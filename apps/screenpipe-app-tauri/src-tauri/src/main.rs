@@ -1190,11 +1190,11 @@ async fn main() {
                 let app_ui_hidden = crate::enterprise_policy::is_app_ui_hidden();
 
                 let mut app_submenu_builder = SubmenuBuilder::new(app, "screenpipe")
-                    .item(&PredefinedMenuItem::about(app, Some("About screenpipe"), None)?)
+                    .item(&PredefinedMenuItem::about(app, Some(&localization::ui_text("About screenpipe")), None)?)
                     .separator();
                 if !crate::updates::is_enterprise_build(&app_handle) {
                     app_submenu_builder = app_submenu_builder
-                        .item(&MenuItemBuilder::with_id("check_for_updates", "Check for Updates...")
+                        .item(&MenuItemBuilder::with_id("check_for_updates", localization::ui_text("Check for Updates..."))
                             .build(app)?)
                         .separator();
                 }
@@ -1202,27 +1202,27 @@ async fn main() {
                     app_submenu_builder = app_submenu_builder
                         // Tauri menu listeners are global, including tray menus.
                         // Keep this id distinct so Settings opens exactly once.
-                        .item(&MenuItemBuilder::with_id("app_settings", "Settings...")
+                        .item(&MenuItemBuilder::with_id("app_settings", localization::ui_text("Settings..."))
                             .accelerator("CmdOrCtrl+,")
                             .build(app)?)
                         .separator();
                 }
                 let app_submenu = app_submenu_builder
                     .item(
-                        &MenuItemBuilder::with_id("quit_app", "Quit screenpipe")
+                        &MenuItemBuilder::with_id("quit_app", localization::ui_text("Quit screenpipe"))
                             .accelerator("CmdOrCtrl+Q")
                             .build(app)?,
                     )
                     .build()?;
 
-                let edit_submenu = SubmenuBuilder::new(app, "Edit")
-                    .item(&PredefinedMenuItem::undo(app, None)?)
-                    .item(&PredefinedMenuItem::redo(app, None)?)
+                let edit_submenu = SubmenuBuilder::new(app, localization::ui_text("Edit"))
+                    .item(&PredefinedMenuItem::undo(app, Some(&localization::ui_text("Undo")))?)
+                    .item(&PredefinedMenuItem::redo(app, Some(&localization::ui_text("Redo")))?)
                     .separator()
-                    .item(&PredefinedMenuItem::cut(app, None)?)
-                    .item(&PredefinedMenuItem::copy(app, None)?)
-                    .item(&PredefinedMenuItem::paste(app, None)?)
-                    .item(&PredefinedMenuItem::select_all(app, None)?)
+                    .item(&PredefinedMenuItem::cut(app, Some(&localization::ui_text("Cut")))?)
+                    .item(&PredefinedMenuItem::copy(app, Some(&localization::ui_text("Copy")))?)
+                    .item(&PredefinedMenuItem::paste(app, Some(&localization::ui_text("Paste")))?)
+                    .item(&PredefinedMenuItem::select_all(app, Some(&localization::ui_text("Select All")))?)
                     .build()?;
 
                 // Custom Close (not PredefinedMenuItem::close_window) so Cmd-W
@@ -1230,12 +1230,12 @@ async fn main() {
                 // menu-close-window and hides the window only when no tab
                 // consumed the chord. Traffic-light close is unchanged.
                 // Cmd-M still needs a menu key equivalent or AppKit swallows it.
-                let window_submenu = SubmenuBuilder::new(app, "Window")
-                    .item(&PredefinedMenuItem::minimize(app, None)?)
-                    .item(&PredefinedMenuItem::maximize(app, None)?)
+                let window_submenu = SubmenuBuilder::new(app, localization::ui_text("Window"))
+                    .item(&PredefinedMenuItem::minimize(app, Some(&localization::ui_text("Minimize")))?)
+                    .item(&PredefinedMenuItem::maximize(app, Some(&localization::ui_text("Zoom")))?)
                     .separator()
                     .item(
-                        &MenuItemBuilder::with_id("close_window", "Close")
+                        &MenuItemBuilder::with_id("close_window", localization::ui_text("Close"))
                             .accelerator("CmdOrCtrl+W")
                             .build(app)?,
                     )
@@ -1247,6 +1247,7 @@ async fn main() {
                     .item(&window_submenu)
                     .build()?;
 
+                localization::register_app_menu(&menu)?;
                 app.set_menu(menu)?;
                 app.on_menu_event(|app_handle, event| {
                     match event.id().as_ref() {

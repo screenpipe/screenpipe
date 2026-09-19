@@ -35,6 +35,9 @@ import {
   type NotificationPriority,
 } from "@/lib/notifications/priority";
 import { appServerFetch } from "@/lib/notifications/app-server";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 interface NotificationEntry {
   id: string;
@@ -153,6 +156,8 @@ export function NotificationInboxPanel({
   fullHeight = false,
   surface = "pipe_store",
 }: NotificationInboxPanelProps) {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
   const [history, setHistory] = useState<NotificationEntry[]>([]);
   const [inboxView, setInboxView] = useState<"priority" | "all">("priority");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -273,7 +278,7 @@ export function NotificationInboxPanel({
     if (diff < 60000) return "Just now";
     if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
     if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-    return d.toLocaleDateString();
+    return d.toLocaleDateString(uiLocale);
   };
 
   const highPriority = history.filter(isHighPriorityNotification);
@@ -303,7 +308,7 @@ export function NotificationInboxPanel({
         <div
           className="mt-2 grid grid-cols-2 rounded-md bg-muted/45 p-0.5"
           role="tablist"
-          aria-label="Notification view"
+          aria-label={ui("Notification view")}
         >
           {(["priority", "all"] as const).map((view) => {
             const count = view === "priority" ? highPriority.length : history.length;
@@ -330,7 +335,7 @@ export function NotificationInboxPanel({
                     : "text-muted-foreground hover:text-foreground",
                 )}
               >
-                {view === "priority" ? "Priority" : "All"}
+                {view === "priority" ? ui("Priority") : ui("All")}
                 <span className="ml-1 text-[9px] tabular-nums opacity-60">{count}</span>
               </button>
             );
@@ -346,14 +351,14 @@ export function NotificationInboxPanel({
             className="px-3 py-6 text-center text-xs text-muted-foreground"
           >
             <div className="font-medium text-foreground/80">
-              {history.length === 0 ? "No notifications yet" : "You’re caught up"}
+              {history.length === 0 ? ui("No notifications yet") : ui("You’re caught up")}
             </div>
             {history.length > 0 && (
               <button
                 onClick={() => setInboxView("all")}
                 className="mt-1 text-[10px] hover:text-foreground transition-colors"
               >
-                {history.length} other {history.length === 1 ? "update" : "updates"} in all
+                {history.length} other {history.length === 1 ? ui("update") : ui("updates")} in all
               </button>
             )}
           </div>
@@ -366,7 +371,7 @@ export function NotificationInboxPanel({
               <Fragment key={entry.id}>
                 {idx === 0 && highPriority.length > 0 && (
                   <SectionLabel>
-                    {inboxView === "priority" ? "Needs your attention" : "High priority"}
+                    {inboxView === "priority" ? ui("Needs your attention") : ui("High priority")}
                   </SectionLabel>
                 )}
                 {inboxView === "all" &&
@@ -474,7 +479,7 @@ export function NotificationInboxPanel({
                           dismissOne(entry.id);
                         }}
                         className="p-0.5 rounded hover:bg-muted/60 opacity-0 group-hover/notif:opacity-100 group-focus/notif:opacity-100 group-focus-within/notif:opacity-100 focus:opacity-100 transition-opacity"
-                        title="Dismiss"
+                        title={ui("Dismiss")}
                       >
                         <X className="w-3 h-3 text-muted-foreground/50 hover:text-foreground" />
                       </button>
@@ -558,7 +563,7 @@ export function NotificationInboxPanel({
                         className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
                       >
                         {copiedId === entry.id ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                        {copiedId === entry.id ? "copied" : "copy"}
+                        {copiedId === entry.id ? ui("copied") : ui("copy")}
                       </button>
                       {entry.source_url && (
                         <button
@@ -631,6 +636,8 @@ export function NotificationInboxPanel({
 }
 
 export function NotificationBell() {
+
+  const ui = useGT();
   const [open, setOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
 
@@ -670,7 +677,7 @@ export function NotificationBell() {
     >
       <PopoverTrigger asChild>
         <button
-          aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} high priority unread` : "Notifications"}
+          aria-label={unreadCount > 0 ? ui("Notifications, {value1} high priority unread", { value1: unreadCount }) : ui("Notifications")}
           data-testid="notification-bell-trigger"
           className="relative p-1.5 rounded-md hover:bg-muted/60 transition-colors"
         >

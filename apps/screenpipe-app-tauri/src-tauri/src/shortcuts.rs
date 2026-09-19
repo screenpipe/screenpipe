@@ -279,10 +279,7 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
             // invisible when the main window is hidden — i.e. exactly when a
             // global hotkey is used. Fire a notification panel so the user gets
             // glance-level confirmation regardless of window visibility.
-            crate::notifications::client::send(
-                "recording started",
-                "screen recording has been initiated",
-            );
+            crate::notifications::client::send(crate::localization::ui_text("recording started"), crate::localization::ui_text("screen recording has been initiated"));
         },
     )
     .await?;
@@ -294,10 +291,7 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         |app| {
             track_shortcut_used(app, "stop_recording");
             let _ = app.emit("shortcut-stop-recording", ());
-            crate::notifications::client::send(
-                "recording paused",
-                "capture paused — pipes and search still available",
-            );
+            crate::notifications::client::send(crate::localization::ui_text("recording paused"), crate::localization::ui_text("capture paused — pipes and search still available"));
         },
     )
     .await?;

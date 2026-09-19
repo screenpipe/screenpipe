@@ -8,6 +8,9 @@ import { type TemplatePipe } from "@/lib/hooks/use-pipes";
 import { commands } from "@/lib/utils/tauri";
 import { toast } from "@/components/ui/use-toast";
 import { showChatWithPrefill } from "@/lib/chat-utils";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 export function useFrameActions(opts: {
 	debouncedFrame: { filePath: string; offsetIndex: number; fps: number; frameId: string } | null;
@@ -16,6 +19,8 @@ export function useFrameActions(opts: {
 	currentFrame: StreamTimeSeriesResponse;
 	templatePipes: any[];
 }) {
+  const uiLanguage = useLocale();
+  const ui = useGT();
 	const {
 		debouncedFrame,
 		frameContext,
@@ -30,16 +35,16 @@ export function useFrameActions(opts: {
 		if (!debouncedFrame?.frameId) return;
 		try {
 			await commands.copyFrameToClipboard(parseInt(debouncedFrame.frameId, 10));
-			toast({ title: "Copied image", description: "Frame copied to clipboard" });
+			toast({ title: ui("Copied image"), description: ui("Frame copied to clipboard") });
 		} catch (err) {
 			console.warn("Copy image failed:", err);
 			toast({
-				title: "Copy failed",
-				description: err instanceof Error ? err.message : "Could not copy image",
+				title: ui("Copy failed"),
+				description: err instanceof Error ? err.message : ui("Could not copy image"),
 				variant: "destructive",
 			});
 		}
-	}, [debouncedFrame?.frameId]);
+	}, [debouncedFrame?.frameId, uiLanguage]);
 
 	const copyFrameText = useCallback(async () => {
 		if (!debouncedFrame?.frameId) return;
@@ -50,30 +55,30 @@ export function useFrameActions(opts: {
 		}
 		if (!text?.trim()) {
 			toast({
-				title: "No text",
-				description: "No text available for this frame",
+				title: ui("No text"),
+				description: ui("No text available for this frame"),
 				variant: "destructive",
 			});
 			return;
 		}
 		await commands.copyTextToClipboard(text);
-		toast({ title: "Copied text", description: "Text copied to clipboard" });
-	}, [debouncedFrame?.frameId, frameContext?.text, textPositions]);
+		toast({ title: ui("Copied text"), description: ui("Text copied to clipboard") });
+	}, [debouncedFrame?.frameId, frameContext?.text, textPositions, uiLanguage]);
 
 	const copyDeeplinkAction = useCallback(async () => {
 		if (!debouncedFrame?.frameId) return;
 		try {
 			await commands.copyDeeplinkToClipboard(parseInt(debouncedFrame.frameId, 10));
-			toast({ title: "Copied deeplink", description: "Frame link copied to clipboard" });
+			toast({ title: ui("Copied deeplink"), description: ui("Frame link copied to clipboard") });
 		} catch (err) {
 			console.warn("Copy deeplink failed:", err);
 			toast({
-				title: "Copy failed",
-				description: err instanceof Error ? err.message : "Could not copy",
+				title: ui("Copy failed"),
+				description: err instanceof Error ? err.message : ui("Could not copy"),
 				variant: "destructive",
 			});
 		}
-	}, [debouncedFrame?.frameId]);
+	}, [debouncedFrame?.frameId, uiLanguage]);
 
 	const askAboutFrame = useCallback(async () => {
 		if (!debouncedFrame?.frameId || !device) return;
@@ -81,8 +86,8 @@ export function useFrameActions(opts: {
 		const textSnippet = rawText.slice(0, 300);
 		const context = `Context from timeline frame:\n${device.metadata?.app_name || "?"} - ${device.metadata?.window_name || "?"}\nTime: ${currentFrame?.timestamp || "?"}\n\nText:\n${textSnippet}${textSnippet.length >= 300 ? "…" : ""}`;
 		await showChatWithPrefill({ context, frameId: parseInt(debouncedFrame.frameId, 10) });
-		toast({ title: "Ask about this frame", description: "Chat opened with frame context" });
-	}, [debouncedFrame, device, frameContext?.text, textPositions, currentFrame]);
+		toast({ title: ui("Ask about this frame"), description: ui("Chat opened with frame context") });
+	}, [debouncedFrame, device, frameContext?.text, textPositions, currentFrame, uiLanguage]);
 
 	const runPipeWithContext = useCallback(async (pipe: TemplatePipe) => {
 		if (!debouncedFrame?.frameId || !device) return;
@@ -90,8 +95,8 @@ export function useFrameActions(opts: {
 		const textSnippet = rawText.slice(0, 300);
 		const context = `Context from timeline frame:\n${device.metadata?.app_name || "?"} - ${device.metadata?.window_name || "?"}\nTime: ${currentFrame?.timestamp || "?"}\n\nText:\n${textSnippet}${textSnippet.length >= 300 ? "…" : ""}`;
 		await showChatWithPrefill({ context, prompt: pipe.prompt, autoSend: true });
-		toast({ title: `${pipe.icon} ${pipe.title}`, description: "Running scheduled task with frame context" });
-	}, [debouncedFrame, device, frameContext?.text, textPositions, currentFrame]);
+		toast({ title: ui("{value1} {value2}", { value1: pipe.icon, value2: pipe.title }), description: ui("Running scheduled task with frame context") });
+	}, [debouncedFrame, device, frameContext?.text, textPositions, currentFrame, uiLanguage]);
 
 	return { copyImage, copyFrameText, copyDeeplinkAction, askAboutFrame, runPipeWithContext };
 }

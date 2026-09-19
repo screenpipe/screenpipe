@@ -14,6 +14,8 @@ import { usePlatform } from "@/lib/hooks/use-platform";
 import { motion } from "framer-motion";
 import posthog from "posthog-js";
 import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
+import { useGT } from "gt-react";
+
 
 interface PermissionsStepProps {
   handleNextSlide: () => void;
@@ -68,6 +70,7 @@ function PermissionRow({
   distance: number;
   onGrant: () => void;
 }) {
+
   const interactive = focused && !granted;
 
   return (
@@ -134,6 +137,8 @@ export default function PermissionsStep({
   handleNextSlide,
   onProgressChange,
 }: PermissionsStepProps) {
+
+  const ui = useGT();
   const { isMac, isLoading: isPlatformLoading } = usePlatform();
   const [statuses, setStatuses] = useState<Record<string, boolean>>({});
   const [requesting, setRequesting] = useState(false);
@@ -156,7 +161,7 @@ export default function PermissionsStep({
     {
       id: "mic",
       icon: <Mic className="w-3.5 h-3.5" strokeWidth={1.5} />,
-      title: "Capture what you say",
+      title: ui("Capture what you say"),
       subtitle: "Lets Screenpipe transcribe your voice in meetings and calls",
       check: () => commands.checkMicrophonePermission(),
       request: () => commands.requestPermission("microphone"),
@@ -164,7 +169,7 @@ export default function PermissionsStep({
     {
       id: "accessibility",
       icon: <Keyboard className="w-3.5 h-3.5" strokeWidth={1.5} />,
-      title: "Read on-screen text",
+      title: ui("Read on-screen text"),
       subtitle: "Lets Screenpipe understand app content without OCR",
       // Silent poll until the user asks for it, then the live tccd probe so a
       // grant made in Settings is seen without an app relaunch.
@@ -181,7 +186,7 @@ export default function PermissionsStep({
     {
       id: "screen",
       icon: <Monitor className="w-3.5 h-3.5" strokeWidth={1.5} />,
-      title: "Capture your screen",
+      title: ui("Capture your screen"),
       subtitle: (
         <>
           Lets Screenpipe index what&apos;s on your screen: windows, docs,
@@ -379,7 +384,7 @@ export default function PermissionsStep({
       {/* Branding */}
       <div className="flex flex-col items-center mb-6">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="w-12 h-12 mb-2" src="/128x128.png" alt="Screenpipe" />
+        <img className="w-12 h-12 mb-2" src="/128x128.png" alt={ui("Screenpipe")} />
         <h1 className="font-mono text-base font-bold text-foreground">
           Unlock the full experience
         </h1>
@@ -407,7 +412,7 @@ export default function PermissionsStep({
             <RefreshCw
               className={`h-3.5 w-3.5 ${restarting ? "animate-spin" : ""}`}
             />
-            {restarting ? "Restarting..." : "Restart screenpipe"}
+            {restarting ? ui("Restarting...") : ui("Restart screenpipe")}
           </button>
         </div>
       ) : (

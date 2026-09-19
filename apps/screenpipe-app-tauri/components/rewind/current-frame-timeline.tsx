@@ -30,6 +30,8 @@ import {
 	type SearchMatch,
 	useKeywordSearchStore,
 } from "@/lib/hooks/use-keyword-search-store";
+import { useGT } from "gt-react";
+
 
 export interface DetectedUrl {
 	normalized: string;
@@ -132,7 +134,6 @@ export const SkeletonLoader: FC = () => {
 };
 
 
-
 export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 	currentFrame,
 	onNavigate,
@@ -155,6 +156,8 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 	playbackSpeed,
 	selectedDeviceId,
 }) => {
+
+  const ui = useGT();
 	const { isMac } = usePlatform();
 	const { settings } = useSettings();
 	const { templatePipes } = usePipes();
@@ -369,6 +372,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 	// Cmd+C fallback: when no text is selected via the overlay (e.g. accessibility-only
 	// frames without OCR bounding boxes), copy all frame text to clipboard
 	useEffect(() => {
+
 		const el = containerRef.current;
 		if (!el) return;
 
@@ -389,7 +393,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 
 			e.preventDefault();
 			commands.copyTextToClipboard(text).catch(() => {});
-			toast({ title: "Copied text", description: "All frame text copied to clipboard" });
+			toast({ title: ui("Copied text"), description: ui("All frame text copied to clipboard") });
 		};
 
 		el.addEventListener("keydown", handleKeyDown);
@@ -509,7 +513,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 									type="button"
 									onClick={() => {
 										commands.copyTextToClipboard(frameText).catch(() => {});
-										toast({ title: "Copied text", description: "Frame text copied to clipboard" });
+										toast({ title: ui("Copied text"), description: ui("Frame text copied to clipboard") });
 									}}
 									className="flex items-center justify-center gap-2 border border-white/20 bg-white/10 px-3 py-2 text-xs font-mono normal-case tracking-wide text-white/80 transition-colors hover:bg-white/20"
 								>
@@ -565,6 +569,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 				>
 					{/* Copy Selected Text — only when there's an active text selection */}
 					{(() => {
+
 						const sel = getSelectableLayerText()?.trim();
 						if (!sel) return null;
 						return (
@@ -575,7 +580,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 									const text = getSelectableLayerText()?.trim();
 									if (text) {
 										commands.copyTextToClipboard(text).catch(() => {});
-										toast({ title: "Copied selection", description: "Selected text copied to clipboard" });
+										toast({ title: ui("Copied selection"), description: ui("Selected text copied to clipboard") });
 									}
 									setContextMenuOpen(false);
 								}}
@@ -592,7 +597,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 							copyImage();
 							setContextMenuOpen(false);
 						}}
-						title="Copy frame image to clipboard"
+						title={ui("Copy frame image to clipboard")}
 					>
 						<ImageIcon className="w-4 h-4 shrink-0" />
 						<span className="flex-1 min-w-0 truncate">Copy image</span>
@@ -618,7 +623,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 							copyDeeplinkAction();
 							setContextMenuOpen(false);
 						}}
-						title="Copy screenpipe://frame/N link"
+						title={ui("Copy screenpipe://frame/N link")}
 					>
 						<Link2 className="w-4 h-4 shrink-0" />
 						Copy deeplink
@@ -683,7 +688,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 					src={snapshotAssetUrl}
 					className="absolute inset-0 w-full h-full object-contain"
 					style={{ zIndex: 2 }}
-					alt="Current frame"
+					alt={ui("Current frame")}
 					draggable={false}
 				/>
 			)}
@@ -695,7 +700,7 @@ export const CurrentFrameTimeline: FC<CurrentFrameTimelineProps> = ({
 					src={displayedFallbackUrl}
 					className="absolute inset-0 w-full h-full object-contain"
 					style={{ zIndex: 2 }}
-					alt="Current frame"
+					alt={ui("Current frame")}
 					draggable={false}
 				/>
 			)}

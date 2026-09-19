@@ -10,6 +10,8 @@ import { ConnectionToolIcon } from "@/components/chat/standalone/message-content
 import type { MentionSuggestion } from "@/components/chat/standalone/hooks/use-chat-mentions";
 import { connectionMentionTag, type ConnectedIntegration } from "@/lib/chat/connection-suggestions";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 type ActiveChatFilters = {
   timeRanges: { label: string }[];
@@ -94,6 +96,8 @@ export function ComposerUtilityMenu({
   applySpeakerFilterSuggestion,
   handleFilePicker,
 }: ComposerUtilityMenuProps) {
+
+  const ui = useGT();
   const timeLabels: Record<string, string> = {
     "today's activity": "today",
     yesterday: "yesterday",
@@ -123,7 +127,7 @@ export function ComposerUtilityMenu({
       >
         <span className="truncate">{suggestion.tag}</span>
         <span className="text-[10px] text-muted-foreground truncate shrink-0 max-w-[9rem]">
-          {isActive ? "Selected" : suggestion.description}
+          {isActive ? ui("Selected") : suggestion.description}
         </span>
       </button>
     );
@@ -181,7 +185,7 @@ export function ComposerUtilityMenu({
                 }
               }
             }}
-            placeholder="Search tags or speakers"
+            placeholder={ui("Search tags or speakers")}
             className="h-8 pl-7 pr-7 text-xs"
             autoComplete="off"
           />
@@ -190,7 +194,7 @@ export function ComposerUtilityMenu({
               type="button"
               onClick={onClearFilterSearch}
               className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              aria-label="Clear filter search"
+              aria-label={ui("Clear filter search")}
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -293,7 +297,7 @@ export function ComposerUtilityMenu({
           </div>
           {appMentionSuggestions.length === 0 ? (
             <div className="px-3 py-2 text-[10px] text-muted-foreground">
-              {appsLoading ? "Loading apps..." : "No apps detected yet"}
+              {appsLoading ? ui("Loading apps...") : ui("No apps detected yet")}
             </div>
           ) : (
             appMentionSuggestions.map((suggestion) => {
@@ -322,7 +326,7 @@ export function ComposerUtilityMenu({
           </div>
           {allTagMentionSuggestions.length === 0 ? (
             <div className="px-3 py-2 text-[10px] text-muted-foreground">
-              {tagsLoading ? "Loading tags..." : "No tags yet"}
+              {tagsLoading ? ui("Loading tags...") : ui("No tags yet")}
             </div>
           ) : (
             tagMentionSections.map((section) => (

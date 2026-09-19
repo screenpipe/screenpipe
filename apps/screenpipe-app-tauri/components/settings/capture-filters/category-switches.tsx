@@ -15,6 +15,8 @@ import {
 	type CategoryState,
 } from "@/lib/settings/capture-categories";
 import type { UrlRule, WindowRules } from "@/lib/settings/capture-filters";
+import { useGT } from "gt-react";
+
 
 interface CategoryRowProps {
 	category: CaptureCategory;
@@ -23,6 +25,8 @@ interface CategoryRowProps {
 }
 
 function CategoryRow({ category, state, onToggle }: CategoryRowProps) {
+
+  const ui = useGT();
 	const [showRules, setShowRules] = useState(false);
 	const members = [...category.apps, ...category.domains];
 
@@ -37,7 +41,7 @@ function CategoryRow({ category, state, onToggle }: CategoryRowProps) {
 				<div className="min-w-0 flex-1">
 					<p className="text-[13px] leading-tight text-foreground">{category.name}</p>
 					<p className="text-[11px] leading-tight text-muted-foreground">
-						{state === "partial" ? "Partly on, switch to apply the rest" : category.description}
+						{state === "partial" ? ui("Partly on, switch to apply the rest") : category.description}
 					</p>
 				</div>
 
@@ -46,7 +50,7 @@ function CategoryRow({ category, state, onToggle }: CategoryRowProps) {
 					onClick={() => setShowRules((open) => !open)}
 					className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground hover:text-foreground"
 					aria-expanded={showRules}
-					aria-label={`Show the ${categorySize(category)} rules in ${category.name}`}
+					aria-label={ui("Show the {value1} rules in {value2}", { value1: categorySize(category), value2: category.name })}
 				>
 					<ChevronRight className={cn("h-3 w-3 transition-transform", showRules && "rotate-90")} />
 					{categorySize(category)}
@@ -55,7 +59,7 @@ function CategoryRow({ category, state, onToggle }: CategoryRowProps) {
 				<Switch
 					checked={state === "on"}
 					onCheckedChange={(next) => onToggle(category, next)}
-					aria-label={`Stop recording ${category.name}`}
+					aria-label={ui("Stop recording {value1}", { value1: category.name })}
 				/>
 			</div>
 
@@ -93,6 +97,7 @@ export interface CategorySwitchesProps {
  * lists are short enough to read.
  */
 export function CategorySwitches({ rules, ignoredUrls, onToggle }: CategorySwitchesProps) {
+
 	return (
 		<div data-testid="privacy-category-switches">
 			<p className="mb-1 text-[11px] text-muted-foreground">

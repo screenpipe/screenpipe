@@ -558,8 +558,8 @@ mod imp {
                                 let _ = app
                                     .notification()
                                     .builder()
-                                    .title("Diagnostic logs shared")
-                                    .body("Filtered app diagnostics were shared with screenpipe support.")
+                                    .title(crate::localization::ui_text("Diagnostic logs shared"))
+                                    .body(crate::localization::ui_text("Filtered app diagnostics were shared with screenpipe support."))
                                     .show();
                                 status.set("ready");
                             }

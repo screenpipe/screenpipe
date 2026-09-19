@@ -126,6 +126,11 @@ import {
 import { AGENT_TOPICS, type AgentEventEnvelope } from "@/lib/events/types";
 import { listenTyped, TAURI_EVENTS } from "@/lib/events/tauri-events";
 import { localFetch } from "@/lib/api";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 // Session ID is per-conversation — set on mount (new conv) and updated on load/new.
 // Stored as a ref so event listeners always see the current value without stale closures.
@@ -135,13 +140,13 @@ const TAG_SUGGESTION_LIMIT = 10;
 const STREAM_RENDER_THROTTLE_MS = 80;
 
 const STATIC_MENTION_SUGGESTIONS: MentionSuggestion[] = [
-  { tag: "@today", description: "Today's activity", category: "time" },
-  { tag: "@yesterday", description: "Yesterday", category: "time" },
-  { tag: "@last-week", description: "Past 7 days", category: "time" },
-  { tag: "@last-hour", description: "Past hour", category: "time" },
-  { tag: "@audio", description: "Audio/meetings only", category: "content" },
-  { tag: "@screen", description: "Screen text only", category: "content" },
-  { tag: "@input", description: "UI events (clicks, keys)", category: "content" },
+  { tag: "@today", description: msg("Today's activity", {}), category: "time" },
+  { tag: "@yesterday", description: msg("Yesterday", {}), category: "time" },
+  { tag: "@last-week", description: msg("Past 7 days", {}), category: "time" },
+  { tag: "@last-hour", description: msg("Past hour", {}), category: "time" },
+  { tag: "@audio", description: msg("Audio/meetings only", {}), category: "content" },
+  { tag: "@screen", description: msg("Screen text only", {}), category: "content" },
+  { tag: "@input", description: msg("UI events (clicks, keys)", {}), category: "content" },
 ];
 
 /**
@@ -177,6 +182,10 @@ export function StandaloneChat({
    *  padding on the chat header since the sidebar no longer covers them. */
   sidebarCollapsed?: boolean;
 } = {}) {
+  const uiLanguage = useLocale();
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const { settings, updateSettings, isSettingsLoaded, reloadStore } = useSettings();
   // ACP stays invisible until PostHog hands out the rollout flag. Filtering the
   // preset list is the choke point: the composer's ACP surface, the agent
@@ -420,11 +429,11 @@ export function StandaloneChat({
     };
 
     return [
-      { label: "Memory tags", suggestions: pick("memory_count") },
-      { label: "Audio tags", suggestions: pick("audio_count") },
-      { label: "Screen tags", suggestions: pick("frame_count") },
+      { label: ui("Memory tags"), suggestions: pick("memory_count") },
+      { label: ui("Audio tags"), suggestions: pick("audio_count") },
+      { label: ui("Screen tags"), suggestions: pick("frame_count") },
     ].filter((section) => section.suggestions.length > 0);
-  }, [tagItems]);
+  }, [tagItems, uiLanguage]);
 
   const appTagMap = React.useMemo(() => {
     const map: Record<string, string> = {};
@@ -468,7 +477,7 @@ export function StandaloneChat({
   >(null);
 
   const atMentionSuggestions = React.useMemo(
-    () => [...STATIC_MENTION_SUGGESTIONS, ...appMentionSuggestions],
+    () => [...localizeDefinitions(STATIC_MENTION_SUGGESTIONS, uiMessages), ...appMentionSuggestions],
     [appMentionSuggestions]
   );
   const {
@@ -654,7 +663,7 @@ export function StandaloneChat({
     }
 
     toast({
-      title: "Sign in required",
+      title: ui("Sign in required"),
       description: buildInvalidatedAuthTokenMessage(),
       variant: "destructive",
     });
@@ -664,7 +673,7 @@ export function StandaloneChat({
     } catch (e) {
       console.warn("failed to open login after Pi auth error:", e);
     }
-  }, [updateSettings]);
+  }, [updateSettings, uiLanguage]);
 
   const lastUserMessageRef = useRef<string>("");
 
@@ -1611,7 +1620,7 @@ export function StandaloneChat({
       // glitch — some agents (Cursor) authenticate instantly with no browser.
       if (inner.type === "acp_authenticated") {
         setAcpSignInError(null);
-        toast({ title: `Signed in to ${acpAdapterInfo(activePresetRef.current?.acpAgent?.id).name}` });
+        toast({ title: ui("Signed in to {value1}", { value1: acpAdapterInfo(activePresetRef.current?.acpAgent?.id).name }) });
       }
       return false;
     }
@@ -1691,7 +1700,7 @@ export function StandaloneChat({
       return alreadyVisible ? prev : [...prev, message];
     });
     return true;
-  }, [removeAgentActionsForSession, setMessages, messagesRef, lastUserMessageRef, piSessionIdRef, sendMessageRef, startNewConversationRef, activePresetRef]);
+  }, [removeAgentActionsForSession, setMessages, messagesRef, lastUserMessageRef, piSessionIdRef, sendMessageRef, startNewConversationRef, activePresetRef, uiLanguage]);
 
   usePiForegroundEvents({
     activePreset,
@@ -2148,8 +2157,8 @@ export function StandaloneChat({
   const askSelectedTextInSideChat = useCallback(async (text: string) => {
     if (activePresetRef.current?.provider === "acp") {
       toast({
-        title: "Temporary side chat is not available with coding agents",
-        description: "Coding-agent sessions cannot guarantee ephemeral history",
+        title: ui("Temporary side chat is not available with coding agents"),
+        description: ui("Coding-agent sessions cannot guarantee ephemeral history"),
       });
       return;
     }
@@ -2189,14 +2198,7 @@ export function StandaloneChat({
     });
     setInput(next);
     focusComposerAtEnd(next, sideChatId);
-  }, [
-    addSelectedTextToChat,
-    conversationId,
-    discardTemporarySideConversation,
-    focusComposerAtEnd,
-    setInput,
-    startNewConversation,
-  ]);
+  }, [addSelectedTextToChat, conversationId, discardTemporarySideConversation, focusComposerAtEnd, setInput, startNewConversation, uiLanguage]);
 
   return (
     <div ref={dropRootRef} className={cn("flex flex-col bg-background", className ?? "h-screen")} data-testid="section-home">
@@ -2260,8 +2262,8 @@ export function StandaloneChat({
                   "h-7 w-7",
                   sidePanelOpen && "bg-muted ring-2 ring-primary ring-offset-1 ring-offset-background",
                 )}
-                title={sidePanelHasContent ? "Toggle side panel" : "Open browser tab"}
-                aria-label={sidePanelHasContent ? "Toggle side panel" : "Open browser tab"}
+                title={sidePanelHasContent ? ui("Toggle side panel") : ui("Open browser tab")}
+                aria-label={sidePanelHasContent ? ui("Toggle side panel") : ui("Open browser tab")}
                 aria-pressed={sidePanelOpen}
               >
                 {sidePanelOpen ? (
@@ -2417,7 +2419,7 @@ export function StandaloneChat({
           disabledReason: composerDisabledReason,
           placeholder:
             isLoading || isStreaming
-              ? "Message will be queued..."
+              ? ui("Message will be queued...")
               : homeCardPromptPreview ?? undefined,
           canChat: Boolean(canSendChatMessage) && !codingWorkspace.isLoading,
           isLoading,
@@ -2465,7 +2467,7 @@ export function StandaloneChat({
           onSelectNextFilterResult: selectNextFilterResult,
           onSelectPreviousFilterResult: selectPreviousFilterResult,
           onApplySelectedFilterResult: applySelectedFilterResult,
-          staticMentionSuggestions: STATIC_MENTION_SUGGESTIONS,
+          staticMentionSuggestions: localizeDefinitions(STATIC_MENTION_SUGGESTIONS, uiMessages),
           appMentionSuggestions,
           allTagMentionSuggestions,
           tagMentionSections,

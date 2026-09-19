@@ -19,6 +19,8 @@ import {
   type ConversationMeta,
 } from "@/lib/chat-storage";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 const CHAT_PICKER_LIMIT = 50;
 
@@ -67,6 +69,8 @@ export function PipeChatDestinationPicker({
   onOpenChange,
   onSelect,
 }: PipeChatDestinationPickerProps) {
+
+  const ui = useGT();
   const [query, setQuery] = React.useState("");
   const [results, setResults] = React.useState<ConversationMeta[]>([]);
   const [selected, setSelected] = React.useState<ConversationMeta | null>(null);
@@ -176,7 +180,7 @@ export function PipeChatDestinationPicker({
         ) : (
           <MessageSquare className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         )}
-        <span className="min-w-0 flex-1 truncate">{chat.title || "Untitled chat"}</span>
+        <span className="min-w-0 flex-1 truncate">{chat.title || ui("Untitled chat")}</span>
         <span className="shrink-0 text-xs text-muted-foreground">
           {chatDate(chat.updatedAt)}
         </span>
@@ -201,16 +205,16 @@ export function PipeChatDestinationPicker({
             "h-8 min-w-0 max-w-full justify-between gap-2 rounded-md px-3 text-xs font-normal sm:w-64",
             unavailable && "text-destructive",
           )}
-          aria-label="Choose an existing chat"
+          aria-label={ui("Choose an existing chat")}
           data-testid="pipe-chat-destination-trigger"
         >
           <span className="truncate">
             {selected?.title ||
               (selectedLoading
-                ? "Loading chat…"
+                ? ui("Loading chat…")
                 : unavailable
-                  ? "Chat unavailable"
-                  : "Choose chat")}
+                  ? ui("Chat unavailable")
+                  : ui("Choose chat"))}
           </span>
           <Search className="h-3.5 w-3.5 shrink-0 opacity-60" />
         </Button>
@@ -239,14 +243,14 @@ export function PipeChatDestinationPicker({
                 event.preventDefault();
                 first.focus();
               }}
-              placeholder="Search chats"
-              aria-label="Search chats"
+              placeholder={ui("Search chats")}
+              aria-label={ui("Search chats")}
               className="h-8 rounded-md pl-8 text-xs"
             />
           </div>
         </div>
 
-        <div className="max-h-80 overflow-y-auto p-1.5" role="listbox" aria-label="Chats">
+        <div className="max-h-80 overflow-y-auto p-1.5" role="listbox" aria-label={ui("Chats")}>
           {loading && results.length === 0 ? (
             <div className="flex items-center justify-center gap-2 px-3 py-8 text-xs text-muted-foreground" role="status">
               <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" />
@@ -261,7 +265,7 @@ export function PipeChatDestinationPicker({
             </div>
           ) : results.length === 0 ? (
             <div className="px-4 py-8 text-center text-xs text-muted-foreground">
-              {query ? "No matching chats" : "No chats yet — start a chat, then return here"}
+              {query ? ui("No matching chats") : ui("No chats yet — start a chat, then return here")}
             </div>
           ) : (
             query ? (

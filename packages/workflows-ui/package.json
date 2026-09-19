@@ -21,7 +21,8 @@
     "react-markdown": "^9.1.0",
     "remark-gfm": "^4.0.1",
     "fflate": "^0.8.2",
-    "unpdf": "^1.6.2"
+    "unpdf": "^1.6.2",
+    "gt-react": "11.4.0"
   },
   "peerDependencies": {
     "lucide-react": ">=0.414.0 <1",

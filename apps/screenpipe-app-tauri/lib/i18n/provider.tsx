@@ -8,6 +8,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { locale as operatingSystemLocale } from "@tauri-apps/plugin-os";
 import { resolveLocale } from "./locale";
 import bundled from "./empty.json";
+import { OfflineGTProvider } from "./offline-provider";
 
 type Snapshot = {
   mode: string; revision: string; defaultLocale: string; locales: string[];
@@ -44,13 +45,14 @@ export function LocalizationProvider({ children }: { children: ReactNode }) {
   const locale = resolveLocale(configured, system, bundledLocales, defaultLocale);
   useEffect(() => {
     document.documentElement.lang = locale;
+    try { localStorage.setItem("screenpipe-ui-locale", locale); } catch { /* Optional crash-screen cache. */ }
     const info = new Intl.Locale(locale) as Intl.Locale & { textInfo?: { direction: string }; getTextInfo?: () => { direction: string } };
     document.documentElement.dir = info.getTextInfo?.().direction ?? info.textInfo?.direction ?? "ltr";
     // This is an allow-listed diagnostic summary: no message text or interpolation
     // values. The bridge includes it in the normal collected support report.
     console.info("[localization]", JSON.stringify({ configured, resolved: locale, revision: localizationSnapshot.revision, coverage: localizationSnapshot.coverage[locale], causes: localizationSnapshot.causes, fallbackCount: Object.keys(localizationSnapshot.fallbacks[locale] ?? {}).length }));
   }, [configured, locale]);
-  return <LocaleContext.Provider value={locale}><GTProvider locale={locale} translations={translations}>{children}</GTProvider></LocaleContext.Provider>;
+  return <LocaleContext.Provider value={locale}><OfflineGTProvider locale={locale} translations={translations}>{children}</OfflineGTProvider></LocaleContext.Provider>;
 }
 
 export function localeName(locale: string) {
@@ -65,4 +67,17 @@ export function useLocaleFormatters() {
     date: (value: Date | number, options?: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat(locale, options).format(value),
     plural: (value: number) => new Intl.PluralRules(locale).select(value),
   }), [locale]);
+}
+
+
+// Next's root error boundary is outside SettingsProvider. It can still show
+// bundled recovery controls in the last resolved language without IPC/network.
+export function EmergencyLocalizationProvider({children}: {children: ReactNode}) {
+  const [locale] = useState(() => {
+    if (typeof window === "undefined") return defaultLocale;
+    let stored: string | null = null;
+    try { stored = localStorage.getItem("screenpipe-ui-locale"); } catch { /* Use system preference. */ }
+    return resolveLocale(stored ?? "system", navigator.languages, bundledLocales, defaultLocale);
+  });
+  return <LocaleContext.Provider value={locale}><OfflineGTProvider locale={locale} translations={translations}>{children}</OfflineGTProvider></LocaleContext.Provider>;
 }

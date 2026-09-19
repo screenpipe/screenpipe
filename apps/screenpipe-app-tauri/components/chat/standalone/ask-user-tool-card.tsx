@@ -7,6 +7,8 @@ import * as React from "react";
 import { Check, ChevronDown } from "lucide-react";
 import type { ToolCall } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 export type AskUserOption = {
   value: string;
@@ -172,6 +174,8 @@ export function AskUserToolCard({
   toolCall: ToolCall;
   onSubmit?: (reply: string, displayLabel: string) => Promise<void> | void;
 }) {
+
+  const ui = useGT();
   const argsSignature = React.useMemo(() => {
     try {
       return `${toolCall.id}:${JSON.stringify(toolCall.args)}`;
@@ -241,16 +245,16 @@ export function AskUserToolCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-xs font-mono font-semibold text-foreground">
-            {parsed.title || "Ask user"}
+            {parsed.title || ui("Ask user")}
           </div>
           <div className="mt-0.5 text-[11px] text-muted-foreground">
             {submitted
-              ? "Answer sent"
+              ? ui("Answer sent")
               : toolCall.isRunning
-                ? "Pi is waiting for your input"
+                ? ui("Pi is waiting for your input")
                 : needsManualFollowup
-                  ? "Pi needs this as a chat reply"
-                  : "Ready to answer"}
+                  ? ui("Pi needs this as a chat reply")
+                  : ui("Ready to answer")}
           </div>
         </div>
         {submitted ? (
@@ -328,7 +332,7 @@ export function AskUserToolCard({
         ) : activeQuestion.options.length > 0 ? (
           <div className="relative">
             <select
-              aria-label={`Answer ${activeQuestion.label}`}
+              aria-label={ui("Answer {value1}", { value1: activeQuestion.label })}
               data-testid={`ask-user-answer-${activeQuestion.id}`}
               value={activeAnswer.values[0] ?? ""}
               onChange={(event) => {
@@ -364,11 +368,11 @@ export function AskUserToolCard({
         ) : null}
 
         <textarea
-          aria-label={`Custom answer ${activeQuestion.label}`}
+          aria-label={ui("Custom answer {value1}", { value1: activeQuestion.label })}
           value={activeAnswer.customText}
           onChange={(event) => updateAnswer(activeQuestion.id, { customText: event.target.value })}
           rows={2}
-          placeholder={activeQuestion.options.length > 0 ? "Type your own answer or add nuance..." : "Type your answer..."}
+          placeholder={activeQuestion.options.length > 0 ? ui("Type your own answer or add nuance...") : ui("Type your answer...")}
           className="min-h-16 w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground/70 focus:border-foreground"
         />
       </div>
@@ -376,8 +380,8 @@ export function AskUserToolCard({
       <div className="mt-3 flex items-center justify-between gap-3">
         <div className="min-w-0 text-[11px] text-muted-foreground">
           {needsManualFollowup
-            ? "Screenpipe will send this as the next chat message."
-            : "Your selection is sent back into this chat."}
+            ? ui("Screenpipe will send this as the next chat message.")
+            : ui("Your selection is sent back into this chat.")}
         </div>
         <button
           type="submit"
@@ -390,7 +394,7 @@ export function AskUserToolCard({
               : "cursor-not-allowed border border-border bg-background text-muted-foreground",
           )}
         >
-          {submitting ? "Sending..." : "Reply"}
+          {submitting ? ui("Sending...") : ui("Reply")}
         </button>
       </div>
     </form>

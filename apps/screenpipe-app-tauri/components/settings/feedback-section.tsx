@@ -8,6 +8,8 @@ import { ShareLogsButton } from "@/components/share-logs-button";
 import { MessageSquare, Github, Lightbulb, FileText, Youtube, BookOpen, Play, ClipboardList } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import { screenpipeWebUrl } from "@/lib/web-url";
+import { useGT } from "gt-react";
+
 
 function DiscordIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
@@ -23,6 +25,7 @@ function DiscordIcon(props: React.SVGProps<SVGSVGElement>) {
 }
 
 export function FeedbackSection() {
+  const ui = useGT();
   return (
     <div className="space-y-5" data-testid="section-help">
       <p className="text-muted-foreground text-sm mb-4">
@@ -50,7 +53,7 @@ export function FeedbackSection() {
           <div className="relative shrink-0">
             <img
               src="/tutorial-thumbnail.jpg"
-              alt="Screenpipe tutorial"
+              alt={ui("Screenpipe tutorial")}
               className="w-[124px] h-[70px] object-cover border border-border"
             />
             <span className="absolute inset-0 flex items-center justify-center">

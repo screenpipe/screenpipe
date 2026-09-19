@@ -11,6 +11,8 @@ import {
   type BusinessCapacityUpgrade,
 } from "@/lib/app-entitlement";
 import type { SelectablePlan } from "@/lib/upgrade-flow";
+import { useGT } from "gt-react";
+
 
 /**
  * Every self-serve plan, shown inline in Settings → Account.
@@ -192,6 +194,8 @@ export function AccountPlanOptions({
   disabledReason?: string;
   onSelect: (purchase: PlanPurchase) => void;
 }) {
+
+  const ui = useGT();
   const recommended = recommendedCapacityCard(entitlementPlan);
 
   return (
@@ -275,7 +279,7 @@ export function AccountPlanOptions({
                 onClick={() => onSelect(purchase)}
                 data-testid={`account-plan-choose-${plan.id}`}
               >
-                {busy ? "Checking…" : plan.cta}
+                {busy ? ui("Checking…") : plan.cta}
                 {leavesApp && !busy ? (
                   <ExternalLinkIcon className="ml-1.5 h-3 w-3" />
                 ) : null}
@@ -283,9 +287,9 @@ export function AccountPlanOptions({
             ) : (
               <p className="mt-3 rounded-md bg-muted px-2 py-1.5 text-center text-[10px] text-muted-foreground">
                 {isCurrent
-                  ? "Your plan"
+                  ? ui("Your plan")
                   : isFallback
-                    ? "After it ends"
+                    ? ui("After it ends")
                     : (disabledReason ?? plan.cta)}
               </p>
             )}

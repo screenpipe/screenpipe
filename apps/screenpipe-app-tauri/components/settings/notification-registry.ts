@@ -17,6 +17,8 @@
  * per-source `*_enabled` gates), so keep ids stable once shipped.
  */
 
+
+import { msg } from "gt-react";
 export type NotificationGroupId =
   | "recording"
   | "meetings"
@@ -55,37 +57,37 @@ export interface NotificationCategory {
 export const NOTIFICATION_GROUPS: NotificationGroup[] = [
   {
     id: "recording",
-    label: "Recording health",
-    description: "Know the moment capture stops working",
+    label: msg("Recording health", {}),
+    description: msg("Know the moment capture stops working", {}),
   },
   {
     id: "meetings",
-    label: "Meetings",
-    description: "Live notes and audio/transcript health during calls",
+    label: msg("Meetings", {}),
+    description: msg("Live notes and audio/transcript health during calls", {}),
   },
   {
     id: "system",
-    label: "System",
-    description: "Monitors, docking, and power changes",
+    label: msg("System", {}),
+    description: msg("Monitors, docking, and power changes", {}),
   },
   {
     id: "automation",
-    label: "Scheduled tasks & automation",
-    description: "Ideas and alerts from your automations",
+    label: msg("Scheduled tasks & automation", {}),
+    description: msg("Ideas and alerts from your automations", {}),
   },
   {
     id: "app",
-    label: "App",
-    description: "Updates to screenpipe itself",
+    label: msg("App", {}),
+    description: msg("Updates to screenpipe itself", {}),
   },
 ];
 
 export const NOTIFICATION_CATEGORIES: NotificationCategory[] = [
   {
     id: "captureStalls",
-    label: "Recording health alerts",
+    label: msg("Recording health alerts", {}),
     description:
-      "Show “recording needs help” and notify when capture stops — may send false positives",
+      msg("Show “recording needs help” and notify when capture stops — may send false positives", {}),
     group: "recording",
     default: false,
     experimental: true,
@@ -94,52 +96,52 @@ export const NOTIFICATION_CATEGORIES: NotificationCategory[] = [
   },
   {
     id: "meetingLiveNotes",
-    label: "Meeting live notes",
-    description: "Prompt to open a live note when a meeting is detected",
+    label: msg("Meeting live notes", {}),
+    description: msg("Prompt to open a live note when a meeting is detected", {}),
     group: "meetings",
     default: true,
     keywords: ["live note", "meeting detected", "call"],
   },
   {
     id: "audioCaptureStalled",
-    label: "Meeting audio not capturing",
+    label: msg("Meeting audio not capturing", {}),
     description:
-      "OS notification when a meeting is detected but no audio reaches the recorder within 60s",
+      msg("OS notification when a meeting is detected but no audio reaches the recorder within 60s", {}),
     group: "meetings",
     default: true,
     keywords: ["no audio", "mic", "silent", "meeting"],
   },
   {
     id: "liveTranscriptStalled",
-    label: "Live transcript not flowing",
+    label: msg("Live transcript not flowing", {}),
     description:
-      "In-app alert when audio is captured but no live transcript arrives within 60s",
+      msg("In-app alert when audio is captured but no live transcript arrives within 60s", {}),
     group: "meetings",
     default: true,
     keywords: ["transcript", "subtitles", "stt"],
   },
   {
     id: "displayChanges",
-    label: "Display changes",
+    label: msg("Display changes", {}),
     description:
-      "Tells you when a monitor is plugged in, unplugged, or switched (laptop lid closed, docking)",
+      msg("Tells you when a monitor is plugged in, unplugged, or switched (laptop lid closed, docking)", {}),
     group: "system",
     default: true,
     keywords: ["monitor", "display", "dock", "clamshell", "screen"],
   },
   {
     id: "powerModeChanges",
-    label: "Power mode changes",
+    label: msg("Power mode changes", {}),
     description:
-      "Tells you when battery saver turns on (Balanced or Saver). You'll still get critical alerts if recording pauses on low battery.",
+      msg("Tells you when battery saver turns on (Balanced or Saver). You'll still get critical alerts if recording pauses on low battery.", {}),
     group: "system",
     default: true,
     keywords: ["battery", "saver", "power", "thermal", "ac"],
   },
   {
     id: "pipeNotifications",
-    label: "Scheduled task alerts",
-    description: "Alerts from installed scheduled tasks",
+    label: msg("Scheduled task alerts", {}),
+    description: msg("Alerts from installed scheduled tasks", {}),
     group: "automation",
     default: true,
     hasPerPipe: true,
@@ -147,9 +149,9 @@ export const NOTIFICATION_CATEGORIES: NotificationCategory[] = [
   },
   {
     id: "pipeAllowanceWarnings",
-    label: "Scheduled task allowance warnings",
+    label: msg("Scheduled task allowance warnings", {}),
     description:
-      "Warn before background scheduled tasks use most of your hosted-AI allowance while the reset is still far away",
+      msg("Warn before background scheduled tasks use most of your hosted-AI allowance while the reset is still far away", {}),
     group: "automation",
     default: true,
     keywords: [
@@ -163,8 +165,8 @@ export const NOTIFICATION_CATEGORIES: NotificationCategory[] = [
   },
   {
     id: "appUpdates",
-    label: "App updates",
-    description: "New version available",
+    label: msg("App updates", {}),
+    description: msg("New version available", {}),
     group: "app",
     default: true,
     keywords: ["update", "upgrade", "what's new", "version"],

@@ -161,6 +161,10 @@ import { useDeviceMonitor } from "@/lib/hooks/use-device-monitor";
 import { Monitor, Wifi, WifiOff, ScanSearch, Lock } from "lucide-react";
 import { requestPipeStop } from "@/lib/pipe-stop";
 import { PipeChatDestinationPicker } from "./pipe-chat-destination-picker";
+import { formatUiRelativeTime } from "@/lib/i18n/format";
+import { useMessages, useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 const PIPE_EXECUTIONS_PAGE_LIMIT = 10;
 
@@ -195,6 +199,7 @@ export function ScheduledTasksRefreshButton({
   refreshing: boolean;
   onRefresh: () => void;
 }) {
+  const ui = useGT();
   return (
     <Button
       variant="outline"
@@ -208,7 +213,7 @@ export function ScheduledTasksRefreshButton({
       disabled={refreshing}
       aria-busy={refreshing}
       aria-label={
-        refreshing ? "Refreshing scheduled tasks" : "Refresh scheduled tasks"
+        refreshing ? ui("Refreshing scheduled tasks") : ui("Refresh scheduled tasks")
       }
     >
       {refreshing ? (
@@ -599,6 +604,8 @@ function PipeConnectionPicker({
   onAdd: (connectionKey: string) => void;
   onOpenConnections: () => void;
 }) {
+
+  const ui = useGT();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
 
@@ -670,7 +677,7 @@ function PipeConnectionPicker({
               autoFocus
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search connections..."
+              placeholder={ui("Search connections...")}
               className="h-8 rounded-md pl-8 text-xs"
               spellCheck={false}
             />
@@ -696,10 +703,10 @@ function PipeConnectionPicker({
                   </span>
                   <span className="block truncate text-[11px] text-muted-foreground">
                     {option.kind === "mcp"
-                      ? "MCP server"
+                      ? ui("MCP server")
                       : option.instanceName
                         ? option.connectionName
-                        : "Connection"}
+                        : ui("Connection")}
                   </span>
                 </span>
                 <span className="ml-2 flex shrink-0 items-center gap-1.5 text-[10px] normal-case tracking-wider text-muted-foreground">
@@ -709,7 +716,7 @@ function PipeConnectionPicker({
                       option.connected ? "bg-foreground" : "bg-muted-foreground/30"
                     )}
                   />
-                  {option.connected ? "ready" : "setup"}
+                  {option.connected ? ui("ready") : ui("setup")}
                 </span>
               </button>
             ))
@@ -1001,6 +1008,7 @@ function pipeExecutionDisplayStatus(exec: PipeExecutionStatusFields): string {
 }
 
 function ElapsedTimer({ startedAt }: { startedAt: string }) {
+
   const [elapsed, setElapsed] = useState("");
   useEffect(() => {
     const start = new Date(startedAt).getTime();
@@ -1070,6 +1078,7 @@ function PipePresetSelector({
   pendingConfigSaves: React.MutableRefObject<Record<string, Promise<void>>>;
   apiBase: string;
 }) {
+
   const savePresets = (presetValue: string | string[] | null) => {
     const pipeName = pipe.config.name;
 
@@ -1105,12 +1114,15 @@ function PipePresetSelector({
 }
 
 /** Compact label for a pipe's current schedule (structured config preferred). */
-function pipeScheduleLabel(config: PipeConfig): string {
-  return describeSchedule(config.schedule_config ?? null, config.schedule);
+function pipeScheduleLabel(config: PipeConfig, ui: ReturnType<typeof useMessages>): string {
+  return describeSchedule(config.schedule_config ?? null, config.schedule, ui);
 }
 
 
 export function PipesSection() {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
+  const uiMessages = useMessages();
   // Device selector: null = local machine, string = remote address
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
   const { devices, discoverDevices, discovering } = useDeviceMonitor();
@@ -1316,9 +1328,9 @@ export function PipesSection() {
       if (data.error) throw new Error(data.error);
       await commands.copyTextToClipboard(data.url);
       posthog.capture("pipe_shared_public", { pipe_name: pipe.config.name, pipe_id: data.id });
-      toast({ title: "Link copied!", description: data.url });
+      toast({ title: ui("Link copied!"), description: data.url });
     } catch (err: any) {
-      toast({ title: "Failed to share scheduled task", description: err.message, variant: "destructive" });
+      toast({ title: ui("Failed to share scheduled task"), description: err.message, variant: "destructive" });
     } finally {
       setSharingPublic(null);
     }
@@ -1448,10 +1460,10 @@ export function PipesSection() {
       });
       if (!res.ok) {
         const err = await res.json();
-        toast({ title: "Update failed", description: err.error || "Unknown error", variant: "destructive" });
+        toast({ title: ui("Update failed"), description: err.error || ui("Unknown error"), variant: "destructive" });
         return;
       }
-      toast({ title: "Scheduled task updated", description: `${pipeName} updated successfully` });
+      toast({ title: ui("Scheduled task updated"), description: ui("{value1} updated successfully", { value1: pipeName }) });
       // Remove from updates map and refresh
       setAvailableUpdates(prev => {
         const next = { ...prev };
@@ -1460,7 +1472,7 @@ export function PipesSection() {
       });
       await fetchPipes();
     } catch (e) {
-      toast({ title: "Update failed", description: String(e), variant: "destructive" });
+      toast({ title: ui("Update failed"), description: String(e), variant: "destructive" });
     } finally {
       setUpdatingPipe(null);
     }
@@ -1688,7 +1700,7 @@ export function PipesSection() {
       const message = error instanceof Error ? error.message : "could not clear context";
       setHistoryResetStatus((previous) => ({ ...previous, [pipeName]: "error" }));
       toast({
-        title: "Could not clear remembered context",
+        title: ui("Could not clear remembered context"),
         description: message,
         variant: "destructive",
       });
@@ -1736,14 +1748,14 @@ export function PipesSection() {
         { pipe: name, version }
       );
       toast({
-        title: existing ? `Update pushed (v${version})` : "Shared with team",
+        title: existing ? ui("Update pushed (v{value1})", { value1: version }) : ui("Shared with team"),
         description: existing
-          ? "Teammates' copies will update automatically"
-          : "Teammates can turn it on from their Automations page",
+          ? ui("Teammates' copies will update automatically")
+          : ui("Teammates can turn it on from their Automations page"),
       });
     } catch (err: any) {
       toast({
-        title: "Failed to share",
+        title: ui("Failed to share"),
         description: err?.message,
         variant: "destructive",
       });
@@ -1759,12 +1771,12 @@ export function PipesSection() {
       await team.deleteConfig(id);
       posthog.capture("team_pipe_unshared", { pipe: name });
       toast({
-        title: "Unshared from team",
-        description: "Teammates' copies will be disabled",
+        title: ui("Unshared from team"),
+        description: ui("Teammates' copies will be disabled"),
       });
     } catch (err: any) {
       toast({
-        title: "Failed to unshare",
+        title: ui("Failed to unshare"),
         description: err?.message,
         variant: "destructive",
       });
@@ -1796,13 +1808,13 @@ export function PipesSection() {
         fork: forkName,
       });
       toast({
-        title: `Forked to "${forkName}"`,
-        description: "Your editable copy — off by default",
+        title: ui("Forked to \"{value1}\"", { value1: forkName }),
+        description: ui("Your editable copy — off by default"),
       });
       fetchPipes();
     } catch (err: any) {
       toast({
-        title: "Failed to fork",
+        title: ui("Failed to fork"),
         description: err?.message,
         variant: "destructive",
       });
@@ -1874,7 +1886,7 @@ export function PipesSection() {
       if (updatedPipes.length > 0) {
         posthog.capture("team_pipe_auto_updated", { pipes: updatedPipes });
         toast({
-          title: "Team scheduled tasks updated",
+          title: ui("Team scheduled tasks updated"),
           description: updatedPipes.join(", "),
         });
       }
@@ -1915,8 +1927,8 @@ export function PipesSection() {
             if (updated.length > 0) {
               for (const u of updated) {
                 toast({
-                  title: `${u.pipe_name} auto-updated`,
-                  description: `v${u.from_version} → v${u.to_version}`,
+                  title: ui("{value1} auto-updated", { value1: u.pipe_name }),
+                  description: ui("v{value1} → v{value2}", { value1: u.from_version, value2: u.to_version }),
                 });
               }
               // Refresh updates map and pipes list
@@ -2108,8 +2120,8 @@ export function PipesSection() {
   const togglePipe = async (name: string, enabled: boolean) => {
     if (isEnterpriseManagedName(name)) {
       toast({
-        title: "Managed by your organization",
-        description: "An organization admin controls when this task runs and whether it is enabled",
+        title: ui("Managed by your organization"),
+        description: ui("An organization admin controls when this task runs and whether it is enabled"),
       });
       return;
     }
@@ -2150,8 +2162,8 @@ export function PipesSection() {
         )
       );
       toast({
-        title: "Scheduled task toggle failed",
-        description: `Could not ${enabled ? "enable" : "disable"} "${name}"`,
+        title: ui("Scheduled task toggle failed"),
+        description: ui("Could not {value1} \"{value2}\"", { value1: enabled ? "enable" : "disable", value2: name }),
         variant: "destructive",
       });
     }
@@ -2213,9 +2225,9 @@ export function PipesSection() {
       }
     } catch (error) {
       toast({
-        title: "Scheduled task stop failed",
+        title: ui("Scheduled task stop failed"),
         description:
-          error instanceof Error ? error.message : `Could not stop "${name}"`,
+          error instanceof Error ? error.message : ui("Could not stop \"{value1}\"", { value1: name }),
         variant: "destructive",
       });
     } finally {
@@ -2276,8 +2288,8 @@ export function PipesSection() {
       const failed = results.filter((r) => r.status === "rejected").length;
       if (failed > 0) {
         toast({
-          title: "Some scheduled tasks failed to delete",
-          description: `${failed} of ${selectedPipes.size} scheduled tasks could not be deleted`,
+          title: ui("Some scheduled tasks failed to delete"),
+          description: ui("{value1} of {value2} scheduled tasks could not be deleted", { value1: failed, value2: selectedPipes.size }),
           variant: "destructive",
         });
       }
@@ -2537,7 +2549,7 @@ export function PipesSection() {
           <div className="relative flex-1">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <Input
-              placeholder="Search scheduled tasks..."
+              placeholder={ui("Search scheduled tasks...")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-8 h-8 text-sm"
@@ -2549,7 +2561,7 @@ export function PipesSection() {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs capitalize">
-                  {pipeTypeFilter === "cloud" ? "Cloud" : `${pipeTypeFilter} (${tabCounts.local})`}
+                  {pipeTypeFilter === "cloud" ? ui("Cloud") : `${pipeTypeFilter} (${tabCounts.local})`}
                   <ChevronDown className="h-3 w-3 opacity-50" />
                 </Button>
               </DropdownMenuTrigger>
@@ -2575,7 +2587,7 @@ export function PipesSection() {
             size="icon"
             className="h-8 w-8"
             onClick={() => pipeFavorites.setShowOnly(!pipeFavorites.showOnly)}
-            title={pipeFavorites.showOnly ? "Show all scheduled tasks" : "Show only starred scheduled tasks"}
+            title={pipeFavorites.showOnly ? ui("Show all scheduled tasks") : ui("Show only starred scheduled tasks")}
           >
             <Star
               className={cn(
@@ -2668,12 +2680,12 @@ export function PipesSection() {
               <AlertCircle className="h-7 w-7 mx-auto text-muted-foreground/70" />
               <div>
                 <p className="text-foreground font-medium text-base">
-                  {isRemote ? "Couldn't load scheduled tasks from this device" : "Screenpipe backend is unavailable"}
+                  {isRemote ? ui("Couldn't load scheduled tasks from this device") : ui("Screenpipe backend is unavailable")}
                 </p>
                 <p className="text-sm mt-1">
                   {isRemote
-                    ? `The remote API at ${apiBase} did not answer. check that screenpipe is running on that device.`
-                    : `Your scheduled task files may still be installed, but the local API at ${apiBase} did not answer.`}
+                    ? ui("The remote API at {value1} did not answer. check that screenpipe is running on that device.", { value1: apiBase })
+                    : ui("Your scheduled task files may still be installed, but the local API at {value1} did not answer.", { value1: apiBase })}
                 </p>
                 <p className="text-xs mt-2 font-mono text-muted-foreground/80">{loadError}</p>
               </div>
@@ -2696,8 +2708,8 @@ export function PipesSection() {
                   </p>
                   <p className="text-sm mt-1">
                     {pipeFavorites.favorites.size === 0
-                      ? "Star any scheduled task to keep your favorites here"
-                      : "None of your starred scheduled tasks match this filter right now"}
+                      ? ui("Star any scheduled task to keep your favorites here")
+                      : ui("None of your starred scheduled tasks match this filter right now")}
                   </p>
                 </div>
                 <div>
@@ -2794,12 +2806,10 @@ export function PipesSection() {
                 (pipe.config.trigger?.custom?.length || 0);
               const scheduleSummary =
                 triggerCount > 0
-                  ? `${triggerCount} trigger${triggerCount > 1 ? "s" : ""}${
-                      pipeHasSchedule(pipe.config) ? ` + ${pipeScheduleLabel(pipe.config)}` : ""
-                    }`
+                  ? ui("{value1, plural, one {# trigger} other {# triggers}}{value3}", { value1: triggerCount, value3: pipeHasSchedule(pipe.config) ? ` + ${pipeScheduleLabel(pipe.config, uiMessages)}` : "" })
                   : pipeHasSchedule(pipe.config)
-                    ? pipeScheduleLabel(pipe.config)
-                    : "manual";
+                    ? pipeScheduleLabel(pipe.config, uiMessages)
+                    : ui("manual");
               // What actually happened last, spelled out rather than left to
               // colour alone. The detail pane shows this as-is — it has an
               // explicit auto-run control right below, so it doesn't need the
@@ -2807,15 +2817,15 @@ export function PipesSection() {
               const lastRunFact =
                 lastStatus === "error"
                   ? lastExec?.started_at
-                    ? `failed ${relativeTime(lastExec.started_at)}`
-                    : "failed"
+                    ? ui("failed {when}", { when: formatUiRelativeTime(lastExec.started_at, uiLocale) })
+                    : ui("failed")
                   : lastExec?.started_at
-                    ? `ran ${relativeTime(lastExec.started_at)}`
-                    : "never run";
+                    ? ui("ran {when}", { when: formatUiRelativeTime(lastExec.started_at, uiLocale) })
+                    : ui("never run");
               // Forward-looking, and only while auto-run is on — a countdown
               // beside a paused task would promise a run that isn't coming.
               const nextRunLabel = pipe.config.enabled
-                ? formatNextRun(pipe.next_run)
+                ? formatNextRun(pipe.next_run, undefined, uiMessages)
                 : null;
               // The row gets exactly one status token, in priority order —
               // never stacked. "paused" outranks the last run because the
@@ -2827,13 +2837,13 @@ export function PipesSection() {
               // are the thing users actually get burned by. Healthy pipes get
               // the forward-looking answer to "when does this run again?".
               const lastRunSummary = isRunning
-                ? `running ${runningLabel ?? "now"}`
+                ? ui("running {elapsed}", { elapsed: runningLabel ?? ui("now") })
                 : !pipe.config.enabled
-                  ? "paused"
+                  ? ui("paused")
                   : lastStatus === "error"
                     ? lastRunFact
                     : nextRunLabel
-                      ? `next run ${nextRunLabel}`
+                      ? ui("next run {when}", { when: nextRunLabel })
                       : lastRunFact;
               const description =
                 typeof pipe.config.description === "string" &&
@@ -2912,14 +2922,14 @@ export function PipesSection() {
                       {enterpriseManaged && (
                         <Lock
                           className="h-3 w-3 shrink-0 text-muted-foreground"
-                          aria-label="Managed by your organization"
+                          aria-label={ui("Managed by your organization")}
                         />
                       )}
                       <span className="truncate text-sm font-medium">{pipe.config.name}</span>
                       {hasMissingConnections && (
                         <span
                           className="shrink-0 font-mono text-[10px] text-destructive"
-                          title="Required connections are not configured"
+                          title={ui("Required connections are not configured")}
                         >
                           Setup
                         </span>
@@ -2927,7 +2937,7 @@ export function PipesSection() {
                       {availableUpdates[pipe.config.name] && (
                         <ArrowUpCircle
                           className="h-3 w-3 shrink-0 text-muted-foreground"
-                          aria-label="Update available"
+                          aria-label={ui("Update available")}
                         />
                       )}
                     </div>
@@ -2948,7 +2958,7 @@ export function PipesSection() {
                         ? "text-foreground"
                         : "text-muted-foreground/50 opacity-0 hover:text-muted-foreground focus:opacity-100 group-hover:opacity-100",
                     )}
-                    title={isFavorite ? "Unstar" : "Star this scheduled task"}
+                    title={isFavorite ? ui("Unstar") : ui("Star this scheduled task")}
                     aria-pressed={isFavorite}
                   >
                     <Star className={cn("h-3.5 w-3.5", isFavorite && "fill-foreground")} />
@@ -2979,15 +2989,15 @@ export function PipesSection() {
                         <PipeActivityIndicator
                           kind="running"
                           label={runningLabel}
-                          ariaLabel={`running ${runningLabel ?? "now"}`}
+                          ariaLabel={ui("running {value1}", { value1: runningLabel ?? "now" })}
                         />
                       ) : lastStatus === "error" ? (
                         <PipeActivityIndicator
                           kind="error"
                           label={
-                            lastExec?.started_at ? relativeTime(lastExec.started_at) : "Failed"
+                            lastExec?.started_at ? relativeTime(lastExec.started_at) : ui("Failed")
                           }
-                          ariaLabel="last run failed"
+                          ariaLabel={ui("last run failed")}
                         />
                       ) : (
                         <span className="font-mono text-xs text-muted-foreground">
@@ -3007,7 +3017,7 @@ export function PipesSection() {
                         <Badge
                           variant="outline"
                           className="h-5 shrink-0 gap-1 rounded-none text-[10px]"
-                          title={`Organization managed v${parseEnterpriseManagedVersion(pipe.raw_content)} — configuration is enforced by your administrator`}
+                          title={ui("Organization managed v{value1} — configuration is enforced by your administrator", { value1: parseEnterpriseManagedVersion(pipe.raw_content) })}
                         >
                           <Lock className="h-2.5 w-2.5" /> Managed
                         </Badge>
@@ -3016,10 +3026,8 @@ export function PipesSection() {
                         <Badge
                           variant="outline"
                           className="text-[10px] h-5 shrink-0 gap-1"
-                          title={`Shared with your team (v${
-                            (sharedByMe.get(pipe.config.name)?.value as Partial<TeamPipePayload>)
-                              ?.version ?? "?"
-                          })`}
+                          title={ui("Shared with your team (v{value1})", { value1: (sharedByMe.get(pipe.config.name)?.value as Partial<TeamPipePayload>)
+                              ?.version ?? "?" })}
                         >
                           <Share2 className="h-2.5 w-2.5" /> Shared
                         </Badge>
@@ -3028,18 +3036,18 @@ export function PipesSection() {
                         <Badge
                           variant="secondary"
                           className="text-[10px] h-5 shrink-0"
-                          title={`Team scheduled task v${parseTeamVersion(pipe.raw_content)} — read-only, updates automatically when the author re-shares`}
+                          title={ui("Team scheduled task v{value1} — read-only, updates automatically when the author re-shares", { value1: parseTeamVersion(pipe.raw_content) })}
                         >
                           {sharerNameForPipe(pipe.config.name)
-                            ? `Team v${parseTeamVersion(pipe.raw_content)} · ${sharerNameForPipe(pipe.config.name)}`
-                            : `Team v${parseTeamVersion(pipe.raw_content)}`}
+                            ? ui("Team v{value1} · {value2}", { value1: parseTeamVersion(pipe.raw_content), value2: sharerNameForPipe(pipe.config.name) })
+                            : ui("Team v{value1}", { value1: parseTeamVersion(pipe.raw_content) })}
                         </Badge>
                       )}
                       {isUnsharedLeftover(pipe) && (
                         <Badge
                           variant="outline"
                           className="text-[10px] h-5 shrink-0 text-muted-foreground"
-                          title="No longer shared with the team — auto-run was disabled; fork to keep it or delete it"
+                          title={ui("No longer shared with the team — auto-run was disabled; fork to keep it or delete it")}
                         >
                           No longer shared
                         </Badge>
@@ -3048,7 +3056,7 @@ export function PipesSection() {
                         <Badge
                           variant="outline"
                           className="h-5 shrink-0 rounded-none text-[10px] text-muted-foreground"
-                          title="Future runs remember prior context and update one chat"
+                          title={ui("Future runs remember prior context and update one chat")}
                         >
                           One chat
                         </Badge>
@@ -3092,7 +3100,7 @@ export function PipesSection() {
                             e.stopPropagation();
                             setConnectionModal({ pipeName: pipe.config.name, connections: pipe.config.connections ?? [] });
                           }}
-                          title="Required connections are not configured"
+                          title={ui("Required connections are not configured")}
                         >
                           Setup
                         </button>
@@ -3114,8 +3122,8 @@ export function PipesSection() {
                             className="h-9 gap-2 rounded-md px-3 font-mono text-xs normal-case"
                             onClick={() => stopPipe(pipe.config.name)}
                             disabled={stoppingPipe === pipe.config.name}
-                            title="Stop scheduled task"
-                            aria-label="Stop scheduled task"
+                            title={ui("Stop scheduled task")}
+                            aria-label={ui("Stop scheduled task")}
                           >
                             {stoppingPipe === pipe.config.name ? (
                               <Loader2 className="h-5 w-5 animate-spin" />
@@ -3140,8 +3148,8 @@ export function PipesSection() {
                               }
                             }}
                             disabled={runningPipe === pipe.config.name}
-                            title={hasMissingConnections ? "Configure required connections first" : "Run scheduled task"}
-                            aria-label={hasMissingConnections ? "Configure required connections first" : "Run scheduled task"}
+                            title={hasMissingConnections ? ui("Configure required connections first") : ui("Run scheduled task")}
+                            aria-label={hasMissingConnections ? ui("Configure required connections first") : ui("Run scheduled task")}
                           >
                             {hasMissingConnections
                               ? <AlertCircle className="h-4 w-4" />
@@ -3169,7 +3177,7 @@ export function PipesSection() {
                               autoSend: true,
                             });
                           }}
-                          title="Optimize this scheduled task with AI — reads recent runs and improves the prompt"
+                          title={ui("Optimize this scheduled task with AI — reads recent runs and improves the prompt")}
                         >
                           <Sparkles className="h-3.5 w-3.5" />
                           Optimize
@@ -3280,7 +3288,7 @@ export function PipesSection() {
                             <DropdownMenuItem
                               onClick={() => {
                                 checkForUpdates();
-                                toast({ title: "Checking for updates..." });
+                                toast({ title: ui("Checking for updates...") });
                               }}
                             >
                               <RefreshCw className="h-3.5 w-3.5 mr-2" />
@@ -3311,7 +3319,7 @@ export function PipesSection() {
                             }}
                           >
                             <CheckSquare className="h-3.5 w-3.5 mr-2" />
-                            {selectedPipes.has(pipe.config.name) ? "Deselect" : "Select"}
+                            {selectedPipes.has(pipe.config.name) ? ui("Deselect") : ui("Select")}
                           </DropdownMenuItem>}
                           {/* Delete is hidden while a team share is active (the
                               sync would reinstall it) but allowed once unshared. */}
@@ -3335,18 +3343,18 @@ export function PipesSection() {
                       className="ml-auto flex items-center gap-2"
                       title={
                         enterpriseManaged
-                          ? "Managed by your organization"
+                          ? ui("Managed by your organization")
                           : hasMissingConnections && !pipe.config.enabled
-                          ? "Configure required connections before enabling auto-run"
+                          ? ui("Configure required connections before enabling auto-run")
                           : pipe.config.enabled
-                            ? "Auto-running on schedule — click to disable"
-                            : "Auto-run disabled — you can still run this task manually"
+                            ? ui("Auto-running on schedule — click to disable")
+                            : ui("Auto-run disabled — you can still run this task manually")
                       }
                     >
                       {/* A naked switch doesn't say what it controls. Name the
                           state so it reads without hovering. */}
                       <span className="font-mono text-xs text-muted-foreground">
-                        {pipe.config.enabled ? "Auto-run on" : "Auto-run off"}
+                        {pipe.config.enabled ? ui("Auto-run on") : ui("Auto-run off")}
                       </span>
                       <Switch
                         checked={pipe.config.enabled}
@@ -3406,11 +3414,11 @@ export function PipesSection() {
                             <dl className="mt-4 grid gap-2 font-mono text-xs sm:grid-cols-2">
                               <div>
                                 <dt className="text-muted-foreground">Schedule</dt>
-                                <dd>{pipeScheduleLabel(pipe.config)}</dd>
+                                <dd>{pipeScheduleLabel(pipe.config, uiMessages)}</dd>
                               </div>
                               <div>
                                 <dt className="text-muted-foreground">AI preset</dt>
-                                <dd>{Array.isArray(pipe.config.preset) ? pipe.config.preset[0] : pipe.config.preset || "Organization default"}</dd>
+                                <dd>{Array.isArray(pipe.config.preset) ? pipe.config.preset[0] : pipe.config.preset || ui("Organization default")}</dd>
                               </div>
                             </dl>
                           </div>
@@ -3479,7 +3487,7 @@ export function PipesSection() {
 
                         {/* Connections */}
                         <div className="p-4">
-                          <Label className="text-xs mb-2 block cursor-help" title="Give the agent access to your apps (Slack, Obsidian, CRM, etc.) — credentials are fetched at runtime">Connections</Label>
+                          <Label className="text-xs mb-2 block cursor-help" title={ui("Give the agent access to your apps (Slack, Obsidian, CRM, etc.) — credentials are fetched at runtime")}>Connections</Label>
                           <div className="flex flex-wrap items-center gap-2">
                             {(pipe.config.connections || []).map((connId) => {
                               const baseId = pipeConnectionLookupKey(connId);
@@ -3625,7 +3633,7 @@ export function PipesSection() {
                               <div key={exec.id} className="border p-2 space-y-1" style={{ contain: "layout paint" }}>
                                 <div className="flex items-center gap-2 text-xs font-mono flex-wrap">
                                   <span className="text-muted-foreground">
-                                    {exec.started_at ? new Date(exec.started_at).toLocaleString() : "Queued"}
+                                    {exec.started_at ? new Date(exec.started_at).toLocaleString(uiLocale) : ui("Queued")}
                                   </span>
                                   <Badge variant={statusBadgeVariant(pipeExecutionDisplayStatus(exec))} className="text-[10px] h-5">{pipeExecutionDisplayStatus(exec)}</Badge>
                                   {!pipeExecutionCompletedBeforeContinueError(exec) && errorTypeBadge(exec.error_type)}
@@ -3634,20 +3642,20 @@ export function PipesSection() {
                                   {exec.model && <span className="text-muted-foreground/60 truncate max-w-[100px]">{exec.model}</span>}
                                   {pipeExecutionDisplayStatus(exec) === "completed" && exec.stdout && cleanPipeStdout(exec.stdout) && (
                                     <div className="ml-auto flex items-center gap-1">
-                                      <button className="text-muted-foreground hover:text-foreground p-0.5" title="Copy" onClick={() => {
+                                      <button className="text-muted-foreground hover:text-foreground p-0.5" title={ui("Copy")} onClick={() => {
                                         commands.copyTextToClipboard(cleanPipeStdout(exec.stdout));
                                         setCopiedExecId(exec.id);
                                         setTimeout(() => setCopiedExecId((prev) => prev === exec.id ? null : prev), 1500);
                                       }}>
                                         {copiedExecId === exec.id ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
                                       </button>
-                                      <button className="text-muted-foreground hover:text-foreground p-0.5" title="Open in chat" onClick={async () => {
+                                      <button className="text-muted-foreground hover:text-foreground p-0.5" title={ui("Open in chat")} onClick={async () => {
                                         const recorderSid = exec.conversation_id || `pipe:${exec.pipe_name}:${exec.id}`;
                                         const existing = await loadConversationFile(recorderSid);
                                         if (pipeExecutionUsesExistingChat(exec) && !existing) {
                                           toast({
-                                            title: "Chat unavailable",
-                                            description: "This run's destination was deleted or cannot be read",
+                                            title: ui("Chat unavailable"),
+                                            description: ui("This run's destination was deleted or cannot be read"),
                                             variant: "destructive",
                                           });
                                           return;
@@ -3716,7 +3724,7 @@ export function PipesSection() {
                               // see contain: layout paint comment above
                               <div key={i} className="border p-2 space-y-1" style={{ contain: "layout paint" }}>
                                 <div className="flex items-center gap-2 text-xs font-mono">
-                                  <span className="text-muted-foreground">{new Date(log.started_at).toLocaleString()}</span>
+                                  <span className="text-muted-foreground">{new Date(log.started_at).toLocaleString(uiLocale)}</span>
                                   <span>{log.success ? "✓" : "✗"}</span>
                                   <span className="text-muted-foreground">{Math.round((new Date(log.finished_at).getTime() - new Date(log.started_at).getTime()) / 1000)}s</span>
                                 </div>
@@ -3729,7 +3737,7 @@ export function PipesSection() {
                                         setCopiedExecId(-(i + 1));
                                         setTimeout(() => setCopiedExecId((prev) => prev === -(i + 1) ? null : prev), 1500);
                                       }}
-                                      title="Copy"
+                                      title={ui("Copy")}
                                     >
                                       {copiedExecId === -(i + 1) ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
                                     </button>
@@ -3764,7 +3772,7 @@ export function PipesSection() {
                       {/* Notification API permission */}
                       <div className="flex items-center justify-between gap-3 px-4 py-3">
                         <div className="min-w-0">
-                          <span className="text-xs font-medium cursor-help" title="Allows this scheduled task to call POST /notify">Allow notification API</span>
+                          <span className="text-xs font-medium cursor-help" title={ui("Allows this scheduled task to call POST /notify")}>Allow notification API</span>
                           <p className="mt-0.5 text-[11px] text-muted-foreground">
                             Blocks hardcoded POST /notify calls when turned off.
                           </p>
@@ -3826,7 +3834,7 @@ export function PipesSection() {
                       {/* Timeout */}
                       <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_11rem] sm:items-center">
                         <div>
-                          <Label className="cursor-help text-xs font-medium" title="Max execution time before the scheduled task is stopped — increase for slow LLMs or complex tasks">Timeout</Label>
+                          <Label className="cursor-help text-xs font-medium" title={ui("Max execution time before the scheduled task is stopped — increase for slow LLMs or complex tasks")}>Timeout</Label>
                           <p className="mt-0.5 text-[11px] text-muted-foreground">
                             Stop a run if it exceeds this limit.
                           </p>
@@ -3893,9 +3901,9 @@ export function PipesSection() {
                                   id={`pipe-run-destination-description-${pipe.config.name}`}
                                   className="mt-0.5 text-[11px] text-muted-foreground"
                                 >
-                                  {mode === "per_run" && "A new chat with fresh context for every run."}
-                                  {mode === "task_chat" && "this task's own chat, shared across runs and your replies."}
-                                  {mode === "existing_chat" && "the selected chat on this device, using that chat's AI settings and approval prompts."}
+                                  {mode === "per_run" && ui("A new chat with fresh context for every run.")}
+                                  {mode === "task_chat" && ui("this task's own chat, shared across runs and your replies.")}
+                                  {mode === "existing_chat" && ui("the selected chat on this device, using that chat's AI settings and approval prompts.")}
                                 </p>
                               </div>
                               <Select
@@ -3933,7 +3941,7 @@ export function PipesSection() {
                                   <SelectItem value="per_run">New chat each run</SelectItem>
                                   <SelectItem value="task_chat">This task&apos;s chat</SelectItem>
                                   <SelectItem value="existing_chat" disabled={Boolean(selectedDevice)}>
-                                    Existing chat{selectedDevice ? " (choose on that device)" : ""}
+                                    Existing chat{selectedDevice ? ui(" (choose on that device)") : ""}
                                   </SelectItem>
                                 </SelectContent>
                               </Select>
@@ -3945,8 +3953,8 @@ export function PipesSection() {
                                   <Label className="text-xs font-medium">Chat</Label>
                                   <p className="mt-0.5 text-[11px] text-muted-foreground">
                                     {selectedDevice
-                                      ? "Open this task on that device to view or change its chat."
-                                      : "Renaming or unpinning is safe. Deleting this chat makes future runs fail until you choose another."}
+                                      ? ui("Open this task on that device to view or change its chat.")
+                                      : ui("Renaming or unpinning is safe. Deleting this chat makes future runs fail until you choose another.")}
                                   </p>
                                 </div>
                                 {selectedDevice ? (
@@ -3994,7 +4002,7 @@ export function PipesSection() {
                               )}
                               {historySaveStatus[pipe.config.name] === "saved" && (
                                 <div className="flex items-center gap-1 text-[11px] text-muted-foreground" role="status">
-                                  <Check className="h-3 w-3" /> Destination saved on {selectedDevice ? "selected device" : "this device"}
+                                  <Check className="h-3 w-3" /> Destination saved on {selectedDevice ? ui("selected device") : ui("this device")}
                                 </div>
                               )}
                               {historySaveStatus[pipe.config.name] === "error" && (
@@ -4026,8 +4034,8 @@ export function PipesSection() {
                                         onClick={() => setHistoryResetPipe(pipe)}
                                       >
                                         {mode === "task_chat"
-                                          ? "Start next run fresh"
-                                          : "Clear saved task-chat context"}
+                                          ? ui("Start next run fresh")
+                                          : ui("Clear saved task-chat context")}
                                       </Button>
                                     )}
                                     {isRunning && (
@@ -4072,7 +4080,7 @@ export function PipesSection() {
                         )}
                         {saveStatus[pipe.config.name] === "error" && (
                           <span className="text-[11px] text-destructive" title={saveErrors[pipe.config.name]}>
-                            Save failed: {saveErrors[pipe.config.name] || "unknown error"}
+                            Save failed: {saveErrors[pipe.config.name] || ui("unknown error")}
                           </span>
                         )}
                         {promptDrafts[pipe.config.name] !== undefined && !saveStatus[pipe.config.name] && (
@@ -4083,8 +4091,8 @@ export function PipesSection() {
                       {isReadOnlyPipe(pipe) && (
                         <p className="px-4 pt-3 text-[11px] text-muted-foreground">
                           {isEnterpriseManagedPipe(pipe)
-                            ? "Managed by your organization (read-only, restored automatically)"
-                            : "Shared by your team (read-only, updates automatically) — fork it to make an editable copy"}
+                            ? ui("Managed by your organization (read-only, restored automatically)")
+                            : ui("Shared by your team (read-only, updates automatically) — fork it to make an editable copy")}
                         </p>
                       )}
                       <Textarea
@@ -4120,8 +4128,8 @@ export function PipesSection() {
                               <div className="flex items-center gap-2 text-xs font-mono flex-wrap">
                                 <span className="text-muted-foreground">
                                   {exec.started_at
-                                    ? new Date(exec.started_at).toLocaleString()
-                                    : "Queued"}
+                                    ? new Date(exec.started_at).toLocaleString(uiLocale)
+                                    : ui("Queued")}
                                 </span>
                                 <Badge variant={statusBadgeVariant(pipeExecutionDisplayStatus(exec))} className="text-[10px] h-5">
                                   {pipeExecutionDisplayStatus(exec)}
@@ -4143,7 +4151,7 @@ export function PipesSection() {
                                 {exec.stdout && (
                                   <button
                                     className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
-                                    title="view in chat"
+                                    title={ui("view in chat")}
                                     onClick={async (e) => {
                                       e.stopPropagation();
                                       const conversationId =
@@ -4151,8 +4159,8 @@ export function PipesSection() {
                                       const existing = await loadConversationFile(conversationId);
                                       if (pipeExecutionUsesExistingChat(exec) && !existing) {
                                         toast({
-                                          title: "Chat unavailable",
-                                          description: "This run's destination was deleted or cannot be read",
+                                          title: ui("Chat unavailable"),
+                                          description: ui("This run's destination was deleted or cannot be read"),
                                           variant: "destructive",
                                         });
                                         return;
@@ -4222,7 +4230,7 @@ export function PipesSection() {
                               >
                                 <div className="flex items-center gap-2 text-xs font-mono">
                                   <span className="text-muted-foreground">
-                                    {new Date(log.started_at).toLocaleString()}
+                                    {new Date(log.started_at).toLocaleString(uiLocale)}
                                   </span>
                                   <span>
                                     {log.success ? "✓" : "✗"}
@@ -4278,8 +4286,8 @@ export function PipesSection() {
                           size="icon"
                           className="h-7 w-7 shrink-0"
                           onClick={() => setCreating(false)}
-                          title="Close"
-                          aria-label="Close"
+                          title={ui("Close")}
+                          aria-label={ui("Close")}
                         >
                           <X className="h-3.5 w-3.5" />
                         </Button>
@@ -4301,12 +4309,12 @@ export function PipesSection() {
                         <div className="flex items-center gap-2">
                           <Input
                             autoFocus
-                            placeholder="E.g. every morning, list the people I still need to reply to"
+                            placeholder={ui("E.g. every morning, list the people I still need to reply to")}
                             className="font-mono text-sm"
                           />
                           <button
                             type="submit"
-                            aria-label="Create scheduled task"
+                            aria-label={ui("Create scheduled task")}
                             className="inline-flex h-9 w-9 shrink-0 items-center justify-center border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                           >
                             <ArrowRight className="h-4 w-4" />
@@ -4433,8 +4441,8 @@ export function PipesSection() {
               Clears the remembered AI context and removes the shared chat from your
               sidebar. Completed execution records stay in Runs. This cannot be undone.
               {historyResetPipe?.config.history
-                ? " the next run starts a new shared chat."
-                : " future runs stay separate unless you turn one-chat memory back on."}
+                ? ui(" the next run starts a new shared chat.")
+                : ui(" future runs stay separate unless you turn one-chat memory back on.")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 sm:gap-0">
@@ -4512,7 +4520,7 @@ export function PipesSection() {
       <Dialog open={bulkDeleteConfirm} onOpenChange={(open) => { if (!open && !bulkDeleting) setBulkDeleteConfirm(false); }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete {selectedPipes.size} scheduled task{selectedPipes.size !== 1 ? "s" : ""}?</DialogTitle>
+            <DialogTitle>{ui("Delete {count, plural, one {# scheduled task} other {# scheduled tasks}}?", { count: selectedPipes.size })}</DialogTitle>
             <DialogDescription>
               This will permanently remove the selected scheduled tasks and their configurations. This action cannot be undone.
             </DialogDescription>

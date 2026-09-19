@@ -11,12 +11,15 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import type { ComposerCodingWorkspaceProps } from "./composer-types";
+import { useGT } from "gt-react";
+
 
 export function ComposerWorktreeToggle({
   codingWorkspace,
 }: {
   codingWorkspace: ComposerCodingWorkspaceProps;
 }) {
+  const ui = useGT();
   const { workspace, isLoading, error } = codingWorkspace;
   const repoName = workspace?.repoRoot.split(/[\\/]/).filter(Boolean).at(-1);
 
@@ -26,7 +29,7 @@ export function ComposerWorktreeToggle({
         className="flex h-7 shrink-0 items-center gap-1.5 text-xs font-medium text-muted-foreground"
         data-testid="coding-workspace-row"
         role="status"
-        aria-label="Preparing worktree"
+        aria-label={ui("Preparing worktree")}
         aria-live="polite"
       >
         <PipeAIIcon size={16} thinking className="text-foreground" />
@@ -95,7 +98,7 @@ export function ComposerWorktreeToggle({
             <button
               type="button"
               className="inline-flex h-6 shrink-0 items-center gap-1 rounded-sm border border-destructive/30 px-1.5 text-[10px] font-medium text-destructive transition-colors duration-150 hover:bg-destructive/5 focus-visible:ring-1 focus-visible:ring-destructive focus-visible:ring-offset-1 motion-reduce:transition-none"
-              aria-label="Worktree setup failed"
+              aria-label={ui("Worktree setup failed")}
             >
               <CircleAlert className="h-3 w-3" />
               <span>Setup failed</span>

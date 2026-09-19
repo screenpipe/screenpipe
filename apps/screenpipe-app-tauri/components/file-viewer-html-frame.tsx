@@ -8,6 +8,8 @@ import { useMemo, useRef, useState } from "react";
 import { useEventListener } from "@/lib/hooks/use-event-listener";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { wrapHtmlForSandbox } from "@/lib/utils/html-sandbox";
+import { useGT } from "gt-react";
+
 
 interface HtmlPreviewFrameProps {
   /** Raw artifact HTML. Wrapped with our CSP + bridge before rendering. */
@@ -55,6 +57,8 @@ export function HtmlPreviewFrame({
   onOpenExternal,
   fillHeight = false,
 }: HtmlPreviewFrameProps) {
+
+  const ui = useGT();
   const ref = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(200);
 
@@ -85,7 +89,7 @@ export function HtmlPreviewFrame({
       if (
         !internal &&
         !(typeof window !== "undefined" &&
-          window.confirm(`open external link?\n\n${url}`))
+          window.confirm(ui("open external link?\n\n{value1}", { value1: url })))
       ) {
         return;
       }
@@ -98,7 +102,7 @@ export function HtmlPreviewFrame({
     <div className={`space-y-2 ${fillHeight ? "flex h-full min-h-0 flex-col" : ""}`}>
       <iframe
         ref={ref}
-        title="Rendered html preview"
+        title={ui("Rendered html preview")}
         sandbox="allow-scripts"
         // Deny every Permissions-Policy feature (camera, mic, geolocation, …)
         // on top of the sandbox. Belt-and-suspenders for an opaque origin.

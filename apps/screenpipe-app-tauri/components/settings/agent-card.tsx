@@ -33,6 +33,10 @@ import { toast } from "@/components/ui/use-toast";
 import posthog from "posthog-js";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { connectionResponseState } from "@/lib/utils/connection-credentials";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 // ---------------------------------------------------------------------------
 // Canonical screenpipe SKILL.md content. Re-exported from a generated module so
@@ -177,6 +181,8 @@ export type AgentCardProps = {
 // ---------------------------------------------------------------------------
 
 function McpSection({ name, mcp }: { name: string; mcp: AgentCardProps["mcp"] }) {
+
+  const ui = useGT();
   const [copied, setCopied] = useState(false);
   const handleCopy = useCallback(async () => {
     try {
@@ -207,7 +213,7 @@ function McpSection({ name, mcp }: { name: string; mcp: AgentCardProps["mcp"] })
           size="sm"
           onClick={handleCopy}
           className="absolute top-2 right-2 h-6 w-6 p-0 opacity-100 transition-opacity"
-          title="Copy"
+          title={ui("Copy")}
         >
           {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
         </Button>
@@ -224,6 +230,8 @@ function McpSection({ name, mcp }: { name: string; mcp: AgentCardProps["mcp"] })
 // ---------------------------------------------------------------------------
 
 function SkillSection({ name, skills }: { name: string; skills: SkillVariant[] }) {
+
+  const ui = useGT();
   const [activeId, setActiveId] = useState(skills[0]?.id ?? "");
   const active = skills.find((s) => s.id === activeId) ?? skills[0];
   if (!active) return null;
@@ -232,7 +240,7 @@ function SkillSection({ name, skills }: { name: string; skills: SkillVariant[] }
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground leading-relaxed">
         Drop a screenpipe SKILL.md into {name}&apos;s skills directory and {name} loads it
-        as a new skill. {skills.length > 1 ? "Install either — or both." : ""}
+        as a new skill. {skills.length > 1 ? ui("Install either — or both.") : ""}
       </p>
 
       {skills.length > 1 && (
@@ -259,6 +267,9 @@ function SkillSection({ name, skills }: { name: string; skills: SkillVariant[] }
 }
 
 function SkillVariantBody({ name, variant }: { name: string; variant: SkillVariant }) {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
   const [copied, setCopied] = useState(false);
   const [savedPath, setSavedPath] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -270,11 +281,11 @@ function SkillVariantBody({ name, variant }: { name: string; variant: SkillVaria
       await commands.copyTextToClipboard(variant.md);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-      toast({ title: "Copied SKILL.md to clipboard" });
+      toast({ title: ui("Copied SKILL.md to clipboard") });
     } catch (e) {
-      toast({ title: "Copy failed", description: String(e), variant: "destructive" });
+      toast({ title: ui("Copy failed"), description: String(e), variant: "destructive" });
     }
-  }, [variant.md]);
+  }, [variant.md, uiLanguage]);
 
   const copyCmd = useCallback(async () => {
     if (!variant.cliInstall) return;
@@ -282,11 +293,11 @@ function SkillVariantBody({ name, variant }: { name: string; variant: SkillVaria
       await commands.copyTextToClipboard(variant.cliInstall);
       setCmdCopied(true);
       setTimeout(() => setCmdCopied(false), 2000);
-      toast({ title: "Copied install command" });
+      toast({ title: ui("Copied install command") });
     } catch (e) {
-      toast({ title: "Copy failed", description: String(e), variant: "destructive" });
+      toast({ title: ui("Copy failed"), description: String(e), variant: "destructive" });
     }
-  }, [variant.cliInstall]);
+  }, [variant.cliInstall, uiLanguage]);
 
   const saveToDownloads = useCallback(async () => {
     setSaveError(null);
@@ -299,25 +310,25 @@ function SkillVariantBody({ name, variant }: { name: string; variant: SkillVaria
       const dir = await downloadDir();
       const filePath = await join(dir, variant.downloadName);
       setSavedPath(filePath);
-      toast({ title: "Saved to Downloads", description: filePath });
+      toast({ title: ui("Saved to Downloads"), description: filePath });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error("[skill] save failed", e);
       setSaveError(msg);
-      toast({ title: "Save failed", description: msg, variant: "destructive" });
+      toast({ title: ui("Save failed"), description: msg, variant: "destructive" });
     } finally {
       setIsSaving(false);
     }
-  }, [variant.downloadName, variant.md]);
+  }, [variant.downloadName, variant.md, uiLanguage]);
 
   const revealSaved = useCallback(async () => {
     if (!savedPath) return;
     try {
       await revealItemInDir(savedPath);
     } catch (e) {
-      toast({ title: "Could not open Finder", description: String(e), variant: "destructive" });
+      toast({ title: ui("Could not open Finder"), description: String(e), variant: "destructive" });
     }
-  }, [savedPath]);
+  }, [savedPath, uiLanguage]);
 
   return (
     <div className="space-y-3">
@@ -343,7 +354,7 @@ function SkillVariantBody({ name, variant }: { name: string; variant: SkillVaria
                 size="sm"
                 onClick={copyCmd}
                 className="absolute top-2 right-2 h-6 w-6 p-0"
-                title="Copy"
+                title={ui("Copy")}
               >
                 {cmdCopied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
               </Button>
@@ -366,7 +377,7 @@ function SkillVariantBody({ name, variant }: { name: string; variant: SkillVaria
             ) : (
               <Download className="h-3 w-3 mr-1.5" />
             )}
-            {isSaving ? "Saving…" : savedPath ? "Saved" : "Save SKILL.md to Downloads"}
+            {isSaving ? ui("Saving…") : savedPath ? ui("Saved") : ui("Save SKILL.md to Downloads")}
           </Button>
           {savedPath && (
             <Button variant="ghost" size="sm" onClick={revealSaved} className="text-xs h-7">
@@ -488,6 +499,8 @@ function RemoteSyncSection({
   agentName: string;
   sync: AgentCardProps["sync"];
 }) {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
   const { getDataDir } = useSettings();
   const storageKey = `${sync.storageKeyPrefix}-sync-config`;
   const lastSyncKey = `${sync.storageKeyPrefix}-last-sync`;
@@ -579,7 +592,7 @@ function RemoteSyncSection({
       const result = res.data;
       if (syncCancelledRef.current) return;
       if (result.ok) {
-        const now = new Date().toLocaleString();
+        const now = new Date().toLocaleString(uiLocale);
         setLastSync(now);
         try { localStorage?.setItem(lastSyncKey, now); } catch {}
         setSyncError(null);
@@ -717,14 +730,14 @@ function RemoteSyncSection({
             <button
               onClick={() => updateConfig({ host: "", user: "" })}
               className="text-muted-foreground hover:text-foreground"
-              title="Disconnect"
+              title={ui("Disconnect")}
             >
               <X className="h-3 w-3" />
             </button>
             <button
               onClick={() => setShowAdvanced(!showAdvanced)}
               className="text-muted-foreground hover:text-foreground"
-              title="Advanced settings"
+              title={ui("Advanced settings")}
             >
               <Settings2 className="h-3 w-3" />
             </button>
@@ -734,13 +747,13 @@ function RemoteSyncSection({
             <div className="space-y-2 pt-1">
               <div className="flex gap-2">
                 <Input
-                  placeholder="Host"
+                  placeholder={ui("Host")}
                   value={config.host}
                   onChange={(e) => updateConfig({ host: e.target.value })}
                   className="text-xs h-7 flex-1"
                 />
                 <Input
-                  placeholder="Port"
+                  placeholder={ui("Port")}
                   value={config.port}
                   onChange={(e) => updateConfig({ port: e.target.value })}
                   className="text-xs h-7 w-16"
@@ -748,14 +761,14 @@ function RemoteSyncSection({
               </div>
               <div className="flex gap-2">
                 <Input
-                  placeholder="User"
+                  placeholder={ui("User")}
                   value={config.user}
                   onChange={(e) => updateConfig({ user: e.target.value })}
                   className="text-xs h-7 w-32"
                 />
                 <div className="relative flex-1">
                   <Input
-                    placeholder="SSH key path"
+                    placeholder={ui("SSH key path")}
                     type={showKey ? "text" : "password"}
                     value={config.keyPath}
                     onChange={(e) => updateConfig({ keyPath: e.target.value })}
@@ -772,13 +785,13 @@ function RemoteSyncSection({
               </div>
               <div className="flex gap-2">
                 <Input
-                  placeholder="Remote path"
+                  placeholder={ui("Remote path")}
                   value={config.remotePath}
                   onChange={(e) => updateConfig({ remotePath: e.target.value })}
                   className="text-xs h-7 flex-1"
                 />
                 <Input
-                  placeholder="Min"
+                  placeholder={ui("Min")}
                   type="number"
                   min={1}
                   value={config.intervalMinutes}
@@ -788,7 +801,7 @@ function RemoteSyncSection({
                     })
                   }
                   className="text-xs h-7 w-16"
-                  title="Sync interval in minutes"
+                  title={ui("Sync interval in minutes")}
                 />
               </div>
             </div>
@@ -796,7 +809,7 @@ function RemoteSyncSection({
 
           {testResult && (
             <p className={`text-xs ${testResult.ok ? "text-foreground" : "text-destructive"}`}>
-              {testResult.ok ? "Connected" : testResult.error}
+              {testResult.ok ? ui("Connected") : testResult.error}
             </p>
           )}
           {syncError && <p className="text-xs text-destructive">{syncError}</p>}
@@ -812,7 +825,7 @@ function RemoteSyncSection({
             size="sm"
             className="h-7 text-xs w-20"
           >
-            {isTesting ? <Loader2 className="h-3 w-3 animate-spin" /> : "Test"}
+            {isTesting ? <Loader2 className="h-3 w-3 animate-spin" /> : ui("Test")}
           </Button>
 
           {isSyncing ? (
@@ -844,7 +857,7 @@ function RemoteSyncSection({
       {isConfigured && (
         <div className="px-3 py-2 bg-muted/50 border border-border rounded-md">
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <span>{lastSync ? `Last sync: ${lastSync}` : "Not synced yet"}</span>
+            <span>{lastSync ? ui("Last sync: {value1}", { value1: lastSync }) : ui("Not synced yet")}</span>
             {config.enabled && <span>Every {config.intervalMinutes} min</span>}
           </div>
         </div>
@@ -859,6 +872,8 @@ function RemoteSyncSection({
 // ---------------------------------------------------------------------------
 
 export function ConnectSection({ integrationId, fields }: { integrationId: string; fields: ConnectField[] }) {
+
+  const ui = useGT();
   const [creds, setCreds] = useState<Record<string, string>>({});
   const [visible, setVisible] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState<"idle" | "connecting" | "error" | "saved">("idle");
@@ -919,7 +934,7 @@ export function ConnectSection({ integrationId, fields }: { integrationId: strin
           <div className="relative">
             <Input
               type={field.secret && !visible[field.key] ? "password" : "text"}
-              placeholder={status === "saved" && field.secret ? "Stored securely" : field.placeholder}
+              placeholder={status === "saved" && field.secret ? ui("Stored securely") : field.placeholder}
               value={creds[field.key] || ""}
               onChange={(e) => { setCreds(prev => ({ ...prev, [field.key]: e.target.value })); if (status === "saved") setStatus("idle"); }}
               className="h-8 text-xs pr-8"
@@ -975,6 +990,9 @@ export function ConnectSection({ integrationId, fields }: { integrationId: strin
 // ---------------------------------------------------------------------------
 
 function SecondBrainCallout({ name }: { name: string }) {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
   const [copied, setCopied] = useState(false);
   const [savedPath, setSavedPath] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -984,12 +1002,12 @@ function SecondBrainCallout({ name }: { name: string }) {
       await commands.copyTextToClipboard(SECOND_BRAIN_PROMPT);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-      toast({ title: "Copied second-brain prompt", description: `Paste it into ${name}` });
+      toast({ title: ui("Copied second-brain prompt"), description: ui("Paste it into {value1}", { value1: name }) });
       posthog.capture("second_brain_prompt_copied", { agent: name });
     } catch (e) {
-      toast({ title: "Copy failed", description: String(e), variant: "destructive" });
+      toast({ title: ui("Copy failed"), description: String(e), variant: "destructive" });
     }
-  }, [name]);
+  }, [name, uiLanguage]);
 
   const saveMd = useCallback(async () => {
     setIsSaving(true);
@@ -999,14 +1017,14 @@ function SecondBrainCallout({ name }: { name: string }) {
       });
       const dir = await downloadDir();
       setSavedPath(await join(dir, "screenpipe-second-brain.md"));
-      toast({ title: "Saved to Downloads", description: "Screenpipe-second-brain.md" });
+      toast({ title: ui("Saved to Downloads"), description: ui("Screenpipe-second-brain.md") });
       posthog.capture("second_brain_prompt_saved", { agent: name });
     } catch (e) {
-      toast({ title: "Save failed", description: String(e), variant: "destructive" });
+      toast({ title: ui("Save failed"), description: String(e), variant: "destructive" });
     } finally {
       setIsSaving(false);
     }
-  }, [name]);
+  }, [name, uiLanguage]);
 
   return (
     <div className="rounded-lg border border-border bg-muted/40 p-3 space-y-2">
@@ -1022,7 +1040,7 @@ function SecondBrainCallout({ name }: { name: string }) {
       <div className="flex items-center gap-2 flex-wrap">
         <Button size="sm" onClick={copyPrompt} className="h-7 text-xs">
           {copied ? <Check className="h-3 w-3 mr-1.5" /> : <Copy className="h-3 w-3 mr-1.5" />}
-          {copied ? "copied" : "copy prompt"}
+          {copied ? ui("copied") : ui("copy prompt")}
         </Button>
         <Button
           variant="outline"
@@ -1038,7 +1056,7 @@ function SecondBrainCallout({ name }: { name: string }) {
           ) : (
             <Download className="h-3 w-3 mr-1.5" />
           )}
-          {savedPath ? "Saved" : "Save .md"}
+          {savedPath ? ui("Saved") : ui("Save .md")}
         </Button>
         <a
           href="#"
@@ -1065,6 +1083,7 @@ export function AgentCard({
   sync,
   connect,
 }: AgentCardProps) {
+
   return (
     <Card className="border-border bg-card overflow-hidden">
       <CardContent className="p-0">

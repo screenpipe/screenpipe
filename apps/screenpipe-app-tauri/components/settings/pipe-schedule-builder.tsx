@@ -28,6 +28,9 @@ import {
   type Frequency,
   type ScheduleConfig,
 } from "@/lib/utils/schedule-builder";
+import { useMessages, useGT } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 /** Convert an RFC3339 string to a value for `<input type="date">` (YYYY-MM-DD). */
 function isoToDateInput(iso: string | null): string {
@@ -52,6 +55,9 @@ export function PipeScheduleBuilder({
   onSave: (cfg: ScheduleConfig | null) => void;
   onCancel: () => void;
 }) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const reverseParsed = useMemo(
     () => scheduleStringToConfig(currentScheduleString),
     [currentScheduleString]
@@ -102,7 +108,7 @@ export function PipeScheduleBuilder({
     };
   }, [cfg, manual, weeklyNoDays, apiBase]);
 
-  const summary = preview?.summary || describeScheduleConfig(cfg);
+  const summary = describeScheduleConfig(cfg, uiMessages);
   const nextRun = !manual && preview?.next?.[0]
     ? new Date(preview.next[0]).toLocaleString([], {
         weekday: "short",
@@ -142,7 +148,7 @@ export function PipeScheduleBuilder({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {FREQUENCY_OPTIONS.map((f) => (
+                {localizeDefinitions(FREQUENCY_OPTIONS, uiMessages).map((f) => (
                   <SelectItem key={f.value} value={f.value}>
                     Every {f.label.replace(/s$/, "")}
                   </SelectItem>
@@ -159,7 +165,7 @@ export function PipeScheduleBuilder({
                 type="number"
                 min={1}
                 max={999}
-                aria-label="Interval"
+                aria-label={ui("Interval")}
                 value={cfg.interval}
                 onChange={(e) => update({ interval: Math.max(1, Number(e.target.value) || 1) })}
                 className="h-8 w-16 text-xs"
@@ -173,7 +179,7 @@ export function PipeScheduleBuilder({
             <div>
               <Label className="text-xs mb-1 block">On</Label>
               <div className="flex items-center gap-1">
-                {WEEKDAYS.map((d) => {
+                {localizeDefinitions(WEEKDAYS, uiMessages).map((d) => {
                   const on = cfg.days_of_week.includes(d.key);
                   return (
                     <button
@@ -234,7 +240,7 @@ export function PipeScheduleBuilder({
               <Label className="text-xs">At</Label>
               <input
                 type="time"
-                aria-label="Time"
+                aria-label={ui("Time")}
                 value={timeValue}
                 onChange={(e) => {
                   const [h, m] = e.target.value.split(":").map(Number);
@@ -272,7 +278,7 @@ export function PipeScheduleBuilder({
             <Label className="text-xs">Starting</Label>
             <input
               type="date"
-              aria-label="Starting"
+              aria-label={ui("Starting")}
               value={isoToDateInput(cfg.starting)}
               onChange={(e) =>
                 update({ starting: e.target.value ? `${e.target.value}T00:00:00Z` : null })
@@ -305,7 +311,7 @@ export function PipeScheduleBuilder({
             <div className="flex items-center justify-end">
               <input
                 type="date"
-                aria-label="Ending date"
+                aria-label={ui("Ending date")}
                 value={isoToDateInput(cfg.ending)}
                 onChange={(e) =>
                   update({ ending: e.target.value ? `${e.target.value}T23:59:59Z` : null })
@@ -320,7 +326,7 @@ export function PipeScheduleBuilder({
                 type="number"
                 min={1}
                 max={9999}
-                aria-label="Max occurrences"
+                aria-label={ui("Max occurrences")}
                 value={cfg.max_occurrences ?? 5}
                 onChange={(e) =>
                   update({ max_occurrences: Math.max(1, Number(e.target.value) || 1) })

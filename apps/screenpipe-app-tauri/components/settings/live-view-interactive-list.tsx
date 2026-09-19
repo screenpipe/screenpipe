@@ -14,6 +14,8 @@ import {
 } from "@/lib/live-views/item-actions";
 import { LiveViewListItemText } from "@/components/settings/live-view-list-item-text";
 import { LiveViewItemControls } from "@/components/settings/live-view-item-controls";
+import { useGT } from "gt-react";
+
 
 function stringValue(value: unknown): string {
   return typeof value === "string" || typeof value === "number"
@@ -62,6 +64,8 @@ export function InteractiveLiveViewListItem({
   onAction?: (request: LiveViewItemActionRequest) => Promise<boolean>;
   onHandoff?: (item: LiveViewListItem) => void;
 }) {
+
+  const ui = useGT();
   const itemId = stringValue(item.id);
   const title = stringValue(item.title);
   const resolveLabel = stringValue(item.resolveLabel) || "done";
@@ -113,7 +117,7 @@ export function InteractiveLiveViewListItem({
           variant="ghost"
           size="sm"
           data-testid={`live-view-item-${itemId}-reopen`}
-          aria-label={`Reopen ${title}`}
+          aria-label={ui("Reopen {value1}", { value1: title })}
           className="h-7 rounded-md px-2 text-[11px]"
           disabled={!onAction || saving !== null}
           onClick={() => void act({ action: "reopen" })}
@@ -195,7 +199,7 @@ export function InteractiveLiveViewListItem({
           onHandoff={onHandoff}
         />
         <span className="sr-only" aria-live="polite">
-          {saving ? `Updating ${title}` : ""}
+          {saving ? ui("Updating {value1}", { value1: title }) : ""}
         </span>
       </div>
     </div>

@@ -10,6 +10,8 @@ import { Play, Pause, Mic, Speaker, Check as CheckIcon } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SpeakerAssignPopover } from "@/components/speaker-assign-popover";
 import { MediaComponent } from "@/components/rewind/media";
+import { useGT } from "gt-react";
+
 
 function formatTime(date: Date): string {
 	return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -29,6 +31,8 @@ function getSpeakerColorClass(_speakerId?: number | string): string {
 const TRUNCATE_LENGTH = 150;
 
 function TranscriptionText({ transcription }: { transcription: string }) {
+
+  const ui = useGT();
 	const [expanded, setExpanded] = useState(false);
 
 	if (!transcription) {
@@ -52,7 +56,7 @@ function TranscriptionText({ transcription }: { transcription: string }) {
 					onClick={() => setExpanded(!expanded)}
 					className="ml-1 text-xs text-muted-foreground hover:text-foreground transition-colors duration-150 cursor-pointer"
 				>
-					{expanded ? "Show less" : "Show more"}
+					{expanded ? ui("Show less") : ui("Show more")}
 				</button>
 			)}
 		</p>
@@ -102,6 +106,8 @@ export function ConversationBubble({
 	isSelected,
 	onToggleSelect,
 }: ConversationBubbleProps) {
+
+  const ui = useGT();
 	return (
 		<div
 			className={cn(
@@ -150,7 +156,7 @@ export function ConversationBubble({
 									"cursor-pointer hover:text-foreground hover:underline transition-colors duration-150"
 							)}
 							onClick={onTimestampClick}
-							title={onTimestampClick ? "Jump to this moment in timeline" : undefined}
+							title={onTimestampClick ? ui("Jump to this moment in timeline") : undefined}
 						>
 							{formatTime(timestamp)}
 						</span>
@@ -182,7 +188,7 @@ export function ConversationBubble({
 							onAssigned={onSpeakerAssigned}
 						>
 							<span className="text-[10px] text-muted-foreground hover:text-foreground cursor-pointer transition-colors duration-150">
-								{speakerName || `Speaker #${speakerId ?? "?"}`}
+								{speakerName || ui("Speaker #{value1}", { value1: speakerId ?? "?" })}
 							</span>
 						</SpeakerAssignPopover>
 					</div>
@@ -226,11 +232,13 @@ export function ConversationBubble({
 
 // Time gap divider component
 export function TimeGapDivider({ minutes }: { minutes: number }) {
+
+  const ui = useGT();
 	return (
 		<div className="flex items-center gap-3 py-3">
 			<div className="flex-1 h-px bg-border" />
 			<span className="text-[10px] text-muted-foreground px-2">
-				{minutes < 60 ? `${minutes} min later` : `${Math.round(minutes / 60)}h later`}
+				{minutes < 60 ? ui("{value1} min later", { value1: minutes }) : ui("{value1}h later", { value1: Math.round(minutes / 60) })}
 			</span>
 			<div className="flex-1 h-px bg-border" />
 		</div>
@@ -253,6 +261,8 @@ export function ParticipantsSummary({
 	onSpeakerAssigned?: (audioChunkId: number, newId: number, newName: string) => void;
 	onBulkSpeakerAssigned?: (originalSpeakerId: number, newId: number, newName: string) => void;
 }) {
+  const uiPlural = useGT();
+
 	const [expanded, setExpanded] = useState(false);
 
 	// Named speakers: apply 5% threshold + top 5 cap
@@ -339,7 +349,7 @@ export function ParticipantsSummary({
 			</div>
 			{unnamedCount > 0 && (
 				<div className="text-[10px] text-muted-foreground mt-1">
-					{unnamedCount} speaker{unnamedCount > 1 ? "s" : ""} not identified — click their badge to assign a name
+					{uiPlural("{count, plural, one {# speaker} other {# speakers}}", { count: unnamedCount })} not identified — click their badge to assign a name
 				</div>
 			)}
 		</div>

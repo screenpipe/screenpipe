@@ -3,6 +3,8 @@
 import { toast } from "@/components/ui/use-toast";
 import { commands } from "@/lib/utils/tauri";
 import * as React from "react";
+import { useGT } from "gt-react";
+
 
 export interface useCopyToClipboardProps {
   timeout?: number;
@@ -11,6 +13,7 @@ export interface useCopyToClipboardProps {
 export function useCopyToClipboard({
   timeout = 2000,
 }: useCopyToClipboardProps) {
+  const ui = useGT();
   const [isCopied, setIsCopied] = React.useState<boolean>(false);
 
   const copyToClipboard = (value: string) => {
@@ -25,7 +28,7 @@ export function useCopyToClipboard({
     commands.copyTextToClipboard(value).then(() => {
       setIsCopied(true);
       toast({
-        title: "Copied to clipboard",
+        title: ui("Copied to clipboard"),
         duration: 2000,
       });
 

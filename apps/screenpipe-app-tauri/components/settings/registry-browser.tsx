@@ -38,6 +38,10 @@ import {
   normalizeUrl,
   pickHttpRemote,
 } from "@/lib/mcp-registry";
+import { useGT } from "gt-react";
+import { useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 function randomId(): string {
   const bytes = new Uint8Array(8);
@@ -66,6 +70,9 @@ export function RegistryBrowser({
   onPick: (draft: McpServerDraft) => void;
   existingServers: McpServer[];
 }) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
   const [servers, setServers] = useState<RegistryServer[]>([]);
@@ -215,7 +222,7 @@ export function RegistryBrowser({
           <DialogClose asChild>
             <button
               type="button"
-              aria-label="Close"
+              aria-label={ui("Close")}
               className="ml-auto text-muted-foreground transition-colors hover:text-foreground"
             >
               <X className="h-4 w-4" />
@@ -230,7 +237,7 @@ export function RegistryBrowser({
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search servers — notion, GitHub, postgres…"
+              placeholder={ui("Search servers — notion, GitHub, postgres…")}
               className="h-8 text-sm pl-8"
               autoFocus
             />
@@ -253,7 +260,7 @@ export function RegistryBrowser({
               <p className="px-0.5 pb-1 text-[10px] font-medium normal-case tracking-wide text-muted-foreground">
                 Recommended
               </p>
-              {RECOMMENDED_SERVERS.map(renderRow)}
+              {localizeDefinitions(RECOMMENDED_SERVERS, uiMessages).map(renderRow)}
               <p className="pt-1 text-[11px] text-muted-foreground text-center">
                 Search above to browse the full registry.
               </p>
@@ -303,6 +310,7 @@ function RegistryRow({
   installed: boolean;
   onAdd: () => void;
 }) {
+  const ui = useGT();
   const kind = installKind(server);
   const ns = namespaceOf(server);
   const repoUrl = server.repository?.url;
@@ -315,7 +323,7 @@ function RegistryRow({
             {displayName(server)}
           </span>
           <span className="px-1.5 py-0.5 rounded-full text-[9px] font-medium border border-border text-muted-foreground">
-            {kind === "http" ? "Remote" : kind === "stdio" ? "Local" : "Catalog"}
+            {kind === "http" ? ui("Remote") : kind === "stdio" ? ui("Local") : ui("Catalog")}
           </span>
         </div>
         {ns && (
@@ -354,7 +362,7 @@ function RegistryRow({
             disabled={kind === "none"}
             title={
               kind === "none"
-                ? "No installable remote or package listed"
+                ? ui("No installable remote or package listed")
                 : undefined
             }
           >

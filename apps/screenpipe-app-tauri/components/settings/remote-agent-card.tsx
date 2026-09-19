@@ -12,6 +12,10 @@ import {
 } from "./agent-card";
 import { Button } from "@/components/ui/button";
 import { commands } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 // One unified "Remote agent" entry that supersedes the separate OpenClaw and
 // Hermes cards. Pick an agent, then set screenpipe up on the machine where that
@@ -71,12 +75,12 @@ type TargetId = "openclaw" | "hermes" | "claude-code" | "claude-desktop" | "code
 const TARGETS: { id: TargetId; label: string; props: AgentCardProps }[] = [
   {
     id: "openclaw",
-    label: "OpenClaw",
+    label: msg("OpenClaw", {}),
     props: {
       name: "OpenClaw",
       iconSrc: "/openclaw-icon.svg",
       description:
-        "Run any AI agent on your VPS 24/7. Wire it to screenpipe — register the MCP server, install the skill, or sync your data.",
+        msg("Run any AI agent on your VPS 24/7. Wire it to screenpipe — register the MCP server, install the skill, or sync your data.", {}),
       homepage: "https://github.com/openclaw/openclaw",
       mcp: { format: "json", configPath: "~/openclaw/mcp.json", snippet: JSON_SNIPPET },
       skills: skillVariants("~/openclaw/skills"),
@@ -86,16 +90,16 @@ const TARGETS: { id: TargetId; label: string; props: AgentCardProps }[] = [
         fields: [
           {
             key: "endpoint",
-            label: "Gateway URL",
+            label: msg("Gateway URL", {}),
             secret: false,
-            placeholder: "http://127.0.0.1:18789",
+            placeholder: msg("http://127.0.0.1:18789", {}),
             helpUrl: "https://docs.openclaw.ai/gateway/configuration-reference",
           },
           {
             key: "token",
-            label: "Gateway Token",
+            label: msg("Gateway Token", {}),
             secret: true,
-            placeholder: "Your-openclaw-gateway-token",
+            placeholder: msg("Your-openclaw-gateway-token", {}),
             helpUrl: "https://docs.openclaw.ai/gateway/authentication",
           },
         ],
@@ -104,12 +108,12 @@ const TARGETS: { id: TargetId; label: string; props: AgentCardProps }[] = [
   },
   {
     id: "hermes",
-    label: "Hermes",
+    label: msg("Hermes", {}),
     props: {
       name: "Hermes",
       iconSrc: "/images/hermes.png",
       description:
-        "Self-improving agent with messaging gateways (Telegram, Discord, Slack, WhatsApp). Wire it to screenpipe.",
+        msg("Self-improving agent with messaging gateways (Telegram, Discord, Slack, WhatsApp). Wire it to screenpipe.", {}),
       homepage: "https://hermes-agent.nousresearch.com",
       mcp: { format: "yaml", configPath: "~/.hermes/config.yaml", snippet: YAML_SNIPPET },
       skills: skillVariants("~/.hermes/skills"),
@@ -119,16 +123,16 @@ const TARGETS: { id: TargetId; label: string; props: AgentCardProps }[] = [
         fields: [
           {
             key: "endpoint",
-            label: "API Server URL",
+            label: msg("API Server URL", {}),
             secret: false,
-            placeholder: "http://127.0.0.1:8642",
+            placeholder: msg("http://127.0.0.1:8642", {}),
             helpUrl: "https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server",
           },
           {
             key: "token",
-            label: "API Server Key",
+            label: msg("API Server Key", {}),
             secret: true,
-            placeholder: "API_SERVER_KEY (optional)",
+            placeholder: msg("API_SERVER_KEY (optional)", {}),
             helpUrl: "https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server",
           },
         ],
@@ -137,12 +141,12 @@ const TARGETS: { id: TargetId; label: string; props: AgentCardProps }[] = [
   },
   {
     id: "claude-code",
-    label: "Claude Code",
+    label: msg("Claude Code", {}),
     props: {
       name: "Claude Code",
       iconSrc: "/images/claude-ai.svg",
       description:
-        "Anthropic's terminal/IDE agent. Give it screenpipe via MCP + skills, locally or on a remote box.",
+        msg("Anthropic's terminal/IDE agent. Give it screenpipe via MCP + skills, locally or on a remote box.", {}),
       homepage: "https://claude.com/claude-code",
       mcp: { format: "json", configPath: "~/.claude.json", snippet: JSON_SNIPPET },
       skills: skillVariants("~/.claude/skills"),
@@ -151,11 +155,11 @@ const TARGETS: { id: TargetId; label: string; props: AgentCardProps }[] = [
   },
   {
     id: "claude-desktop",
-    label: "Claude Desktop",
+    label: msg("Claude Desktop", {}),
     props: {
       name: "Claude Desktop",
       iconSrc: "/images/claude-ai.svg",
-      description: "The Claude desktop app. MCP-only — register screenpipe as an MCP server.",
+      description: msg("The Claude desktop app. MCP-only — register screenpipe as an MCP server.", {}),
       homepage: "https://claude.ai/download",
       mcp: {
         format: "json",
@@ -168,11 +172,11 @@ const TARGETS: { id: TargetId; label: string; props: AgentCardProps }[] = [
   },
   {
     id: "codex",
-    label: "Codex",
+    label: msg("Codex", {}),
     props: {
       name: "Codex",
       iconSrc: "/images/codex.svg",
-      description: "OpenAI's Codex CLI. MCP-only — registers screenpipe in ~/.codex/config.toml.",
+      description: msg("OpenAI's Codex CLI. MCP-only — registers screenpipe in ~/.codex/config.toml.", {}),
       homepage: "https://developers.openai.com/codex",
       mcp: { format: "toml", configPath: "~/.codex/config.toml", snippet: TOML_SNIPPET },
       skills: [],
@@ -182,9 +186,12 @@ const TARGETS: { id: TargetId; label: string; props: AgentCardProps }[] = [
 ];
 
 export function RemoteAgentCard() {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const [targetId, setTargetId] = useState<TargetId>("openclaw");
   const [copied, setCopied] = useState<"" | "cmd" | "prompt">("");
-  const target = TARGETS.find((t) => t.id === targetId) ?? TARGETS[0];
+  const target = localizeDefinitions(TARGETS, uiMessages).find((t) => t.id === targetId) ?? localizeDefinitions(TARGETS, uiMessages)[0];
 
   const name = target.props.name;
   const hasSkills = target.props.skills.length > 0;
@@ -219,7 +226,7 @@ that installs the screenpipe MCP server${hasSkills ? " + skill" : ""} so ${name}
           }}
           className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground"
         >
-          {TARGETS.map((t) => (
+          {localizeDefinitions(TARGETS, uiMessages).map((t) => (
             <option key={t.id} value={t.id}>
               {t.label}
             </option>
@@ -247,7 +254,7 @@ that installs the screenpipe MCP server${hasSkills ? " + skill" : ""} so ${name}
               className="h-7 text-xs shrink-0"
               onClick={() => copy(setupCmd, "cmd")}
             >
-              {copied === "cmd" ? "Copied" : "Copy"}
+              {copied === "cmd" ? ui("Copied") : ui("Copy")}
             </Button>
           </div>
         </div>
@@ -266,7 +273,7 @@ that installs the screenpipe MCP server${hasSkills ? " + skill" : ""} so ${name}
               className="h-7 text-xs shrink-0"
               onClick={() => copy(aiPrompt, "prompt")}
             >
-              {copied === "prompt" ? "Copied" : "Copy"}
+              {copied === "prompt" ? ui("Copied") : ui("Copy")}
             </Button>
           </div>
         </div>

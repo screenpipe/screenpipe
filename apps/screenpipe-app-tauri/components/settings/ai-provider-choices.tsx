@@ -10,6 +10,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { AcpAdapterInfo } from "@/lib/utils/preset-appearance";
 import type { AIPreset } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+
 
 export interface AIProviderCardProps {
   type:
@@ -42,6 +44,7 @@ export function AIProviderCard({
   warningText,
   imageClassName,
 }: AIProviderCardProps) {
+
   return (
     <Card
       onClick={disabled ? undefined : onClick}
@@ -108,6 +111,8 @@ export function AIProviderChoices({
   onSelectProvider,
   onSelectAcpAgent,
 }: AIProviderChoicesProps) {
+
+  const ui = useGT();
   const advancedSelected =
     selectedProvider === "custom" ||
     selectedProvider === "openai-chatgpt" ||
@@ -126,8 +131,8 @@ export function AIProviderChoices({
         {showScreenpipeCloud && (
           <AIProviderCard
             type="screenpipe-cloud"
-            title="Screenpipe"
-            description="Use screenpipe's AI. Included with your plan."
+            title={ui("Screenpipe")}
+            description={ui("Use screenpipe's AI. Included with your plan.")}
             imageSrc="/images/screenpipe.png"
             selected={selectedProvider === "screenpipe-cloud"}
             onClick={() => onSelectProvider("screenpipe-cloud")}
@@ -142,7 +147,7 @@ export function AIProviderChoices({
               key={adapter.id}
               type="acp"
               title={adapter.name}
-              description={`Let ${adapter.name} handle tasks for you.`}
+              description={ui("Let {value1} handle tasks for you.", { value1: adapter.name })}
               imageSrc={adapter.imageSrc}
               imageClassName={adapter.invertInDark ? "dark:invert" : undefined}
               selected={
@@ -156,7 +161,7 @@ export function AIProviderChoices({
 
       <button
         type="button"
-        aria-label="Advanced"
+        aria-label={ui("Advanced")}
         className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
         onClick={() => setShowAdvanced((current) => !current)}
         aria-expanded={showAdvanced}
@@ -176,8 +181,8 @@ export function AIProviderChoices({
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
               <AIProviderCard
                 type="openai-chatgpt"
-                title="ChatGPT"
-                description="Sign in with your ChatGPT subscription."
+                title={ui("ChatGPT")}
+                description={ui("Sign in with your ChatGPT subscription.")}
                 imageSrc="/images/openai.png"
                 selected={selectedProvider === "openai-chatgpt"}
                 onClick={() => onSelectProvider("openai-chatgpt")}
@@ -185,8 +190,8 @@ export function AIProviderChoices({
 
               <AIProviderCard
                 type="anthropic"
-                title="Claude API"
-                description="Use Claude models with an Anthropic API key."
+                title={ui("Claude API")}
+                description={ui("Use Claude models with an Anthropic API key.")}
                 imageSrc="/images/claude-ai.svg"
                 selected={selectedProvider === "anthropic"}
                 onClick={() => onSelectProvider("anthropic")}
@@ -194,8 +199,8 @@ export function AIProviderChoices({
 
               <AIProviderCard
                 type="native-ollama"
-                title="Ollama"
-                description="Use AI models running on this computer."
+                title={ui("Ollama")}
+                description={ui("Use AI models running on this computer.")}
                 imageSrc="/images/ollama.png"
                 selected={selectedProvider === "native-ollama"}
                 onClick={() => onSelectProvider("native-ollama")}
@@ -203,8 +208,8 @@ export function AIProviderChoices({
 
               <AIProviderCard
                 type="custom"
-                title="Use an API key"
-                description="Connect another AI service."
+                title={ui("Use an API key")}
+                description={ui("Connect another AI service.")}
                 imageSrc="/images/custom.png"
                 selected={selectedProvider === "custom"}
                 onClick={() => onSelectProvider("custom")}
@@ -217,8 +222,8 @@ export function AIProviderChoices({
               <p className="text-sm font-medium">Connect another agent</p>
               <AIProviderCard
                 type="acp"
-                title="Use a command"
-                description="Connect another coding agent."
+                title={ui("Use a command")}
+                description={ui("Connect another coding agent.")}
                 imageSrc={customAcpAdapter.imageSrc}
                 imageClassName={
                   customAcpAdapter.invertInDark ? "dark:invert" : undefined

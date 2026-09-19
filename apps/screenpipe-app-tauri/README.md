@@ -121,14 +121,23 @@ the snapshot to match current source and policy before consulting the frontend
 cache. Local reuse accepts `SCREENPIPE_I18N_SNAPSHOT=/absolute/path/snapshot.json`
 with `SCREENPIPE_I18N_MODE=cached`.
 
-**Rollout status:** real Japanese translations have been generated and validated
-for 2,502 extracted frontend messages and 26 initial native labels. The browser
-mock verifies Japanese General Settings, Appearance, permission explanations,
-the onboarding welcome, and an interpolated toast. Full explicit-string and
-Swift surface coverage and disposable native UI acceptance remain unfinished.
-The browser mock's settings store resets on reload, so it cannot establish
-persistence across app restarts. These counts describe the extracted catalog,
-not full interface coverage.
+The native catalog also covers the Swift timeline, shortcut overlay and
+notification panel. Menus retain their handles when the locale changes.
+English labels use `ui_text` / `ui_format` in Rust and `uiText` in Swift;
+`source_text` and `ui_menu` retain deferred menu sources for live switching.
+
+Shared UI definitions use `msg("English", {})`: the explicit options object
+marks the value for `localizeDefinitions` without translating IDs or prompts.
+Translate only display fields when a definition is also persisted or executed.
+Memoized render data depends on `useUiLocale()` rather than GT callback identity,
+which can change on each render in development.
+
+For a Japanese system-language browser fixture, open
+`http://127.0.0.1:1420/home?mockLocale=ja-JP` in cached mode. This affects only
+the browser mock OS locale. Settings still override it normally. The mock store
+resets on a full reload; native restart persistence requires a disposable app test.
+Current snapshot coverage and fallback causes are in `.localization/coverage.json`.
+Counts describe extracted messages; verify rendered surfaces before delivery.
 
 ## dev builds are isolated from your installed app
 

@@ -4,6 +4,8 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 /**
  * Who owns what once a coding agent is running.
@@ -68,6 +70,8 @@ export function AcpBoundaries({
   compact?: boolean;
   className?: string;
 }) {
+
+  const ui = useGT();
   const rows = acpBoundaryRows(agentName);
 
   return (
@@ -102,7 +106,7 @@ export function AcpBoundaries({
                   compact ? "text-[9px]" : "text-[10px]",
                 )}
               >
-                {row.owner === "agent" ? agentName : "Screenpipe"}
+                {row.owner === "agent" ? agentName : ui("Screenpipe")}
               </span>
             </div>
             <dd

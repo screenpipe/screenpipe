@@ -33,6 +33,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useMessages, useGT } from "gt-react";
+import { englishUiMessage, type UiMessage } from "@/lib/i18n/message";
+import { msg } from "gt-react";
+
+
 
 // Cowork schedules are account-backed, not part of the local Claude Code
 // projection. Keep that boundary visible without pretending we can list them.
@@ -48,21 +53,21 @@ function rruleParts(schedule: string): Record<string, string> {
 }
 
 const RRULE_MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
+  msg("Jan"),
+  msg("Feb"),
+  msg("Mar"),
+  msg("Apr"),
+  msg("May"),
+  msg("Jun"),
+  msg("Jul"),
+  msg("Aug"),
+  msg("Sep"),
+  msg("Oct"),
+  msg("Nov"),
+  msg("Dec"),
 ] as const;
 
-function readableList(values: string[]): string {
+function readableList(values: string[], ui: UiMessage = englishUiMessage): string {
   if (values.length <= 1) return String(values[0] ?? "");
   return `${values.slice(0, -1).join(", ")} & ${values.at(-1)}`;
 }
@@ -81,18 +86,18 @@ function rruleNumberList(
 
 function yearlyRruleLabel(
   parts: Record<string, string>,
-  interval: number,
+  interval: number, ui: UiMessage = englishUiMessage,
 ): string {
   const months = rruleNumberList(parts.BYMONTH, 1, 12).map(
-    (month) => RRULE_MONTHS[month - 1],
+    (month) => ui(RRULE_MONTHS[month - 1]),
   );
   const days = rruleNumberList(parts.BYMONTHDAY, 1, 31).map(String);
   const dates =
     months.length === 1 && days.length > 0
-      ? `${months[0]} ${readableList(days)}`
+      ? `${months[0]} ${readableList(days, ui)}`
       : [
-          months.length > 0 ? readableList(months) : null,
-          days.length > 0 ? `day ${readableList(days)}` : null,
+          months.length > 0 ? readableList(months, ui) : null,
+          days.length > 0 ? `day ${readableList(days, ui)}` : null,
         ]
           .filter(Boolean)
           .join(" · ");
@@ -100,7 +105,7 @@ function yearlyRruleLabel(
   const minutes = rruleNumberList(parts.BYMINUTE || "0", 0, 59);
   const hour = hours[0];
   const minute = minutes[0];
-  const suffix = hour < 12 ? "AM" : "PM";
+  const suffix = hour < 12 ? ui(msg("AM")) : ui(msg("PM"));
   const hour12 = hour % 12 || 12;
   const time =
     hours.length !== 1 || minutes.length !== 1
@@ -121,7 +126,7 @@ function yearlyRruleLabel(
     .join(" · ");
 }
 
-function cronLabel(schedule: string): string | null {
+function cronLabel(schedule: string, ui: UiMessage = englishUiMessage): string | null {
   const [minute, hour, dayOfMonth, month, dayOfWeek] = schedule
     .trim()
     .split(/\s+/);
@@ -134,13 +139,13 @@ function cronLabel(schedule: string): string | null {
     month === "*" &&
     dayOfWeek === "*"
   ) {
-    if (minute === "*") return "Every minute";
+    if (minute === "*") return ui(msg("Every minute"));
     const everyMinutes = minute.match(/^\*\/(\d+)$/)?.[1];
-    if (everyMinutes) return `Every ${everyMinutes} minutes`;
+    if (everyMinutes) return ui(msg("Every {value1} minutes"), { value1: everyMinutes });
     if (/^\d+$/.test(minute)) {
       return Number(minute) === 0
-        ? "every hour"
-        : `every hour at :${minute.padStart(2, "0")}`;
+        ? ui(msg("every hour"))
+        : ui(msg("every hour at :{value1}"), { value1: minute.padStart(2, "0") });
     }
   }
   const everyHours = hour.match(/^\*\/(\d+)$/)?.[1];
@@ -151,7 +156,7 @@ function cronLabel(schedule: string): string | null {
     month === "*" &&
     dayOfWeek === "*"
   ) {
-    return `Every ${everyHours} hours${Number(minute) === 0 ? "" : ` at :${minute.padStart(2, "0")}`}`;
+    return ui(msg("Every {value1} hours{value2}"), { value1: everyHours, value2: Number(minute) === 0 ? "" : ` at :${minute.padStart(2, "0")}` });
   }
   if (
     /^\d+$/.test(minute) &&
@@ -160,36 +165,36 @@ function cronLabel(schedule: string): string | null {
     month === "*"
   ) {
     const time = `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
-    if (dayOfWeek === "*") return `Daily at ${time}`;
-    if (dayOfWeek === "1-5") return `Weekdays at ${time}`;
+    if (dayOfWeek === "*") return ui(msg("Daily at {value1}"), { value1: time });
+    if (dayOfWeek === "1-5") return ui(msg("Weekdays at {value1}"), { value1: time });
   }
   return null;
 }
 
-export function providerScheduleLabel(task: ProviderAutomation): string {
+export function providerScheduleLabel(task: ProviderAutomation, ui: UiMessage = englishUiMessage): string {
   if (task.scheduleLabel?.trim()) return task.scheduleLabel.trim();
-  const describedCron = cronLabel(task.schedule);
+  const describedCron = cronLabel(task.schedule, ui);
   if (describedCron) return describedCron;
   if (!task.schedule.startsWith("FREQ=")) return task.schedule;
 
   const parts = rruleParts(task.schedule);
   const interval = Math.max(1, Number(parts.INTERVAL || "1"));
   if (parts.FREQ === "HOURLY") {
-    return interval === 1 ? "every hour" : `every ${interval} hours`;
+    return interval === 1 ? ui(msg("every hour")) : ui(msg("every {value1} hours"), { value1: interval });
   }
   if (parts.FREQ === "DAILY") {
     const hour = Number(parts.BYHOUR);
     const minute = Number(parts.BYMINUTE || "0");
     if (Number.isFinite(hour)) {
-      return `Daily at ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+      return ui(msg("Daily at {value1}:{value2}"), { value1: String(hour).padStart(2, "0"), value2: String(minute).padStart(2, "0") });
     }
-    return interval === 1 ? "daily" : `every ${interval} days`;
+    return interval === 1 ? ui(msg("daily")) : ui(msg("every {value1} days"), { value1: interval });
   }
   if (parts.FREQ === "WEEKLY") {
-    return parts.BYDAY ? `weekly · ${parts.BYDAY.toLowerCase()}` : "weekly";
+    return parts.BYDAY ? ui(msg("weekly · {value1}"), { value1: parts.BYDAY.toLowerCase() }) : ui(msg("weekly"));
   }
   if (parts.FREQ === "YEARLY") {
-    return yearlyRruleLabel(parts, interval);
+    return yearlyRruleLabel(parts, interval, ui);
   }
   return task.schedule;
 }
@@ -200,10 +205,10 @@ export function providerManagementUrl(provider: string): string | null {
   return null;
 }
 
-function providerManagementActionLabel(provider: string): string {
+function providerManagementActionLabel(provider: string, ui: UiMessage = englishUiMessage): string {
   const name =
     provider.toLowerCase() === "claude" ? "Claude" : providerLabel(provider);
-  return `Open ${name} schedules`;
+  return ui(msg("Open {provider} schedules"), { provider: name });
 }
 
 type ProviderOpenDependencies = {
@@ -271,6 +276,7 @@ function providerLabel(provider: string): string {
 }
 
 function ProviderIcon({ provider }: { provider: string }) {
+
   const className = "h-4 w-4 shrink-0";
   if (provider.toLowerCase() === "codex") {
     // eslint-disable-next-line @next/next/no-img-element
@@ -299,6 +305,9 @@ export function ProviderAutomationsPanel({
     if (result.status === "error") throw new Error(result.error);
   },
 }: ProviderAutomationsPanelProps) {
+
+  const ui = useGT();
+  const uiMessages = useMessages();
   const [tasks, setTasks] = React.useState<ProviderAutomation[]>([]);
   const [selectedProvider, setSelectedProvider] = React.useState<string | null>(
     null,
@@ -410,8 +419,8 @@ export function ProviderAutomationsPanel({
           </div>
           <button
             type="button"
-            aria-label="Open Claude schedules"
-            title="Open Claude schedules"
+            aria-label={ui("Open Claude schedules")}
+            title={ui("Open Claude schedules")}
             className="inline-flex h-10 w-10 shrink-0 items-center justify-center border-l border-border text-muted-foreground transition-colors hover:bg-foreground hover:text-background"
             onClick={() => void manageProvider("claude")}
           >
@@ -435,7 +444,7 @@ export function ProviderAutomationsPanel({
     ? providerManagementUrl(activeProvider)
     : null;
   const activeManagementAction = activeProvider
-    ? providerManagementActionLabel(activeProvider)
+    ? providerManagementActionLabel(activeProvider, uiMessages)
     : "open provider schedules";
   const displayedActiveTasks =
     expandedProvider === activeProvider ? activeTasks : activeTasks.slice(0, 5);
@@ -451,7 +460,7 @@ export function ProviderAutomationsPanel({
         {hasMultipleProviders ? (
           <div
             role="tablist"
-            aria-label="Schedule owner"
+            aria-label={ui("Schedule owner")}
             className="flex min-w-0 flex-1 overflow-x-auto bg-muted/20 px-2"
           >
             {providers.map((provider) => {
@@ -539,8 +548,8 @@ export function ProviderAutomationsPanel({
                 >
                   <span
                     role="img"
-                    aria-label={isOn ? "Active" : "Paused"}
-                    title={isOn ? "Active" : "Paused"}
+                    aria-label={isOn ? ui("Active") : ui("Paused")}
+                    title={isOn ? ui("Active") : ui("Paused")}
                     className={cn(
                       "h-2 w-2 shrink-0 border border-current text-muted-foreground",
                       isOn && "bg-foreground text-foreground",
@@ -556,7 +565,7 @@ export function ProviderAutomationsPanel({
                     <div className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
                       <Clock3 className="h-3 w-3 shrink-0" />
                       <span className="truncate">
-                        {providerScheduleLabel(task)}
+                        {providerScheduleLabel(task, uiMessages)}
                       </span>
                     </div>
                   </div>
@@ -568,7 +577,7 @@ export function ProviderAutomationsPanel({
                         role="switch"
                         aria-checked={isOn}
                         aria-busy={isPending}
-                        aria-label={`${isOn ? "Turn off" : "Turn on"} ${task.name}`}
+                        aria-label={isOn ? ui("Turn off {name}", { name: task.name }) : ui("Turn on {name}", { name: task.name })}
                         disabled={isPending}
                         className="inline-flex h-7 w-9 items-center justify-center border border-border transition-colors hover:bg-muted disabled:cursor-wait disabled:opacity-50"
                         onClick={() => void mutateTask(task, primaryAction)}
@@ -598,7 +607,7 @@ export function ProviderAutomationsPanel({
                         <DropdownMenuTrigger asChild>
                           <button
                             type="button"
-                            aria-label={`Actions for ${task.name}`}
+                            aria-label={ui("Actions for {value1}", { value1: task.name })}
                             disabled={isPending}
                             className="inline-flex h-7 w-7 items-center justify-center border border-border transition-colors hover:bg-foreground hover:text-background disabled:opacity-50"
                           >
@@ -628,7 +637,7 @@ export function ProviderAutomationsPanel({
           {hiddenTaskCount > 0 && (
             <button
               type="button"
-              aria-label={`Show ${hiddenTaskCount} more`}
+              aria-label={ui("Show {value1} more", { value1: hiddenTaskCount })}
               className="w-full border-t border-border px-3 py-2 text-left font-mono text-[10px] text-muted-foreground transition-colors hover:bg-background/70 hover:text-foreground"
               onClick={() => setExpandedProvider(activeProvider)}
             >
@@ -662,7 +671,7 @@ export function ProviderAutomationsPanel({
         <AlertDialogContent className="rounded-lg">
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Delete {taskToDelete?.name ?? "this schedule"}?
+              Delete {taskToDelete?.name ?? ui("this schedule")}?
             </AlertDialogTitle>
             <AlertDialogDescription>
               This permanently removes the schedule from {activeProviderLabel}.

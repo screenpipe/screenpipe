@@ -22,6 +22,9 @@ import {
   type SessionRecord,
 } from "@/lib/stores/chat-store";
 import { useChatPrefillEvents } from "@/components/chat/standalone/hooks/use-chat-prefill-events";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 type SendMessageRef = React.MutableRefObject<
   ((msg: string, displayLabel?: string, imageDataUrls?: string[]) => Promise<void>) | undefined
@@ -284,6 +287,8 @@ export function useChatConversationRoutingEvents({
   focusMessageById,
   openFilePreview,
 }: UseChatConversationRoutingEventsOptions) {
+  const uiLanguage = useLocale();
+  const ui = useGT();
   const loadConversationRef = useRef(loadConversation);
   const startNewConversationRef = useRef(startNewConversation);
   loadConversationRef.current = loadConversation;
@@ -320,7 +325,7 @@ export function useChatConversationRoutingEvents({
     if (session) {
       loadConversationRef.current({
         id: convId,
-        title: session.title || "Untitled",
+        title: session.title || ui("Untitled"),
         messages: [],
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
@@ -330,7 +335,7 @@ export function useChatConversationRoutingEvents({
 
     await startNewConversationRef.current(convId);
     emit("chat-current-session", { id: convId });
-  }, [piSessionIdRef, renderedMessagesRef]);
+  }, [piSessionIdRef, renderedMessagesRef, uiLanguage]);
 
   useEffect(() => {
     const unlisten = listen<ChatLoadConversationPayload>("chat-load-conversation", async (event) => {
@@ -406,6 +411,7 @@ export function useChatE2EGlobals({
   setIsStreaming,
   setPiStarting,
 }: UseChatE2EGlobalsOptions) {
+  const ui = useGT();
   useEffect(() => {
     if (typeof window === "undefined") return;
     const seedE2eSessionMessage = (

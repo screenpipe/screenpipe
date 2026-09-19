@@ -136,6 +136,9 @@ import { navigationProductMode } from "@/lib/workflows/navigation";
 import { IntegratedWorkflows } from "@/components/workflows/integrated-workflows";
 import { useWorkflowsRolloutEnabled } from "@/lib/workflows/rollout";
 import { readProductMode, saveProductMode } from "@/lib/workflows/entry-preference";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 type MainSection = "home" | "timeline" | "activity" | "brain" | "pipes" | "connections" | "meetings" | "help";
 const TRIAL_ACTIVATION_ALLOWED_SECTIONS = new Set<MainSection>([
@@ -166,6 +169,9 @@ const ALL_SECTIONS = [
 const isSettingsRoute = (value: string) => resolveSettingsSection(value) !== null;
 
 function HomeContent() {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
   const router = useRouter();
   const workflowsRolloutEnabled = useWorkflowsRolloutEnabled();
   const [requestedMode, setRequestedMode] = useQueryState("mode", { defaultValue: "screenpipe", history: "push" });
@@ -371,7 +377,7 @@ function HomeContent() {
     }
     store.actions.setCurrent(id);
     void emit("chat-load-conversation", { conversationId: id });
-  }, [setActiveSection]);
+  }, [setActiveSection, uiLanguage]);
 
   // Redirect settings sections to the standalone settings page
   useEffect(() => {
@@ -1058,7 +1064,7 @@ function HomeContent() {
     if (isSectionHidden(activeSection) && activeSection !== "help") {
       return (
         <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-          <img src="/128x128.png" alt="Screenpipe" className="w-16 h-16 opacity-30 mb-4" />
+          <img src="/128x128.png" alt={ui("Screenpipe")} className="w-16 h-16 opacity-30 mb-4" />
           <p className="text-sm font-mono">Screenpipe</p>
         </div>
       );
@@ -1139,7 +1145,7 @@ function HomeContent() {
       default:
         return (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-            <img src="/128x128.png" alt="Screenpipe" className="w-16 h-16 opacity-30 mb-4" />
+            <img src="/128x128.png" alt={ui("Screenpipe")} className="w-16 h-16 opacity-30 mb-4" />
             <p className="text-sm font-mono">Screenpipe</p>
           </div>
         );
@@ -1153,13 +1159,13 @@ function HomeContent() {
     // The Chat row doubles as "go to chat view + start a fresh conversation".
     // Each click allocates a new session id (empty rows are not reused — that
     // felt like opening an old recent).
-    home: { label: "Chat", icon: <Plus className="h-3.5 w-3.5" /> },
-    meetings: { label: "Meetings", icon: <CalendarClock className="h-3.5 w-3.5" /> },
-    timeline: { label: "Timeline", icon: <MonitorPlay className="h-3.5 w-3.5" /> },
-    activity: { label: "Activity", icon: <ListTree className="h-3.5 w-3.5" /> },
-    brain: { label: "Library", icon: <Brain className="h-3.5 w-3.5" /> },
-    pipes: { label: "Automations", icon: <TimerReset className="h-3.5 w-3.5" /> },
-    connections: { label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
+    home: { label: ui("Chat"), icon: <Plus className="h-3.5 w-3.5" /> },
+    meetings: { label: ui("Meetings"), icon: <CalendarClock className="h-3.5 w-3.5" /> },
+    timeline: { label: ui("Timeline"), icon: <MonitorPlay className="h-3.5 w-3.5" /> },
+    activity: { label: ui("Activity"), icon: <ListTree className="h-3.5 w-3.5" /> },
+    brain: { label: ui("Library"), icon: <Brain className="h-3.5 w-3.5" /> },
+    pipes: { label: ui("Automations"), icon: <TimerReset className="h-3.5 w-3.5" /> },
+    connections: { label: ui("Connections"), icon: <Plug className="h-3.5 w-3.5" /> },
   };
 
   const sidebarLayout = normalizeSidebarNavLayout(settings.sidebarNavLayout);
@@ -1203,11 +1209,11 @@ function HomeContent() {
       setSidebarNavItemHidden(sidebarLayout, availableSidebarIds, id, true),
     );
     toast({
-      title: `${label} hidden`,
+      title: ui("{value1} hidden", { value1: label }),
       description:
         id === "meetings"
-          ? "Still one click away from the icon in the top bar."
-          : "Use sidebar options in the top bar to bring it back.",
+          ? ui("Still one click away from the icon in the top bar.")
+          : ui("Use sidebar options in the top bar to bring it back."),
       action: (
         <ToastAction
           altText={`Show ${label} in the sidebar again`}
@@ -1233,7 +1239,7 @@ function HomeContent() {
           label={runningPipeCount}
           className="ml-auto shrink-0"
           labelClassName="text-muted-foreground/60"
-          ariaLabel={`${runningPipeCount} running scheduled task${runningPipeCount === 1 ? "" : "s"}`}
+          ariaLabel={ui("{value1} running scheduled task{value2}", { value1: runningPipeCount, value2: runningPipeCount === 1 ? "" : "s" })}
         />
       ) : id === "meetings" && meetingState.active ? (
         // Same live-recording dot the chrome-strip placement shows, so moving
@@ -1413,7 +1419,7 @@ function HomeContent() {
               <TooltipTrigger asChild>
                 <button
                   onClick={toggleSidebar}
-                  aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                  aria-label={sidebarCollapsed ? ui("Expand sidebar") : ui("Collapse sidebar")}
                   data-announcement-anchor="top-sidebar-toggle"
                   className={cn(
                     "p-1 rounded-md transition-colors",
@@ -1429,7 +1435,7 @@ function HomeContent() {
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-xs">
                 <span className="flex items-center gap-2">
-                  {sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                  {sidebarCollapsed ? ui("Expand sidebar") : ui("Collapse sidebar")}
                   <ShortcutKeycap>
                     {inAppShortcutLabel("toggle_sidebar", isMac)}
                   </ShortcutKeycap>
@@ -1444,7 +1450,7 @@ function HomeContent() {
                     onClick={() => {
                       void commands.showWindow({ Search: { query: null } });
                     }}
-                    aria-label="Search"
+                    aria-label={ui("Search")}
                     data-announcement-anchor="top-search"
                     className={cn(
                       "p-1 rounded-md transition-colors",
@@ -1495,7 +1501,7 @@ function HomeContent() {
                 <TooltipTrigger asChild>
                   <button
                     onClick={() => setActiveSection("meetings")}
-                    aria-label={meetingState.active ? "Meetings — recording" : "Meetings"}
+                    aria-label={meetingState.active ? ui("Meetings — recording") : ui("Meetings")}
                     aria-current={activeSection === "meetings" ? "page" : undefined}
                     disabled={trialActivationLocked}
                     data-testid="nav-meetings"
@@ -1525,7 +1531,7 @@ function HomeContent() {
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">
-                  {meetingState.active ? "Meetings — recording" : "Meetings"}
+                  {meetingState.active ? ui("Meetings — recording") : ui("Meetings")}
                 </TooltipContent>
               </Tooltip>
             )}
@@ -1702,8 +1708,8 @@ function HomeContent() {
                 <button
                   type="button"
                   onClick={returnToActivity}
-                  aria-label="Back to activity"
-                  title="Back to activity"
+                  aria-label={ui("Back to activity")}
+                  title={ui("Back to activity")}
                   className="absolute left-4 top-11 z-40 flex h-10 w-10 items-center justify-center rounded-full border border-border/80 bg-background/90 text-foreground shadow-lg shadow-black/10 backdrop-blur-sm transition-colors hover:border-foreground hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2"
                 >
                   <ArrowLeft className="h-4 w-4" />

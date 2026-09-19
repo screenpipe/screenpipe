@@ -21,6 +21,8 @@
 
 import { Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 export interface PipeContextBannerProps {
   pipeName: string;
@@ -40,6 +42,7 @@ export function PipeContextBanner({
   done = false,
   className,
 }: PipeContextBannerProps) {
+  const ui = useGT();
   return (
     <div
       className={cn(
@@ -48,7 +51,7 @@ export function PipeContextBanner({
         className,
       )}
       role="status"
-      aria-label={done ? `Task run: ${pipeName}` : `Watching scheduled task: ${pipeName}`}
+      aria-label={done ? ui("Task run: {value1}", { value1: pipeName }) : ui("Watching scheduled task: {value1}", { value1: pipeName })}
     >
       <span
         className={cn(

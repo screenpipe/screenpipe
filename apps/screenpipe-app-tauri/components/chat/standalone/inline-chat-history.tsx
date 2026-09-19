@@ -12,6 +12,8 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { isInjectedTitle } from "@/lib/chat-utils";
 import type { ConversationMeta } from "@/lib/chat-storage";
+import { useGT } from "gt-react";
+
 
 interface InlineChatHistoryProps {
   hideInlineHistory?: boolean;
@@ -38,6 +40,8 @@ export function InlineChatHistory({
   deleteConversation,
   renameConversation,
 }: InlineChatHistoryProps) {
+
+  const ui = useGT();
   const [openConvMenuId, setOpenConvMenuId] = React.useState<string | null>(null);
   const [renamingConvId, setRenamingConvId] = React.useState<string | null>(null);
   const [renameValue, setRenameValue] = React.useState("");
@@ -69,7 +73,7 @@ export function InlineChatHistory({
               <div className="relative">
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                 <Input
-                  placeholder="Search conversations..."
+                  placeholder={ui("Search conversations...")}
                   value={historySearch}
                   onChange={(e) => onHistorySearchChange(e.target.value)}
                   className="h-8 pl-8 text-xs bg-background/50"
@@ -82,7 +86,7 @@ export function InlineChatHistory({
                 <div className="flex flex-col items-center justify-center py-8 text-center">
                   <History className="h-8 w-8 text-muted-foreground/50 mb-2" />
                   <p className="text-xs text-muted-foreground">
-                    {historySearch ? "No matching conversations" : "No chat history yet"}
+                    {historySearch ? ui("No matching conversations") : ui("No chat history yet")}
                   </p>
                 </div>
               ) : (
@@ -102,7 +106,7 @@ export function InlineChatHistory({
                       >
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-medium truncate">
-                            {(isInjectedTitle(conv.title) ? undefined : conv.title) || "Untitled"}
+                            {(isInjectedTitle(conv.title) ? undefined : conv.title) || ui("Untitled")}
                           </p>
                           <p className="text-[10px] text-muted-foreground">
                             {conv.messageCount} messages

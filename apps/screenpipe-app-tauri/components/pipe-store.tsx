@@ -72,6 +72,11 @@ import {
 } from "@/lib/pipe-publisher";
 import { PipeStoreSubmissionDialog } from "@/components/pipe-store-submission";
 import { buildPipeStoreSubmissionMailto } from "@/lib/pipe-store-submission";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
+
 // --- Types ---
 
 interface StorePipe {
@@ -138,18 +143,18 @@ interface LocalPipe {
 
 // Categories are derived dynamically from pipe metadata — no hardcoded taxonomy.
 const SORT_OPTIONS = [
-  { value: "popular", label: "Popular" },
-  { value: "newest", label: "Newest" },
+  { value: "popular", label: msg("Popular", {}) },
+  { value: "newest", label: msg("Newest", {}) },
 ];
 
 const PERMISSION_LABELS: { key: string; label: string; icon: React.ReactNode }[] = [
-  { key: "ocr", label: "Screen text (OCR)", icon: <Eye className="h-3.5 w-3.5" /> },
-  { key: "audio", label: "Audio transcripts", icon: <Mic className="h-3.5 w-3.5" /> },
-  { key: "input", label: "Keyboard input", icon: <Keyboard className="h-3.5 w-3.5" /> },
-  { key: "raw_sql", label: "Raw SQL", icon: <Database className="h-3.5 w-3.5" /> },
-  { key: "frames", label: "Screenshots", icon: <Image className="h-3.5 w-3.5" /> },
-  { key: "connections", label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
-  { key: "accessibility", label: "Accessibility", icon: <Accessibility className="h-3.5 w-3.5" /> },
+  { key: "ocr", label: msg("Screen text (OCR)", {}), icon: <Eye className="h-3.5 w-3.5" /> },
+  { key: "audio", label: msg("Audio transcripts", {}), icon: <Mic className="h-3.5 w-3.5" /> },
+  { key: "input", label: msg("Keyboard input", {}), icon: <Keyboard className="h-3.5 w-3.5" /> },
+  { key: "raw_sql", label: msg("Raw SQL", {}), icon: <Database className="h-3.5 w-3.5" /> },
+  { key: "frames", label: msg("Screenshots", {}), icon: <Image className="h-3.5 w-3.5" /> },
+  { key: "connections", label: msg("Connections", {}), icon: <Plug className="h-3.5 w-3.5" /> },
+  { key: "accessibility", label: msg("Accessibility", {}), icon: <Accessibility className="h-3.5 w-3.5" /> },
 ];
 
 function getPermissionStatus(perms: PipePermissions | undefined, key: string): "allowed" | "denied" | "unset" {
@@ -330,6 +335,8 @@ function getPipeStoreList(data: unknown): any[] {
 }
 
 export function PipeStoreView() {
+
+  const ui = useGT();
   // Track installed pipe count to auto-switch to Discover for new users
   const [installedCount, setInstalledCount] = useState<number | null>(null);
 
@@ -371,16 +378,16 @@ export function PipeStoreView() {
   }, [installedCount]);
 
   const tabs = [
-    { key: "my-pipes" as const, label: "My tasks" },
-    { key: "discover" as const, label: "Discover" },
+    { key: "my-pipes" as const, label: ui("My tasks") },
+    { key: "discover" as const, label: ui("Discover") },
   ];
 
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         {activeTab === "discover"
-          ? "Browse, install, and review community automations"
-          : "Run tasks on a schedule, after meetings, or when events happen."}
+          ? ui("Browse, install, and review community automations")
+          : ui("Run tasks on a schedule, after meetings, or when events happen.")}
       </p>
 
       {/* Tab bar */}
@@ -420,6 +427,9 @@ export function PipeStoreView() {
 // --- Discover View ---
 
 function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const { settings } = useSettings();
   const { toast } = useToast();
   const openFeedback = useFeedbackStore((s) => s.openFeedback);
@@ -617,7 +627,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     } catch (err) {
       console.error("failed to fetch pipe detail:", err);
       toast({
-        title: "Failed to load scheduled task details",
+        title: ui("Failed to load scheduled task details"),
         variant: "destructive",
       });
       setShowDetail(false);
@@ -675,10 +685,10 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
         return next;
       });
       apiCache.invalidate("pipes/installed");
-      toast({ title: `"${pipeName}" updated` });
+      toast({ title: ui("\"{value1}\" updated", { value1: pipeName }) });
     } catch (err: any) {
       toast({
-        title: "Failed to update scheduled task",
+        title: ui("Failed to update scheduled task"),
         description: err.message,
         variant: "destructive",
       });
@@ -742,8 +752,8 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       }
 
       toast({
-        title: `"${pipeName}" installed`,
-        description: "Open My tasks to configure and run it",
+        title: ui("\"{value1}\" installed", { value1: pipeName }),
+        description: ui("Open My tasks to configure and run it"),
       });
       // Invalidate cache and update installed names
       apiCache.invalidate("pipes/installed");
@@ -758,7 +768,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       onInstalled?.();
     } catch (err: any) {
       toast({
-        title: "Failed to install scheduled task",
+        title: ui("Failed to install scheduled task"),
         description: (
           <span>
             {err.message}{" "}
@@ -797,12 +807,12 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `HTTP ${res.status}`);
       }
-      toast({ title: "Review submitted" });
+      toast({ title: ui("Review submitted") });
       openDetail(selectedPipe.slug);
       setReviewExpanded(false);
     } catch (err: any) {
       toast({
-        title: "Failed to submit review",
+        title: ui("Failed to submit review"),
         description: err.message,
         variant: "destructive",
       });
@@ -824,14 +834,14 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
       posthog.capture("pipe_unpublished_from_store", { slug });
-      toast({ title: `"${slug}" unpublished from store` });
+      toast({ title: ui("\"{value1}\" unpublished from store", { value1: slug }) });
       setShowDetail(false);
       setSelectedPipe(null);
       apiCache.invalidatePrefix("pipes/store");
       fetchPipes();
     } catch (err: any) {
       toast({
-        title: "Failed to unpublish scheduled task",
+        title: ui("Failed to unpublish scheduled task"),
         description: err.message,
         variant: "destructive",
       });
@@ -882,7 +892,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
                   Installing...
                 </>
               ) : (
-                "Install scheduled task"
+                ui("Install scheduled task")
               )}
             </Button>
           </DialogFooter>
@@ -938,7 +948,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
           <button
             onClick={dismissWelcome}
             className="absolute top-2 right-2 text-muted-foreground hover:text-foreground text-sm px-1.5"
-            aria-label="Dismiss"
+            aria-label={ui("Dismiss")}
           >
             ✕
           </button>
@@ -957,7 +967,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search community tasks..."
+              placeholder={ui("Search community tasks...")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9 h-9"
@@ -968,7 +978,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {SORT_OPTIONS.map((s) => (
+              {localizeDefinitions(SORT_OPTIONS, uiMessages).map((s) => (
                 <SelectItem key={s.value} value={s.value}>
                   {s.label}
                 </SelectItem>
@@ -1136,12 +1146,15 @@ function PipeCard({
   installing: boolean;
   onClick: () => void;
 }) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const publisher = getPipePublisherIdentity({
     id: pipe.author_id,
     name: pipe.author,
     verified: pipe.author_verified,
   });
-  const permissionPills = PERMISSION_LABELS.filter((p) => {
+  const permissionPills = localizeDefinitions(PERMISSION_LABELS, uiMessages).filter((p) => {
     const status = getPermissionStatus(pipe.permissions, p.key);
     return status === "allowed";
   });
@@ -1179,9 +1192,9 @@ function PipeCard({
               UPDATE
             </>
           ) : isInstalled ? (
-            "INSTALLED"
+            ui("INSTALLED")
           ) : (
-            "GET"
+            ui("GET")
           )}
         </Button>
       </div>
@@ -1215,13 +1228,15 @@ function PublisherIdentity({
   className?: string;
   compact?: boolean;
 }) {
+
+  const ui = useGT();
   const avatarClass = compact ? "h-4 w-4" : "h-5 w-5";
 
   return (
     <div
       data-testid="pipe-publisher-identity"
-      aria-label={publisher.isScreenpipeTeam ? "Official Screenpipe publisher" : undefined}
-      title={compact && publisher.isScreenpipeTeam ? "Built by screenpipe team" : undefined}
+      aria-label={publisher.isScreenpipeTeam ? ui("Official Screenpipe publisher") : undefined}
+      title={compact && publisher.isScreenpipeTeam ? ui("Built by screenpipe team") : undefined}
       className={cn(
         "flex min-w-0 items-center",
         compact ? "gap-1.5" : "gap-2",
@@ -1256,14 +1271,14 @@ function PublisherIdentity({
           <span className="font-medium">{publisher.name}</span>
         ) : (
           <>
-            {publisher.isScreenpipeTeam ? "Built by " : "By "}
+            {publisher.isScreenpipeTeam ? ui("Built by ") : ui("By ")}
             <span className="font-medium text-foreground">{publisher.name}</span>
           </>
         )}
       </span>
       {publisher.verified && !publisher.isScreenpipeTeam && (
         <BadgeCheck
-          aria-label="Verified publisher"
+          aria-label={ui("Verified publisher")}
           className={cn(
             "flex-shrink-0 text-foreground",
             compact ? "h-3 w-3" : "h-3.5 w-3.5",
@@ -1300,6 +1315,9 @@ function PipeDetailPanel({
   unpublishing?: boolean;
   onRefresh?: () => void;
 }) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const unrestricted = isUnrestricted(pipe.permissions);
   const isOwner = !!(currentUserId && pipe.author_id && currentUserId === pipe.author_id);
   const publisher = getPipePublisherIdentity({
@@ -1329,7 +1347,7 @@ function PipeDetailPanel({
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-xl font-semibold tracking-tight">{pipe.title || pipe.slug || "Untitled scheduled task"}</h2>
+              <h2 className="text-xl font-semibold tracking-tight">{pipe.title || pipe.slug || ui("Untitled scheduled task")}</h2>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
                 <PublisherIdentity publisher={publisher} />
                 {pipe.version ? (
@@ -1414,7 +1432,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
                       UNPUBLISHING...
                     </>
                   ) : (
-                    "UNPUBLISH"
+                    ui("UNPUBLISH")
                   )}
                 </Button>
               )}
@@ -1433,7 +1451,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
                 {installing === pipe.slug ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-                    {hasUpdate ? "UPDATING..." : "INSTALLING..."}
+                    {hasUpdate ? ui("UPDATING...") : ui("INSTALLING...")}
                   </>
                 ) : hasUpdate ? (
                   <>
@@ -1441,7 +1459,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
                     UPDATE
                   </>
                 ) : isInstalled ? (
-                  "INSTALLED"
+                  ui("INSTALLED")
                 ) : (
                   <>
                     <Download className="h-4 w-4 mr-1.5" />
@@ -1492,7 +1510,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
         </h4>
         <div className="border border-border rounded-lg p-5 space-y-3">
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-            {PERMISSION_LABELS.map((perm) => {
+            {localizeDefinitions(PERMISSION_LABELS, uiMessages).map((perm) => {
               const status = getPermissionStatus(pipe.permissions, perm.key);
               return (
                 <div
@@ -1583,6 +1601,8 @@ export function PermissionsReview({
   permissions?: PipePermissions;
   authorVerified: boolean;
 }) {
+
+  const uiMessages = useMessages();
   const unrestricted = isUnrestricted(permissions);
 
   return (
@@ -1593,7 +1613,7 @@ export function PermissionsReview({
           Data access
         </div>
         <div className="grid grid-cols-2 gap-1.5">
-          {PERMISSION_LABELS.map((perm) => {
+          {localizeDefinitions(PERMISSION_LABELS, uiMessages).map((perm) => {
             const status = getPermissionStatus(permissions, perm.key);
             return (
               <div
@@ -1642,6 +1662,8 @@ export function InstallRiskSummary({
   permissions?: PipePermissions;
   onReviewSource?: () => void;
 }) {
+
+  const ui = useGT();
   const risk = getPipeInstallRisk({
     permissions,
     author_verified: authorVerified,
@@ -1659,11 +1681,11 @@ export function InstallRiskSummary({
             ) : (
               <Shield className="h-4 w-4" />
             )}
-            {unrestricted ? "Can access all your screen data" : "Requested access"}
+            {unrestricted ? ui("Can access all your screen data") : ui("Requested access")}
           </div>
           <p className="text-xs text-muted-foreground leading-relaxed">
             {unrestricted
-              ? "Screen text, audio, keyboard input, screenshots, and raw queries."
+              ? ui("Screen text, audio, keyboard input, screenshots, and raw queries.")
               : getPipeAccessSummary(permissions)}{" "}
             {onReviewSource ? (
               <button

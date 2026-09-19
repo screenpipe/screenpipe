@@ -9,6 +9,8 @@ import { FirstTaskChoice } from "@/components/workflows/first-task-choice";
 import { WorkflowAccessNotice } from "@/components/workflows/workflow-access";
 import { WorkflowTasksPrompt } from "@/components/workflows/workflow-tasks-prompt";
 import { ProductSwitcher } from "@/components/workflows/product-switcher";
+import { useGT } from "gt-react";
+
 
 const previewTasks = { load: async () => ({ enabled: false, title: "Keep your workflows current", schedule: "every 24h" }), enable: async () => {} };
 const fixture = createFixtureWorkflowsPlatform();
@@ -48,11 +50,13 @@ const processingFixture = { ...fixture, managesAnalysis: true,
 // Maintained browser-mock harness: real product components, synthetic history.
 // This route never enables fixtures in a packaged application.
 export default function WorkflowUxPreview() {
+
+  const ui = useGT();
   const [accessRequested, setAccessRequested] = useState(false);
   const [screen, setScreen] = useState<"onboarding" | "empty" | "catalog" | "processing" | "tasks" | "skill" | "allowance" | "business" | "legacy" | "no-changes">("processing");
   if (process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV !== "mock") return null;
   return <div className="h-screen bg-background text-foreground">
-    <nav aria-label="Preview states" className="flex h-10 items-center justify-between gap-4 border-b border-border px-4 text-xs">
+    <nav aria-label={ui("Preview states")} className="flex h-10 items-center justify-between gap-4 border-b border-border px-4 text-xs">
       <span className="text-muted-foreground">UX preview · fictional data</span>
       <div className="flex gap-4"><button onClick={() => setScreen("no-changes")}>No changes</button><button onClick={() => setScreen("legacy")}>SOP screenshots</button><button onClick={() => setScreen("allowance")}>Low allowance</button><button onClick={() => setScreen("business")}>Business access</button><button onClick={() => setScreen("skill")}>Skill install result</button><button onClick={() => setScreen("tasks")}>Enable tasks</button><button onClick={() => setScreen("onboarding")}>First task</button><button onClick={() => setScreen("empty")}>New history</button><button onClick={() => setScreen("catalog")}>Existing history</button><button onClick={() => setScreen("processing")}>Processing preview</button></div>
     </nav>

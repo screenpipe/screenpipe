@@ -14,6 +14,8 @@ import {
   setOnboardingLiveViewGuideStep,
   type OnboardingLiveViewActivation,
 } from "@/lib/live-views/onboarding-activation";
+import { useGT } from "gt-react";
+
 
 export function LiveViewOnboardingGuide({
   activation,
@@ -30,6 +32,8 @@ export function LiveViewOnboardingGuide({
   onComplete: () => void;
   onActivationChange: () => void;
 }) {
+
+  const ui = useGT();
   const viewedStepRef = useRef<string | null>(null);
   const visibleStep =
     activation.guideStep === "result" && !hasResult
@@ -92,8 +96,8 @@ export function LiveViewOnboardingGuide({
         targetSelector='[data-onboarding-guide-target="dashboard"]'
         eyebrow="your first Live View"
         step="1 of 3"
-        title="This dashboard was made for your goal"
-        description="Screenpipe created this Live View for the goal you chose. It fills with your real activity."
+        title={ui("This dashboard was made for your goal")}
+        description={ui("Screenpipe created this Live View for the goal you chose. It fills with your real activity.")}
         primaryLabel="show me how it fills"
         onPrimary={() => moveTo("waiting")}
         onDismiss={dismiss}
@@ -114,7 +118,7 @@ export function LiveViewOnboardingGuide({
         eyebrow="how it updates"
         step="2 of 3"
         title={
-          needsRetry ? "Finish the interrupted setup" : "Wait for real work"
+          needsRetry ? ui("Finish the interrupted setup") : ui("Wait for real work")
         }
         description={description}
         primaryLabel={
@@ -138,8 +142,8 @@ export function LiveViewOnboardingGuide({
       targetSelector='[data-testid="live-view-canvas"]'
       eyebrow="your first result"
       step="3 of 3"
-      title="Check it and help it improve"
-      description="Open the result, check it against your work, and use thumbs up or down. Your feedback helps future updates improve."
+      title={ui("Check it and help it improve")}
+      description={ui("Open the result, check it against your work, and use thumbs up or down. Your feedback helps future updates improve.")}
       primaryLabel="I found my first result"
       onPrimary={onComplete}
       onDismiss={dismiss}

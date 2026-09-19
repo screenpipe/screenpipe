@@ -8,8 +8,39 @@ use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 use tauri::{AppHandle, Listener};
+use tauri::menu::{Menu, MenuItem, MenuItemKind};
+
+type MenuLabel = (MenuItemKind<tauri::Wry>, String, Vec<(String, String)>);
+static APP_MENU: Lazy<Mutex<Vec<MenuLabel>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Capture source labels once, before the persisted locale is applied. Retain
+/// menu handles so a language switch changes text without replacing menus.
+pub fn register_app_menu(menu: &Menu<tauri::Wry>) -> tauri::Result<()> {
+    fn collect(items: Vec<MenuItemKind<tauri::Wry>>, output: &mut Vec<MenuLabel>) -> tauri::Result<()> {
+        for item in items {
+            let text = match &item {
+                MenuItemKind::MenuItem(item) => item.text()?,
+                MenuItemKind::Predefined(item) => item.text()?,
+                MenuItemKind::Submenu(item) => { collect(item.items()?, output)?; item.text()? },
+                _ => continue,
+            };
+            if !text.is_empty() && text != "screenpipe" { output.push((item, text, Vec::new())); }
+        }
+        Ok(())
+    }
+    collect(menu.items()?, &mut APP_MENU.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// Dynamic native labels retain their source so switching locale also updates
+/// a download in progress. Values remain in memory, never in diagnostics.
+pub fn ui_menu(english: &str, values: &[(&str, String)], item: &MenuItem<tauri::Wry>) -> tauri::Result<()> {
+    let mut labels = APP_MENU.lock().unwrap_or_else(|e| e.into_inner());
+    labels.retain(|(existing, _, _)| existing.id() != item.id());
+    labels.push((MenuItemKind::MenuItem(item.clone()), english.to_owned(), values.iter().map(|(key, value)| ((*key).to_owned(), value.clone())).collect()));
+    item.set_text(ui_format(english, values))
+}
 
 static SNAPSHOT: Lazy<Value> = Lazy::new(|| {
     serde_json::from_str(include_str!(concat!(env!("OUT_DIR"), "/localization.json")))
@@ -38,7 +69,7 @@ pub fn resolve_locale(configured: &str, system: &[String], available: &[String],
     default.to_string()
 }
 
-fn refresh(configured: &str) {
+fn refresh(configured: &str) -> bool {
     let default = SNAPSHOT["defaultLocale"].as_str().unwrap_or("en");
     let mut available = vec![default.to_string()];
     if let Some(locales) = SNAPSHOT["locales"].as_array() {
@@ -47,12 +78,36 @@ fn refresh(configured: &str) {
     let system: Vec<String> = sys_locale::get_locales().collect();
     let resolved = resolve_locale(configured, &system, &available, default);
     let mut state = STATE.write().unwrap_or_else(|e| e.into_inner());
+    let changed = state.resolved != resolved;
     state.configured = configured.to_string();
     state.resolved = resolved;
+    changed
+}
+
+fn refresh_surfaces(app: &AppHandle) {
+    let locale = resolved_locale();
+    let payload = json!({"locale": locale, "messages": SNAPSHOT["native"][&locale].as_object().cloned().unwrap_or_default()}).to_string();
+    if let Err(error) = app.run_on_main_thread(move || {
+        for (item, english, values) in APP_MENU.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+            let values: Vec<_> = values.iter().map(|(key, value)| (key.as_str(), value.clone())).collect();
+            let text = ui_format(english, &values);
+            let result = match item {
+                MenuItemKind::MenuItem(item) => item.set_text(&text),
+                MenuItemKind::Predefined(item) => item.set_text(&text),
+                MenuItemKind::Submenu(item) => item.set_text(&text),
+                _ => Ok(()),
+            };
+            if let Err(error) = result { tracing::warn!("localization: app menu update failed: {error}"); }
+        }
+        crate::native_timeline::set_ui_locale(&payload);
+        crate::native_notification::set_ui_locale(&payload);
+        crate::native_shortcut_reminder::set_ui_locale(&payload);
+    }) { tracing::warn!("localization: native locale dispatch failed: {error}"); }
 }
 
 pub fn initialize(app: &AppHandle, configured: &str) {
     refresh(configured);
+    refresh_surfaces(app);
     let app = app.clone();
     let handle = app.clone();
     app.listen("store://change", move |event| {
@@ -63,7 +118,7 @@ pub fn initialize(app: &AppHandle, configured: &str) {
         let app = handle.clone();
         tauri::async_runtime::spawn_blocking(move || {
             if let Ok(Some(settings)) = crate::store::SettingsStore::get(&app) {
-                refresh(&settings.ui_locale);
+                if refresh(&settings.ui_locale) { refresh_surfaces(&app); }
             }
         });
     });
@@ -72,6 +127,9 @@ pub fn initialize(app: &AppHandle, configured: &str) {
 pub fn resolved_locale() -> String {
     STATE.read().unwrap_or_else(|e| e.into_inner()).resolved.clone()
 }
+
+/// Mark a deferred native label for extraction, retaining its English source.
+pub fn source_text(english: &str) -> &str { english }
 
 pub fn ui_text(english: &str) -> String {
     let id = format!("{:x}", Sha256::digest(english.as_bytes()))[..16].to_string();
@@ -84,6 +142,28 @@ pub fn ui_text(english: &str) -> String {
     }
     state.fallbacks.insert(id, "missing_native_translation");
     english.to_string()
+}
+
+pub fn ui_format(english: &str, values: &[(&str, String)]) -> String {
+    interpolate(&ui_text(english), values)
+}
+
+fn interpolate(message: &str, values: &[(&str, String)]) -> String {
+    let mut result = String::with_capacity(message.len());
+    let mut rest = message;
+    while let Some(start) = rest.find('{') {
+        result.push_str(&rest[..start]);
+        let Some(end) = rest[start..].find('}').map(|end| start + end) else {
+            result.push_str(&rest[start..]);
+            return result;
+        };
+        let key = &rest[start + 1..end];
+        if let Some((_, value)) = values.iter().find(|(name, _)| *name == key) { result.push_str(value); }
+        else { result.push_str(&rest[start..=end]); }
+        rest = &rest[end + 1..];
+    }
+    result.push_str(rest);
+    result
 }
 
 /// Called when collecting feedback, so missing entries remain diagnosable after
@@ -110,6 +190,12 @@ fn diagnostics_for(snapshot: &Value, state: &LocaleState) -> String {
 mod tests {
     use super::{resolve_locale, diagnostics_for, LocaleState};
     use serde_json::json;
+
+    #[test]
+    fn interpolation_never_reinterprets_private_values() {
+        let values = [("name", "{error}".to_string()), ("error", "private diagnostic".to_string())];
+        assert_eq!(super::interpolate("Hello {name}; {missing}", &values), "Hello {error}; {missing}");
+    }
 
     #[test]
     fn locale_resolution_matches_bundled_exact_then_base_then_english() {

@@ -10,7 +10,7 @@ use crate::health::{
     HighFpsCacheEntry, RecordingStatus,
 };
 use crate::process_exit;
-use crate::localization::ui_text;
+use crate::localization::{ui_text, ui_format};
 use crate::recording::{local_api_context_from_app, RecordingState};
 use crate::store::{OnboardingStore, SettingsStore};
 use crate::updates::{is_enterprise_build, is_source_build};
@@ -287,14 +287,14 @@ fn format_remaining(d: std::time::Duration) -> String {
         let h = secs / 3600;
         let m = (secs % 3600) / 60;
         if m == 0 {
-            format!("{}h", h)
+            ui_format("{hours}h", &[("hours", h.to_string())])
         } else {
-            format!("{}h {}m", h, m)
+            ui_format("{hours}h {minutes}m", &[("hours", h.to_string()), ("minutes", m.to_string())])
         }
     } else if secs >= 60 {
-        format!("{}m", (secs + 59) / 60) // round up
+        ui_format("{minutes}m", &[("minutes", ((secs + 59) / 60).to_string())]) // round up
     } else {
-        format!("{}s", secs.max(1))
+        ui_format("{seconds}s", &[("seconds", secs.max(1).to_string())])
     }
 }
 
@@ -364,10 +364,10 @@ impl TrayRecordingAction {
         }
     }
 
-    fn failure_copy(self) -> (&'static str, &'static str) {
+    fn failure_copy(self) -> (String, &'static str) {
         match self {
-            Self::Start => ("recording could not resume", "resume"),
-            Self::Stop => ("recording could not pause", "pause"),
+            Self::Start => (crate::localization::ui_text("recording could not resume"), crate::localization::source_text("screenpipe could not resume capture: {error}")),
+            Self::Stop => (crate::localization::ui_text("recording could not pause"), crate::localization::source_text("screenpipe could not pause capture: {error}")),
         }
     }
 }
@@ -442,15 +442,15 @@ fn dispatch_tray_recording_action(
                 if let Some((title, body)) =
                     success_notification_for_outcome(outcome, success_notification)
                 {
-                    send_notify(title, body);
+                    send_notify(crate::localization::ui_text(title), crate::localization::ui_text(body));
                 }
             }
             Err(error) => {
-                let (title, verb) = action.failure_copy();
+                let (title, message) = action.failure_copy();
                 tracing::error!(?action, %error, "native tray recording action failed");
                 send_notify(
                     title,
-                    format!("screenpipe could not {verb} capture: {error}"),
+                    crate::localization::ui_format(message, &[("error", error)]),
                 );
             }
         }
@@ -897,13 +897,13 @@ fn hd_stop_menu_label(hd: &HighFpsCacheEntry) -> String {
     let fps = (hd.interval_ms > 0).then(|| 1000 / hd.interval_ms);
     let remaining = format_remaining_secs(hd.remaining_secs);
     let why = match hd.session_kind.as_str() {
-        "meeting" => "until call ends",
-        "prewarm_pending" => "awaiting call",
-        _ => "left",
+        "meeting" => ui_text("until call ends"),
+        "prewarm_pending" => ui_text("awaiting call"),
+        _ => ui_text("left"),
     };
     match fps {
-        Some(f) => format!("Stop HD recording (~{} fps, {} {})", f, remaining, why),
-        None => format!("Stop HD recording ({} {})", remaining, why),
+        Some(f) => ui_format("Stop HD recording (~{fps} fps, {time} {reason})", &[("fps", f.to_string()), ("time", remaining.clone()), ("reason", why.clone())]),
+        None => ui_format("Stop HD recording ({time} {reason})", &[("time", remaining), ("reason", why)]),
     }
 }
 
@@ -1208,23 +1208,23 @@ fn recording_status_text(
     status: RecordingStatus,
     all_capture_disabled: bool,
     audio_capture_status: Option<AudioCaptureStatus>,
-) -> &'static str {
+) -> String {
     match (status, all_capture_disabled, audio_capture_status) {
-        (RecordingStatus::Recording, true, _) => "○ Stopped",
+        (RecordingStatus::Recording, true, _) => ui_text("○ Stopped"),
         (RecordingStatus::Recording, false, Some(AudioCaptureStatus::WaitingForMeeting)) => {
-            "● Screen recording · audio waiting for meeting"
+            ui_text("● Screen recording · audio waiting for meeting")
         }
         (
             RecordingStatus::Recording,
             false,
             Some(AudioCaptureStatus::MeetingDetectorUnavailable),
-        ) => "● Screen recording · meeting detection unavailable",
-        (RecordingStatus::Starting, _, _) => "○ Starting…",
-        (RecordingStatus::Recording, _, _) => "● Recording",
-        (RecordingStatus::Paused, _, _) => "◐ Paused",
-        (RecordingStatus::ScheduledPause, _, _) => "○ Outside work hours",
-        (RecordingStatus::Stopped, _, _) => "○ Stopped",
-        (RecordingStatus::Error, _, _) => "○ Error",
+        ) => ui_text("● Screen recording · meeting detection unavailable"),
+        (RecordingStatus::Starting, _, _) => ui_text("○ Starting…"),
+        (RecordingStatus::Recording, _, _) => ui_text("● Recording"),
+        (RecordingStatus::Paused, _, _) => ui_text("◐ Paused"),
+        (RecordingStatus::ScheduledPause, _, _) => ui_text("○ Outside work hours"),
+        (RecordingStatus::Stopped, _, _) => ui_text("○ Stopped"),
+        (RecordingStatus::Error, _, _) => ui_text("○ Error"),
     }
 }
 
@@ -1417,7 +1417,7 @@ fn create_dynamic_menu(
         let has_cloud = data.cloud_subscribed;
         menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
         menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("plan_info", format!("{} plan", plan_label))
+            &MenuItemBuilder::with_id("plan_info", ui_format("{plan} plan", &[("plan", plan_label.to_string())]))
                 .enabled(false)
                 .build(app)?,
         );
@@ -1461,15 +1461,15 @@ fn create_dynamic_menu(
 
         let is_recording = effective_status == RecordingStatus::Recording && !all_capture_disabled;
         let label = if all_capture_disabled {
-            "Stopped — no devices enabled"
+            ui_text("Stopped — no devices enabled")
         } else {
             match effective_status {
-                RecordingStatus::Recording => "Recording",
-                RecordingStatus::Paused => "Paused — click to resume",
-                RecordingStatus::ScheduledPause => "Outside work hours — paused by schedule",
-                RecordingStatus::Starting => "Starting…",
-                RecordingStatus::Error => "Error — click to retry",
-                _ => "Stopped — click to record",
+                RecordingStatus::Recording => ui_text("Recording"),
+                RecordingStatus::Paused => ui_text("Paused — click to resume"),
+                RecordingStatus::ScheduledPause => ui_text("Outside work hours — paused by schedule"),
+                RecordingStatus::Starting => ui_text("Starting…"),
+                RecordingStatus::Error => ui_text("Error — click to retry"),
+                _ => ui_text("Stopped — click to record"),
             }
         };
         let toggle = CheckMenuItemBuilder::with_id("toggle_recording", label)
@@ -1478,11 +1478,11 @@ fn create_dynamic_menu(
             .build(app)?;
         menu_builder = menu_builder.item(&toggle);
 
-        // "Pause for…" submenu — only meaningful while currently recording.
+        // ui_text("Pause for…") submenu — only meaningful while currently recording.
         // Each click stops capture immediately, then a tokio task auto-resumes
         // after the chosen interval. See cancel_pause_timer / handle_menu_event.
         if is_recording {
-            let pause_submenu = SubmenuBuilder::new(app, "Pause for…")
+            let pause_submenu = SubmenuBuilder::new(app, ui_text("Pause for…"))
                 .item(&MenuItemBuilder::with_id("pause_5", ui_text("5 minutes")).build(app)?)
                 .item(&MenuItemBuilder::with_id("pause_15", ui_text("15 minutes")).build(app)?)
                 .item(&MenuItemBuilder::with_id("pause_30", ui_text("30 minutes")).build(app)?)
@@ -1512,7 +1512,7 @@ fn create_dynamic_menu(
             *HD_STOP_MENU_ITEM.lock().unwrap_or_else(|e| e.into_inner()) = None;
             // Idle: offer timer-bound sessions only. The meeting-bound path
             // is reached via the meeting-start notification's "+ HD" action.
-            let submenu = SubmenuBuilder::new(app, "Record HD")
+            let submenu = SubmenuBuilder::new(app, ui_text("Record HD"))
                 .item(&MenuItemBuilder::with_id("hd_timer_15", ui_text("15 minutes")).build(app)?)
                 .item(&MenuItemBuilder::with_id("hd_timer_30", ui_text("30 minutes")).build(app)?)
                 .item(&MenuItemBuilder::with_id("hd_timer_60", ui_text("1 hour")).build(app)?)
@@ -1573,11 +1573,11 @@ fn create_workflows_menu(app: &AppHandle, data: &TrayMenuData) -> Result<tauri::
                 .item(&MenuItemBuilder::with_id("pause_60", ui_text("Pause for 1 hour")).build(app)?);
         }
         let label = if recording {
-            "Pause until resumed"
+            ui_text("Pause until resumed")
         } else if status == RecordingStatus::Starting {
-            "Starting…"
+            ui_text("Starting…")
         } else {
-            "Resume recording"
+            ui_text("Resume recording")
         };
         controls = controls.item(
             &MenuItemBuilder::with_id("toggle_recording", label)
@@ -1835,7 +1835,7 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                 dispatch_tray_recording_action(
                     app_for_resume,
                     TrayRecordingAction::Start,
-                    Some(("Recording resumed", "screenpipe is recording again.")),
+                    Some((crate::localization::source_text("Recording resumed"), crate::localization::source_text("screenpipe is recording again."))),
                 );
             });
             *PAUSE_TIMER.lock().unwrap_or_else(|e| e.into_inner()) = Some(PauseTimer {
@@ -1849,16 +1849,16 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
             let pretty = if mins >= 60 {
                 let h = mins / 60;
                 if h == 1 {
-                    "1 hour".to_string()
+                    ui_text("1 hour")
                 } else {
-                    format!("{} hours", h)
+                    ui_format("{count} hours", &[("count", h.to_string())])
                 }
             } else {
-                format!("{} minutes", mins)
+                ui_format("{count} minutes", &[("count", mins.to_string())])
             };
             send_notify(
-                "Recording paused",
-                format!("screenpipe will auto-resume in {}.", pretty),
+                ui_text("Recording paused"),
+                ui_format("screenpipe will auto-resume in {duration}.", &[("duration", pretty)]),
             );
             // Repaint the tray so "Recording" flips to "Paused" immediately.
             let app_for_rebuild = app_handle.clone();
@@ -2096,11 +2096,8 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                     tauri::async_runtime::spawn(async move {
                         let dialog = app
                             .dialog()
-                            .message(
-                                "auto-updates are only available in the pre-built version.\n\n\
-                                source builds require manual updates from github.",
-                            )
-                            .title("source build detected")
+                            .message(crate::localization::ui_text("auto-updates are only available in the pre-built version.\n\nsource builds require manual updates from github."))
+                            .title(crate::localization::ui_text("source build detected"))
                             .buttons(MessageDialogButtons::OkCancelCustom(
                                 "download pre-built".to_string(),
                                 "view on github".to_string(),
@@ -2225,22 +2222,22 @@ async fn update_menu_if_needed(
     let has_perm_issue = new_state.has_permission_issue;
     let audio_capture_status = get_recording_info().audio_capture_status;
     let tooltip: String = if has_perm_issue {
-        "screenpipe — ⚠️ permissions needed".to_string()
+        ui_text("screenpipe — ⚠️ permissions needed")
     } else if effective_status == RecordingStatus::Recording
         && audio_capture_status == Some(AudioCaptureStatus::MeetingDetectorUnavailable)
     {
-        "screenpipe — screen recording; meeting detection unavailable".to_string()
+        ui_text("screenpipe — screen recording; meeting detection unavailable")
     } else if effective_status == RecordingStatus::Recording
         && audio_capture_status == Some(AudioCaptureStatus::WaitingForMeeting)
     {
-        "screenpipe — screen recording; audio waiting for meeting".to_string()
+        ui_text("screenpipe — screen recording; audio waiting for meeting")
     } else if effective_status == RecordingStatus::Paused {
         match pause_remaining() {
-            Some(d) => format!("screenpipe — paused, resumes in {}", format_remaining(d)),
-            None => "screenpipe — paused".to_string(),
+            Some(d) => ui_format("screenpipe — paused, resumes in {duration}", &[("duration", format_remaining(d))]),
+            None => ui_text("screenpipe — paused"),
         }
     } else if effective_status == RecordingStatus::ScheduledPause {
-        "screenpipe — outside work hours (paused by schedule)".to_string()
+        ui_text("screenpipe — outside work hours (paused by schedule)")
     } else {
         "screenpipe".to_string()
     };

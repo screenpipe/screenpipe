@@ -10,6 +10,8 @@ import { Switch } from "@/components/ui/switch";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
+import { useGT } from "gt-react";
+
 
 type RemoteSupportStatus =
   | "checking"
@@ -68,6 +70,8 @@ function describeConsumerStatus(status: RemoteSupportStatus): StatusMessage {
 }
 
 export function RemoteSupportLogsCard() {
+
+  const ui = useGT();
   const { settings, updateSettings } = useSettings();
   const [remoteStatus, setRemoteStatus] =
     useState<RemoteSupportStatus>("checking");
@@ -144,11 +148,11 @@ export function RemoteSupportLogsCard() {
                 <p className="text-xs text-muted-foreground mt-0.5 max-w-2xl">
                   {!isManagedDeploymentResolved
                     ? managedDeploymentResolutionError
-                      ? "Could not verify whether this device is managed. Remote log controls stay locked and will retry automatically."
-                      : "Checking whether remote log collection is managed by your organization..."
+                      ? ui("Could not verify whether this device is managed. Remote log controls stay locked and will retry automatically.")
+                      : ui("Checking whether remote log collection is managed by your organization...")
                     : isManagedDeployment
-                      ? "Your organization can request diagnostic logs from this managed device. Nothing is uploaded unless an administrator sends a request. Logs are filtered locally for common secrets and personal data, but automated filtering can miss secrets and logs can still contain names, file paths, URLs, and error messages. They go to your organization's configured support service, which controls retention. Screenshots, recordings, audio files, chat history, settings, and the timeline database are never included."
-                      : `Remote support logs are enabled by default. Screenpipe support can request recent diagnostic logs from this device. Before upload, logs are filtered locally on this device for common secrets and personal data, but automated filtering can miss secrets and logs can still contain names, file paths, URLs, and error messages. Screenshots, recordings, audio files, chat history, settings, and the timeline database are never included. Nothing is uploaded unless support sends a short-lived request. You can turn this off at any time; previously shared diagnostics are deleted after 30 days.${requiresSignIn ? " Sign in to enable this." : ""}`}
+                      ? ui("Your organization can request diagnostic logs from this managed device. Nothing is uploaded unless an administrator sends a request. Logs are filtered locally for common secrets and personal data, but automated filtering can miss secrets and logs can still contain names, file paths, URLs, and error messages. They go to your organization's configured support service, which controls retention. Screenshots, recordings, audio files, chat history, settings, and the timeline database are never included.")
+                      : ui("Remote support logs are enabled by default. Screenpipe support can request recent diagnostic logs from this device. Before upload, logs are filtered locally on this device for common secrets and personal data, but automated filtering can miss secrets and logs can still contain names, file paths, URLs, and error messages. Screenshots, recordings, audio files, chat history, settings, and the timeline database are never included. Nothing is uploaded unless support sends a short-lived request. You can turn this off at any time; previously shared diagnostics are deleted after 30 days.{value1}", { value1: requiresSignIn ? " Sign in to enable this." : "" })}
                 </p>
                 {consumerStatus && (
                   <p className={`text-[11px] mt-1 ${consumerStatus.className}`}>
@@ -159,7 +163,7 @@ export function RemoteSupportLogsCard() {
             </div>
             <Switch
               id="remote-log-collection-toggle"
-              aria-label="Allow remote support logs"
+              aria-label={ui("Allow remote support logs")}
               data-testid="remote-log-collection-toggle"
               checked={enabled}
               disabled={

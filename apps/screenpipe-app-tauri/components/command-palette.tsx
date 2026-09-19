@@ -47,6 +47,8 @@ import {
   matchesInAppShortcut,
   type ShortcutHintSettings,
 } from "@/lib/shortcuts";
+import { useGT } from "gt-react";
+
 
 export { globalShortcutHint } from "@/lib/shortcuts";
 
@@ -261,6 +263,8 @@ export function CommandPalette({
   onOpenChange,
   experimentalFeaturesEnabled = false,
 }: CommandPaletteProps) {
+
+  const ui = useGT();
   const [internalOpen, setInternalOpen] = useState(false);
   const open = controlledOpen ?? internalOpen;
   const setOpen = onOpenChange ?? setInternalOpen;
@@ -299,7 +303,7 @@ export function CommandPalette({
   return (
     <CommandDialog open={open} onOpenChange={setOpen}>
       <CommandInput
-        placeholder="Type a command..."
+        placeholder={ui("Type a command...")}
         className="ph-no-capture"
         data-testid="command-palette-input"
       />

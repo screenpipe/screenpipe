@@ -22,6 +22,8 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 export type ModelDiscoveryStatus = "idle" | "loading" | "ready" | "error";
 
@@ -54,6 +56,8 @@ export function ModelPicker({
   disabled = false,
   className,
 }: ModelPickerProps) {
+
+  const ui = useGT();
   const [open, setOpen] = React.useState(false);
   const [search, setSearch] = React.useState("");
   const generatedId = React.useId();
@@ -102,7 +106,7 @@ export function ModelPicker({
             variant="outline"
             role="combobox"
             aria-expanded={open}
-            aria-label="Model"
+            aria-label={ui("Model")}
             aria-describedby={statusText ? statusId : undefined}
             disabled={disabled}
             className={cn(
@@ -111,7 +115,7 @@ export function ModelPicker({
             )}
           >
             <span className="truncate">
-              {value || (status === "loading" ? "Loading models..." : placeholder)}
+              {value || (status === "loading" ? ui("Loading models...") : placeholder)}
             </span>
             {status === "loading" ? (
               <Loader2 className="ml-2 h-3.5 w-3.5 shrink-0 animate-spin" />
@@ -124,18 +128,18 @@ export function ModelPicker({
           align="start"
           className="w-[--radix-popover-trigger-width] rounded-lg p-0"
         >
-          <Command label="Search models" className="rounded-none font-mono">
+          <Command label={ui("Search models")} className="rounded-none font-mono">
             <CommandInput
               value={search}
               onValueChange={setSearch}
-              placeholder={allowManualEntry ? "Search or type a model" : "Search models"}
-              aria-label="Search models"
+              placeholder={allowManualEntry ? ui("Search or type a model") : ui("Search models")}
+              aria-label={ui("Search models")}
               className="rounded-none"
             />
             <CommandList>
               {status === "error" && (
                 <div className="border-b px-3 py-2 text-xs text-destructive" role="alert">
-                  {errorMessage || "Model discovery failed"}
+                  {errorMessage || ui("Model discovery failed")}
                 </div>
               )}
               {status === "loading" ? (
@@ -149,8 +153,8 @@ export function ModelPicker({
                 <>
                   <CommandEmpty>
                     {status === "idle"
-                      ? idleMessage || "Model discovery is not available yet"
-                      : emptyMessage || "No matching models"}
+                      ? idleMessage || ui("Model discovery is not available yet")
+                      : emptyMessage || ui("No matching models")}
                   </CommandEmpty>
                   {uniqueModels.length > 0 && (
                     <CommandGroup heading="models">

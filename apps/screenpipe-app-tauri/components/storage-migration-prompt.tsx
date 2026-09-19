@@ -9,6 +9,8 @@ import {
   AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
   AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useGT } from "gt-react";
+
 
 export function StorageMigrationDescription() {
   return <>
@@ -37,6 +39,8 @@ const deferredKey = (root: string) => `screenpipe-storage-migration-deferred:${r
 
 /** Offered on Home after authentication; progress remains global across webviews. */
 export function StorageMigrationPrompt({ activity }: { activity: StorageMigrationActivity }) {
+
+  const ui = useGT();
   const [status, setStatus] = useState<StorageMigrationStatus | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -102,25 +106,25 @@ export function StorageMigrationPrompt({ activity }: { activity: StorageMigratio
     <AlertDialog open={open} onOpenChange={(open) => { if (!open) dismiss(); }}>
       <AlertDialogContent data-testid="storage-migration-prompt">
         <AlertDialogHeader>
-          <AlertDialogTitle>{success ? "Storage migration complete" : failure ? "Migration needs attention" : status?.pending ? "Finish migrating your history" : "Upgrade your history storage"}</AlertDialogTitle>
+          <AlertDialogTitle>{success ? ui("Storage migration complete") : failure ? ui("Migration needs attention") : status?.pending ? ui("Finish migrating your history") : ui("Upgrade your history storage")}</AlertDialogTitle>
           <AlertDialogDescription>
             {success ? activity.message : <>
-              {!failure && "Your history is in the older storage format. Upgrade it to store history more efficiently and keep it searchable. "}
+              {!failure && ui("Your history is in the older storage format. Upgrade it to store history more efficiently and keep it searchable. ")}
               <StorageMigrationDescription />
             </>}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {success && <div className="space-y-2 text-sm text-muted-foreground">
           <p>Completed in {migrationElapsed(activity.elapsed_seconds)}.</p>
-          <p>{status?.in_place ? "Your existing database is now the index for your upgraded history." : "Your original database is kept as a recovery copy. You can delete it separately in Settings → Storage after reviewing your history."}</p>
+          <p>{status?.in_place ? ui("Your existing database is now the index for your upgraded history.") : ui("Your original database is kept as a recovery copy. You can delete it separately in Settings → Storage after reviewing your history.")}</p>
           {status?.bytes_saved != null && <p>Space saved: {migrationBytes(status.bytes_saved)}</p>}
         </div>}
         {failure && <p className="text-sm text-destructive" role="alert">{failure}</p>}
-        {!success && <p className="text-xs text-muted-foreground">{status?.pending && status.in_place ? "Your completed progress is saved. Migration continues from that progress when you retry." : "You can also start later in Settings → Storage."}</p>}
+        {!success && <p className="text-xs text-muted-foreground">{status?.pending && status.in_place ? ui("Your completed progress is saved. Migration continues from that progress when you retry.") : ui("You can also start later in Settings → Storage.")}</p>}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={submitting} onClick={dismiss}>{success ? "Done" : "Do later"}</AlertDialogCancel>
+          <AlertDialogCancel disabled={submitting} onClick={dismiss}>{success ? ui("Done") : ui("Do later")}</AlertDialogCancel>
           {status?.can_cancel && !success && <Button variant="outline" disabled={submitting} onClick={() => void run(true)}>Use original database</Button>}
-          {status?.can_migrate && !success && <Button disabled={submitting} onClick={() => void run()}>{submitting ? "Starting…" : failure ? "Try again" : "Start now"}</Button>}
+          {status?.can_migrate && !success && <Button disabled={submitting} onClick={() => void run()}>{submitting ? ui("Starting…") : failure ? ui("Try again") : ui("Start now")}</Button>}
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

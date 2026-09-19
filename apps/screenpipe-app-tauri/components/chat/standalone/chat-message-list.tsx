@@ -39,6 +39,8 @@ import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
 import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
 import type { ChatRichResult } from "@/lib/chat/rich-results";
+import { useGT } from "gt-react";
+
 
 const MAX_MESSAGE_EDIT_HEIGHT_PX = 240;
 
@@ -159,6 +161,8 @@ export function ChatMessageList({
   onAskSelectedTextInSideChat,
   suppressSourceFooters = false,
 }: ChatMessageListProps) {
+
+  const ui = useGT();
   const retryInFlightRef = React.useRef(false);
   const [isRetrying, setIsRetrying] = React.useState(false);
   const retryDisabled = isLoading || isStreaming || isRetrying;
@@ -411,7 +415,7 @@ export function ChatMessageList({
                           data-testid="chat-message-editor"
                         >
                           <textarea
-                            aria-label="Edit message"
+                            aria-label={ui("Edit message")}
                             ref={(el) => {
                               editTextareaRef.current = el;
                               if (!el) return;
@@ -541,7 +545,7 @@ export function ChatMessageList({
                               }
                             }}
                             className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                            title="Copy message"
+                            title={ui("Copy message")}
                           >
                             {copiedMessageId === message.id ? (
                               <Check className="h-3 w-3" />
@@ -558,7 +562,7 @@ export function ChatMessageList({
                                 beginEditingMessage(message);
                               }}
                               className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                              title="Edit"
+                              title={ui("Edit")}
                             >
                               <Pencil className="h-3 w-3" />
                             </button>
@@ -576,7 +580,7 @@ export function ChatMessageList({
                             <button
                               onClick={() => onRetryAssistantMessage(message.id)}
                               className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                              title="Retry"
+                              title={ui("Retry")}
                             >
                               <RefreshCw className="h-3 w-3" />
                             </button>
@@ -589,7 +593,7 @@ export function ChatMessageList({
                               <PopoverTrigger asChild>
                                 <button
                                   className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                                  title="More options"
+                                  title={ui("More options")}
                                 >
                                   <MoreHorizontal className="h-3 w-3" />
                                 </button>

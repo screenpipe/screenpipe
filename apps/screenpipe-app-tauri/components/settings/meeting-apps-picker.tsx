@@ -17,6 +17,8 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { useAppWindowTree } from "@/lib/hooks/use-sql-autocomplete";
+import { useGT } from "gt-react";
+
 
 const APP_ICON_URL = (app: string) =>
   `http://localhost:11435/app-icon?name=${encodeURIComponent(app)}`;
@@ -89,6 +91,8 @@ const Row = React.memo(function Row({
   added: boolean;
   onToggle: (value: string) => void;
 }) {
+
+  const ui = useGT();
   return (
     <div
       className={cn(
@@ -122,7 +126,7 @@ const Row = React.memo(function Row({
           e.stopPropagation();
           onToggle(value);
         }}
-        title={added ? `${label} is ignored — click to re-enable` : `Ignore ${label}`}
+        title={added ? ui("{value1} is ignored — click to re-enable", { value1: label }) : ui("Ignore {value1}", { value1: label })}
         data-testid={`meeting-apps-picker-toggle-${value.toLowerCase()}`}
       >
         {added ? (
@@ -153,6 +157,8 @@ export function MeetingAppsPicker({
   selected,
   onToggle,
 }: MeetingAppsPickerProps) {
+
+  const ui = useGT();
   const { data, isLoading } = useAppWindowTree();
   const [search, setSearch] = React.useState("");
 
@@ -236,7 +242,7 @@ export function MeetingAppsPicker({
                 {s}
                 <button
                   type="button"
-                  aria-label={`Stop ignoring ${s}`}
+                  aria-label={ui("Stop ignoring {value1}", { value1: s })}
                   className="inline-flex rounded-sm focus:outline-none focus:ring-1 focus:ring-ring"
                   onClick={() => onToggle(s)}
                 >
@@ -252,7 +258,7 @@ export function MeetingAppsPicker({
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search your apps, or type a service (e.g. meet.google.com)..."
+            placeholder={ui("Search your apps, or type a service (e.g. meet.google.com)...")}
             className="pl-8 h-8 text-sm"
             autoFocus
           />
@@ -302,8 +308,8 @@ export function MeetingAppsPicker({
           {!isLoading && userRows.length === 0 && (
             <div className="p-3 text-xs text-muted-foreground text-center italic">
               {q
-                ? `No recent app matches "${search.trim()}" — use the add option above for a custom service.`
-                : "No other recent apps to show."}
+                ? ui("No recent app matches \"{value1}\" — use the add option above for a custom service.", { value1: search.trim() })
+                : ui("No other recent apps to show.")}
             </div>
           )}
           {userRows.map((n) => (
@@ -321,8 +327,8 @@ export function MeetingAppsPicker({
 
         <div className="text-[10px] text-muted-foreground">
           {selected.length === 0
-            ? "Nothing ignored — all known meeting apps are detected."
-            : `${selected.length} app${selected.length === 1 ? "" : "s"} ignored.`}
+            ? ui("Nothing ignored — all known meeting apps are detected.")
+            : ui("{value1, plural, one {# app} other {# apps}} ignored.", { value1: selected.length })}
         </div>
       </DialogContent>
     </Dialog>

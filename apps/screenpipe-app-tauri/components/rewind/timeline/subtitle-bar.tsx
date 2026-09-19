@@ -5,6 +5,8 @@
 import { useMemo, useRef, useEffect, useState } from "react";
 import { Mic, Volume2, ChevronDown, X, Loader2, MessageSquareText } from "lucide-react";
 import { StreamTimeSeriesResponse, AudioData } from "@/components/rewind/timeline";
+import { useGT } from "gt-react";
+
 
 interface SubtitleBarProps {
 	frames: StreamTimeSeriesResponse[];
@@ -32,6 +34,8 @@ const LINGER_SECS = 4;
 const LOOKAHEAD_MS = 30_000;
 
 export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcriptionPaused, meetingApp }: SubtitleBarProps) {
+
+  const ui = useGT();
 	const [isHovered, setIsHovered] = useState(false);
 	const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -147,7 +151,7 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 						setIsCollapsed(false);
 					}}
 					className="flex items-center gap-1.5 px-2.5 py-1 bg-background/80 backdrop-blur-sm rounded-full border border-border/50 shadow-sm hover:bg-background/90 hover:border-border hover:shadow-md transition-all duration-200 text-muted-foreground hover:text-foreground"
-					title="Show captions"
+					title={ui("Show captions")}
 				>
 					<MessageSquareText className="w-3.5 h-3.5" />
 					<span className="text-[10px] font-medium">Captions</span>
@@ -171,7 +175,7 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 						setIsCollapsed(true);
 					}}
 					className="px-2 py-0.5 rounded-full bg-black/60 hover:bg-black/80 text-white/70 hover:text-white text-[10px] font-medium backdrop-blur-sm transition-colors flex items-center gap-1"
-					title="Hide captions"
+					title={ui("Hide captions")}
 				>
 					<X className="w-3 h-3" />
 					<span>Hide</span>
@@ -249,6 +253,7 @@ function SubtitleLine({
 	isHovered: boolean;
 	isLookahead: boolean;
 }) {
+
 	const speakerLabel = entry.is_input
 		? "You"
 		: entry.speaker_name || entry.device_name || "Speaker";

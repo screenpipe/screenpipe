@@ -27,6 +27,8 @@ import {
 } from "./guide";
 import { GuideAssistant } from "./guide-assistant";
 import styles from "./workflow-guide.module.css";
+import { useGT } from "gt-react";
+
 
 export function WorkflowGuide({
   workflow,
@@ -37,6 +39,7 @@ export function WorkflowGuide({
   platform: NonNullable<WorkflowsPlatform["guides"]>;
   close: () => void;
 }) {
+  const ui = useGT();
   const [draft, setDraft] = useState<Guide | null>(null);
   const [busy, setBusy] = useState(true);
   const [progress, setProgress] = useState("Opening your SOP");
@@ -90,7 +93,7 @@ export function WorkflowGuide({
         setError(
           e instanceof Error
             ? e.message
-            : "Could not create the SOP. Try again.",
+            : ui("Could not create the SOP. Try again."),
         );
     } finally {
       if (!run.signal.aborted) setBusy(false);
@@ -113,7 +116,7 @@ export function WorkflowGuide({
     } catch {
       if (version === loadVersion.current) {
         setError(
-          "Your saved guide could not be opened. Its files are unchanged.",
+          ui("Your saved guide could not be opened. Its files are unchanged."),
         );
         setBusy(false);
       }
@@ -209,8 +212,8 @@ export function WorkflowGuide({
               {platform.openWeb && (
                 <button
                   className={styles.iconButton}
-                  aria-label="Open web editor"
-                  title="Open web editor"
+                  aria-label={ui("Open web editor")}
+                  title={ui("Open web editor")}
                   onClick={() => {
                     setWebReview(true);
                     setWebError("");
@@ -221,8 +224,8 @@ export function WorkflowGuide({
               )}
               <button
                 className={styles.iconButton}
-                aria-label={editing ? "Done editing" : "Edit SOP"}
-                title={editing ? "Done editing" : "Edit SOP"}
+                aria-label={editing ? ui("Done editing") : ui("Edit SOP")}
+                title={editing ? ui("Done editing") : ui("Edit SOP")}
                 aria-pressed={editing}
                 onClick={() => setEditing(!editing)}
               >
@@ -234,8 +237,8 @@ export function WorkflowGuide({
               </button>
               <button
                 className={styles.iconButton}
-                aria-label="Export SOP"
-                title="Export SOP"
+                aria-label={ui("Export SOP")}
+                title={ui("Export SOP")}
                 onClick={() => {
                   setImages(false);
                   setExportError("");
@@ -249,7 +252,7 @@ export function WorkflowGuide({
         </div>
       </header>
       {draft && webReview && (
-        <section className={styles.section} aria-label="Open SOP on the web">
+        <section className={styles.section} aria-label={ui("Open SOP on the web")}>
           <h2>Open your SOP on the web</h2>
           <p>
             Save the reviewed SOP text to your Screenpipe account to edit and
@@ -274,7 +277,7 @@ export function WorkflowGuide({
               }
             }}
           >
-            {openingWeb ? "Opening…" : "Continue to web editor"}
+            {openingWeb ? ui("Opening…") : ui("Continue to web editor")}
           </button>
           <button disabled={openingWeb} onClick={() => setWebReview(false)}>
             Cancel
@@ -293,8 +296,8 @@ export function WorkflowGuide({
           <p className={styles.eyebrow}>STANDARD OPERATING PROCEDURE</p>
           <h1>
             {busy
-              ? "Turning your work into an SOP"
-              : "Your SOP needs another try"}
+              ? ui("Turning your work into an SOP")
+              : ui("Your SOP needs another try")}
           </h1>
           <p>{workflow.title}</p>
           {busy ? (
@@ -311,7 +314,7 @@ export function WorkflowGuide({
                   controller.current?.abort();
                   setBusy(false);
                   setError(
-                    "Generation stopped. You can try again when you’re ready.",
+                    ui("Generation stopped. You can try again when you’re ready."),
                   );
                 }}
               >
@@ -341,7 +344,7 @@ export function WorkflowGuide({
             {draft.steps.map((step, i) => (
               <a onClick={jump} href={`#guide-step-${i}`} key={i}>
                 <span>{String(i + 1).padStart(2, "0")}</span>
-                {step.title || "Untitled step"}
+                {step.title || ui("Untitled step")}
               </a>
             ))}
             <a onClick={jump} href="#guide-completion">
@@ -364,14 +367,14 @@ export function WorkflowGuide({
               {editing ? (
                 <>
                   <input
-                    aria-label="Guide title"
+                    aria-label={ui("Guide title")}
                     value={draft.title}
                     onChange={(e) =>
                       update({ ...draft, title: e.target.value })
                     }
                   />
                   <textarea
-                    aria-label="Guide summary"
+                    aria-label={ui("Guide summary")}
                     value={draft.summary}
                     onChange={(e) =>
                       update({ ...draft, summary: e.target.value })
@@ -428,7 +431,7 @@ export function WorkflowGuide({
                       <span className={styles.number}>{i + 1}</span>
                       {editing ? (
                         <input
-                          aria-label={`Step ${i + 1} title`}
+                          aria-label={ui("Step {value1} title", { value1: i + 1 })}
                           value={step.title}
                           onChange={(e) =>
                             update({
@@ -445,7 +448,7 @@ export function WorkflowGuide({
                       {editing && (
                         <div className={styles.stepTools}>
                           <button
-                            aria-label={`Move step ${i + 1} up`}
+                            aria-label={ui("Move step {value1} up", { value1: i + 1 })}
                             disabled={i === 0}
                             onClick={() => {
                               const steps = [...draft.steps];
@@ -459,7 +462,7 @@ export function WorkflowGuide({
                             <ArrowUp size={14} />
                           </button>
                           <button
-                            aria-label={`Move step ${i + 1} down`}
+                            aria-label={ui("Move step {value1} down", { value1: i + 1 })}
                             disabled={i === draft.steps.length - 1}
                             onClick={() => {
                               const steps = [...draft.steps];
@@ -473,7 +476,7 @@ export function WorkflowGuide({
                             <ArrowDown size={14} />
                           </button>
                           <button
-                            aria-label={`Remove step ${i + 1}`}
+                            aria-label={ui("Remove step {value1}", { value1: i + 1 })}
                             disabled={draft.steps.length === 1}
                             onClick={() =>
                               update({
@@ -489,7 +492,7 @@ export function WorkflowGuide({
                     </div>
                     {editing ? (
                       <textarea
-                        aria-label={`Step ${i + 1} instructions`}
+                        aria-label={ui("Step {value1} instructions", { value1: i + 1 })}
                         value={step.instruction}
                         onChange={(e) =>
                           update({
@@ -509,7 +512,7 @@ export function WorkflowGuide({
                       <figure>
                         <img
                           src={image}
-                          alt={`Source for ${step.title}`}
+                          alt={ui("Source for {value1}", { value1: step.title })}
                           draggable={false}
                         />
                         {editing && (
@@ -554,15 +557,15 @@ export function WorkflowGuide({
                     ) : (
                       <p className={styles.muted}>
                         {stale
-                          ? "Source changed. Regenerate this SOP to review its screenshots."
-                          : "No captured screenshot for this step."}
+                          ? ui("Source changed. Regenerate this SOP to review its screenshots.")
+                          : ui("No captured screenshot for this step.")}
                       </p>
                     )}
                     {editing ? (
                       <label className={styles.result}>
                         Expected result
                         <input
-                          aria-label={`Step ${i + 1} expected result`}
+                          aria-label={ui("Step {value1} expected result", { value1: i + 1 })}
                           value={step.expectedResult}
                           onChange={(e) =>
                             update({
@@ -628,7 +631,7 @@ export function WorkflowGuide({
         <div>
           <h2>Export your SOP</h2>
           <button
-            aria-label="Close export"
+            aria-label={ui("Close export")}
             onClick={() => dialog.current?.close()}
           >
             <X size={18} />
@@ -677,7 +680,7 @@ export function WorkflowGuide({
           }}
         >
           <Download size={15} />
-          {exporting ? "Exporting…" : "Export HTML"}
+          {exporting ? ui("Exporting…") : ui("Export HTML")}
         </button>
       </dialog>
     </div>
@@ -693,6 +696,7 @@ function ScreenshotReview({
   title: string;
   include: () => void;
 }) {
+  const ui = useGT();
   const [open, setOpen] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -701,14 +705,14 @@ function ScreenshotReview({
       <div className={styles.imageReviewHeader}>
         <span>Saved screenshot available</span>
         <button aria-expanded={open} onClick={() => setOpen(!open)}>
-          {open ? "Hide screenshot" : "Review screenshot"}
+          {open ? ui("Hide screenshot") : ui("Review screenshot")}
         </button>
       </div>
       {open && (
         <>
           <img
             src={source.dataUrl}
-            alt={`Review source for ${title}`}
+            alt={ui("Review source for {value1}", { value1: title })}
             draggable={false}
             onLoad={() => {
               setLoaded(true);
@@ -722,8 +726,8 @@ function ScreenshotReview({
           <div className={styles.imageReviewHeader}>
             <span>
               {failed
-                ? "This screenshot could not be loaded."
-                : "Does this image show the step clearly?"}
+                ? ui("This screenshot could not be loaded.")
+                : ui("Does this image show the step clearly?")}
             </span>
             <button disabled={!loaded || failed} onClick={include}>
               Include screenshot

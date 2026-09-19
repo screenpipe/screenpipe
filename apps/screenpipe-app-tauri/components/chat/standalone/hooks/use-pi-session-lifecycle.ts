@@ -14,6 +14,9 @@ import { commands, type AIPreset, type PiInfo, type PiProviderConfig } from "@/l
 import type { ActivityAppItem, ConnectedIntegration, ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 import { applyResolvedModelLimits } from "@/lib/model-metadata";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 type PiRunningConfig = {
   backend?: "acp" | null;
@@ -119,6 +122,8 @@ export function usePiSessionLifecycle({
   piStoppedIntentionallyRef,
   piPresetSwitchPromiseRef,
 }: UsePiSessionLifecycleOptions) {
+  const uiLanguage = useLocale();
+  const ui = useGT();
   const pendingPresetRef = useRef<AIPreset | null>(null);
   useEffect(() => {
     // Don't resolve preset until settings are loaded from the store. Before
@@ -377,7 +382,7 @@ export function usePiSessionLifecycle({
   const handlePiRestart = useCallback((preset: AIPreset) => {
     if (isStreamingRef.current) {
       pendingPresetRef.current = preset;
-      toast({ title: "Model will switch after this response finishes" });
+      toast({ title: ui("Model will switch after this response finishes") });
       return;
     }
 
@@ -444,16 +449,7 @@ export function usePiSessionLifecycle({
     void switchPromise.catch((error) => {
       console.error("[Pi] Preset switch failed:", error);
     });
-  }, [
-    buildProviderConfig,
-    isStreamingRef,
-    piPresetSwitchPromiseRef,
-    piRunningConfigRef,
-    piSessionIdRef,
-    restartCurrentPiSession,
-    setRunningConfigFromProviderConfig,
-    userToken,
-  ]);
+  }, [buildProviderConfig, isStreamingRef, piPresetSwitchPromiseRef, piRunningConfigRef, piSessionIdRef, restartCurrentPiSession, setRunningConfigFromProviderConfig, userToken, uiLanguage]);
 
   useEffect(() => {
     if (!isStreaming && pendingPresetRef.current) {

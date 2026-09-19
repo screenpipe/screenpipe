@@ -6,6 +6,8 @@
 import React from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Check, FileText, Loader2, Play, Sparkles } from "lucide-react";
+import { useGT } from "gt-react";
+
 
 export type MeetingSummaryTransitionPhase = "finalizing" | "writing" | null;
 
@@ -29,6 +31,7 @@ export function MeetingSummaryTransition({
   onResume,
   onOpenSummary,
 }: MeetingSummaryTransitionProps) {
+  const ui = useGT();
   const reduceMotion = useReducedMotion();
   const label = phase === "finalizing" ? "Meeting saved" : "Writing summary";
   const detail =
@@ -101,7 +104,7 @@ export function MeetingSummaryTransition({
               className="inline-flex h-8 shrink-0 items-center gap-2 border border-border bg-background px-3 font-mono text-[10px] normal-case tracking-[0.12em] text-foreground transition-colors duration-150 hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
               <FileText className="h-3 w-3" aria-hidden="true" />
-              {transcriptOpen ? "Hide transcript" : "Show transcript"}
+              {transcriptOpen ? ui("Hide transcript") : ui("Show transcript")}
             </button>
           </div>
         </div>

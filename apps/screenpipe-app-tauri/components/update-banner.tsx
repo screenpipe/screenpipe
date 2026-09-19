@@ -13,6 +13,8 @@ import { commands } from "@/lib/utils/tauri";
 import { useToast } from "@/components/ui/use-toast";
 import { cn } from "@/lib/utils";
 import { flushPendingSettingsWrites } from "@/lib/hooks/use-settings";
+import { useGT } from "gt-react";
+
 
 interface UpdateInfo {
   version: string;
@@ -64,6 +66,8 @@ interface UpdateBannerProps {
 }
 
 export function UpdateBanner({ className, compact = false, variant = "default" }: UpdateBannerProps) {
+
+  const ui = useGT();
   const { isVisible, updateInfo, isInstalling, setIsInstalling, authRequired, dismiss } = useUpdateBanner();
   const { toast } = useToast();
 
@@ -94,8 +98,8 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
       // Native code owns the download/install handoff on Windows and the
       // staged restart elsewhere, including startup exclusion and bounded stop.
       toast({
-        title: "Installing update...",
-        description: "Screenpipe will restart automatically",
+        title: ui("Installing update..."),
+        description: ui("Screenpipe will restart automatically"),
         duration: 10000,
       });
       const res = await commands.restartForUpdate(60);
@@ -103,10 +107,10 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
       if (outcome !== "proceed") {
         setIsInstalling(false);
         toast({
-          title: "Update could not restart",
+          title: ui("Update could not restart"),
           description: res.status === "error"
             ? res.error
-            : "Audio is still initializing — try updating again shortly",
+            : ui("Audio is still initializing — try updating again shortly"),
           variant: "destructive",
         });
       }
@@ -114,8 +118,8 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
       console.error("failed to update:", error);
       setIsInstalling(false);
       toast({
-        title: "Update failed",
-        description: "Please try again or download manually",
+        title: ui("Update failed"),
+        description: ui("Please try again or download manually"),
         variant: "destructive",
       });
     }
@@ -189,7 +193,7 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
         <Sparkles className="h-4 w-4 text-primary shrink-0" />
         <div className="flex-1 min-w-0">
           <div className="text-xs font-medium text-foreground truncate">
-            {isInstalling ? "Restarting…" : "Restart to update"}
+            {isInstalling ? ui("Restarting…") : ui("Restart to update")}
           </div>
           <div className="text-[10px] text-muted-foreground truncate">V{updateInfo.version}</div>
         </div>
@@ -212,7 +216,7 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
           onClick={handleUpdate}
           disabled={isInstalling}
         >
-          {isInstalling ? "Restarting..." : "Restart to update"}
+          {isInstalling ? ui("Restarting...") : ui("Restart to update")}
         </Button>
       </div>
     );
@@ -237,7 +241,7 @@ export function UpdateBanner({ className, compact = false, variant = "default" }
           onClick={handleUpdate}
           disabled={isInstalling}
         >
-          {isInstalling ? "Restarting..." : "Restart to update"}
+          {isInstalling ? ui("Restarting...") : ui("Restart to update")}
         </Button>
         <Button
           variant="ghost"
@@ -267,6 +271,7 @@ interface PendingUpdateSnapshot {
 // state from Rust so it can recover if the event fired before this hook
 // registered (boot-time webview race).
 export function useUpdateListener() {
+
   const { setIsVisible, setUpdateInfo, setAuthRequired } = useUpdateBanner();
 
   useEffect(() => {

@@ -16,6 +16,8 @@ import {
   type AcpSetupPhase,
 } from "@/components/settings/acp-setup-progress";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 export interface AcpPresetDefaultsChange {
   config?: Record<string, string>;
@@ -76,6 +78,8 @@ export function AcpPresetDefaults({
    *  completed first step while the shared probe starts and connects it. */
   installedInEditor?: boolean;
 }) {
+
+  const ui = useGT();
   const agentId = agent.id;
   const advertised = useAcpSessionConfig((state) => state.byAgent[agentId]);
   const cacheAdvertisement = useAcpSessionConfig((state) => state.cacheAdvertisement);
@@ -298,8 +302,8 @@ export function AcpPresetDefaults({
       return (
         <p className={hintClass}>
           {compact
-            ? "Enter the agent command to load its model and mode choices"
-            : "Enter the agent command to load its model and mode choices."}
+            ? ui("Enter the agent command to load its model and mode choices")
+            : ui("Enter the agent command to load its model and mode choices.")}
         </p>
       );
     }
@@ -384,8 +388,8 @@ export function AcpPresetDefaults({
             <p className={cn("font-medium", compact ? "text-xs" : "text-sm")}>Sign in to {info.name}</p>
             <p className={cn("text-muted-foreground", compact ? "text-[11px]" : "text-xs")}>
               {signInCommand
-                ? `${info.name} opens its secure login in your browser and keeps the credential.`
-                : `${info.name} signs in when you open a chat with this preset: it runs its own login and stores the credential itself. Screenpipe never sees or stores an API key for it.`}
+                ? ui("{value1} opens its secure login in your browser and keeps the credential.", { value1: info.name })
+                : ui("{value1} signs in when you open a chat with this preset: it runs its own login and stores the credential itself. Screenpipe never sees or stores an API key for it.", { value1: info.name })}
             </p>
           </div>
           {/* A retry that still failed: say so plainly, kept visible, like the
@@ -400,10 +404,10 @@ export function AcpPresetDefaults({
               )}
             >
               {signInError
-                ? `Couldn't open ${info.name}'s login: ${signInError}`
+                ? ui("Couldn't open {value1}'s login: {value2}", { value1: info.name, value2: signInError })
                 : signInCommand
-                ? `Still not signed in to ${info.name}. Try signing in again.`
-                : `Still not signed in. ${info.name} signs in from a chat, not from here.`}
+                ? ui("Still not signed in to {value1}. Try signing in again.", { value1: info.name })
+                : ui("Still not signed in. {value1} signs in from a chat, not from here.", { value1: info.name })}
             </div>
           )}
           {signInCommand && signInError && (
@@ -422,7 +426,7 @@ export function AcpPresetDefaults({
           {signInCommand ? (
             <Button type="button" size="sm" disabled={busy} onClick={() => void beginExternalLogin()}>
               {signInPending || retryPending || probing ? (
-                <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> {signInPending ? "Signing in…" : "Connecting…"}</>
+                <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> {signInPending ? ui("Signing in…") : ui("Connecting…")}</>
               ) : (
                 <><LogIn className="mr-1.5 h-3.5 w-3.5" /> Sign in with {info.name}</>
               )}
@@ -448,10 +452,10 @@ export function AcpPresetDefaults({
       <div className={cn(hintClass, "flex items-center gap-2")}>
         <span>
           {probeError
-            ? `Could not load choices: ${probeError}`
+            ? ui("Could not load choices: {value1}", { value1: probeError })
             : compact
-              ? "Model and mode choices unavailable"
-              : "Model and mode choices are unavailable for this agent."}
+              ? ui("Model and mode choices unavailable")
+              : ui("Model and mode choices are unavailable for this agent.")}
         </span>
         <button
           type="button"
@@ -460,7 +464,7 @@ export function AcpPresetDefaults({
           className="inline-flex items-center gap-1 underline underline-offset-2 hover:text-foreground disabled:opacity-60"
         >
           {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-          {busy ? "checking…" : "retry"}
+          {busy ? ui("checking…") : ui("retry")}
         </button>
       </div>
     );
@@ -522,15 +526,15 @@ export function AcpPresetDefaults({
             <option value="">
               {defaultChoiceLabel(option.currentValue === true ? "on" : "off")}
             </option>
-            <option value="true">{compact ? "On" : "On"}</option>
-            <option value="false">{compact ? "Off" : "Off"}</option>
+            <option value="true">{compact ? ui("On") : ui("On")}</option>
+            <option value="false">{compact ? ui("Off") : ui("Off")}</option>
           </select>
         </div>
       ))}
       {modes && (
         <div className="space-y-1">
           <Label htmlFor="acpDefaultMode" className={labelClass}>
-            {compact ? "Mode" : "Mode"}
+            {compact ? ui("Mode") : ui("Mode")}
           </Label>
           <select
             id="acpDefaultMode"
@@ -558,8 +562,8 @@ export function AcpPresetDefaults({
       )}
       <p className={hintClass}>
         {compact
-          ? "Applied when the agent starts"
-          : "Applied whenever this agent starts. The composer can still change them mid-conversation."}
+          ? ui("Applied when the agent starts")
+          : ui("Applied whenever this agent starts. The composer can still change them mid-conversation.")}
       </p>
     </div>
   );

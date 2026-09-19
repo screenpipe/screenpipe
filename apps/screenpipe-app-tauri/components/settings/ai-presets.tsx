@@ -7,11 +7,11 @@ import type { SettingsField } from "./settings-search";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "AI presets", keywords: ["preset"] },
-  { label: "API key", keywords: ["openai", "anthropic", "key"] },
-  { label: "Model", keywords: ["gpt", "claude", "gemini", "llm"] },
-  { label: "Agent harness", keywords: ["acp", "codex", "claude code", "opencode", "cursor"] },
-  { label: "Embedding" },
+  { label: msg("AI presets", {}), keywords: ["preset"] },
+  { label: msg("API key", {}), keywords: ["openai", "anthropic", "key"] },
+  { label: msg("Model", {}), keywords: ["gpt", "claude", "gemini", "llm"] },
+  { label: msg("Agent harness", {}), keywords: ["acp", "codex", "claude code", "opencode", "cursor"] },
+  { label: msg("Embedding", {}) },
 ];
 import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { tauriFetchWithDeadline } from "@/lib/http/tauri-fetch";
@@ -160,6 +160,11 @@ import {
   ollamaContextWindowFromShow,
   resolveModelLimits,
 } from "@/lib/model-metadata";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 // Helper to detect UUID-like strings and format preset names nicely
 const formatPresetName = (name: string): string => {
@@ -237,6 +242,9 @@ const AISection = ({
   setDialog: (value: boolean) => void;
   isDuplicating?: boolean;
 }) => {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
   const { settings, updateSettings } = useSettings();
   const { isManagedDeployment, policy: enterprisePolicy } = useManagedPolicy();
   const aiPresetPolicy = enterprisePolicy.aiPresetPolicy ?? DEFAULT_ENTERPRISE_AI_PRESET_POLICY;
@@ -315,7 +323,7 @@ const AISection = ({
           errors.id = nameValidation.error;
         }
       }
-      
+
       setValidationErrors(errors);
     }, 300),
     [visiblePresets, preset?.id]
@@ -396,8 +404,8 @@ const AISection = ({
   const updateStoreSettings = async () => {
     if (!employeePresetsAllowed) {
       toast({
-        title: "Managed by your organization",
-        description: "Your admin controls which AI presets are available",
+        title: ui("Managed by your organization"),
+        description: ui("Your admin controls which AI presets are available"),
         variant: "destructive",
       });
       return;
@@ -406,10 +414,10 @@ const AISection = ({
     if (!isFormValid) {
       const needsConnectionTest = connectionTestRequired && !connectionTestPassed;
       toast({
-        title: needsConnectionTest ? "Test the connection" : "Validation errors",
+        title: needsConnectionTest ? ui("Test the connection") : ui("Validation errors"),
         description: needsConnectionTest
-          ? "The current provider, URL, model, and API key must pass the connection test before saving"
-          : "Please fix all validation errors before saving",
+          ? ui("The current provider, URL, model, and API key must pass the connection test before saving")
+          : ui("Please fix all validation errors before saving"),
         variant: "destructive",
       });
       return;
@@ -448,8 +456,8 @@ const AISection = ({
         });
 
         toast({
-          title: "Preset created",
-          description: "Default preset has been created successfully",
+          title: ui("Preset created"),
+          description: ui("Default preset has been created successfully"),
         });
 
         setDialog(false);
@@ -475,8 +483,8 @@ const AISection = ({
         });
 
         toast({
-          title: "Preset updated",
-          description: "Changes have been saved successfully",
+          title: ui("Preset updated"),
+          description: ui("Changes have been saved successfully"),
         });
       } else {
         // Handle create case (new preset or duplicate)
@@ -498,18 +506,18 @@ const AISection = ({
         });
 
         toast({
-          title: isDuplicating ? "Preset duplicated" : "Preset created",
+          title: isDuplicating ? ui("Preset duplicated") : ui("Preset created"),
           description: isDuplicating
-            ? "Duplicate has been saved successfully"
-            : "New preset has been added successfully",
+            ? ui("Duplicate has been saved successfully")
+            : ui("New preset has been added successfully"),
         });
       }
 
       setDialog(false);
     } catch (error) {
       toast({
-        title: "Error saving preset",
-        description: "Something went wrong while saving the preset",
+        title: ui("Error saving preset"),
+        description: ui("Something went wrong while saving the preset"),
         variant: "destructive",
       });
     } finally {
@@ -924,7 +932,7 @@ const AISection = ({
         if (modelsParsed) {
           setTestResults((prev) => ({
             ...prev,
-            models: { status: "pass", message: `${modelCount} model${modelCount !== 1 ? "s" : ""} loaded` },
+            models: { status: "pass", message: ui("{value1, plural, one {# model} other {# models}} loaded", { value1: modelCount }) },
             chat: { status: "running", message: "Sending test message..." },
           }));
         }
@@ -1048,8 +1056,8 @@ const AISection = ({
           });
           if (!r.ok) {
             toast({
-              title: "Error fetching models",
-              description: "Please check your API key",
+              title: ui("Error fetching models"),
+              description: ui("Please check your API key"),
               variant: "destructive",
             });
             return;
@@ -1216,7 +1224,7 @@ const AISection = ({
       setIsLoadingModels(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settingsPreset?.provider, settingsPreset?.url, settingsPreset?.apiKey, settings.user?.id, chatgptLoggedIn]);
+  }, [settingsPreset?.provider, settingsPreset?.url, settingsPreset?.apiKey, settings.user?.id, chatgptLoggedIn, uiLanguage]);
 
   const apiKey = useMemo(() => {
     if (settingsPreset && "apiKey" in settingsPreset) {
@@ -1279,7 +1287,7 @@ const AISection = ({
           <ArrowLeft className="w-4 h-4" /> Back
         </Button>
         <h1 className="text-xl font-semibold">
-          {preset ? "Update preset" : "Create preset"}
+          {preset ? ui("Update preset") : ui("Create preset")}
         </h1>
       </div>
 
@@ -1306,7 +1314,7 @@ const AISection = ({
 
       <ValidatedInput
         id="preset_id"
-        label="Preset Name"
+        label={ui("Preset Name")}
         value={settingsPreset?.id || ""}
         onChange={(value, isValid) => updateSettingsPreset({ id: value })}
         validation={(value) =>
@@ -1314,13 +1322,13 @@ const AISection = ({
             ? validatePresetName(value, visiblePresets, preset?.id)
             : { isValid: true }
         }
-        placeholder="Preset name"
+        placeholder={ui("Preset name")}
         required={false}
         spellCheck={false}
         autoCorrect="off"
         onBlur={refillEmptyName}
         disabled={!!preset && !isDuplicating && preset.id !== undefined}
-        helperText="Follows your selection automatically, or type your own"
+        helperText={ui("Follows your selection automatically, or type your own")}
       />
 
       {settingsPreset?.provider === "acp" && (
@@ -1334,13 +1342,13 @@ const AISection = ({
       {settingsPreset?.provider === "custom" && (
         <ValidatedInput
           id="customAiUrl"
-          label="Custom URL"
+          label={ui("Custom URL")}
           value={settingsPreset?.url || ""}
           onChange={(value, isValid) => updateSettingsPreset({ url: value })}
           validation={(value) => validateAiProviderUrl(value, "custom")}
-          placeholder="e.g. https://integrate.api.nvidia.com/v1 or http://localhost:11434/v1"
+          placeholder={ui("e.g. https://integrate.api.nvidia.com/v1 or http://localhost:11434/v1")}
           required={true}
-          helperText={formErrors.url || "Base URL before /models and /chat/completions. Examples: Gemini https://generativelanguage.googleapis.com/v1beta/openai, NVIDIA NIM https://integrate.api.nvidia.com/v1, Ollama http://localhost:11434/v1"}
+          helperText={formErrors.url || ui("Base URL before /models and /chat/completions. Examples: Gemini https://generativelanguage.googleapis.com/v1beta/openai, NVIDIA NIM https://integrate.api.nvidia.com/v1, Ollama http://localhost:11434/v1")}
         />
       )}
 
@@ -1371,7 +1379,7 @@ const AISection = ({
                           settingsPreset?.url,
                         )
                   }
-                  placeholder="Enter your AI API key"
+                  placeholder={ui("Enter your AI API key")}
                   required={apiKeyRequired}
                   className="pr-10"
                 />
@@ -1439,18 +1447,18 @@ const AISection = ({
                         if (res.status === "ok" && res.data) {
                           setChatgptLoggedIn(true);
                           toast({
-                            title: "ChatGPT connected",
-                            description: "Click \"Create preset\" below to save and start using it.",
+                            title: ui("ChatGPT connected"),
+                            description: ui("Click \"Create preset\" below to save and start using it."),
                           });
                         } else if (res.status === "error") {
                           const msg = String(res.error || "unknown error");
                           console.error("chatgpt oauth failed:", msg);
                           toast({
-                            title: "ChatGPT sign-in failed",
+                            title: ui("ChatGPT sign-in failed"),
                             description: msg.includes("invalid_state")
-                              ? "Auth session expired — please try signing in again."
+                              ? ui("Auth session expired — please try signing in again.")
                               : msg.includes("not logged in") || msg.includes("timed out")
-                              ? "Sign-in timed out or was cancelled. Please try again."
+                              ? ui("Sign-in timed out or was cancelled. Please try again.")
                               : msg.slice(0, 120),
                             variant: "destructive",
                           });
@@ -1458,8 +1466,8 @@ const AISection = ({
                       } catch (e) {
                         console.error("chatgpt oauth failed:", e);
                         toast({
-                          title: "ChatGPT sign-in failed",
-                          description: "An unexpected error occurred. Please try again.",
+                          title: ui("ChatGPT sign-in failed"),
+                          description: ui("An unexpected error occurred. Please try again."),
                           variant: "destructive",
                         });
                       }
@@ -1472,7 +1480,7 @@ const AISection = ({
                   ) : chatgptLoggedIn ? (
                     <CheckCircle2 className="h-4 w-4 mr-2" />
                   ) : null}
-                  {chatgptLoggedIn ? "Sign out" : "Sign in with ChatGPT"}
+                  {chatgptLoggedIn ? ui("Sign out") : ui("Sign in with ChatGPT")}
                 </Button>
               )}
               {chatgptLoggedIn && !chatgptChecking && (
@@ -1514,8 +1522,8 @@ const AISection = ({
               >
                 {settingsPreset?.provider === "openai" &&
                 !settingsPreset?.apiKey
-                  ? "API key required to fetch models"
-                  : settingsPreset?.model || "Select model..."}
+                  ? ui("API key required to fetch models")
+                  : settingsPreset?.model || ui("Select model...")}
                 <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
               </Button>
             </PopoverTrigger>
@@ -1523,7 +1531,7 @@ const AISection = ({
               <Command>
                 <CommandInput
                   value={modelSearch}
-                  placeholder="Select or type model name" 
+                  placeholder={ui("Select or type model name")}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       const input = modelSearch.trim();
@@ -1574,7 +1582,7 @@ const AISection = ({
                                   <Badge variant="outline" className="ml-2 text-[10px] bg-green-500/10 text-green-600 border-green-500/30">Free</Badge>
                                 </div>
                                 {model.description && (
-                                  <span className="text-xs text-muted-foreground">{model.description}{model.context_window ? ` · ${Math.round(model.context_window / 1000)}K ctx` : ""}</span>
+                                  <span className="text-xs text-muted-foreground">{model.description}{model.context_window ? ui(" · {value1}K ctx", { value1: Math.round(model.context_window / 1000) }) : ""}</span>
                                 )}
                               </div>
                             </CommandItem>
@@ -1630,17 +1638,17 @@ const AISection = ({
                                       className={`text-[10px] ${lowCloudflareAllowance || lowLegacyAllowance ? "bg-yellow-500/10 text-yellow-700 border-yellow-500/40 dark:text-yellow-400" : ""}`}
                                       title={cloudflareAllowance
                                         ? `${formatUsagePercent(cloudflareAllowance.used_percent)} used${cloudflareAllowance.resets_at ? ` — resets ${formatAllowanceReset(cloudflareAllowance.resets_at)}` : ""}`
-                                        : `Approaching daily limit${usage?.resets_at ? ` — resets ${formatResetTime(usage.resets_at)}` : ""}`}
+                                        : ui("Approaching daily limit{value1}", { value1: usage?.resets_at ? ` — resets ${formatResetTime(usage.resets_at)}` : "" })}
                                     >
                                       {cloudflareAllowance
                                         ? `${formatUsagePercent(cloudflareAllowance.remaining_percent)} left`
-                                        : `≈ ${messagesLeftForModel(usage, model.query_weight)} left`}
+                                        : ui("≈ {value1} left", { value1: messagesLeftForModel(usage, model.query_weight) })}
                                     </Badge>
                                   )}
                                 </div>
                               </div>
                               <span className="text-xs text-muted-foreground">
-                                {model.description}{model.context_window ? ` · ${Math.round(model.context_window / 1000)}K ctx` : ""}
+                                {model.description}{model.context_window ? ui(" · {value1}K ctx", { value1: Math.round(model.context_window / 1000) }) : ""}
                               </span>
                               {model.recommended_for && model.recommended_for.length > 0 && (
                                 <div className="flex items-center gap-1 mt-0.5">
@@ -1664,6 +1672,7 @@ const AISection = ({
             <p className="text-sm text-destructive">{formErrors.model}</p>
           )}
           {(() => {
+
             const selectedModel = models?.find((m) => m.id === settingsPreset?.model);
             if (selectedModel?.warning) {
               return (
@@ -1681,7 +1690,7 @@ const AISection = ({
                             className="inline-flex items-center rounded bg-muted px-1.5 py-0.5 mr-1 font-medium hover:bg-accent cursor-pointer"
                             onClick={() => updateSettingsPreset({ model: m.id })}
                           >
-                            {m.name} {m.free ? "(free)" : ""}
+                            {m.name} {m.free ? ui("(free)") : ""}
                           </button>
                         ))}
                       </p>
@@ -1713,7 +1722,7 @@ const AISection = ({
 
       <ValidatedTextarea
         id="customPrompt"
-        label="Custom Prompt"
+        label={ui("Custom Prompt")}
         value={settingsPreset?.prompt || DEFAULT_PROMPT}
         onChange={handleCustomPromptChange}
         validation={(value) => {
@@ -1722,12 +1731,12 @@ const AISection = ({
           }
           return { isValid: true };
         }}
-        placeholder="Enter your custom prompt here"
+        placeholder={ui("Enter your custom prompt here")}
         required={true}
         minLength={10}
         maxLength={5000}
         className="min-h-[100px] resize-none"
-        helperText="This prompt will be used to guide the AI's responses"
+        helperText={ui("This prompt will be used to guide the AI's responses")}
       />
 
       {settingsPreset?.provider !== "screenpipe-cloud" &&
@@ -1815,15 +1824,15 @@ const AISection = ({
               {testStatus === "done" && (
                 <span className="text-xs text-muted-foreground">
                   {testResults.chat.status === "pass"
-                    ? "Connection verified"
+                    ? ui("Connection verified")
                     : testResults.endpoint.status === "fail"
-                    ? "Connection failed"
+                    ? ui("Connection failed")
                     : testResults.auth.status === "fail"
-                    ? "Auth failed"
+                    ? ui("Auth failed")
                     : testResults.models.status === "fail"
-                    ? "Models failed"
+                    ? ui("Models failed")
                     : testResults.chat.status === "fail"
-                    ? "Chat failed"
+                    ? ui("Chat failed")
                     : ""}
                 </span>
               )}
@@ -1858,10 +1867,10 @@ const AISection = ({
                   <Zap className="h-3 w-3" />
                 )}
                 {testStatus === "testing"
-                  ? "Testing..."
+                  ? ui("Testing...")
                   : Object.keys(connectionFieldErrors).length > 0
-                  ? "Fix fields to test"
-                  : "Run diagnostics"}
+                  ? ui("Fix fields to test")
+                  : ui("Run diagnostics")}
               </Button>
 
               <div className="space-y-2 text-sm">
@@ -1920,8 +1929,8 @@ const AISection = ({
       )}
 
       <div className="flex justify-end gap-2">
-        <Button 
-          variant="outline" 
+        <Button
+          variant="outline"
           onClick={() => setDialog(false)}
           disabled={isLoading}
         >
@@ -1943,23 +1952,23 @@ const AISection = ({
                   ) : (
                     <AlertCircle className="w-4 h-4" />
                   )}
-                  {preset ? "Update preset" : "Create preset"}
+                  {preset ? ui("Update preset") : ui("Create preset")}
                 </Button>
               </span>
             </TooltipTrigger>
             {!isFormValid && !isLoading && (
               <TooltipContent>
                 {!settingsPreset?.provider
-                  ? "Pick a provider to continue"
+                  ? ui("Pick a provider to continue")
                   : !settingsPreset?.model && settingsPreset.provider !== "acp"
-                  ? "Select a model to continue"
+                  ? ui("Select a model to continue")
                   : Object.keys(formErrors).length > 0
-                  ? "Fix validation errors to continue"
+                  ? ui("Fix validation errors to continue")
                   : connectionTestRequired && !connectionTestPassed
                   ? testStatus === "testing"
-                    ? "Testing this connection before saving"
-                    : "Test this connection before saving"
-                  : "Complete the required fields to continue"}
+                    ? ui("Testing this connection before saving")
+                    : ui("Test this connection before saving")
+                  : ui("Complete the required fields to continue")}
               </TooltipContent>
             )}
           </Tooltip>
@@ -1999,6 +2008,9 @@ function SortablePresetCard({
   defaultLocked?: boolean;
   chatgptTokenExpired?: boolean;
 }) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const {
     attributes,
     listeners,
@@ -2093,10 +2105,10 @@ function SortablePresetCard({
           )}
         </div>
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="font-mono bg-muted px-1.5 py-0.5 rounded truncate max-w-[180px]" title={preset.provider === "acp" ? preset.acpAgent?.id : (preset.model || "Not set")}>
+          <span className="font-mono bg-muted px-1.5 py-0.5 rounded truncate max-w-[180px]" title={preset.provider === "acp" ? preset.acpAgent?.id : (preset.model || ui("Not set"))}>
             {preset.provider === "acp"
-              ? ACP_ADAPTERS.find((adapter) => adapter.id === preset.acpAgent?.id)?.name || preset.acpAgent?.id || "No agent"
-              : preset.model || "Not set"}
+              ? localizeDefinitions(ACP_ADAPTERS, uiMessages).find((adapter) => adapter.id === preset.acpAgent?.id)?.name || preset.acpAgent?.id || ui("No agent")
+              : preset.model || ui("Not set")}
           </span>
         </div>
         <div className="flex items-center gap-0.5 pt-1.5 border-t border-border">
@@ -2104,7 +2116,7 @@ function SortablePresetCard({
             <Copy className="w-3 h-3 mr-1" />Duplicate
           </Button>
           <Button variant="ghost" size="sm" className="text-[11px] h-6 px-2" onClick={(e) => { e.stopPropagation(); onSetDefault(); }} disabled={isLoading || isDefault || defaultLocked}>
-            <Star className="w-3 h-3 mr-1" />{isDefault ? "Default" : "Set default"}
+            <Star className="w-3 h-3 mr-1" />{isDefault ? ui("Default") : ui("Set default")}
           </Button>
           {isTeamAdmin && onShareToTeam && !readOnly && (
             <TooltipProvider>
@@ -2120,7 +2132,7 @@ function SortablePresetCard({
           )}
           {!readOnly && onDelete && (
             <Button
-              aria-label={`Delete ${preset.id}`}
+              aria-label={ui("Delete {value1}", { value1: preset.id })}
               variant="ghost"
               size="sm"
               className="text-[11px] h-6 px-2 text-destructive hover:text-destructive ml-auto"
@@ -2137,6 +2149,8 @@ function SortablePresetCard({
 }
 
 export const AIPresets = () => {
+
+  const ui = useGT();
   const { settings, updateSettings } = useSettings();
   const [createPresetsDialog, setCreatePresentDialog] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState<AIPreset | undefined>();
@@ -2163,9 +2177,9 @@ export const AIPresets = () => {
   const sharePresetToTeam = async (preset: AIPreset) => {
     try {
       await team.pushConfig("ai_provider", preset.id, preset);
-      toast({ title: "Shared to team", description: `"${formatPresetName(preset.id)}" is now available to all team members (e2e encrypted)` });
+      toast({ title: ui("Shared to team"), description: ui("\"{value1}\" is now available to all team members (e2e encrypted)", { value1: formatPresetName(preset.id) }) });
     } catch (err: any) {
-      toast({ title: "Failed to share to team", description: err.message, variant: "destructive" });
+      toast({ title: ui("Failed to share to team"), description: err.message, variant: "destructive" });
     }
   };
 
@@ -2231,16 +2245,16 @@ useEffect(() => {
         ((presetToRemove && isEnterpriseManagedPreset(presetToRemove)) || !aiPresetPolicy.allow_employee_custom_presets)
       ) {
         toast({
-          title: "Managed by your organization",
-          description: "Your admin controls which AI presets are available",
+          title: ui("Managed by your organization"),
+          description: ui("Your admin controls which AI presets are available"),
           variant: "destructive",
         });
         return;
       }
       if (settings.aiPresets.length <= 1) {
         toast({
-          title: "Cannot delete preset",
-          description: "At least one AI preset is required",
+          title: ui("Cannot delete preset"),
+          description: ui("At least one AI preset is required"),
           variant: "destructive",
         });
         return;
@@ -2256,8 +2270,8 @@ useEffect(() => {
 
       if (!checkIfIDPresent) {
         toast({
-          title: "Preset not found",
-          description: "The preset you're trying to delete doesn't exist",
+          title: ui("Preset not found"),
+          description: ui("The preset you're trying to delete doesn't exist"),
           variant: "destructive",
         });
         return;
@@ -2282,13 +2296,13 @@ useEffect(() => {
       });
 
       toast({
-        title: "Preset deleted",
-        description: "The preset has been removed successfully",
+        title: ui("Preset deleted"),
+        description: ui("The preset has been removed successfully"),
       });
     } catch (error) {
       toast({
-        title: "Error deleting preset",
-        description: "Something went wrong while deleting the preset",
+        title: ui("Error deleting preset"),
+        description: ui("Something went wrong while deleting the preset"),
         variant: "destructive",
       });
     } finally {
@@ -2302,8 +2316,8 @@ useEffect(() => {
     try {
       if (isManagedDeployment && aiPresetPolicy.lock_default_preset) {
         toast({
-          title: "Default preset is locked",
-          description: "Your admin controls the default AI preset",
+          title: ui("Default preset is locked"),
+          description: ui("Your admin controls the default AI preset"),
           variant: "destructive",
         });
         return;
@@ -2332,13 +2346,13 @@ useEffect(() => {
       await updateSettings(updateData);
 
       toast({
-        title: "Default preset updated",
-        description: "The preset has been set as default",
+        title: ui("Default preset updated"),
+        description: ui("The preset has been set as default"),
       });
     } catch (error) {
       toast({
-        title: "Error updating default preset",
-        description: "Something went wrong while updating the default preset",
+        title: ui("Error updating default preset"),
+        description: ui("Something went wrong while updating the default preset"),
         variant: "destructive",
       });
     } finally {
@@ -2355,8 +2369,8 @@ useEffect(() => {
       (isEnterpriseManagedPreset(presetToDuplicate) || !aiPresetPolicy.allow_employee_custom_presets)
     ) {
       toast({
-        title: "Managed by your organization",
-        description: "Your admin controls which AI presets are available",
+        title: ui("Managed by your organization"),
+        description: ui("Your admin controls which AI presets are available"),
         variant: "destructive",
       });
       return;
@@ -2396,8 +2410,8 @@ useEffect(() => {
           </h2>
           <p className="text-sm text-muted-foreground text-center max-w-md">
             {canManageEmployeePresets
-              ? "Create your first AI preset to get started with intelligent features. Presets allow you to quickly switch between different AI configurations."
-              : "Your organization has not made any AI presets available on this device."}
+              ? ui("Create your first AI preset to get started with intelligent features. Presets allow you to quickly switch between different AI configurations.")
+              : ui("Your organization has not made any AI presets available on this device.")}
           </p>
           {canManageEmployeePresets && (
             <Button onClick={() => setCreatePresentDialog(true)} size="lg">
@@ -2419,7 +2433,7 @@ useEffect(() => {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Badge variant="outline" className="px-3 py-1">
-            {visiblePresets.length} preset{visiblePresets.length !== 1 ? 's' : ''}
+            {ui("{count, plural, one {# preset} other {# presets}}", { count: visiblePresets.length })}
           </Badge>
           {settings.aiPresets.some(p => p.defaultPreset) && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -2499,7 +2513,7 @@ useEffect(() => {
               {isLoading ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
-                "Delete"
+                ui("Delete")
               )}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -2528,7 +2542,7 @@ useEffect(() => {
               {isLoading ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
-                "Continue"
+                ui("Continue")
               )}
             </AlertDialogAction>
           </AlertDialogFooter>

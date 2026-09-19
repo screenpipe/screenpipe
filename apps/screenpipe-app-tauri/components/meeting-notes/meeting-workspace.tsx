@@ -14,6 +14,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { AlertTriangle, Check, ChevronDown, Loader2 } from "lucide-react";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 export type MeetingWorkspaceTab = "notes" | "transcript" | "summary";
 
@@ -45,9 +49,9 @@ const MEETING_TABS: ReadonlyArray<{
   value: MeetingWorkspaceTab;
   label: string;
 }> = [
-  { value: "notes", label: "Notes" },
-  { value: "transcript", label: "Transcript" },
-  { value: "summary", label: "Summary" },
+  { value: "notes", label: msg("Notes", {}) },
+  { value: "transcript", label: msg("Transcript", {}) },
+  { value: "summary", label: msg("Summary", {}) },
 ];
 
 export function MeetingWorkspaceTabs({
@@ -66,11 +70,14 @@ export function MeetingWorkspaceTabs({
   // fourth pseudo-tab for arrow-key navigation.
   trailing?: React.ReactNode;
 }) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const tabRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
 
   const moveFocus = (index: number) => {
-    const normalized = (index + MEETING_TABS.length) % MEETING_TABS.length;
-    const next = MEETING_TABS[normalized];
+    const normalized = (index + localizeDefinitions(MEETING_TABS, uiMessages).length) % localizeDefinitions(MEETING_TABS, uiMessages).length;
+    const next = localizeDefinitions(MEETING_TABS, uiMessages)[normalized];
     onValueChange(next.value);
     tabRefs.current[normalized]?.focus();
   };
@@ -78,13 +85,13 @@ export function MeetingWorkspaceTabs({
   const tablist = (
     <div
       role="tablist"
-      aria-label="Meeting workspace"
+      aria-label={ui("Meeting workspace")}
       className={cn(
         "flex min-w-0 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         !trailing && "border-b border-border",
       )}
     >
-      {MEETING_TABS.map((tab, index) => {
+      {localizeDefinitions(MEETING_TABS, uiMessages).map((tab, index) => {
         const selected = value === tab.value;
         const state = tab.value === "summary" ? summaryState : null;
         return (
@@ -112,7 +119,7 @@ export function MeetingWorkspaceTabs({
                 moveFocus(0);
               } else if (event.key === "End") {
                 event.preventDefault();
-                moveFocus(MEETING_TABS.length - 1);
+                moveFocus(localizeDefinitions(MEETING_TABS, uiMessages).length - 1);
               }
             }}
             className={cn(
@@ -124,7 +131,7 @@ export function MeetingWorkspaceTabs({
             <span>{tab.label}</span>
             {state && (
               <span
-                aria-label={`Summary ${state}`}
+                aria-label={ui("Summary {value1}", { value1: state })}
                 className={cn(
                   "h-1.5 w-1.5 shrink-0",
                   state === "working" &&
@@ -236,6 +243,8 @@ export function MeetingSummarySurface({
   // draft of unbounded length, which is a place nobody scrolls to.
   activity?: React.ReactNode;
 }) {
+
+  const ui = useGT();
   const savedSummary = extractMeetingSummary(note);
   const liveSummary = streamedSummary?.trim() || null;
   // A Pipe run completes immediately after its final message, while the
@@ -272,15 +281,15 @@ export function MeetingSummarySurface({
               )}
               <span>
                 {state === "working"
-                  ? "Writing summary"
-                  : "Meeting summary"}
+                  ? ui("Writing summary")
+                  : ui("Meeting summary")}
               </span>
             </div>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               {attention
                 ? savedSummary
-                  ? "The existing summary is unchanged."
-                  : "Generation stopped before a summary was written."
+                  ? ui("The existing summary is unchanged.")
+                  : ui("Generation stopped before a summary was written.")
                 : detail}
             </p>
           </div>
@@ -298,10 +307,10 @@ export function MeetingSummarySurface({
                 className="h-9 shrink-0 border border-foreground bg-foreground px-3 font-mono text-[10px] normal-case tracking-[0.12em] text-background transition-colors hover:bg-background hover:text-foreground disabled:border-border disabled:bg-muted disabled:text-muted-foreground"
               >
                 {state === "attention"
-                  ? "Retry"
+                  ? ui("Retry")
                   : state === "ready"
-                    ? "Summarize again"
-                    : "Generate"}
+                    ? ui("Summarize again")
+                    : ui("Generate")}
               </button>
             )}
           </div>
@@ -346,8 +355,8 @@ export function MeetingSummarySurface({
                           className="flex h-9 items-center gap-2 border border-border bg-background px-3 font-mono text-[10px] normal-case tracking-[0.12em] text-foreground transition-colors hover:border-foreground disabled:text-muted-foreground"
                         >
                           {attention.model.saving
-                            ? "Changing model"
-                            : "Change summary model"}
+                            ? ui("Changing model")
+                            : ui("Change summary model")}
                           <ChevronDown className="h-3 w-3" aria-hidden="true" />
                         </button>
                       </DropdownMenuTrigger>

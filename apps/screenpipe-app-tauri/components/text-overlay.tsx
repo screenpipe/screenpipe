@@ -8,6 +8,8 @@ import { cn } from "@/lib/utils";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import { commands } from "@/lib/utils/tauri";
 import type { TextPosition } from "@/lib/hooks/use-frame-text-data";
+import { useGT } from "gt-react";
+
 
 /**
  * Check if a string looks like a URL.
@@ -196,6 +198,8 @@ export const TextOverlay = memo(function TextOverlay({
 	highlightTerms,
 	highlightFading = false,
 }: TextOverlayProps) {
+
+  const ui = useGT();
 	const [hoveredLinkIndex, setHoveredLinkIndex] = useState<number | null>(null);
 
 	// URL links
@@ -350,12 +354,7 @@ export const TextOverlay = memo(function TextOverlay({
 						transition: "opacity 600ms ease-out",
 					}}
 				>
-					<style>{`
-						@keyframes screenpipe-search-hl-pulse {
-							0%, 100% { box-shadow: 0 0 6px rgba(250, 204, 21, 0.45); }
-							50%      { box-shadow: 0 0 14px rgba(250, 204, 21, 0.85); }
-						}
-					`}</style>
+					<style>{"\n\t\t\t\t\t\t@keyframes screenpipe-search-hl-pulse {\n\t\t\t\t\t\t\t0%, 100% { box-shadow: 0 0 6px rgba(250, 204, 21, 0.45); }\n\t\t\t\t\t\t\t50%      { box-shadow: 0 0 14px rgba(250, 204, 21, 0.85); }\n\t\t\t\t\t\t}\n\t\t\t\t\t"}</style>
 					{highlights.map((hl) => (
 						<div
 							key={hl.key}
@@ -379,6 +378,7 @@ export const TextOverlay = memo(function TextOverlay({
 			)}
 			{/* URL links — on top of text blocks */}
 			{urlLinks.map((link, index) => {
+
 				const isHovered = hoveredLinkIndex === index;
 
 				const rawH = link.height;
@@ -417,7 +417,7 @@ export const TextOverlay = memo(function TextOverlay({
 									}
 								: {}),
 						}}
-						title={`Open ${link.normalizedUrl}`}
+						title={ui("Open {value1}", { value1: link.normalizedUrl })}
 						target="_blank"
 						rel="noopener noreferrer"
 					>

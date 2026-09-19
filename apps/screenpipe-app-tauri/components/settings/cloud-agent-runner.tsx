@@ -45,6 +45,8 @@ import {
   type CursorAgentSummary,
   type ProviderStatus,
 } from "@/lib/cloud-agents";
+import { useGT } from "gt-react";
+
 
 export type { CloudAgentConfig, CloudAgentProvider } from "@/lib/cloud-agents";
 
@@ -67,6 +69,8 @@ function CodebaseField({
   onValueChange: (value: string) => void;
   onCommit: (value: string) => void;
 }) {
+
+  const ui = useGT();
   const definition = CLOUD_AGENT_PROVIDERS[provider];
   const displayValue =
     options.find((option) => option.value === value)?.label ??
@@ -94,7 +98,7 @@ function CodebaseField({
           if (event.key === "Enter") event.currentTarget.blur();
         }}
         placeholder={definition.codebasePlaceholder}
-        aria-label="Codebase"
+        aria-label={ui("Codebase")}
         data-testid="cloud-agent-codebase-select"
         className="h-9 min-w-0 rounded-md text-xs"
       />
@@ -111,7 +115,7 @@ function CodebaseField({
         size="icon"
         className="h-9 w-9 shrink-0 rounded-md"
         onClick={() => void openUrl(definition.manageUrl)}
-        aria-label={`Manage ${definition.label} codebases`}
+        aria-label={ui("Manage {value1} codebases", { value1: definition.label })}
       >
         {loading ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -140,6 +144,8 @@ export function CloudAgentRunner({
   apiBase: string;
   onSaved: (agent: string, cloudAgent: CloudAgentConfig | null) => void;
 }) {
+
+  const ui = useGT();
   const api = React.useMemo(() => createCloudAgentApi(apiBase), [apiBase]);
   const draft =
     agent === "cloud-agent"
@@ -351,8 +357,8 @@ export function CloudAgentRunner({
                 </div>
                 <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
                   {needsCodebase && status?.configured
-                    ? `Choose your ${definition.label} codebase once`
-                    : (status?.detail ?? "Checking connection...")}
+                    ? ui("Choose your {value1} codebase once", { value1: definition.label })
+                    : (status?.detail ?? ui("Checking connection..."))}
                 </p>
               </div>
               <div className="flex items-center gap-1">
@@ -372,13 +378,13 @@ export function CloudAgentRunner({
                     {connecting ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : needsCodebase ? (
-                      "Choose codebase"
+                      ui("Choose codebase")
                     ) : draft.provider === "claude" &&
                       status &&
                       !status.available ? (
-                      "Update"
+                      ui("Update")
                     ) : (
-                      "Connect"
+                      ui("Connect")
                     )}
                   </Button>
                 )}
@@ -501,7 +507,7 @@ export function CloudAgentRunner({
                   size="icon"
                   className="h-9 w-9 rounded-md"
                   onClick={() => setMemoryOpen(true)}
-                  aria-label="Review shared context"
+                  aria-label={ui("Review shared context")}
                 >
                   <ShieldCheck className="h-3.5 w-3.5" />
                 </Button>
@@ -516,7 +522,7 @@ export function CloudAgentRunner({
             role={error ? "alert" : "status"}
           >
             {saving ? (
-              "Saving..."
+              ui("Saving...")
             ) : (
               <span className="text-destructive">{error}</span>
             )}
@@ -540,10 +546,10 @@ export function CloudAgentRunner({
               <div className="flex items-center justify-between gap-3 border border-border bg-muted/20 p-3">
                 <div className="min-w-0">
                   <p className="text-xs font-medium">
-                    {status?.configured ? "Connected" : "Connection required"}
+                    {status?.configured ? ui("Connected") : ui("Connection required")}
                   </p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
-                    {status?.detail ?? "Checking connection..."}
+                    {status?.detail ?? ui("Checking connection...")}
                   </p>
                 </div>
                 {!status?.configured && draft.provider !== "cursor" && (
@@ -559,9 +565,9 @@ export function CloudAgentRunner({
                     ) : draft.provider === "claude" &&
                       status &&
                       !status.available ? (
-                      "Update"
+                      ui("Update")
                     ) : (
-                      "Connect"
+                      ui("Connect")
                     )}
                   </Button>
                 )}
@@ -578,7 +584,7 @@ export function CloudAgentRunner({
                       patchDraft({ session_id: event.target.value }, false)
                     }
                     onBlur={() => void persist("cloud-agent", draft)}
-                    placeholder="Leave blank to start a new conversation"
+                    placeholder={ui("Leave blank to start a new conversation")}
                     className="h-9 rounded-md text-xs"
                   />
                   <p className="text-[11px] text-muted-foreground">
@@ -611,8 +617,8 @@ export function CloudAgentRunner({
                         }}
                         placeholder={
                           status?.configured
-                            ? "Saved in encrypted storage"
-                            : "Paste API key"
+                            ? ui("Saved in encrypted storage")
+                            : ui("Paste API key")
                         }
                         className="h-9 rounded-md pl-8 text-xs"
                         autoComplete="off"
@@ -631,7 +637,7 @@ export function CloudAgentRunner({
                       ) : keySaved ? (
                         <Check className="h-3.5 w-3.5" />
                       ) : (
-                        "Save key"
+                        ui("Save key")
                       )}
                     </Button>
                   </div>
@@ -660,7 +666,7 @@ export function CloudAgentRunner({
                       )
                     }
                     onBlur={() => void persist("cloud-agent", draft)}
-                    placeholder="Main"
+                    placeholder={ui("Main")}
                     className="h-9 rounded-md text-xs"
                   />
                 </div>

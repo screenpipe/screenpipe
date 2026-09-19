@@ -46,12 +46,13 @@ fi
 
 # Sources that carry no window, so the logic binaries stay headless-safe.
 core_sources=(
+    "$swift_dir/UILocalization.swift"
     "$timeline_dir/TimelineModels.swift"
     "$timeline_dir/TimelineAPI.swift"
     "$timeline_dir/TimelineCore.swift"
 )
 # Everything, for the binaries that build a real window.
-app_sources=("$timeline_dir"/*.swift)
+app_sources=("$swift_dir/UILocalization.swift" "$timeline_dir"/*.swift)
 
 compile() {
     local output="$1"

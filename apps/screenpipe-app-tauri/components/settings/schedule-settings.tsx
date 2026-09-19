@@ -17,6 +17,8 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
+import { useGT } from "gt-react";
+
 
 export interface ScheduleRule {
   dayOfWeek: number; // 0=Mon, 6=Sun
@@ -89,6 +91,8 @@ export function ScheduleSettings({
   rules,
   onChange,
 }: ScheduleSettingsProps) {
+  const ui = useGT();
+
   const setScheduleEnabled = useCallback(
     (val: boolean) => onChange(val, rules),
     [onChange, rules]
@@ -174,7 +178,7 @@ export function ScheduleSettings({
                 Define when recording is active
               </p>
             </div>
-            <HelpTooltip text="Set specific time ranges per day when screen and audio recording should be active. Outside these hours, recording pauses automatically." />
+            <HelpTooltip text={ui("Set specific time ranges per day when screen and audio recording should be active. Outside these hours, recording pauses automatically.")} />
           </div>
           <Switch
             checked={enabled}
@@ -277,6 +281,8 @@ function DayRow({
   onRemoveRule,
   onUpdateRule,
 }: DayRowProps) {
+
+  const ui = useGT();
   const [expanded, setExpanded] = useState(false);
   const isWeekend = dayIndex >= 5;
 
@@ -345,7 +351,7 @@ function DayRow({
             e.stopPropagation();
             onAddRule();
           }}
-          title={`Add time range for ${dayNameFull}`}
+          title={ui("Add time range for {value1}", { value1: dayNameFull })}
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
@@ -375,6 +381,7 @@ interface RuleEditorProps {
 }
 
 function RuleEditor({ rule, onUpdate, onRemove }: RuleEditorProps) {
+  const ui = useGT();
   const startInput = rule.startTime;
   const endInput = rule.endTime;
 
@@ -421,7 +428,7 @@ function RuleEditor({ rule, onUpdate, onRemove }: RuleEditorProps) {
       <button
         className="text-muted-foreground hover:text-destructive transition-colors duration-100"
         onClick={onRemove}
-        title="Remove time range"
+        title={ui("Remove time range")}
       >
         <Trash2 className="h-3 w-3" />
       </button>

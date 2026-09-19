@@ -21,6 +21,9 @@ import {
   PASTED_TEXT_SHOW_IN_FIELD_MAX_CHARS,
 } from "@/lib/chat/large-context";
 import { toast } from "@/components/ui/use-toast";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 export type PendingDoc = { id: string; name: string; ext: string };
 
@@ -43,6 +46,8 @@ export function useChatAttachments({
   setShowMentionDropdown,
   setMentionFilter,
 }: UseChatAttachmentsOptions) {
+  const uiLanguage = useLocale();
+  const ui = useGT();
   const [isDragging, setIsDragging] = useState(false);
   const [pastedImages, setPastedImages] = useState<string[]>([]);
   // Mirror for the per-conversation draft snapshot — see inputValueRef.
@@ -132,8 +137,8 @@ export function useChatAttachments({
     const ext = extFromName(name);
     if (!isSupportedDocExt(ext)) {
       toast({
-        title: "Unsupported file",
-        description: `Can't read .${ext || "?"} files`,
+        title: ui("Unsupported file"),
+        description: ui("Can't read .{value1} files", { value1: ext || "?" }),
         variant: "destructive",
       });
       return;
@@ -153,8 +158,8 @@ export function useChatAttachments({
       const doc = await extractDocument(name, bytes);
       if (!doc.text.trim()) {
         toast({
-          title: "No text found",
-          description: `${name} looks empty or has no extractable text`,
+          title: ui("No text found"),
+          description: ui("{value1} looks empty or has no extractable text", { value1: name }),
           variant: "destructive",
         });
         return;
@@ -165,14 +170,14 @@ export function useChatAttachments({
     } catch (err) {
       console.error("failed to extract attached doc:", err);
       toast({
-        title: "Couldn't read file",
+        title: ui("Couldn't read file"),
         description: err instanceof Error ? err.message : String(err),
         variant: "destructive",
       });
     } finally {
       setPendingDocs((prev) => prev.filter((p) => p.id !== pendingId));
     }
-  }, []);
+  }, [uiLanguage]);
 
   const loadDocFromPath = useCallback(async (filePath: string) => {
     const name = filePath.split(/[\\/]/).pop() || filePath;

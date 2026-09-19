@@ -28,21 +28,24 @@ import {
   resolveVisibleSidebarNavIds,
   setSidebarNavItemHidden,
 } from "@/lib/utils/sidebar-nav-layout";
+import { msg } from "gt-react";
+
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Theme", keywords: ["dark", "light", "appearance"] },
-  { label: "Font Size" },
-  { label: "Chat Always on Top", keywords: ["pin", "window"] },
-  { label: "Shortcut Reminder", keywords: ["overlay", "pill", "pin", "drag", "position"] },
-  { label: "Timeline / rewind", keywords: ["rewind", "timeline", "backend"] },
-  { label: "Overlay Size" },
-  { label: "Hide from screen recordings", keywords: ["capture", "obs", "screen share", "overlay"] },
-  { label: "Sidebar translucency", keywords: ["vibrancy", "translucent"] },
-  { label: "Meetings in Sidebar", keywords: ["meeting", "meetings", "sidebar", "toolbar", "nav", "navigation", "icon", "reorder", "customize"] },
+  { label: msg("Theme", {}), keywords: ["dark", "light", "appearance"] },
+  { label: msg("Font Size", {}) },
+  { label: msg("Chat Always on Top", {}), keywords: ["pin", "window"] },
+  { label: msg("Shortcut Reminder", {}), keywords: ["overlay", "pill", "pin", "drag", "position"] },
+  { label: msg("Timeline / rewind", {}), keywords: ["rewind", "timeline", "backend"] },
+  { label: msg("Overlay Size", {}) },
+  { label: msg("Hide from screen recordings", {}), keywords: ["capture", "obs", "screen share", "overlay"] },
+  { label: msg("Sidebar translucency", {}), keywords: ["vibrancy", "translucent"] },
+  { label: msg("Meetings in Sidebar", {}), keywords: ["meeting", "meetings", "sidebar", "toolbar", "nav", "navigation", "icon", "reorder", "customize"] },
 ];
 
 export function DisplaySection() {
+
   const gt = useGT();
   const m = useMessages();
   const { settings, updateSettings } = useSettings();
@@ -168,7 +171,7 @@ export function DisplaySection() {
                 <div>
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     Timeline / rewind
-                    <HelpTooltip text="Turn off the timeline / rewind feature. Skips the in-memory hot frame cache (warm-up + per-frame/audio buffering) that only the timeline uses, and disables the native macOS Live Text overlay that can otherwise leak a selection layer over other windows (e.g. the chat input) and block typing. Restarts screenpipe to apply." />
+                    <HelpTooltip text={gt("Turn off the timeline / rewind feature. Skips the in-memory hot frame cache (warm-up + per-frame/audio buffering) that only the timeline uses, and disables the native macOS Live Text overlay that can otherwise leak a selection layer over other windows (e.g. the chat input) and block typing. Restarts screenpipe to apply.")} />
                   </h3>
                   <p className="text-xs text-muted-foreground">Show rewind and keep its background cache work on</p>
                 </div>
@@ -232,7 +235,7 @@ export function DisplaySection() {
                 <div>
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     Timeline Mode
-                    <HelpTooltip text="Controls how the timeline overlay appears. 'Native' uses a system overlay, 'Tauri' uses the app window." />
+                    <HelpTooltip text={gt("Controls how the timeline overlay appears. 'Native' uses a system overlay, 'Tauri' uses the app window.")} />
                   </h3>
                   <p className="text-xs text-muted-foreground">Reopen timeline to apply</p>
                 </div>
@@ -307,7 +310,7 @@ export function DisplaySection() {
                 <div>
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     Show Chat Suggestions
-                    <HelpTooltip text="Show the follow-up questions and suggested-prompt chips above the chat input. The X on the chips hides them too." />
+                    <HelpTooltip text={gt("Show the follow-up questions and suggested-prompt chips above the chat input. The X on the chips hides them too.")} />
                   </h3>
                   <p className="text-xs text-muted-foreground">Follow-up questions and suggested prompts above the input</p>
                 </div>
@@ -331,7 +334,7 @@ export function DisplaySection() {
                 <div>
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     Hide from screen recordings
-                    <HelpTooltip text="When enabled, only the screenpipe overlay is hidden from OBS, Screen Studio, screenshots, and screen sharing. Other screenpipe windows remain visible." />
+                    <HelpTooltip text={gt("When enabled, only the screenpipe overlay is hidden from OBS, Screen Studio, screenshots, and screen sharing. Other screenpipe windows remain visible.")} />
                   </h3>
                   <p className="text-xs text-muted-foreground">
                     Hide the overlay from OBS, Screen Studio, and screen sharing
@@ -379,7 +382,7 @@ export function DisplaySection() {
                   <div>
                     <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                       Meetings in Sidebar
-                      <HelpTooltip text="Show Meetings as a labelled row in the Home sidebar. Off keeps it as the compact icon in the top-left strip next to search. The live-recording dot shows either way." />
+                      <HelpTooltip text={gt("Show Meetings as a labelled row in the Home sidebar. Off keeps it as the compact icon in the top-left strip next to search. The live-recording dot shows either way.")} />
                     </h3>
                     <p className="text-xs text-muted-foreground">
                       {meetingsInSidebar
@@ -438,7 +441,7 @@ export function DisplaySection() {
                   <div>
                     <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                       Translucent Sidebar
-                      <HelpTooltip text="Apply a macOS vibrancy effect to the sidebar for a frosted glass look." />
+                      <HelpTooltip text={gt("Apply a macOS vibrancy effect to the sidebar for a frosted glass look.")} />
                     </h3>
                     <p className="text-xs text-muted-foreground">Frosted glass sidebar effect</p>
                   </div>
@@ -474,7 +477,7 @@ export function DisplaySection() {
                   <div>
                     <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                       Hide Dock Icon
-                      <HelpTooltip text="Run screenpipe as a menu-bar-only app with no icon in the Dock. The menu-bar (tray) icon stays — click it to open screenpipe. Useful if you only need the app occasionally and don't want it in the Dock." />
+                      <HelpTooltip text={gt("Run screenpipe as a menu-bar-only app with no icon in the Dock. The menu-bar (tray) icon stays — click it to open screenpipe. Useful if you only need the app occasionally and don't want it in the Dock.")} />
                     </h3>
                     <p className="text-xs text-muted-foreground">
                       Menu bar only — keep screenpipe out of the Dock
@@ -521,7 +524,7 @@ export function DisplaySection() {
                   <div>
                     <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                       Minimize to System Tray on Close
-                      <HelpTooltip text="When enabled, clicking the X on the Home window hides it and removes it from the Windows taskbar. screenpipe keeps running in the system tray — click the tray icon to bring the window back." />
+                      <HelpTooltip text={gt("When enabled, clicking the X on the Home window hides it and removes it from the Windows taskbar. screenpipe keeps running in the system tray — click the tray icon to bring the window back.")} />
                     </h3>
                     <p className="text-xs text-muted-foreground">
                       Keep running in the tray when the window is closed

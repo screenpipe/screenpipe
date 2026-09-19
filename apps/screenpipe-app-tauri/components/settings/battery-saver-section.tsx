@@ -14,11 +14,15 @@ import { useToast } from "@/components/ui/use-toast";
 import { commands } from "@/lib/utils/tauri";
 import type { SettingsField } from "./settings-search";
 import { PowerModePreview } from "./setting-previews";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Power & battery", keywords: ["power", "battery", "performance", "saver"] },
-  { label: "Keep computer awake", keywords: ["sleep", "awake", "power"] },
+  { label: msg("Power & battery", {}), keywords: ["power", "battery", "performance", "saver"] },
+  { label: msg("Keep computer awake", {}), keywords: ["sleep", "awake", "power"] },
 ];
 
 interface PowerState {
@@ -45,40 +49,43 @@ type PowerMode = "auto" | "performance" | "battery_saver";
 
 const PROFILE_INFO: Record<ActiveProfile, { label: string; description: string; icon: typeof Zap }> = {
   performance: {
-    label: "Performance",
-    description: "Full capture quality and frequency",
+    label: msg("Performance", {}),
+    description: msg("Full capture quality and frequency", {}),
     icon: Zap,
   },
   balanced: {
-    label: "Balanced",
-    description: "Reduced capture frequency, lower quality encoding",
+    label: msg("Balanced", {}),
+    description: msg("Reduced capture frequency, lower quality encoding", {}),
     icon: Gauge,
   },
   saver: {
-    label: "Battery Saver",
-    description: "Minimal capture, aggressive power saving",
+    label: msg("Battery Saver", {}),
+    description: msg("Minimal capture, aggressive power saving", {}),
     icon: Leaf,
   },
   audio_paused: {
-    label: "Audio Paused",
-    description: "Battery ≤20% — vision continues, audio + Whisper off",
+    label: msg("Audio Paused", {}),
+    description: msg("Battery ≤20% — vision continues, audio + Whisper off", {}),
     icon: MicOff,
   },
   full_pause: {
-    label: "Full Pause",
-    description: "Battery ≤10% or OS low-power — capture paused",
+    label: msg("Full Pause", {}),
+    description: msg("Battery ≤10% or OS low-power — capture paused", {}),
     icon: PauseCircle,
   },
 };
 
 // Fallback for any future Rust profile variant that lands before the UI knows about it.
 const UNKNOWN_PROFILE_INFO = {
-  label: "Unknown",
-  description: "Reported by backend but not recognized by this app version",
+  label: msg("Unknown", {}),
+  description: msg("Reported by backend but not recognized by this app version", {}),
   icon: Gauge,
 } as const;
 
 export function BatterySaverSection() {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const { settings, updateSettings } = useSettings();
   const { toast } = useToast();
   const [status, setStatus] = useState<PowerStatus | null>(null);
@@ -140,7 +147,7 @@ export function BatterySaverSection() {
     } catch (error) {
       await updateSettings({ keepComputerAwake: previous });
       toast({
-        title: "Couldn't update keep-awake",
+        title: ui("Couldn't update keep-awake"),
         description: error instanceof Error ? error.message : String(error),
       });
     } finally {
@@ -154,25 +161,25 @@ export function BatterySaverSection() {
   const user_pref: PowerMode = status?.user_pref ?? settings.powerMode ?? "auto";
   const keepAwakeEnabled = settings.keepComputerAwake ?? false;
   const profileInfo = active_profile
-    ? (PROFILE_INFO[active_profile] ?? UNKNOWN_PROFILE_INFO)
+    ? (localizeDefinitions(PROFILE_INFO, uiMessages)[active_profile] ?? localizeDefinitions(UNKNOWN_PROFILE_INFO, uiMessages))
     : null;
   const ProfileIcon = profileInfo?.icon;
 
   const modes: { value: PowerMode; label: string; description: string }[] = [
     {
       value: "auto",
-      label: "Auto",
-      description: "Adjusts based on battery state",
+      label: ui("Auto"),
+      description: ui("Adjusts based on battery state"),
     },
     {
       value: "performance",
-      label: "Performance",
-      description: "Full quality, ignore battery",
+      label: ui("Performance"),
+      description: ui("Full quality, ignore battery"),
     },
     {
       value: "battery_saver",
-      label: "Battery Saver",
-      description: "Maximum power saving",
+      label: ui("Battery Saver"),
+      description: ui("Maximum power saving"),
     },
   ];
 
@@ -197,8 +204,8 @@ export function BatterySaverSection() {
               <Battery className="h-3.5 w-3.5" />
             )}
             <span>
-              {state.battery_pct !== null ? `${state.battery_pct}%` : "AC"}
-              {state.on_ac ? " (charging)" : ""}
+              {state.battery_pct !== null ? `${state.battery_pct}%` : ui("AC")}
+              {state.on_ac ? ui(" (charging)") : ""}
             </span>
           </div>
         )}
@@ -230,7 +237,7 @@ export function BatterySaverSection() {
           checked={keepAwakeEnabled}
           onCheckedChange={setKeepAwake}
           disabled={keepAwakeUpdating}
-          aria-label="Keep computer awake"
+          aria-label={ui("Keep computer awake")}
         />
       </div>
 

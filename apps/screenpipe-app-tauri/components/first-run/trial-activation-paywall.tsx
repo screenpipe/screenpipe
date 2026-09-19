@@ -25,6 +25,8 @@ import {
   TRIAL_ACTIVATION_CHECKOUT_STATE_KEY,
   TRIAL_ACTIVATION_UNLOCKED_STEP,
 } from "@/lib/first-run/trial-activation";
+import { useGT } from "gt-react";
+
 
 const HOSTED_CHECKOUT_URL = screenpipeWebUrl(
   "/onboarding/checkout",
@@ -38,6 +40,8 @@ export function TrialActivationPaywall({
   open: boolean;
   locked: boolean;
 }) {
+
+  const ui = useGT();
   const { settings } = useSettings();
   const user = settings.user as AppUser | null | undefined;
   const [checkoutToken, setCheckoutToken] = React.useState<string | null>(
@@ -132,7 +136,7 @@ export function TrialActivationPaywall({
       setError(
         checkoutError instanceof Error
           ? checkoutError.message
-          : "Secure checkout could not be opened",
+          : ui("Secure checkout could not be opened"),
       );
     }
   }, [checkoutToken]);

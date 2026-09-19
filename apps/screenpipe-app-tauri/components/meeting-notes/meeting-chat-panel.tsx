@@ -61,6 +61,9 @@ import {
   SUMMARY_SUGGESTION,
   type MeetingChatConditions,
 } from "./meeting-chat-state";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 export interface MeetingChatTurn {
   id: string;
@@ -145,6 +148,8 @@ export function MeetingChatPanel({
   storedWidth,
   onWidthChange,
 }: MeetingChatPanelProps) {
+
+  const ui = useGT();
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -258,7 +263,7 @@ export function MeetingChatPanel({
   return (
     <aside
       data-testid="meeting-chat-panel"
-      aria-label="Ask about this meeting"
+      aria-label={ui("Ask about this meeting")}
       style={{ width }}
       // Absolute, always. Docking this in a column shrank the shell and slid
       // the centred reading column leftward on open, so the transcript jumped
@@ -270,7 +275,7 @@ export function MeetingChatPanel({
     >
       <div
         role="separator"
-        aria-label="Resize conversation"
+        aria-label={ui("Resize conversation")}
         aria-orientation="vertical"
         tabIndex={0}
         onPointerDown={(event) => {
@@ -297,9 +302,9 @@ export function MeetingChatPanel({
           </p>
           <p
             className="mt-0.5 truncate text-xs font-medium text-foreground"
-            title={meetingTitle || "Untitled meeting"}
+            title={meetingTitle || ui("Untitled meeting")}
           >
-            {meetingTitle || "Untitled meeting"}
+            {meetingTitle || ui("Untitled meeting")}
           </p>
           <p
             data-testid="meeting-chat-context"
@@ -314,7 +319,7 @@ export function MeetingChatPanel({
           size="icon"
           variant="ghost"
           data-testid="meeting-chat-close"
-          aria-label="Close chat"
+          aria-label={ui("Close chat")}
           onClick={onClose}
           className="h-6 w-6 rounded-md"
         >
@@ -409,7 +414,7 @@ export function MeetingChatPanel({
           value={draft}
           rows={1}
           disabled={!availability.enabled}
-          aria-label="Ask about this meeting"
+          aria-label={ui("Ask about this meeting")}
           placeholder={availability.placeholder}
           onChange={(event) => onDraftChange(event.target.value)}
           onKeyDown={handleKeyDown}
@@ -458,8 +463,8 @@ export function MeetingChatPanel({
             size="icon"
             variant="ghost"
             data-testid="meeting-chat-send"
-            aria-label={conditions.turnInFlight ? "Stop" : "Send"}
-            title={conditions.turnInFlight ? "Stop" : "Send"}
+            aria-label={conditions.turnInFlight ? ui("Stop") : ui("Send")}
+            title={conditions.turnInFlight ? ui("Stop") : ui("Send")}
             disabled={
               conditions.turnInFlight ? false : !canSubmitTurn(draft, conditions)
             }
@@ -488,6 +493,8 @@ function MeetingTurnBody({
   window: CitationWindow | null;
   onCitationClick: (atMs: number) => void;
 }) {
+  const uiLanguage = useLocale();
+  const ui = useGT();
   const message = useMemo<Message>(
     () => ({
       id: turn.id,
@@ -520,10 +527,10 @@ function MeetingTurnBody({
           type="button"
           data-testid="meeting-chat-citation"
           data-at={at}
-          aria-label={`Jump to transcript at ${new Date(at).toLocaleTimeString([], {
+          aria-label={ui("Jump to transcript at {value1}", { value1: new Date(at).toLocaleTimeString([], {
             hour: "numeric",
             minute: "2-digit",
-          })}`}
+          }) })}
           onClick={() => onCitationClick(at)}
           className="inline-flex whitespace-nowrap rounded-sm bg-muted/70 px-1 align-baseline font-mono text-[11px] text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
         >
@@ -531,7 +538,7 @@ function MeetingTurnBody({
         </button>
       );
     },
-    [onCitationClick],
+    [onCitationClick, uiLanguage],
   );
 
   return (

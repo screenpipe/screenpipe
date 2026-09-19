@@ -63,8 +63,8 @@ import { ExperimentalShortcutGuide } from "@/components/shortcut-guide";
 // this file. Lives here because the section itself lives here; same co-location
 // principle as the standalone sections.
 const referralSearchIndex: SettingsField[] = [
-  { label: "Invite link", keywords: ["invite", "refer", "promo"] },
-  { label: "Free month", keywords: ["discount", "earn"] },
+  { label: msg("Invite link", {}), keywords: ["invite", "refer", "promo"] },
+  { label: msg("Free month", {}), keywords: ["discount", "earn"] },
 ];
 
 /**
@@ -101,6 +101,9 @@ const ALL_SETTINGS_FIELDS: IndexedSettingsField[] = [
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import posthog from "posthog-js";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 /**
  * Nav layout revision, stamped onto `settings_viewed`.
@@ -117,6 +120,8 @@ function ReferralSection() {
 }
 
 function SettingsContent() {
+
+  const uiMessages = useMessages();
   const gt = useGT();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -256,8 +261,8 @@ function SettingsContent() {
     g.items.map((it) => ({ ...it, group: g.label })),
   );
   const searchableFields = showPermissions
-    ? ALL_SETTINGS_FIELDS
-    : ALL_SETTINGS_FIELDS.filter((f) => f.section !== "permissions");
+    ? localizeDefinitions(ALL_SETTINGS_FIELDS, uiMessages)
+    : localizeDefinitions(ALL_SETTINGS_FIELDS, uiMessages).filter((f) => f.section !== "permissions");
   const results = searchSettingsNav(searchQuery, flatItems, searchableFields);
 
   useEffect(() => {

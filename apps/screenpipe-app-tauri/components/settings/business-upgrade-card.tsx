@@ -21,6 +21,8 @@ import {
   type BusinessUpgradeOffer,
 } from "@/lib/business-upgrade-offer";
 import type { BusinessUpgradeSelection } from "@/lib/upgrade-flow";
+import { useGT } from "gt-react";
+
 
 const OFFER_URL = screenpipeWebUrl(
   "/api/subscription/offer",
@@ -44,6 +46,8 @@ export function BusinessUpgradeCard({
   busy,
   onContinue,
 }: BusinessUpgradeCardProps) {
+
+  const ui = useGT();
   const { settings } = useSettings();
   const [offer, setOffer] = useState<BusinessUpgradeOffer>(
     DEFAULT_BUSINESS_UPGRADE_OFFER,
@@ -253,8 +257,8 @@ export function BusinessUpgradeCard({
         <div className="self-end">
           <div className="mb-3 border-l border-border pl-3 text-xs leading-relaxed text-muted-foreground">
             {existingSubscription
-              ? "Your current subscription stays in place until you review and confirm the prorated upgrade"
-              : `${selectedCharge} is charged today in Stripe checkout, then renews ${interval === "year" ? "yearly" : "monthly"}`}
+              ? ui("Your current subscription stays in place until you review and confirm the prorated upgrade")
+              : ui("{value1} is charged today in Stripe checkout, then renews {value2}", { value1: selectedCharge, value2: interval === "year" ? "yearly" : "monthly" })}
           </div>
           <Button
             className="h-11 w-full rounded-md bg-foreground font-mono text-xs normal-case tracking-wide text-background hover:bg-background hover:text-foreground"
@@ -276,15 +280,15 @@ export function BusinessUpgradeCard({
               <ExternalLinkIcon className="mr-2 h-4 w-4" />
             )}
             {busy
-              ? "Opening checkout"
+              ? ui("Opening checkout")
               : selectedAvailable
                 ? ctaLabel
-                : "Billing option unavailable"}
+                : ui("Billing option unavailable")}
           </Button>
           <p className="mt-2 text-center text-[11px] text-muted-foreground">
             {selectedAvailable
-              ? "Payment details stay in Stripe's secure checkout"
-              : "Choose another billing interval or try again later"}
+              ? ui("Payment details stay in Stripe's secure checkout")
+              : ui("Choose another billing interval or try again later")}
           </p>
         </div>
       </div>

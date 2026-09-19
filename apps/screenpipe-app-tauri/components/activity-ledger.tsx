@@ -75,6 +75,9 @@ import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { getAppServerBaseUrl } from "@/lib/notifications/app-server";
 import { cn } from "@/lib/utils";
 import { commands, type AIPreset } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 type RangePreset = "today" | "24h" | "7d" | "custom";
 type GenerationSource = "empty_state" | "refresh" | "enable";
@@ -269,10 +272,11 @@ export function isActivityCalendarDateDisabled(
   return day < activityCalendarStartDate(today).getTime();
 }
 
-function customRangeLabel(range: DateRange | undefined): string {
-  if (!range?.from) return "Choose dates";
-  if (!range.to) return `${format(range.from, "MMM d, yyyy")} – …`;
-  return `${format(range.from, "MMM d, yyyy")} – ${format(range.to, "MMM d, yyyy")}`;
+function customRangeLabel(range: DateRange | undefined, locale: string): string {
+  const date = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", year: "numeric" });
+  if (!range?.from) return "";
+  if (!range.to) return `${date.format(range.from)} – …`;
+  return `${date.format(range.from)} – ${date.format(range.to)}`;
 }
 
 export function rangeForPreset(
@@ -679,6 +683,7 @@ export function artifactsForHistoryEntry(
 }
 
 function EvidenceArtifactIcon({ evidence }: { evidence: ActivityArtifact }) {
+
   const [iconAttempt, setIconAttempt] = useState<{
     domain: string | null;
     stage: "exact" | "root" | "failed";
@@ -881,6 +886,8 @@ function ArtifactPreviewTooltip({
   onPreviewLoaded: (preview: ActivityArtifactPreview) => void;
   children: React.ReactElement;
 }) {
+
+  const ui = useGT();
   const preview = evidence.preview;
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<
@@ -1078,7 +1085,7 @@ function ArtifactPreviewTooltip({
       <TooltipContent
         side="top"
         collisionPadding={16}
-        aria-label={`${artifactName} activity preview`}
+        aria-label={ui("{value1} activity preview", { value1: artifactName })}
         className="w-80 rounded-lg border-border bg-popover p-0 shadow-lg shadow-black/10"
         data-testid="activity-artifact-preview"
       >
@@ -1170,6 +1177,8 @@ function ActivityEntryArtifacts({
   artifactsLoading: boolean;
   openEvidence: (evidence: ActivityArtifact) => void;
 }) {
+
+  const ui = useGT();
   const artifacts = useMemo(
     () => artifactsForHistoryEntry(entry, intervals),
     [entry, intervals],
@@ -1227,7 +1236,7 @@ function ActivityEntryArtifacts({
     <TooltipProvider delayDuration={300} skipDelayDuration={300}>
       <div
         className="flex items-center gap-1.5"
-        aria-label={`Source artifacts for ${entry.title}`}
+        aria-label={ui("Source artifacts for {value1}", { value1: entry.title })}
       >
         {artifacts.map((evidence) => {
           const artifactName =
@@ -1301,6 +1310,7 @@ function groupByDay(entries: ActivityHistoryEntry[]) {
 }
 
 function ActivityLedgerSkeleton({ label }: { label: string }) {
+
   return (
     <section
       aria-label={label}
@@ -1373,6 +1383,9 @@ export function ActivityLedger({
 }: {
   onOpenArtifact?: () => void;
 } = {}) {
+
+  const ui = useGT();
+  const uiLocale = useUiLocale();
   const router = useRouter();
   const setPendingNavigation = useTimelineStore(
     (state) => state.setPendingNavigation,
@@ -1536,7 +1549,7 @@ export function ActivityLedger({
   useEffect(() => {
     if (!range || range.start >= range.end) {
       setLoading(false);
-      setError("Start time must be before end time.");
+      setError(ui("Start time must be before end time."));
       return;
     }
     const controller = new AbortController();
@@ -1965,8 +1978,8 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                 <SelectTrigger
                   className="h-9 w-auto min-w-0 shrink-0 justify-center gap-1.5 rounded-md px-2 text-xs [&>svg:last-child]:hidden"
                   data-testid="activity-range"
-                  aria-label={`Time range: ${RANGE_COPY[preset]}`}
-                  title={`Time range: ${RANGE_COPY[preset]}`}
+                  aria-label={ui("Time range: {value1}", { value1: RANGE_COPY[preset] })}
+                  title={ui("Time range: {value1}", { value1: RANGE_COPY[preset] })}
                 >
                   <CalendarRange className="h-4 w-4" aria-hidden="true" />
                   <span aria-hidden="true">{RANGE_SHORT_COPY[preset]}</span>
@@ -2002,10 +2015,10 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                   type="button"
                   variant="outline"
                   disabled
-                  aria-label="AI preset"
+                  aria-label={ui("AI preset")}
                   className="h-9 w-[190px] max-w-[36vw] justify-start rounded-md text-xs"
                 >
-                  {reviewPreset.model || "Auto"}
+                  {reviewPreset.model || ui("Auto")}
                 </Button>
               )}
               <Button
@@ -2021,7 +2034,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                     ? recentActivityDisabled
                     : loading || historyLoading || !cacheReady || invalidRange
                 }
-                aria-label="Refresh history"
+                aria-label={ui("Refresh history")}
               >
                 <RefreshCw
                   className={cn(
@@ -2040,10 +2053,10 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                   <Button
                     variant="outline"
                     className="h-9 justify-start rounded-md border-border bg-background px-3 font-mono text-xs font-normal normal-case tracking-normal"
-                    aria-label="Choose custom date range"
+                    aria-label={ui("Choose custom date range")}
                   >
                     <CalendarDays className="mr-2 h-3.5 w-3.5" />
-                    {customRangeLabel(customDateRange)}
+                    {customDateRange?.from ? customRangeLabel(customDateRange, uiLocale) : ui("Choose dates")}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent
@@ -2121,11 +2134,11 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
             </p>
           ) : !activitiesEnabled ? (
             loading && !summary ? (
-              <ActivityLedgerSkeleton label="Reading your day…" />
+              <ActivityLedgerSkeleton label={ui("Reading your day…")} />
             ) : !cacheReady ? (
-              <ActivityLedgerSkeleton label="Loading generated activities…" />
+              <ActivityLedgerSkeleton label={ui("Loading generated activities…")} />
             ) : historyLoading ? (
-              <ActivityLedgerSkeleton label="Understanding what you worked on…" />
+              <ActivityLedgerSkeleton label={ui("Understanding what you worked on…")} />
             ) : (
               <div className="flex min-h-[320px] items-center justify-center py-12 text-center">
                 <div className="max-w-sm">
@@ -2135,7 +2148,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">
                     <span role={historyError ? "alert" : undefined}>
                       {historyError ||
-                        "Generate this time range now, then keep activities updated automatically."}
+                        ui("Generate this time range now, then keep activities updated automatically.")}
                     </span>
                   </p>
                   <Button
@@ -2143,13 +2156,13 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                     className="mt-5 h-10 px-5 normal-case tracking-wide"
                     onClick={() => void enableActivities()}
                   >
-                    {historyError ? "Try again" : "Enable activities"}
+                    {historyError ? ui("Try again") : ui("Enable activities")}
                   </Button>
                 </div>
               </div>
             )
           ) : history ? (
-            <section aria-label="Activity history">
+            <section aria-label={ui("Activity history")}>
               {groupedEntries.map(([day, entries]) => (
                 <div key={day} className="mb-12 last:mb-0">
                   <h2 className="border-b border-foreground pb-3 font-sans text-xl font-medium">
@@ -2177,7 +2190,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                           });
                         }}
                         className="self-start justify-self-start font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
-                        aria-label={`Open ${entry.title} in timeline`}
+                        aria-label={ui("Open {value1} in timeline", { value1: entry.title })}
                       >
                         {formatEntryTime(entry)}
                       </a>
@@ -2202,7 +2215,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                             type="button"
                             onClick={() => makeSkill(entry)}
                             className="font-mono text-[10px] normal-case tracking-wider text-muted-foreground transition-colors hover:text-foreground"
-                            aria-label={`Make skill from ${entry.title}`}
+                            aria-label={ui("Make skill from {value1}", { value1: entry.title })}
                           >
                             Make skill
                           </button>
@@ -2211,7 +2224,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                             type="button"
                             onClick={() => askAboutActivity(entry)}
                             className="font-mono text-[10px] normal-case tracking-wider text-muted-foreground transition-colors hover:text-foreground"
-                            aria-label={`Chat about ${entry.title}`}
+                            aria-label={ui("Chat about {value1}", { value1: entry.title })}
                           >
                             Chat
                           </button>
@@ -2223,13 +2236,13 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
               ))}
             </section>
           ) : loading && !summary ? (
-            <ActivityLedgerSkeleton label="Reading your day…" />
+            <ActivityLedgerSkeleton label={ui("Reading your day…")} />
           ) : error ? (
             <p className="text-sm text-muted-foreground">{error}</p>
           ) : !cacheReady ? (
-            <ActivityLedgerSkeleton label="Loading generated activities…" />
+            <ActivityLedgerSkeleton label={ui("Loading generated activities…")} />
           ) : historyLoading && !history ? (
-            <ActivityLedgerSkeleton label="Understanding what you worked on…" />
+            <ActivityLedgerSkeleton label={ui("Understanding what you worked on…")} />
           ) : (
             <div className="flex min-h-[320px] items-center justify-center py-12 text-center">
               <div className="max-w-sm">
@@ -2239,7 +2252,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
                   <span role={historyError ? "alert" : undefined}>
                     {historyError ||
-                      "Turn this range into a private activity history when you’re ready."}
+                      ui("Turn this range into a private activity history when you’re ready.")}
                   </span>
                 </p>
                 <Button
@@ -2247,7 +2260,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                   className="mt-5 h-10 px-5 normal-case tracking-wide"
                   onClick={() => regenerateSelectedRange("empty_state")}
                 >
-                  {historyError ? "Try again" : "Generate activities"}
+                  {historyError ? ui("Try again") : ui("Generate activities")}
                 </Button>
               </div>
             </div>

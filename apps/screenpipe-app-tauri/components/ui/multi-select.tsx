@@ -30,6 +30,8 @@ import {
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command";
+import { useGT } from "gt-react";
+
 
 function OptionIcon({
   iconUrl,
@@ -40,6 +42,7 @@ function OptionIcon({
   icon?: React.ComponentType<{ className?: string }>;
   className?: string;
 }) {
+
   const [imgFailed, setImgFailed] = React.useState(false);
 
   if (iconUrl && !imgFailed) {
@@ -189,6 +192,7 @@ export const MultiSelect = React.forwardRef<
     },
     ref
   ) => {
+  const ui = useGT();
     const isControlled = typeof value !== "undefined";
     const [internalSelectedValues, setInternalSelectedValues] = React.useState<string[]>(defaultValue);
     const selectedValues = isControlled ? value! : internalSelectedValues;
@@ -346,7 +350,7 @@ export const MultiSelect = React.forwardRef<
                       )}
                       style={{ animationDuration: `${animation}s` }}
                     >
-                      {`+ ${selectedValues.length - maxCount} more`}
+                      {ui("+ {value1} more", { value1: selectedValues.length - maxCount })}
                       <XCircle
                         className="ml-2 h-4 w-4 cursor-pointer"
                         onClick={(event) => {
@@ -397,7 +401,7 @@ export const MultiSelect = React.forwardRef<
             }}
           >
             <CommandInput
-              placeholder="Search..."
+              placeholder={ui("Search...")}
               onKeyDown={handleInputKeyDown}
               value={inputValue}
               onValueChange={handleInputChange}
@@ -409,7 +413,7 @@ export const MultiSelect = React.forwardRef<
                     Add &quot;{inputValue}&quot;
                   </CommandItem>
                 ) : (
-                  "No results found."
+                  ui("No results found.")
                 )}
               </CommandEmpty>
               <CommandGroup>

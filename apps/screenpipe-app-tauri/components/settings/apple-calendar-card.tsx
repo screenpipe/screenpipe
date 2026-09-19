@@ -17,6 +17,8 @@ import {
   RotateCcw,
   Users,
 } from "lucide-react";
+import { useGT } from "gt-react";
+
 
 interface CalendarEventItem {
   id: string;
@@ -36,6 +38,8 @@ export function AppleCalendarCard({
 }: {
   onStatusChange?: (connected: boolean) => void;
 }) {
+
+  const ui = useGT();
   const [authorized, setAuthorized] = useState(false);
   const [available, setAvailable] = useState(true);
   const [authorizationStatus, setAuthorizationStatus] = useState("checking");
@@ -260,7 +264,7 @@ export function AppleCalendarCard({
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-1.5">
                                 <span className="font-medium text-foreground truncate">
-                                  {event.title || "Untitled event"}
+                                  {event.title || ui("Untitled event")}
                                 </span>
                                 {isHappeningNow(event.start, event.end) && (
                                   <span className="text-[10px] bg-foreground text-background px-1 rounded">
@@ -304,10 +308,10 @@ export function AppleCalendarCard({
         {!connected && (
           <p className="mt-4 text-xs text-muted-foreground">
             {busy === "connect"
-              ? "Waiting for macOS approval…"
+              ? ui("Waiting for macOS approval…")
               : hasAttemptedConnect
-                ? "If the prompt does not appear, revoke permission and connect again."
-                : "Click Connect and approve the macOS Calendar prompt."}
+                ? ui("If the prompt does not appear, revoke permission and connect again.")
+                : ui("Click Connect and approve the macOS Calendar prompt.")}
           </p>
         )}
       </CardContent>

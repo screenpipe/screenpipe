@@ -73,6 +73,11 @@ import type {
   BrainViewSlot,
   BrainViewTimeRange,
 } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 type CanvasTool = "select" | "pan" | "note" | "arrow" | "draw";
 type ChangeOptions = { persist: boolean };
@@ -133,11 +138,11 @@ const TOOL_OPTIONS: Array<{
   label: string;
   icon: React.ComponentType<{ className?: string }>;
 }> = [
-  { value: "select", label: "Select", icon: MousePointer2 },
-  { value: "pan", label: "Pan", icon: Hand },
-  { value: "note", label: "Note", icon: StickyNote },
-  { value: "arrow", label: "Connect", icon: ArrowRight },
-  { value: "draw", label: "Draw", icon: Pencil },
+  { value: "select", label: msg("Select", {}), icon: MousePointer2 },
+  { value: "pan", label: msg("Pan", {}), icon: Hand },
+  { value: "note", label: msg("Note", {}), icon: StickyNote },
+  { value: "arrow", label: msg("Connect", {}), icon: ArrowRight },
+  { value: "draw", label: msg("Draw", {}), icon: Pencil },
 ];
 
 const RESIZE_HANDLE_STYLE: React.CSSProperties = {
@@ -185,6 +190,7 @@ function strokePath(points: BrainViewCanvasPoint[]): string {
 }
 
 function CanvasConnectionHandles({ tool }: { tool: CanvasTool }) {
+  const ui = useGT();
   const visible = tool === "arrow";
   const style: React.CSSProperties = {
     width: 10,
@@ -202,14 +208,14 @@ function CanvasConnectionHandles({ tool }: { tool: CanvasTool }) {
         position={Position.Left}
         isConnectable={visible}
         style={style}
-        aria-label="Connect incoming step"
+        aria-label={ui("Connect incoming step")}
       />
       <Handle
         type="source"
         position={Position.Right}
         isConnectable={visible}
         style={style}
-        aria-label="Connect outgoing step"
+        aria-label={ui("Connect outgoing step")}
       />
     </>
   );
@@ -241,6 +247,8 @@ function CanvasNodeResizer({
 }
 
 function LiveViewBlockNode({ id, data }: NodeProps<LiveViewFlowNode>) {
+
+  const ui = useGT();
   const { slot } = data;
   return (
     <article
@@ -278,8 +286,8 @@ function LiveViewBlockNode({ id, data }: NodeProps<LiveViewFlowNode>) {
           data-testid={`canvas-move-${slot.id}`}
           aria-label={
             data.tool === "arrow"
-              ? `Connect ${slot.title}`
-              : `Move ${slot.title}`
+              ? ui("Connect {value1}", { value1: slot.title })
+              : ui("Move {value1}", { value1: slot.title })
           }
           className="canvas-node-drag-handle flex h-6 min-w-0 flex-1 cursor-move items-center gap-1.5 px-1 text-left text-[10px] normal-case tracking-wide focus-visible:outline focus-visible:outline-1"
           onFocus={() => data.onSelect(id)}
@@ -312,7 +320,7 @@ function LiveViewBlockNode({ id, data }: NodeProps<LiveViewFlowNode>) {
                 data.proposal.status === "accepted" ? "default" : "ghost"
               }
               className="h-6 w-6 rounded-md"
-              aria-label={`Accept change to ${slot.title}`}
+              aria-label={ui("Accept change to {value1}", { value1: slot.title })}
               onClick={(event) => {
                 event.stopPropagation();
                 data.onProposalDecision("accepted");
@@ -328,7 +336,7 @@ function LiveViewBlockNode({ id, data }: NodeProps<LiveViewFlowNode>) {
                 data.proposal.status === "rejected" ? "destructive" : "ghost"
               }
               className="h-6 w-6 rounded-md"
-              aria-label={`Reject change to ${slot.title}`}
+              aria-label={ui("Reject change to {value1}", { value1: slot.title })}
               onClick={(event) => {
                 event.stopPropagation();
                 data.onProposalDecision("rejected");
@@ -360,6 +368,8 @@ function LiveViewBlockNode({ id, data }: NodeProps<LiveViewFlowNode>) {
 }
 
 function CanvasNoteNode({ id, data }: NodeProps<NoteFlowNode>) {
+
+  const ui = useGT();
   const { note } = data;
   return (
     <article
@@ -387,7 +397,7 @@ function CanvasNoteNode({ id, data }: NodeProps<NoteFlowNode>) {
       <CanvasConnectionHandles tool={data.tool} />
       <button
         type="button"
-        aria-label={data.tool === "arrow" ? "Connect note" : "Move note"}
+        aria-label={data.tool === "arrow" ? ui("Connect note") : ui("Move note")}
         className="canvas-node-drag-handle flex h-8 w-full cursor-move items-center gap-1.5 border-b border-border bg-muted/30 px-2 text-[10px] normal-case tracking-wide"
         onFocus={() => data.onSelect(id)}
         onPointerDown={(event) => {
@@ -405,10 +415,10 @@ function CanvasNoteNode({ id, data }: NodeProps<NoteFlowNode>) {
       </button>
       <textarea
         data-testid={`canvas-note-text-${note.id}`}
-        aria-label="Canvas note"
+        aria-label={ui("Canvas note")}
         value={note.text}
         maxLength={4_000}
-        placeholder="Write a note"
+        placeholder={ui("Write a note")}
         className="nodrag nowheel nopan h-[calc(100%-2rem)] w-full resize-none bg-transparent p-3 font-serif text-sm outline-none"
         onChange={(event) =>
           data.onTextChange(note.id, event.target.value, false)
@@ -476,6 +486,10 @@ export function LiveViewCanvas({
     decision: "accepted" | "rejected",
   ) => void;
 }) {
+  const uiLanguage = useLocale();
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const [tool, setTool] = useState<CanvasTool>("select");
   const [toolsOpen, setToolsOpen] = useState(false);
   const [selection, setSelection] = useState<string[]>([]);
@@ -836,7 +850,7 @@ export function LiveViewCanvas({
           dragHandle: ".canvas-node-drag-handle",
           selected: selection.includes(id),
           deletable: false,
-          ariaLabel: `Live View step: ${slot.title}`,
+          ariaLabel: ui("Live View step: {value1}", { value1: slot.title }),
           data: {
             slot,
             timeRange,
@@ -897,7 +911,7 @@ export function LiveViewCanvas({
         dragHandle: ".canvas-node-drag-handle",
         selected: selection.includes(id),
         deletable: true,
-        ariaLabel: "Canvas note container",
+        ariaLabel: ui("Canvas note container"),
         data: {
           note,
           tool,
@@ -911,23 +925,7 @@ export function LiveViewCanvas({
       };
     });
     return [...blockNodes, ...noteNodes];
-  }, [
-    aiEditingSlotId,
-    arrowSource,
-    connectNode,
-    document.blocks,
-    document.notes,
-    proposals,
-    refreshingSlotIds,
-    sourceStatusFor,
-    selection,
-    setCanvasSelection,
-    slotsById,
-    timeRange,
-    tool,
-    updateNodeGeometry,
-    updateNoteText,
-  ]);
+  }, [aiEditingSlotId, arrowSource, connectNode, document.blocks, document.notes, proposals, refreshingSlotIds, sourceStatusFor, selection, setCanvasSelection, slotsById, timeRange, tool, updateNodeGeometry, updateNoteText, uiLanguage]);
 
   const edges = useMemo<CanvasFlowEdge[]>(
     () =>
@@ -1434,7 +1432,7 @@ export function LiveViewCanvas({
 
   const selectedCanDelete = selection.some((id) => !id.startsWith("block:"));
   const activeTool =
-    TOOL_OPTIONS.find((option) => option.value === tool) ?? TOOL_OPTIONS[0];
+    localizeDefinitions(TOOL_OPTIONS, uiMessages).find((option) => option.value === tool) ?? localizeDefinitions(TOOL_OPTIONS, uiMessages)[0];
   const ActiveToolIcon = activeTool.icon;
 
   // Any deliberate interaction owns the viewport immediately. The toolbar is
@@ -1446,7 +1444,7 @@ export function LiveViewCanvas({
     <section
       data-testid="live-view-canvas"
       className="relative min-h-0 w-full flex-1 overflow-hidden border border-border bg-background"
-      aria-label="Live View process canvas"
+      aria-label={ui("Live View process canvas")}
       onPointerDownCapture={() => cancelFocusAnimation()}
       onClickCapture={() => cancelFocusAnimation()}
       onKeyDownCapture={() => cancelFocusAnimation()}
@@ -1455,7 +1453,7 @@ export function LiveViewCanvas({
         ref={surfaceRef}
         data-testid="live-view-canvas-surface"
         role="application"
-        aria-label="Whiteboard canvas. Use the toolbar to select, pan, add notes, connect Blocks, or draw."
+        aria-label={ui("Whiteboard canvas. Use the toolbar to select, pan, add notes, connect Blocks, or draw.")}
         tabIndex={0}
         className="live-view-process-canvas absolute inset-0 outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-inset"
         onPointerEnter={(event) => {
@@ -1594,8 +1592,8 @@ export function LiveViewCanvas({
               variant="ghost"
               size="icon"
               data-testid="canvas-tools-close"
-              aria-label="Close canvas tools"
-              title="Close canvas tools"
+              aria-label={ui("Close canvas tools")}
+              title={ui("Close canvas tools")}
               className="h-8 w-8 shrink-0 rounded-md"
               onClick={() => {
                 setToolsOpen(false);
@@ -1608,7 +1606,7 @@ export function LiveViewCanvas({
               className="mx-0.5 h-5 w-px shrink-0 bg-border"
               aria-hidden="true"
             />
-            {TOOL_OPTIONS.map((option) => {
+            {localizeDefinitions(TOOL_OPTIONS, uiMessages).map((option) => {
               const Icon = option.icon;
               return (
                 <Button
@@ -1645,8 +1643,8 @@ export function LiveViewCanvas({
               type="button"
               variant="ghost"
               size="icon"
-              aria-label="Zoom out"
-              title="Zoom out (-)"
+              aria-label={ui("Zoom out")}
+              title={ui("Zoom out (-)")}
               className="h-8 w-8 shrink-0 rounded-md"
               onClick={() => zoomCanvas(1 / 1.2)}
             >
@@ -1655,8 +1653,8 @@ export function LiveViewCanvas({
             <button
               type="button"
               data-testid="canvas-zoom-reset"
-              aria-label="Reset zoom to 100%"
-              title="Reset zoom to 100%"
+              aria-label={ui("Reset zoom to 100%")}
+              title={ui("Reset zoom to 100%")}
               className="h-8 w-11 shrink-0 text-center font-mono text-[10px] tabular-nums text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-1 focus-visible:outline-foreground"
               onClick={() =>
                 zoomCanvas(1 / latestDocumentRef.current.viewport.zoom)
@@ -1668,8 +1666,8 @@ export function LiveViewCanvas({
               type="button"
               variant="ghost"
               size="icon"
-              aria-label="Zoom in"
-              title="Zoom in (+)"
+              aria-label={ui("Zoom in")}
+              title={ui("Zoom in (+)")}
               className="h-8 w-8 shrink-0 rounded-md"
               onClick={() => zoomCanvas(1.2)}
             >
@@ -1680,8 +1678,8 @@ export function LiveViewCanvas({
               data-testid="canvas-fit"
               variant="ghost"
               size="icon"
-              aria-label="Fit canvas"
-              title="Fit canvas"
+              aria-label={ui("Fit canvas")}
+              title={ui("Fit canvas")}
               className="h-8 w-8 shrink-0 rounded-md"
               onClick={fitCanvas}
             >
@@ -1692,8 +1690,8 @@ export function LiveViewCanvas({
               data-testid="canvas-arrange"
               variant="ghost"
               size="icon"
-              aria-label="Arrange canvas"
-              title="Arrange canvas"
+              aria-label={ui("Arrange canvas")}
+              title={ui("Arrange canvas")}
               className="h-8 w-8 shrink-0 rounded-md"
               onClick={arrangeCanvas}
             >
@@ -1705,8 +1703,8 @@ export function LiveViewCanvas({
               data-testid="canvas-delete-selection"
               variant="ghost"
               size="icon"
-              aria-label="Delete selected canvas item"
-              title="Delete selected canvas item"
+              aria-label={ui("Delete selected canvas item")}
+              title={ui("Delete selected canvas item")}
               className="h-8 w-8 shrink-0 rounded-md"
               disabled={!selectedCanDelete}
               onClick={removeSelection}
@@ -1718,9 +1716,9 @@ export function LiveViewCanvas({
           <button
             type="button"
             data-testid="canvas-tools-toggle"
-            aria-label={`Open canvas tools. ${activeTool.label} tool active`}
+            aria-label={ui("Open canvas tools. {value1} tool active", { value1: activeTool.label })}
             aria-expanded="false"
-            title={`Open canvas tools · ${activeTool.label} active`}
+            title={ui("Open canvas tools · {value1} active", { value1: activeTool.label })}
             className="flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-foreground hover:text-background focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-foreground"
             onClick={() => setToolsOpen(true)}
           >

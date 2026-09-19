@@ -61,6 +61,8 @@ import {
 } from "@/components/chat/standalone/hooks/pi-event-handlers";
 import type { Message, ToolCall } from "@/lib/chat/types";
 import type { PiForegroundEventsOptions } from "@/components/chat/standalone/hooks/pi-types";
+import { useGT } from "gt-react";
+
 
 const POST_STREAM_SIDE_EFFECT_DELAY_MS = 1_500;
 
@@ -126,6 +128,7 @@ export function usePiForegroundEvents({
   turnIntentTextValuesMatch,
   noteTurnLivenessEvent,
 }: PiForegroundEventsOptions) {
+  const ui = useGT();
   const getActivePreset = () => activePresetRef?.current ?? activePreset;
   // Error classification names the agent rather than saying "the agent", so a
   // refusal from the agent's own service reads as that agent's answer.
@@ -322,8 +325,8 @@ export function usePiForegroundEvents({
           // to look like nothing was happening.
           useAcpBootState.getState().begin(agentId, "installing");
           toast({
-            title: `Installing ${name}`,
-            description: "Downloading the agent. This can take a moment.",
+            title: ui("Installing {value1}", { value1: name }),
+            description: ui("Downloading the agent. This can take a moment."),
           });
         } else if (stringValue(data.phase) === "ready") {
           useAcpBootState.getState().finish(agentId);
@@ -331,8 +334,8 @@ export function usePiForegroundEvents({
           // cached/instant connect stays quiet.
           if (installingAgents.delete(agentId)) {
             toast({
-              title: `${name} ready`,
-              description: "The agent is connected. You can start chatting.",
+              title: ui("{value1} ready", { value1: name }),
+              description: ui("The agent is connected. You can start chatting."),
             });
           }
         }

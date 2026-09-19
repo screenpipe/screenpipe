@@ -39,6 +39,8 @@ import {
   TimelineChart,
   WaterfallChart,
 } from "./chart-marks";
+import { useGT } from "gt-react";
+
 
 export type SendChartPrompt = (
   prompt: string,
@@ -66,13 +68,14 @@ function ChartActions({
   spec: ChartSpec;
   onSendPrompt: SendChartPrompt;
 }) {
+  const ui = useGT();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label="Chart actions"
-          title="Chart actions"
+          aria-label={ui("Chart actions")}
+          title={ui("Chart actions")}
           className="not-prose absolute right-2 top-2 z-20 flex h-7 w-7 items-center justify-center border border-transparent bg-background/80 text-muted-foreground opacity-70 transition-[color,background-color,border-color,opacity] duration-150 hover:border-border hover:bg-muted hover:text-foreground hover:opacity-100 focus-visible:border-foreground focus-visible:text-foreground focus-visible:opacity-100 focus-visible:outline-none"
         >
           <MoreHorizontal className="h-4 w-4" aria-hidden="true" />

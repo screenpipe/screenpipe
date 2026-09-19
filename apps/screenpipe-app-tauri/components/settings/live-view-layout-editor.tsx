@@ -26,6 +26,8 @@ import type {
   BrainViewSlot,
   BrainViewTimeRange,
 } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+
 
 type ComponentOption = {
   value: BrainViewComponent;
@@ -125,6 +127,8 @@ export function LiveViewLayoutEditor({
   onCancel: () => void;
   onSave: () => void;
 }) {
+
+  const ui = useGT();
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
@@ -293,7 +297,7 @@ export function LiveViewLayoutEditor({
               Time window
             </span>
             <select
-              aria-label="Template time range"
+              aria-label={ui("Template time range")}
               value={draft.timeRange}
               className="h-9 w-full border border-border bg-background px-2 text-xs outline-none focus:border-foreground"
               onChange={(event) =>
@@ -317,7 +321,7 @@ export function LiveViewLayoutEditor({
         <section
           data-testid={`overview-block-inspector-${selectedSlot.id}`}
           className="mb-4 border border-foreground bg-muted/20 p-4"
-          aria-label={`Edit ${selectedSlot.title}`}
+          aria-label={ui("Edit {value1}", { value1: selectedSlot.title })}
         >
           <div className="mb-3 flex items-start justify-between gap-4">
             <div>
@@ -330,7 +334,7 @@ export function LiveViewLayoutEditor({
               type="button"
               variant="ghost"
               size="icon"
-              aria-label="Close Block settings"
+              aria-label={ui("Close Block settings")}
               className="h-8 w-8 rounded-md"
               onClick={() => setSelectedSlotId(null)}
             >
@@ -433,7 +437,7 @@ export function LiveViewLayoutEditor({
                 value={selectedSlot.intent ?? ""}
                 maxLength={800}
                 rows={2}
-                placeholder={`For example: Calculate time spent on GTM as a percentage of all active time in the selected period. Use 0 when no GTM activity is observed.`}
+                placeholder={ui("For example: Calculate time spent on GTM as a percentage of all active time in the selected period. Use 0 when no GTM activity is observed.", {  })}
                 className="w-full resize-y border border-border bg-background px-3 py-2 text-xs outline-none focus:border-foreground"
                 onChange={(event) =>
                   updateSlot(selectedSlot.id, (slot) => ({
@@ -503,8 +507,8 @@ export function LiveViewLayoutEditor({
                   <button
                     type="button"
                     data-testid={`overview-drag-${slot.id}`}
-                    aria-label={`Drag ${slot.title}. Use arrow keys to reorder.`}
-                    title="Drag to move"
+                    aria-label={ui("Drag {value1}. Use arrow keys to reorder.", { value1: slot.title })}
+                    title={ui("Drag to move")}
                     onKeyDown={(event) => {
                       if (
                         event.key !== "ArrowUp" &&
@@ -570,8 +574,8 @@ export function LiveViewLayoutEditor({
                   <div className="hidden items-center border border-border bg-background sm:flex">
                     <button
                       type="button"
-                      aria-label={`Shrink ${slot.title}`}
-                      title="Make narrower"
+                      aria-label={ui("Shrink {value1}", { value1: slot.title })}
+                      title={ui("Make narrower")}
                       disabled={!canShrink}
                       onClick={() =>
                         updateSlot(slot.id, (current) => ({
@@ -588,8 +592,8 @@ export function LiveViewLayoutEditor({
                     </span>
                     <button
                       type="button"
-                      aria-label={`Grow ${slot.title}`}
-                      title="Make wider"
+                      aria-label={ui("Grow {value1}", { value1: slot.title })}
+                      title={ui("Make wider")}
                       disabled={!canGrow}
                       onClick={() =>
                         updateSlot(slot.id, (current) => ({
@@ -604,8 +608,8 @@ export function LiveViewLayoutEditor({
                   </div>
                   <button
                     type="button"
-                    aria-label={`Edit ${slot.title}`}
-                    title="Edit Block"
+                    aria-label={ui("Edit {value1}", { value1: slot.title })}
+                    title={ui("Edit Block")}
                     onClick={() => setSelectedSlotId(slot.id)}
                     className="inline-flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
                   >
@@ -613,8 +617,8 @@ export function LiveViewLayoutEditor({
                   </button>
                   <button
                     type="button"
-                    aria-label={`Delete ${slot.title}`}
-                    title="Delete Block"
+                    aria-label={ui("Delete {value1}", { value1: slot.title })}
+                    title={ui("Delete Block")}
                     onClick={() => {
                       changeSlots(
                         slots.filter((candidate) => candidate.id !== slot.id),
@@ -633,8 +637,8 @@ export function LiveViewLayoutEditor({
 
                 <button
                   type="button"
-                  aria-label={`Resize ${slot.title}. Use left and right arrow keys.`}
-                  title="Drag to resize"
+                  aria-label={ui("Resize {value1}. Use left and right arrow keys.", { value1: slot.title })}
+                  title={ui("Drag to resize")}
                   onKeyDown={(event) => {
                     if (
                       event.key !== "ArrowLeft" &&

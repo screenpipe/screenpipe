@@ -38,6 +38,10 @@ import {
   HomeCardAgentActions,
   type HomeCardAgentTask,
 } from "./home-card-agent-actions";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 interface SummaryCardsProps {
   onSendMessage: (
@@ -94,12 +98,12 @@ export function homeCardSlugsForGoal(category: UserGoalCategory): string[] {
 const QUICK_SUMMARY_TASKS = [
   {
     name: "meeting-prep",
-    title: "Meeting Prep",
+    title: msg("Meeting Prep", {}),
     previewPrompt: "Summarize context I'll need for upcoming meetings",
   },
   {
     name: "blockers",
-    title: "Blockers",
+    title: msg("Blockers", {}),
     previewPrompt: "What problems, errors, or blockers did I encounter?",
   },
 ] satisfies HomeCardAgentTask[];
@@ -165,6 +169,13 @@ export function SummaryCards({
   existingPipes = [],
   userGoalCategory = DEFAULT_USER_GOAL_CATEGORY,
 }: SummaryCardsProps) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
+  const templateLabel = (pipe: TemplatePipe, field: "title" | "description") => {
+    const source = FALLBACK_TEMPLATES.find(item => item.name === pipe.name)?.[field];
+    return source && source === pipe[field] ? uiMessages(source) : pipe[field];
+  };
   const [showAll, setShowAll] = useState(false);
   const [showBuilder, setShowBuilder] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<CustomTemplate | null>(null);
@@ -216,7 +227,7 @@ export function SummaryCards({
       pipe.name === AUTOMATE_MY_WORK_TEMPLATE_NAME
         ? buildAutomateMyWorkPrompt(existingPipes)
         : pipe.prompt;
-    onSendMessage(prompt, `${pipe.icon} ${pipe.title}`, "home_card", entryCard);
+    onSendMessage(prompt, `${pipe.icon} ${templateLabel(pipe, "title")}`, "home_card", entryCard);
   };
 
   // Opens the builder pre-filled for review/editing instead of running
@@ -241,7 +252,7 @@ export function SummaryCards({
         <PipeAIIconLarge size={40} thinking={false} className="relative text-foreground/80" />
       </div>
       <h3 className="text-sm font-medium mb-0.5 text-foreground">
-        {userName ? `How can I help, ${userName}?` : "How can I help today?"}
+        {userName ? ui("How can I help, {value1}?", { value1: userName }) : ui("How can I help today?")}
       </h3>
       <p className="text-xs text-muted-foreground mb-2">
         From everything you&apos;ve seen, said, or heard
@@ -267,10 +278,10 @@ export function SummaryCards({
               />
               <div className="min-w-0 flex-1 pr-24">
                 <div className="text-sm font-semibold group-hover/home-card:text-background group-focus-within/home-card:text-background leading-tight">
-                  {featured[0].title}
+                  {templateLabel(featured[0], "title")}
                 </div>
                 <div className="text-pretty text-xs text-muted-foreground group-hover/home-card:text-background/60 group-focus-within/home-card:text-background/60 leading-tight mt-0.5">
-                  {featured[0].description}
+                  {templateLabel(featured[0], "description")}
                 </div>
               </div>
               <HomeCardArrow slug={featured[0].name} />
@@ -299,10 +310,10 @@ export function SummaryCards({
               />
               <div className="min-w-0 flex-1 pr-24">
                 <div className="text-xs font-semibold text-foreground/85 group-hover/home-card:text-background group-focus-within/home-card:text-background leading-tight">
-                  {featured[1].title}
+                  {templateLabel(featured[1], "title")}
                 </div>
                 <div className="text-pretty text-xs text-muted-foreground group-hover/home-card:text-background/70 group-focus-within/home-card:text-background/70 leading-tight mt-0.5">
-                  {featured[1].description}
+                  {templateLabel(featured[1], "description")}
                 </div>
               </div>
               <HomeCardArrow slug={featured[1].name} />
@@ -335,14 +346,14 @@ export function SummaryCards({
               className="h-10 w-full cursor-pointer rounded-md border border-foreground/20 bg-card px-0 text-[11px] text-foreground/75 transition-colors duration-150 group-hover/home-card:border-foreground group-hover/home-card:bg-foreground group-hover/home-card:text-background group-focus-within/home-card:border-foreground group-focus-within/home-card:bg-foreground group-focus-within/home-card:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
             >
               <span className="transition-opacity duration-150 group-hover/home-card:opacity-0 group-focus-within/home-card:opacity-0 motion-reduce:transition-none">
-                {pipe.title}
+                {templateLabel(pipe, "title")}
               </span>
             </button>
             <HomeCardAgentActions pipe={pipe} placement="chip" />
           </div>
         ))}
         {/* Quick summary chips */}
-        {QUICK_SUMMARY_TASKS.map((task) => (
+        {localizeDefinitions(QUICK_SUMMARY_TASKS, uiMessages).map((task) => (
           <div key={task.name} className="group/home-card relative min-w-[108px] flex-1">
             <button
               type="button"
@@ -440,10 +451,10 @@ export function SummaryCards({
             >
               <div className="text-sm mb-0.5">{pipe.icon}</div>
               <div className="text-xs font-medium group-hover:text-background mb-0.5 leading-tight">
-                {pipe.title}
+                {templateLabel(pipe, "title")}
               </div>
               <div className="text-xs text-muted-foreground group-hover:text-background/60 leading-tight line-clamp-1">
-                {pipe.description}
+                {templateLabel(pipe, "description")}
               </div>
             </button>
           ))}

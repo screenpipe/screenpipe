@@ -21,6 +21,10 @@ import { TimelineTagToolbar } from "./timeline-tag-toolbar";
 import { extractDomain, FaviconImg } from "./favicon-utils";
 import { localFetch } from "@/lib/api";
 import { getFrameThumbnailSources } from "@/lib/frame-thumbnails";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+import { formatUiRelativeTime } from "@/lib/i18n/format";
+
 
 // Global cache: preloads app-icon images so they render instantly on scroll.
 // Maps app name → "loaded" | "error" | Promise (in-flight).
@@ -43,6 +47,7 @@ function preloadAppIcon(appName: string): "loaded" | "error" | "loading" {
 
 /** App icon with in-memory cache — no flash of fallback letter on fast scroll */
 const CachedAppIcon = React.memo(function CachedAppIcon({ appName, className }: { appName: string; className?: string }) {
+
 	const [status, setStatus] = useState<"loaded" | "error" | "loading">(() => preloadAppIcon(appName));
 
 	useEffect(() => {
@@ -294,6 +299,7 @@ const PlayheadTimeChip = React.memo(function PlayheadTimeChip({
 	containerRef: React.RefObject<HTMLDivElement | null>;
 	timestamp: string | undefined;
 }) {
+  const uiLocale = useUiLocale();
 	const [rect, setRect] = useState<{ x: number; y: number } | null>(null);
 
 	useEffect(() => {
@@ -358,7 +364,7 @@ const PlayheadTimeChip = React.memo(function PlayheadTimeChip({
 			>
 				<div className="flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-[11px] font-mono font-semibold tabular-nums leading-none text-neutral-900 shadow-lg ring-1 ring-black/10 whitespace-nowrap">
 					<Clock className="w-3 h-3 opacity-80" />
-					<span>{format(new Date(timestamp), "h:mm:ss a")}</span>
+					<span>{new Intl.DateTimeFormat(uiLocale, {"hour":"numeric","minute":"2-digit","second":"2-digit"}).format(new Date(timestamp))}</span>
 				</div>
 				{/* small cap connecting the chip down to the playhead line */}
 				<div className="-mt-[3px] h-2 w-2 rotate-45 rounded-[1px] bg-white ring-1 ring-black/10" />
@@ -406,6 +412,8 @@ export const TimelineSlider = ({
 	scrubberRef,
 	isWheelNavigating = false,
 }: TimelineSliderProps) => {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
 	const containerRef = useRef<HTMLDivElement>(null);
 	// The inner flex content (motion.div) that lays out frame bars and is the
 	// positioning context for the memory-marker layer. Memory diamonds are placed
@@ -898,7 +906,7 @@ export const TimelineSlider = ({
 			if (!seenHours.has(hourKey)) {
 				seenHours.add(hourKey);
 				markers.push({
-					time: format(date, 'h a'),
+					time: new Intl.DateTimeFormat(uiLocale, {"hour":"numeric"}).format(date),
 					position: index,
 					isHour: true,
 				});
@@ -1196,7 +1204,7 @@ export const TimelineSlider = ({
 							"bg-background/80 backdrop-blur-sm border border-border",
 						)}
 						onClick={onRefresh}
-						title="Refresh timeline"
+						title={ui("Refresh timeline")}
 					>
 						<RotateCcw className="w-3.5 h-3.5 text-foreground/70" />
 					</button>
@@ -1214,7 +1222,7 @@ export const TimelineSlider = ({
 								expandedFilterSection === "monitor" && "bg-foreground/10",
 								selectedDeviceId !== "all" && "ring-1 ring-primary/50",
 							)}
-							title="Monitors"
+							title={ui("Monitors")}
 						>
 							<Monitor className="w-3.5 h-3.5 text-foreground/70" />
 						</button>
@@ -1262,7 +1270,7 @@ export const TimelineSlider = ({
 								expandedFilterSection === "app" && "bg-foreground/10",
 								selectedAppName !== "all" && "ring-1 ring-primary/50",
 							)}
-							title="Apps"
+							title={ui("Apps")}
 						>
 							<AppWindow className="w-3.5 h-3.5 text-foreground/70" />
 						</button>
@@ -1310,7 +1318,7 @@ export const TimelineSlider = ({
 								expandedFilterSection === "domain" && "bg-foreground/10",
 								selectedDomain !== "all" && "ring-1 ring-primary/50",
 							)}
-							title="Domains"
+							title={ui("Domains")}
 						>
 							<Globe className="w-3.5 h-3.5 text-foreground/70" />
 						</button>
@@ -1358,7 +1366,7 @@ export const TimelineSlider = ({
 								expandedFilterSection === "speaker" && "bg-foreground/10",
 								selectedSpeaker !== "all" && "ring-1 ring-primary/50",
 							)}
-							title="Speakers"
+							title={ui("Speakers")}
 						>
 							<Mic className="w-3.5 h-3.5 text-foreground/70" />
 						</button>
@@ -1406,7 +1414,7 @@ export const TimelineSlider = ({
 								expandedFilterSection === "calls" && "bg-foreground/10",
 								selectedMeeting !== "all" && "ring-1 ring-primary/50",
 							)}
-							title="Calls"
+							title={ui("Calls")}
 						>
 							<Phone className="w-3.5 h-3.5 text-foreground/70" />
 						</button>
@@ -1461,7 +1469,7 @@ export const TimelineSlider = ({
 								expandedFilterSection === "tag" && "bg-foreground/10",
 								selectedTag !== "all" && "ring-1 ring-primary/50",
 							)}
-							title="Tags"
+							title={ui("Tags")}
 						>
 							<Hash className="w-3.5 h-3.5 text-foreground/70" />
 						</button>
@@ -1508,7 +1516,7 @@ export const TimelineSlider = ({
 							expandedFilterSection === "zoom" && "bg-foreground/10",
 						)}
 						onClick={() => setTargetZoom((prev) => Math.min(MAX_ZOOM, prev * 1.5))}
-						title="Zoom in (or pinch/Cmd+scroll)"
+						title={ui("Zoom in (or pinch/Cmd+scroll)")}
 					>
 						<ZoomIn className="w-3.5 h-3.5 text-foreground/70" />
 					</button>
@@ -1522,7 +1530,7 @@ export const TimelineSlider = ({
 						<button
 							onClick={() => setTargetZoom((prev) => Math.max(MIN_ZOOM, prev / 1.5))}
 							className="p-0.5 hover:bg-foreground/10 rounded transition-colors shrink-0"
-							title="Zoom out"
+							title={ui("Zoom out")}
 						>
 							<ZoomOut className="w-3.5 h-3.5 text-foreground" />
 						</button>
@@ -1538,7 +1546,7 @@ export const TimelineSlider = ({
 						"bg-background/80 backdrop-blur-sm border border-border hover:bg-accent",
 					)}
 					onClick={() => setFiltersCollapsed((prev) => !prev)}
-					title={filtersCollapsed ? "Show filters" : "Hide filters"}
+					title={filtersCollapsed ? ui("Show filters") : ui("Hide filters")}
 				>
 					{filtersCollapsed ? (
 						<PanelBottomOpen className="w-3.5 h-3.5 text-foreground/70" />
@@ -1620,7 +1628,7 @@ export const TimelineSlider = ({
 									<>
 										<p className="text-foreground mb-1 line-clamp-3">{truncated}</p>
 										<div className="flex items-center gap-1.5 text-muted-foreground flex-wrap">
-											<span>{formatDistanceToNow(new Date(mem.created_at), { addSuffix: true })}</span>
+											<span>{formatUiRelativeTime(new Date(mem.created_at), uiLocale)}</span>
 											{usefulTags.slice(0, 3).map((t) => (
 												<span key={t} className="px-1 py-0.5 bg-foreground/10 rounded text-[9px]">{t}</span>
 											))}
@@ -1796,6 +1804,7 @@ export const TimelineSlider = ({
 								)}
 
 								{group.frames.map((frame, frameIdx) => {
+
 									// O(1) lookup via object identity (WeakMap)
 									const frameIndex = frameIndexMap.get(frame) ?? -1;
 									const isSelected = selectedIndices.has(frameIndex);
@@ -1969,7 +1978,7 @@ export const TimelineSlider = ({
 																src={getFrameThumbnailSources(frameId).src}
 																srcSet={getFrameThumbnailSources(frameId).srcSet}
 																sizes="256px"
-																alt="Frame preview"
+																alt={ui("Frame preview")}
 																className="w-full h-full object-cover select-none"
 																loading="lazy"
 																decoding="async"
@@ -1998,7 +2007,7 @@ export const TimelineSlider = ({
 														</p>
 													</div>
 													<p className="text-muted-foreground">
-														{format(new Date(frame.timestamp), 'h:mm:ss a')}
+														{new Intl.DateTimeFormat(uiLocale, {"hour":"numeric","minute":"2-digit","second":"2-digit"}).format(new Date(frame.timestamp))}
 													</p>
 													{hasAudio && (
 														<p className="text-muted-foreground flex items-center gap-1 mt-1">
@@ -2096,11 +2105,11 @@ export const TimelineSlider = ({
 					<div className="flex items-center gap-1.5">
 						<PipeAIIcon size={12} animated={false} className="shrink-0" />
 						<span className="text-popover-foreground font-medium truncate">
-							{hoveredChatConv.conv.title || "Chat"}
+							{hoveredChatConv.conv.title || ui("Chat")}
 						</span>
 					</div>
 					<p className="text-muted-foreground text-[10px] mt-0.5">
-						{format(new Date(hoveredChatConv.conv.createdAt), 'h:mm a')}
+						{new Intl.DateTimeFormat(uiLocale, {"hour":"numeric","minute":"2-digit"}).format(new Date(hoveredChatConv.conv.createdAt))}
 						{" · "}
 						{hoveredChatConv.conv.messages.length} messages
 					</p>

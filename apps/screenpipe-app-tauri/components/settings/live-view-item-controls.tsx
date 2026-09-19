@@ -16,6 +16,8 @@ import type {
   LiveViewItemActionRequest,
   LiveViewListItem,
 } from "@/lib/live-views/item-actions";
+import { useGT } from "gt-react";
+
 
 type ItemAction = Omit<LiveViewItemActionRequest, "itemId">;
 
@@ -55,6 +57,8 @@ export function LiveViewItemControls({
   onAction: (request: ItemAction) => Promise<boolean>;
   onHandoff?: (item: LiveViewListItem) => void;
 }) {
+
+  const ui = useGT();
   const [notRightOpen, setNotRightOpen] = useState(false);
   const [editingCorrection, setEditingCorrection] = useState(false);
   const [correction, setCorrection] = useState(savedCorrection ?? "");
@@ -69,7 +73,7 @@ export function LiveViewItemControls({
   return (
     <div
       className="mt-2 flex flex-wrap items-center gap-1"
-      aria-label={`Actions for ${title}`}
+      aria-label={ui("Actions for {value1}", { value1: title })}
     >
       {actions.has("snooze") && (
         <Popover open={snoozeOpen} onOpenChange={setSnoozeOpen}>
@@ -79,7 +83,7 @@ export function LiveViewItemControls({
               variant="outline"
               size="sm"
               data-testid={`live-view-item-${itemId}-snooze`}
-              aria-label={`Snooze ${title}`}
+              aria-label={ui("Snooze {value1}", { value1: title })}
               className="h-7 rounded-md px-2 text-[11px]"
               disabled={itemActionDisabled}
             >
@@ -119,7 +123,7 @@ export function LiveViewItemControls({
             size="sm"
             data-testid={`live-view-item-${itemId}-not-right`}
             data-state={notRightOpen ? "open" : "closed"}
-            aria-label={`Not right ${title}`}
+            aria-label={ui("Not right {value1}", { value1: title })}
             aria-expanded={notRightOpen}
             aria-controls={`live-view-item-${itemId}-not-right-panel`}
             className="h-7 rounded-md px-2 text-[11px] data-[state=open]:bg-foreground data-[state=open]:text-background"
@@ -139,7 +143,7 @@ export function LiveViewItemControls({
               id={`live-view-item-${itemId}-not-right-panel`}
               data-testid={`live-view-item-${itemId}-not-right-panel`}
               role="group"
-              aria-label={`What is not right about ${title}`}
+              aria-label={ui("What is not right about {value1}", { value1: title })}
               className="order-last mt-1 w-full flex-none border border-border bg-background p-3 sm:max-w-2xl"
               onKeyDown={(event) => {
                 if (event.key !== "Escape") return;
@@ -175,7 +179,7 @@ export function LiveViewItemControls({
                     data-testid={`live-view-item-${itemId}-correction-input`}
                     value={correction}
                     onChange={(event) => setCorrection(event.target.value)}
-                    placeholder="E.g. Sam owns this, due Friday"
+                    placeholder={ui("E.g. Sam owns this, due Friday")}
                     className="h-8 rounded-md text-xs"
                     maxLength={500}
                   />
@@ -272,7 +276,7 @@ export function LiveViewItemControls({
           variant="ghost"
           size="sm"
           data-testid={`live-view-item-${itemId}-handoff`}
-          aria-label={`Send ${title} to another app`}
+          aria-label={ui("Send {value1} to another app", { value1: title })}
           className="h-7 rounded-md px-2 text-[11px]"
           disabled={busy}
           onClick={() => onHandoff(item)}

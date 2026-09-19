@@ -10,15 +10,15 @@ export const searchIndex: SettingsField[] = [
   // Mirrors the labels actually rendered by AccountSection below. Keep in sync
   // when you add/remove a control — phantom entries route users to a page that
   // doesn't contain the field.
-  { label: "Sign in to Screenpipe", keywords: ["login", "log in", "sign in"] },
-  { label: "Logout", keywords: ["signout", "sign out", "log out"] },
-  { label: "Screenpipe Business", keywords: ["subscription", "billing", "plan", "pro", "business", "max", "ultra", "upgrade", "manage"] },
-  { label: "Data Sync", keywords: ["allow data sync", "cloud", "account"] },
-  { label: "Device name", keywords: ["data sync", "hostname", "computer"] },
-  { label: "Sync scheduled tasks across devices", keywords: ["scheduled sync", "pipe sync", "sync"] },
-  { label: "Memories sync across devices", keywords: ["memories sync", "sync", "facts"] },
-  { label: "Connection sync across devices", keywords: ["connection sync", "sync", "slack", "notion"] },
-  { label: "Restart remote sync", keywords: ["reset sync", "older key", "new device", "decryption"] },
+  { label: msg("Sign in to Screenpipe", {}), keywords: ["login", "log in", "sign in"] },
+  { label: msg("Logout", {}), keywords: ["signout", "sign out", "log out"] },
+  { label: msg("Screenpipe Business", {}), keywords: ["subscription", "billing", "plan", "pro", "business", "max", "ultra", "upgrade", "manage"] },
+  { label: msg("Data Sync", {}), keywords: ["allow data sync", "cloud", "account"] },
+  { label: msg("Device name", {}), keywords: ["data sync", "hostname", "computer"] },
+  { label: msg("Sync scheduled tasks across devices", {}), keywords: ["scheduled sync", "pipe sync", "sync"] },
+  { label: msg("Memories sync across devices", {}), keywords: ["memories sync", "sync", "facts"] },
+  { label: msg("Connection sync across devices", {}), keywords: ["connection sync", "sync", "slack", "notion"] },
+  { label: msg("Restart remote sync", {}), keywords: ["reset sync", "older key", "new device", "decryption"] },
 ];
 import { Button } from "@/components/ui/button";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -77,6 +77,10 @@ import {
   isLegacySyncKeyMismatch,
   SyncKeyRecovery,
 } from "./sync-key-recovery";
+import { useGT } from "gt-react";
+import { msg } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 const ACCOUNT_URL = screenpipeWebUrl("/account", "https://screenpipe.com");
 const BILLING_URL = screenpipeWebUrl("/account/billing", "https://screenpipe.com");
@@ -156,6 +160,8 @@ function syncErrorDescription(e: unknown): string {
 }
 
 export function AccountSection() {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
   const { settings, updateSettings, loadUser } = useSettings();
   const { isServerDown } = useHealthCheck();
   const [pipeSyncing, setPipeSyncing] = useState(false);
@@ -246,7 +252,7 @@ export function AccountSection() {
       });
     } catch (error) {
       toast({
-        title: "Data sync was not changed",
+        title: ui("Data sync was not changed"),
         description: error instanceof Error ? error.message : String(error),
         variant: "destructive",
       });
@@ -351,13 +357,13 @@ export function AccountSection() {
                 loadUser(settings.user.token!);
               }
               toast({
-                title: "Stripe connected!",
-                description: "Your account is now set up for payments",
+                title: ui("Stripe connected!"),
+                description: ui("Your account is now set up for payments"),
               });
             } else if (url.includes("/refresh")) {
               toast({
-                title: "Stripe setup incomplete",
-                description: "Please complete the stripe onboarding process",
+                title: ui("Stripe setup incomplete"),
+                description: ui("Please complete the stripe onboarding process"),
               });
             }
           }
@@ -433,8 +439,8 @@ export function AccountSection() {
               source: upgradeSource,
             });
             toast({
-              title: "Subscription activated",
-              description: "Screenpipe Business is ready",
+              title: ui("Subscription activated"),
+              description: ui("Screenpipe Business is ready"),
             });
             return;
           }
@@ -560,7 +566,7 @@ export function AccountSection() {
         startSubscriptionPolling();
       } catch (error) {
         toast({
-          title: "Failed to start checkout",
+          title: ui("Failed to start checkout"),
           description: String(error),
           variant: "destructive",
         });
@@ -614,7 +620,7 @@ export function AccountSection() {
       setShowSyncKeyRecovery(true);
     }
     toast({
-      title: "Sync failed",
+      title: ui("Sync failed"),
       description: syncErrorDescription(error),
       variant: "destructive",
     });
@@ -626,12 +632,12 @@ export function AccountSection() {
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground" data-testid="account-login-status">
           {settings.user?.token
-            ? `Logged in as ${settings.user.email}`
+            ? ui("Logged in as {value1}", { value1: settings.user.email })
             : isManagedDeployment
               ? isManagedAuthenticated
-                ? "Enterprise device access active"
-                : "Enterprise access verification required"
-              : "Not logged in"}
+                ? ui("Enterprise device access active")
+                : ui("Enterprise access verification required")
+              : ui("Not logged in")}
         </p>
         <div className="flex gap-2">
           {settings.user?.token ? (
@@ -660,7 +666,7 @@ export function AccountSection() {
                   try {
                     await commands.piUpdateConfig(null, null);
                   } catch {}
-                  toast({ title: "Logged out" });
+                  toast({ title: ui("Logged out") });
                 }}
               >
                 Logout
@@ -687,18 +693,18 @@ export function AccountSection() {
             <ShieldCheck className="h-5 w-5 text-primary" />
             <h3 className="text-lg font-semibold">Screenpipe Enterprise</h3>
             <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">
-              {isManagedAuthenticated ? "Active" : "Verification required"}
+              {isManagedAuthenticated ? ui("Active") : ui("Verification required")}
             </span>
           </div>
           <p className="text-sm text-muted-foreground mt-2">
             {policy.orgName
-              ? `${policy.orgName} manages this deployment and its recording policy.`
-              : "Your organization manages this deployment and its recording policy."}
+              ? ui("{value1} manages this deployment and its recording policy.", { value1: policy.orgName })
+              : ui("Your organization manages this deployment and its recording policy.")}
           </p>
           <p className="text-xs text-muted-foreground mt-3">
             {isManagedAuthenticated
-              ? "Enterprise access has been verified for this session."
-              : "Verify the enterprise key or sign in with an authorized organization account to enable recording."}
+              ? ui("Enterprise access has been verified for this session.")
+              : ui("Verify the enterprise key or sign in with an authorized organization account to enable recording.")}
           </p>
         </Card>
       ) : isSignedInBusinessSubscriber ? (
@@ -707,7 +713,7 @@ export function AccountSection() {
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-primary" />
-              <h3 className="text-lg font-semibold">Screenpipe {hasNamedPlan ? planDisplayName(subscriptionPlan, isManagedDeployment) : "Business"}</h3>
+              <h3 className="text-lg font-semibold">Screenpipe {hasNamedPlan ? planDisplayName(subscriptionPlan, isManagedDeployment) : ui("Business")}</h3>
               <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">Active</span>
             </div>
           </div>
@@ -762,10 +768,10 @@ export function AccountSection() {
                     onCheckedChange={async (checked) => {
                       await updateSettings({ pipeSyncEnabled: checked });
                       toast({
-                        title: checked ? "Scheduled task sync enabled" : "Scheduled task sync disabled",
+                        title: checked ? ui("Scheduled task sync enabled") : ui("Scheduled task sync disabled"),
                         description: checked
-                          ? "Scheduled tasks will sync across your devices"
-                          : "Scheduled tasks will no longer sync",
+                          ? ui("Scheduled tasks will sync across your devices")
+                          : ui("Scheduled tasks will no longer sync"),
                       });
                     }}
                   />
@@ -780,7 +786,7 @@ export function AccountSection() {
                     className="text-xs normal-case tracking-wide"
                     title={
                       isServerDown
-                        ? "Screenpipe server is starting up — try again in a moment"
+                        ? ui("Screenpipe server is starting up — try again in a moment")
                         : undefined
                     }
                     disabled={pipeSyncing || isServerDown}
@@ -789,7 +795,7 @@ export function AccountSection() {
                       try {
                         await syncFetchOrThrow("/sync/pipes/pull", { method: "POST" });
                         await syncFetchOrThrow("/sync/pipes/push", { method: "POST" });
-                        toast({ title: "Scheduled tasks synced" });
+                        toast({ title: ui("Scheduled tasks synced") });
                       } catch (e) {
                         reportSyncFailure(e);
                       } finally {
@@ -823,10 +829,10 @@ export function AccountSection() {
                     onCheckedChange={async (checked) => {
                       await updateSettings({ memoriesSyncEnabled: checked });
                       toast({
-                        title: checked ? "Memories sync enabled" : "Memories sync disabled",
+                        title: checked ? ui("Memories sync enabled") : ui("Memories sync disabled"),
                         description: checked
-                          ? "Memories will sync across your devices"
-                          : "Memories will no longer sync",
+                          ? ui("Memories will sync across your devices")
+                          : ui("Memories will no longer sync"),
                       });
                     }}
                   />
@@ -841,7 +847,7 @@ export function AccountSection() {
                     className="text-xs normal-case tracking-wide"
                     title={
                       isServerDown
-                        ? "Screenpipe server is starting up — try again in a moment"
+                        ? ui("Screenpipe server is starting up — try again in a moment")
                         : undefined
                     }
                     disabled={memoriesSyncing || isServerDown}
@@ -850,7 +856,7 @@ export function AccountSection() {
                       try {
                         await syncFetchOrThrow("/sync/memories/pull", { method: "POST" });
                         await syncFetchOrThrow("/sync/memories/push", { method: "POST" });
-                        toast({ title: "Memories synced" });
+                        toast({ title: ui("Memories synced") });
                       } catch (e) {
                         reportSyncFailure(e);
                       } finally {
@@ -887,10 +893,10 @@ export function AccountSection() {
                     onCheckedChange={async (checked) => {
                       await updateSettings({ connectionsSyncEnabled: checked });
                       toast({
-                        title: checked ? "Connection sync enabled" : "Connection sync disabled",
+                        title: checked ? ui("Connection sync enabled") : ui("Connection sync disabled"),
                         description: checked
-                          ? "Connected accounts will sync across your devices"
-                          : "Connected accounts will no longer sync",
+                          ? ui("Connected accounts will sync across your devices")
+                          : ui("Connected accounts will no longer sync"),
                       });
                     }}
                   />
@@ -905,7 +911,7 @@ export function AccountSection() {
                     className="text-xs normal-case tracking-wide"
                     title={
                       isServerDown
-                        ? "Screenpipe server is starting up — try again in a moment"
+                        ? ui("Screenpipe server is starting up — try again in a moment")
                         : undefined
                     }
                     disabled={connectionsSyncing || isServerDown}
@@ -914,7 +920,7 @@ export function AccountSection() {
                       try {
                         await syncFetchOrThrow("/sync/connections/pull", { method: "POST" });
                         await syncFetchOrThrow("/sync/connections/push", { method: "POST" });
-                        toast({ title: "Connections synced" });
+                        toast({ title: ui("Connections synced") });
                       } catch (e) {
                         reportSyncFailure(e);
                       } finally {
@@ -1016,8 +1022,8 @@ export function AccountSection() {
               </div>
               <p className="text-sm text-muted-foreground mt-2">
                 {isLifetimePlan
-                  ? "One-time purchase. Local capture, search & timeline are included."
-                  : "Local capture, search & timeline. Add cloud sync, cloud AI & 50+ integrations with Business below."}
+                  ? ui("One-time purchase. Local capture, search & timeline are included.")
+                  : ui("Local capture, search & timeline. Add cloud sync, cloud AI & 50+ integrations with Business below.")}
               </p>
 
               <div className="mt-4">
@@ -1117,7 +1123,7 @@ export function AccountSection() {
               </div>
               <Switch
                 id="data-sync-toggle"
-                aria-label="Data Sync"
+                aria-label={ui("Data Sync")}
                 checked={settings.dataSyncEnabled ?? false}
                 disabled={dataSyncSaving}
                 onCheckedChange={(checked) => void setDataSyncEnabled(checked)}
@@ -1129,7 +1135,7 @@ export function AccountSection() {
                 <Label htmlFor="data-sync-device-name">Device name</Label>
                 <Input
                   id="data-sync-device-name"
-                  aria-label="Device name"
+                  aria-label={ui("Device name")}
                   maxLength={96}
                   value={settings.dataSyncDeviceName ?? ""}
                   onChange={(event) =>
@@ -1142,7 +1148,7 @@ export function AccountSection() {
                   Synced data will be grouped under this name
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Ask Screenpipe: “What was I doing on {settings.dataSyncDeviceName || "this device"} this morning?”
+                  Ask Screenpipe: “What was I doing on {settings.dataSyncDeviceName || ui("this device")} this morning?”
                 </p>
                 <div className="space-y-1 pt-2">
                   <p className="text-xs font-medium">Synced devices</p>
@@ -1157,7 +1163,7 @@ export function AccountSection() {
                         key={device.device_id}
                       >
                         {device.device_name} · last synced{" "}
-                        {new Date(device.last_synced_at).toLocaleString()}
+                        {new Date(device.last_synced_at).toLocaleString(uiLocale)}
                       </p>
                     ))
                   )}

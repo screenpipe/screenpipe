@@ -8,6 +8,8 @@ import { dispatchStopRequest } from "@/lib/chat-stop";
 import { requestPipeStop } from "@/lib/pipe-stop";
 import { commands } from "@/lib/utils/tauri";
 import type { PiSendTransportOptions } from "@/components/chat/standalone/hooks/pi-types";
+import { useGT } from "gt-react";
+
 
 export function usePiLiveSendControls({
   abortControllerRef,
@@ -35,6 +37,7 @@ export function usePiLiveSendControls({
   | "setIsLoading"
   | "setIsStreaming"
 >) {
+  const ui = useGT();
   const openConnectionSetup = useCallback((connectionId: string) => {
     window.dispatchEvent(
       new CustomEvent("open-settings", {
@@ -111,17 +114,17 @@ export function usePiLiveSendControls({
       const result = stopAction.result;
       if (!result.ok && result.status !== "not_running") {
         toast({
-          title: "Scheduled task stop failed",
+          title: ui("Scheduled task stop failed"),
           description: result.error,
           variant: "destructive",
         });
       } else if (result.ok) {
         toast({
-        title: "Stopping scheduled task",
+        title: ui("Stopping scheduled task"),
           description:
             result.status === "stop_pending"
-              ? `${stopAction.pipeName} will stop as soon as the agent subprocess finishes spawning`
-              : `${stopAction.pipeName} is shutting down`,
+              ? ui("{value1} will stop as soon as the agent subprocess finishes spawning", { value1: stopAction.pipeName })
+              : ui("{value1} is shutting down", { value1: stopAction.pipeName }),
         });
       }
       return;

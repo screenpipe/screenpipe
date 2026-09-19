@@ -5,6 +5,8 @@ import { memo, useCallback, useEffect, useState, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { getMediaFile } from '@/lib/actions/video-actions'
 import { isAudioMediaPath, normalizeMediaFilePath } from "@/lib/utils/media-file-path";
+import { useGT } from "gt-react";
+
 
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY = 500; // ms
@@ -75,6 +77,8 @@ export const MediaComponent = memo(function MediaComponent({
   className?: string;
   startTimeSecs?: number;
 }) {
+
+  const ui = useGT();
   const [error, setError] = useState<string | null>(null);
   const initialPath = normalizeMediaFilePath(filePath);
   const initialCachedMedia = getCachedMedia(initialPath);
@@ -151,7 +155,7 @@ export const MediaComponent = memo(function MediaComponent({
             }
           }, delay);
         } else {
-          setError(`Failed to load media: ${errorMessage}`);
+          setError(ui("Failed to load media: {value1}", { value1: errorMessage }));
           setRetryCount(0);
         }
       }

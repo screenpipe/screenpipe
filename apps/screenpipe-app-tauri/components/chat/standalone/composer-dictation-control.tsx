@@ -17,6 +17,8 @@ import {
   useComposerDictation,
 } from "@/components/chat/standalone/hooks/use-composer-dictation";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 type ComposerDictationControlProps = {
   inputValue: string;
@@ -37,6 +39,8 @@ export function ComposerDictationControl({
   sessionId,
   isMac,
 }: ComposerDictationControlProps) {
+
+  const ui = useGT();
   const dictation = useComposerDictation({
     inputValue,
     inputRef,
@@ -83,7 +87,7 @@ export function ComposerDictationControl({
     return (
       <div
         role="status"
-        aria-label={`Recording dictation, ${formatDictationDuration(dictation.elapsedMs)}`}
+        aria-label={ui("Recording dictation, {value1}", { value1: formatDictationDuration(dictation.elapsedMs) })}
         className="flex h-8 shrink-0 items-center gap-1 rounded-md border border-signal/45 bg-signal/10 px-1 text-signal"
         data-testid="composer-dictation-recording"
       >
@@ -112,8 +116,8 @@ export function ComposerDictationControl({
           variant="ghost"
           className="h-6 w-6 rounded-sm text-muted-foreground hover:bg-background/60 hover:text-foreground"
           onClick={dictation.cancel}
-          title="Cancel dictation (Esc)"
-          aria-label="Cancel dictation"
+          title={ui("Cancel dictation (Esc)")}
+          aria-label={ui("Cancel dictation")}
         >
           <X className="h-3.5 w-3.5" />
         </Button>
@@ -122,8 +126,8 @@ export function ComposerDictationControl({
           size="icon"
           className="h-6 w-6 rounded-sm bg-signal text-signal-foreground hover:bg-signal/85"
           onClick={dictation.finish}
-          title="Finish dictation (Enter)"
-          aria-label="Finish dictation"
+          title={ui("Finish dictation (Enter)")}
+          aria-label={ui("Finish dictation")}
         >
           <Check className="h-3.5 w-3.5" />
         </Button>
@@ -140,7 +144,7 @@ export function ComposerDictationControl({
       >
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
         <span className="font-mono text-[10px]">
-          {isTranscribing ? "Transcribing" : "Microphone"}
+          {isTranscribing ? ui("Transcribing") : ui("Microphone")}
         </span>
         <Button
           type="button"
@@ -149,10 +153,10 @@ export function ComposerDictationControl({
           className="h-6 w-6 rounded-sm"
           onClick={dictation.cancel}
           title={
-            isTranscribing ? "Cancel transcription" : "Cancel microphone request"
+            isTranscribing ? ui("Cancel transcription") : ui("Cancel microphone request")
           }
           aria-label={
-            isTranscribing ? "Cancel transcription" : "Cancel microphone request"
+            isTranscribing ? ui("Cancel transcription") : ui("Cancel microphone request")
           }
         >
           <X className="h-3.5 w-3.5" />
@@ -169,7 +173,7 @@ export function ComposerDictationControl({
         title={dictation.error || undefined}
       >
         <span className="max-w-28 truncate font-mono text-[10px]">
-          {dictation.error || "Dictation failed"}
+          {dictation.error || ui("Dictation failed")}
         </span>
         <Button
           type="button"
@@ -178,10 +182,10 @@ export function ComposerDictationControl({
           className="h-6 w-6 shrink-0 rounded-sm hover:bg-destructive/10"
           onClick={dictation.canRetry ? dictation.retry : dictation.start}
           title={
-            dictation.canRetry ? "Retry transcription" : "Try dictation again"
+            dictation.canRetry ? ui("Retry transcription") : ui("Try dictation again")
           }
           aria-label={
-            dictation.canRetry ? "Retry transcription" : "Try dictation again"
+            dictation.canRetry ? ui("Retry transcription") : ui("Try dictation again")
           }
         >
           <RotateCcw className="h-3.5 w-3.5" />
@@ -192,8 +196,8 @@ export function ComposerDictationControl({
           variant="ghost"
           className="h-6 w-6 shrink-0 rounded-sm hover:bg-destructive/10"
           onClick={dictation.cancel}
-          title="Dismiss dictation error"
-          aria-label="Dismiss dictation error"
+          title={ui("Dismiss dictation error")}
+          aria-label={ui("Dismiss dictation error")}
         >
           <X className="h-3.5 w-3.5" />
         </Button>
@@ -216,7 +220,7 @@ export function ComposerDictationControl({
             )}
             onPointerDown={handlePointerDown}
             onClick={event => { if (event.detail === 0 && !disabled) void dictation.start(); }}
-            aria-label={`Dictate message (${shortcut})`}
+            aria-label={ui("Dictate message ({value1})", { value1: shortcut })}
           >
             <Mic className="h-4 w-4" />
           </Button>

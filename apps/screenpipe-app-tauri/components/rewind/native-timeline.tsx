@@ -39,6 +39,8 @@ import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { clearTimelineCache } from "@/lib/hooks/use-timeline-cache";
 import { clearTextCache } from "@/lib/hooks/use-frame-text-data";
 import { toast } from "@/components/ui/use-toast";
+import { useGT } from "gt-react";
+
 
 export interface NativeTimelineSelectionContext {
   start: string;
@@ -170,6 +172,8 @@ export function NativeTimelineBridge({
   onReturnToActivity?: () => void;
   onToggleSidebar?: () => void;
 } = {}) {
+
+  const ui = useGT();
   const [dailySummaryRequest, setDailySummaryRequest] = useState<{
     date: Date;
     id: number;
@@ -237,14 +241,14 @@ export function NativeTimelineBridge({
           if (result.error) {
             toast({
               variant: "destructive",
-              title: "deletion failed",
+              title: ui("deletion failed"),
               description: result.error,
             });
             return;
           }
           toast({
-            title: "deleted",
-            description: `removed ${result.framesDeleted} frames, ${result.audioTranscriptionsDeleted} audio segments`,
+            title: ui("deleted"),
+            description: ui("removed {value1} frames, {value2} audio segments", { value1: result.framesDeleted, value2: result.audioTranscriptionsDeleted }),
           });
           // The React timeline shares these caches; a stale entry would
           // resurrect deleted frames the next time it mounts.
@@ -262,7 +266,7 @@ export function NativeTimelineBridge({
         "timeline-export-video-selection",
         (event) => {
           const selection = event.payload;
-          toast({ title: "Exporting selected timeline…" });
+          toast({ title: ui("Exporting selected timeline…") });
           void localFetch("/export", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -283,8 +287,8 @@ export function NativeTimelineBridge({
               const outputPath = String(result.output_path || "");
               if (outputPath) await revealItemInDir(outputPath);
               toast({
-                title: "Timeline video exported",
-                description: outputPath || "Saved in screenpipe exports.",
+                title: ui("Timeline video exported"),
+                description: outputPath || ui("Saved in screenpipe exports."),
               });
               posthog.capture("timeline_selection_exported", {
                 selection_duration_ms:
@@ -300,9 +304,9 @@ export function NativeTimelineBridge({
               );
               toast({
                 variant: "destructive",
-                title: "Timeline export failed",
+                title: ui("Timeline export failed"),
                 description:
-                  error instanceof Error ? error.message : "Try again.",
+                  error instanceof Error ? error.message : ui("Try again."),
               });
             });
         },
@@ -346,6 +350,7 @@ export function NativeTimeline({
   closeOnEscape?: boolean;
   showActivityReturn?: boolean;
 }) {
+
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [available, setAvailable] = useState<boolean | null>(null);
   // `getApiPort()` is intentionally synchronous, but its value starts at the

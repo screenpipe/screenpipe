@@ -6,6 +6,8 @@ import { Settings, HelpCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { useGT } from "gt-react";
+
 
 export function SidebarFooter({ onSettings, onHelp, onKeyboardShortcuts, isTranslucent = false, hideHelp = false, helpActive = false, trialActivationLocked = false }: {
   onSettings: () => void;
@@ -16,8 +18,9 @@ export function SidebarFooter({ onSettings, onHelp, onKeyboardShortcuts, isTrans
   helpActive?: boolean;
   trialActivationLocked?: boolean;
 }) {
+  const ui = useGT();
   const itemStyle = isTranslucent ? "vibrant-nav-item vibrant-nav-hover" : "text-muted-foreground hover:bg-card/50 hover:text-foreground";
-  const helpButton = <button type="button" data-testid="nav-help" data-announcement-anchor="sidebar-help" aria-label="Help"
+  const helpButton = <button type="button" data-testid="nav-help" data-announcement-anchor="sidebar-help" aria-label={ui("Help")}
     disabled={trialActivationLocked} onClick={onKeyboardShortcuts ? undefined : onHelp}
     className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-all duration-150",
       trialActivationLocked && "cursor-not-allowed",

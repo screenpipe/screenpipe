@@ -24,6 +24,8 @@ import {
 } from "@/components/ui/dialog";
 import { useAppWindowTree, AppWindowNode } from "@/lib/hooks/use-sql-autocomplete";
 import { appIconUrl } from "./capture-filters/icon-urls";
+import { useGT } from "gt-react";
+
 
 function formatCount(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
@@ -65,6 +67,8 @@ export function WindowPicker({
   onAdd,
   action,
 }: WindowPickerProps) {
+
+  const ui = useGT();
   const { data, isLoading } = useAppWindowTree();
   const [search, setSearch] = React.useState("");
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
@@ -152,7 +156,7 @@ export function WindowPicker({
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search apps or windows..."
+            placeholder={ui("Search apps or windows...")}
             className="pl-8 h-8 text-sm"
             autoFocus
           />
@@ -167,8 +171,8 @@ export function WindowPicker({
           {!isLoading && filtered.length === 0 && (
             <div className="p-4 text-xs text-muted-foreground text-center">
               {search
-                ? `Nothing in the last 7 days matches "${search}".`
-                : "No recorded apps yet. Record something first."}
+                ? ui("Nothing in the last 7 days matches \"{value1}\".", { value1: search })
+                : ui("No recorded apps yet. Record something first.")}
             </div>
           )}
           {!isLoading &&
@@ -203,9 +207,9 @@ export function WindowPicker({
                     </span>
                     <span className="text-[10px] text-muted-foreground tabular-nums">
                       {node.totalCount === 0
-                        ? "Not captured yet"
+                        ? ui("Not captured yet")
                         : node.windowCount > 1
-                          ? `${node.windowCount} windows · ${formatCount(node.totalCount)}`
+                          ? ui("{value1} windows · {value2}", { value1: node.windowCount, value2: formatCount(node.totalCount) })
                           : formatCount(node.totalCount)}
                     </span>
                     <Button
@@ -219,8 +223,8 @@ export function WindowPicker({
                       }}
                       title={
                         appAdded
-                          ? `${node.app} already added`
-                          : `${action} all of ${node.app}`
+                          ? ui("{value1} already added", { value1: node.app })
+                          : ui("{value1} all of {value2}", { value1: action, value2: node.app })
                       }
                     >
                       {appAdded ? (
@@ -239,8 +243,8 @@ export function WindowPicker({
                       {node.windows.length === 0 && (
                         <div className="pl-9 pr-2 py-1.5 text-[11px] text-muted-foreground italic">
                           {node.totalCount === 0
-                            ? "Not captured yet. Add the whole app above."
-                            : "No window titles available — accessibility permission may be blocked for this app"}
+                            ? ui("Not captured yet. Add the whole app above.")
+                            : ui("No window titles available — accessibility permission may be blocked for this app")}
                         </div>
                       )}
                       {node.windows.map((w) => {
@@ -274,7 +278,7 @@ export function WindowPicker({
                               }}
                               title={
                                 winAdded
-                                  ? "Already covered"
+                                  ? ui("Already covered")
                                   : `${action} ${scoped}`
                               }
                             >
@@ -291,7 +295,7 @@ export function WindowPicker({
                       })}
                       {moreCount > 0 && (
                         <div className="pl-9 pr-2 py-1 text-[10px] text-muted-foreground italic">
-                          + {moreCount} more window{moreCount === 1 ? "" : "s"}{" "}
+                          {ui("+ {count, plural, one {# more window} other {# more windows}}", { count: moreCount })}{" "}
                           not shown — type to search them
                         </div>
                       )}

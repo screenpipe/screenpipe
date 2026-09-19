@@ -17,24 +17,29 @@ import {
 import { Calendar } from "@/components/ui/calendar";
 import { format, parse } from "date-fns";
 import { type DateRange } from "react-day-picker";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 const TIME_RANGES = [
-  { label: "Last 5 min", value: "5 minutes" },
-  { label: "Last 30 min", value: "30 minutes" },
-  { label: "Last 2 hours", value: "2 hours" },
-  { label: "Today", value: "today" },
-  { label: "Past 24h", value: "24 hours" },
-  { label: "Yesterday", value: "yesterday" },
-  { label: "This Week", value: "this week" },
-  { label: "Last Week", value: "last week" },
+  { label: msg("Last 5 min", {}), value: "5 minutes" },
+  { label: msg("Last 30 min", {}), value: "30 minutes" },
+  { label: msg("Last 2 hours", {}), value: "2 hours" },
+  { label: msg("Today", {}), value: "today" },
+  { label: msg("Past 24h", {}), value: "24 hours" },
+  { label: msg("Yesterday", {}), value: "yesterday" },
+  { label: msg("This Week", {}), value: "this week" },
+  { label: msg("Last Week", {}), value: "last week" },
 ];
 
 const QUICK_TEMPLATES = [
-  { label: "Status Update", prompt: "Generate a brief status update of what I accomplished" },
-  { label: "Key Decisions", prompt: "What key decisions did I make or encounter?" },
-  { label: "Action Items", prompt: "Extract all action items and to-dos from my activity" },
-  { label: "Meeting Prep", prompt: "Summarize context I'll need for upcoming meetings" },
-  { label: "Blockers", prompt: "What problems, errors, or blockers did I encounter?" },
+  { label: msg("Status Update", {}), prompt: "Generate a brief status update of what I accomplished" },
+  { label: msg("Key Decisions", {}), prompt: "What key decisions did I make or encounter?" },
+  { label: msg("Action Items", {}), prompt: "Extract all action items and to-dos from my activity" },
+  { label: msg("Meeting Prep", {}), prompt: "Summarize context I'll need for upcoming meetings" },
+  { label: msg("Blockers", {}), prompt: "What problems, errors, or blockers did I encounter?" },
 ];
 
 interface CustomSummaryBuilderProps {
@@ -57,6 +62,9 @@ export function CustomSummaryBuilder({
   onUpdateTemplate,
   onDeleteTemplate,
 }: CustomSummaryBuilderProps) {
+  const uiLocale = useUiLocale();
+  const uiMessages = useMessages();
+  const ui = useGT();
   const [selectedTime, setSelectedTime] = useState(
     editingTemplate?.timeRange || "today",
   );
@@ -71,7 +79,7 @@ export function CustomSummaryBuilder({
   const [showSave, setShowSave] = useState(false);
   const [dateRange, setDateRange] = useState<DateRange | undefined>(() => {
     if (!editingTemplate?.timeRange) return undefined;
-    if (TIME_RANGES.some((r) => r.value === editingTemplate.timeRange)) return undefined;
+    if (localizeDefinitions(TIME_RANGES, uiMessages).some((r) => r.value === editingTemplate.timeRange)) return undefined;
     const tr = editingTemplate.timeRange;
     const fmt = "MMMM d, yyyy";
     try {
@@ -101,7 +109,7 @@ export function CustomSummaryBuilder({
     : false;
 
   const getTimeLabel = () => {
-    return TIME_RANGES.find((r) => r.value === selectedTime)?.label || selectedTime || "";
+    return localizeDefinitions(TIME_RANGES, uiMessages).find((r) => r.value === selectedTime)?.label || selectedTime || "";
   };
 
   const isPresetSelected = (value: string) =>
@@ -113,7 +121,7 @@ export function CustomSummaryBuilder({
         Quick Templates
       </label>
       <div className="flex flex-wrap gap-1">
-        {QUICK_TEMPLATES.map((qt) => (
+        {localizeDefinitions(QUICK_TEMPLATES, uiMessages).map((qt) => (
           <button
             key={qt.label}
             onClick={() => handleQuickTemplate(qt.prompt)}
@@ -149,7 +157,7 @@ export function CustomSummaryBuilder({
     const template: CustomTemplate = {
       id: `custom-${Date.now()}`,
       title: templateTitle.trim(),
-      description: instructions.trim().slice(0, 60) || `Summary for ${selectedTime}`,
+      description: instructions.trim().slice(0, 60) || ui("Summary for {value1}", { value1: selectedTime }),
       prompt: buildPrompt(),
       timeRange: selectedTime,
       createdAt: new Date().toISOString(),
@@ -160,8 +168,8 @@ export function CustomSummaryBuilder({
     setShowSave(false);
     setTemplateTitle("");
     toast({
-      title: "Template saved",
-      description: `"${template.title}" added to your templates`,
+      title: ui("Template saved"),
+      description: ui("\"{value1}\" added to your templates", { value1: template.title }),
     });
     onClose();
   };
@@ -171,14 +179,14 @@ export function CustomSummaryBuilder({
 
     onUpdateTemplate({
       ...editingTemplate,
-      description: instructions.trim().slice(0, 60) || `Summary for ${selectedTime}`,
+      description: instructions.trim().slice(0, 60) || ui("Summary for {value1}", { value1: selectedTime }),
       prompt: buildPrompt(),
       timeRange: selectedTime,
       instructions: instructions.trim(),
     });
     toast({
-      title: "Template updated",
-      description: `"${editingTemplate.title}" has been updated`,
+      title: ui("Template updated"),
+      description: ui("\"{value1}\" has been updated", { value1: editingTemplate.title }),
     });
     onClose();
   };
@@ -196,10 +204,10 @@ export function CustomSummaryBuilder({
     if (range?.from) {
       if (range.to && range.from.getTime() !== range.to.getTime()) {
         setSelectedTime(
-          `${format(range.from, "MMMM d, yyyy")} to ${format(range.to, "MMMM d, yyyy")}`
+          `${new Intl.DateTimeFormat(uiLocale, {"month":"long","day":"numeric","year":"numeric"}).format(range.from)} to ${new Intl.DateTimeFormat(uiLocale, {"month":"long","day":"numeric","year":"numeric"}).format(range.to)}`
         );
       } else {
-        setSelectedTime(format(range.from, "MMMM d, yyyy"));
+        setSelectedTime(new Intl.DateTimeFormat(uiLocale, {"month":"long","day":"numeric","year":"numeric"}).format(range.from));
       }
     }
   };
@@ -212,13 +220,13 @@ export function CustomSummaryBuilder({
             {editingTemplate ? (
               editingTemplate.title
             ) : (
-              "Custom summary"
+              ui("Custom summary")
             )}
           </DialogTitle>
           <DialogDescription>
             {editingTemplate
-              ? "Edit the time range or instructions, then run or save your changes"
-              : "Pick a time range and tell us what to focus on"}
+              ? ui("Edit the time range or instructions, then run or save your changes")
+              : ui("Pick a time range and tell us what to focus on")}
           </DialogDescription>
         </DialogHeader>
 
@@ -229,7 +237,7 @@ export function CustomSummaryBuilder({
               Time Period
             </label>
             <div className="flex flex-wrap gap-1">
-              {TIME_RANGES.map((range) => (
+              {localizeDefinitions(TIME_RANGES, uiMessages).map((range) => (
                 <button
                   key={range.value}
                   onClick={() => { setSelectedTime(range.value); setDateRange(undefined); setCalendarOpen(false); }}
@@ -257,7 +265,7 @@ export function CustomSummaryBuilder({
                 }`}
               >
                 <CalendarIcon className="w-3 h-3" />
-                {dateRange?.from ? getTimeLabel() : "Custom Range"}
+                {dateRange?.from ? getTimeLabel() : ui("Custom Range")}
               </button>
             </div>
             {calendarOpen ? (
@@ -309,7 +317,7 @@ export function CustomSummaryBuilder({
             <Textarea
               value={instructions}
               onChange={(e) => setInstructions(e.target.value.slice(0, 1000))}
-              placeholder={hasValidTime ? `Type your custom instructions for ${getTimeLabel().toLowerCase()}...` : "Type your custom instructions..."}
+              placeholder={hasValidTime ? ui("Type your custom instructions for {value1}...", { value1: getTimeLabel().toLowerCase() }) : ui("Type your custom instructions...")}
               className="flex-1 min-h-[208px] text-[12px] resize-none border border-border/30"
             />
             <div className="text-[10px] text-muted-foreground/50 text-right mt-1 font-mono">
@@ -340,7 +348,7 @@ export function CustomSummaryBuilder({
             <div className="text-[11px] text-muted-foreground font-mono">
               {hasValidTime
                 ? <>Summarizing <span className="font-medium text-foreground">{getTimeLabel().toLowerCase()}</span></>
-                : "Select a time period"}
+                : ui("Select a time period")}
             </div>
           )}
           <div className="flex items-center gap-2">
@@ -360,7 +368,7 @@ export function CustomSummaryBuilder({
                 <Input
                   value={templateTitle}
                   onChange={(e) => setTemplateTitle(e.target.value)}
-                  placeholder="Template name..."
+                  placeholder={ui("Template name...")}
                   className="h-8 w-36 text-[11px]"
                   onKeyDown={(e) => e.key === "Enter" && handleSave()}
                   autoFocus
@@ -380,7 +388,7 @@ export function CustomSummaryBuilder({
               </Button>
             )}
             <Button size="sm" onClick={handleGenerate} disabled={!hasValidTime} className="h-8 text-[11px]">
-              {editingTemplate ? "Run" : "Generate"}
+              {editingTemplate ? ui("Run") : ui("Generate")}
             </Button>
           </div>
         </div>

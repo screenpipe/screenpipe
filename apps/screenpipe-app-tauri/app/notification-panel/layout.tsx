@@ -4,11 +4,14 @@
 
 "use client";
 
+
+import { useGT } from "gt-react";
 export default function NotificationPanelLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const ui = useGT();
   return (
     <div
       style={{
@@ -21,15 +24,7 @@ export default function NotificationPanelLayout({
         fontFamily: '"IBM Plex Mono", monospace',
       }}
     >
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap');
-        html, body {
-          background: transparent !important;
-          margin: 0;
-          padding: 0;
-          overflow: hidden;
-        }
-      `}</style>
+      <style>{"\n        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap');\n        html, body {\n          background: transparent !important;\n          margin: 0;\n          padding: 0;\n          overflow: hidden;\n        }\n      "}</style>
       {children}
     </div>
   );

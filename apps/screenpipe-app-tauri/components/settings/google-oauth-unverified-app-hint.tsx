@@ -11,11 +11,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ArrowRight, ChevronDown, ShieldAlert } from "lucide-react";
+import { useGT } from "gt-react";
+
 
 const WALKTHROUGH_IMAGE =
   "/images/google-oauth-unverified-app-walkthrough.png";
 
 export function GoogleOAuthUnverifiedAppHint() {
+  const ui = useGT();
   const [isScreenshotOpen, setIsScreenshotOpen] = useState(false);
 
   return (
@@ -54,7 +57,7 @@ export function GoogleOAuthUnverifiedAppHint() {
           </DialogHeader>
           <img
             src={WALKTHROUGH_IMAGE}
-            alt="Google OAuth warning walkthrough showing Advanced, then Go to Screenpipe unsafe"
+            alt={ui("Google OAuth warning walkthrough showing Advanced, then Go to Screenpipe unsafe")}
             className="max-h-[calc(100vh-10rem)] w-full rounded-md border border-border object-contain"
           />
         </DialogContent>

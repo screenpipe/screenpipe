@@ -12,6 +12,8 @@ import { AnnouncementKindChip } from "@/components/announcement-kind-chip";
 import { Button } from "@/components/ui/button";
 import { type Announcement, type BubblePosition } from "@/lib/announcements";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 type RectLike = Pick<
   DOMRect,
@@ -157,6 +159,7 @@ export function AnnouncementBubble({
   onCta: () => void;
   onShown: () => void;
 }) {
+
   const anchor = announcement.anchor;
   const [target, setTarget] = useState<HTMLElement | null>(null);
 
@@ -210,6 +213,8 @@ function AnnouncementBubbleVisible({
   onCta: () => void;
   onShown: () => void;
 }) {
+
+  const ui = useGT();
   const bubbleRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<number | null>(null);
   const shownRef = useRef(false);
@@ -334,7 +339,7 @@ function AnnouncementBubbleVisible({
           <AnnouncementKindChip kind={announcement.kind} />
           <button
             type="button"
-            aria-label="Dismiss"
+            aria-label={ui("Dismiss")}
             data-testid="announcement-dismiss"
             onClick={onDismiss}
             className="-mr-1 -mt-1 p-1 text-muted-foreground transition-colors hover:text-foreground"

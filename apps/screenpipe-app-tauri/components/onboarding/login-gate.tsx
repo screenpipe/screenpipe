@@ -13,9 +13,10 @@ import { isDevLoginSkipEnabled } from "@/lib/app-entitlement";
 import { ArrowRight } from "lucide-react";
 import { LOCALITY_DETAIL } from "./trust-disclosure";
 
+
 const FAILURE_COPY: Record<string, string> = {
-  cancelled: msg("sign in was cancelled in your browser."),
-  timeout: msg("that sign-in link expired."),
+  cancelled: msg("sign in was cancelled in your browser.", {}),
+  timeout: msg("that sign-in link expired.", {}),
 };
 
 interface OnboardingLoginProps {
@@ -29,6 +30,7 @@ function useBackgroundCanvas(
   w: number,
   h: number,
 ) {
+
   const anim = useRef(0);
   const frame = useRef(0);
 
@@ -120,6 +122,7 @@ function useButtonCanvas(
   h: number,
   hovered: boolean,
 ) {
+
   const anim = useRef(0);
   const frame = useRef(0);
   const intensity = useRef(0);
@@ -238,6 +241,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
   handleNextSlide,
   suppressAutoAdvance = false,
 }) => {
+
   const gt = useGT();
   const m = useMessages();
   const { settings, isSettingsLoaded } = useSettings();
@@ -353,7 +357,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
             animate={{ opacity: 1, scale: 1 }}
           >
             <span className="font-mono text-xs text-foreground/80">
-              ✓ signed in as {settings.user?.email || "user"}
+              ✓ signed in as {settings.user?.email || gt("user")}
             </span>
           </motion.div>
         ) : awaitingBrowser ? (
@@ -439,7 +443,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
                     and "sign in" reads as an instruction for people who
                     already have one. */}
                 {suppressAutoAdvance ? (
-                  "Sign in"
+                  gt("Sign in")
                 ) : (
                   <>
                     Get started

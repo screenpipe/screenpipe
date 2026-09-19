@@ -15,6 +15,9 @@ import {
 import { formatClock } from "@/lib/utils/meeting-format";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { nativeCalendarLabel } from "./calendar-connect-dialog";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 export type ComingUpStatus =
   | "loading"
@@ -77,6 +80,7 @@ export function ComingUp({
   onStart,
   meetingActive,
 }: ComingUpProps) {
+
   const trimmed = events.slice(0, MAX_EVENTS);
   const buckets = bucketByDay(trimmed);
   const platform = usePlatform();
@@ -222,12 +226,13 @@ function DayBlock({
   onStart: (event: CalendarEvent) => void | Promise<void>;
   meetingActive: boolean;
 }) {
+  const uiLocale = useUiLocale();
   const day = String(date.getDate()).padStart(2, "0");
   const month = date
-    .toLocaleString(undefined, { month: "short" })
+    .toLocaleString(uiLocale, { month: "short" })
     .toLowerCase();
   const dow = date
-    .toLocaleString(undefined, { weekday: "short" })
+    .toLocaleString(uiLocale, { weekday: "short" })
     .toLowerCase();
   const rel = relativeDayLabel(date);
 
@@ -268,6 +273,8 @@ function ComingUpRow({
   onStart: (event: CalendarEvent) => void | Promise<void>;
   disabled: boolean;
 }) {
+
+  const ui = useGT();
   const startsIn = formatStartsIn(event.start);
   const attendeeCount = event.attendees?.filter(Boolean).length ?? 0;
   const isImminent = (() => {
@@ -286,8 +293,8 @@ function ComingUpRow({
         )}
         title={
           disabled
-            ? "A meeting is already recording"
-            : "Start a meeting seeded from this event"
+            ? ui("A meeting is already recording")
+            : ui("Start a meeting seeded from this event")
         }
       >
         <div
@@ -302,11 +309,11 @@ function ComingUpRow({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-sm font-medium text-foreground truncate">
-              {event.title || "Untitled event"}
+              {event.title || ui("Untitled event")}
             </span>
             {isImminent && (
               <span className="shrink-0 text-[9px] normal-case tracking-[0.15em] text-foreground border border-foreground px-1 py-px">
-                {startsIn === "now" ? "Now" : "Soon"}
+                {startsIn === "now" ? ui("Now") : ui("Soon")}
               </span>
             )}
           </div>
@@ -320,7 +327,7 @@ function ComingUpRow({
               <>
                 <span className="text-muted-foreground/60">·</span>
                 <span>
-                  {attendeeCount} {attendeeCount === 1 ? "person" : "people"}
+                  {attendeeCount} {attendeeCount === 1 ? ui("person") : ui("people")}
                 </span>
               </>
             )}

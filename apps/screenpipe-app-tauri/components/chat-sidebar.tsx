@@ -172,6 +172,12 @@ import {
   type SidebarRecentsSection,
   validateSidebarGroupName,
 } from "@/lib/utils/chat-sidebar-grouping";
+import { formatUiCompactAge as formatCompactAge } from "@/lib/i18n/format";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 /** Max top-level rows shown in recents. Pipes use the authoritative inventory. */
 const SIDEBAR_CAP = 8;
@@ -189,9 +195,9 @@ type RecentSource = "screenpipe" | ExternalChatSource;
 type RecentLayout = "source" | "list";
 type RecentSort = "priority" | "updated";
 const RECENT_SOURCE_OPTIONS: Array<{ source: RecentSource; label: string }> = [
-  { source: "screenpipe", label: "Screenpipe" },
-  { source: "codex", label: "Codex" },
-  { source: "claude-code", label: "Claude" },
+  { source: "screenpipe", label: msg("Screenpipe", {}) },
+  { source: "codex", label: msg("Codex", {}) },
+  { source: "claude-code", label: msg("Claude", {}) },
 ];
 const RECENT_SOURCE_ICONS: Record<RecentSource, string> = {
   screenpipe: "/images/screenpipe.png",
@@ -383,6 +389,7 @@ function readCollapsedPref(key: string, defaultValue = false): boolean {
 }
 
 function useCollapsedPref(key: string, defaultValue = false) {
+
   const [collapsed, setCollapsedRaw] = useState<boolean>(() => readCollapsedPref(key, defaultValue));
   const setCollapsed = useCallback((v: boolean) => {
     setCollapsedRaw(v);
@@ -401,6 +408,7 @@ function useVisibleChatSections(): {
   pipes: SessionRecord[];
   archived: SessionRecord[];
 } {
+
   const sessions = useOrderedSessions();
 
   return useMemo(() => {
@@ -443,6 +451,7 @@ function useVisibleChatSections(): {
  * only mirrors the snapshot rust pushes via `pi-queue-changed`.
  */
 function useQueueDepths(): Map<string, number> {
+
   const [depths, setDepths] = useState<Map<string, number>>(() => new Map());
   useTauriEvent<{ sessionId?: string; session_id?: string; queued?: { id: string }[] }>(
     "pi-queue-changed",
@@ -473,6 +482,10 @@ export function ChatSidebar({
   onViewAll,
   allowedConversationId,
 }: ChatSidebarProps) {
+  const uiLanguage = useLocale();
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const conversationRestrictionActive = allowedConversationId !== undefined;
   const currentId = useChatStore(selectDisplayedChatId);
   // Reactive group key for the current session — re-evaluates when the
@@ -775,7 +788,7 @@ export function ChatSidebar({
   }, []);
   const groupedSections = useMemo(
     () => recentLayout === "source"
-      ? RECENT_SOURCE_OPTIONS.flatMap(({ source, label }) => {
+      ? localizeDefinitions(RECENT_SOURCE_OPTIONS, uiMessages).flatMap(({ source, label }) => {
           const sessions = visibleRecents.filter((session) => recentSource(session) === source);
           return sessions.length === 0
             ? []
@@ -798,7 +811,7 @@ export function ChatSidebar({
             () => null,
           ),
         }],
-    [recentLayout, visibleRecents],
+    [recentLayout, visibleRecents, uiLanguage],
   );
 
   const [pipesCollapsed, setPipesCollapsed] = useCollapsedPref(
@@ -1340,8 +1353,8 @@ export function ChatSidebar({
       !isTerminalPipeExecutionStatus(fullExecution.status)
     ) {
       toast({
-        title: "Couldn't load automation run",
-        description: "The execution output is temporarily unavailable",
+        title: ui("Couldn't load automation run"),
+        description: ui("The execution output is temporarily unavailable"),
         variant: "destructive",
       });
       return false;
@@ -1611,8 +1624,8 @@ export function ChatSidebar({
     } catch (error) {
       console.warn("[chat-sidebar] failed to branch conversation:", error);
       toast({
-        title: "Couldn't branch chat",
-        description: "The conversation could not be copied. Try again.",
+        title: ui("Couldn't branch chat"),
+        description: ui("The conversation could not be copied. Try again."),
         variant: "destructive",
       });
     }
@@ -1729,7 +1742,7 @@ export function ChatSidebar({
       });
       if (!validation.ok) {
         toast({
-          title: "Invalid group name",
+          title: ui("Invalid group name"),
           description: validation.message,
           variant: "destructive",
         });
@@ -1783,7 +1796,7 @@ export function ChatSidebar({
           {pinned.length > 0 && (
             <div className="shrink-0">
               <Section
-                title="Pinned"
+                title={ui("Pinned")}
                 tone="default"
                 collapsed={pinnedCollapsed}
                 onCollapsedChange={setPinnedCollapsed}
@@ -1813,7 +1826,7 @@ export function ChatSidebar({
 
           <div className="group/recents min-h-0 flex flex-col">
             <Section
-              title="Recents"
+              title={ui("Recents")}
               collapsed={recentsCollapsed}
               onCollapsedChange={setRecentsCollapsed}
               headerAction={
@@ -1824,8 +1837,8 @@ export function ChatSidebar({
                         type="button"
                         disabled={conversationRestrictionActive}
                         className="inline-flex h-5 w-5 items-center justify-center rounded opacity-0 transition-opacity hover:bg-muted/40 focus-visible:opacity-100 group-hover:opacity-100"
-                        aria-label="Organize recents"
-                        title="Organize recents"
+                        aria-label={ui("Organize recents")}
+                        title={ui("Organize recents")}
                       >
                         <MoreHorizontal className="h-3.5 w-3.5" aria-hidden />
                       </button>
@@ -1913,7 +1926,7 @@ export function ChatSidebar({
                           onViewAll?.();
                         }}
                         disabled={!onViewAll}
-                        title="View all · right-click to filter"
+                        title={ui("View all · right-click to filter")}
                       >
                         View all <ChevronRight className="h-3 w-3" aria-hidden />
                       </button>
@@ -1995,10 +2008,10 @@ export function ChatSidebar({
               ) : visibleRecents.length === 0 ? (
                 <div className="px-2.5 py-2 text-xs sidebar-text-secondary italic">
                   {recents.length > 0
-                    ? "No chats match filters"
+                    ? ui("No chats match filters")
                     : pinned.length === 0 && pipes.length === 0
-                    ? "No chats yet — click + to start"
-                    : "No recent chats"}
+                    ? ui("No chats yet — click + to start")
+                    : ui("No recent chats")}
                 </div>
               ) : (
                 <RecentsBody
@@ -2028,7 +2041,7 @@ export function ChatSidebar({
 
           <div className="group/pipes min-h-0 flex flex-col shrink-0">
               <Section
-                title="Automations"
+                title={ui("Automations")}
                 collapsed={pipesCollapsed}
                 onCollapsedChange={updatePipesCollapsed}
                 headerAction={
@@ -2080,7 +2093,7 @@ export function ChatSidebar({
                     onClick={() => void fetchPipeInventory(true)}
                     disabled={pipeInventoryLoadingMore}
                   >
-                    {pipeInventoryLoadingMore ? "Loading…" : "Show more automation runs"}
+                    {pipeInventoryLoadingMore ? ui("Loading…") : ui("Show more automation runs")}
                   </button>
                 )}
               </Section>
@@ -2146,8 +2159,8 @@ export function ChatSidebar({
                 "w-full rounded-md border bg-background px-3 py-2 text-sm outline-none",
                 "focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
               )}
-              placeholder="Chat title"
-              aria-label="Chat title"
+              placeholder={ui("Chat title")}
+              aria-label={ui("Chat title")}
             />
           </div>
           <DialogFooter>
@@ -2200,8 +2213,8 @@ export function ChatSidebar({
                 "w-full rounded-md border bg-background px-3 py-2 text-sm outline-none",
                 "focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
               )}
-              placeholder="Group name"
-              aria-label="Group name"
+              placeholder={ui("Group name")}
+              aria-label={ui("Group name")}
             />
           </div>
           <DialogFooter>
@@ -2236,6 +2249,7 @@ export function CollapsedChatSidebarButton({
   onSelect: (id: string) => void;
   isTranslucent: boolean;
 }) {
+  const ui = useGT();
   const currentId = useChatStore((s) => s.currentId);
   const { pinned, recents, archived } = useVisibleChatSections();
   const diskHydrated = useChatStore((s) => s.diskHydrated);
@@ -2297,7 +2311,7 @@ export function CollapsedChatSidebarButton({
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
             <button
-              aria-label="Recent chats"
+              aria-label={ui("Recent chats")}
               onClick={() => {
                 setTooltipOpen(false);
                 setSuppressTooltip(true);
@@ -2379,7 +2393,7 @@ export function CollapsedChatSidebarButton({
                 </div>
               ) : recents.length === 0 ? (
                 <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
-                  {pinned.length === 0 ? emptyText : "No recent chats"}
+                  {pinned.length === 0 ? emptyText : ui("No recent chats")}
                 </div>
               ) : (
                 <CompactDrawerList items={recents} currentId={currentId} onSelect={handleSelect} />
@@ -2404,6 +2418,7 @@ function CompactDrawerList({
   currentId: string | null;
   onSelect: (id: string) => void;
 }) {
+
   return (
     <div className="max-h-72 overflow-y-auto overflow-x-hidden scrollbar-minimal">
       <div className="flex flex-col py-1">
@@ -2437,6 +2452,7 @@ const CHAT_ROW_SKELETON_WIDTHS = [
 ] as const;
 
 function ChatRowsSkeleton({ rows }: { rows: number }) {
+
   return (
     <div
       className="flex flex-col"
@@ -2601,6 +2617,7 @@ function RecentsBody({
   openConversationMenuId: string | null;
   setOpenConversationMenuId: (id: string | null) => void;
 }) {
+
   const renderItem = (item: SidebarItem) =>
     item.kind === "single" ? (
       <SidebarChatRow
@@ -2734,8 +2751,11 @@ function PipeGroupRow({
   openConversationMenuId: string | null;
   setOpenConversationMenuId: (id: string | null) => void;
 }) {
+
+  const ui = useGT();
   const now = useMinuteTick(!!lastRun);
-  const lastRunAge = lastRun ? formatCompactAge(new Date(lastRun).getTime(), now) : null;
+  const rowLocale = useLocale();
+  const lastRunAge = lastRun ? formatCompactAge(new Date(lastRun).getTime(), now, rowLocale) : null;
   return (
     <div data-testid={`pipe-group-${item.key}`}>
       <button
@@ -2803,7 +2823,7 @@ function PipeGroupRow({
               onClick={onLoadMore}
               disabled={runsLoading}
             >
-              {runsLoading ? "Loading…" : "Show older runs"}
+              {runsLoading ? ui("Loading…") : ui("Show older runs")}
             </button>
           )}
         </div>
@@ -2931,6 +2951,8 @@ function RowMenuItems({
   onNewGroupRequest?: (id: string) => void;
   existingGroups?: string[];
 }) {
+
+  const ui = useGT();
   const P = ROW_MENU_PARTS[variant];
   const { isMac } = usePlatform();
   const itemCls = "text-[11px] h-[30px] px-2 gap-2 rounded-sm focus:bg-muted/30";
@@ -2947,7 +2969,7 @@ function RowMenuItems({
         }}
       >
         <Pin className="h-3 w-3 text-muted-foreground" />
-        {session.pinned ? "Unpin" : "Pin"}
+        {session.pinned ? ui("Unpin") : ui("Pin")}
         <P.Shortcut className={shortcutCls}>P</P.Shortcut>
       </P.Item>
       <P.Item
@@ -3130,6 +3152,8 @@ export function SidebarChatRow({
   openConversationMenuId,
   setOpenConversationMenuId,
 }: ChatRowProps) {
+
+  const ui = useGT();
   const allowedConversationId = React.useContext(
     ChatSidebarAllowedConversationContext,
   );
@@ -3148,7 +3172,8 @@ export function SidebarChatRow({
     showActions && !disableHover && !conversationRestrictionActive;
   const activityAt = session.lastUserMessageAt ?? session.updatedAt ?? session.createdAt;
   const now = useMinuteTick(!isLive && !isUnread && !isError && queuedCount === 0);
-  const age = formatCompactAge(activityAt, now);
+  const rowLocale = useLocale();
+  const age = formatCompactAge(activityAt, now, rowLocale);
   const canSwapAgeForMenu = !isLive && !isError && queuedCount === 0 && !isUnread && Boolean(age);
   const menuOpen = openConversationMenuId === session.id;
   // Exclude the group the session already lives in — whether it was placed
@@ -3274,7 +3299,7 @@ export function SidebarChatRow({
                 : "sidebar-text-secondary"
           )}
           >
-            {session.streamingTitle || (isInjectedTitle(session.title) ? undefined : session.title) || "Untitled"}
+            {session.streamingTitle || (isInjectedTitle(session.title) ? undefined : session.title) || ui("Untitled")}
           </span>
         </span>
         <span className="ml-1 h-4 w-10 shrink-0 relative flex items-center justify-end">
@@ -3287,7 +3312,7 @@ export function SidebarChatRow({
           >
             {interactionDisabled ? (
               <LockKeyhole
-                aria-label="Locked during trial"
+                aria-label={ui("Locked during trial")}
                 className="h-3 w-3 text-muted-foreground"
               />
             ) : showCurrentLabel ? (
@@ -3331,7 +3356,7 @@ export function SidebarChatRow({
                     ? "opacity-100 visible"
                     : "opacity-0 invisible group-hover:opacity-100 group-hover:visible"
                 )}
-                aria-label="Conversation actions"
+                aria-label={ui("Conversation actions")}
               >
                 <MoreVertical className="h-3.5 w-3.5 text-muted-foreground" />
               </button>
@@ -3383,11 +3408,13 @@ function RowRightSignal({
   status: string;
   age: string | null;
 }) {
+
+  const ui = useGT();
   const { content, label } = ((): { content: React.ReactNode; label: string | null } => {
     if (isError) {
       return {
-        content: <AlertCircle className="h-3 w-3 text-red-500" aria-label="Error" />,
-        label: "Error",
+        content: <AlertCircle className="h-3 w-3 text-red-500" aria-label={ui("Error")} />,
+        label: ui("Error"),
       };
     }
     if (isLive) {
@@ -3406,10 +3433,10 @@ function RowRightSignal({
         content: (
           <span
             className="inline-block h-1.5 w-1.5 rounded-full bg-foreground"
-            aria-label="Unread"
+            aria-label={ui("Unread")}
           />
         ),
-        label: "New",
+        label: ui("New"),
       };
     }
     if (age) {
@@ -3444,23 +3471,8 @@ function RowRightSignal({
 }
 
 function useMinuteTick(enabled = true): number {
+
   const [now, setNow] = useState(() => Date.now());
   useInterval(() => setNow(Date.now()), enabled ? 60_000 : null);
   return now;
-}
-
-function formatCompactAge(timestamp?: number, now = Date.now()): string | null {
-  if (!timestamp || !Number.isFinite(timestamp)) return null;
-  const ms = Math.max(0, now - timestamp);
-  if (ms < 60_000) return "now";
-  const minutes = Math.floor(ms / 60_000);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d`;
-  const weeks = Math.floor(days / 7);
-  if (weeks < 5) return `${weeks}w`;
-  if (days < 365) return `${Math.max(1, Math.floor(days / 30))}mo`;
-  return `${Math.floor(days / 365)}y`;
 }

@@ -31,6 +31,9 @@ import {
   type SlashCommandItem,
   type SlashState,
 } from "./editor-commands";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 /**
  * Floating editor menus for the meeting note editor, adapted from
@@ -54,6 +57,7 @@ const VIEWPORT_PADDING = 8;
  * (mousedown is prevented), so a blur really means "the user left the note".
  */
 function useEditorFocused(editor: Editor | null): boolean {
+
   const [focused, setFocused] = useState(() => editor?.isFocused ?? false);
   useEffect(() => {
     if (!editor) return;
@@ -76,6 +80,7 @@ function useEditorFocused(editor: Editor | null): boolean {
  * dragged (it would otherwise chase the cursor mid-drag).
  */
 function useEditorMouseDown(editor: Editor | null): boolean {
+
   const [down, setDown] = useState(false);
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
@@ -110,6 +115,7 @@ function useAnchoredPosition(
   ref: React.MutableRefObject<HTMLDivElement | null>;
   pos: AnchorPosition | null;
 } {
+
   const ref = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<AnchorPosition | null>(null);
 
@@ -148,6 +154,8 @@ function clampLeft(left: number, width: number): number {
 // ---------------------------------------------------------------------------
 
 export function SlashCommandMenu({ editor }: { editor: Editor | null }) {
+
+  const uiMessages = useMessages();
   const [selectedIndex, setSelectedIndex] = useState(0);
   // Escape parks the menu for this exact "/" position; typing elsewhere
   // re-arms it.
@@ -167,7 +175,7 @@ export function SlashCommandMenu({ editor }: { editor: Editor | null }) {
 
   const active =
     !!editor && !!slash && focused && dismissedFrom !== slash.from;
-  const items = active ? filterSlashCommands(slash.query) : [];
+  const items = active ? filterSlashCommands(slash.query, uiMessages) : [];
   const open = active && items.length > 0;
 
   useEffect(() => {
@@ -340,62 +348,64 @@ const TOOLBAR_ACTIONS: ToolbarAction[] = [
   {
     id: "bold",
     icon: Bold,
-    title: "Bold",
+    title: msg("Bold", {}),
     group: "mark",
     run: (e) => e.chain().focus().toggleBold().run(),
   },
   {
     id: "italic",
     icon: Italic,
-    title: "Italic",
+    title: msg("Italic", {}),
     group: "mark",
     run: (e) => e.chain().focus().toggleItalic().run(),
   },
   {
     id: "strike",
     icon: Strikethrough,
-    title: "Strikethrough",
+    title: msg("Strikethrough", {}),
     group: "mark",
     run: (e) => e.chain().focus().toggleStrike().run(),
   },
   {
     id: "code",
     icon: Code,
-    title: "Inline code",
+    title: msg("Inline code", {}),
     group: "mark",
     run: (e) => e.chain().focus().toggleCode().run(),
   },
   {
     id: "h1",
     icon: Heading1,
-    title: "Heading 1",
+    title: msg("Heading 1", {}),
     group: "block",
     run: (e) => e.chain().focus().toggleHeading({ level: 1 }).run(),
   },
   {
     id: "h2",
     icon: Heading2,
-    title: "Heading 2",
+    title: msg("Heading 2", {}),
     group: "block",
     run: (e) => e.chain().focus().toggleHeading({ level: 2 }).run(),
   },
   {
     id: "bullet",
     icon: List,
-    title: "Bullet list",
+    title: msg("Bullet list", {}),
     group: "block",
     run: (e) => e.chain().focus().toggleBulletList().run(),
   },
   {
     id: "quote",
     icon: TextQuote,
-    title: "Quote",
+    title: msg("Quote", {}),
     group: "block",
     run: (e) => e.chain().focus().toggleBlockquote().run(),
   },
 ];
 
 export function FormatToolbar({ editor }: { editor: Editor | null }) {
+
+  const uiMessages = useMessages();
   const focused = useEditorFocused(editor);
   const mouseDown = useEditorMouseDown(editor);
 
@@ -489,11 +499,11 @@ export function FormatToolbar({ editor }: { editor: Editor | null }) {
       // and collapses the selection to the end of the note.
       onClick={(event) => event.stopPropagation()}
     >
-      {TOOLBAR_ACTIONS.map((action, index) => {
+      {localizeDefinitions(TOOLBAR_ACTIONS, uiMessages).map((action, index) => {
         const isActive = snapshot[action.id];
         const startsBlockGroup =
           action.group === "block" &&
-          TOOLBAR_ACTIONS[index - 1]?.group === "mark";
+          localizeDefinitions(TOOLBAR_ACTIONS, uiMessages)[index - 1]?.group === "mark";
         return (
           <React.Fragment key={action.id}>
             {startsBlockGroup && (

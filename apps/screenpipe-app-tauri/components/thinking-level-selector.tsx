@@ -10,6 +10,10 @@ import { commands } from "@/lib/utils/tauri";
 import { usePiThinkingLevel } from "@/lib/hooks/use-pi-thinking-level";
 import { ComposerSettingsPopover } from "@/components/chat/standalone/composer-settings-popover";
 import { ComposerEffortSlider } from "@/components/chat/standalone/composer-effort-slider";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 export type ThinkingLevel = "low" | "medium" | "high";
 
@@ -21,9 +25,9 @@ interface ThinkingLevelOption {
 }
 
 const THINKING_LEVELS: ThinkingLevelOption[] = [
-  { value: "low",    label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high",   label: "High" },
+  { value: "low",    label: msg("Low", {}) },
+  { value: "medium", label: msg("Medium", {}) },
+  { value: "high",   label: msg("High", {}) },
 ];
 
 function isValidLevel(v: string): v is ThinkingLevel {
@@ -44,6 +48,9 @@ export function ThinkingLevelSelector({
   sessionId = null,
   embedded = false,
 }: ThinkingLevelSelectorProps) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const [currentLevel, setCurrentLevel] = useState<ThinkingLevel>("medium");
   const [isOpen, setIsOpen] = useState(false);
   const [isRpcLoading, setIsRpcLoading] = useState(false);
@@ -105,7 +112,7 @@ export function ThinkingLevelSelector({
     }
   }, [streaming, sendRpc]);
 
-  const currentLabel = THINKING_LEVELS.find((l) => l.value === currentLevel)?.label ?? currentLevel;
+  const currentLabel = localizeDefinitions(THINKING_LEVELS, uiMessages).find((l) => l.value === currentLevel)?.label ?? currentLevel;
 
   const disabledReason = piThinkingUnsupported ? "Model doesn't support thinking" : null;
 
@@ -130,11 +137,11 @@ export function ThinkingLevelSelector({
 
   const effortSlider = (
     <ComposerEffortSlider
-      label="Effort"
+      label={ui("Effort")}
       testId="thinking-level-slider"
       value={currentLevel}
       disabled={isRpcLoading || piThinkingUnsupported}
-      steps={THINKING_LEVELS.map((level) => ({
+      steps={localizeDefinitions(THINKING_LEVELS, uiMessages).map((level) => ({
         value: level.value,
         name: level.label,
       }))}
@@ -148,7 +155,7 @@ export function ThinkingLevelSelector({
     return (
       <div
         data-testid="thinking-level-inline"
-        title={disabledReason || "Thinking level: controls reasoning depth"}
+        title={disabledReason || ui("Thinking level: controls reasoning depth")}
       >
         {effortSlider}
       </div>
@@ -160,8 +167,8 @@ export function ThinkingLevelSelector({
   return (
     <ComposerSettingsPopover
       label={currentLabel}
-      title={disabledReason || "Thinking level: controls reasoning depth"}
-      ariaLabel={`Thinking level: ${currentLabel}`}
+      title={disabledReason || ui("Thinking level: controls reasoning depth")}
+      ariaLabel={ui("Thinking level: {value1}", { value1: currentLabel })}
       triggerTestId="thinking-level-trigger"
       contentTestId="thinking-level-popover"
       triggerIcon={Gauge}

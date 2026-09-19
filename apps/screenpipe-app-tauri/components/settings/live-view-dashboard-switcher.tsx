@@ -42,6 +42,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { MAX_DASHBOARDS } from "@/lib/live-views/constants";
 import type { BrainViewDefinition } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+
 
 export function LiveViewDashboardSwitcher({
   views,
@@ -68,6 +70,8 @@ export function LiveViewDashboardSwitcher({
   onDuplicate: () => void | Promise<void>;
   onDelete: () => void | Promise<void>;
 }) {
+
+  const ui = useGT();
   const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [renameTitle, setRenameTitle] = useState(current.title);
@@ -92,7 +96,7 @@ export function LiveViewDashboardSwitcher({
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <select
             data-testid="overview-dashboard-selector"
-            aria-label="Dashboard"
+            aria-label={ui("Dashboard")}
             value={current.id}
             disabled={selectionDisabled}
             className="h-9 min-w-0 flex-1 border border-border bg-background px-3 text-sm font-medium outline-none focus:border-foreground disabled:opacity-50 sm:min-w-60"
@@ -112,8 +116,8 @@ export function LiveViewDashboardSwitcher({
                 variant="outline"
                 size="icon"
                 className="h-9 w-9 shrink-0 rounded-md"
-                aria-label="Dashboard actions"
-                title="Dashboard actions"
+                aria-label={ui("Dashboard actions")}
+                title={ui("Dashboard actions")}
                 disabled={busy}
               >
                 <MoreHorizontal className="h-3.5 w-3.5" />

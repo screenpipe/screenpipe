@@ -26,6 +26,9 @@ import {
 	PopoverTrigger,
 } from "@/components/ui/popover";
 import { TimelineDailySummary } from "./daily-summary";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 interface TimeRange {
 	start: Date;
@@ -108,6 +111,8 @@ export function TimelineControls({
 	mutedDevices,
 	onToggleDeviceMute,
 }: TimelineControlsProps) {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
 	const { isMac } = usePlatform();
 	const { settings } = useSettings();
 	const [calendarOpen, setCalendarOpen] = useState(false);
@@ -198,8 +203,8 @@ export function TimelineControls({
 				className,
 			)}
 		>
-			
-			
+
+
 			{/* Center section - Timeline controls */}
 			<div className={`flex items-center gap-2 ${embedded ? "mt-1" : "mt-8"}`}>
 				<div className="flex items-center h-10 bg-background border border-border px-1">
@@ -228,7 +233,7 @@ export function TimelineControls({
 								    shown by the playhead chip on the timeline, so repeating it here
 								    is redundant. Prefer the date of the frame under the playhead;
 								    fall back to currentDate during the brief load window. */}
-								<span>{format(currentTime ?? currentDate, "MMM d")}</span>
+								<span>{new Intl.DateTimeFormat(uiLocale, {"month":"short","day":"numeric"}).format(currentTime ?? currentDate)}</span>
 								<ChevronDown className="h-3 w-3 opacity-60" />
 							</button>
 						</PopoverTrigger>
@@ -288,7 +293,7 @@ export function TimelineControls({
 						size="icon"
 						onClick={onJumpToday}
 						className="h-8 w-8 text-foreground hover:bg-foreground hover:text-background transition-colors duration-150"
-						title="Jump to now"
+						title={ui("Jump to now")}
 					>
 						<RefreshCw className="h-4 w-4" />
 					</Button>
@@ -303,7 +308,7 @@ export function TimelineControls({
 							size="icon"
 							onClick={onTogglePlayPause}
 							className="h-8 w-8 text-foreground hover:bg-foreground hover:text-background transition-colors duration-150"
-							title={isPlaying ? "Pause (Space)" : "Play (Space)"}
+							title={isPlaying ? ui("Pause (Space)") : ui("Play (Space)")}
 						>
 							{isPlaying ? (
 								<Pause className="h-4 w-4" />
@@ -316,7 +321,7 @@ export function TimelineControls({
 								type="button"
 								onClick={onCycleSpeed}
 								className="px-2 h-8 text-xs font-mono text-foreground hover:bg-foreground hover:text-background transition-colors duration-150 min-w-[36px] text-center"
-								title="Playback speed"
+								title={ui("Playback speed")}
 							>
 								{playbackSpeed ?? 1}x
 							</button>
@@ -366,7 +371,7 @@ export function TimelineControls({
 							size="icon"
 							onClick={onSearchClick}
 							className="h-10 w-10 bg-background border border-border text-foreground hover:bg-foreground hover:text-background transition-colors duration-150"
-							title="Search"
+							title={ui("Search")}
 						>
 							<Search className="h-4 w-4" />
 						</Button>
@@ -398,7 +403,7 @@ export function TimelineControls({
 				)}
 			</div>
 
-			
+
 		</div>
 	);
 }

@@ -30,6 +30,9 @@ import {
   type PiExtensionModelFit,
   type PortableAgentExtensionCatalogItem,
 } from "@/lib/pi-extension-catalog";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 const MODEL_FIT_CLASS: Record<PiExtensionModelFit, string> = {
   "local-friendly": "border-border bg-muted/40 text-foreground",
@@ -94,6 +97,7 @@ function PiExtensionRow({
   disabled: boolean;
   onToggle: (checked: boolean) => void;
 }) {
+  const ui = useGT();
   const published = relativeDate(item.publishedAt);
 
   return (
@@ -136,7 +140,7 @@ function PiExtensionRow({
           <Switch
             checked
             disabled
-            aria-label={`${item.name} always enabled`}
+            aria-label={ui("{value1} always enabled", { value1: item.name })}
             className="shrink-0"
           />
         ) : (
@@ -223,6 +227,8 @@ function PiExtensionRecentCard({
   disabled: boolean;
   onToggle: (checked: boolean) => void;
 }) {
+
+  const ui = useGT();
   const published = relativeDate(item.publishedAt);
   const packageName = item.source.replace(/^npm:/, "");
   const action = stale ? "repair" : enabled ? "remove" : "add";
@@ -236,7 +242,7 @@ function PiExtensionRecentCard({
         <button
           type="button"
           onClick={() => openUrl(item.npmUrl)}
-          aria-label={`Open ${item.name} on npm`}
+          aria-label={ui("Open {value1} on npm", { value1: item.name })}
           className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
         >
           <ExternalLink className="h-3 w-3" />
@@ -275,6 +281,8 @@ function PiExtensionRecentCard({
 }
 
 export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
   const [packages, setPackages] = useState<PiExtensionPackage[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [query, setQuery] = useState("");
@@ -409,7 +417,7 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
         if (res.status === "error") {
           setError(res.error);
           toast({
-            title: "Tool could not be changed",
+            title: ui("Tool could not be changed"),
             description: res.error,
             variant: "destructive",
           });
@@ -422,19 +430,19 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
           (pkg) => normalizePiPackageSource(pkg.source) === normalizePiPackageSource(item.source),
         );
         toast({
-          title: checked ? `${item.name} enabled` : `${item.name} disabled`,
+          title: checked ? ui("{value1} enabled", { value1: item.name }) : ui("{value1} disabled", { value1: item.name }),
           description:
             checked && changedPackage?.acpCompatible
-              ? "Ready to use in new agent chats."
+              ? ui("Ready to use in new agent chats.")
               : checked
-                ? "Ready to use in new Pi chats."
-                : "Removed from new Pi chats.",
+                ? ui("Ready to use in new Pi chats.")
+                : ui("Removed from new Pi chats."),
         });
       } catch (err) {
         const message = packageErrorMessage(err);
         setError(message);
         toast({
-          title: "Tool could not be changed",
+          title: ui("Tool could not be changed"),
           description: message,
           variant: "destructive",
         });
@@ -442,7 +450,7 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
         setBusySource(null);
       }
     },
-    [onChanged, toast],
+    [onChanged, toast, uiLocale],
   );
 
   const removePackageSource = useCallback(
@@ -454,7 +462,7 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
         if (res.status === "error") {
           setError(res.error);
           toast({
-            title: "Tool could not be changed",
+            title: ui("Tool could not be changed"),
             description: res.error,
             variant: "destructive",
           });
@@ -464,14 +472,14 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
         setPackages(res.data);
         onChanged?.();
         toast({
-          title: "Tool removed",
-          description: "It will no longer be available in new Pi chats.",
+          title: ui("Tool removed"),
+          description: ui("It will no longer be available in new Pi chats."),
         });
       } catch (err) {
         const message = packageErrorMessage(err);
         setError(message);
         toast({
-          title: "Tool could not be changed",
+          title: ui("Tool could not be changed"),
           description: message,
           variant: "destructive",
         });
@@ -479,7 +487,7 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
         setBusySource(null);
       }
     },
-    [onChanged, toast],
+    [onChanged, toast, uiLocale],
   );
 
   return (
@@ -576,7 +584,7 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
         <Input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search tools..."
+          placeholder={ui("Search tools...")}
           className="h-8 rounded-md pl-8 text-xs"
         />
       </div>
@@ -626,10 +634,10 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
               </h4>
               <span className="text-[11px] text-muted-foreground">
                 {registryLoading
-                  ? "Searching..."
+                  ? ui("Searching...")
                   : registryTotal === null
-                    ? "Tools"
-                    : `${visibleRegistryItems.length} shown / ${registryTotal.toLocaleString()} found`}
+                    ? ui("Tools")
+                    : ui("{value1} shown / {value2} found", { value1: visibleRegistryItems.length, value2: registryTotal.toLocaleString(uiLocale) })}
               </span>
             </div>
             {registryError && (
@@ -689,12 +697,12 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="text-[11px] text-muted-foreground">
                     {pkg.filtered
-                      ? "Unavailable"
+                      ? ui("Unavailable")
                       : !pkg.installed
-                        ? "Repair needed"
+                        ? ui("Repair needed")
                         : pkg.acpCompatible
-                          ? "Works with every agent"
-                          : "Screenpipe only"}
+                          ? ui("Works with every agent")
+                          : ui("Screenpipe only")}
                   </span>
                   {busySource === pkg.source ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
@@ -705,7 +713,7 @@ export function PiExtensionsCard({ onChanged }: { onChanged?: () => void }) {
                       onCheckedChange={(checked) => {
                         if (!checked) removePackageSource(pkg.source);
                       }}
-                      aria-label={`Disable ${packageDisplayName(pkg.source)}`}
+                      aria-label={ui("Disable {value1}", { value1: packageDisplayName(pkg.source) })}
                     />
                   )}
                 </div>

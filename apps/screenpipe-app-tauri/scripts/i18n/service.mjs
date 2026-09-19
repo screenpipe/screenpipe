@@ -19,13 +19,13 @@ export async function requestGT(endpoint, body) {
   const response = await fetch(`https://api.gtx.dev${endpoint}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.GT_API_KEY}`, "gt-project-id": process.env.GT_PROJECT_ID, "gt-api-version": "2026-03-06.v1" },
-    body: JSON.stringify(body), signal: AbortSignal.timeout(30_000),
+    body: JSON.stringify(body), signal: AbortSignal.timeout(endpoint === "/v2/translate" ? 120_000 : 30_000),
   });
   if (!response.ok) throw new Error(`GT ${endpoint} HTTP ${response.status}: ${await response.text()}`);
   return response.json();
 }
 
-export async function translateMissing({ root, source, native, config, policy, cache, request = requestGT, wait = (ms) => Bun.sleep(ms), timeoutMs = 900_000 }) {
+export async function translateMissing({ root, source, native, config, policy, cache, request = requestGT }) {
   const dir = path.join(root, ".localization");
   const frontendMetadata = JSON.parse(await fs.readFile(path.join(dir, "source", `${config.defaultLocale}.metadata.json`), "utf8"));
   const manifestPath = path.join(dir, "translation-jobs.json");
@@ -87,18 +87,25 @@ export async function translateMissing({ root, source, native, config, policy, c
         const missing = missingMessages(messages, cached, config.defaultLocale, locale);
         const ids = Object.keys(missing).sort();
         if (!ids.length) continue;
-        const identity = digest({ policy, kind, locale, missing });
+        // Bounded immutable batches checkpoint completed work and avoid one
+        // request holding the whole app catalog. They retain the same GT format
+        // and per-source identities used by provider corrections and recovery.
+        for (let offset = 0; offset < ids.length; offset += 40) {
+        const batchIds = ids.slice(offset, offset + 40);
+        const batchMissing = Object.fromEntries(batchIds.map(id => [id, missing[id]]));
+        const identity = digest({ policy, kind, locale, missing: batchMissing });
         const fileId = identity;
-        const formatMetadata = Object.fromEntries(ids.map((id) => [id, {
+        const formatMetadata = Object.fromEntries(batchIds.map((id) => [id, {
           ...metadata[id],
-          context: `${translationPolicy.context}\n${metadata[id]?.context ?? ""}\n${(metadata[id]?.filePaths ?? []).join(", ")}`,
+          context: [...new Set([translationPolicy.context, metadata[id]?.context, (metadata[id]?.filePaths ?? []).join(", ")].filter(Boolean))].join("\n"),
         }]));
-        batches.push({ kind, locale, missing, source: {
+        batches.push({ kind, locale, missing: batchMissing, metadata: formatMetadata, source: {
           fileId, versionId: identity, fileName: `desktop/${kind}/${identity}.json`,
           fileFormat: kind === "gt" ? "GTJSON" : "JSON", locale: config.defaultLocale,
-          content: JSON.stringify(missing),
+          content: JSON.stringify(batchMissing),
           formatMetadata: kind === "gt" ? formatMetadata : { keyedMetadata: formatMetadata },
         } });
+        }
       }
     }
     if (!batches.length) {
@@ -107,38 +114,58 @@ export async function translateMissing({ root, source, native, config, policy, c
     }
     const { branch } = await request("/v2/project/branches/create", { branchName: `desktop-${policy.slice(0, 12)}` });
     if (!branch?.id) throw new Error("Localization artifact integrity: invalid branch response");
-    const pending = [];
     for (const batch of batches) {
+      const sourceFile = { ...batch.source, content: Buffer.from(batch.source.content).toString("base64"), branchId: branch.id };
       const { uploadedFiles } = await request("/v2/project/files/upload-files", {
-        sourceLocale: config.defaultLocale, data: [{ source: { ...batch.source, content: Buffer.from(batch.source.content).toString("base64"), branchId: branch.id } }],
+        sourceLocale: config.defaultLocale, data: [{ source: sourceFile }],
       });
       const uploaded = uploadedFiles?.find((file) => file.fileId === batch.source.fileId && file.versionId === batch.source.versionId && file.branchId === branch.id);
       if (!uploaded) throw new Error("Localization artifact integrity: uploaded source identity mismatch");
       const ref = { fileId: uploaded.fileId, versionId: uploaded.versionId, branchId: branch.id, locale: batch.locale };
-      await request("/v2/project/translations/enqueue", { files: [ref], sourceLocale: config.defaultLocale, targetLocales: [batch.locale], force: false, publish: false });
-      pending.push({ ...batch, ref });
-    }
-    const newRefs = pending.map(({ kind, ref, missing }) => ({ kind, ref, messageIds: Object.keys(missing) }));
-    const refs = new Map([...known, ...newRefs].map((batch) => [`${batch.ref.fileId}:${batch.ref.locale}`, batch]));
-    await writeJson(manifestPath, { policy, batches: [...refs.values()] });
-    const deadline = Date.now() + timeoutMs;
-    while (pending.length) {
-      const { files } = await request("/v2/project/files/download", pending.map(({ ref }) => ref));
-      if (!Array.isArray(files)) throw new Error("Localization artifact integrity: invalid download response");
-      for (const file of files) {
-        const index = pending.findIndex(({ ref }) => ref.fileId === file.fileId && ref.versionId === file.versionId && ref.branchId === file.branchId && ref.locale === file.locale);
-        if (index < 0) throw new Error("Localization artifact integrity: downloaded source identity mismatch");
-        const batch = pending[index];
-        if (file.fileFormat !== batch.source.fileFormat) throw new Error("Localization artifact integrity: downloaded format mismatch");
-        const content = JSON.parse(Buffer.from(file.data, "base64").toString("utf8"));
-        downloads[batch.kind][batch.locale] = { ...downloads[batch.kind][batch.locale], ...content };
-        await writeJson(path.join(dir, batch.kind, `${batch.locale}.json`), downloads[batch.kind][batch.locale]);
-        downloaded = true;
-        pending.splice(index, 1);
+      // The per-message API is used ONLY by this build script. No credentials,
+      // network translator, or provider URL is included in the desktop runtime.
+      // Upload accepted results to the ordinary file workspace so terminology
+      // corrections and fresh CI recovery use exactly the same source versions.
+      const result = await request("/v2/translate", {
+        requests: Object.fromEntries(Object.entries(batch.missing).map(([id, source]) => [id, {
+          source,
+          metadata: {
+            hash: digest({ policy, kind: batch.kind, id, source }),
+            context: batch.metadata[id].context,
+            dataFormat: batch.metadata[id].dataFormat ?? (typeof source === "string" ? "ICU" : "JSX"),
+            actionType: "standard",
+          },
+        }])), sourceLocale: config.defaultLocale, targetLocale: batch.locale, metadata: {},
+      });
+      const content = {};
+      let serviceError;
+      for (const id of Object.keys(batch.missing)) {
+        const entry = result[id];
+        if (entry?.success === false) { serviceError ??= `GT translation HTTP ${entry.code}: ${entry.error}`; continue; }
+        const expectedFormat = batch.metadata[id].dataFormat ?? (typeof batch.missing[id] === "string" ? "ICU" : "JSX");
+        if (entry?.success !== true || entry.locale !== batch.locale || entry.dataFormat !== expectedFormat || entry.translation === undefined) {
+          throw new Error("Localization artifact integrity: translated message identity/format mismatch");
+        }
+        content[id] = entry.translation;
       }
-      if (!pending.length) break;
-      if (Date.now() >= deadline) return { exitCode: 0, timedOut: true, downloaded, output: "Translation service timeout; retained completed batches." };
-      await wait(2000);
+      // Keep rejected entries in the local report, but never upload an invalid
+      // placeholder/structure as an accepted provider correction.
+      downloads[batch.kind][batch.locale] = { ...downloads[batch.kind][batch.locale], ...content };
+      await writeJson(path.join(dir, batch.kind, `${batch.locale}.json`), downloads[batch.kind][batch.locale]);
+      downloaded = true;
+      const valid = validateCatalog(batch.missing, content, config.defaultLocale, batch.locale).valid;
+      if (Object.keys(valid).length) {
+        await request("/v2/project/files/upload-translations", {
+          sourceLocale: config.defaultLocale, data: [{ source: sourceFile, translations: [{
+            content: Buffer.from(JSON.stringify(valid)).toString("base64"),
+            fileName: batch.source.fileName, fileFormat: batch.source.fileFormat, locale: batch.locale,
+          }] }],
+        });
+        known.push({ kind: batch.kind, ref, messageIds: Object.keys(batch.missing) });
+        await writeJson(manifestPath, { policy, batches: known });
+      }
+      console.log(`[i18n] ${batch.locale}: completed ${Object.keys(valid).length}/${Object.keys(batch.missing).length} ${batch.kind} messages`);
+      if (serviceError) throw new Error(serviceError);
     }
     return { exitCode: 0, timedOut: false, downloaded, output: `Translated ${batches.reduce((sum, b) => sum + Object.keys(b.missing).length, 0)} missing messages; unchanged translations retained.` };
   } catch (error) {

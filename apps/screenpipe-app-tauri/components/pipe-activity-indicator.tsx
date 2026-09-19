@@ -7,6 +7,8 @@ import React from "react";
 import { AlertCircle, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LiveSignal } from "@/components/live-signal";
+import { useGT } from "gt-react";
+
 
 export type PipeActivityKind = "running" | "upcoming" | "idle" | "ok" | "error";
 
@@ -90,8 +92,9 @@ export function PipeActivityIndicator({
 }
 
 function PipeActivityIcon({ kind }: { kind: PipeActivityKind }) {
+  const ui = useGT();
   if (kind === "running") {
-    return <LiveSignal ariaLabel="running" />;
+    return <LiveSignal ariaLabel={ui("running")} />;
   }
 
   // "upcoming" intentionally renders no icon — the "in 4h" label already

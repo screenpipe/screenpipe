@@ -18,8 +18,11 @@ import { appIconUrl } from "@/lib/first-run/recent-activity";
 import { AgentHandoffPicker } from "@/components/first-run/agent-handoff-picker";
 import { useFirstRunLearningWindow } from "@/components/first-run/learning-window-provider";
 import type { AgentHandoffTarget } from "@/lib/first-run/agent-handoff";
+import { useGT } from "gt-react";
+
 
 function CapturedAppIcon({ app }: { app: FirstRunCapturedApp }) {
+
   const [failed, setFailed] = React.useState(false);
   return (
     <span
@@ -163,6 +166,7 @@ export function FirstRunSetupReadyPanel({
 export function FirstRunLearningBanner(
   props: { fallback?: React.ReactNode } = {},
 ) {
+
   const { fallback } = props;
   const { learning, handoff } = useFirstRunLearningWindow();
   const {
@@ -298,6 +302,8 @@ export function FirstRunLearningBanner(
 }
 
 export function TrialActivationSummaryExperience() {
+
+  const ui = useGT();
   const { learning } = useFirstRunLearningWindow();
   const { phase, remainingMs, chatId, markSummaryOpened } = learning;
 
@@ -353,19 +359,19 @@ export function TrialActivationSummaryExperience() {
         </div>
         <h1 className="mt-7 text-2xl font-semibold normal-case">
           {phase === "ready"
-            ? "Your first summary is ready"
+            ? ui("Your first summary is ready")
             : phase === "empty"
-              ? "We need another try"
+              ? ui("We need another try")
               : phase === "writing"
-                ? "Writing your first summary"
-                : "Building your first summary"}
+                ? ui("Writing your first summary")
+                : ui("Building your first summary")}
         </h1>
         <p className="mx-auto mt-3 max-w-lg text-sm leading-relaxed text-muted-foreground">
           {phase === "empty"
-            ? "Screenpipe did not capture enough valid activity to show you a useful result. Keep working normally, then retry."
+            ? ui("Screenpipe did not capture enough valid activity to show you a useful result. Keep working normally, then retry.")
             : phase === "ready"
-              ? "Open the result to see what Screenpipe understood from your work."
-              : "Keep working normally while Screenpipe records only what it needs to build this result."}
+              ? ui("Open the result to see what Screenpipe understood from your work.")
+              : ui("Keep working normally while Screenpipe records only what it needs to build this result.")}
         </p>
         {phase === "empty" ? (
           <Button className="mt-8 h-12 px-8 text-sm" onClick={() => void retry()}>

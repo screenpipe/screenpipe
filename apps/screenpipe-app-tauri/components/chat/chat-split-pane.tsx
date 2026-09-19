@@ -14,6 +14,8 @@ import {
   type SplitChatPosition,
 } from "@/lib/stores/chat-store";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 interface ChatSplitPaneProps {
   sessionId: string;
@@ -38,6 +40,8 @@ export function ChatSplitPane({
   onPromote,
   onClose,
 }: ChatSplitPaneProps) {
+
+  const ui = useGT();
   const session = useChatStore((state) => state.sessions[sessionId]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const messages = useMemo(
@@ -69,7 +73,7 @@ export function ChatSplitPane({
           ? "order-first border-r border-border/60"
           : "border-l border-border/60",
       )}
-      aria-label={`Split view: ${title}`}
+      aria-label={ui("Split view: {value1}", { value1: title })}
       data-testid="chat-split-pane"
       data-side={side}
     >
@@ -77,7 +81,7 @@ export function ChatSplitPane({
         {working ? (
           <Loader2
             className="h-3.5 w-3.5 animate-spin text-primary"
-            aria-label="Working"
+            aria-label={ui("Working")}
           />
         ) : (
           <span
@@ -95,8 +99,8 @@ export function ChatSplitPane({
           variant="ghost"
           size="icon"
           className="h-7 w-7"
-          aria-label={`Work in ${title}`}
-          title="Make this the active chat"
+          aria-label={ui("Work in {value1}", { value1: title })}
+          title={ui("Make this the active chat")}
           onClick={() => void onPromote(sessionId)}
         >
           <ArrowLeftRight className="h-3.5 w-3.5" aria-hidden />
@@ -105,7 +109,7 @@ export function ChatSplitPane({
           variant="ghost"
           size="icon"
           className="h-7 w-7"
-          aria-label="Close split view"
+          aria-label={ui("Close split view")}
           onClick={onClose}
         >
           <X className="h-3.5 w-3.5" aria-hidden />

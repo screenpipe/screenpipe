@@ -8,10 +8,10 @@ import type { SettingsField } from "./settings-search";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Disk usage", keywords: ["disk", "space", "gb"] },
-  { label: "Retention", keywords: ["cleanup", "delete old"] },
-  { label: "Clear Cache" },
-  { label: "Database storage", keywords: ["migrate", "migration", "compression", "original database"] },
+  { label: msg("Disk usage", {}), keywords: ["disk", "space", "gb"] },
+  { label: msg("Retention", {}), keywords: ["cleanup", "delete old"] },
+  { label: msg("Clear Cache", {}) },
+  { label: msg("Database storage", {}), keywords: ["migrate", "migration", "compression", "original database"] },
 ];
 import { StorageMigrationCard } from "./storage-migration-card";
 import { DiskUsageSection } from "./disk-usage-section";
@@ -35,6 +35,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useGT } from "gt-react";
+import { msg } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -45,6 +49,9 @@ function formatBytes(bytes: number): string {
 }
 
 export function StorageSection() {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
   const { settings, updateSettings, getDataDir } = useSettings();
   const { toast } = useToast();
   const [storageOperationBusy, setStorageOperationBusy] = useState(false);
@@ -69,7 +76,7 @@ export function StorageSection() {
       const result = await commands.validateDataDir(selected);
       if (result.status === "error") {
         toast({
-          title: "Invalid directory",
+          title: ui("Invalid directory"),
           description: String(result.error),
           variant: "destructive",
           duration: 5000,
@@ -81,13 +88,13 @@ export function StorageSection() {
     } catch (error) {
       console.error("failed to change data directory:", error);
       toast({
-        title: "Error",
-        description: "Failed to change data directory",
+        title: ui("Error"),
+        description: ui("Failed to change data directory"),
         variant: "destructive",
         duration: 5000,
       });
     }
-  }, [getDataDir, updateSettings, toast]);
+  }, [getDataDir, updateSettings, toast, uiLanguage]);
 
   const handleDataDirReset = useCallback(() => {
     updateSettings({ dataDir: "default" });
@@ -105,21 +112,21 @@ export function StorageSection() {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       setDataDirChanged(false);
       toast({
-        title: "Restarted",
-        description: "Screenpipe restarted with the new data directory",
+        title: ui("Restarted"),
+        description: ui("Screenpipe restarted with the new data directory"),
       });
     } catch (error) {
       console.error("failed to restart screenpipe:", error);
       toast({
-        title: "Restart failed",
-        description: "Please restart screenpipe manually for the change to apply",
+        title: ui("Restart failed"),
+        description: ui("Please restart screenpipe manually for the change to apply"),
         variant: "destructive",
         duration: 5000,
       });
     } finally {
       setIsRestarting(false);
     }
-  }, [toast]);
+  }, [toast, uiLanguage]);
 
   return (
     <div className="space-y-5" data-testid="section-settings-storage">
@@ -142,7 +149,7 @@ export function StorageSection() {
                   </h3>
                   <p className="text-xs text-muted-foreground truncate max-w-[250px]">
                     {!settings.dataDir || settings.dataDir === "default"
-                      ? "~/.screenpipe (default)"
+                      ? ui("~/.screenpipe (default)")
                       : settings.dataDir}
                   </p>
                   <p className="text-[10px] text-muted-foreground/70 mt-0.5">
@@ -204,20 +211,20 @@ export function StorageSection() {
                   if (result.data.length === 0) {
                     if (await hasCachedData()) {
                       await clearTimelineCache();
-                      toast({ title: "Cache cleared" });
+                      toast({ title: ui("Cache cleared") });
                     } else {
-                      toast({ title: "Nothing to clean up" });
+                      toast({ title: ui("Nothing to clean up") });
                     }
                     return;
                   }
                   setCacheFiles(result.data);
                   setShowCacheDialog(true);
                 } catch (e: any) {
-                  toast({ title: "Failed to clear cache", description: e?.toString(), variant: "destructive" });
+                  toast({ title: ui("Failed to clear cache"), description: e?.toString(), variant: "destructive" });
                 }
               }}
             >
-              {isClearing ? "Clearing..." : "Clear"}
+              {isClearing ? ui("Clearing...") : ui("Clear")}
             </Button>
           </div>
         </CardContent>
@@ -256,11 +263,11 @@ export function StorageSection() {
                   if (result.status === "error") throw new Error(result.error);
                   await clearTimelineCache();
                   toast({
-                    title: "Cache cleared",
-                    description: `Freed ${formatBytes(Number(result.data))}`,
+                    title: ui("Cache cleared"),
+                    description: ui("Freed {value1}", { value1: formatBytes(Number(result.data)) }),
                   });
                 } catch (e: any) {
-                  toast({ title: "Failed to clear cache", description: e?.toString(), variant: "destructive" });
+                  toast({ title: ui("Failed to clear cache"), description: e?.toString(), variant: "destructive" });
                 } finally {
                   setIsClearing(false);
                   setCacheFiles([]);

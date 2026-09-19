@@ -34,6 +34,8 @@ import {
   skillKey,
   sourceLabel,
 } from "@/lib/skills-registry";
+import { useGT } from "gt-react";
+
 
 // How many skills sit under the "Recommended" header before "All skills".
 const RECOMMENDED_COUNT = 4;
@@ -86,6 +88,8 @@ export function SkillsBrowser({
   installedNames: string[];
   onInstalled?: () => void;
 }) {
+
+  const ui = useGT();
   const [query, setQuery] = useState("");
   const [skills, setSkills] = useState<RegistrySkill[]>([]);
   const [loading, setLoading] = useState(false);
@@ -218,7 +222,7 @@ export function SkillsBrowser({
           <DialogClose asChild>
             <button
               type="button"
-              aria-label="Close"
+              aria-label={ui("Close")}
               className="ml-auto text-muted-foreground transition-colors hover:text-foreground"
             >
               <X className="h-4 w-4" />
@@ -233,7 +237,7 @@ export function SkillsBrowser({
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search skills — pdf, transcribe, security…"
+              placeholder={ui("Search skills — pdf, transcribe, security…")}
               className="h-8 text-sm pl-8"
               autoFocus
             />
@@ -271,7 +275,7 @@ export function SkillsBrowser({
           ) : (
             <div className="space-y-1.5">
               <SectionLabel>
-                {personalized ? "Recommended for you" : "Recommended"}
+                {personalized ? ui("Recommended for you") : ui("Recommended")}
               </SectionLabel>
               {ranked.slice(0, RECOMMENDED_COUNT).map(renderRow)}
               {ranked.length > RECOMMENDED_COUNT && (
@@ -320,6 +324,7 @@ function SkillRow({
   busy: boolean;
   onInstall: () => void;
 }) {
+  const ui = useGT();
   return (
     <div className="flex items-start gap-3 border border-border rounded-md p-2.5">
       <div className="flex-1 min-w-0">
@@ -360,14 +365,14 @@ function SkillRow({
             className="h-7 text-xs"
             onClick={onInstall}
             disabled={busy}
-            title={installed ? "Re-download and refresh this skill" : undefined}
+            title={installed ? ui("Re-download and refresh this skill") : undefined}
           >
             {busy ? (
               <Loader2 className="h-3 w-3 mr-1 animate-spin" />
             ) : (
               <Download className="h-3 w-3 mr-1" />
             )}
-            {installed ? "Update" : "Install"}
+            {installed ? ui("Update") : ui("Install")}
           </Button>
         )}
       </div>

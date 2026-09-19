@@ -33,6 +33,10 @@ import {
 import type { AcpConfigDefaultChange } from "@/components/chat/standalone/acp-config-selector";
 import { acpAdapterInfo } from "@/lib/utils/preset-appearance";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+import { msg, useMessages } from "gt-react";
+
 
 type PermissionSource =
   | { kind: "select"; optionId: string }
@@ -56,8 +60,8 @@ interface PermissionPresentation {
 const CLIENT_FULL_ACCESS_VALUE = "screenpipe-full-access";
 const CLIENT_FULL_ACCESS_OPTION: AcpConfigValue = {
   value: CLIENT_FULL_ACCESS_VALUE,
-  name: "Full access",
-  description: "Run every requested tool without asking for approval.",
+  name: msg("Full access", {}),
+  description: msg("Run every requested tool without asking for approval.", {}),
 };
 
 function withClientFullAccess(values: AcpConfigValue[]): {
@@ -100,13 +104,13 @@ function permissionControl(
       values: [
         {
           value: "false",
-          name: "Ask for approval",
-          description: "Ask before running tools that need approval.",
+          name: msg("Ask for approval", {}),
+          description: msg("Ask before running tools that need approval.", {}),
         },
         {
           value: "true",
-          name: "Full access",
-          description: "Run every requested tool without asking for approval.",
+          name: msg("Full access", {}),
+          description: msg("Run every requested tool without asking for approval.", {}),
         },
       ],
       hasClientFullAccess: false,
@@ -141,81 +145,81 @@ function permissionPresentation(mode: AcpConfigValue): PermissionPresentation {
   switch (mode.value) {
     case CLIENT_FULL_ACCESS_VALUE:
       return {
-        label: "Full access",
+        label: msg("Full access", {}),
         description:
-          mode.description || "Run every requested tool without asking.",
+          mode.description || msg("Run every requested tool without asking.", {}),
         icon: ShieldAlert,
         warning: true,
       };
     case "false":
       return {
-        label: "Ask for approval",
+        label: msg("Ask for approval", {}),
         description:
-          mode.description || "Ask before running tools that need approval.",
+          mode.description || msg("Ask before running tools that need approval.", {}),
         icon: Hand,
       };
     case "true":
       return {
-        label: "Full access",
+        label: msg("Full access", {}),
         description:
           mode.description ||
-          "Run every requested tool without asking for approval.",
+          msg("Run every requested tool without asking for approval.", {}),
         icon: ShieldAlert,
         warning: true,
       };
     case "read-only":
     case "default":
       return {
-        label: "Ask for approval",
+        label: msg("Ask for approval", {}),
         description:
-          mode.description || "Ask before editing files or running commands.",
+          mode.description || msg("Ask before editing files or running commands.", {}),
         icon: Hand,
       };
     case "agent":
       return {
-        label: "Approve for me",
-        description: "Work in this workspace and ask before elevated actions.",
+        label: msg("Approve for me", {}),
+        description: msg("Work in this workspace and ask before elevated actions.", {}),
         icon: ShieldCheck,
       };
     case "acceptEdits":
       return {
-        label: "Approve edits",
+        label: msg("Approve edits", {}),
         description:
-          mode.description || "Automatically approve file edit operations.",
+          mode.description || msg("Automatically approve file edit operations.", {}),
         icon: ShieldCheck,
       };
     case "plan":
       return {
-        label: "Plan only",
-        description: mode.description || "Plan without changing files.",
+        label: msg("Plan only", {}),
+        description: mode.description || msg("Plan without changing files.", {}),
         icon: Shield,
       };
     case "dontAsk":
       return {
-        label: "Don't ask",
+        label: msg("Don't ask", {}),
         description:
-          mode.description || "Deny actions that are not already approved.",
+          mode.description || msg("Deny actions that are not already approved.", {}),
         icon: Shield,
       };
     case "agent-full-access":
       return {
-        label: "Full access",
+        label: msg("Full access", {}),
         description:
-          "Unrestricted access to the internet and any file on your computer.",
+          msg("Unrestricted access to the internet and any file on your computer.", {}),
         icon: ShieldAlert,
         warning: true,
       };
     case "bypassPermissions":
       return {
-        label: "Full access",
-        description: mode.description || "Bypass all permission checks.",
+        label: msg("Full access", {}),
+        description: mode.description || msg("Bypass all permission checks.", {}),
         icon: ShieldAlert,
         warning: true,
       };
     default:
       return {
         label: mode.name,
-        description: mode.description || "Use this agent permission mode.",
+        description: mode.description || msg("Use this agent permission mode.", {}),
         icon: isUnrestrictedMode(mode) ? ShieldAlert : Shield,
         warning: isUnrestrictedMode(mode),
       };
@@ -247,6 +251,9 @@ export function AcpPermissionSelector({
   activePreset?: AIPreset | null;
   onPersistDefault?: (change: AcpConfigDefaultChange) => void;
 }) {
+
+  const ui = useGT();
+  const uiMessages = useMessages();
   const live = useAcpSessionConfig((state) =>
     sessionId ? state.sessions[sessionId] : undefined,
   );
@@ -280,7 +287,7 @@ export function AcpPermissionSelector({
     control.values.find((mode) => mode.value === selectedValue) ??
     control.values[0];
   if (!selectedMode) return null;
-  const selected = permissionPresentation(selectedMode);
+  const selected = localizeDefinitions(permissionPresentation(selectedMode), uiMessages);
   const SelectedIcon = selected.icon;
 
   const apply = async (mode: AcpConfigValue) => {
@@ -342,7 +349,7 @@ export function AcpPermissionSelector({
       }
       setOpen(false);
     } catch (error) {
-      toast.error(`Could not change ${agentName.toLowerCase()} permissions`, {
+      toast.error(ui("Could not change {value1} permissions", { value1: agentName.toLowerCase() }), {
         description: String(error),
       });
     } finally {
@@ -390,7 +397,7 @@ export function AcpPermissionSelector({
           How should {agentName.toLowerCase()} actions be approved?
         </p>
         {control.values.map((mode) => {
-          const presentation = permissionPresentation(mode);
+          const presentation = localizeDefinitions(permissionPresentation(mode), uiMessages);
           const ModeIcon = presentation.icon;
           const isSelected = mode.value === selectedValue;
           const isPending = mode.value === pendingValue;
@@ -437,12 +444,12 @@ export function AcpPermissionSelector({
               {isPending ? (
                 <Loader2
                   className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground"
-                  aria-label="Changing permissions"
+                  aria-label={ui("Changing permissions")}
                 />
               ) : isSelected ? (
                 <Check
                   className="mt-0.5 h-4 w-4 shrink-0"
-                  aria-label="Selected"
+                  aria-label={ui("Selected")}
                 />
               ) : null}
             </button>

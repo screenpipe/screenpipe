@@ -33,6 +33,9 @@ import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
 import { appDeepLinkScheme } from "@/lib/connections/mcp-oauth";
 import { RegistryBrowser } from "./registry-browser";
 import type { McpHeader, McpServer, McpServerDraft } from "@/lib/mcp-registry";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 interface McpOAuthStatus {
   connected: boolean;
@@ -95,6 +98,8 @@ async function listServers(): Promise<McpServer[]> {
 }
 
 export function CustomMcpCard() {
+
+  const ui = useGT();
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [browsing, setBrowsing] = useState(false);
@@ -195,7 +200,7 @@ export function CustomMcpCard() {
               </h3>
               {servers.length > 0 && (
                 <span className="px-2 py-0.5 text-xs font-medium bg-foreground text-background rounded-full">
-                  {servers.length} server{servers.length === 1 ? "" : "s"}
+                  {ui("{count, plural, one {# server} other {# servers}}", { count: servers.length })}
                 </span>
               )}
             </div>
@@ -251,7 +256,7 @@ export function CustomMcpCard() {
                 disabled={!loaded}
               >
                 <Plus className="h-3 w-3 mr-1.5" />
-                {servers.length === 0 ? "Add manually" : "Add another"}
+                {servers.length === 0 ? ui("Add manually") : ui("Add another")}
               </Button>
               {!loaded && (
                 <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
@@ -268,16 +273,16 @@ export function CustomMcpCard() {
                 if (servers.length === 0)
                   return "Supports HTTP and stdio MCP servers";
                 if (enabled === 0)
-                  return `${servers.length} server${servers.length === 1 ? "" : "s"} registered, none enabled`;
+                  return ui("{value1, plural, one {# server} other {# servers}} registered, none enabled", { value1: servers.length });
                 if (enabled === servers.length)
-                  return `${enabled} server${enabled === 1 ? "" : "s"} available to the agent`;
+                  return ui("{value1, plural, one {# server} other {# servers}} available to the agent", { value1: enabled });
                 return `${enabled} of ${servers.length} servers enabled`;
               })()}
             </span>
             <span className="ml-auto">
               {servers.some((s) => s.enabled)
-                ? "● enabled"
-                : "○ disabled"}
+                ? ui("● enabled")
+                : ui("○ disabled")}
             </span>
           </div>
         </div>
@@ -300,13 +305,13 @@ export function CustomMcpCard() {
               <DialogHeader className="flex-row items-center gap-3 space-y-0 border-b border-border p-4 pr-12 text-left">
                 <DialogTitle className="text-sm font-semibold font-sans normal-case">
                   {editing.mode === "create"
-                    ? "Add MCP Server"
-                    : "Edit MCP Server"}
+                    ? ui("Add MCP Server")
+                    : ui("Edit MCP Server")}
                 </DialogTitle>
                 <DialogClose asChild>
                   <button
                     type="button"
-                    aria-label="Close"
+                    aria-label={ui("Close")}
                     className="ml-auto text-muted-foreground transition-colors hover:text-foreground"
                   >
                     <X className="h-4 w-4" />
@@ -356,6 +361,9 @@ function ServerRow({
   onEdit: () => void;
   onChanged: () => void;
 }) {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
   const [removing, setRemoving] = useState(false);
   // Background tool-count probe — gives users a visible "this server
   // is reachable + has N tools" signal without forcing them to open
@@ -386,7 +394,7 @@ function ServerRow({
   }, [server.id, server.enabled]);
 
   const handleDelete = useCallback(async () => {
-    if (!confirm(`Remove "${server.name}" from MCP servers?`)) return;
+    if (!confirm(ui("Remove \"{value1}\" from MCP servers?", { value1: server.name }))) return;
     setRemoving(true);
     try {
       await localFetch(`/mcp-servers/${encodeURIComponent(server.id)}`, {
@@ -396,7 +404,7 @@ function ServerRow({
     } finally {
       setRemoving(false);
     }
-  }, [server.id, server.name, onChanged]);
+  }, [server.id, server.name, onChanged, uiLanguage]);
 
   return (
     <div className="flex items-center justify-between gap-2 text-xs border border-border rounded-md px-2 py-1.5">
@@ -421,10 +429,10 @@ function ServerRow({
           {probing
             ? "…"
             : toolCount !== null
-            ? `${toolCount} tool${toolCount === 1 ? "" : "s"}`
+            ? ui("{value1, plural, one {# tool} other {# tools}}", { value1: toolCount })
             : server.enabled
             ? "—"
-            : "Disabled"}
+            : ui("Disabled")}
         </span>
       </button>
       <Button
@@ -433,7 +441,7 @@ function ServerRow({
         onClick={handleDelete}
         disabled={removing}
         className="h-6 px-2 text-muted-foreground hover:text-destructive shrink-0"
-        aria-label={`Remove ${server.name}`}
+        aria-label={ui("Remove {value1}", { value1: server.name })}
       >
         {removing ? (
           <Loader2 className="h-3 w-3 animate-spin" />
@@ -466,6 +474,8 @@ function ServerEditor({
   onSaved: () => void;
   onCancel: () => void;
 }) {
+
+  const ui = useGT();
   const [name, setName] = useState(initial.name);
   const [serverInput, setServerInput] = useState(
     (initial.transport ?? "http") === "stdio"
@@ -838,7 +848,7 @@ function ServerEditor({
                   ? suggestedNameFromUrl(url)
                   : transport === "stdio" && suggestedNameFromCommand(command)
                   ? suggestedNameFromCommand(command)
-                  : "Brave Search"
+                  : ui("Brave Search")
               }
               className="h-8 text-sm"
             />
@@ -856,7 +866,7 @@ function ServerEditor({
           </Label>
           {serverInput.trim().length > 0 && (
             <span className="text-[10px] text-muted-foreground">
-              {transport === "http" ? "Remote URL" : "Local command"}
+              {transport === "http" ? ui("Remote URL") : ui("Local command")}
             </span>
           )}
         </div>
@@ -994,7 +1004,7 @@ function ServerEditor({
                     id="mcp-bearer-token"
                     value={bearerToken}
                     onChange={(e) => setBearerToken(e.target.value)}
-                    placeholder="Lin_api_... Or Bearer ..."
+                    placeholder={ui("Lin_api_... Or Bearer ...")}
                     className="h-7 text-xs font-mono"
                     type={bearerToken === PLACEHOLDER_VALUE ? "password" : "text"}
                     autoComplete="off"
@@ -1007,7 +1017,7 @@ function ServerEditor({
                       onChange={(e) =>
                         updateHeader(i, { name: e.target.value })
                       }
-                      placeholder="X-Custom-Header"
+                      placeholder={ui("X-Custom-Header")}
                       className="h-7 text-xs font-mono flex-1"
                     />
                     <Input
@@ -1015,7 +1025,7 @@ function ServerEditor({
                       onChange={(e) =>
                         updateHeader(i, { value: e.target.value })
                       }
-                      placeholder="Value"
+                      placeholder={ui("Value")}
                       className="h-7 text-xs font-mono flex-1"
                       type={
                         h.value === PLACEHOLDER_VALUE ? "password" : "text"
@@ -1027,7 +1037,7 @@ function ServerEditor({
                       size="sm"
                       onClick={() => removeHeader(i)}
                       className="h-7 w-7 p-0 text-muted-foreground"
-                      aria-label="Remove header"
+                      aria-label={ui("Remove header")}
                     >
                       <X className="h-3 w-3" />
                     </Button>
@@ -1077,8 +1087,7 @@ function ServerEditor({
             <>
               <div className="flex items-center gap-1.5 font-medium">
                 <Check className="h-3 w-3" />
-                Connected — {testResult.data.count} tool
-                {testResult.data.count === 1 ? "" : "s"} discovered
+                Connected — {ui("{count, plural, one {# tool} other {# tools}}", { count: testResult.data.count })} discovered
               </div>
               <div className="font-mono text-[11px] text-muted-foreground leading-tight max-h-32 overflow-auto">
                 {testResult.data.tools.map((t) => t.name).join(", ")}
@@ -1137,7 +1146,7 @@ function ServerEditor({
             {saving ? (
               <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
             ) : null}
-            {mode === "create" ? "Add server" : "Save changes"}
+            {mode === "create" ? ui("Add server") : ui("Save changes")}
           </Button>
         </div>
       </div>

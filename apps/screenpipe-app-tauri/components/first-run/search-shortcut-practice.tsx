@@ -13,6 +13,8 @@ import { Button } from "@/components/ui/button";
 import { formatShortcutDisplay } from "@/lib/chat-utils";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { openSettingsWindow } from "@/lib/utils/window";
+import { useGT } from "gt-react";
+
 
 export const FIRST_RUN_SEARCH_SHORTCUT_STORAGE_KEY =
   "screenpipe.first-run.search-shortcut.v1";
@@ -112,6 +114,8 @@ export function dismissFirstRunSearchShortcutFromParent(): void {
 }
 
 export function FirstRunSearchShortcutPractice() {
+
+  const ui = useGT();
   const { settings, isSettingsLoaded } = useSettings();
   const [phase, setPhase] = React.useState<PracticePhase>(() => initialPhase());
   const [listenerState, setListenerState] =
@@ -349,13 +353,13 @@ export function FirstRunSearchShortcutPractice() {
           Find anything from anywhere
         </p>
         <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
-          {phase === "waiting" ? "Press" : "Use"}{" "}
+          {phase === "waiting" ? ui("Press") : ui("Use")}{" "}
           <kbd className="border border-border bg-muted/30 px-1.5 py-0.5 font-mono text-[9px] text-foreground">
             {shortcut}
           </kbd>{" "}
           {phase === "waiting"
-            ? "now. Screenpipe is waiting for the real shortcut."
-            : "while screenpipe runs in the background."}
+            ? ui("now. Screenpipe is waiting for the real shortcut.")
+            : ui("while screenpipe runs in the background.")}
         </p>
         {issueCopy ? (
           <div className="mt-1 flex items-center gap-2">
@@ -388,10 +392,10 @@ export function FirstRunSearchShortcutPractice() {
             disabled={listenerState !== "ready"}
           >
             {listenerState === "connecting"
-              ? "Getting ready"
+              ? ui("Getting ready")
               : listenerState === "failed"
-                ? "Unavailable"
-                : "Try it now"}
+                ? ui("Unavailable")
+                : ui("Try it now")}
           </Button>
         ) : (
           <span

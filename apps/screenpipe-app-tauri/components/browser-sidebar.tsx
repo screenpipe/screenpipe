@@ -76,6 +76,9 @@ import {
   parseNavigatePayload,
   type OwnedBrowserNavigatePayload,
 } from "@/lib/owned-browser-ownership";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 const NAVIGATE_EVENT = "owned-browser:navigate";
 const SESSION_ACCESS_REQUEST_EVENT = "owned-browser:session-access-request";
@@ -198,6 +201,9 @@ export function BrowserSidebar({
   onSetPanelOpen,
   onPanelStateChange,
 }: BrowserSidebarProps) {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
   const { settings, updateSettings } = useSettings();
   const [visible, setVisible] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -1392,15 +1398,7 @@ export function BrowserSidebar({
     void navigateNativeBrowserTab(tabId, url, owner).then(() => {
       requestAnimationFrame(schedulePushBounds);
     });
-  }, [
-    agentSessionId,
-    conversationId,
-    hideNativeBrowserTab,
-    navigateNativeBrowserTab,
-    onSelectFilePreviewPath,
-    onSetPanelOpen,
-    schedulePushBounds,
-  ]);
+  }, [agentSessionId, conversationId, hideNativeBrowserTab, navigateNativeBrowserTab, onSelectFilePreviewPath, onSetPanelOpen, schedulePushBounds, uiLanguage]);
 
   useEffect(() => {
     const create = () => createBrowserTab();
@@ -1588,7 +1586,7 @@ export function BrowserSidebar({
           <div
             onMouseDown={onDragStart}
             className="absolute top-0 left-0 h-full w-2.5 cursor-ew-resize z-10 group/resize -translate-x-1/2"
-            title="Drag to resize"
+            title={ui("Drag to resize")}
           >
             <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-px bg-border/60 group-hover/resize:bg-foreground/40 transition-colors" />
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-10 w-1 rounded-full bg-border group-hover/resize:bg-foreground/60 group-hover/resize:w-1.5 transition-all" />
@@ -1624,23 +1622,23 @@ export function BrowserSidebar({
                 >
                   <button
                     onClick={() => void moveHistory("back")}
-                    title="Back"
-                    aria-label="Browser back"
+                    title={ui("Back")}
+                    aria-label={ui("Browser back")}
                     className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
                   >
                     <ChevronLeft className="h-3.5 w-3.5" />
                   </button>
                   <button
                     onClick={() => void moveHistory("forward")}
-                    title="Forward"
-                    aria-label="Browser forward"
+                    title={ui("Forward")}
+                    aria-label={ui("Browser forward")}
                     className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
                   >
                     <ChevronRight className="h-3.5 w-3.5" />
                   </button>
                   <form className="min-w-0 flex-1" onSubmit={submitAddress}>
                     <input
-                      aria-label="Browser address"
+                      aria-label={ui("Browser address")}
                       value={addressDraft}
                       onChange={(event) => setAddressDraft(event.target.value)}
                       onFocus={(event) => event.currentTarget.select()}
@@ -1654,8 +1652,8 @@ export function BrowserSidebar({
                   {isMac && (
                     <button
                       onClick={openCookieMenu}
-                      title="Browser session cookies"
-                      aria-label="Browser session cookies"
+                      title={ui("Browser session cookies")}
+                      aria-label={ui("Browser session cookies")}
                       className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
                       <Cookie className="h-3.5 w-3.5" />
@@ -1663,8 +1661,8 @@ export function BrowserSidebar({
                   )}
                   <button
                     onClick={reload}
-                    title="Reload"
-                    aria-label="Reload page"
+                    title={ui("Reload")}
+                    aria-label={ui("Reload page")}
                     className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
                   >
                     <RotateCw className="h-3.5 w-3.5" />
@@ -1673,7 +1671,7 @@ export function BrowserSidebar({
                     <div
                       className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-0.5 overflow-hidden bg-border/25"
                       role="progressbar"
-                      aria-label="Page loading"
+                      aria-label={ui("Page loading")}
                     >
                       <div className="h-full w-1/3 min-w-20 bg-foreground/70 animate-owned-browser-load" />
                     </div>
@@ -1697,8 +1695,8 @@ export function BrowserSidebar({
                         <div className="min-w-0">
                           <div className="text-sm font-medium text-foreground">
                             {sessionAccessRequest.alreadyGranted
-                              ? "MacOS may ask for access"
-                              : "Use your browser login?"}
+                              ? ui("MacOS may ask for access")
+                              : ui("Use your browser login?")}
                           </div>
                           <div className="mt-1 break-all text-xs text-muted-foreground">
                             {sessionAccessRequest.host}
@@ -1707,8 +1705,8 @@ export function BrowserSidebar({
                       </div>
                       <p className="text-xs leading-5 text-muted-foreground">
                         {sessionAccessRequest.alreadyGranted
-                          ? "Screenpipe is about to copy browser session cookies. MacOS may ask for browser Safe Storage access next."
-                          : "Screenpipe can use your browser sessions so the agent opens sites already signed in. This applies to all sites. It does not read saved passwords."}
+                          ? ui("Screenpipe is about to copy browser session cookies. MacOS may ask for browser Safe Storage access next.")
+                          : ui("Screenpipe can use your browser sessions so the agent opens sites already signed in. This applies to all sites. It does not read saved passwords.")}
                       </p>
                       {isMac && !sessionAccessRequest.alreadyGranted && (
                         <p className="mt-2 text-xs leading-5 text-muted-foreground">
@@ -1725,11 +1723,11 @@ export function BrowserSidebar({
                         >
                           {sessionAccessAnswer === "allow"
                             ? isMac
-                              ? "Waiting for macOS…"
-                              : "Applying…"
+                              ? ui("Waiting for macOS…")
+                              : ui("Applying…")
                             : sessionAccessRequest.alreadyGranted
-                              ? "Continue"
-                              : "Use browser session"}
+                              ? ui("Continue")
+                              : ui("Use browser session")}
                         </Button>
                         <Button
                           size="sm"
@@ -1765,7 +1763,7 @@ export function BrowserSidebar({
                           <p className="text-xs leading-5 text-muted-foreground">
                             {v20CookieBlock.sources.length > 0
                               ? v20CookieBlock.sources.join(", ")
-                              : "Your browser"}{" "}
+                              : ui("Your browser")}{" "}
                             is running and holds an exclusive lock on its cookie
                             database. Screenpipe cannot read it while the
                             browser is open.

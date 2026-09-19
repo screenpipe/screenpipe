@@ -15,6 +15,8 @@ import {
 } from "@/lib/ai-feedback";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { notificationAnalyticsProperties } from "@/lib/notification-analytics";
+import { useGT } from "gt-react";
+
 
 interface NotificationFeedbackProps {
   notification: FeedbackableNotification;
@@ -31,6 +33,8 @@ export function NotificationFeedback({
   variant = "panel",
   revealOnHover = true,
 }: NotificationFeedbackProps) {
+
+  const ui = useGT();
   const [rating, setRating] = useState<AiFeedbackRating | null>(null);
   const [correction, setCorrection] = useState("");
   const [saveState, setSaveState] = useState<SaveState>("idle");
@@ -126,7 +130,7 @@ export function NotificationFeedback({
             <>
               <div
                 role="group"
-                aria-label="Notification feedback options"
+                aria-label={ui("Notification feedback options")}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -137,9 +141,9 @@ export function NotificationFeedback({
                   type="button"
                   onClick={selectUp}
                   disabled={saveState === "saving"}
-                  aria-label="Useful notification"
+                  aria-label={ui("Useful notification")}
                   aria-pressed={rating === "up"}
-                  title="Useful"
+                  title={ui("Useful")}
                   style={iconButtonStyle(rating === "up")}
                 >
                   <ThumbsUp size={9} strokeWidth={1.8} />
@@ -148,9 +152,9 @@ export function NotificationFeedback({
                   type="button"
                   onClick={selectDown}
                   disabled={saveState === "saving"}
-                  aria-label="Not useful notification"
+                  aria-label={ui("Not useful notification")}
                   aria-pressed={rating === "down"}
-                  title="Not useful"
+                  title={ui("Not useful")}
                   style={iconButtonStyle(rating === "down")}
                 >
                   <ThumbsDown size={9} strokeWidth={1.8} />
@@ -169,8 +173,8 @@ export function NotificationFeedback({
                       if (saveState !== "idle") setSaveState("idle");
                     }}
                     maxLength={500}
-                    placeholder="What should improve?"
-                    aria-label="What should improve"
+                    placeholder={ui("What should improve?")}
+                    aria-label={ui("What should improve")}
                     style={{
                       minWidth: 0,
                       flex: 1,
@@ -188,8 +192,8 @@ export function NotificationFeedback({
                   <button
                     type="submit"
                     disabled={!correction.trim() || saveState === "saving"}
-                    aria-label="Send feedback"
-                    title="Send feedback"
+                    aria-label={ui("Send feedback")}
+                    title={ui("Send feedback")}
                     style={{
                       display: "inline-flex",
                       alignItems: "center",

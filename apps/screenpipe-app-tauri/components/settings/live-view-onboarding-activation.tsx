@@ -9,6 +9,8 @@ import { AlertCircle, Check, Circle, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { OnboardingGoalCategory } from "@/lib/live-views/onboarding-goals";
 import type { OnboardingLiveViewActivation } from "@/lib/live-views/onboarding-activation";
+import { useGT } from "gt-react";
+
 
 type CaptureReadiness = "checking" | "ready" | "blocked";
 
@@ -103,6 +105,7 @@ export function LiveViewOnboardingActivation({
   onFixCapture: () => void;
   onComplete: () => void;
 }) {
+  const ui = useGT();
   const copy = PATH_COPY[goalCategory];
 
   if (hasResult) {
@@ -181,7 +184,7 @@ export function LiveViewOnboardingActivation({
       <div className="px-5">
         <StatusRow
           state={captureStatus.state}
-          label="Capture"
+          label={ui("Capture")}
           detail={captureStatus.detail}
         />
         <StatusRow
@@ -192,7 +195,7 @@ export function LiveViewOnboardingActivation({
                 ? "ready"
                 : "working"
           }
-          label="Setup"
+          label={ui("Setup")}
           detail={
             setupStatus === "needs_retry"
               ? (setupError ?? "Setup paused before it finished.")
@@ -203,7 +206,7 @@ export function LiveViewOnboardingActivation({
         />
         <StatusRow
           state="working"
-          label="First result"
+          label={ui("First result")}
           detail={
             refreshing
               ? "Reading recent activity now."
@@ -224,7 +227,7 @@ export function LiveViewOnboardingActivation({
             <RefreshCw
               className={`mr-1.5 h-3.5 w-3.5 ${retrying ? "animate-spin" : ""}`}
             />
-            {retrying ? "Finishing setup" : "Finish setup"}
+            {retrying ? ui("Finishing setup") : ui("Finish setup")}
           </Button>
         ) : captureReadiness === "blocked" ? (
           <Button
@@ -247,7 +250,7 @@ export function LiveViewOnboardingActivation({
             <RefreshCw
               className={`mr-1.5 h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`}
             />
-            {refreshing ? "Checking" : "Check now"}
+            {refreshing ? ui("Checking") : ui("Check now")}
           </Button>
         )}
         <span className="text-[11px] text-muted-foreground">

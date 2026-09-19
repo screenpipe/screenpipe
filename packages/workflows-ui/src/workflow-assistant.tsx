@@ -9,6 +9,8 @@ import { assistantContextSnapshot, emptyAssistantState, newAssistantConversation
 import { ChatMarkdown, ComposerTextArea, ChatJumpToLatest } from "./chat-primitives";
 import { matchesSidebarShortcut, useSidebarShortcuts } from "./sidebar-shortcuts";
 import styles from "./workflow-assistant.module.css";
+import { useGT } from "gt-react";
+
 
 const FEEDBACK_PROMPT = "Review this workflow and ask me 3 specific questions to help refine it. Also invite any general feedback I have.";
 
@@ -23,6 +25,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   active?: boolean;
   composerAccessory?: WorkflowComposerAccessory;
 }) {
+  const ui = useGT();
   const shortcuts = useSidebarShortcuts();
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<AssistantState>(emptyAssistantState);
@@ -212,7 +215,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
     setBusy(true); setError(""); setHistoryOpen(false); setActivity("Starting…");
     follow.current = true; setAtBottom(true);
     const snapshot = update((s) => ({ ...s, conversations: s.conversations.map((c) => c.id !== current.id ? c : {
-      ...c, draft: retry ? c.draft : "", title: c.feedbackContext ? `Feedback: ${c.feedbackContext.title}` : history.length ? c.title : question.trim().slice(0, 64),
+      ...c, draft: retry ? c.draft : "", title: c.feedbackContext ? ui("Feedback: {value1}", { value1: c.feedbackContext.title }) : history.length ? c.title : question.trim().slice(0, 64),
       messages: [...history,
         { id: userId, role: "user", feedbackSaved: alreadySavedFeedback || undefined, text: question.trim(), at: new Date().toISOString(), ...(turnContext ? { context: turnContext } : {}) },
         { id: answerId, role: "assistant", text: "", at: new Date().toISOString() }],
@@ -235,7 +238,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
       if (!mounted.current) return;
       const stopped = abort.signal.aborted;
       patchMessage(current.id, answerId, { status: stopped ? "stopped" : "error" });
-      if (!stopped) setError(cause instanceof Error ? cause.message : "Couldn’t finish the answer. Try again.");
+      if (!stopped) setError(cause instanceof Error ? cause.message : ui("Couldn’t finish the answer. Try again."));
     } finally {
       if (controller.current === abort) controller.current = null;
       if (mounted.current) {
@@ -275,7 +278,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   const history = [...state.conversations].reverse().filter((item) =>
     item.messages.length && (!historyQuery.trim() || [item.title, ...item.messages.map((message) => message.text)].join(" ").toLowerCase().includes(historyQuery.trim().toLowerCase())));
   const openSource = useCallback((url: string) => {
-    if (platform.openLink) void platform.openLink(url).catch(() => setError("Couldn’t open that source."));
+    if (platform.openLink) void platform.openLink(url).catch(() => setError(ui("Couldn’t open that source.")));
   }, [platform]);
 
   function setWidth(value: number) {
@@ -296,12 +299,12 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
 
   return <>
     {!open && (loaded || loadError) && !useHeaderToggle && <button ref={launcher} className={styles.launcher} onClick={() => setOpen(true)} title={`${launcherLabel} (${shortcuts.right.keys.join(" ")})`} aria-keyshortcuts={shortcuts.right.aria} aria-label={launcherLabel} aria-expanded={false}>
-      <MessageCircle size={20} strokeWidth={1.65} /><span>{launcherLabel}<kbd>{shortcuts.right.keys.join(" ")}</kbd></span>{busy && <i aria-label="Answer in progress" />}
+      <MessageCircle size={20} strokeWidth={1.65} /><span>{launcherLabel}<kbd>{shortcuts.right.keys.join(" ")}</kbd></span>{busy && <i aria-label={ui("Answer in progress")} />}
     </button>}
     <aside id="workflows-assistant" ref={panel} hidden={!open} className={[styles.panel, state.mode === "sidebar" ? styles.docked : styles.floating].join(" ")}
       style={{ "--assistant-width": width + "px" } as React.CSSProperties}
-      data-empty={!conversation.messages.length && !historyOpen} data-mode={state.mode} role="region" aria-label="Screenpipe assistant">
-      <div className={styles.resizeHandle} role="separator" tabIndex={0} aria-label="Resize chat" aria-orientation="vertical"
+      data-empty={!conversation.messages.length && !historyOpen} data-mode={state.mode} role="region" aria-label={ui("Screenpipe assistant")}>
+      <div className={styles.resizeHandle} role="separator" tabIndex={0} aria-label={ui("Resize chat")} aria-orientation="vertical"
         aria-valuemin={340} aria-valuemax={560} aria-valuenow={width}
         onPointerDown={(event) => { resizing.current = true; event.currentTarget.setPointerCapture?.(event.pointerId); event.preventDefault(); }}
         onPointerMove={(event) => { if (resizing.current && panel.current) setWidth(panel.current.getBoundingClientRect().right - event.clientX); }}
@@ -309,18 +312,18 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
         onLostPointerCapture={() => { resizing.current = false; }}
         onKeyDown={(event) => { if (["ArrowLeft", "ArrowRight", "Home"].includes(event.key)) { event.preventDefault(); setWidth(event.key === "Home" ? 420 : width + (event.key === "ArrowLeft" ? 24 : -24)); } }} />
       <header className={styles.header}>
-        <button className={styles.title} aria-label="Conversation history" aria-expanded={historyOpen} disabled={!loaded}
-          title={conversation.messages.length ? conversation.title : "New chat"} onClick={() => { setHistoryOpen(!historyOpen); setDisplayOpen(false); }}>
-          <span>{feedbackContext ? "Feedback" : conversation.messages.length ? conversation.title : "New chat"}</span><ChevronDown size={13} />
+        <button className={styles.title} aria-label={ui("Conversation history")} aria-expanded={historyOpen} disabled={!loaded}
+          title={conversation.messages.length ? conversation.title : ui("New chat")} onClick={() => { setHistoryOpen(!historyOpen); setDisplayOpen(false); }}>
+          <span>{feedbackContext ? ui("Feedback") : conversation.messages.length ? conversation.title : ui("New chat")}</span><ChevronDown size={13} />
         </button>
         <div className={styles.headerActions}>
-          <button aria-label="New conversation" title="New chat" disabled={busy || !loaded} onClick={newConversation}><SquarePen size={16} /></button>
+          <button aria-label={ui("New conversation")} title={ui("New chat")} disabled={busy || !loaded} onClick={newConversation}><SquarePen size={16} /></button>
           <div ref={displayMenu} className={styles.displayControl}>
-            <button ref={displayTrigger} aria-label="Chat display" title="Chat display" aria-haspopup="menu" aria-expanded={displayOpen}
+            <button ref={displayTrigger} aria-label={ui("Chat display")} title={ui("Chat display")} aria-haspopup="menu" aria-expanded={displayOpen}
               disabled={!loaded} onClick={() => setDisplayOpen(!displayOpen)} onKeyDown={(event) => {
                 if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); setDisplayOpen(true); }
               }}><Maximize2 size={16} /></button>
-            {displayOpen && <div className={styles.displayMenu} role="menu" aria-label="Chat display" onKeyDown={(event) => {
+            {displayOpen && <div className={styles.displayMenu} role="menu" aria-label={ui("Chat display")} onKeyDown={(event) => {
               if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
               event.preventDefault();
               const choices = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button"));
@@ -332,49 +335,49 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
               <button role="menuitemradio" aria-checked={state.mode === "sidebar"} onClick={() => chooseMode("sidebar")}><PanelRight size={15} /><span>Sidebar</span>{state.mode === "sidebar" && <Check size={14} />}</button>
             </div>}
           </div>
-          <button aria-label={state.mode === "floating" ? "Minimize chat" : "Collapse right sidebar"} title={`${state.mode === "floating" ? "Minimize chat" : "Collapse right sidebar"} (${shortcuts.right.keys.join(" ")})`} aria-expanded={true}
+          <button aria-label={state.mode === "floating" ? ui("Minimize chat") : ui("Collapse right sidebar")} title={`${state.mode === "floating" ? "Minimize chat" : "Collapse right sidebar"} (${shortcuts.right.keys.join(" ")})`} aria-expanded={true}
             aria-controls="workflows-assistant" aria-keyshortcuts={shortcuts.right.aria} onClick={close}>{state.mode === "floating" ? <Minus size={18} /> : <PanelRightClose size={14} strokeWidth={1.5} />}</button>
         </div>
       </header>
-      <div className={styles.body} ref={scroll} data-workflows-chat-scroll role={historyOpen ? undefined : "log"} aria-label={historyOpen ? undefined : "Conversation"} aria-live="off"
+      <div className={styles.body} ref={scroll} data-workflows-chat-scroll role={historyOpen ? undefined : "log"} aria-label={historyOpen ? undefined : ui("Conversation")} aria-live="off"
         onScroll={() => { const element = scroll.current!; follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 70; setAtBottom(follow.current); }}>
-        {!loaded && <div className={styles.restoring}>{loadError || "Opening your conversations…"}{loadError && <button onClick={() => void restore()}>Try again</button>}</div>}
+        {!loaded && <div className={styles.restoring}>{loadError || ui("Opening your conversations…")}{loadError && <button onClick={() => void restore()}>Try again</button>}</div>}
         {loaded && historyOpen ? <div className={styles.history}>
-          <div className={styles.historyHeader}><button aria-label="Back to chat" onClick={() => setHistoryOpen(false)}><ArrowLeft size={16} /></button><h3>Conversations</h3></div>
-          <label className={styles.historySearch}><Search size={15} /><input ref={historyInput} value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="Search conversations…" aria-label="Search conversations" /></label>
+          <div className={styles.historyHeader}><button aria-label={ui("Back to chat")} onClick={() => setHistoryOpen(false)}><ArrowLeft size={16} /></button><h3>Conversations</h3></div>
+          <label className={styles.historySearch}><Search size={15} /><input ref={historyInput} value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder={ui("Search conversations…")} aria-label={ui("Search conversations")} /></label>
           {history.map((item) => <button key={item.id} aria-label={item.title} className={styles.historyItem} disabled={busy} onClick={() => {
             update((current) => ({ ...current, activeId: item.id })); setHistoryOpen(false); setError(""); follow.current = true;
           }}><MessageCircle size={15} /><span><strong>{item.title}</strong><small>{item.messages.find((message) => message.role === "assistant")?.text.replace(/[#*_]/g, "").slice(0, 85)}</small></span>{item.id === state.activeId && <Check size={14} />}</button>)}
-          {!history.length && <p>{historyQuery ? "No matching conversations." : "Your conversations will appear here."}</p>}
+          {!history.length && <p>{historyQuery ? ui("No matching conversations.") : ui("Your conversations will appear here.")}</p>}
         </div> : loaded && <>
           {!conversation.messages.length && <div className={styles.empty}>
-            <h2>{feedbackContext ? "What should change?" : context.purpose === "sop" ? "Edit this SOP" : context.workflow ? "Ask about this workflow" : "Search your memory"}</h2>
+            <h2>{feedbackContext ? ui("What should change?") : context.purpose === "sop" ? ui("Edit this SOP") : context.workflow ? ui("Ask about this workflow") : ui("Search your memory")}</h2>
             {!feedbackContext && <div>{suggestions.map((question) => <button key={question} onClick={() => void send(question)}><Search size={15} /><span>{question}</span><ArrowUp size={13} /></button>)}</div>}
           </div>}
-          {conversation.messages.map((message) => <article key={message.id} className={message.role === "user" ? styles.user : styles.assistant} aria-label={message.role === "user" ? "Your question" : "Screenpipe answer"}>
+          {conversation.messages.map((message) => <article key={message.id} className={message.role === "user" ? styles.user : styles.assistant} aria-label={message.role === "user" ? ui("Your question") : ui("Screenpipe answer")}>
             {message.role === "user" ? <p>{message.text}</p> : <ChatMarkdown text={message.text} streaming={busy && message.id === lastAnswer?.id} allowLink={isAssistantLink} onOpenLink={platform.openLink ? openSource : undefined} />}
             {message.feedbackSaved && message.id === lastUser?.id && <small>Feedback saved for the next update</small>}
             {message.status === "stopped" && <small>Stopped</small>}
             {message.role === "assistant" && message.text && (!busy || message.id !== lastAnswer?.id) && <div className={styles.messageActions}>
-              <button aria-label="Copy answer" title="Copy answer" onClick={() => void navigator.clipboard.writeText(message.text).then(() => { setCopied(message.id); setTimeout(() => setCopied(""), 1500); }).catch(() => setError("Couldn’t copy. You can select the answer and copy it."))}>{copied === message.id ? <Check size={14} /> : <Copy size={14} />}</button>
-              {!busy && message.id === lastAnswer?.id && !message.status && lastUser && <button aria-label="Retry answer" title="Retry answer" onClick={() => void send(lastUser.text, true)}><RotateCcw size={14} /></button>}
+              <button aria-label={ui("Copy answer")} title={ui("Copy answer")} onClick={() => void navigator.clipboard.writeText(message.text).then(() => { setCopied(message.id); setTimeout(() => setCopied(""), 1500); }).catch(() => setError(ui("Couldn’t copy. You can select the answer and copy it.")))}>{copied === message.id ? <Check size={14} /> : <Copy size={14} />}</button>
+              {!busy && message.id === lastAnswer?.id && !message.status && lastUser && <button aria-label={ui("Retry answer")} title={ui("Retry answer")} onClick={() => void send(lastUser.text, true)}><RotateCcw size={14} /></button>}
             </div>}
           </article>)}
           {busy && <div className={styles.activity} role="status"><i />{activity}</div>}
-          {!busy && (error || lastAnswer?.status === "error" || lastAnswer?.status === "stopped") && <div className={styles.error} role="status"><span>{error || (lastAnswer?.status === "error" ? "This answer didn’t finish." : "")}</span>{lastUser && <button onClick={() => void send(lastUser.text, true)}>Try again</button>}</div>}
+          {!busy && (error || lastAnswer?.status === "error" || lastAnswer?.status === "stopped") && <div className={styles.error} role="status"><span>{error || (lastAnswer?.status === "error" ? ui("This answer didn’t finish.") : "")}</span>{lastUser && <button onClick={() => void send(lastUser.text, true)}>Try again</button>}</div>}
         </>}
       </div>
       {!historyOpen && <ChatJumpToLatest hasMessages={!!conversation.messages.length} scrolledUp={!atBottom} onJump={() => {
         follow.current = true; setAtBottom(true); scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: "auto" });
       }} />}
       {!platform.learnsFromFeedback && !historyOpen && feedbackContext && !busy && conversation.messages.some(m => m.role === "user" && m.text !== FEEDBACK_PROMPT) && lastUser && !lastUser.feedbackSaved && <div className={styles.feedbackActions}>
-        <button disabled={feedbackSaving} onClick={() => void saveFeedback()}>{feedbackSaving ? "Saving…" : "Save feedback"}</button>
+        <button disabled={feedbackSaving} onClick={() => void saveFeedback()}>{feedbackSaving ? ui("Saving…") : ui("Save feedback")}</button>
       </div>}
       {feedbackError && <div className={styles.saveError} role="alert">{feedbackError}</div>}
       {saveError && <div className={styles.saveError} role="alert">Couldn’t save this conversation.<button onClick={() => void persist(stateRef.current).catch(() => {})}>Retry save</button></div>}
       {!historyOpen && <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(conversation.draft); }}>
-        {feedbackContext ? <span className={styles.context}><span className={styles.contextDot} /><span>{feedbackContext.title}</span></span> : <button type="button" className={styles.context} aria-pressed={includeContext} title={includeContext ? "Remove current page from the next message" : "Include current page in the next message"} onClick={() => setIncludeContext(!includeContext)}>{includeContext ? <><span className={styles.contextDot} /><span>{context.title}</span><X size={12} /></> : <><Plus size={13} /><span>Add current page</span></>}</button>}
-        <ComposerTextArea ref={input} aria-label="Ask Screenpipe" placeholder={feedbackContext ? platform.learnsFromFeedback ? "Share feedback to refine this workflow…" : "Answer a question or share feedback…" : includeContext && context.purpose === "sop" ? "Ask Screenpipe to edit this SOP…" : includeContext && context.workflow ? "Ask about this workflow…" : "Ask or find anything…"} rows={1}
+        {feedbackContext ? <span className={styles.context}><span className={styles.contextDot} /><span>{feedbackContext.title}</span></span> : <button type="button" className={styles.context} aria-pressed={includeContext} title={includeContext ? ui("Remove current page from the next message") : ui("Include current page in the next message")} onClick={() => setIncludeContext(!includeContext)}>{includeContext ? <><span className={styles.contextDot} /><span>{context.title}</span><X size={12} /></> : <><Plus size={13} /><span>Add current page</span></>}</button>}
+        <ComposerTextArea ref={input} aria-label={ui("Ask Screenpipe")} placeholder={feedbackContext ? platform.learnsFromFeedback ? ui("Share feedback to refine this workflow…") : ui("Answer a question or share feedback…") : includeContext && context.purpose === "sop" ? ui("Ask Screenpipe to edit this SOP…") : includeContext && context.workflow ? ui("Ask about this workflow…") : ui("Ask or find anything…")} rows={1}
           value={conversation.draft} maxLength={8000} disabled={!loaded} onChange={(event) => update((current) => ({
             ...current, conversations: current.conversations.map((item) => item.id === current.activeId ? { ...item, draft: event.target.value } : item),
           }))} onSend={() => void send(conversation.draft)} />
@@ -383,8 +386,8 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
             onValueChange: value => update(current => ({ ...current, conversations: current.conversations.map(item => item.id === current.activeId ? { ...item, draft: value } : item) })),
             disabled: !loaded || busy, sessionId: conversation.id,
           })}
-          {busy ? <button type="button" className={styles.send} aria-label="Stop answer" title="Stop answer" onClick={() => controller.current?.abort()}><Square size={12} fill="currentColor" /></button>
-            : <button className={styles.send} type="submit" aria-label={feedbackContext ? "Send feedback" : "Send message"} title="Send (Enter)" disabled={!loaded || !conversation.draft.trim()}><ArrowUp size={18} /></button>}
+          {busy ? <button type="button" className={styles.send} aria-label={ui("Stop answer")} title={ui("Stop answer")} onClick={() => controller.current?.abort()}><Square size={12} fill="currentColor" /></button>
+            : <button className={styles.send} type="submit" aria-label={feedbackContext ? ui("Send feedback") : ui("Send message")} title={ui("Send (Enter)")} disabled={!loaded || !conversation.draft.trim()}><ArrowUp size={18} /></button>}
         </div>
       </form>}
     </aside>

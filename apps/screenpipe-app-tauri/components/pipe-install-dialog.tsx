@@ -27,6 +27,8 @@ import {
   publishPipeInstalledReceipt,
 } from "@/lib/pipe-install-receipt";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
+import { useGT } from "gt-react";
+
 
 interface PipeInstallRequest {
   url: string;
@@ -50,6 +52,8 @@ function getRegistrySlug(url: string): string {
 }
 
 export function PipeInstallDialog() {
+
+  const ui = useGT();
   const [request, setRequest] = useState<PipeInstallRequest | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -159,7 +163,7 @@ export function PipeInstallDialog() {
       if (pipeConnections.length > 0) setSection("pipes");
     } catch (err: any) {
       toast({
-        title: "Failed to install scheduled task",
+        title: ui("Failed to install scheduled task"),
         description: (
           <span>
             {err.message}{" "}
@@ -207,9 +211,9 @@ export function PipeInstallDialog() {
             <AlertDialogDescription className="text-xs">
               {isRegistry
                 ? registryRisk === "high"
-                  ? "Unverified publisher. Can access all your screen data."
-                  : "Review the requested access before installing."
-                : "An external link wants to install a scheduled task. These are AI agents that run on your screen data — review the prompt below before installing."}
+                  ? ui("Unverified publisher. Can access all your screen data.")
+                  : ui("Review the requested access before installing.")
+                : ui("An external link wants to install a scheduled task. These are AI agents that run on your screen data — review the prompt below before installing.")}
             </AlertDialogDescription>
           </AlertDialogHeader>
 
@@ -220,7 +224,7 @@ export function PipeInstallDialog() {
           {loading ? (
             <div className="flex items-center gap-2 py-4 text-xs text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
-              {isRegistry ? "Loading scheduled task details..." : "Loading scheduled task content..."}
+              {isRegistry ? ui("Loading scheduled task details...") : ui("Loading scheduled task content...")}
             </div>
           ) : isRegistry && registryDetail ? (
             <InstallRiskSummary
@@ -263,7 +267,7 @@ export function PipeInstallDialog() {
                   Installing...
                 </>
               ) : (
-                "Install scheduled task"
+                ui("Install scheduled task")
               )}
             </Button>
           </AlertDialogFooter>

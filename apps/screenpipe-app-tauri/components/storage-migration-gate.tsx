@@ -9,9 +9,14 @@ import { commands, type StorageMigrationActivity } from "@/lib/utils/tauri";
 import { migrationBytes, migrationElapsed, StorageMigrationPrompt } from "./storage-migration-prompt";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { UpdateBanner } from "./update-banner";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 /** Explicit conversion blocks history; startup recovery leaves the shell usable. */
 export function StorageMigrationGate({ offerMigration = false, utilityWindow = false }: { offerMigration?: boolean; utilityWindow?: boolean }) {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
   const [activity, setActivity] = useState<StorageMigrationActivity>({ root: null, busy: false, recovering: false, message: "", error: null, completed: false, elapsed_seconds: 0, completed_records: null, total_records: null, bytes_saved: null, available_bytes: null });
   const [recoveryDismissed, setRecoveryDismissed] = useState(false);
   const [unavailable, setUnavailable] = useState(true);
@@ -102,13 +107,13 @@ export function StorageMigrationGate({ offerMigration = false, utilityWindow = f
   if (activity.recovering) {
     if (recoveryDismissed) return null;
     return (
-      <aside aria-label="Storage recovery" className="fixed bottom-4 right-4 z-50 w-[calc(100%-2rem)] max-w-sm space-y-3 rounded-lg border border-border bg-background p-4 text-foreground shadow-lg">
+      <aside aria-label={ui("Storage recovery")} className="fixed bottom-4 right-4 z-50 w-[calc(100%-2rem)] max-w-sm space-y-3 rounded-lg border border-border bg-background p-4 text-foreground shadow-lg">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold">Restoring recording</h2>
           <button type="button" onClick={() => setRecoveryDismissed(true)} className="text-xs underline">Hide</button>
         </div>
         <p className="text-xs text-muted-foreground">Recording and history are unavailable while recovery runs. You can use settings and install updates.</p>
-        <p role="status" className="text-xs">{unavailable ? "Waiting for recovery status…" : activity.message} · {migrationElapsed(elapsed)}</p>
+        <p role="status" className="text-xs">{unavailable ? ui("Waiting for recovery status…") : activity.message} · {migrationElapsed(elapsed)}</p>
         <UpdateBanner compact />
       </aside>
     );
@@ -140,14 +145,14 @@ export function StorageMigrationGate({ offerMigration = false, utilityWindow = f
         </div>
         <div className="flex items-center gap-3 text-sm" role="status" aria-live="polite">
           <Loader2 className="h-5 w-5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-          <span>{unavailable ? "Waiting for migration status…" : `${activity.message || "Preparing migration"}…`}</span>
+          <span>{unavailable ? ui("Waiting for migration status…") : `${activity.message || "Preparing migration"}…`}</span>
         </div>
         {percentage !== null && <div className="space-y-2">
           <div className="flex justify-between gap-4 text-sm tabular-nums">
             <span>Records converted</span><span>{percentage}%</span>
           </div>
-          <progress aria-label="Records converted" value={converted} max={total} className="h-2 w-full appearance-none [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:bg-primary [&::-moz-progress-bar]:bg-primary" />
-          <p className="text-xs text-muted-foreground tabular-nums">{converted.toLocaleString()} of {total.toLocaleString()} records. Verification follows conversion.</p>
+          <progress aria-label={ui("Records converted")} value={converted} max={total} className="h-2 w-full appearance-none [&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:bg-primary [&::-moz-progress-bar]:bg-primary" />
+          <p className="text-xs text-muted-foreground tabular-nums">{converted.toLocaleString(uiLocale)} of {total.toLocaleString(uiLocale)} records. Verification follows conversion.</p>
         </div>}
         <p className="text-sm tabular-nums">Elapsed: {migrationElapsed(elapsed)}</p>
         <div className="space-y-1 text-sm tabular-nums">

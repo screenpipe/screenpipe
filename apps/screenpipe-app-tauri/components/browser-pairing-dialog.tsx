@@ -18,6 +18,8 @@ import { Button } from "@/components/ui/button";
 import { localFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
+import { useGT } from "gt-react";
+
 
 type PendingPair = {
   id: string;
@@ -37,6 +39,8 @@ function labelBrowser(browser: string): string {
 }
 
 export function BrowserPairingDialog() {
+
+  const ui = useGT();
   const [pending, setPending] = useState<PendingPair | null>(null);
   const [resolving, setResolving] = useState(false);
   const { toast } = useToast();
@@ -98,7 +102,7 @@ export function BrowserPairingDialog() {
       setPending(null);
     } catch (e) {
       toast({
-        title: "Browser pairing failed",
+        title: ui("Browser pairing failed"),
         description: e instanceof Error ? e.message : String(e),
         variant: "destructive",
       });
@@ -118,8 +122,8 @@ export function BrowserPairingDialog() {
           <DialogTitle>Connect browser</DialogTitle>
           <DialogDescription>
             {pending
-              ? `${labelBrowser(pending.browser)} wants to connect to Screenpipe. This lets agents use your open tabs when browser context is needed.`
-              : "A browser wants to connect to Screenpipe."}
+              ? ui("{value1} wants to connect to Screenpipe. This lets agents use your open tabs when browser context is needed.", { value1: labelBrowser(pending.browser) })
+              : ui("A browser wants to connect to Screenpipe.")}
           </DialogDescription>
         </DialogHeader>
 

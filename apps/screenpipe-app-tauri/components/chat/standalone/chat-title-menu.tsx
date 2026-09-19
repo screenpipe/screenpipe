@@ -15,6 +15,8 @@ import {
   useChatStore,
 } from "@/lib/stores/chat-store";
 import { resolveVisibleChatTitle } from "@/lib/chat/conversation-title";
+import { useGT } from "gt-react";
+
 
 interface ChatTitleMenuProps {
   conversationId: string | null;
@@ -39,6 +41,8 @@ export function ChatTitleMenu({
   archiveConversation,
   compact = false,
 }: ChatTitleMenuProps) {
+
+  const ui = useGT();
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState("");
@@ -181,8 +185,8 @@ export function ChatTitleMenu({
               setOpen((value) => !value);
             }}
             className="inline-flex h-7 w-7 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            title={`Chat options for ${title}`}
-            aria-label={`Chat options for ${title}`}
+            title={ui("Chat options for {value1}", { value1: title })}
+            aria-label={ui("Chat options for {value1}", { value1: title })}
           >
             <MoreHorizontal className="h-4 w-4" aria-hidden />
           </button>
@@ -198,7 +202,7 @@ export function ChatTitleMenu({
             onClick={() => void handleTogglePin()}
           >
             <Pin className="h-3.5 w-3.5 shrink-0" aria-hidden />
-            {isPinned ? "Unpin" : "Pin"}
+            {isPinned ? ui("Unpin") : ui("Pin")}
           </button>
           <button
             className="flex h-8 w-full items-center gap-2 px-2 text-left text-sm hover:bg-muted focus-visible:outline-none focus-visible:bg-muted"
@@ -211,7 +215,7 @@ export function ChatTitleMenu({
           <button
             className="flex h-8 w-full items-center gap-2 px-2 text-left text-sm hover:bg-muted focus-visible:outline-none focus-visible:bg-muted"
             onClick={() => void handleArchive()}
-            aria-label="Archive"
+            aria-label={ui("Archive")}
           >
             <Archive className="h-3.5 w-3.5 shrink-0" aria-hidden />
             Archive

@@ -47,15 +47,20 @@ import {
   listMoveTargetGroups,
   validateSidebarGroupName,
 } from "@/lib/utils/chat-sidebar-grouping";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 type HistoryTab = "chats" | "pipes" | "archived" | "all";
 
 const HISTORY_PAGE_SIZE = 30;
 const TABS: ReadonlyArray<{ value: HistoryTab; label: string }> = [
-  { value: "chats", label: "Chats" },
-  { value: "pipes", label: "Automations" },
-  { value: "archived", label: "Archived" },
-  { value: "all", label: "All" },
+  { value: "chats", label: msg("Chats", {}) },
+  { value: "pipes", label: msg("Automations", {}) },
+  { value: "archived", label: msg("Archived", {}) },
+  { value: "all", label: msg("All", {}) },
 ];
 
 export function ChatHistoryView({
@@ -67,6 +72,10 @@ export function ChatHistoryView({
   onNewChat: () => void;
   onSelectConversation: (conversationId: string) => void;
 }) {
+  const uiLanguage = useLocale();
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const { isMac } = usePlatform();
   const [tab, setTab] = useState<HistoryTab>("chats");
   const [query, setQuery] = useState("");
@@ -272,7 +281,7 @@ export function ChatHistoryView({
       if (!store.sessions[id] && meta) {
         store.actions.upsert({
           id,
-          title: meta.title || "Untitled",
+          title: meta.title || ui("Untitled"),
           preview: "",
           status: "idle",
           messageCount: meta.messageCount ?? 0,
@@ -292,7 +301,7 @@ export function ChatHistoryView({
     } catch {
       // ignore
     }
-  }, []);
+  }, [uiLanguage]);
 
   const bulkSetHidden = useCallback(
     async (ids: string[], hidden: boolean): Promise<{ ok: string[]; failed: string[] }> => {
@@ -340,7 +349,7 @@ export function ChatHistoryView({
       });
       if (!validation.ok) {
         toast({
-          title: "Invalid group name",
+          title: ui("Invalid group name"),
           description: validation.message,
           variant: "destructive",
         });
@@ -357,9 +366,11 @@ export function ChatHistoryView({
     }
     void load();
     return true;
-  }, [existingGroups, load]);
+  }, [existingGroups, load, uiLanguage]);
 
   const Row = ({ conv }: { conv: ConversationMeta }) => {
+
+  const ui = useGT();
     const updatedAt = conv.updatedAt ? fmt.format(new Date(conv.updatedAt)) : "";
     const selected = selectedIds.has(conv.id);
     const selectionMode = selectedIds.size > 0;
@@ -418,7 +429,7 @@ export function ChatHistoryView({
               checked={selected}
               onCheckedChange={() => toggleSelected(conv.id)}
               onClick={(e) => e.stopPropagation()}
-              aria-label={selected ? "Deselect chat" : "Select chat"}
+              aria-label={selected ? ui("Deselect chat") : ui("Select chat")}
             />
           </div>
         </div>
@@ -431,7 +442,7 @@ export function ChatHistoryView({
               conv.hidden ? "text-muted-foreground" : "text-foreground"
             )}
           >
-            {(isInjectedTitle(conv.title) ? undefined : conv.title) || "Untitled"}
+            {(isInjectedTitle(conv.title) ? undefined : conv.title) || ui("Untitled")}
           </p>
         </div>
 
@@ -469,7 +480,7 @@ export function ChatHistoryView({
                     "h-7 w-7 inline-flex items-center justify-center",
                     "text-muted-foreground hover:text-foreground hover:bg-muted/60"
                   )}
-                  aria-label="Conversation actions"
+                  aria-label={ui("Conversation actions")}
                   disabled={rowPending}
                 >
                   {rowPending ? (
@@ -494,7 +505,7 @@ export function ChatHistoryView({
                   }}
                 >
                   <CheckSquare className="h-3 w-3 text-muted-foreground" />
-                  {selected ? "Deselect" : "Select"}
+                  {selected ? ui("Deselect") : ui("Select")}
                 </DropdownMenuItem>
                 <DropdownMenuSeparator className="my-1 bg-border/70" />
                 <DropdownMenuItem
@@ -502,6 +513,7 @@ export function ChatHistoryView({
                   disabled={rowPending}
                   onSelect={(e) => {
                     void (async () => {
+
                       if (rowPendingIds.has(conv.id)) return;
                       setRowPendingIds((prev) => new Set(prev).add(conv.id));
                       try {
@@ -521,8 +533,8 @@ export function ChatHistoryView({
                         void load();
                       } catch {
                         toast({
-                          title: "Update failed",
-                          description: "Could not update this chat. Please try again.",
+                          title: ui("Update failed"),
+                          description: ui("Could not update this chat. Please try again."),
                         });
                       } finally {
                         setRowPendingIds((prev) => {
@@ -535,7 +547,7 @@ export function ChatHistoryView({
                   }}
                 >
                   <Pin className="h-3 w-3 text-muted-foreground" />
-                  {conv.pinned ? "Unpin" : "Pin"}
+                  {conv.pinned ? ui("Unpin") : ui("Pin")}
                 </DropdownMenuItem>
                 {conv.kind !== "pipe-run" && conv.kind !== "pipe-watch" && (
                 <DropdownMenuSub>
@@ -683,9 +695,9 @@ export function ChatHistoryView({
             <div
               className="flex items-center gap-6 border-b border-border/60"
               role="tablist"
-              aria-label="Chat filter"
+              aria-label={ui("Chat filter")}
             >
-              {TABS.map((t) => {
+              {localizeDefinitions(TABS, uiMessages).map((t) => {
                 const active = tab === t.value;
                 return (
                   <button
@@ -749,7 +761,7 @@ export function ChatHistoryView({
                             else setAllVisibleSelected();
                           }}
                           aria-label={
-                            allVisibleSelected ? "Clear selection" : "Select all visible chats"
+                            allVisibleSelected ? ui("Clear selection") : ui("Select all visible chats")
                           }
                         />
                       );
@@ -765,10 +777,10 @@ export function ChatHistoryView({
                       <span className="inline-flex items-center gap-1 text-xs text-muted-foreground/70">
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         {bulkPending === "archiving"
-                          ? "Archiving…"
+                          ? ui("Archiving…")
                           : bulkPending === "restoring"
-                            ? "Restoring…"
-                            : "Deleting…"}
+                            ? ui("Restoring…")
+                            : ui("Deleting…")}
                       </span>
                     )}
                   </div>
@@ -806,8 +818,8 @@ export function ChatHistoryView({
                                 setBulkPending(null);
                                 if (result.failed.length > 0) {
                                   toast({
-                                    title: "Some chats could not be archived",
-                                    description: `${result.failed.length} failed.`,
+                                    title: ui("Some chats could not be archived"),
+                                    description: ui("{value1} failed.", { value1: result.failed.length }),
                                   });
                                   return;
                                 }
@@ -863,8 +875,8 @@ export function ChatHistoryView({
                                 setBulkPending(null);
                                 if (result.failed.length > 0) {
                                   toast({
-                                    title: "Some chats could not be restored",
-                                    description: `${result.failed.length} failed.`,
+                                    title: ui("Some chats could not be restored"),
+                                    description: ui("{value1} failed.", { value1: result.failed.length }),
                                   });
                                   return;
                                 }
@@ -908,10 +920,10 @@ export function ChatHistoryView({
                   <Input
                     ref={searchInputRef}
                     placeholder={
-                      tab === "chats" ? "Search chats"
-                      : tab === "pipes" ? "Search scheduled tasks"
-                      : tab === "archived" ? "Search archived"
-                      : "Search all"
+                      tab === "chats" ? ui("Search chats")
+                      : tab === "pipes" ? ui("Search scheduled tasks")
+                      : tab === "archived" ? ui("Search archived")
+                      : ui("Search all")
                     }
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
@@ -929,8 +941,8 @@ export function ChatHistoryView({
                         "absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 transition-colors",
                         "text-muted-foreground hover:text-foreground hover:bg-muted/50"
                       )}
-                      aria-label="Clear search"
-                      title="Clear"
+                      aria-label={ui("Clear search")}
+                      title={ui("Clear")}
                       onClick={() => setQuery("")}
                     >
                       <X className="h-3.5 w-3.5" />
@@ -941,7 +953,7 @@ export function ChatHistoryView({
                   variant="outline"
                   className="h-9 px-3 gap-2 shrink-0 rounded-md"
                   onClick={() => setImportDialogOpen(true)}
-                  title="Import chats"
+                  title={ui("Import chats")}
                 >
                   <Download className="h-4 w-4" />
                   Import
@@ -954,7 +966,7 @@ export function ChatHistoryView({
                     onNewChat();
                     onBack();
                   }}
-                  title="New chat"
+                  title={ui("New chat")}
                 >
                   <Plus className="h-4 w-4" />
                   New chat
@@ -972,9 +984,9 @@ export function ChatHistoryView({
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
               <span>
-                {tab === "chats" ? "Loading chats…"
-                  : tab === "pipes" ? "Loading scheduled tasks…"
-                  : "Loading…"}
+                {tab === "chats" ? ui("Loading chats…")
+                  : tab === "pipes" ? ui("Loading scheduled tasks…")
+                  : ui("Loading…")}
               </span>
             </div>
           </div>
@@ -982,14 +994,14 @@ export function ChatHistoryView({
           <div className="min-h-[40vh] flex items-center justify-center">
             <span className="text-sm text-muted-foreground">
               {query.trim()
-                ? (tab === "chats" ? "No matching chats."
-                  : tab === "pipes" ? "No matching scheduled tasks."
-                  : tab === "archived" ? "No matching archived."
-                  : "No results.")
-                : (tab === "chats" ? "No chats yet."
-                  : tab === "pipes" ? "No scheduled tasks yet."
-                  : tab === "archived" ? "No archived yet."
-                  : "No chats yet.")}
+                ? (tab === "chats" ? ui("No matching chats.")
+                  : tab === "pipes" ? ui("No matching scheduled tasks.")
+                  : tab === "archived" ? ui("No matching archived.")
+                  : ui("No results."))
+                : (tab === "chats" ? ui("No chats yet.")
+                  : tab === "pipes" ? ui("No scheduled tasks yet.")
+                  : tab === "archived" ? ui("No archived yet.")
+                  : ui("No chats yet."))}
             </span>
           </div>
         ) : (
@@ -1022,11 +1034,11 @@ export function ChatHistoryView({
       >
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>{deleteIds.length > 1 ? "Delete chats" : "Delete chat"}</DialogTitle>
+            <DialogTitle>{deleteIds.length > 1 ? ui("Delete chats") : ui("Delete chat")}</DialogTitle>
             <DialogDescription>
               {deleteIds.length > 1
-                ? `Delete ${deleteIds.length} chats? This cannot be undone.`
-                : "Delete this chat? This cannot be undone."}
+                ? ui("Delete {value1} chats? This cannot be undone.", { value1: deleteIds.length })
+                : ui("Delete this chat? This cannot be undone.")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1070,8 +1082,8 @@ export function ChatHistoryView({
                 setBulkPending(null);
                 if (failed.length > 0) {
                   toast({
-                    title: "Some chats could not be deleted",
-                    description: `${failed.length} failed.`,
+                    title: ui("Some chats could not be deleted"),
+                    description: ui("{value1} failed.", { value1: failed.length }),
                   });
                   // Keep dialog open + selection intact so the user can retry.
                   return;
@@ -1081,7 +1093,7 @@ export function ChatHistoryView({
                 void load();
               }}
             >
-              {bulkPending === "deleting" ? "Deleting…" : "Delete"}
+              {bulkPending === "deleting" ? ui("Deleting…") : ui("Delete")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1119,8 +1131,8 @@ export function ChatHistoryView({
                 "w-full rounded-md border bg-background px-3 py-2 text-sm outline-none",
                 "focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
               )}
-              placeholder="Group name"
-              aria-label="Group name"
+              placeholder={ui("Group name")}
+              aria-label={ui("Group name")}
             />
           </div>
           <DialogFooter>

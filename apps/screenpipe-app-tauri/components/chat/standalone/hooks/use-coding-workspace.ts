@@ -11,6 +11,9 @@ import {
   type PiProviderConfig,
 } from "@/lib/utils/tauri";
 import { selectWorktreeRepository } from "@/lib/utils/select-worktree-repository";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 export type WorktreeRouterContext = {
   providerConfig: PiProviderConfig;
@@ -61,6 +64,8 @@ export function useCodingWorkspace({
   locked: boolean;
   projectDirectory?: string | null;
 }) {
+  const uiLanguage = useLocale();
+  const ui = useGT();
   const [workspace, setWorkspace] = useState<CodingWorkspace | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [resolvedConversationId, setResolvedConversationId] = useState<
@@ -150,9 +155,9 @@ export function useCodingWorkspace({
         publishWorkspaceIdentity(requestConversationId, result.data);
         setResolvedConversationId(requestConversationId);
         toast({
-          title: "Coding workspace ready",
+          title: ui("Coding workspace ready"),
           description: result.data.sourceDirty
-            ? "Created from HEAD; your uncommitted source changes were left untouched"
+            ? ui("Created from HEAD; your uncommitted source changes were left untouched")
             : result.data.branch,
         });
         return result.data;
@@ -165,7 +170,7 @@ export function useCodingWorkspace({
           setEnabled(false);
           setError(message);
           toast({
-            title: "Could not create coding workspace",
+            title: ui("Could not create coding workspace"),
             description: message,
             variant: "destructive",
           });
@@ -180,7 +185,7 @@ export function useCodingWorkspace({
         }
       }
     },
-    [conversationId],
+    [conversationId, uiLanguage],
   );
 
   const hasCurrentConversation =
@@ -263,7 +268,7 @@ export function useCodingWorkspace({
             setEnabled(false);
             setError(message);
             toast({
-              title: "Could not resolve a coding repository",
+              title: ui("Could not resolve a coding repository"),
               description: message,
               variant: "destructive",
             });
@@ -279,9 +284,9 @@ export function useCodingWorkspace({
           setEnabled(true);
           setResolvedConversationId(requestConversationId);
           toast({
-            title: "Coding workspace ready",
+            title: ui("Coding workspace ready"),
             description: preparedWorkspace.sourceDirty
-              ? "Created from HEAD; your uncommitted source changes were left untouched"
+              ? ui("Created from HEAD; your uncommitted source changes were left untouched")
               : preparedWorkspace.branch,
           });
         }
@@ -299,7 +304,7 @@ export function useCodingWorkspace({
           setEnabled(false);
           setError(message);
           toast({
-            title: "Could not create coding workspace",
+            title: ui("Could not create coding workspace"),
             description: message,
             variant: "destructive",
           });
@@ -314,7 +319,7 @@ export function useCodingWorkspace({
         }
       }
     },
-    [conversationId, currentWorkspace, projectDirectory],
+    [conversationId, currentWorkspace, projectDirectory, uiLanguage],
   );
 
   useEffect(() => {

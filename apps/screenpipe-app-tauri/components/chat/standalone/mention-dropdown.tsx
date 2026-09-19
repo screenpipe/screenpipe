@@ -7,12 +7,16 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import type { ComposerMentionsProps } from "./composer-types";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 export function MentionDropdown({
   mentions,
 }: {
   mentions: ComposerMentionsProps;
 }) {
+
+  const ui = useGT();
   if (!mentions.show || mentions.suggestions.length === 0) return null;
 
   return (
@@ -35,22 +39,22 @@ export function MentionDropdown({
             <div key={category}>
               <div className="px-2 py-1 text-[10px] font-medium normal-case tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50">
                 {category === "command"
-                  ? "Commands"
+                  ? ui("Commands")
                   : category === "chat"
-                  ? "Recent chats"
+                  ? ui("Recent chats")
                   : category === "skill"
-                    ? "Installed skills"
+                    ? ui("Installed skills")
                     : category === "range"
-                      ? "Time ranges"
+                      ? ui("Time ranges")
                   : category === "time"
-                  ? "Time"
+                  ? ui("Time")
                   : category === "content"
-                    ? "Content type"
+                    ? ui("Content type")
                     : category === "speaker"
-                      ? "Speakers"
+                      ? ui("Speakers")
                       : category === "tag"
-                        ? "Tags"
-                        : "Apps"}
+                        ? ui("Tags")
+                        : ui("Apps")}
               </div>
               {items.map((suggestion) => {
                 const globalIndex = mentions.suggestions.indexOf(suggestion);

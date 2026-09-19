@@ -36,6 +36,8 @@ import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { NotificationActionButton } from "@/components/notification-action-button";
 import { isNotificationFeedbackEligible } from "@/lib/ai-feedback";
 import { NotificationFeedback } from "@/components/notification-feedback";
+import { useGT } from "gt-react";
+
 
 interface NotificationPayload {
   id: string;
@@ -90,6 +92,8 @@ function notificationClipboardText(payload: NotificationPayload): string {
 }
 
 export default function NotificationPanelPage() {
+
+  const ui = useGT();
   const [payload, setPayload] = useState<NotificationPayload | null>(null);
   const [optionsExpanded, setOptionsExpanded] = useState(false);
   const [feedbackExpanded, setFeedbackExpanded] = useState(false);
@@ -466,47 +470,7 @@ export default function NotificationPanelPage() {
           boxShadow: "0 4px 16px hsl(var(--foreground) / 0.12)",
         }}
       >
-        <style>{`
-          [class~="group/notif"] button:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
-          @media (prefers-reduced-motion: reduce) { [class~="group/notif"] > div { animation: none !important; } }
-          @keyframes slideIn {
-            from {
-              opacity: 0;
-              transform: translateX(20px);
-            }
-            to {
-              opacity: 1;
-              transform: translateX(0);
-            }
-          }
-          .notif-md p { margin: 0 0 4px 0; }
-          .notif-md p:last-child { margin: 0; }
-          .notif-md strong { color: hsl(var(--foreground) / 0.9); }
-          .notif-md a { color: hsl(var(--foreground) / 0.7); text-decoration: underline; }
-          .notif-md code {
-            background: hsl(var(--foreground) / 0.06);
-            padding: 1px 4px;
-            font-size: 10px;
-          }
-          .notif-md ul, .notif-md ol {
-            margin: 2px 0;
-            padding-left: 16px;
-          }
-          .notif-md li { margin: 1px 0; }
-          .notif-body::-webkit-scrollbar {
-            width: 4px;
-          }
-          .notif-body::-webkit-scrollbar-track {
-            background: transparent;
-          }
-          .notif-body::-webkit-scrollbar-thumb {
-            background: hsl(var(--foreground) / 0.15);
-            border-radius: 2px;
-          }
-          .notif-body::-webkit-scrollbar-thumb:hover {
-            background: hsl(var(--foreground) / 0.3);
-          }
-        `}</style>
+        <style>{"\n          [class~=\"group/notif\"] button:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }\n          @media (prefers-reduced-motion: reduce) { [class~=\"group/notif\"] > div { animation: none !important; } }\n          @keyframes slideIn {\n            from {\n              opacity: 0;\n              transform: translateX(20px);\n            }\n            to {\n              opacity: 1;\n              transform: translateX(0);\n            }\n          }\n          .notif-md p { margin: 0 0 4px 0; }\n          .notif-md p:last-child { margin: 0; }\n          .notif-md strong { color: hsl(var(--foreground) / 0.9); }\n          .notif-md a { color: hsl(var(--foreground) / 0.7); text-decoration: underline; }\n          .notif-md code {\n            background: hsl(var(--foreground) / 0.06);\n            padding: 1px 4px;\n            font-size: 10px;\n          }\n          .notif-md ul, .notif-md ol {\n            margin: 2px 0;\n            padding-left: 16px;\n          }\n          .notif-md li { margin: 1px 0; }\n          .notif-body::-webkit-scrollbar {\n            width: 4px;\n          }\n          .notif-body::-webkit-scrollbar-track {\n            background: transparent;\n          }\n          .notif-body::-webkit-scrollbar-thumb {\n            background: hsl(var(--foreground) / 0.15);\n            border-radius: 2px;\n          }\n          .notif-body::-webkit-scrollbar-thumb:hover {\n            background: hsl(var(--foreground) / 0.3);\n          }\n        "}</style>
 
         {/* Header */}
         <div
@@ -542,7 +506,7 @@ export default function NotificationPanelPage() {
           <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
             <button
               type="button"
-              aria-label="Notification options"
+              aria-label={ui("Notification options")}
               aria-expanded={optionsExpanded}
               onClick={() => setOptionsExpanded((expanded) => !expanded)}
               style={{
@@ -562,7 +526,7 @@ export default function NotificationPanelPage() {
               <MoreHorizontal size={14} />
             </button>
             <button
-              aria-label="Dismiss notification"
+              aria-label={ui("Dismiss notification")}
               onClick={() => hide("explicit")}
               style={{
                 background: "none",
@@ -600,7 +564,7 @@ export default function NotificationPanelPage() {
         >
           <div
             onClick={payload.source_url ? openSource : undefined}
-            title={payload.source_url ? "Open source chat" : undefined}
+            title={payload.source_url ? ui("Open source chat") : undefined}
             style={{
               fontSize: "12px",
               fontWeight: 500,
@@ -675,8 +639,8 @@ export default function NotificationPanelPage() {
                             e.currentTarget.style.color =
                               "hsl(var(--foreground) / 0.35)";
                           }}
-                          title="Open in default app"
-                          aria-label="Open in default app"
+                          title={ui("Open in default app")}
+                          aria-label={ui("Open in default app")}
                           style={{
                             marginLeft: "3px",
                             padding: "0 3px",
@@ -798,8 +762,8 @@ export default function NotificationPanelPage() {
           >
             <button
               onClick={copyNotification}
-              title="Copy notification"
-              aria-label={copied ? "Copied notification" : "Copy notification"}
+              title={ui("Copy notification")}
+              aria-label={copied ? ui("Copied notification") : ui("Copy notification")}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -827,12 +791,12 @@ export default function NotificationPanelPage() {
               ) : (
                 <Copy size={12} strokeWidth={1.8} />
               )}
-              {copied ? "copied" : "copy"}
+              {copied ? ui("copied") : ui("copy")}
             </button>
             {payload.source_url && (
               <button
                 onClick={openSource}
-                title="Open source chat"
+                title={ui("Open source chat")}
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
@@ -887,7 +851,7 @@ export default function NotificationPanelPage() {
                   await commands.showWindow({ Home: { page: null } });
                 } catch {}
               }}
-              title="Manage notification settings"
+              title={ui("Manage notification settings")}
               style={{
                 display: "inline-flex",
                 alignItems: "center",

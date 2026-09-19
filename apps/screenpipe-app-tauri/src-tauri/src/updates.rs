@@ -713,10 +713,10 @@ fn consume_update_attempt_marker(app: &tauri::AppHandle) -> Option<UpdateAttempt
 
 /// Fire-and-forget native notification; used where no webview toast can exist
 /// (tray-only interactions, possibly with zero windows open).
-fn notify_update_state(app: &tauri::AppHandle, title: &str, body: &str) {
+fn notify_update_state(app: &tauri::AppHandle, title: impl Into<String>, body: impl Into<String>) {
     let app = app.clone();
-    let title = title.to_string();
-    let body = body.to_string();
+    let title = title.into();
+    let body = body.into();
     std::thread::spawn(move || {
         if let Err(e) = app.notification().builder().title(title).body(body).show() {
             warn!("failed to show update notification: {}", e);
@@ -748,29 +748,17 @@ pub async fn trigger_update_now(app: tauri::AppHandle) {
             Ok(outcome) => {
                 warn!("tray update flow: restart deferred (outcome={})", outcome);
                 manager.set_menu_restart_ready();
-                notify_update_state(
-                    &app,
-                    "screenpipe is still starting up",
-                    "the update will install once startup finishes — try again in a moment.",
-                );
+                notify_update_state(&app, crate::localization::ui_text("screenpipe is still starting up"), crate::localization::ui_text("the update will install once startup finishes — try again in a moment."));
             }
             Err(e) => {
                 error!("tray update flow: restart for update failed: {}", e);
                 manager.set_menu_restart_ready();
-                notify_update_state(
-                    &app,
-                    "update couldn't restart",
-                    "screenpipe couldn't save settings before restarting. try again, or quit and reopen the app.",
-                );
+                notify_update_state(&app, crate::localization::ui_text("update couldn't restart"), crate::localization::ui_text("screenpipe couldn't save settings before restarting. try again, or quit and reopen the app."));
             }
         }
     } else if let Err(e) = manager.check_for_updates(true, true).await {
         error!("tray menu: check for updates failed: {}", e);
-        notify_update_state(
-            &app,
-            "update check failed",
-            "couldn't reach the update server. check your connection and try again.",
-        );
+        notify_update_state(&app, crate::localization::ui_text("update check failed"), crate::localization::ui_text("couldn't reach the update server. check your connection and try again."));
     }
 }
 
@@ -1019,19 +1007,19 @@ impl UpdatesManager {
             None
         } else {
             let (menu_text, enabled) = if is_source_build(app) {
-                ("Auto-updates unavailable (source build)", true) // Enable to show info dialog
+                (crate::localization::source_text("Auto-updates unavailable (source build)"), true) // Enable to show info dialog
             } else if failed_attempt.is_some() {
                 // Enabled: with nothing staged in this fresh process, a click
                 // routes to check_for_updates(force) and re-attempts.
-                ("Update didn't apply — click to retry", true)
+                (crate::localization::source_text("Update didn't apply — click to retry"), true)
             } else {
-                ("Screenpipe is up to date", false)
+                (crate::localization::source_text("Screenpipe is up to date"), false)
             };
-            Some(
-                MenuItemBuilder::with_id("update_now", menu_text)
-                    .enabled(enabled)
-                    .build(app)?,
-            )
+            let item = MenuItemBuilder::with_id("update_now", menu_text)
+                .enabled(enabled)
+                .build(app)?;
+            crate::localization::ui_menu(menu_text, &[], &item)?;
+            Some(item)
         };
 
         Ok(Self {
@@ -1115,15 +1103,15 @@ impl UpdatesManager {
                 );
                 if let Some(ref item) = self.update_menu_item {
                     item.set_enabled(true)?;
-                    item.set_text("Move screenpipe to Applications to update")?;
+                    crate::localization::ui_menu("Move screenpipe to Applications to update", &[], item)?;
                 }
                 if show_dialog {
                     self.app
                         .dialog()
                         .message(
-                            "Quit screenpipe, move screenpipe.app to Applications, then reopen it. macOS prevents apps launched from Downloads or a disk image from updating themselves.",
+                            crate::localization::ui_text("Quit screenpipe, move screenpipe.app to Applications, then reopen it. macOS prevents apps launched from Downloads or a disk image from updating themselves."),
                         )
-                        .title("Move screenpipe to Applications")
+                        .title(crate::localization::ui_text("Move screenpipe to Applications"))
                         .buttons(MessageDialogButtons::Ok)
                         .show(|_| {});
                 }
@@ -1221,7 +1209,7 @@ impl UpdatesManager {
                     );
                     if let Some(ref item) = self.update_menu_item {
                         item.set_enabled(true)?;
-                        item.set_text("Update failed — click to retry")?;
+                        crate::localization::ui_menu("Update failed — click to retry", &[], item)?;
                     }
                     return Result::Ok(false);
                 }
@@ -1240,7 +1228,7 @@ impl UpdatesManager {
 
             if let Some(ref item) = self.update_menu_item {
                 item.set_enabled(true)?;
-                item.set_text(&format!("Update available: v{}", update.version))?;
+                crate::localization::ui_menu("Update available: v{value1}", &[("value1", (update.version).to_string())], item)?;
             }
 
             {
@@ -1294,7 +1282,7 @@ impl UpdatesManager {
                 }
                 if let Some(ref item) = self.update_menu_item {
                     item.set_enabled(true)?;
-                    item.set_text("Restart to update")?;
+                    crate::localization::ui_menu("Restart to update", &[], item)?;
                 }
 
                 save_pre_update_version(&self.app, update.body.clone());
@@ -1314,8 +1302,8 @@ impl UpdatesManager {
                     let _ = app_notif
                         .notification()
                         .builder()
-                        .title("screenpipe update ready")
-                        .body(format!("v{} ready — restart to update", version_str))
+                        .title(crate::localization::ui_text("screenpipe update ready"))
+                        .body(crate::localization::ui_format("v{value1} ready — restart to update", &[("value1", (version_str).to_string())]))
                         .show();
                 });
 
@@ -1334,7 +1322,7 @@ impl UpdatesManager {
 
             if let Some(ref item) = self.update_menu_item {
                 item.set_enabled(false)?;
-                item.set_text("Downloading latest version of screenpipe")?;
+                crate::localization::ui_menu("Downloading latest version of screenpipe", &[], item)?;
             }
 
             // Retry transient download failures with exponential backoff.
@@ -1370,7 +1358,7 @@ impl UpdatesManager {
                             info!("update download: {}%", pct);
                         }
                         if let Some(ref m) = menu_item {
-                            let _ = m.set_text(&format!("Downloading update... {}%", pct));
+                            let _ = crate::localization::ui_menu("Downloading update... {value1}%", &[("value1", (pct).to_string())], m);
                         }
                     };
                     // macOS: never install in the background. install() renames
@@ -1475,10 +1463,7 @@ impl UpdatesManager {
                                 delay.as_secs()
                             );
                             if let Some(ref item) = self.update_menu_item {
-                                let _ = item.set_text(&format!(
-                                    "Update download failed — retrying in {}s",
-                                    delay.as_secs()
-                                ));
+                                let _ = crate::localization::ui_menu("Update download failed — retrying in {value1}s", &[("value1", (delay.as_secs()).to_string())], item);
                             }
                             tokio::time::sleep(delay).await;
                             attempt += 1;
@@ -1497,7 +1482,7 @@ impl UpdatesManager {
                     }
                     if let Some(ref item) = self.update_menu_item {
                         item.set_enabled(true)?;
-                        item.set_text("Restart to update")?;
+                        crate::localization::ui_menu("Restart to update", &[], item)?;
                     }
                 }
                 Err(e) => {
@@ -1524,13 +1509,13 @@ impl UpdatesManager {
                             let _ = app_notif
                                 .notification()
                                 .builder()
-                                .title("screenpipe update available")
-                                .body(format!("v{} is ready — sign in to download", version_str))
+                                .title(crate::localization::ui_text("screenpipe update available"))
+                                .body(crate::localization::ui_format("v{value1} is ready — sign in to download", &[("value1", (version_str).to_string())]))
                                 .show();
                         });
                         if let Some(ref item) = self.update_menu_item {
                             item.set_enabled(true)?;
-                            item.set_text("Sign in to update")?;
+                            crate::localization::ui_menu("Sign in to update", &[], item)?;
                         }
                         return Ok(false);
                     }
@@ -1547,7 +1532,7 @@ impl UpdatesManager {
                     *self.pending_update.lock().await = None;
                     if let Some(ref item) = self.update_menu_item {
                         item.set_enabled(true)?;
-                        item.set_text("Update failed — click to retry")?;
+                        crate::localization::ui_menu("Update failed — click to retry", &[], item)?;
                     }
                     let _ = self.app.emit(
                         "update-failed",
@@ -1562,11 +1547,8 @@ impl UpdatesManager {
                         let _ = app_notif
                             .notification()
                             .builder()
-                            .title("screenpipe update failed")
-                            .body(format!(
-                                "v{} couldn't download — open screenpipe to retry",
-                                version_str
-                            ))
+                            .title(crate::localization::ui_text("screenpipe update failed"))
+                            .body(crate::localization::ui_format("v{value1} couldn't download — open screenpipe to retry", &[("value1", (version_str).to_string())]))
                             .show();
                     });
                     return Err(e.into());
@@ -1594,13 +1576,13 @@ impl UpdatesManager {
                 let notification = app_notif.notification().builder();
                 let result = if auto_update {
                     notification
-                        .title("screenpipe updating")
-                        .body(format!("v{} downloaded — restarting now", version_str))
+                        .title(crate::localization::ui_text("screenpipe updating"))
+                        .body(crate::localization::ui_format("v{value1} downloaded — restarting now", &[("value1", (version_str).to_string())]))
                         .show()
                 } else {
                     notification
-                        .title("screenpipe update ready")
-                        .body(format!("v{} downloaded — restart to update", version_str))
+                        .title(crate::localization::ui_text("screenpipe update ready"))
+                        .body(crate::localization::ui_format("v{value1} downloaded — restart to update", &[("value1", (version_str).to_string())]))
                         .show()
                 };
                 if let Err(e) = result {
@@ -1671,11 +1653,8 @@ impl UpdatesManager {
         if show_dialog {
             self.app
                 .dialog()
-                .message(format!(
-                    "you're running the latest version (v{})",
-                    self.app.package_info().version
-                ))
-                .title("screenpipe is up to date")
+                .message(crate::localization::ui_format("you're running the latest version (v{value1})", &[("value1", (self.app.package_info().version).to_string())]))
+                .title(crate::localization::ui_text("screenpipe is up to date"))
                 .buttons(MessageDialogButtons::Ok)
                 .show(|_| {});
         }
@@ -1691,7 +1670,7 @@ impl UpdatesManager {
     /// visibly acknowledged even though the whole UI is about to go away.
     pub fn set_menu_installing(&self) {
         if let Some(item) = &self.update_menu_item {
-            let _ = item.set_text("Installing update…");
+            let _ = crate::localization::ui_menu("Installing update…", &[], item);
             let _ = item.set_enabled(false);
         }
     }
@@ -1700,7 +1679,7 @@ impl UpdatesManager {
     /// user can click again.
     pub fn set_menu_restart_ready(&self) {
         if let Some(item) = &self.update_menu_item {
-            let _ = item.set_text("Restart to update");
+            let _ = crate::localization::ui_menu("Restart to update", &[], item);
             let _ = item.set_enabled(true);
         }
     }
@@ -1731,14 +1710,11 @@ impl UpdatesManager {
         let dialog = self
             .app
             .dialog()
-            .message(
-                "auto-updates are only available in the pre-built version.\n\n\
-                source builds require manual updates from github.",
-            )
-            .title("source build detected")
+            .message(crate::localization::ui_text("auto-updates are only available in the pre-built version.\n\nsource builds require manual updates from github."))
+            .title(crate::localization::ui_text("source build detected"))
             .buttons(MessageDialogButtons::OkCancelCustom(
-                "download pre-built".to_string(),
-                "view on github".to_string(),
+                crate::localization::ui_text("download pre-built"),
+                crate::localization::ui_text("view on github"),
             ));
 
         dialog.show(move |answer| {

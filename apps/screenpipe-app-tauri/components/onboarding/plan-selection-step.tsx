@@ -14,6 +14,8 @@ import {
 } from "@/lib/onboarding-checkout-navigation";
 import type { AppUser } from "@/lib/app-entitlement";
 import { isOnboardingCheckoutResolved } from "@/lib/onboarding-checkout";
+import { useGT } from "gt-react";
+
 
 const HOSTED_CHECKOUT_URL = screenpipeWebUrl(
   "/onboarding/checkout",
@@ -32,6 +34,8 @@ export default function PlanSelectionStep({
 }: {
   handleNextSlide: () => void | Promise<void>;
 }) {
+
+  const ui = useGT();
   const { settings, loadUser } = useSettings();
   const user = settings.user as AppUser | null | undefined;
   const [returnStatus] = useState(checkoutStatus);
@@ -55,7 +59,7 @@ export default function PlanSelectionStep({
     if (submissionStartedRef.current) return;
     if (!userToken) {
       setBusy(false);
-      setError("Sign in to continue");
+      setError(ui("Sign in to continue"));
       return;
     }
 
@@ -77,7 +81,7 @@ export default function PlanSelectionStep({
       setError(
         checkoutError instanceof Error
           ? checkoutError.message
-          : "Secure checkout could not be opened",
+          : ui("Secure checkout could not be opened"),
       );
     }
   }, [userToken]);
@@ -103,7 +107,7 @@ export default function PlanSelectionStep({
     ) {
       if (returnStatus === "complete" && !userToken) {
         setBusy(false);
-        setError("Sign in to confirm your payment");
+        setError(ui("Sign in to confirm your payment"));
       }
       return;
     }
@@ -146,7 +150,7 @@ export default function PlanSelectionStep({
       if (pollAttemptsRef.current >= CHECKOUT_MAX_POLL_ATTEMPTS) {
         setConfirmationTimedOut(true);
         setBusy(false);
-        setError("Account confirmation is taking longer than expected");
+        setError(ui("Account confirmation is taking longer than expected"));
         posthog.capture("onboarding_card_checkout_confirmation_timed_out", {
           poll_attempts: pollAttemptsRef.current,
         });
@@ -234,7 +238,7 @@ export default function PlanSelectionStep({
             </div>
           ) : (
             <p className="font-mono text-[11px] text-muted-foreground">
-              {busy ? "Checking secure checkout" : "Waiting for confirmation"}
+              {busy ? ui("Checking secure checkout") : ui("Waiting for confirmation")}
             </p>
           )}
         </div>
@@ -263,7 +267,7 @@ export default function PlanSelectionStep({
           disabled={busy}
           className="mt-5 border bg-foreground px-4 py-2 font-mono text-[10px] normal-case tracking-widest text-background transition-opacity hover:opacity-80 disabled:opacity-50"
         >
-          {busy ? "Opening checkout" : "Retry secure checkout"}
+          {busy ? ui("Opening checkout") : ui("Retry secure checkout")}
         </button>
       </div>
     );
@@ -278,7 +282,7 @@ export default function PlanSelectionStep({
         Opening secure checkout
       </h2>
       <p className="mt-3 font-mono text-[11px] text-muted-foreground">
-        {error || "Loading screenpipe.com"}
+        {error || ui("Loading screenpipe.com")}
       </p>
       {error && (
         <button

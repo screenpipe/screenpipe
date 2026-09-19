@@ -16,6 +16,7 @@ import SwiftUI
 // MARK: - Root
 
 struct TimelineRootView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: TimelineViewModel
     /// Embedded inside the main window rather than the fullscreen overlay: the
     /// webview varies its insets and hides window-level actions the same way.
@@ -146,6 +147,7 @@ struct TimelineRootView: View {
 // MARK: - Frame canvas
 
 struct TimelineFrameCanvas: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: TimelineViewModel
 
     var body: some View {
@@ -159,8 +161,8 @@ struct TimelineFrameCanvas: View {
                 } else {
                     TimelineStatusCard(
                         systemImage: "hourglass",
-                        title: "Loading Timeline",
-                        message: "Fetching your recorded frames...",
+                        title: uiText("Loading Timeline"),
+                        message: uiText("Fetching your recorded frames..."),
                         showsSpinner: true
                     )
                 }
@@ -171,8 +173,8 @@ struct TimelineFrameCanvas: View {
             case .connectionError(let message):
                 TimelineStatusCard(
                     systemImage: "exclamationmark.triangle",
-                    title: "Connection Error",
-                    message: "Unable to reach your screenpipe data. \(message)",
+                    title: uiText("Connection Error"),
+                    message: uiText("Unable to reach your screenpipe data. {value1}", ["value1": String(describing: message)]),
                     showsSpinner: false
                 )
             }
@@ -222,6 +224,7 @@ struct TimelineFrameCanvas: View {
 /// flashing a centered spinner between every pair of decoded frames. This is
 /// a plain, non-interactive image so stale Live Text can never be selected.
 struct TimelineLoadingFrameTransition: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let image: NSImage
 
     var body: some View {
@@ -243,6 +246,7 @@ struct TimelineLoadingFrameTransition: View {
 /// Gives the AppKit Live Text surface an explicit viewport. Keeping this as a
 /// named view makes the native-resolution regression directly render-testable.
 struct TimelineFrameImageView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let image: NSImage
     var searchHighlights: [TimelineSearchTextPosition] = []
 
@@ -257,6 +261,7 @@ struct TimelineFrameImageView: View {
 
 /// Generic bordered card used by the loading and error states.
 struct TimelineStatusCard: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     var systemImage: String
     var title: String
     var message: String
@@ -289,6 +294,7 @@ struct TimelineStatusCard: View {
 /// Recording is off in settings — the one state that must never be confused
 /// with "still loading", because the fix is a settings change, not waiting.
 struct TimelineRecordingOffCard: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: TimelineViewModel
 
     var body: some View {
@@ -301,15 +307,15 @@ struct TimelineRecordingOffCard: View {
                     .font(.system(size: 24))
                     .foregroundStyle(TimelineTheme.trace)
             }
-            Text("Screen recording is off")
+            Text(uiText("Screen recording is off"))
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(TimelineTheme.foreground)
-            Text("Enable screen recording in settings to start capturing your timeline.")
+            Text(uiText("Enable screen recording in settings to start capturing your timeline."))
                 .font(TimelineTheme.captionFont)
                 .foregroundStyle(TimelineTheme.trace)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 320)
-            Button("Open settings") {
+            Button(uiText("Open settings")) {
                 model.emitAction("open_recording_settings")
             }
             .buttonStyle(TimelineControlStyle())
@@ -319,6 +325,7 @@ struct TimelineRecordingOffCard: View {
 
 /// Recording is on but nothing has been captured yet.
 struct TimelineBuildingMemoryCard: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @State private var pulse = false
 
     var body: some View {
@@ -340,17 +347,17 @@ struct TimelineBuildingMemoryCard: View {
                     .font(.system(size: 22))
                     .foregroundStyle(TimelineTheme.phosphor)
             }
-            Text("Building Your Memory")
+            Text(uiText("Building Your Memory"))
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(TimelineTheme.foreground)
-            Text("Screenpipe is recording your screen activity. Your timeline will appear here as frames are captured.")
+            Text(uiText("Screenpipe is recording your screen activity. Your timeline will appear here as frames are captured."))
                 .font(TimelineTheme.captionFont)
                 .foregroundStyle(TimelineTheme.trace)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 340)
             HStack(spacing: 6) {
                 Circle().fill(TimelineTheme.phosphor).frame(width: 6, height: 6)
-                Text("Recording in progress").font(TimelineTheme.captionFont)
+                Text(uiText("Recording in progress")).font(TimelineTheme.captionFont)
             }
             .foregroundStyle(TimelineTheme.trace)
         }
@@ -361,6 +368,7 @@ struct TimelineBuildingMemoryCard: View {
 /// A frame exists but no image was written — a privacy or low-battery pause.
 /// Saying so is the difference between "broken" and "working as configured".
 struct TimelineScreenshotPausedCard: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: TimelineViewModel
 
     var body: some View {
@@ -370,10 +378,10 @@ struct TimelineScreenshotPausedCard: View {
                     .font(TimelineTheme.monoFont)
                     .foregroundStyle(TimelineTheme.trace)
             }
-            Text("SCREENSHOT PAUSED")
+            Text(uiText("SCREENSHOT PAUSED"))
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(TimelineTheme.foreground)
-            Text("screenpipe saved activity for this moment, but no image was saved. This usually happens during low-battery or privacy pause modes.")
+            Text(uiText("screenpipe saved activity for this moment, but no image was saved. This usually happens during low-battery or privacy pause modes."))
                 .font(TimelineTheme.captionFont)
                 .foregroundStyle(TimelineTheme.trace)
                 .multilineTextAlignment(.center)
@@ -385,10 +393,10 @@ struct TimelineScreenshotPausedCard: View {
 
     private var navigationButtons: some View {
         HStack(spacing: 8) {
-            Button("Previous") { model.step(1) }
+            Button(uiText("Previous")) { model.step(1) }
                 .buttonStyle(TimelineControlStyle())
                 .disabled(model.currentIndex >= model.frames.count - 1)
-            Button("Next") { model.step(-1) }
+            Button(uiText("Next")) { model.step(-1) }
                 .buttonStyle(TimelineControlStyle())
                 .disabled(model.currentIndex <= 0)
         }
@@ -398,6 +406,7 @@ struct TimelineScreenshotPausedCard: View {
 /// The frame claims an image on disk but none of the three tiers could produce
 /// one — a deleted chunk, a bad path, or a server that cannot serve it.
 struct TimelineImageUnavailableCard: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: TimelineViewModel
 
     var body: some View {
@@ -405,19 +414,19 @@ struct TimelineImageUnavailableCard: View {
             Image(systemName: "photo.badge.exclamationmark")
                 .font(.system(size: 22))
                 .foregroundStyle(TimelineTheme.trace)
-            Text("IMAGE UNAVAILABLE")
+            Text(uiText("IMAGE UNAVAILABLE"))
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(TimelineTheme.foreground)
-            Text("This moment was recorded, but its image could not be read from disk or the local server.")
+            Text(uiText("This moment was recorded, but its image could not be read from disk or the local server."))
                 .font(TimelineTheme.captionFont)
                 .foregroundStyle(TimelineTheme.trace)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 340)
             HStack(spacing: 8) {
-                Button("Previous") { model.step(1) }
+                Button(uiText("Previous")) { model.step(1) }
                     .buttonStyle(TimelineControlStyle())
                     .disabled(model.currentIndex >= model.frames.count - 1)
-                Button("Next") { model.step(-1) }
+                Button(uiText("Next")) { model.step(-1) }
                     .buttonStyle(TimelineControlStyle())
                     .disabled(model.currentIndex <= 0)
             }
@@ -427,6 +436,7 @@ struct TimelineImageUnavailableCard: View {
 }
 
 struct TimelineNoFrameCard: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: TimelineViewModel
 
     var body: some View {
@@ -434,10 +444,10 @@ struct TimelineNoFrameCard: View {
             Image(systemName: "photo.badge.exclamationmark")
                 .font(.system(size: 22))
                 .foregroundStyle(TimelineTheme.trace)
-            Text("NO FRAME SELECTED")
+            Text(uiText("NO FRAME SELECTED"))
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(TimelineTheme.foreground)
-            Text("Select a point on the timeline to view a recorded frame.")
+            Text(uiText("Select a point on the timeline to view a recorded frame."))
                 .font(TimelineTheme.captionFont)
                 .foregroundStyle(TimelineTheme.trace)
         }
@@ -448,6 +458,7 @@ struct TimelineNoFrameCard: View {
 // MARK: - Control bar
 
 struct TimelineControlBar: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: TimelineViewModel
     var embedded: Bool
     @State private var showCalendar = false
@@ -470,7 +481,7 @@ struct TimelineControlBar: View {
             }
             .buttonStyle(TimelineControlStyle())
             .disabled(model.isNavigating || model.isAtEarliest)
-            .help("Previous day")
+            .help(uiText("Previous day"))
 
             Button { showCalendar.toggle() } label: {
                 HStack(spacing: 6) {
@@ -498,13 +509,13 @@ struct TimelineControlBar: View {
             // Forward navigation is the escape hatch from a slow/empty older
             // day, so it remains clickable while that request is pending.
             .disabled(model.isAtToday)
-            .help("Next day")
+            .help(uiText("Next day"))
 
             Button { model.jumpToNow() } label: {
                 Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(TimelineControlStyle())
-            .help("Jump to now")
+            .help(uiText("Jump to now"))
         }
     }
 
@@ -514,13 +525,13 @@ struct TimelineControlBar: View {
                 Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
             }
             .buttonStyle(TimelineControlStyle())
-            .help(model.isPlaying ? "Pause (Space)" : "Play (Space)")
+            .help(model.isPlaying ? uiText("Pause (Space)") : uiText("Play (Space)"))
 
             Button { model.cycleSpeed() } label: {
                 Text("\(formattedSpeed)x").font(TimelineTheme.monoFont)
             }
             .buttonStyle(TimelineControlStyle())
-            .help("Playback speed")
+            .help(uiText("Playback speed"))
 
             // Per-device mute only earns its space once more than one device is
             // audible, which is when muting is actually a decision.
@@ -563,38 +574,39 @@ struct TimelineControlBar: View {
             }
         }
         .buttonStyle(TimelineControlStyle())
-        .accessibilityLabel("daily summary")
-        .help("Generate a summary for this day")
+        .accessibilityLabel(uiText("daily summary"))
+        .help(uiText("Generate a summary for this day"))
     }
 
     private var searchAction: some View {
         Button { model.emitAction("open_search") } label: {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
-                Text("search")
+                Text(uiText("search"))
             }
         }
         .buttonStyle(TimelineControlStyle())
-        .accessibilityLabel("search")
-        .help("Search timeline (/)")
+        .accessibilityLabel(uiText("search"))
+        .help(uiText("Search timeline (/)"))
     }
 
     private var chatAction: some View {
         Button { model.emitAction("open_chat") } label: {
             HStack(spacing: 6) {
                 Image(systemName: "bubble.left")
-                Text("chat")
+                Text(uiText("chat"))
             }
         }
         .buttonStyle(TimelineControlStyle())
-        .accessibilityLabel("chat")
-        .help("Open chat")
+        .accessibilityLabel(uiText("chat"))
+        .help(uiText("Open chat"))
     }
 }
 
 /// A muted device is greyed *and* struck through, so the state does not rely on
 /// colour alone.
 struct TimelineMuteButton: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let device: String
     let isInput: Bool
     let isMuted: Bool
@@ -616,13 +628,14 @@ struct TimelineMuteButton: View {
         }
         .buttonStyle(TimelinePlainButtonStyle())
         .foregroundStyle(isMuted ? TimelineTheme.trace : TimelineTheme.foreground)
-        .help(isMuted ? "unmute \(device)" : "mute \(device)")
+        .help(isMuted ? uiText("unmute {value1}", ["value1": String(describing: device)]) : uiText("mute {value1}", ["value1": String(describing: device)]))
     }
 }
 
 /// Days without any capture are disabled, so the calendar cannot navigate to an
 /// empty screen.
 struct TimelineCalendarPopover: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: TimelineViewModel
     @Binding var isPresented: Bool
     @State private var month: Date = Date()
@@ -683,8 +696,8 @@ struct TimelineCalendarPopover: View {
 
     private var monthLabel: String {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "MMMM yyyy"
+        f.locale = UILocalization.shared.locale
+        f.setLocalizedDateFormatFromTemplate("MMMM yyyy")
         return f.string(from: month)
     }
 
@@ -731,6 +744,7 @@ struct TimelineCalendarPopover: View {
 // MARK: - Filter rail
 
 struct TimelineFilterRail: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     static let captionsSymbol = "captions.bubble"
     static let tagSymbol = "tag"
 
@@ -783,8 +797,8 @@ struct TimelineFilterRail: View {
             )
         }
         .buttonStyle(TimelinePlainButtonStyle())
-        .accessibilityLabel(model.showSubtitles ? "hide captions" : "show captions")
-        .help(model.showSubtitles ? "Hide captions" : "Show captions")
+        .accessibilityLabel(model.showSubtitles ? uiText("hide captions") : uiText("show captions"))
+        .help(model.showSubtitles ? uiText("Hide captions") : uiText("Show captions"))
     }
 
     private func row(
@@ -878,7 +892,7 @@ struct TimelineFilterRail: View {
     private func meetingLabel(_ meeting: TimelineMeeting) -> String {
         let names = meeting.speakers.prefix(2).joined(separator: ", ")
         let extra = meeting.speakers.count > 2 ? " +\(meeting.speakers.count - 2)" : ""
-        let who = names.isEmpty ? "\(meeting.durationMinutes)m call" : names + extra
+        let who = names.isEmpty ? uiText("{value1}m call", ["value1": String(describing: meeting.durationMinutes)]) : names + extra
         return "\(who) · \(TimelineTheme.clockFormatter.string(from: meeting.start))"
     }
 
@@ -913,6 +927,7 @@ struct TimelineFilterRail: View {
 // MARK: - Subtitles
 
 struct TimelineSubtitleBar: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: TimelineViewModel
     @State private var editingLine: SubtitleLine?
 
@@ -934,12 +949,12 @@ struct TimelineSubtitleBar: View {
                                 .buttonStyle(TimelinePlainButtonStyle())
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(TimelineTheme.foreground)
-                                .help("Change speaker")
+                                .help(uiText("Change speaker"))
                         }
                         if line.isPending {
                             HStack(spacing: 4) {
                                 ProgressView().controlSize(.mini)
-                                Text("transcribing…")
+                                Text(uiText("transcribing…"))
                                     .font(TimelineTheme.captionFont)
                                     .foregroundStyle(TimelineTheme.trace)
                             }
@@ -973,6 +988,7 @@ struct TimelineSubtitleBar: View {
 }
 
 struct TimelineSpeakerEditor: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: TimelineViewModel
     let line: SubtitleLine
     let onClose: () -> Void
@@ -989,9 +1005,9 @@ struct TimelineSpeakerEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("CHANGE SPEAKER")
+            Text(uiText("CHANGE SPEAKER"))
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
-            TextField("speaker name", text: $name)
+            TextField(uiText("speaker name"), text: $name)
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 8)
                 .frame(width: 220, height: 28)
@@ -1003,13 +1019,13 @@ struct TimelineSpeakerEditor: View {
                     .foregroundStyle(Color.red.opacity(0.85))
             }
             HStack(spacing: 6) {
-                Button("cancel", action: onClose)
+                Button(uiText("cancel"), action: onClose)
                     .buttonStyle(TimelineControlStyle())
                 Button {
                     save()
                 } label: {
                     if isSaving { ProgressView().controlSize(.mini) }
-                    else { Text("save") }
+                    else { Text(uiText("save")) }
                 }
                 .buttonStyle(TimelineControlStyle(isActive: true))
                 .disabled(isSaving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -1029,7 +1045,7 @@ struct TimelineSpeakerEditor: View {
                 try await model.reassignSpeaker(line, to: name)
                 onClose()
             } catch {
-                self.error = "Could not update this speaker."
+                self.error = uiText("Could not update this speaker.")
                 isSaving = false
             }
         }
@@ -1039,6 +1055,7 @@ struct TimelineSpeakerEditor: View {
 // MARK: - Browser URL pill
 
 struct TimelineURLPill: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let url: String
 
     var body: some View {
@@ -1065,6 +1082,7 @@ struct TimelineURLPill: View {
 // MARK: - Search review
 
 struct TimelineSearchPill: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: TimelineViewModel
 
     var body: some View {
@@ -1078,7 +1096,7 @@ struct TimelineSearchPill: View {
                 Button { model.stepSearchResult(1) } label: { Image(systemName: "chevron.left") }
                     .buttonStyle(TimelinePlainButtonStyle())
                     .disabled(review.isLast)
-                    .help("older match (←)")
+                    .help(uiText("older match (←)"))
 
                 TimelineSearchStripView(review: review) { model.jumpToSearchResult($0) }
 
@@ -1089,11 +1107,11 @@ struct TimelineSearchPill: View {
                 Button { model.stepSearchResult(-1) } label: { Image(systemName: "chevron.right") }
                     .buttonStyle(TimelinePlainButtonStyle())
                     .disabled(review.isFirst)
-                    .help("newer match (→)")
+                    .help(uiText("newer match (→)"))
 
                 Button { model.exitSearchReview() } label: { Image(systemName: "xmark") }
                     .buttonStyle(TimelinePlainButtonStyle())
-                    .help("Exit search review (Esc)")
+                    .help(uiText("Exit search review (Esc)"))
             }
             .foregroundStyle(TimelineTheme.foreground)
             .padding(.horizontal, 12)
@@ -1106,6 +1124,7 @@ struct TimelineSearchPill: View {
 
 /// Mirrored to match the scrubber: the newest match sits at the right edge.
 struct TimelineSearchStripView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let review: TimelineSearchReview
     var onSelect: (Int) -> Void
 
@@ -1143,8 +1162,8 @@ struct TimelineSearchStripView: View {
                 }
             )
             .accessibilityElement()
-            .accessibilityLabel("search results")
-            .accessibilityValue("\(review.activeIndex + 1) of \(review.count)")
+            .accessibilityLabel(uiText("search results"))
+            .accessibilityValue(uiText("{value1} of {value2}", ["value1": String(describing: review.activeIndex + 1), "value2": String(describing: review.count)]))
         }
     }
 }
@@ -1152,6 +1171,7 @@ struct TimelineSearchStripView: View {
 // MARK: - Tag toolbar
 
 struct TimelineTagToolbar: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: TimelineViewModel
     let selection: TimelineSelection
     @State private var confirmingDelete = false
@@ -1168,20 +1188,20 @@ struct TimelineTagToolbar: View {
                 Spacer()
                 Button { confirmingDelete.toggle() } label: { Image(systemName: "trash") }
                     .buttonStyle(TimelinePlainButtonStyle())
-                    .help("Delete this range")
+                    .help(uiText("Delete this range"))
             }
             .foregroundStyle(TimelineTheme.foreground)
 
             if confirmingDelete {
                 // Destructive and irreversible, so it states exactly what goes.
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("permanently delete all screen recordings, audio, and transcriptions from \(rangeLabel)? this cannot be undone.")
+                    Text(uiText("permanently delete all screen recordings, audio, and transcriptions from {value1}? this cannot be undone.", ["value1": String(describing: rangeLabel)]))
                         .font(TimelineTheme.captionFont)
                         .foregroundStyle(TimelineTheme.trace)
                     HStack {
-                        Button("cancel") { confirmingDelete = false }
+                        Button(uiText("cancel")) { confirmingDelete = false }
                             .buttonStyle(TimelineControlStyle())
-                        Button(model.isDeletingSelection ? "deleting…" : "delete permanently") {
+                        Button(model.isDeletingSelection ? uiText("deleting…") : uiText("delete permanently")) {
                             model.deleteSelectionRange()
                             confirmingDelete = false
                         }
@@ -1205,7 +1225,7 @@ struct TimelineTagToolbar: View {
                             }
                         }
                         .buttonStyle(TimelineControlStyle(isActive: state == .all))
-                        .help(state == .all ? "Remove \(tag) from selection" : "Add \(tag) to selection")
+                        .help(state == .all ? uiText("Remove {value1} from selection", ["value1": String(describing: tag)]) : uiText("Add {value1} to selection", ["value1": String(describing: tag)]))
                     }
                 }
                 let customSelectionTags = model.selectionTags.filter { !quickTags.contains($0) }
@@ -1222,19 +1242,19 @@ struct TimelineTagToolbar: View {
                                     }
                                 }
                                 .buttonStyle(TimelineControlStyle(isActive: true))
-                                .help("Remove \(tag) from selection")
+                                .help(uiText("Remove {value1} from selection", ["value1": String(describing: tag)]))
                             }
                         }
                     }
                 }
                 HStack(spacing: 6) {
-                    TextField("custom tag", text: $customTag)
+                    TextField(uiText("custom tag"), text: $customTag)
                         .textFieldStyle(.plain)
                         .font(TimelineTheme.captionFont)
                         .padding(.horizontal, 6)
                         .frame(height: 24)
                         .overlay(Rectangle().stroke(TimelineTheme.border, lineWidth: 1))
-                    Button("add") {
+                    Button(uiText("add")) {
                         let trimmed = customTag.trimmingCharacters(in: .whitespaces)
                         guard !trimmed.isEmpty else { return }
                         model.applyTag(trimmed, add: true)
@@ -1251,7 +1271,7 @@ struct TimelineTagToolbar: View {
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "sparkles")
-                            Text("ask ai")
+                            Text(uiText("ask ai"))
                         }
                     }
                     .buttonStyle(TimelineControlStyle())
@@ -1263,11 +1283,11 @@ struct TimelineTagToolbar: View {
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "square.and.arrow.up")
-                            Text("export video")
+                            Text(uiText("export video"))
                         }
                     }
                     .buttonStyle(TimelineControlStyle())
-                    .help("Export this selection as an MP4 with synced audio")
+                    .help(uiText("Export this selection as an MP4 with synced audio"))
                 }
             }
         }

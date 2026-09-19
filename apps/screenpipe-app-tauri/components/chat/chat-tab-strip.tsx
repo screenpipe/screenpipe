@@ -38,6 +38,8 @@ import {
 } from "@/lib/stores/chat-store";
 import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 interface ChatTabStripProps {
   activeId: string | null;
@@ -68,42 +70,16 @@ async function messagesForExport(session: SessionRecord): Promise<Message[]> {
   return (file?.messages ?? []) as Message[];
 }
 
-function visibleTabTitle(session: SessionRecord): string {
-  if (isEphemeralSideConversation(session)) return "Temporary side chat";
-  if (session.streamingTitle?.trim()) return session.streamingTitle.trim();
-  const title = session.title.trim();
-  if (!title || isInjectedTitle(title)) return "New chat";
-  return title;
-}
 
 type TabGlyph =
-  | { kind: "error"; label: "Error" }
-  | { kind: "working"; label: "Working" }
-  | { kind: "unread"; label: "Unread" }
+  | { kind: "error"; label: string }
+  | { kind: "working"; label: string }
+  | { kind: "unread"; label: string }
   | { kind: "worktree"; label: string }
-  | { kind: "split"; label: "Split pane" };
+  | { kind: "split"; label: string };
 
 /** One left-slot mark. Status wins over worktree/split so the dot stays
  *  readable instead of stacking a branch icon on top of a 6px circle. */
-function tabGlyph(
-  session: SessionRecord,
-  active: boolean,
-  split: boolean,
-): TabGlyph | null {
-  if (session.status === "error") return { kind: "error", label: "Error" };
-  if (["streaming", "thinking", "tool"].includes(session.status)) {
-    return { kind: "working", label: "Working" };
-  }
-  if (session.unread && !active) return { kind: "unread", label: "Unread" };
-  if (session.codingWorkspace) {
-    return {
-      kind: "worktree",
-      label: `Worktree · ${session.codingWorkspace.repoName}`,
-    };
-  }
-  if (split) return { kind: "split", label: "Split pane" };
-  return null;
-}
 
 function TabGlyphMark({
   glyph,
@@ -153,6 +129,37 @@ export function ChatTabStrip({
   renameConversation,
   archiveConversation,
 }: ChatTabStripProps) {
+
+  const ui = useGT();
+
+  function visibleTabTitle(session: SessionRecord): string {
+    if (isEphemeralSideConversation(session)) return ui("Temporary side chat");
+    if (session.streamingTitle?.trim()) return session.streamingTitle.trim();
+    const title = session.title.trim();
+    if (!title || title === "untitled" || isInjectedTitle(title)) return ui("New chat");
+    return title;
+  }
+
+  function tabGlyph(
+    session: SessionRecord,
+    active: boolean,
+    split: boolean,
+  ): TabGlyph | null {
+    if (session.status === "error") return { kind: "error", label: ui("Error") };
+    if (["streaming", "thinking", "tool"].includes(session.status)) {
+      return { kind: "working", label: ui("Working") };
+    }
+    if (session.unread && !active) return { kind: "unread", label: ui("Unread") };
+    if (session.codingWorkspace) {
+      return {
+        kind: "worktree",
+        label: ui("Worktree · {repository}", { repository: session.codingWorkspace.repoName }),
+      };
+    }
+    if (split) return { kind: "split", label: ui("Split pane") };
+    return null;
+  }
+
   const sessions = useChatStore((state) => state.sessions);
   const openChatIds = useChatStore((state) => state.openChatIds);
   const splitChatId = useChatStore((state) => state.splitChatId);
@@ -320,7 +327,7 @@ export function ChatTabStrip({
         ref={scrollerRef}
         className="scrollbar-hide flex min-w-0 items-center gap-0.5 overflow-x-auto scroll-smooth"
         role="tablist"
-        aria-label="Open chats"
+        aria-label={ui("Open chats")}
       >
         {tabs.map((session, index) => {
           const active = session.id === activeId;
@@ -359,7 +366,7 @@ export function ChatTabStrip({
                       <input
                         ref={renameInputRef}
                         value={renameDraft}
-                        aria-label={`Rename ${title}`}
+                        aria-label={ui("Rename {value1}", { value1: title })}
                         data-testid={`chat-tab-rename-${session.id}`}
                         className="min-w-0 flex-1 border border-border bg-background px-1 text-xs font-medium outline-none focus:ring-1 focus:ring-foreground/30"
                         onChange={(event) => setRenameDraft(event.target.value)}
@@ -426,8 +433,8 @@ export function ChatTabStrip({
                   )}
                   <button
                     type="button"
-                    aria-label={`Close ${title}`}
-                    title={`Close ${title} (${closeShortcut})`}
+                    aria-label={ui("Close {value1}", { value1: title })}
+                    title={ui("Close {value1} ({value2})", { value1: title, value2: closeShortcut })}
                     data-testid={`chat-tab-close-${session.id}`}
                     className={cn(
                       "mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none transition-opacity hover:bg-background/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
@@ -460,7 +467,7 @@ export function ChatTabStrip({
                         );
                       }}
                     >
-                      {session.pinned ? "Unpin" : "Pin"}
+                      {session.pinned ? ui("Unpin") : ui("Pin")}
                     </ContextMenuItem>
                     <ContextMenuItem
                       onSelect={() => {
@@ -491,7 +498,7 @@ export function ChatTabStrip({
                             void (async () => {
                               const messages = await messagesForExport(session);
                               if (messages.length === 0) {
-                                toast({ title: "No messages to copy" });
+                                toast({ title: ui("No messages to copy") });
                                 return;
                               }
                               await copyText(
@@ -616,8 +623,8 @@ export function ChatTabStrip({
 
       <button
         type="button"
-        aria-label="New chat tab"
-        title="New chat"
+        aria-label={ui("New chat tab")}
+        title={ui("New chat")}
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onClick={() => void onNewChat()}
       >

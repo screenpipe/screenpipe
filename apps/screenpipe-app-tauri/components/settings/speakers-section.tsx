@@ -8,7 +8,7 @@ import type { SettingsField } from "./settings-search";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Speakers", keywords: ["voice", "diarization", "identify"] },
+  { label: msg("Speakers", {}), keywords: ["voice", "diarization", "identify"] },
 ];
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,6 +45,9 @@ import {
   redactApiUrlForLogs,
 } from "@/lib/api";
 import { showChatWithPrefill } from "@/lib/chat-utils";
+import { useGT } from "gt-react";
+import { msg } from "gt-react";
+
 
 interface AudioSample {
   path: string;
@@ -113,6 +116,8 @@ function AudioClip({
   duration: number;
   large?: boolean;
 }) {
+
+  const ui = useGT();
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -175,10 +180,10 @@ function AudioClip({
     } else {
       if (!audioSrc) {
         toast({
-          title: "Couldn't play sample",
+          title: ui("Couldn't play sample"),
           description: audioChunkId
-            ? "This voice sample is not ready yet"
-            : "This voice sample is missing its audio chunk id",
+            ? ui("This voice sample is not ready yet")
+            : ui("This voice sample is missing its audio chunk id"),
           variant: "destructive",
         });
         return;
@@ -200,8 +205,8 @@ function AudioClip({
           });
           setPlaying(false);
           toast({
-            title: "Couldn't play sample",
-            description: "Screenpipe couldn't load this voice clip",
+            title: ui("Couldn't play sample"),
+            description: ui("Screenpipe couldn't load this voice clip"),
             variant: "destructive",
           });
         });
@@ -234,8 +239,8 @@ function AudioClip({
           });
           stop();
           toast({
-            title: "Couldn't play sample",
-            description: "Screenpipe couldn't load this voice clip",
+            title: ui("Couldn't play sample"),
+            description: ui("Screenpipe couldn't load this voice clip"),
             variant: "destructive",
           });
         }}
@@ -280,6 +285,8 @@ function QuickNameInput({
   onHallucination: (ids: number[]) => Promise<void>;
   placeholder?: string;
 }) {
+
+  const ui = useGT();
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -299,7 +306,7 @@ function QuickNameInput({
       <Input
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder={placeholder || "Who is this?"}
+        placeholder={placeholder || ui("Who is this?")}
         className="h-7 text-xs flex-1 min-w-0"
         onKeyDown={(e) => {
           if (e.key === "Enter") save();
@@ -322,7 +329,7 @@ function QuickNameInput({
         variant="ghost"
         size="icon"
         className="h-7 w-7 shrink-0 text-muted-foreground"
-        title="Not a real speaker (noise)"
+        title={ui("Not a real speaker (noise)")}
         onClick={() => onHallucination(speakerIds)}
       >
         <UserX className="h-3 w-3" />
@@ -348,6 +355,8 @@ function ClusterCard({
   expandedId: number | null;
   setExpandedId: (id: number | null) => void;
 }) {
+
+  const ui = useGT();
   const { members } = cluster;
   const isMulti = members.length > 1;
   const allIds = members.map((m) => m.id);
@@ -383,8 +392,8 @@ function ClusterCard({
             <div className="flex flex-col">
               <span className="text-xs font-medium">
                 {isMulti
-                  ? `${members.length} similar voices`
-                  : `Speaker #${members[0].id}`}
+                  ? ui("{value1} similar voices", { value1: members.length })
+                  : ui("Speaker #{value1}", { value1: members[0].id })}
               </span>
               {latestTime > 0 && (
                 <span className="text-[10px] text-muted-foreground flex items-center gap-1">
@@ -437,7 +446,7 @@ function ClusterCard({
           onName={onNameCluster}
           onHallucination={onHallucination}
           placeholder={
-            isMulti ? `Name all ${members.length} as...` : "Who is this?"
+            isMulti ? ui("Name all {value1} as...", { value1: members.length }) : ui("Who is this?")
           }
         />
       </div>
@@ -462,6 +471,8 @@ function IdentifiedSpeakerCard({
   onMerge: (keepId: number, mergeId: number) => Promise<void>;
   onRefresh: () => void;
 }) {
+
+  const ui = useGT();
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(speaker.name);
   const [saving, setSaving] = useState(false);
@@ -509,7 +520,7 @@ function IdentifiedSpeakerCard({
             <Input
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
-              placeholder="Enter name..."
+              placeholder={ui("Enter name...")}
               className="h-7 text-sm"
               autoFocus
               onKeyDown={(e) => {
@@ -544,7 +555,7 @@ function IdentifiedSpeakerCard({
             <div className="flex-1 min-w-0 flex items-center gap-2">
               <span className="text-sm font-medium">{speaker.name}</span>
               <span className="text-xs text-muted-foreground">
-                {samples.length} sample{samples.length !== 1 ? "s" : ""}
+                {ui("{count, plural, one {# sample} other {# samples}}", { count: samples.length })}
               </span>
               {latestTime > 0 && (
                 <span className="text-[10px] text-muted-foreground">
@@ -579,7 +590,7 @@ function IdentifiedSpeakerCard({
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7"
-                title="Rename"
+                title={ui("Rename")}
                 onClick={() => {
                   setEditing(true);
                   setEditName(speaker.name || "");
@@ -591,7 +602,7 @@ function IdentifiedSpeakerCard({
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7 text-destructive"
-                title="Delete"
+                title={ui("Delete")}
                 disabled={deleting}
                 onClick={async () => {
                   setDeleting(true);
@@ -634,6 +645,8 @@ function SpeakerDetail({
   onMerge: (keepId: number, mergeId: number) => Promise<void>;
   onRefresh: () => void;
 }) {
+
+  const ui = useGT();
   const [similar, setSimilar] = useState<SimilarSpeaker[]>([]);
   const [loadingSimilar, setLoadingSimilar] = useState(true);
 
@@ -725,14 +738,14 @@ function SpeakerDetail({
               )}
               <div className="flex-1 min-w-0">
                 <span className="font-medium">
-                  {s.name || `Speaker #${s.id}`}
+                  {s.name || ui("Speaker #{value1}", { value1: s.id })}
                 </span>
               </div>
               <Button
                 variant="outline"
                 size="icon"
                 className="h-6 w-6 border-green-300 text-green-600 hover:bg-green-100 hover:text-green-700"
-                title={`Yes, merge into ${speaker.name || "this speaker"}`}
+                title={ui("Yes, merge into {value1}", { value1: speaker.name || "this speaker" })}
                 onClick={() => onMerge(speaker.id, s.id)}
               >
                 <ThumbsUp className="h-3 w-3" />
@@ -741,7 +754,7 @@ function SpeakerDetail({
                 variant="outline"
                 size="icon"
                 className="h-6 w-6 border-red-300 text-red-500 hover:bg-red-100 hover:text-red-600"
-                title="No, different person"
+                title={ui("No, different person")}
               >
                 <ThumbsDown className="h-3 w-3" />
               </Button>
@@ -765,6 +778,8 @@ function MergeBanner({
   onMerge: (keepId: number, mergeId: number) => Promise<void>;
   onDismiss: (speakerId: number, similarId: number) => void;
 }) {
+
+  const ui = useGT();
   const [current, setCurrent] = useState(0);
   const [merging, setMerging] = useState(false);
 
@@ -832,7 +847,7 @@ function MergeBanner({
             <span className="text-sm font-medium truncate">
               {suggestion.speaker.isNamed
                 ? suggestion.speaker.name
-                : `Speaker #${suggestion.speaker.id}`}
+                : ui("Speaker #{value1}", { value1: suggestion.speaker.id })}
             </span>
           </div>
           {speakerSamples[0] && (
@@ -860,7 +875,7 @@ function MergeBanner({
                 : "?"}
             </div>
             <span className="text-sm font-medium truncate">
-              {suggestion.similar.name || `Speaker #${suggestion.similar.id}`}
+              {suggestion.similar.name || ui("Speaker #{value1}", { value1: suggestion.similar.id })}
             </span>
           </div>
           {similarSamples[0] && (
@@ -910,6 +925,8 @@ function MergeBanner({
 }
 
 export function SpeakersSection() {
+
+  const ui = useGT();
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
   const [unnamed, setUnnamed] = useState<Speaker[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1077,7 +1094,7 @@ export function SpeakersSection() {
       body: JSON.stringify({ id, name }),
     });
     if (!res.ok) throw new Error("failed");
-    toast({ title: `Speaker renamed to "${name}"` });
+    toast({ title: ui("Speaker renamed to \"{value1}\"", { value1: name }) });
     fetchSpeakers();
   };
 
@@ -1088,7 +1105,7 @@ export function SpeakersSection() {
       body: JSON.stringify({ id }),
     });
     if (!res.ok) throw new Error("failed");
-    toast({ title: "Speaker deleted" });
+    toast({ title: ui("Speaker deleted") });
     if (expandedId === id) setExpandedId(null);
     fetchSpeakers();
   };
@@ -1100,7 +1117,7 @@ export function SpeakersSection() {
       body: JSON.stringify({ speaker_id: id }),
     });
     if (!res.ok) throw new Error("failed");
-    toast({ title: "Marked as false detection" });
+    toast({ title: ui("Marked as false detection") });
     fetchSpeakers();
   };
 
@@ -1116,7 +1133,7 @@ export function SpeakersSection() {
       }),
     });
     if (!res.ok) throw new Error("failed");
-    toast({ title: "Speakers merged" });
+    toast({ title: ui("Speakers merged") });
     fetchSpeakers();
   };
 
@@ -1203,13 +1220,11 @@ export function SpeakersSection() {
           <div className="flex items-center gap-2 text-sm">
             <AlertCircle className="h-4 w-4 text-amber-500 shrink-0" />
             <span className="font-medium text-amber-700 dark:text-amber-400">
-              {unnamed.length} unidentified speaker
-              {unnamed.length !== 1 ? "s" : ""}
+              {ui("{count, plural, one {# unidentified speaker} other {# unidentified speakers}}", { count: unnamed.length })}
             </span>
             {multiClusters.length > 0 && (
               <span className="text-xs text-amber-600 dark:text-amber-500">
-                ({multiClusters.length} cluster
-                {multiClusters.length !== 1 ? "s" : ""} of similar voices)
+                ({ui("{count, plural, one {# cluster} other {# clusters}}", { count: multiClusters.length })} of similar voices)
               </span>
             )}
           </div>
@@ -1231,7 +1246,7 @@ export function SpeakersSection() {
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search speakers..."
+            placeholder={ui("Search speakers...")}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-9 h-9"
@@ -1278,9 +1293,7 @@ export function SpeakersSection() {
         <div className="space-y-2">
           <h3 className="text-xs font-medium text-muted-foreground normal-case tracking-wide flex items-center gap-1.5">
             <Users className="h-3 w-3" />
-            Pending identification ({unnamed.length} speaker
-            {unnamed.length !== 1 ? "s" : ""} in {filteredClusters.length} group
-            {filteredClusters.length !== 1 ? "s" : ""})
+            Pending identification ({ui("{count, plural, one {# speaker} other {# speakers}}", { count: unnamed.length })} in {ui("{count, plural, one {# group} other {# groups}}", { count: filteredClusters.length })})
           </h3>
           {clusterLoading ? (
             <div className="space-y-2">
@@ -1332,8 +1345,8 @@ export function SpeakersSection() {
       {filteredSpeakers.length === 0 && filteredClusters.length === 0 && (
         <p className="text-sm text-muted-foreground py-8 text-center">
           {searchQuery
-            ? "No speakers match your search"
-            : "No speakers detected yet"}
+            ? ui("No speakers match your search")
+            : ui("No speakers detected yet")}
         </p>
       )}
     </div>

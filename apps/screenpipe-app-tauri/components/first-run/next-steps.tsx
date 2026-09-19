@@ -29,6 +29,8 @@ import {
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
 import { publishPipeInstalledReceipt } from "@/lib/pipe-install-receipt";
 import { commands } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+
 
 const DAILY_EMAIL_PIPE = "daily-email-summary";
 const DIGITAL_CLONE_PIPE = "digital-clone";
@@ -245,6 +247,7 @@ export function FirstRunNextStepsPanel({
   onSetupEverything: () => void;
   onRetry: () => void;
 }) {
+  const ui = useGT();
   const checking = !snapshot.checked || refreshing;
   const dailyReady =
     snapshot.dailyEmailState === "enabled" && snapshot.gmailConnected === true;
@@ -350,14 +353,14 @@ export function FirstRunNextStepsPanel({
             >
               <span>
                 {checking
-                  ? "Checking"
+                  ? ui("Checking")
                   : setupBusyLabel
                     ? setupBusyLabel
                     : hasUnknown
-                      ? "Check again"
+                      ? ui("Check again")
                       : actionError
-                        ? "Keep going"
-                        : "Set up all"}
+                        ? ui("Keep going")
+                        : ui("Set up all")}
               </span>
               {checking || setupBusy ? (
                 <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
@@ -369,8 +372,8 @@ export function FirstRunNextStepsPanel({
 
           <SetupOutcomeRow
             icon={<BrainCircuit className="h-4 w-4" aria-hidden="true" />}
-            title="Remember my work"
-            description="Remember my work, meetings, and the people I work with."
+            title={ui("Remember my work")}
+            description={ui("Remember my work, meetings, and the people I work with.")}
             status={
               checking
                 ? "checking"
@@ -387,8 +390,8 @@ export function FirstRunNextStepsPanel({
 
           <SetupOutcomeRow
             icon={<AudioLines className="h-4 w-4" aria-hidden="true" />}
-            title="Name people in meetings"
-            description="After each meeting, suggest who was speaking. You review every name before anything changes."
+            title={ui("Name people in meetings")}
+            description={ui("After each meeting, suggest who was speaking. You review every name before anything changes.")}
             status={
               checking
                 ? "checking"
@@ -412,8 +415,8 @@ export function FirstRunNextStepsPanel({
                 data-testid="gmail-service-icon"
               />
             }
-            title="Send my daily recap"
-            description="Email me a short recap of my day each evening."
+            title={ui("Send my daily recap")}
+            description={ui("Email me a short recap of my day each evening.")}
             status={
               checking
                 ? "checking"
@@ -437,8 +440,8 @@ export function FirstRunNextStepsPanel({
                 data-testid="google-calendar-service-icon"
               />
             }
-            title="Understand my meetings"
-            description="Use Google Calendar to understand what my meetings are about. Screenpipe never changes my calendar."
+            title={ui("Understand my meetings")}
+            description={ui("Use Google Calendar to understand what my meetings are about. Screenpipe never changes my calendar.")}
             status={
               checking
                 ? "checking"
@@ -460,7 +463,7 @@ export function FirstRunNextStepsPanel({
         >
           <p className="text-[10px] leading-relaxed text-muted-foreground">
             {actionError ??
-              "Screenpipe couldn't check everything. Nothing changed."}
+              ui("Screenpipe couldn't check everything. Nothing changed.")}
           </p>
           <Button
             type="button"
@@ -483,6 +486,7 @@ export function FirstRunNextSteps({
 }: {
   userToken?: string | null;
 }) {
+
   const [snapshot, setSnapshot] =
     useState<FirstRunNextStepsSnapshot>(INITIAL_SNAPSHOT);
   const [refreshing, setRefreshing] = useState(false);

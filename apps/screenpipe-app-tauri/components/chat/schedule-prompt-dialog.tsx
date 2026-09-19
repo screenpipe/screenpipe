@@ -14,12 +14,16 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Clock, Zap } from "lucide-react";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 const SCHEDULE_OPTIONS = [
-  { label: "Every morning (9 AM)", value: "every day at 9am" },
-  { label: "Every evening (6 PM)", value: "every day at 6pm" },
-  { label: "Every hour", value: "every 1h" },
-  { label: "Every Monday (9 AM)", value: "every monday at 9am" },
+  { label: msg("Every morning (9 AM)", {}), value: "every day at 9am" },
+  { label: msg("Every evening (6 PM)", {}), value: "every day at 6pm" },
+  { label: msg("Every hour", {}), value: "every 1h" },
+  { label: msg("Every Monday (9 AM)", {}), value: "every monday at 9am" },
 ];
 
 // Pipe creation context — mirrors the PIPE_CREATION_PROMPT in pipes-section.tsx
@@ -117,8 +121,11 @@ export function SchedulePromptDialog({
   onSchedule,
   originalPrompt,
 }: SchedulePromptDialogProps) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const [pipeName, setPipeName] = useState("");
-  const [selectedSchedule, setSelectedSchedule] = useState(SCHEDULE_OPTIONS[1].value);
+  const [selectedSchedule, setSelectedSchedule] = useState(localizeDefinitions(SCHEDULE_OPTIONS, uiMessages)[1].value);
   const [customCron, setCustomCron] = useState("");
   const [showCustom, setShowCustom] = useState(false);
 
@@ -180,7 +187,7 @@ export function SchedulePromptDialog({
             <Input
               value={pipeName}
               onChange={(e) => setPipeName(e.target.value)}
-              placeholder="E.g. daily-recap, standup-notes"
+              placeholder={ui("E.g. daily-recap, standup-notes")}
               className="h-9 text-[12px]"
             />
           </div>
@@ -191,7 +198,7 @@ export function SchedulePromptDialog({
               Schedule
             </label>
             <div className="space-y-1">
-              {SCHEDULE_OPTIONS.map((opt) => (
+              {localizeDefinitions(SCHEDULE_OPTIONS, uiMessages).map((opt) => (
                 <button
                   key={opt.value}
                   onClick={() => {
@@ -221,7 +228,7 @@ export function SchedulePromptDialog({
                 <Input
                   value={customCron}
                   onChange={(e) => setCustomCron(e.target.value)}
-                  placeholder="E.g. 0 */2 * * * (every 2 hours)"
+                  placeholder={ui("E.g. 0 */2 * * * (every 2 hours)")}
                   className="h-8 text-[11px] mt-1"
                   autoFocus
                 />

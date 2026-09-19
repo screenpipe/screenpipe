@@ -13,6 +13,9 @@ import {
 } from "@/lib/chat/large-context";
 import type { PendingDoc } from "@/components/chat/standalone/hooks/use-chat-attachments";
 import type { ExtractedDoc } from "@/lib/pi/extract-document";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 interface AttachmentTrayProps {
   pendingDocs: PendingDoc[];
@@ -33,6 +36,8 @@ export function AttachmentTray({
   onImageClick,
   onRemoveImage,
 }: AttachmentTrayProps) {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
   if (attachedDocs.length === 0 && pendingDocs.length === 0 && pastedImages.length === 0) {
     return null;
   }
@@ -46,7 +51,7 @@ export function AttachmentTray({
             <div
               key={`pending-${doc.id}`}
               className="flex items-center gap-2.5 h-16 max-w-[240px] rounded-lg border border-border/50 bg-muted/40 px-2.5 shadow-sm opacity-80"
-              title={`${doc.name} — extracting…`}
+              title={ui("{value1} — extracting…", { value1: doc.name })}
               aria-busy="true"
             >
               <div className={`relative shrink-0 w-10 h-10 rounded-lg flex items-center justify-center text-[10px] font-semibold tracking-tight ${badge.tint}`}>
@@ -67,7 +72,7 @@ export function AttachmentTray({
             <div
               key={`doc-${doc.name}-${i}`}
               className="relative group flex items-center gap-2.5 h-16 max-w-[240px] rounded-lg border border-border/50 bg-muted/40 px-2.5 shadow-sm"
-              title={`${doc.name} — ${doc.charCount.toLocaleString()} chars${doc.truncated ? " (truncated to fit)" : ""}`}
+              title={ui("{value1} — {value2} chars{value3}", { value1: doc.name, value2: doc.charCount.toLocaleString(uiLocale), value3: doc.truncated ? " (truncated to fit)" : "" })}
             >
               <div className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center text-[10px] font-semibold tracking-tight ${badge.tint}`}>
                 {badge.label}
@@ -97,7 +102,7 @@ export function AttachmentTray({
                   )
                 ) : (
                   <div className="truncate text-[10px] text-muted-foreground">
-                    {doc.charCount.toLocaleString()} chars{doc.truncated ? " • truncated" : ""}
+                    {doc.charCount.toLocaleString(uiLocale)} chars{doc.truncated ? ui(" • truncated") : ""}
                   </div>
                 )}
               </div>
@@ -121,7 +126,7 @@ export function AttachmentTray({
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={img}
-                alt={`Attached ${i + 1}`}
+                alt={ui("Attached {value1}", { value1: i + 1 })}
                 className="h-16 w-16 min-h-16 min-w-16 object-cover cursor-pointer"
               />
             </button>

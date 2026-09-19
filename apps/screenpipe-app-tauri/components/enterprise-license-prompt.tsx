@@ -7,6 +7,8 @@
 import React, { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { screenpipeWebUrl } from "@/lib/web-url";
+import { useGT } from "gt-react";
+
 
 interface EnterpriseLicensePromptProps {
   onSubmit: (key: string) => Promise<{ ok: boolean; error?: string }>;
@@ -29,6 +31,8 @@ export function EnterpriseLicensePrompt({
   onActivated,
   embedded = false,
 }: EnterpriseLicensePromptProps) {
+
+  const ui = useGT();
   const [key, setKey] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,13 +52,13 @@ export function EnterpriseLicensePrompt({
     try {
       const result = await onSubmit(normalized);
       if (!result.ok) {
-        setError(result.error || "Failed to validate enterprise key");
+        setError(result.error || ui("Failed to validate enterprise key"));
       } else {
         onActivated?.();
       }
     } catch (e) {
       console.error("[enterprise] license activation failed:", e);
-      setError("Failed to validate enterprise key");
+      setError(ui("Failed to validate enterprise key"));
     } finally {
       setLoading(false);
     }
@@ -79,7 +83,7 @@ export function EnterpriseLicensePrompt({
               setKey(e.target.value.toUpperCase());
               if (error) setError(null);
             }}
-            placeholder="ENT-XXXX-XXXX-XXXX-XXXX"
+            placeholder={ui("ENT-XXXX-XXXX-XXXX-XXXX")}
             className="h-10 w-full border border-border bg-background px-3 py-2 font-mono text-sm focus:outline-none focus:ring-1 focus:ring-foreground focus:ring-offset-1"
             autoFocus
             spellCheck={false}
@@ -114,7 +118,7 @@ export function EnterpriseLicensePrompt({
                 Validating...
               </>
             ) : (
-              "Activate"
+              ui("Activate")
             )}
           </button>
       </form>

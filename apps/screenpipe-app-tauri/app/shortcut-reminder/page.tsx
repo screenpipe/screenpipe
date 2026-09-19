@@ -38,6 +38,8 @@ import {
   overlayAnchorFromStored,
   type OverlayAnchor,
 } from "./overlay-anchor";
+import { useGT } from "gt-react";
+
 
 type ReminderSettings = {
   disabledShortcuts?: string[];
@@ -73,6 +75,8 @@ const INCIDENT_SIZE = { width: 160, height: 40 };
 const MEETING_SIZE = { width: 280, height: 80 };
 
 export default function ShortcutReminderPage() {
+
+  const ui = useGT();
   const { isMac, isWindows, isLoading } = usePlatform();
   const shortcutPlatform: ShortcutPlatform = isMac
     ? "macos"
@@ -524,7 +528,7 @@ export default function ShortcutReminderPage() {
             title={failureReason}
             aria-label={manualRecoveryRequired
               ? `${failureHeadlineSentence}: ${failureReason}`
-              : `${failureHeadlineSentence}: ${failureReason}. Restart recording`}
+              : ui("{value1}: {value2}. Restart recording", { value1: failureHeadlineSentence, value2: failureReason })}
           >
             <div
               className="rounded-full bg-red-500 animate-pulse shrink-0"
@@ -557,7 +561,7 @@ export default function ShortcutReminderPage() {
                 onPointerDown={(e) => e.stopPropagation()}
                 className="flex items-center justify-center hover:bg-white/10 transition-colors cursor-pointer text-white/90 flex-1"
                 style={{ gap: `${gap}px`, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-                title={`Restart recording — ${failureReason}`}
+                title={ui("Restart recording — {value1}", { value1: failureReason })}
               >
                 <RotateCw style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }} className="shrink-0" />
                 <span className="font-mono font-bold" style={{ fontSize: `${fontPx}px` }}>
@@ -572,7 +576,7 @@ export default function ShortcutReminderPage() {
               onPointerDown={(e) => e.stopPropagation()}
               className="flex items-center justify-center hover:bg-white/10 transition-colors cursor-pointer text-white/60 hover:text-white"
               style={{ padding: `${padY}px ${padX * 2}px`, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-              title="Dismiss"
+              title={ui("Dismiss")}
             >
               <X style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }} />
             </button>
@@ -606,10 +610,10 @@ export default function ShortcutReminderPage() {
             style={{ fontSize: `${fontPx}px` }}
           >
             {healthState === "recovering"
-              ? "Checking recovery..."
+              ? ui("Checking recovery...")
               : healthDetail
-                ? `Fixing — ${healthDetail}...`
-                : "Fixing recording..."}
+                ? ui("Fixing — {value1}...", { value1: healthDetail })
+                : ui("Fixing recording...")}
           </span>
         </div>
       </div>
@@ -681,8 +685,8 @@ export default function ShortcutReminderPage() {
               aria-pressed={meetingPinned}
               className="ml-auto flex items-center justify-center px-1.5 h-full text-white/70 hover:text-white hover:bg-white/10"
               style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-              title={meetingPinned ? "Unpin transcript" : "Pin transcript"}
-              aria-label={meetingPinned ? "Unpin transcript" : "Pin transcript"}
+              title={meetingPinned ? ui("Unpin transcript") : ui("Pin transcript")}
+              aria-label={meetingPinned ? ui("Unpin transcript") : ui("Pin transcript")}
             >
               {meetingPinned ? (
                 <PinOff style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }} />
@@ -700,7 +704,7 @@ export default function ShortcutReminderPage() {
               disabled={meetingOverlay.stopping}
               className="flex items-center gap-1 px-1.5 h-full font-mono text-white/70 hover:text-white hover:bg-white/10 disabled:opacity-50"
               style={{ fontSize: `${fontPx}px`, WebkitAppRegion: "no-drag" } as React.CSSProperties}
-              title="Stop meeting"
+              title={ui("Stop meeting")}
             >
               {meetingOverlay.stopping ? (
                 <Loader2 className="animate-spin" style={{ width: `${smIconPx}px`, height: `${smIconPx}px` }} />
@@ -713,10 +717,10 @@ export default function ShortcutReminderPage() {
           <div className="bg-white/15" />
           <div className="flex items-center min-w-0" style={{ padding: `0 ${padX}px`, gap: `${gap * 2}px` }}>
             <span className="font-mono text-white/40 shrink-0" style={{ fontSize: `${fontPx}px` }}>
-              {meetingOverlay.stopError ? "Stop failed" : latestSpeaker || "Live transcript"}
+              {meetingOverlay.stopError ? ui("Stop failed") : latestSpeaker || ui("Live transcript")}
             </span>
             <span className="font-mono text-white/80 truncate" style={{ fontSize: `${fontPx}px` }}>
-              {meetingOverlay.stopError || latestTranscript?.text || "Listening for speech…"}
+              {meetingOverlay.stopError || latestTranscript?.text || ui("Listening for speech…")}
             </span>
           </div>
         </div>
@@ -771,7 +775,7 @@ export default function ShortcutReminderPage() {
             cursor: "grab",
             WebkitAppRegion: "no-drag",
           } as React.CSSProperties}
-          title="Open timeline"
+          title={ui("Open timeline")}
         >
           <span
             aria-hidden="true"
@@ -785,8 +789,8 @@ export default function ShortcutReminderPage() {
           {meetingOverlay.active && (
             <span
               role="status"
-              aria-label="Meeting live"
-              title="Meeting live — hover for transcript"
+              aria-label={ui("Meeting live")}
+              title={ui("Meeting live — hover for transcript")}
               className="absolute rounded-full bg-red-500 pointer-events-none"
               style={{
                 top: `${-1 * overlayScale}px`,
@@ -839,7 +843,7 @@ export default function ShortcutReminderPage() {
         }}
       >
         <button
-          title="Open search"
+          title={ui("Open search")}
           className={dockButtonClass}
           style={dockButtonStyle}
           onMouseEnter={() => setHoveredControl("search")}
@@ -854,7 +858,7 @@ export default function ShortcutReminderPage() {
           <Search style={{ width: `${12 * overlayScale}px`, height: `${12 * overlayScale}px` }} />
         </button>
         <button
-          title="Open chat"
+          title={ui("Open chat")}
           className={dockButtonClass}
           style={dockButtonStyle}
           onMouseEnter={() => setHoveredControl("chat")}
@@ -869,7 +873,7 @@ export default function ShortcutReminderPage() {
           <MessageCircle style={{ width: `${12 * overlayScale}px`, height: `${12 * overlayScale}px` }} />
         </button>
         <button
-          title="Open timeline"
+          title={ui("Open timeline")}
           className={dockButtonClass}
           style={dockButtonStyle}
           onMouseEnter={() => setHoveredControl("timeline")}
@@ -881,7 +885,7 @@ export default function ShortcutReminderPage() {
         </button>
         <div className="my-1 bg-white/25" style={{ width: "1px" }} />
         <div
-          title="Microphone capture status"
+          title={ui("Microphone capture status")}
           className={`${dockButtonClass} min-w-0 overflow-hidden`}
           onMouseEnter={() => setHoveredControl("audio")}
         >
@@ -892,8 +896,8 @@ export default function ShortcutReminderPage() {
         </div>
         <div className="my-1 bg-white/25" style={{ width: "1px" }} />
         <button
-          title="Screenpipe — right-click for options"
-          aria-label="Screenpipe — open timeline; right-click for options"
+          title={ui("Screenpipe — right-click for options")}
+          aria-label={ui("Screenpipe — open timeline; right-click for options")}
           className={dockButtonClass}
           style={dockButtonStyle}
           onMouseEnter={() => setHoveredControl("brand")}
@@ -921,7 +925,7 @@ export default function ShortcutReminderPage() {
       {settingsOpen ? (
         <div
           role="menu"
-          aria-label="Shortcut reminder options"
+          aria-label={ui("Shortcut reminder options")}
           className="flex w-full min-h-0 flex-1 flex-col overflow-hidden border border-white/40 font-mono text-white/85"
           style={{
             marginTop: dockAbove ? `${4 * overlayScale}px` : 0,
@@ -934,7 +938,7 @@ export default function ShortcutReminderPage() {
           <button
             role="menuitem"
             className="flex-1 px-2 text-left hover:bg-white/15"
-            title="Hide for 1 hour"
+            title={ui("Hide for 1 hour")}
             onClick={(e) => void handleHourSnooze(e)}
           >
             Hide for 1 hour
@@ -943,7 +947,7 @@ export default function ShortcutReminderPage() {
           <button
             role="menuitem"
             className="flex-1 px-2 text-left hover:bg-white/15"
-            title="Open overlay settings"
+            title={ui("Open overlay settings")}
             onClick={handleOpenSettings}
           >
             Settings…

@@ -26,6 +26,8 @@ import {
 } from "@/lib/utils/html-sandbox";
 import { HtmlPreviewFrame } from "./file-viewer-html-frame";
 import { usePlatform } from "@/lib/hooks/use-platform";
+import { useGT } from "gt-react";
+
 
 export type ViewerContent =
   | {
@@ -131,6 +133,7 @@ function ErrorState({ message, path }: { message: string; path: string }) {
 type ImageFit = "fit" | "actual";
 
 function ImageView({ src, name }: { src: string; name: string }) {
+  const ui = useGT();
   const [fit, setFit] = useState<ImageFit>("fit");
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
   return (
@@ -156,7 +159,7 @@ function ImageView({ src, name }: { src: string; name: string }) {
       </div>
       {dims && (
         <div className="font-mono text-[10px] tracking-wider normal-case text-foreground/40">
-          {dims.w} × {dims.h} · click to {fit === "fit" ? "zoom" : "fit"}
+          {dims.w} × {dims.h} · click to {fit === "fit" ? ui("zoom") : ui("fit")}
         </div>
       )}
     </div>
@@ -164,6 +167,7 @@ function ImageView({ src, name }: { src: string; name: string }) {
 }
 
 export function useViewerFileContent(path: string | null): ViewerContent | null {
+
   const [content, setContent] = useState<ViewerContent | null>(null);
 
   useEffect(() => {
@@ -210,6 +214,8 @@ export function ViewerFileContent({
   onOpenViewerPath,
   className,
 }: ViewerFileContentProps) {
+
+  const ui = useGT();
   const codeStyle = useSyntaxTheme();
   const [showRendered, setShowRendered] = useState(false);
 
@@ -390,14 +396,14 @@ export function ViewerFileContent({
         >
           <div className="shrink-0 font-mono text-[10px] tracking-wide normal-case text-foreground/50 px-3 py-1 border border-border bg-foreground/[0.04] flex items-center justify-between gap-3">
             <span>
-              Html document · sandboxed{showRendered ? " · rendered" : " · source"}
+              Html document · sandboxed{showRendered ? ui(" · rendered") : ui(" · source")}
             </span>
             <button
               data-testid="html-render-toggle"
               onClick={() => setShowRendered((v) => !v)}
               className="underline opacity-80 hover:opacity-100"
             >
-              {showRendered ? "View source" : "Preview rendered ↗"}
+              {showRendered ? ui("View source") : ui("Preview rendered ↗")}
             </button>
           </div>
           {showRendered ? (

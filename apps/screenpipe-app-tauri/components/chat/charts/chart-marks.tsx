@@ -45,6 +45,9 @@ import {
   DataTable,
   useChartHover,
 } from "./chart-frame";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 type MarkProps<T> = { spec: T; palette: ChartPalette };
 
@@ -56,6 +59,7 @@ const LABEL_COL = "minmax(0,7rem)";
 // ---------------------------------------------------------------------------
 
 export function StatChart({ spec, palette }: MarkProps<StatChartSpec>) {
+
   return (
     <ChartFrame
       spec={spec}
@@ -122,6 +126,7 @@ function divergingGeometry(values: number[]) {
 }
 
 export function BarChart({ spec, palette }: MarkProps<BarChartSpec>) {
+
   const { tooltip, activeKey, show, hide } = useChartHover();
   const geometry = divergingGeometry(spec.items.map((item) => item.value));
   const hasSignedDomain = geometry.minimum < 0 && geometry.maximum > 0;
@@ -210,6 +215,8 @@ export function BarChart({ spec, palette }: MarkProps<BarChartSpec>) {
 const VIEWBOX = { width: 100, height: 100 } as const;
 
 export function LineChart({ spec, palette }: MarkProps<LineChartSpec>) {
+
+  const ui = useGT();
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
   const geometry = useMemo(() => {
@@ -297,7 +304,7 @@ export function LineChart({ spec, palette }: MarkProps<LineChartSpec>) {
       >
         <svg
           role="img"
-          aria-label={`${spec.title || "line chart"} time series`}
+          aria-label={ui("{value1} time series", { value1: spec.title || "line chart" })}
           viewBox={`0 0 ${VIEWBOX.width} ${VIEWBOX.height}`}
           preserveAspectRatio="none"
           className="h-full w-full"
@@ -361,6 +368,7 @@ export function GroupedBarChart({
   spec,
   palette,
 }: MarkProps<GroupedBarChartSpec>) {
+
   const { tooltip, activeKey, show, hide } = useChartHover();
   const geometry = divergingGeometry(
     spec.series.flatMap((series) => series.values),
@@ -464,6 +472,7 @@ export function StackedBarChart({
   spec,
   palette,
 }: MarkProps<StackedBarChartSpec>) {
+
   const { tooltip, activeKey, show, hide } = useChartHover();
 
   const totals = spec.categories.map((_, categoryIndex) =>
@@ -569,6 +578,7 @@ export function ProportionChart({
   spec,
   palette,
 }: MarkProps<ProportionChartSpec>) {
+
   const { tooltip, activeKey, show, hide } = useChartHover();
   const total = spec.items.reduce((sum, item) => sum + item.value, 0);
   const share = (value: number) => (total > 0 ? (value / total) * 100 : 0);
@@ -655,6 +665,7 @@ export function ProportionChart({
 // ---------------------------------------------------------------------------
 
 export function HeatmapChart({ spec, palette }: MarkProps<HeatmapChartSpec>) {
+
   const { tooltip, show, hide } = useChartHover();
   const flattened = spec.values.flat();
   const minimum = Math.min(...flattened);
@@ -760,6 +771,7 @@ export function HeatmapChart({ spec, palette }: MarkProps<HeatmapChartSpec>) {
 // ---------------------------------------------------------------------------
 
 export function TimelineChart({ spec, palette }: MarkProps<TimelineChartSpec>) {
+
   const { tooltip, activeKey, show, hide } = useChartHover();
 
   // Bound the axis to the data, floored/ceiled to the hour, so a workday does
@@ -854,6 +866,7 @@ function isoDate(date: Date): string {
 }
 
 export function CalendarChart({ spec, palette }: MarkProps<CalendarChartSpec>) {
+
   const { tooltip, show, hide } = useChartHover();
   const geometry = useMemo(() => {
     const byDate = new Map(spec.items.map((item) => [item.date, item.value]));
@@ -978,6 +991,8 @@ export function CalendarChart({ spec, palette }: MarkProps<CalendarChartSpec>) {
 // ---------------------------------------------------------------------------
 
 export function FunnelChart({ spec, palette }: MarkProps<FunnelChartSpec>) {
+
+  const ui = useGT();
   const { tooltip, activeKey, show, hide } = useChartHover();
   const first = spec.items[0].value;
 
@@ -1040,8 +1055,8 @@ export function FunnelChart({ spec, palette }: MarkProps<FunnelChartSpec>) {
                     </span>
                     <span className="w-14 text-[10px] text-muted-foreground">
                       {index === 0
-                        ? "Start"
-                        : `${Math.round(priorPercent)}% prior`}
+                        ? ui("Start")
+                        : ui("{value1}% prior", { value1: Math.round(priorPercent) })}
                     </span>
                   </span>
                 </span>
@@ -1084,6 +1099,9 @@ export function WaterfallChart({
   spec,
   palette,
 }: MarkProps<WaterfallChartSpec>) {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
   const { tooltip, activeKey, show, hide } = useChartHover();
   const geometry = useMemo(() => {
     let running = spec.start.value;
@@ -1109,7 +1127,7 @@ export function WaterfallChart({
         };
       }),
       {
-        label: "Total",
+        label: ui("Total"),
         delta: running,
         from: 0,
         to: running,
@@ -1130,7 +1148,7 @@ export function WaterfallChart({
       net: running - spec.start.value,
       position,
     };
-  }, [spec.items, spec.start]);
+  }, [spec.items, spec.start, uiLanguage]);
 
   return (
     <ChartFrame
@@ -1256,6 +1274,7 @@ export function WaterfallChart({
 // ---------------------------------------------------------------------------
 
 export function RangeChart({ spec, palette }: MarkProps<RangeChartSpec>) {
+
   const { tooltip, activeKey, show, hide } = useChartHover();
   const minimum = Math.min(...spec.items.map((item) => item.min));
   const maximum = Math.max(...spec.items.map((item) => item.max));
@@ -1365,6 +1384,7 @@ export function RangeChart({ spec, palette }: MarkProps<RangeChartSpec>) {
 // ---------------------------------------------------------------------------
 
 export function ScatterChart({ spec, palette }: MarkProps<ScatterChartSpec>) {
+
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const geometry = useMemo(() => {
     const xs = spec.items.map((item) => item.x);

@@ -27,6 +27,9 @@ import {
 } from "@/lib/utils/meeting-format";
 import { ListeningSticks } from "./listening-sticks";
 import { copyMeetingToClipboard } from "./copy-meeting";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 const MEETING_DRAG_MIME = "application/x-screenpipe-meeting-id";
 
@@ -84,6 +87,9 @@ export function PastMeetings({
   onDelete,
   onMerged,
 }: PastMeetingsProps) {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
   const buckets = bucketByRelativeDay(meetings);
   const { toast } = useToast();
   const [draggingId, setDraggingId] = React.useState<number | null>(null);
@@ -170,14 +176,14 @@ export function PastMeetings({
       setPendingMerge(null);
     } catch (err) {
       toast({
-        title: "Couldn't merge meetings",
+        title: ui("Couldn't merge meetings"),
         description: String(err),
         variant: "destructive",
       });
     } finally {
       setMerging(false);
     }
-  }, [pendingMerge, onMerged, toast]);
+  }, [pendingMerge, onMerged, toast, uiLanguage]);
 
   if (buckets.length === 0) return null;
 
@@ -247,7 +253,7 @@ export function PastMeetings({
                   Merging
                 </span>
               ) : (
-                "Merge"
+                ui("Merge")
               )}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -298,6 +304,8 @@ function PastMeetingRow({
   onDragLeave: () => void;
   onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
 }) {
+
+  const ui = useGT();
   const { toast } = useToast();
   const [copyState, setCopyState] = React.useState<
     "idle" | "copying" | "copied"
@@ -310,11 +318,11 @@ function PastMeetingRow({
       await copyMeetingToClipboard(meeting);
       setCopyState("copied");
       window.setTimeout(() => setCopyState("idle"), 2000);
-      toast({ title: "Copied meeting to clipboard" });
+      toast({ title: ui("Copied meeting to clipboard") });
     } catch (err) {
       setCopyState("idle");
       toast({
-        title: "Couldn't copy meeting",
+        title: ui("Couldn't copy meeting"),
         description: String(err),
         variant: "destructive",
       });
@@ -330,7 +338,7 @@ function PastMeetingRow({
       onDelete(meeting.id);
     } catch (err) {
       toast({
-        title: "Couldn't delete meeting",
+        title: ui("Couldn't delete meeting"),
         description: String(err),
         variant: "destructive",
       });
@@ -408,8 +416,8 @@ function PastMeetingRow({
             onClick={() => void handleCopy()}
             disabled={copyState === "copying"}
             className="h-7 w-7 flex items-center justify-center bg-transparent text-muted-foreground hover:text-foreground disabled:opacity-60"
-            title="Copy full meeting"
-            aria-label="Copy full meeting"
+            title={ui("Copy full meeting")}
+            aria-label={ui("Copy full meeting")}
           >
             {copyState === "copying" ? (
               <Loader2 className="h-3 w-3 animate-spin" />
@@ -424,7 +432,7 @@ function PastMeetingRow({
               <AlertDialogTrigger asChild>
                 <button
                   className="opacity-0 group-hover:opacity-100 transition-opacity h-7 w-7 flex items-center justify-center bg-transparent text-muted-foreground hover:text-destructive"
-                  title="Delete meeting"
+                  title={ui("Delete meeting")}
                 >
                   <Trash2 className="h-3 w-3" />
                 </button>

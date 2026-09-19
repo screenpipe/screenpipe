@@ -10,24 +10,18 @@ import { AnimatePresence, motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { isInjectedTitle } from "@/lib/chat-utils";
 import type { SessionRecord } from "@/lib/stores/chat-store";
+import { formatUiCompactAge as formatCompactAge } from "@/lib/i18n/format";
+import { useUiLocale } from "@/lib/i18n/provider";
+import { useGT } from "gt-react";
+
 
 function useMinuteTick(enabled = true): number {
+
   const [now, setNow] = useState(() => Date.now());
   useInterval(() => setNow(Date.now()), enabled ? 60_000 : null);
   return now;
 }
 
-function formatCompactAge(timestamp?: number, now = Date.now()): string | null {
-  if (!timestamp || !Number.isFinite(timestamp)) return null;
-  const ms = Math.max(0, now - timestamp);
-  if (ms < 60_000) return "now";
-  const minutes = Math.floor(ms / 60_000);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  return `${Math.max(1, days)}d`;
-}
 
 interface RecentChatSwitcherProps {
   open: boolean;
@@ -44,6 +38,9 @@ export function RecentChatSwitcher({
   onSelect,
   onHoverSelect,
 }: RecentChatSwitcherProps) {
+
+  const ui = useGT();
+  const locale = useUiLocale();
   const hasSessions = sessions.length > 0;
   const now = useMinuteTick(open);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -97,7 +94,7 @@ export function RecentChatSwitcher({
                   const isSelected = session.id === selectedId;
                   const activityAt =
                     session.lastUserMessageAt ?? session.updatedAt ?? session.createdAt;
-                  const age = formatCompactAge(activityAt, now);
+                  const age = formatCompactAge(activityAt, now, locale);
                   return (
                     <button
                       key={session.id}
@@ -113,7 +110,7 @@ export function RecentChatSwitcher({
                     >
                       <span className="min-w-0 truncate text-[14px] font-normal leading-5">
                         {(isInjectedTitle(session.title) ? undefined : session.title) ||
-                          "Untitled"}
+                          ui("Untitled")}
                       </span>
                       <span className="shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground/65">
                         {age ?? ""}

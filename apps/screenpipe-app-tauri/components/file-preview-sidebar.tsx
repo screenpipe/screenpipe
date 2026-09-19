@@ -12,6 +12,8 @@ import {
   useViewerFileContent,
 } from "@/components/file-viewer";
 import { commands } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+
 
 interface FilePreviewSidebarProps {
   path: string;
@@ -22,6 +24,8 @@ export function FilePreviewSidebar({
   path,
   onReplacePath,
 }: FilePreviewSidebarProps) {
+
+  const ui = useGT();
   const [copyPathToast, setCopyPathToast] = useState(false);
   const [copyContentToast, setCopyContentToast] = useState(false);
   const content = useViewerFileContent(path);
@@ -86,7 +90,7 @@ export function FilePreviewSidebar({
           <>
             <button
               onClick={revealInFinder}
-              title="Reveal file"
+              title={ui("Reveal file")}
               className="px-2 py-1 rounded hover:bg-muted text-[10px] normal-case tracking-wide text-muted-foreground hover:text-foreground"
             >
               Reveal
@@ -96,18 +100,18 @@ export function FilePreviewSidebar({
         {content?.kind === "text" && content.text !== "" && (
           <button
             onClick={copyContent}
-            title="Copy file content"
+            title={ui("Copy file content")}
             className="px-2 py-1 rounded hover:bg-muted text-[10px] normal-case tracking-wide text-muted-foreground hover:text-foreground"
           >
-            {copyContentToast ? "Copied" : "Copy"}
+            {copyContentToast ? ui("Copied") : ui("Copy")}
           </button>
         )}
         <button
           onClick={copyPath}
-          title="Copy file path"
+          title={ui("Copy file path")}
           className="px-2 py-1 rounded hover:bg-muted text-[10px] normal-case tracking-wide text-muted-foreground hover:text-foreground"
         >
-          {copyPathToast ? "Copied" : "Path"}
+          {copyPathToast ? ui("Copied") : ui("Path")}
         </button>
       </div>
       <ViewerFileContent

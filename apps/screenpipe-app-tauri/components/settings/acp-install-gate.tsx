@@ -10,6 +10,8 @@ import { commands, type AcpAgentInstallStatus } from "@/lib/utils/tauri";
 import { Button } from "@/components/ui/button";
 import { AcpSetupProgress } from "@/components/settings/acp-setup-progress";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 /**
  * Install gate for binary ACP agents (OpenCode, Cursor, Kimi). Those run a CLI
@@ -38,6 +40,8 @@ export function AcpInstallGate({
   onInstalled?: () => void;
   compact?: boolean;
 }) {
+
+  const ui = useGT();
   const [status, setStatus] = useState<AcpAgentInstallStatus | null>(null);
   const [nonce, setNonce] = useState(0);
   // Hold the retry spinner for a visible beat: the re-check is instant, so
@@ -164,7 +168,7 @@ export function AcpInstallGate({
             ) : (
               <>Install it, then retry.</>
             )}
-            {onSwitchToDefault ? " Or use Screenpipe Cloud instead." : ""}
+            {onSwitchToDefault ? ui(" Or use Screenpipe Cloud instead.") : ""}
           </p>
         </div>
       </div>

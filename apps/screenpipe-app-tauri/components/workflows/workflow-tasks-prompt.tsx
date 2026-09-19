@@ -7,6 +7,8 @@ import { Clock3, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { enableWorkflowTask, loadWorkflowTaskSetup, type WorkflowTaskSetup } from "@/lib/workflows/scheduled-discovery";
+import { useGT } from "gt-react";
+
 
 const desktopTasks = { load: loadWorkflowTaskSetup, enable: enableWorkflowTask };
 
@@ -14,6 +16,8 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks }: {
   active: boolean;
   tasks?: { load: () => Promise<WorkflowTaskSetup>; enable: () => Promise<void> };
 }) {
+
+  const ui = useGT();
   const [open, setOpen] = useState(false);
   const [setup, setSetup] = useState<WorkflowTaskSetup | null>(null);
   const [error, setError] = useState("");
@@ -39,7 +43,7 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks }: {
         if (cancelled) return;
         // Recorder startup is not a consent failure. Retry quietly first.
         if (++attempts < 4) timer = setTimeout(load, 1500 * attempts);
-        else setError("Could not check scheduled tasks. Try again when Screenpipe is connected.");
+        else setError(ui("Could not check scheduled tasks. Try again when Screenpipe is connected."));
       }
     }
     if (active) void load();
@@ -55,7 +59,7 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks }: {
       await tasks.enable();
       setOpen(false);
     } catch {
-      setError("Could not enable all tasks. Please try again.");
+      setError(ui("Could not enable all tasks. Please try again."));
     } finally {
       enabling.current = false;
       setBusy(false);
@@ -78,7 +82,7 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks }: {
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       <DialogFooter className="gap-2 sm:gap-0">
         <Button style={{ background: "#fff", borderColor: "#dedfd8", color: "#171815", fontFamily: "inherit", textTransform: "none", letterSpacing: 0 }} variant="outline" disabled={busy} onClick={() => setOpen(false)}>Not now</Button>
-        {setup ? <Button style={{ background: "#171815", color: "#fff", fontFamily: "inherit", textTransform: "none", letterSpacing: 0 }} disabled={busy} onClick={enable}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} {busy ? "Enabling…" : "Enable tasks"}</Button>
+        {setup ? <Button style={{ background: "#171815", color: "#fff", fontFamily: "inherit", textTransform: "none", letterSpacing: 0 }} disabled={busy} onClick={enable}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} {busy ? ui("Enabling…") : ui("Enable tasks")}</Button>
           : <Button onClick={() => setRetry(value => value + 1)}>Try again</Button>}
       </DialogFooter>
     </DialogContent>

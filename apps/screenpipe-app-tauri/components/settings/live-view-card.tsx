@@ -39,6 +39,8 @@ import type {
   BrainViewTimeRange,
   JsonValue,
 } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+
 
 export type {
   LiveViewItemActionRequest,
@@ -103,22 +105,24 @@ function LiveViewCardBody({
   onItemAction?: (request: LiveViewItemActionRequest) => Promise<boolean>;
   onItemHandoff?: (item: LiveViewListItem) => void;
 }) {
+
+  const ui = useGT();
   const rawPayload = slot.value?.payload;
   const payload = isRecord(rawPayload) ? rawPayload : null;
   if (!payload) {
     return (
       <div className="flex min-h-24 items-center justify-center border border-dashed border-border px-4 text-center text-xs text-muted-foreground">
         {preview ? (
-          "Data loads after you apply this dashboard"
+          ui("Data loads after you apply this dashboard")
         ) : refreshing && slot.binding ? (
           <span className="inline-flex items-center gap-2">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             Asking {slot.binding.pipeName} for fresh data
           </span>
         ) : slot.binding ? (
-          `${slot.binding.pipeName} has not published this data yet`
+          ui("{value1} has not published this data yet", { value1: slot.binding.pipeName })
         ) : (
-          "Connect a scheduled task to fill this Block"
+          ui("Connect a scheduled task to fill this Block")
         )}
       </div>
     );
@@ -415,6 +419,8 @@ export function LiveViewCard({
   onItemAction?: (request: LiveViewItemActionRequest) => Promise<boolean>;
   onItemHandoff?: (item: LiveViewListItem) => void;
 }) {
+
+  const ui = useGT();
   const [aiOpen, setAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -474,7 +480,7 @@ export function LiveViewCard({
             type="button"
             variant="ghost"
             size="icon"
-            aria-label={`Mark ${slot.title} useful`}
+            aria-label={ui("Mark {value1} useful", { value1: slot.title })}
             aria-pressed={feedback === "up"}
             className={`h-7 w-7 rounded-md ${
               feedback === "up" ? "bg-foreground text-background" : ""
@@ -500,7 +506,7 @@ export function LiveViewCard({
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-label={`Mark ${slot.title} not useful`}
+                aria-label={ui("Mark {value1} not useful", { value1: slot.title })}
                 aria-pressed={feedback === "down"}
                 className={`h-7 w-7 rounded-md ${
                   feedback === "down" ? "bg-foreground text-background" : ""
@@ -536,7 +542,7 @@ export function LiveViewCard({
                   autoFocus
                   value={feedbackNote}
                   onChange={(event) => setFeedbackNote(event.target.value)}
-                  placeholder="E.g. exclude meetings"
+                  placeholder={ui("E.g. exclude meetings")}
                   className="h-8 rounded-md text-xs"
                   maxLength={500}
                 />
@@ -574,8 +580,8 @@ export function LiveViewCard({
             type="button"
             variant="ghost"
             size="icon"
-            aria-label={`Regenerate ${slot.title}`}
-            title="Regenerate this section"
+            aria-label={ui("Regenerate {value1}", { value1: slot.title })}
+            title={ui("Regenerate this section")}
             className="h-7 w-7 rounded-md"
             disabled={!slot.binding || busy}
             onClick={onRegenerate}
@@ -592,8 +598,8 @@ export function LiveViewCard({
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-label={`Edit ${slot.title} with AI`}
-                title="Edit this section with AI"
+                aria-label={ui("Edit {value1} with AI", { value1: slot.title })}
+                title={ui("Edit this section with AI")}
                 className="h-7 w-7 rounded-md"
                 disabled={busy}
               >
@@ -620,7 +626,7 @@ export function LiveViewCard({
                   autoFocus
                   value={aiPrompt}
                   onChange={(event) => setAiPrompt(event.target.value)}
-                  placeholder="E.g. group by project instead"
+                  placeholder={ui("E.g. group by project instead")}
                   className="h-8 rounded-md text-xs"
                   maxLength={500}
                 />
@@ -659,8 +665,8 @@ export function LiveViewCard({
       <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-[10px] text-muted-foreground">
         <span className="truncate">
           {slot.binding
-            ? `Scheduled task: ${slot.binding.pipeName}`
-            : "No scheduled task connected"}
+            ? ui("Scheduled task: {value1}", { value1: slot.binding.pipeName })
+            : ui("No scheduled task connected")}
         </span>
         {SOURCE_STATUS_LABELS[effectiveSourceStatus] && (
           <span

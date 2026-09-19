@@ -135,6 +135,11 @@ import {
   removeOnboardingLiveViewActivation,
   selectedLiveViewDashboardId,
 } from "@/lib/live-views/onboarding-activation";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 export type ViewComponent = BrainViewComponent;
 export type ViewSlot = BrainViewSlot;
@@ -271,27 +276,27 @@ const COMPONENTS: Array<{
 }> = [
   {
     value: "metric.v1",
-    label: "Metric",
+    label: msg("Metric", {}),
     schema: "one value, unit, and change",
   },
-  { value: "list.v1", label: "List", schema: "ranked items with status" },
+  { value: "list.v1", label: msg("List", {}), schema: "ranked items with status" },
   {
     value: "bar-chart.v1",
-    label: "Bar chart",
+    label: msg("Bar chart", {}),
     schema: "labels and numeric values",
   },
   {
     value: "line-chart.v1",
-    label: "Line chart",
+    label: msg("Line chart", {}),
     schema: "numeric values changing over time",
   },
   {
     value: "table.v1",
-    label: "Table",
+    label: msg("Table", {}),
     schema: "scrollable rows with values and details",
   },
-  { value: "timeline.v1", label: "Timeline", schema: "timestamped events" },
-  { value: "markdown.v1", label: "Text", schema: "a short formatted brief" },
+  { value: "timeline.v1", label: msg("Timeline", {}), schema: "timestamped events" },
+  { value: "markdown.v1", label: msg("Text", {}), schema: "a short formatted brief" },
 ];
 
 function serializedSlots(slots: ViewSlot[]): BrainViewSlotInput[] {
@@ -307,29 +312,29 @@ function serializedSlots(slots: ViewSlot[]): BrainViewSlotInput[] {
 }
 
 function DataRefreshBanner({ state }: { state: DataRefreshState }) {
+  const uiPlural = useGT();
+
   const active = state.status === "starting" || state.status === "running";
   const configurationNote =
     state.unconfiguredCount > 0
-      ? `${state.unconfiguredCount} section${
-          state.unconfiguredCount === 1 ? "" : "s"
-        } not configured`
+      ? uiPlural("{value1, plural, one {# section} other {# sections}} not configured", { value1: state.unconfiguredCount })
       : null;
   const withConfigurationNote = (message: string) =>
     configurationNote ? `${message} · ${configurationNote}` : message;
   const message =
     state.status === "starting"
-      ? withConfigurationNote(`starting ${state.pipeNames.join(", ")}`)
+      ? withConfigurationNote(uiPlural("Starting {names}", { names: state.pipeNames.join(", ") }))
       : state.status === "running"
         ? state.filled > 0
           ? withConfigurationNote(
-              `${state.filled} of ${state.refreshableTotal} connected sections updated`,
+              uiPlural("{filled} of {total} connected sections updated", { filled: state.filled, total: state.refreshableTotal }),
             )
           : withConfigurationNote(
-              `${state.pipeNames.join(", ")} ${state.pipeNames.length === 1 ? "is" : "are"} building your live data`,
+              uiPlural("Building your live data: {names}", { names: state.pipeNames.join(", ") }),
             )
         : state.status === "complete"
-          ? `${state.total} sections updated from source data`
-          : state.message || "some sections could not be updated";
+          ? uiPlural("{total} sections updated from source data", { total: state.total })
+          : state.message || uiPlural("some sections could not be updated");
 
   return (
     <div
@@ -538,6 +543,10 @@ export function BrainOverview({
   navigation?: React.ReactNode;
   onViewCountChange?: (count: number) => void;
 } = {}) {
+  const uiLanguage = useLocale();
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const { toast } = useToast();
   const { pipes, refetch: refetchPipes } = usePipes();
   const { settings, isSettingsLoaded } = useSettings();
@@ -770,7 +779,7 @@ export function BrainOverview({
           if (canvasSaveErrorsRef.current.get(viewId) !== result.error) {
             canvasSaveErrorsRef.current.set(viewId, result.error);
             toast({
-              title: "Canvas changes were not saved",
+              title: ui("Canvas changes were not saved"),
               description: result.error,
               variant: "destructive",
             });
@@ -807,7 +816,7 @@ export function BrainOverview({
     });
     canvasSavePumpRef.current = promise;
     return promise;
-  }, [toast]);
+  }, [toast, uiLanguage]);
 
   const changeCanvasDocument = useCallback(
     (next: BrainViewCanvasDocument, { persist }: { persist: boolean }) => {
@@ -948,7 +957,7 @@ export function BrainOverview({
           setError(
             loadError instanceof Error
               ? loadError.message
-              : "Failed to load Live Views",
+              : ui("Failed to load Live Views"),
           );
         }
       } finally {
@@ -1410,9 +1419,9 @@ export function BrainOverview({
       onboardingRetrying
     ) {
       toast({
-        title: "Setup could not resume",
+        title: ui("Setup could not resume"),
         description:
-          "Create or customize this Live View directly from Brain instead.",
+          ui("Create or customize this Live View directly from Brain instead."),
         variant: "destructive",
       });
       return;
@@ -1445,25 +1454,17 @@ export function BrainOverview({
           retryError instanceof Error ? retryError.name : "unknown",
       });
       toast({
-        title: "Setup still needs attention",
+        title: ui("Setup still needs attention"),
         description:
           retryError instanceof Error
             ? retryError.message
-            : "Try again in a moment.",
+            : ui("Try again in a moment."),
         variant: "destructive",
       });
     } finally {
       setOnboardingRetrying(false);
     }
-  }, [
-    selectedAiPreset,
-    onboardingActivation,
-    onboardingRetrying,
-    refetchPipes,
-    settings.user?.token,
-    toast,
-    view,
-  ]);
+  }, [selectedAiPreset, onboardingActivation, onboardingRetrying, refetchPipes, settings.user?.token, toast, view, uiLanguage]);
 
   useEffect(() => {
     if (!dataRefresh || dataRefresh.status !== "running") return;
@@ -1607,8 +1608,8 @@ export function BrainOverview({
         dashboard_count: views.length,
       });
       toast({
-        title: "Dashboard limit reached",
-        description: `Delete a dashboard before creating another. You can keep up to ${MAX_DASHBOARDS}.`,
+        title: ui("Dashboard limit reached"),
+        description: ui("Delete a dashboard before creating another. You can keep up to {value1}.", { value1: MAX_DASHBOARDS }),
         variant: "destructive",
       });
       return;
@@ -1840,7 +1841,7 @@ export function BrainOverview({
             ).length
           : generated.blocks.length,
       });
-      setBuilderFeedback({ tone: "success", label: "Changes ready to review" });
+      setBuilderFeedback({ tone: "success", label: ui("Changes ready to review") });
       builderFeedbackTimerRef.current = window.setTimeout(
         () => setBuilderFeedback(null),
         2_500,
@@ -1870,12 +1871,12 @@ export function BrainOverview({
         tone: "error",
         label:
           quota.kind === "daily"
-            ? "AI usage limit reached"
-            : "Could not update · try again",
+            ? ui("AI usage limit reached")
+            : ui("Could not update · try again"),
         detail: failureDetail,
       });
       toast({
-        title: "Could not update the Live View",
+        title: ui("Could not update the Live View"),
         description: failureDetail,
         variant: "destructive",
       });
@@ -2006,7 +2007,7 @@ export function BrainOverview({
         failure_type: analyticsErrorType(feedbackError),
       });
       toast({
-        title: "Failed to save feedback",
+        title: ui("Failed to save feedback"),
         description:
           feedbackError instanceof Error
             ? feedbackError.message
@@ -2068,7 +2069,7 @@ export function BrainOverview({
         failure_type: analyticsErrorType(actionError),
       });
       toast({
-        title: "Could not update this item",
+        title: ui("Could not update this item"),
         description:
           actionError instanceof Error
             ? actionError.message
@@ -2095,7 +2096,7 @@ export function BrainOverview({
       });
     } catch (handoffError) {
       toast({
-        title: "Could not open the handoff",
+        title: ui("Could not open the handoff"),
         description:
           handoffError instanceof Error
             ? handoffError.message
@@ -2111,8 +2112,8 @@ export function BrainOverview({
   ): Promise<boolean> => {
     if (!view || !selectedAiPreset) {
       toast({
-        title: "Choose an AI model first",
-        description: "Add an AI preset in Settings, then try again.",
+        title: ui("Choose an AI model first"),
+        description: ui("Add an AI preset in Settings, then try again."),
         variant: "destructive",
       });
       return false;
@@ -2220,10 +2221,10 @@ export function BrainOverview({
       if (changedSlots.length > 0) {
         void refreshConnectedPipes(result.data, changedSlots, "card_ai_edit");
       }
-      toast({ title: "Accepted changes applied" });
+      toast({ title: ui("Accepted changes applied") });
     } catch (applyError) {
       toast({
-        title: "Could not apply accepted changes",
+        title: ui("Could not apply accepted changes"),
         description:
           applyError instanceof Error ? applyError.message : String(applyError),
         variant: "destructive",
@@ -2287,7 +2288,7 @@ export function BrainOverview({
       setAiNote(null);
       setReplaceConfirmationOpen(false);
       toast({
-        title: creatingNew ? `${result.data.title} created` : "Dashboard saved",
+        title: creatingNew ? ui("{value1} created", { value1: result.data.title }) : ui("Dashboard saved"),
       });
       let slotsToRefresh: ViewSlot[] = [];
       if (refreshData) {
@@ -2337,7 +2338,7 @@ export function BrainOverview({
         failure_type: analyticsErrorType(saveError),
       });
       toast({
-        title: "Failed to save Live View",
+        title: ui("Failed to save Live View"),
         description:
           saveError instanceof Error ? saveError.message : String(saveError),
         variant: "destructive",
@@ -2414,7 +2415,7 @@ export function BrainOverview({
         ...liveViewAnalyticsProperties(result.data, views.length),
         action: "renamed",
       });
-      toast({ title: `Renamed to ${result.data.title}` });
+      toast({ title: ui("Renamed to {value1}", { value1: result.data.title }) });
     } catch (renameError) {
       posthog.capture("live_view_dashboard_action_failed", {
         analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
@@ -2422,7 +2423,7 @@ export function BrainOverview({
         failure_type: analyticsErrorType(renameError),
       });
       toast({
-        title: "Could not rename dashboard",
+        title: ui("Could not rename dashboard"),
         description:
           renameError instanceof Error
             ? renameError.message
@@ -2439,8 +2440,8 @@ export function BrainOverview({
     if (!view) return;
     if (views.length >= MAX_DASHBOARDS) {
       toast({
-        title: "Dashboard limit reached",
-        description: `Delete a dashboard before duplicating another. You can keep up to ${MAX_DASHBOARDS}.`,
+        title: ui("Dashboard limit reached"),
+        description: ui("Delete a dashboard before duplicating another. You can keep up to {value1}.", { value1: MAX_DASHBOARDS }),
         variant: "destructive",
       });
       return;
@@ -2491,7 +2492,7 @@ export function BrainOverview({
         source: "duplicate",
         refresh_requested: true,
       });
-      toast({ title: `${result.data.title} created` });
+      toast({ title: ui("{value1} created", { value1: result.data.title }) });
       void refreshConnectedPipes(
         result.data,
         undefined,
@@ -2507,7 +2508,7 @@ export function BrainOverview({
         failure_type: analyticsErrorType(duplicateError),
       });
       toast({
-        title: "Could not duplicate dashboard",
+        title: ui("Could not duplicate dashboard"),
         description:
           duplicateError instanceof Error
             ? duplicateError.message
@@ -2540,7 +2541,7 @@ export function BrainOverview({
         ...liveViewAnalyticsProperties(view, views.length),
         dashboard_count_after: nextViews.length,
       });
-      toast({ title: "Dashboard deleted" });
+      toast({ title: ui("Dashboard deleted") });
     } catch (deleteError) {
       posthog.capture("live_view_dashboard_action_failed", {
         analytics_schema_version: LIVE_VIEW_ANALYTICS_SCHEMA_VERSION,
@@ -2548,7 +2549,7 @@ export function BrainOverview({
         failure_type: analyticsErrorType(deleteError),
       });
       toast({
-        title: "Could not delete dashboard",
+        title: ui("Could not delete dashboard"),
         description:
           deleteError instanceof Error
             ? deleteError.message
@@ -2588,7 +2589,7 @@ export function BrainOverview({
         source: "undo",
         refresh_requested: true,
       });
-      toast({ title: "Previous dashboard restored" });
+      toast({ title: ui("Previous dashboard restored") });
       void refreshConnectedPipes(result.data, undefined, "undo");
     } catch (restoreError) {
       posthog.capture("live_view_dashboard_action_failed", {
@@ -2597,7 +2598,7 @@ export function BrainOverview({
         failure_type: analyticsErrorType(restoreError),
       });
       toast({
-        title: "Could not restore the previous dashboard",
+        title: ui("Could not restore the previous dashboard"),
         description:
           restoreError instanceof Error
             ? restoreError.message
@@ -2643,9 +2644,9 @@ export function BrainOverview({
       )
     ) {
       toast({
-        title: "This dashboard uses a fixed period",
+        title: ui("This dashboard uses a fixed period"),
         description:
-          "Choose another dashboard or template for a different period.",
+          ui("Choose another dashboard or template for a different period."),
         variant: "destructive",
       });
       return;
@@ -2670,7 +2671,7 @@ export function BrainOverview({
         previous_time_range: previousView.timeRange,
       });
       toast({
-        title: `Showing ${getLiveViewTimeRangeOption(timeRange).label.toLowerCase()}`,
+        title: ui("Showing {value1}", { value1: getLiveViewTimeRangeOption(timeRange).label.toLowerCase() }),
       });
       void refreshConnectedPipes(result.data, undefined, "time_range");
     } catch (rangeError) {
@@ -2680,7 +2681,7 @@ export function BrainOverview({
         failure_type: analyticsErrorType(rangeError),
       });
       toast({
-        title: "Could not change the time range",
+        title: ui("Could not change the time range"),
         description:
           rangeError instanceof Error ? rangeError.message : String(rangeError),
         variant: "destructive",
@@ -2791,7 +2792,7 @@ export function BrainOverview({
     );
     const destination = wholeDashboardPreview ? previewDestination : "replace";
     const templateReadiness = templatePreview
-      ? getTemplatePipeReadiness(templatePreview, installedPipeNames)
+      ? localizeDefinitions(getTemplatePipeReadiness(templatePreview, installedPipeNames), uiMessages)
       : null;
     const applyPreview = () =>
       templatePreview
@@ -2813,7 +2814,7 @@ export function BrainOverview({
           <div className="mb-5 flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4">
             <div>
               <p className="text-[10px] normal-case tracking-wide text-muted-foreground">
-                {templatePreview ? "Template preview" : "AI draft"}
+                {templatePreview ? ui("Template preview") : ui("AI draft")}
               </p>
               <h2 className="text-lg font-semibold tracking-tight">
                 {draft.title}
@@ -2875,11 +2876,11 @@ export function BrainOverview({
                 )}
                 {replacingDashboard
                   ? templatePreview
-                    ? "replace with agent"
-                    : "replace current dashboard"
+                    ? ui("replace with agent")
+                    : ui("replace current dashboard")
                   : templatePreview
-                    ? "build with agent"
-                    : "create dashboard & load data"}
+                    ? ui("build with agent")
+                    : ui("create dashboard & load data")}
               </Button>
             </div>
           </div>
@@ -2952,8 +2953,8 @@ export function BrainOverview({
                     </span>
                     <span className="mt-1 block text-[11px] text-muted-foreground">
                       {dashboardLimitReached
-                        ? `${MAX_DASHBOARDS} dashboard limit reached`
-                        : `Keep “${view?.title}” unchanged`}
+                        ? ui("{value1} dashboard limit reached", { value1: MAX_DASHBOARDS })
+                        : ui("Keep “{value1}” unchanged", { value1: view?.title })}
                     </span>
                   </button>
                   <button
@@ -2969,13 +2970,13 @@ export function BrainOverview({
                   >
                     <span className="block text-xs font-medium">
                       {replacingBlankStarter
-                        ? "Use this dashboard"
-                        : "Replace current"}
+                        ? ui("Use this dashboard")
+                        : ui("Replace current")}
                     </span>
                     <span className="mt-1 block text-[11px] text-muted-foreground">
                       {replacingBlankStarter
-                        ? "Turn the empty starter into this view"
-                        : "Confirmation required"}
+                        ? ui("Turn the empty starter into this view")
+                        : ui("Confirmation required")}
                     </span>
                   </button>
                 </div>
@@ -3056,7 +3057,7 @@ export function BrainOverview({
       <LiveViewLayoutEditor
         draft={draft}
         saving={saving}
-        componentOptions={COMPONENTS}
+        componentOptions={localizeDefinitions(COMPONENTS, uiMessages)}
         pipeNames={installedPipes.map((pipe) => pipe.config.name)}
         onChange={setDraft}
         onCancel={() => {
@@ -3086,9 +3087,7 @@ export function BrainOverview({
     stalledSources.paused.length + stalledSources.manual.length;
   const stalledSourceLabel =
     stalledSourceCount > 0
-      ? `${stalledSourceCount} source${
-          stalledSourceCount === 1 ? "" : "s"
-        } only update on refresh`
+      ? ui("{value1, plural, one {# source} other {# sources}} only update on refresh", { value1: stalledSourceCount })
       : null;
   const latestUpdate =
     [freshness.label, stalledSourceLabel]
@@ -3182,8 +3181,8 @@ export function BrainOverview({
                 variant="outline"
                 size="icon"
                 className="h-9 w-9 shrink-0 rounded-md"
-                aria-label="Undo last Live View change"
-                title={`Undo last Live View change (${isMac ? "⌘Z" : "Ctrl+Z"})`}
+                aria-label={ui("Undo last Live View change")}
+                title={ui("Undo last Live View change ({value1})", { value1: isMac ? "⌘Z" : "Ctrl+Z" })}
                 disabled={saving}
                 onClick={() => void restorePreviousView()}
               >
@@ -3202,8 +3201,8 @@ export function BrainOverview({
                   data-testid="overview-time-range"
                   aria-label={
                     latestUpdate
-                      ? `Live View time range. ${latestUpdate}`
-                      : "Live View time range"
+                      ? ui("Live View time range. {value1}", { value1: latestUpdate })
+                      : ui("Live View time range")
                   }
                   title={latestUpdate ?? undefined}
                   className="h-9 min-w-36 w-auto flex-1 text-xs sm:flex-none"
@@ -3225,8 +3224,8 @@ export function BrainOverview({
                 variant="outline"
                 size="icon"
                 className="h-9 w-9 shrink-0 rounded-md"
-                aria-label={refreshIsActive ? "Loading data" : "Refresh data"}
-                title={refreshIsActive ? "Loading data" : "Refresh data"}
+                aria-label={refreshIsActive ? ui("Loading data") : ui("Refresh data")}
+                title={refreshIsActive ? ui("Loading data") : ui("Refresh data")}
                 disabled={dashboardBusy}
                 onClick={() => void refreshConnectedPipes(view)}
               >
@@ -3260,12 +3259,12 @@ export function BrainOverview({
             <div className="min-w-0 flex-1">
               <p className="text-xs font-medium">
                 {freshness.dataOutsideRange
-                  ? `Showing data older than ${getLiveViewTimeRangeOption(view.timeRange).label.toLowerCase()}`
+                  ? ui("Showing data older than {value1}", { value1: getLiveViewTimeRangeOption(view.timeRange).label.toLowerCase() })
                   : stalledSourceCount > 0
-                    ? "This view will not update by itself"
+                    ? ui("This view will not update by itself")
                     : freshness.waiting > 0
-                      ? "Some data is missing"
-                      : "Some sources have not checked recently"}
+                      ? ui("Some data is missing")
+                      : ui("Some sources have not checked recently")}
               </p>
               <p
                 data-testid="overview-freshness"
@@ -3310,7 +3309,7 @@ export function BrainOverview({
             className="mb-3 shrink-0 text-[11px] text-muted-foreground"
           >
             {unconfiguredBlockCount} Block
-            {unconfiguredBlockCount === 1 ? " is" : "s are"} not connected to a
+            {unconfiguredBlockCount === 1 ? " is" : ui("s are")} not connected to a
             scheduled task
           </p>
         )}
@@ -3333,7 +3332,7 @@ export function BrainOverview({
         {templateGalleryOpen && !onboardingColdStart && (
           <div className="relative mb-5 max-h-[min(50vh,32rem)] shrink-0 overflow-y-auto border border-border p-4 pr-12">
             <Button
-              aria-label="Close templates"
+              aria-label={ui("Close templates")}
               variant="ghost"
               size="icon"
               className="absolute right-2 top-2 h-8 w-8 rounded-md"
@@ -3354,8 +3353,7 @@ export function BrainOverview({
             className="mb-3 flex flex-wrap items-center gap-2 border border-amber-500/60 bg-amber-500/5 px-3 py-2 text-xs"
           >
             <span className="font-medium">
-              Review {aiBlockProposals.length} proposed Block
-              {aiBlockProposals.length === 1 ? "" : "s"}
+              {ui("Review {count, plural, one {# proposed Block} other {# proposed Blocks}}", { count: aiBlockProposals.length })}
             </span>
             <span className="text-muted-foreground">
               {
@@ -3378,7 +3376,7 @@ export function BrainOverview({
                 variant="ghost"
                 className="h-7 rounded-md px-2"
                 disabled={saving}
-                title="Accept and save every proposed change"
+                title={ui("Accept and save every proposed change")}
                 onClick={() => void acceptAllAiProposals()}
               >
                 <Check className="mr-1 h-3 w-3" /> Accept all
@@ -3389,7 +3387,7 @@ export function BrainOverview({
                 variant="ghost"
                 className="h-7 rounded-md px-2"
                 disabled={saving}
-                title="Reject and discard every proposed change"
+                title={ui("Reject and discard every proposed change")}
                 onClick={discardAiProposals}
               >
                 <X className="mr-1 h-3 w-3" /> Reject all
@@ -3413,7 +3411,7 @@ export function BrainOverview({
                 size="icon"
                 variant="ghost"
                 className="h-7 w-7 rounded-md"
-                aria-label="Discard all AI changes"
+                aria-label={ui("Discard all AI changes")}
                 onClick={discardAiProposals}
               >
                 <X className="h-3 w-3" />

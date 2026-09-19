@@ -7,6 +7,8 @@ import * as React from "react";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 export type ImageViewerState = { images: string[]; index: number } | null;
 
@@ -16,6 +18,8 @@ interface ImageViewerDialogProps {
 }
 
 export function ImageViewerDialog({ imageViewer, onChange }: ImageViewerDialogProps) {
+
+  const ui = useGT();
   return (
     <Dialog open={!!imageViewer} onOpenChange={(open) => !open && onChange(null)}>
       <DialogContent
@@ -32,7 +36,7 @@ export function ImageViewerDialog({ imageViewer, onChange }: ImageViewerDialogPr
                 type="button"
                 onClick={() => onChange(null)}
                 className="p-2 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                aria-label="Close"
+                aria-label={ui("Close")}
               >
                 <X className="h-5 w-5" />
               </button>
@@ -41,7 +45,7 @@ export function ImageViewerDialog({ imageViewer, onChange }: ImageViewerDialogPr
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={imageViewer.images[imageViewer.index]}
-                alt={`Attached image ${imageViewer.index + 1}`}
+                alt={ui("Attached image {value1}", { value1: imageViewer.index + 1 })}
                 className="max-w-full max-h-full object-contain rounded-lg"
               />
             </div>
@@ -51,7 +55,7 @@ export function ImageViewerDialog({ imageViewer, onChange }: ImageViewerDialogPr
                 onClick={() => onChange((v) => v && v.index > 0 ? { ...v, index: v.index - 1 } : v)}
                 disabled={imageViewer.index === 0}
                 className="p-2 rounded-md hover:bg-muted disabled:opacity-40 disabled:pointer-events-none text-foreground"
-                aria-label="Previous image"
+                aria-label={ui("Previous image")}
               >
                 <ChevronLeft className="h-5 w-5" />
               </button>
@@ -60,7 +64,7 @@ export function ImageViewerDialog({ imageViewer, onChange }: ImageViewerDialogPr
                 onClick={() => onChange((v) => v && v.index < v.images.length - 1 ? { ...v, index: v.index + 1 } : v)}
                 disabled={imageViewer.index === imageViewer.images.length - 1}
                 className="p-2 rounded-md hover:bg-muted disabled:opacity-40 disabled:pointer-events-none text-foreground"
-                aria-label="Next image"
+                aria-label={ui("Next image")}
               >
                 <ChevronRight className="h-5 w-5" />
               </button>

@@ -26,11 +26,15 @@ import {
 } from "./notification-registry";
 import { NotificationPipeControls } from "./notification-pipe-controls";
 import { NotificationPauseControl } from "./notification-pause-control";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 const PRESETS: { kind: CategoryPreset; label: string }[] = [
-  { kind: "recommended", label: "Recommended" },
-  { kind: "all", label: "Everything" },
-  { kind: "none", label: "Nothing" },
+  { kind: "recommended", label: msg("Recommended", {}) },
+  { kind: "all", label: msg("Everything", {}) },
+  { kind: "none", label: msg("Nothing", {}) },
 ];
 
 /**
@@ -40,15 +44,15 @@ const PRESETS: { kind: CategoryPreset; label: string }[] = [
  */
 export const searchIndex: SettingsField[] = [
   {
-    label: "Notifications",
+    label: msg("Notifications", {}),
     keywords: ["mute all", "do not disturb", "dnd", "silence", "pause", "snooze"],
   },
   {
-    label: "Quiet hours",
+    label: msg("Quiet hours", {}),
     keywords: ["schedule", "night", "sleep", "focus", "dnd", "do not disturb"],
   },
   {
-    label: "Reset to defaults",
+    label: msg("Reset to defaults", {}),
     keywords: ["presets", "recommended", "everything", "nothing", "reset"],
   },
   ...NOTIFICATION_CATEGORIES.map((c) => ({
@@ -56,7 +60,7 @@ export const searchIndex: SettingsField[] = [
     keywords: c.keywords,
   })),
   {
-    label: "Per-task notifications",
+    label: msg("Per-task notifications", {}),
     keywords: ["pipe", "mute pipe", "per pipe", "individual pipe"],
     conditional: true,
   },
@@ -77,6 +81,9 @@ function matchesQuery(category: NotificationCategory, q: string): boolean {
 }
 
 export function NotificationsSettings() {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const { settings, updateSettings } = useSettings();
   const [query, setQuery] = React.useState("");
   const [pipesExpanded, setPipesExpanded] = React.useState(false);
@@ -133,9 +140,9 @@ export function NotificationsSettings() {
   const q = query.trim().toLowerCase();
 
   // Groups that still have at least one matching category under the active filter.
-  const visibleGroups = NOTIFICATION_GROUPS.map((group) => ({
+  const visibleGroups = localizeDefinitions(NOTIFICATION_GROUPS, uiMessages).map((group) => ({
     group,
-    categories: categoriesForGroup(group.id).filter((c) => matchesQuery(c, q)),
+    categories: localizeDefinitions(categoriesForGroup(group.id), uiMessages).filter((c) => matchesQuery(c, q)),
   })).filter((g) => g.categories.length > 0);
 
   return (
@@ -169,7 +176,7 @@ export function NotificationsSettings() {
       {/* Quick presets + reset, then the in-section filter */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[11px] text-muted-foreground">Quick set:</span>
-        {PRESETS.map((p) => (
+        {localizeDefinitions(PRESETS, uiMessages).map((p) => (
           <button
             key={p.kind}
             type="button"
@@ -196,8 +203,8 @@ export function NotificationsSettings() {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search notifications"
-          aria-label="Search notifications"
+          placeholder={ui("Search notifications")}
+          aria-label={ui("Search notifications")}
           data-testid="notification-search"
           className="w-full border border-border bg-transparent py-2 pl-8 pr-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-foreground/30"
         />
@@ -218,7 +225,7 @@ export function NotificationsSettings() {
               {!q && (
                 <Switch
                   data-testid={`notification-group-${group.id}`}
-                  aria-label={`Toggle all ${group.label}`}
+                  aria-label={ui("Toggle all {value1}", { value1: group.label })}
                   checked={gstate === "all"}
                   onCheckedChange={(v) =>
                     writeCategoryPatch(

@@ -3,6 +3,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { Shield, ShieldCheck, ShieldAlert, X } from "lucide-react";
+import { useGT } from "gt-react";
+
 export type VerificationState = "verifying" | "attested" | "response_verified" | "failed";
 export type VerificationProof = {
   securityVerified: true; configRepo: string; enclaveHost: string; releaseTag: string;
@@ -54,6 +56,7 @@ export function ConfidentialVerificationBadge({ source }: { source?: Confidentia
 }
 
 export function ConfidentialVerificationDetails({ current, showLabel = false, triggerRole }: { current: ConfidentialVerification | null; showLabel?: boolean; triggerRole?: "menuitem" }) {
+  const ui = useGT();
   const dialog = useRef<HTMLDialogElement>(null);
   const state = current?.state ?? "idle";
   const proof = current?.document;
@@ -65,13 +68,13 @@ export function ConfidentialVerificationDetails({ current, showLabel = false, tr
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   return <span style={{ display: "inline-flex", alignItems: "center" }}>
-    <button type="button" role={triggerRole} aria-label={`Private AI: ${labels[state]}`} title={labels[state]} onClick={() => dialog.current?.showModal()}
+    <button type="button" role={triggerRole} aria-label={ui("Private AI: {value1}", { value1: labels[state] })} title={labels[state]} onClick={() => dialog.current?.showModal()}
       style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "inherit", background: "transparent", border: showLabel ? 0 : "1px solid currentColor", borderRadius: 6, padding: 5, cursor: "pointer", font: "inherit", textAlign: "left" }}><Icon size={15} aria-hidden="true" />{showLabel && <span>Private AI · {labels[state]}</span>}</button>
-    <dialog ref={dialog} aria-label="Private AI verification" onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); dialog.current?.close(); } }} onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }}
+    <dialog ref={dialog} aria-label={ui("Private AI verification")} onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); dialog.current?.close(); } }} onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }}
       style={{ background: "Canvas", color: "CanvasText", colorScheme: "light dark", border: "1px solid GrayText", borderRadius: 8, padding: 24, width: 460, maxWidth: "calc(100vw - 32px)", maxHeight: "80vh", overflow: "auto", font: "inherit", fontSize: 13 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}><strong>Private AI verification</strong><button type="button" aria-label="Close verification" onClick={() => dialog.current?.close()} style={{ background: "transparent", color: "inherit", border: 0, cursor: "pointer" }}><X size={18} /></button></div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}><strong>Private AI verification</strong><button type="button" aria-label={ui("Close verification")} onClick={() => dialog.current?.close()} style={{ background: "transparent", color: "inherit", border: 0, cursor: "pointer" }}><X size={18} /></button></div>
       <p role="status" style={{ margin: "18px 0 8px" }}><strong>{labels[state]}</strong></p>
-      <p style={{ margin: "8px 0 16px" }}>{state === "idle" ? "Send a Private request to verify the enclave. Selecting a model alone is not verification." : state === "verifying" ? "Tinfoil is checking the enclave and its encryption key before sending your prompt." : state === "attested" ? "The enclave passed verification. An encrypted response has not completed yet." : state === "response_verified" ? "The latest observed request used Tinfoil encryption. Its response was authenticated and decrypted on this device." : "The request did not complete successfully. It did not fall back to another model or plaintext transport."}</p>
+      <p style={{ margin: "8px 0 16px" }}>{state === "idle" ? ui("Send a Private request to verify the enclave. Selecting a model alone is not verification.") : state === "verifying" ? ui("Tinfoil is checking the enclave and its encryption key before sending your prompt.") : state === "attested" ? ui("The enclave passed verification. An encrypted response has not completed yet.") : state === "response_verified" ? ui("The latest observed request used Tinfoil encryption. Its response was authenticated and decrypted on this device.") : ui("The request did not complete successfully. It did not fall back to another model or plaintext transport.")}</p>
       <p style={{ margin: "8px 0 16px" }}>Protects model prompts, tool results sent to the model, and responses between this device and the verified enclave. External tools and local files have their own privacy boundaries.</p>
       {proof && <><dl style={{ overflowWrap: "anywhere" }}>{[["Enclave", proof.enclaveHost], ["Release", proof.releaseTag], ["Verified at", proof.verifiedAt], ["Code and enclave measurement", proof.codeFingerprint], ["Attested encryption public key", proof.hpkePublicKey]].map(([name, value]) => <div key={name} style={{ marginBottom: 12 }}><dt style={{ fontWeight: 600 }}>{name}</dt><dd style={{ margin: 0, fontFamily: "monospace", fontSize: 12 }}>{value}</dd></div>)}</dl>
         <a href={`https://github.com/screenpipe/privacy-filter/releases/tag/${encodeURIComponent(proof.releaseTag)}`} target="_blank" rel="noreferrer">Inspect verified release</a>

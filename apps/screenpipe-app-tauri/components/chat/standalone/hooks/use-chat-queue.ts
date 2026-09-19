@@ -9,10 +9,13 @@ import type { QueuedDisplayPayload } from "@/lib/chat/types";
 import { payloadMatchesText, queuedSnapshotsEqual, shouldKeepQueuedDisplay } from "@/lib/chat/queued-display";
 import { normalizeQueueEventPayload } from "@/lib/chat-queue-controls";
 import { toast } from "@/components/ui/use-toast";
+import { useGT } from "gt-react";
+
 
 const EMPTY_QUEUED_PROMPTS: PiQueuedPrompt[] = [];
 
 export function useChatQueue(currentQueueSessionId: string, piSessionIdRef: MutableRefObject<string>) {
+  const ui = useGT();
   const [queuedPromptsBySession, setQueuedPromptsBySession] = useState<Record<string, PiQueuedPrompt[]>>({});
   const queuedDisplayBySessionRef = useRef<Record<string, Record<string, QueuedDisplayPayload>>>({});
   const [queuedActionPromptId, setQueuedActionPromptId] = useState<string | null>(null);
@@ -142,15 +145,15 @@ export function useChatQueue(currentQueueSessionId: string, piSessionIdRef: Muta
       const result = await commands.piCancelQueued(piSessionIdRef.current, prompt.id);
       if (result.status !== "ok") {
         if (!options.silent) {
-          toast({ title: "Failed to cancel queued message", description: result.error, variant: "destructive" });
+          toast({ title: ui("Failed to cancel queued message"), description: result.error, variant: "destructive" });
         }
         return false;
       }
       if (!result.data) {
         if (!options.silent) {
           toast({
-            title: "Message already started",
-            description: "Use stop if you want to interrupt the active reply.",
+            title: ui("Message already started"),
+            description: ui("Use stop if you want to interrupt the active reply."),
           });
         }
         return false;
@@ -161,7 +164,7 @@ export function useChatQueue(currentQueueSessionId: string, piSessionIdRef: Muta
     } catch (e) {
       if (!options.silent) {
         toast({
-          title: "Failed to cancel queued message",
+          title: ui("Failed to cancel queued message"),
           description: e instanceof Error ? e.message : String(e),
           variant: "destructive",
         });

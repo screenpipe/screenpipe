@@ -9,6 +9,8 @@ import { Plus, X } from "lucide-react";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 export const MAX_PIPE_PRESET_CHAIN_LENGTH = 4;
 
@@ -48,6 +50,8 @@ export function PipePresetChain({
   preset: PipePresetValue;
   onChange: (preset: string | string[] | null) => void;
 }) {
+
+  const ui = useGT();
   const chain = normalizePipePresetChain(preset);
   const [addingFallback, setAddingFallback] = useState(false);
   const canAddFallback = chain.length < MAX_PIPE_PRESET_CHAIN_LENGTH;
@@ -96,7 +100,7 @@ export function PipePresetChain({
         </span>
       </div>
 
-      <ol className="mt-3 border border-border" aria-label="Model fallback order">
+      <ol className="mt-3 border border-border" aria-label={ui("Model fallback order")}>
         {rows.map((presetId, index) => (
           <li
             key={`${presetId ?? "empty"}-${index}`}
@@ -155,7 +159,7 @@ export function PipePresetChain({
                   <button
                     type="button"
                     className="flex h-8 w-8 shrink-0 items-center justify-center border border-transparent text-muted-foreground transition-colors hover:border-border hover:text-foreground focus-visible:border-foreground focus-visible:outline-none"
-                    aria-label={`Remove ${rowLabel(index)}`}
+                    aria-label={ui("Remove {value1}", { value1: rowLabel(index) })}
                     onClick={() => {
                       if (index >= chain.length) setAddingFallback(false);
                       else removeFallback(index);

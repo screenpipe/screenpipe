@@ -27,6 +27,10 @@ import {
   type InAppShortcutSection,
 } from "@/lib/shortcuts";
 import { useExperimentalFeaturesEnabled } from "@/lib/experimental-features";
+import { useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 const SECTION_LABELS: Record<InAppShortcutSection, string> = {
   chat: "chat",
@@ -49,6 +53,9 @@ export function ShortcutGuide({
   open: controlledOpen,
   onOpenChange,
 }: ShortcutGuideProps = {}) {
+  const uiLanguage = useLocale();
+
+  const uiMessages = useMessages();
   const { settings } = useSettings();
   const { isMac } = usePlatform();
   const storedOpen = useShortcutGuideStore((state) => state.isOpen);
@@ -76,9 +83,9 @@ export function ShortcutGuide({
     () =>
       (["chat", "navigation", "app"] as const).map((section) => ({
         section,
-        items: IN_APP_SHORTCUTS.filter((item) => item.section === section),
+        items: localizeDefinitions(IN_APP_SHORTCUTS, uiMessages).filter((item) => item.section === section),
       })),
-    [],
+    [uiLanguage],
   );
 
   return (
@@ -144,7 +151,7 @@ export function ShortcutGuide({
               </span>
             </div>
             <div className="divide-y divide-border/60">
-              {GLOBAL_SHORTCUTS.map((item) => {
+              {localizeDefinitions(GLOBAL_SHORTCUTS, uiMessages).map((item) => {
                 const hint = globalShortcutHint(settings, item.id, isMac);
                 return (
                   <div

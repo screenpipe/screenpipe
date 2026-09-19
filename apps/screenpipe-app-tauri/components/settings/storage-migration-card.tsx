@@ -12,11 +12,15 @@ import {
   AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { useGT } from "gt-react";
+
 
 export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
   dataDirectory?: string;
   onBusyChange: (busy: boolean) => void;
 }) {
+
+  const ui = useGT();
   const [status, setStatus] = useState<StorageMigrationStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -90,8 +94,8 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
             <h3 className="text-sm font-medium">Database storage</h3>
             <p className="text-xs text-muted-foreground">
               {status?.completed && status.using_new_storage
-                ? "Your recordings use the new compressed storage."
-                : "Reduce database size while keeping your recorded history searchable."}
+                ? ui("Your recordings use the new compressed storage.")
+                : ui("Reduce database size while keeping your recorded history searchable.")}
             </p>
           </div>
         </div>
@@ -101,7 +105,7 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
         {status?.blocked_reason && <p className="text-xs text-muted-foreground">{status.blocked_reason}</p>}
         {status?.pending && !status.busy && (
           <p className="text-xs text-muted-foreground">
-            {status.in_place ? "Migration is unfinished. Completed progress is saved; retry migration when ready." : "Migration is unfinished. Resume to continue. Your original database is still kept."}
+            {status.in_place ? ui("Migration is unfinished. Completed progress is saved; retry migration when ready.") : ui("Migration is unfinished. Resume to continue. Your original database is still kept.")}
           </p>
         )}
         {status?.completed && !status.using_new_storage && !status.busy && (
@@ -112,16 +116,16 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
             {status.migrated_bytes != null && <p>Database size after migration: {bytes(status.migrated_bytes)}</p>}
             {status.bytes_saved != null && <p>Space saved: {bytes(status.bytes_saved)}</p>}
             <p className="text-muted-foreground">
-              {status.in_place ? "Your existing database is now the smaller index. Space was recovered during migration." : Number(status.source_bytes) > 0
-                ? `Original database kept: ${bytes(status.source_bytes)}. New recordings go to the compressed storage.`
-                : "The original database has been deleted."}
+              {status.in_place ? ui("Your existing database is now the smaller index. Space was recovered during migration.") : Number(status.source_bytes) > 0
+                ? ui("Original database kept: {value1}. New recordings go to the compressed storage.", { value1: bytes(status.source_bytes) })
+                : ui("The original database has been deleted.")}
             </p>
           </div>
         )}
         {status?.can_migrate && (
           <Button variant="outline" size="sm" className="h-7 text-xs" disabled={busy}
             onClick={() => setMigrationRoot(status.root)}>
-            {status.completed ? "Finish switching" : status.pending ? "Resume migration" : "Migrate storage"}
+            {status.completed ? ui("Finish switching") : status.pending ? ui("Resume migration") : ui("Migrate storage")}
           </Button>
         )}
         {status?.can_cancel && (
@@ -152,7 +156,7 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
         <AlertDialog open={migrationRoot !== null} onOpenChange={(open) => { if (!open && !submitting) setMigrationRoot(null); }}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>{status?.completed ? "Finish switching storage?" : "Migrate storage?"}</AlertDialogTitle>
+              <AlertDialogTitle>{status?.completed ? ui("Finish switching storage?") : ui("Migrate storage?")}</AlertDialogTitle>
               <AlertDialogDescription>
                 <StorageMigrationDescription />
               </AlertDialogDescription>
@@ -162,7 +166,7 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
               <AlertDialogCancel disabled={submitting}>Keep current storage</AlertDialogCancel>
               <Button disabled={busy || !status?.can_migrate || migrationRoot !== status?.root}
                 onClick={() => { if (migrationRoot) void run(() => commands.startStorageMigration(migrationRoot)); }}>
-                {submitting ? "Starting…" : "Start now"}
+                {submitting ? ui("Starting…") : ui("Start now")}
               </Button>
             </AlertDialogFooter>
           </AlertDialogContent>
@@ -188,7 +192,7 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
               <AlertDialogCancel disabled={submitting}>Keep original database</AlertDialogCancel>
               <Button variant="destructive" disabled={!confirmed || !deletionAvailable || !sameDeletionTarget}
                 onClick={() => { if (deletion) void run(() => commands.deleteOriginalStorageDatabase(deletion.root, deletion.generation, true)); }}>
-                {submitting ? "Deleting…" : "Delete permanently"}
+                {submitting ? ui("Deleting…") : ui("Delete permanently")}
               </Button>
             </AlertDialogFooter>
           </AlertDialogContent>

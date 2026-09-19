@@ -11,6 +11,8 @@ import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useChatStore } from "@/lib/stores/chat-store";
 import posthog from "posthog-js";
+import { useGT } from "gt-react";
+
 
 // One-time guided first run, shown on the home window right after onboarding.
 // It does NOT replace the chat — it guides the REAL chat:
@@ -95,6 +97,8 @@ export default function FirstRunGuide({
   onGoToAutomations,
   onEnsureChatVisible,
 }: FirstRunGuideProps) {
+
+  const ui = useGT();
   const [phase, setPhase] = useState<Phase>("invite");
   const phaseRef = useRef<Phase>("invite");
   phaseRef.current = phase;
@@ -513,7 +517,7 @@ export default function FirstRunGuide({
           </span>
           <button
             onClick={skip}
-            aria-label="Skip intro"
+            aria-label={ui("Skip intro")}
             className="font-mono text-[10px] normal-case tracking-widest text-foreground transition-opacity hover:opacity-60"
           >
             Skip ✕

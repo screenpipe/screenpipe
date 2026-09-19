@@ -37,6 +37,8 @@ import {
   pipeConnectionInstanceName,
   pipeConnectionLookupKey,
 } from "@/lib/pipe-connections";
+import { useGT } from "gt-react";
+
 
 interface PostInstallConnectionsModalProps {
   open: boolean;
@@ -101,6 +103,8 @@ export function PostInstallConnectionsModal({
   connections,
   onConnectionRemoved,
 }: PostInstallConnectionsModalProps) {
+
+  const ui = useGT();
   const { settings } = useSettings();
   const composioToken = settings.user?.token;
   const [statuses, setStatuses] = useState<Record<string, ConnectionStatus>>({});
@@ -470,7 +474,7 @@ export function PostInstallConnectionsModal({
                                 Removing...
                               </>
                             ) : (
-                              "Remove from scheduled task"
+                              ui("Remove from scheduled task")
                             )}
                           </Button>
                         )}
@@ -557,7 +561,7 @@ export function PostInstallConnectionsModal({
             onClick={() => onOpenChange(false)}
             disabled={!allConfigured && false}
           >
-            {allConfigured ? "Done" : "Done"}
+            {allConfigured ? ui("Done") : ui("Done")}
           </Button>
         </DialogFooter>
       </DialogContent>

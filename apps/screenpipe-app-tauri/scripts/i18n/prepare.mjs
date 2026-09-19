@@ -41,14 +41,15 @@ export async function extractNative(root, policy = translationPolicy) {
   // Rust/Swift strings (logs, prompts and user content must not leave the app).
   const glob = new Bun.Glob("src-tauri/{src,swift}/**/*.{rs,swift}");
   for await (const file of glob.scan({ cwd: root })) {
+    if (/(?:_tests?|_preview|_render)\./.test(file)) continue;
     const raw = await fs.readFile(path.join(root, file), "utf8");
     const code = raw.replace(/"(?:[^"\\]|\\.)*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (token) => token.startsWith('"') ? token : " ");
-    for (const match of code.matchAll(/\b(?:ui_text|uiText)\(\s*("(?:[^"\\]|\\.)*")/g)) {
+    for (const match of code.matchAll(/\b(?:ui_text|ui_format|ui_menu|source_text|uiText)\(\s*("(?:[^"\\]|\\.)*")/g)) {
       const english = JSON.parse(match[1]);
       const id = digest(english).slice(0, 16);
       if (messages[id] && messages[id] !== english) throw new Error("Native localization hash collision");
       messages[id] = english;
-      metadata[id] = { context: `${policy.context}\nNative desktop interface: ${file}` };
+      metadata[id] = { context: `Native desktop interface: ${file}` };
     }
   }
   return { messages, metadata };

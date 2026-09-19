@@ -23,27 +23,29 @@ import {
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useInputMonitoringPermission } from "@/components/settings/hooks/use-input-monitoring-permission";
 import type { SettingsField } from "./settings-search";
+import { msg } from "gt-react";
+
 
 /** Settings search index for this section. Co-located with the component. */
 export const searchIndex: SettingsField[] = [
   {
-    label: "Screen Recording",
+    label: msg("Screen Recording", {}),
     keywords: ["screen", "display", "capture", "tcc", "permission"],
   },
   {
-    label: "Microphone",
+    label: msg("Microphone", {}),
     keywords: ["mic", "audio", "voice", "permission"],
   },
   {
-    label: "Accessibility",
+    label: msg("Accessibility", {}),
     keywords: ["ax", "ui", "context", "permission"],
   },
   {
-    label: "Input Monitoring",
+    label: msg("Input Monitoring", {}),
     keywords: ["keyboard", "keystroke", "clicks", "permission"],
   },
   {
-    label: "Calendar",
+    label: msg("Calendar", {}),
     keywords: ["apple calendar", "events", "permission"],
   },
 ];
@@ -154,6 +156,7 @@ function PermissionRow({
 }
 
 function RequiredPermissions() {
+
   const gt = useGT();
   const [statuses, setStatuses] = useState<{
     screenRecording: OSPermissionStatus;
@@ -290,6 +293,7 @@ function RequiredPermissions() {
 }
 
 function InputMonitoringPermissionRow() {
+
   const gt = useGT();
   const {
     status,
@@ -342,6 +346,7 @@ function InputMonitoringPermissionRow() {
 }
 
 function CalendarPermissionRow() {
+
   const gt = useGT();
   const [status, setStatus] = useState<RowStatus>("checking");
   const [busy, setBusy] = useState(false);

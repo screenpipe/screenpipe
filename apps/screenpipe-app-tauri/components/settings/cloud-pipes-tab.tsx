@@ -33,6 +33,8 @@ import { useToast } from "@/components/ui/use-toast";
 import { useCloudRunner } from "@/lib/hooks/use-cloud-runner";
 import { cn } from "@/lib/utils";
 import { Cloud, KeyRound, Loader2, Play, Square, Trash2 } from "lucide-react";
+import { useGT } from "gt-react";
+
 
 function timeAgo(iso: string | null): string {
   if (!iso) return "never";
@@ -56,6 +58,8 @@ const STATUS_DOT: Record<string, string> = {
 };
 
 export function CloudPipesTab({ active }: { active: boolean }) {
+
+  const ui = useGT();
   const cloud = useCloudRunner(active);
   const { toast } = useToast();
   const [aiKeyDraft, setAiKeyDraft] = useState("");
@@ -66,7 +70,7 @@ export function CloudPipesTab({ active }: { active: boolean }) {
       await fn();
       toast({ title: okMsg });
     } catch (e: any) {
-      toast({ title: "Cloud runner", description: e.message, variant: "destructive" });
+      toast({ title: ui("Cloud runner"), description: e.message, variant: "destructive" });
     }
   };
 
@@ -83,7 +87,7 @@ export function CloudPipesTab({ active }: { active: boolean }) {
   if (cloud.error === "no_license") {
     return (
       <EmptyState
-        title="No enterprise license on this device"
+        title={ui("No enterprise license on this device")}
         body="Cloud scheduled tasks run your org's managed tasks on screenpipe infrastructure. Activate your enterprise license first, then come back here."
       />
     );
@@ -92,7 +96,7 @@ export function CloudPipesTab({ active }: { active: boolean }) {
   if (cloud.error) {
     return (
       <EmptyState
-        title="Couldn't reach cloud scheduled tasks"
+        title={ui("Couldn't reach cloud scheduled tasks")}
         body={cloud.error}
         action={<Button variant="outline" size="sm" onClick={cloud.refresh}>Retry</Button>}
       />
@@ -103,7 +107,7 @@ export function CloudPipesTab({ active }: { active: boolean }) {
   if (!cloud.runner) {
     return (
       <EmptyState
-        title={cloud.orgName ? `No cloud runner for ${cloud.orgName}` : "No cloud runner yet"}
+        title={cloud.orgName ? ui("No cloud runner for {value1}", { value1: cloud.orgName }) : ui("No cloud runner yet")}
         body={
           cloud.isAdmin
             ? "One managed vm for your whole org: it syncs every managed task and runs them on schedule against your org's centralized data, laptops closed."
@@ -141,7 +145,7 @@ export function CloudPipesTab({ active }: { active: boolean }) {
             <span className={cn("h-2 w-2 rounded-full shrink-0", STATUS_DOT[r.status] || "bg-foreground/30")} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium">{cloud.orgName || "Org"} cloud runner</span>
+                <span className="text-sm font-medium">{cloud.orgName || ui("Org")} cloud runner</span>
                 <Badge variant="outline" className="text-[10px] normal-case tracking-wider">{r.status}</Badge>
               </div>
               <p className="text-xs text-muted-foreground truncate">
@@ -166,7 +170,7 @@ export function CloudPipesTab({ active }: { active: boolean }) {
                 )}
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
-                    <Button variant="outline" size="icon" className="h-7 w-7" disabled={cloud.mutating} title="Delete runner">
+                    <Button variant="outline" size="icon" className="h-7 w-7" disabled={cloud.mutating} title={ui("Delete runner")}>
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </AlertDialogTrigger>
@@ -200,7 +204,7 @@ export function CloudPipesTab({ active }: { active: boolean }) {
                   <Input
                     value={aiKeyDraft}
                     onChange={(e) => setAiKeyDraft(e.target.value)}
-                    placeholder="API key for AI scheduled tasks (SCREENPIPE_API_KEY on the vm)"
+                    placeholder={ui("API key for AI scheduled tasks (SCREENPIPE_API_KEY on the vm)")}
                     className="h-7 text-xs"
                     type="password"
                     spellCheck={false}
@@ -217,12 +221,12 @@ export function CloudPipesTab({ active }: { active: boolean }) {
                 <>
                   <span className="text-xs text-muted-foreground flex-1">
                     {r.has_ai_key
-                      ? "AI key set for the runner"
+                      ? ui("AI key set for the runner")
                       : cloud.ai?.usable_in_cloud && cloud.ai.default_preset
-                        ? `AI: org preset "${cloud.ai.default_preset.id}" (${cloud.ai.default_preset.model}) from the dashboard`
+                        ? ui("AI: org preset \"{value1}\" ({value2}) from the dashboard", { value1: cloud.ai.default_preset.id, value2: cloud.ai.default_preset.model })
                         : cloud.ai?.default_preset
-                          ? `Org preset "${cloud.ai.default_preset.id}" is ${cloud.ai.default_preset.provider}, the runner needs a key for it`
-                          : "No AI configured. Set an org preset in the enterprise dashboard, or add a key here"}
+                          ? ui("Org preset \"{value1}\" is {value2}, the runner needs a key for it", { value1: cloud.ai.default_preset.id, value2: cloud.ai.default_preset.provider })
+                          : ui("No AI configured. Set an org preset in the enterprise dashboard, or add a key here")}
                   </span>
                   <Button
                     variant={cloud.ai?.usable_in_cloud || r.has_ai_key ? "ghost" : "outline"}
@@ -230,7 +234,7 @@ export function CloudPipesTab({ active }: { active: boolean }) {
                     className="h-7 text-xs"
                     onClick={() => setShowAiKeyInput(true)}
                   >
-                    {r.has_ai_key ? "Replace" : "Add key"}
+                    {r.has_ai_key ? ui("Replace") : ui("Add key")}
                   </Button>
                   {r.has_ai_key && (
                     <Button variant="ghost" size="sm" className="h-7 text-xs" disabled={cloud.mutating}
@@ -248,7 +252,7 @@ export function CloudPipesTab({ active }: { active: boolean }) {
       {/* org managed pipes — managed in the enterprise dashboard */}
       {cloud.orgPipes.length === 0 ? (
         <EmptyState
-          title="No scheduled tasks for the runner yet"
+          title={ui("No scheduled tasks for the runner yet")}
           body="Share a scheduled task to your team or push one from the enterprise dashboard. The runner picks it up within a minute."
         />
       ) : (
@@ -264,17 +268,17 @@ export function CloudPipesTab({ active }: { active: boolean }) {
                       <span className="text-sm truncate">{pipe.display_name || pipe.name}</span>
                       <span className="text-[10px] text-muted-foreground">V{pipe.version}</span>
                       <Badge variant="outline" className="text-[10px] opacity-70">
-                        {pipe.source === "team" ? "Team share" : "Dashboard"}
+                        {pipe.source === "team" ? ui("Team share") : ui("Dashboard")}
                       </Badge>
                       {ps?.is_running && <Badge variant="outline" className="text-[10px]">Running</Badge>}
                       {!pipe.enabled && <Badge variant="outline" className="text-[10px] opacity-60">Disabled</Badge>}
                     </div>
                     <p className="text-xs text-muted-foreground truncate">
-                      {pipe.schedule || "Manual"}
+                      {pipe.schedule || ui("Manual")}
                       {ps?.last_run_at
-                        ? ` · last run ${timeAgo(ps.last_run_at)}${ps.last_run_status ? ` (${ps.last_run_status})` : ""}`
+                        ? ui(" · last run {value1}{value2}", { value1: timeAgo(ps.last_run_at), value2: ps.last_run_status ? ` (${ps.last_run_status})` : "" })
                         : r.status === "running"
-                          ? " · no cloud runs yet"
+                          ? ui(" · no cloud runs yet")
                           : ""}
                     </p>
                   </div>

@@ -9,6 +9,9 @@ import { Loader2 } from "lucide-react";
 import { localFetch } from "@/lib/api";
 import { fetchAiGateway } from "@/lib/ai-gateway-url";
 import { presentQuotaError } from "@/lib/chat/quota-errors";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 interface RegionOcrOverlayProps {
   /** Frame ID used to fetch a clean (non-tainted) copy for canvas cropping */
@@ -36,6 +39,9 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
   naturalDimensions,
   userToken,
 }) => {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
   const [isSelecting, setIsSelecting] = useState(false);
   const [selectionRect, setSelectionRect] = useState<SelectionRect | null>(
     null
@@ -91,8 +97,8 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
 
       if (!userToken) {
         toast({
-          title: "Login required",
-          description: "Login required for region OCR",
+          title: ui("Login required"),
+          description: ui("Login required for region OCR"),
           variant: "destructive",
         });
         setSelectionRect(null);
@@ -100,7 +106,7 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
       }
 
       setIsProcessing(true);
-      toast({ title: "Reading text...", description: "Analyzing selected region" });
+      toast({ title: ui("Reading text..."), description: ui("Analyzing selected region") });
 
       try {
         // Map container coords to natural image coords
@@ -187,8 +193,8 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
 
         if (!extractedText) {
           toast({
-            title: "No text found",
-            description: "No text was detected in the selected region",
+            title: ui("No text found"),
+            description: ui("No text was detected in the selected region"),
           });
         } else {
           // Use native Tauri clipboard — navigator.clipboard.writeText() fails
@@ -199,7 +205,7 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
               ? extractedText.slice(0, 120) + "..."
               : extractedText;
           toast({
-            title: "Text copied to clipboard",
+            title: ui("Text copied to clipboard"),
             description: preview,
           });
         }
@@ -211,11 +217,11 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
           err instanceof Error ? err.message : "",
         );
         toast({
-          title: "OCR failed",
+          title: ui("OCR failed"),
           description:
             quota.kind !== "none"
               ? quota.message
-              : "Could not extract text from this region. try again.",
+              : ui("Could not extract text from this region. try again."),
           variant: "destructive",
         });
       } finally {
@@ -223,7 +229,7 @@ export const RegionOcrOverlay: FC<RegionOcrOverlayProps> = ({
         setSelectionRect(null);
       }
     },
-    [frameId, renderedImageInfo, naturalDimensions, userToken]
+    [frameId, renderedImageInfo, naturalDimensions, userToken, uiLanguage]
   );
 
   const onMouseDown = useCallback(

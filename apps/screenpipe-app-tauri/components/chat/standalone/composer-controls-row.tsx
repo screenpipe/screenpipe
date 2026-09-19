@@ -25,6 +25,8 @@ import type {
   ComposerModelControlsProps,
 } from "./composer-types";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 interface ComposerControlsRowProps {
   canChat: boolean;
@@ -50,6 +52,8 @@ export function ComposerControlsRow({
   dictation,
   sendButton,
 }: ComposerControlsRowProps) {
+
+  const ui = useGT();
   const privateVerification = usePrivateModelVerification({
     sessionId: modelControls.currentQueueSessionId,
     preset: modelControls.activePreset,
@@ -81,8 +85,8 @@ export function ComposerControlsRow({
               "relative h-8 w-8 shrink-0 rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-signal focus-visible:ring-offset-1 motion-reduce:transition-none",
               filters.hasActiveFilters && "text-foreground bg-muted/50",
             )}
-            title="Add attachments and filters"
-            aria-label="Add attachments and filters"
+            title={ui("Add attachments and filters")}
+            aria-label={ui("Add attachments and filters")}
           >
             <Plus className="h-4 w-4" />
             {filters.activeFilterCount > 0 && (
@@ -216,17 +220,17 @@ export function ComposerControlsRow({
         )}
         title={
           sendButton.isStopMode
-            ? "Stop"
+            ? ui("Stop")
             : sendButton.hasPendingDocs
-              ? "Waiting for attachment to finish extracting"
-              : "Send"
+              ? ui("Waiting for attachment to finish extracting")
+              : ui("Send")
         }
         aria-label={
           sendButton.isStopMode
-            ? "Stop reply"
+            ? ui("Stop reply")
             : sendButton.hasPendingDocs
-              ? "Send disabled while attachment is extracting"
-              : "Send message"
+              ? ui("Send disabled while attachment is extracting")
+              : ui("Send message")
         }
       >
         {sendButton.isStopMode ? (
@@ -242,6 +246,7 @@ export function ComposerControlsRow({
 }
 
 function ActiveFilterLabels({ filters }: { filters: ComposerFiltersProps }) {
+
   return (
     <div className="flex-1 min-w-0">
       {filters.hasActiveFilters && (

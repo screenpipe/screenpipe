@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Check, Circle, ExternalLink, Loader2, RefreshCw, X } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import { platform } from "@tauri-apps/plugin-os";
+import { useGT } from "gt-react";
+
 
 interface BrowserStatus {
   name: string;
@@ -22,6 +24,8 @@ interface BrowserUrlCardProps {
 }
 
 export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
+
+  const ui = useGT();
   const [browsers, setBrowsers] = useState<BrowserStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingError, setLoadingError] = useState(false);
@@ -95,7 +99,7 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
           <div className="flex-shrink-0">
             <img
               src="/images/browser-url.svg"
-              alt="Browser URL"
+              alt={ui("Browser URL")}
               className="w-10 h-10 rounded-lg"
             />
           </div>
@@ -143,8 +147,8 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
                         <Check className="h-3 w-3" />
                       )}
                       {hasPromptableBrowser
-                        ? "Request automation permission"
-                        : "Open automation settings"}
+                        ? ui("Request automation permission")
+                        : ui("Open automation settings")}
                     </Button>
                   </div>
                 )}
@@ -207,8 +211,8 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
               <div className="space-y-2 rounded-lg border border-dashed border-border p-3">
                 <p className="text-xs text-muted-foreground">
                   {loadingError
-                    ? "Couldn't read browser automation status. Try requesting permission, then refresh."
-                    : "No supported Chromium browser was detected. Open Chrome, Arc, Brave, Edge, or another Chromium browser, then refresh."}
+                    ? ui("Couldn't read browser automation status. Try requesting permission, then refresh.")
+                    : ui("No supported Chromium browser was detected. Open Chrome, Arc, Brave, Edge, or another Chromium browser, then refresh.")}
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <Button

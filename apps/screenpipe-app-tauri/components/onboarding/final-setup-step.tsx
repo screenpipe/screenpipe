@@ -12,12 +12,16 @@ import { localFetch } from "@/lib/api";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { publishPipeInstalledReceipt } from "@/lib/pipe-install-receipt";
 import { commands } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 const DEFAULTS = [
-  { slug: "digital-clone", label: "Remember my work", description: "", bundled: false },
-  { slug: "speaker-reconciliation", label: "Recognize meeting speakers", description: "", bundled: true },
-  { slug: "skill-learning", label: "Improve my skills", description: "Learns from work and AI chat previews.", bundled: true },
-  { slug: "daily-email-summary", label: "Email my daily recap", description: "Sent each evening.", bundled: false },
+  { slug: "digital-clone", label: msg("Remember my work", {}), description: "", bundled: false },
+  { slug: "speaker-reconciliation", label: msg("Recognize meeting speakers", {}), description: "", bundled: true },
+  { slug: "skill-learning", label: msg("Improve my skills", {}), description: msg("Learns from work and AI chat previews.", {}), bundled: true },
+  { slug: "daily-email-summary", label: msg("Email my daily recap", {}), description: msg("Sent each evening.", {}), bundled: false },
 ];
 
 
@@ -94,14 +98,17 @@ export default function FinalSetupStep({ userToken, handleNextSlide }: {
   userToken?: string | null;
   handleNextSlide: () => void | Promise<void>;
 }) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const { settings } = useSettings();
   const presets = (settings.aiPresets ?? []).filter(p => p.provider !== "acp" && !!p.model);
   const preset = presets.find(p => p.defaultPreset) ?? presets[0];
-  const [selected, setSelected] = useState<Record<string, boolean>>(() => Object.fromEntries(DEFAULTS.map(task => [task.slug, true])));
+  const [selected, setSelected] = useState<Record<string, boolean>>(() => Object.fromEntries(localizeDefinitions(DEFAULTS, uiMessages).map(task => [task.slug, true])));
   const [gmailConnected, setGmailConnected] = useState<boolean | null>(userToken ? null : false);
   const [connectionBusy, setConnectionBusy] = useState(false);
   const checkingGmail = selected["daily-email-summary"] && gmailConnected === null;
-  const needsModel = DEFAULTS.some(task => selected[task.slug] && (task.slug !== "daily-email-summary" || gmailConnected));
+  const needsModel = localizeDefinitions(DEFAULTS, uiMessages).some(task => selected[task.slug] && (task.slug !== "daily-email-summary" || gmailConnected));
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState("");
   const [error, setError] = useState("");
@@ -117,10 +124,10 @@ export default function FinalSetupStep({ userToken, handleNextSlide }: {
     setBusy(true); setError("");
     const controller = new AbortController();
     operation.current = controller;
-    const tasks = DEFAULTS;
+    const tasks = localizeDefinitions(DEFAULTS, uiMessages);
     let taskSlug = "engine";
     let stage = "engine";
-    posthog.capture("onboarding_defaults_start_clicked", { setup_version: 2, selected_steps: DEFAULTS.filter(task => selected[task.slug]).map(task => task.slug) });
+    posthog.capture("onboarding_defaults_start_clicked", { setup_version: 2, selected_steps: localizeDefinitions(DEFAULTS, uiMessages).filter(task => selected[task.slug]).map(task => task.slug) });
     try {
       setPhase("Starting Screenpipe");
       const health = await request("/health", controller.signal, undefined, 3_000).catch(() => null);
@@ -143,12 +150,12 @@ export default function FinalSetupStep({ userToken, handleNextSlide }: {
       }
       stage = "continue";
       setPhase("Opening Screenpipe");
-      posthog.capture("onboarding_defaults_completed", { setup_version: 2, selected_steps: DEFAULTS.filter(task => selected[task.slug]).map(task => task.slug) });
+      posthog.capture("onboarding_defaults_completed", { setup_version: 2, selected_steps: localizeDefinitions(DEFAULTS, uiMessages).filter(task => selected[task.slug]).map(task => task.slug) });
       await handleNextSlide();
     } catch (failure) {
       if (controller.signal.aborted) return;
       posthog.capture("onboarding_default_setup_failed", { step: taskSlug, stage, setup_version: 2 });
-      setError(stage === "continue" ? "Your setup is saved. Screenpipe couldn't open. Try again." : "Screenpipe couldn't finish setup. Completed tasks are saved; retry or finish later in Scheduled Tasks.");
+      setError(stage === "continue" ? ui("Your setup is saved. Screenpipe couldn't open. Try again.") : ui("Screenpipe couldn't finish setup. Completed tasks are saved; retry or finish later in Scheduled Tasks."));
     } finally {
       if (!controller.signal.aborted) { setBusy(false); setPhase(""); }
       running.current = false;
@@ -160,7 +167,7 @@ export default function FinalSetupStep({ userToken, handleNextSlide }: {
     running.current = true; setBusy(true);
     posthog.capture("onboarding_defaults_deferred", { setup_version: 2, completed_steps: completed });
     try { await handleNextSlide(); }
-    catch { setError("Screenpipe couldn't open. Try again."); }
+    catch { setError(ui("Screenpipe couldn't open. Try again.")); }
     finally { running.current = false; setBusy(false); }
   }
 
@@ -169,19 +176,19 @@ export default function FinalSetupStep({ userToken, handleNextSlide }: {
       <h2 className="font-mono text-xl font-semibold">Ready to remember</h2>
       <p className="mt-2 text-xs leading-relaxed text-muted-foreground">On by default. Change anytime.</p>
       <div className="mt-3 divide-y divide-border">
-        {DEFAULTS.map(task => <div key={task.slug} className="flex items-center justify-between gap-3 py-3">
-          <label htmlFor={`setup-${task.slug}`} className="cursor-pointer"><span className="block text-xs font-medium">{task.label}</span>{task.description && <span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">{task.slug === "daily-email-summary" && !gmailConnected ? (gmailConnected === null ? "Checking Gmail…" : "Needs Gmail.") : task.description}</span>}</label>
+        {localizeDefinitions(DEFAULTS, uiMessages).map(task => <div key={task.slug} className="flex items-center justify-between gap-3 py-3">
+          <label htmlFor={`setup-${task.slug}`} className="cursor-pointer"><span className="block text-xs font-medium">{task.label}</span>{task.description && <span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">{task.slug === "daily-email-summary" && !gmailConnected ? (gmailConnected === null ? ui("Checking Gmail…") : ui("Needs Gmail.")) : task.description}</span>}</label>
           <Switch id={`setup-${task.slug}`} checked={selected[task.slug]} disabled={busy || connectionBusy} onCheckedChange={enabled => setSelected(previous => ({ ...previous, [task.slug]: enabled }))} />
         </div>)}
       </div>
       <SetupConnections userToken={userToken} disabled={busy} onGmailChange={setGmailConnected} onBusyChange={setConnectionBusy} />
       <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-        {preset ? (preset.provider === "native-ollama" ? `Uses your local model (${preset.model}).` : `Work context goes to ${preset.provider} (${preset.model}).`) : "No compatible AI model available."}
+        {preset ? (preset.provider === "native-ollama" ? ui("Uses your local model ({value1}).", { value1: preset.model }) : ui("Work context goes to {value1} ({value2}).", { value1: preset.provider, value2: preset.model })) : ui("No compatible AI model available.")}
         {" "}Use your own AI provider anytime in Scheduled Tasks.
       </p>
       {error && <div role="alert" className="mt-4 text-xs leading-relaxed text-destructive">{error}</div>}
       {busy && <p role="status" className="mt-4 text-xs text-muted-foreground">{phase}</p>}
-      <Button className="mt-4 w-full normal-case" onClick={() => void start()} disabled={busy || connectionBusy || checkingGmail || needsModel && !preset} aria-busy={busy}>{busy && <Loader2 aria-hidden="true" className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" />}{busy ? "Setting up" : error ? "Retry setup" : "Start Screenpipe"}</Button>
+      <Button className="mt-4 w-full normal-case" onClick={() => void start()} disabled={busy || connectionBusy || checkingGmail || needsModel && !preset} aria-busy={busy}>{busy && <Loader2 aria-hidden="true" className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" />}{busy ? ui("Setting up") : error ? ui("Retry setup") : ui("Start Screenpipe")}</Button>
       {(error || needsModel && !preset) && <Button variant="ghost" className="mt-2 w-full normal-case" disabled={busy || connectionBusy} onClick={() => void finishLater()}>Finish setup later</Button>}
     </div>
   );

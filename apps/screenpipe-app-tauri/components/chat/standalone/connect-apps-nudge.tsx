@@ -6,12 +6,16 @@
 import { ArrowRight, X } from "lucide-react";
 import { IntegrationIcon } from "@/components/settings/connections-section";
 import type { ComposerConnectBannerProps } from "./composer-types";
+import { useGT } from "gt-react";
+
 
 export function ConnectAppsNudge({
   banner,
 }: {
   banner: ComposerConnectBannerProps;
 }) {
+
+  const ui = useGT();
   if (!banner.show) return null;
 
   return (
@@ -35,7 +39,7 @@ export function ConnectAppsNudge({
             key={connection.id}
             type="button"
             title={connection.name}
-            aria-label={`Connect ${connection.name}`}
+            aria-label={ui("Connect {value1}", { value1: connection.name })}
             onClick={() => banner.onOpenConnectionSetup(connection.id)}
             className="flex h-9 w-9 shrink-0 items-center justify-center border-l border-border/60 opacity-70 transition-colors duration-150 hover:bg-foreground hover:text-background hover:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-signal motion-reduce:transition-none"
           >
@@ -50,7 +54,7 @@ export function ConnectAppsNudge({
       <button
         type="button"
         onClick={banner.onDismiss}
-        aria-label="Dismiss connect apps suggestion"
+        aria-label={ui("Dismiss connect apps suggestion")}
         className="flex h-9 w-9 shrink-0 items-center justify-center border-l border-border/60 text-muted-foreground/60 transition-colors duration-150 hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-signal motion-reduce:transition-none"
       >
         <X className="h-3.5 w-3.5" />

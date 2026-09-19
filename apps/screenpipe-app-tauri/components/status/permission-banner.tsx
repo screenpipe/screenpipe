@@ -12,6 +12,8 @@ import { commands } from "@/lib/utils/tauri";
 import { openPermissionSettingsWithFlow, requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
+import { useGT } from "gt-react";
+
 
 interface PermissionState {
   screenOk: boolean;
@@ -25,6 +27,8 @@ interface PermissionState {
  * Cannot be permanently dismissed — only goes away when permissions are granted.
  */
 export function PermissionBanner() {
+
+  const ui = useGT();
   const [permissions, setPermissions] = useState<PermissionState | null>(null);
 
   const { isMac } = usePlatform();
@@ -62,7 +66,6 @@ export function PermissionBanner() {
   if (permissions.screenOk && permissions.micOk && permissions.accessibilityOk) return null;
 
 
-
   const missingPerms: string[] = [];
   if (!permissions.screenOk) missingPerms.push("screen recording");
   if (!permissions.micOk) missingPerms.push("microphone");
@@ -75,13 +78,13 @@ export function PermissionBanner() {
         <div className="flex items-center gap-2 min-w-0">
           <span className="font-semibold text-destructive-foreground text-base">
             {permissions.screenRestartRequired
-              ? "Restart required"
+              ? ui("Restart required")
               : `${missingPerms.join(" & ")} disabled`}
           </span>
           <span className="text-destructive-foreground/80 hidden sm:inline text-sm">
             {permissions.screenRestartRequired
-              ? "Screenpipe won’t work until you restart"
-              : "Recording is paused"}
+              ? ui("Screenpipe won’t work until you restart")
+              : ui("Recording is paused")}
           </span>
         </div>
       </div>
@@ -111,8 +114,8 @@ export function PermissionBanner() {
           }}
         >
           {permissions.screenRestartRequired
-            ? "Restart screenpipe"
-            : "Fix permissions"}
+            ? ui("Restart screenpipe")
+            : ui("Fix permissions")}
         </Button>
 
       </div>

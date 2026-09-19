@@ -25,6 +25,8 @@ import {
   type ExternalChatScanResult,
 } from "@/lib/chat/external-chat-import";
 import type { ExternalChatSource } from "@/lib/chat/external-chat-parser";
+import { useGT } from "gt-react";
+
 
 export function ImportChatsDialog({
   open,
@@ -35,6 +37,8 @@ export function ImportChatsDialog({
   onOpenChange: (open: boolean) => void;
   onImported: (result: ExternalChatImportResult) => void;
 }) {
+
+  const ui = useGT();
   const [scan, setScan] = useState<ExternalChatScanResult | null>(null);
   const [selected, setSelected] = useState<Set<ExternalChatSource>>(() => new Set());
   const [loading, setLoading] = useState(false);
@@ -93,20 +97,20 @@ export function ImportChatsDialog({
       const result = await importExternalChatHistory(selectedCandidates);
       const completed = result.imported + result.updated;
       toast({
-        title: completed > 0 ? "Chat import complete" : "No chats imported",
+        title: completed > 0 ? ui("Chat import complete") : ui("No chats imported"),
         description: [
           result.imported > 0 ? `${result.imported} new` : "",
           result.updated > 0 ? `${result.updated} updated` : "",
           result.skipped > 0 ? `${result.skipped} skipped` : "",
           result.failed > 0 ? `${result.failed} failed` : "",
-        ].filter(Boolean).join(" · ") || "No visible conversations were found.",
+        ].filter(Boolean).join(" · ") || ui("No visible conversations were found."),
         ...(result.failed > 0 && completed === 0 ? { variant: "destructive" as const } : {}),
       });
       onImported(result);
       onOpenChange(false);
     } catch (error) {
       toast({
-        title: "Chat import failed",
+        title: ui("Chat import failed"),
         description: error instanceof Error ? error.message : String(error),
         variant: "destructive",
       });
@@ -125,7 +129,7 @@ export function ImportChatsDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="border-y border-border divide-y divide-border" role="group" aria-label="Chat sources">
+        <div className="border-y border-border divide-y divide-border" role="group" aria-label={ui("Chat sources")}>
           {loading ? (
             <div className="flex items-center gap-2 px-3 py-5 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -141,7 +145,7 @@ export function ImportChatsDialog({
             const details = [
               source.omittedByLimit > 0
                 ? `showing the ${count} most recent from the past ${scan.lookbackDays} days`
-                : `${count} conversation${count === 1 ? "" : "s"} from the past ${scan.lookbackDays} days`,
+                : ui("{value1, plural, one {# conversation} other {# conversations}} from the past {value3} days", { value1: count, value3: scan.lookbackDays }),
               source.skippedTooLarge > 0
                 ? `${source.skippedTooLarge} oversized file${source.skippedTooLarge === 1 ? "" : "s"} skipped`
                 : "",
@@ -155,7 +159,7 @@ export function ImportChatsDialog({
                   checked={checked}
                   disabled={count === 0 || importing}
                   onCheckedChange={() => toggleSource(source.source)}
-                  aria-label={`Import ${source.label} chats`}
+                  aria-label={ui("Import {value1} chats", { value1: source.label })}
                 />
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm text-foreground">{source.label}</span>

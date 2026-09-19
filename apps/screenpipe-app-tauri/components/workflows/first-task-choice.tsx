@@ -5,8 +5,12 @@
 import { ArrowLeft, ArrowRight, Check, Search, Workflow } from "lucide-react";
 import { useState } from "react";
 import type { ProductMode } from "./product-switcher";
+import { useGT } from "gt-react";
+
 
 export function FirstTaskChoice({ onComplete }: { onComplete: (mode: ProductMode, goal: string) => Promise<void> }) {
+
+  const ui = useGT();
   const [step, setStep] = useState<"choice" | "workflow">("choice");
   const [goal, setGoal] = useState("");
   const [busy, setBusy] = useState(false);
@@ -15,7 +19,7 @@ export function FirstTaskChoice({ onComplete }: { onComplete: (mode: ProductMode
     if (busy) return;
     setBusy(true); setError("");
     try { await onComplete(mode, chosenGoal.trim()); }
-    catch { setError("Couldn't save your choice. Please try again."); setBusy(false); }
+    catch { setError(ui("Couldn't save your choice. Please try again.")); setBusy(false); }
   }
   return <section className="mx-auto w-full max-w-xl px-6 py-8 text-foreground">
     <p className="mb-5 flex items-center justify-center gap-2 text-xs text-muted-foreground"><Check size={14} /> Screenpipe is set up</p>
@@ -36,10 +40,10 @@ export function FirstTaskChoice({ onComplete }: { onComplete: (mode: ProductMode
       <h1 className="text-3xl font-medium tracking-tight">What work do you repeat?</h1>
       <p className="mt-3 text-sm text-muted-foreground">An optional starting point for your context. You can change it later.</p>
       <label htmlFor="workflow-goal" className="mt-7 block text-sm font-medium">A task or process</label>
-      <textarea id="workflow-goal" value={goal} onChange={event => setGoal(event.target.value)} maxLength={1000} rows={3} placeholder="For example, preparing a customer follow-up" className="mt-2 w-full resize-none rounded-md border border-border bg-background p-4 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+      <textarea id="workflow-goal" value={goal} onChange={event => setGoal(event.target.value)} maxLength={1000} rows={3} placeholder={ui("For example, preparing a customer follow-up")} className="mt-2 w-full resize-none rounded-md border border-border bg-background p-4 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
       <div className="mt-3 flex flex-wrap gap-2">{["Customer follow-ups", "Weekly reporting", "Meeting preparation"].map(example => <button disabled={busy} key={example} onClick={() => setGoal(example)} className="rounded-md border border-border px-3 py-2 text-xs hover:bg-muted">{example}</button>)}</div>
       <div className="mt-7 rounded-lg bg-muted/50 p-4 text-sm leading-relaxed text-muted-foreground"><strong className="block mb-1 font-medium text-foreground">Your history is the starting point</strong>Existing recordings are reused. If you're just getting started, keep Screenpipe running while you work. A map needs captured evidence, and nothing runs until you choose to build it.</div>
-      <button disabled={busy} onClick={() => void complete("workflows", goal)} className="mt-7 flex w-full items-center justify-center gap-2 rounded-md bg-foreground px-5 py-3 text-sm font-medium text-background disabled:opacity-50">{busy ? "Opening Workflows…" : "Open Workflows"}<ArrowRight size={16} /></button>
+      <button disabled={busy} onClick={() => void complete("workflows", goal)} className="mt-7 flex w-full items-center justify-center gap-2 rounded-md bg-foreground px-5 py-3 text-sm font-medium text-background disabled:opacity-50">{busy ? ui("Opening Workflows…") : ui("Open Workflows")}<ArrowRight size={16} /></button>
       <button disabled={busy} onClick={() => void complete("workflows")} className="mt-3 w-full py-2 text-center text-xs text-muted-foreground hover:text-foreground">Skip for now</button>
     </>}
     {error && <p role="alert" className="mt-4 text-sm text-destructive">{error}</p>}

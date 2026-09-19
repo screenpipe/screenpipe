@@ -7,6 +7,8 @@
 import { useEffect } from "react";
 import { writeBrowserLogNow } from "@/lib/logging/browser-log";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
+import { useGT } from "gt-react";
+
 
 export default function GlobalError({
   error,
@@ -15,6 +17,8 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+
+  const ui = useGT();
   const openFeedback = useFeedbackStore((s) => s.openFeedback);
 
   useEffect(() => {
@@ -36,10 +40,10 @@ export default function GlobalError({
   return (
     <div className="flex items-center justify-center h-screen bg-neutral-950 text-white">
       <div className="flex flex-col items-center space-y-4 p-8">
-        <img src="/128x128.png" alt="Screenpipe" className="w-16 h-16 opacity-60" />
+        <img src="/128x128.png" alt={ui("Screenpipe")} className="w-16 h-16 opacity-60" />
         <h2 className="text-lg font-medium">Something went wrong</h2>
         <p className="text-sm text-neutral-400 text-center max-w-sm">
-          {error.message || "An unexpected error occurred"}
+          {error.message || ui("An unexpected error occurred")}
         </p>
         <div className="flex gap-3">
           <button

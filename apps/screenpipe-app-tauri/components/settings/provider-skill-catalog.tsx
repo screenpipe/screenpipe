@@ -9,6 +9,8 @@ import { AlertCircle, Check, Download, Loader2, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { commands, type RegistrySkill } from "@/lib/utils/tauri";
 import { skillKey, sourceLabel } from "@/lib/skills-registry";
+import { useGT } from "gt-react";
+
 
 const PROVIDERS = ["anthropic", "openai"] as const;
 const SKILLS_PER_PROVIDER = 2;
@@ -33,6 +35,8 @@ export function ProviderSkillCatalog({
 }: {
   onInstalled?: () => void;
 }) {
+
+  const ui = useGT();
   const [skills, setSkills] = useState<RegistrySkill[]>([]);
   const [installed, setInstalled] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -210,7 +214,7 @@ export function ProviderSkillCatalog({
                     ) : (
                       <Download className="h-3 w-3" aria-hidden />
                     )}
-                    {installError ? "Retry" : isBusy ? "Installing" : "Install"}
+                    {installError ? ui("Retry") : isBusy ? ui("Installing") : ui("Install")}
                   </Button>
                 )}
               </article>

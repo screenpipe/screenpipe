@@ -16,6 +16,9 @@ import { localFetch } from "@/lib/api";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import { type TemplatePipe } from "@/lib/hooks/use-pipes";
 import { AnimatePresence, motion } from "framer-motion";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 const DEFAULT_TAGS = ["deep work", "meeting", "admin", "break"];
 
@@ -53,6 +56,8 @@ interface TimelineTagToolbarProps {
 }
 
 export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePipes }: TimelineTagToolbarProps) {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
 	const { selectionRange, tagFrames, removeTagFromFrames, setSelectionRange, tags } = useTimelineSelection();
 	const [customTag, setCustomTag] = useState("");
 	const [radialOpen, setRadialOpen] = useState(false);
@@ -128,8 +133,8 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 		try {
 			await tagFrames(frameIds, tag.trim());
 			toast({
-				title: "Tagged",
-				description: `Applied "${tag.trim()}" to ${frameIds.length} frames`,
+				title: ui("Tagged"),
+				description: ui("Applied \"{value1}\" to {value2} frames", { value1: tag.trim(), value2: frameIds.length }),
 			});
 			posthog.capture("timeline_tag_applied", {
 				tag: tag.trim(),
@@ -140,15 +145,15 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 			setSelectionRange(null);
 		} catch {
 			toast({
-				title: "Tagging failed",
-				description: "Some frames could not be tagged",
+				title: ui("Tagging failed"),
+				description: ui("Some frames could not be tagged"),
 				variant: "destructive",
 			});
 		} finally {
 			setIsApplying(false);
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [isApplying, frameIds, tagFrames, setSelectionRange, quickTags]);
+	}, [isApplying, frameIds, tagFrames, setSelectionRange, quickTags, uiLocale]);
 
 	const handleRemoveTag = useCallback(async (tag: string) => {
 		if (isApplying || frameIds.length === 0) return;
@@ -161,15 +166,15 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 			});
 		} catch {
 			toast({
-				title: "Remove failed",
-				description: `Could not remove "${tag}"`,
+				title: ui("Remove failed"),
+				description: ui("Could not remove \"{value1}\"", { value1: tag }),
 				variant: "destructive",
 			});
 		} finally {
 			setIsApplying(false);
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [isApplying, frameIds, removeTagFromFrames]);
+	}, [isApplying, frameIds, removeTagFromFrames, uiLocale]);
 
 	const handleCustomSubmit = useCallback((e: React.FormEvent) => {
 		e.preventDefault();
@@ -191,8 +196,8 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 			if (!resp.ok) throw new Error(await resp.text());
 			const data = await resp.json();
 			toast({
-				title: "Deleted",
-				description: `Removed ${data.frames_deleted} frames, ${data.audio_transcriptions_deleted} audio segments`,
+				title: ui("Deleted"),
+				description: ui("Removed {value1} frames, {value2} audio segments", { value1: data.frames_deleted, value2: data.audio_transcriptions_deleted }),
 			});
 			posthog.capture("timeline_range_deleted", {
 				duration_ms: selectionRange.end.getTime() - selectionRange.start.getTime(),
@@ -204,11 +209,11 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 			await clearTimelineCache();
 			window.location.reload();
 		} catch (e) {
-			toast({ title: "Deletion failed", description: String(e), variant: "destructive" });
+			toast({ title: ui("Deletion failed"), description: String(e), variant: "destructive" });
 		} finally {
 			setIsDeleting(false);
 		}
-	}, [selectionRange, isDeleting, setSelectionRange]);
+	}, [selectionRange, isDeleting, setSelectionRange, uiLocale]);
 
 	const handleRetranscribe = useCallback(async () => {
 		if (!selectionRange || isRetranscribing) return;
@@ -238,8 +243,8 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 	const { start, end } = selectionRange;
 
 	// Format the selection time range
-	const startTime = format(start, "h:mm a");
-	const endTime = format(end, "h:mm a");
+	const startTime = new Intl.DateTimeFormat(uiLocale, {"hour":"numeric","minute":"2-digit"}).format(start);
+	const endTime = new Intl.DateTimeFormat(uiLocale, {"hour":"numeric","minute":"2-digit"}).format(end);
 	const durationMs = end.getTime() - start.getTime();
 	const durationMins = Math.round(durationMs / 60000);
 	const durationStr =
@@ -265,7 +270,7 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 				<button
 					onClick={() => setSelectionRange(null)}
 					className="absolute top-1.5 right-1.5 p-0.5 text-muted-foreground hover:text-foreground transition-colors"
-					title="Close"
+					title={ui("Close")}
 				>
 					<X className="w-3 h-3" />
 				</button>
@@ -288,7 +293,7 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 								? "text-destructive bg-destructive/10"
 								: "text-muted-foreground hover:text-destructive hover:bg-destructive/10"
 						)}
-						title="Delete selected range"
+						title={ui("Delete selected range")}
 					>
 						{isDeleting ? (
 							<Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -313,7 +318,7 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 								<button
 									onClick={onAskAI}
 									className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-md bg-foreground text-background hover:bg-foreground/90 transition-colors font-medium flex-shrink-0 cursor-pointer"
-									title="Ask AI"
+									title={ui("Ask AI")}
 								>
 									<span className="pointer-events-none">
 										<PipeAIIcon size={14} animated={radialOpen} />
@@ -405,7 +410,7 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 													>
 														<button
 															className="w-full h-full rounded-full bg-muted border border-border shadow-md flex items-center justify-center text-[10px] font-medium text-muted-foreground cursor-pointer hover:scale-110 transition-all"
-														title={`${overflow} more scheduled tasks`}
+														title={ui("{value1} more scheduled tasks", { value1: overflow })}
 															onMouseEnter={() => setHoveredPipeIndex(maxVisible)}
 															onMouseLeave={() => setHoveredPipeIndex(null)}
 															onClick={(e) => {
@@ -431,7 +436,7 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 														>
 															{hoveredPipeIndex < visible.length
 																? visible[hoveredPipeIndex].title
-																: `${overflow} more scheduled tasks`}
+																: ui("{value1} more scheduled tasks", { value1: overflow })}
 														</motion.div>
 													)}
 												</AnimatePresence>
@@ -445,7 +450,7 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 							onClick={handleRetranscribe}
 							disabled={isRetranscribing}
 							className="flex items-center gap-1 text-xs px-2 py-1 rounded-md border border-border hover:bg-muted transition-colors flex-shrink-0"
-							title="Re-transcribe audio in this range via AI"
+							title={ui("Re-transcribe audio in this range via AI")}
 						>
 							{isRetranscribing ? (
 								<Loader2 className="w-3 h-3 animate-spin" />
@@ -507,7 +512,7 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 									onClick={() => handleRemoveTag(t)}
 									disabled={isApplying}
 									className="flex-shrink-0 rounded-full hover:bg-primary/20 disabled:opacity-50 disabled:cursor-not-allowed"
-									aria-label={`Remove tag ${t}`}
+									aria-label={ui("Remove tag {value1}", { value1: t })}
 								>
 									<X className="w-2.5 h-2.5" />
 								</button>
@@ -542,7 +547,7 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 						type="text"
 						value={customTag}
 						onChange={(e) => setCustomTag(e.target.value)}
-						placeholder="Custom tag..."
+						placeholder={ui("Custom tag...")}
 						disabled={isApplying}
 						maxLength={50}
 						className="flex-1 text-xs px-2 py-1 rounded-md border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 min-w-0"

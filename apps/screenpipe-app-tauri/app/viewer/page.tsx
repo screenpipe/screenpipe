@@ -15,6 +15,8 @@ import {
 } from "@/components/file-viewer";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { commands } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+
 
 function isMacPlatform(): boolean {
   if (typeof navigator === "undefined") return false;
@@ -51,6 +53,8 @@ function ToolbarButton({
 }
 
 export default function ViewerPage() {
+
+  const ui = useGT();
   const [path, setPath] = useState<string>("");
   const [copyToast, setCopyToast] = useState(false);
   const [copyContentToast, setCopyContentToast] = useState(false);
@@ -159,20 +163,20 @@ export default function ViewerPage() {
           )}
         </div>
         <ToolbarButton
-          label="Reveal"
+          label={ui("Reveal")}
           shortcut={isMacPlatform() ? "⌘R" : "Ctrl+R"}
           onClick={revealInFinder}
           primary
         />
         {content?.kind === "text" && content.text !== "" && (
           <ToolbarButton
-            label={copyContentToast ? "Copied" : "Copy"}
+            label={copyContentToast ? ui("Copied") : ui("Copy")}
             shortcut={isMacPlatform() ? "⇧⌘C" : "Ctrl+Shift+C"}
             onClick={copyContent}
           />
         )}
         <ToolbarButton
-          label={copyToast ? "Copied" : "Copy path"}
+          label={copyToast ? ui("Copied") : ui("Copy path")}
           shortcut={isMacPlatform() ? "⌘L" : "Ctrl+L"}
           onClick={copyPath}
         />

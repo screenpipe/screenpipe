@@ -5,6 +5,8 @@
 
 import React from "react";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 // Inline "show, don't tell" previews for otherwise-abstract settings. Each is
 // pure presentational (props in, no data fetching), grayscale per DESIGN.md,
@@ -16,6 +18,8 @@ import { cn } from "@/lib/utils";
 // A filmstrip whose density tracks the chosen interval, plus an honest
 // floor readout. `seconds === 0` means "auto / follow the power profile".
 export function CaptureFrequencyPreview({ seconds }: { seconds: number }) {
+
+  const ui = useGT();
   const auto = seconds === 0;
   // More frames in a fixed window = denser strip. Honest *floor*: this is the
   // guaranteed minimum cadence on a still screen, not total capture volume.
@@ -36,7 +40,7 @@ export function CaptureFrequencyPreview({ seconds }: { seconds: number }) {
       </div>
       <p className="mt-1.5 text-[11px] text-muted-foreground">
         {auto ? (
-          "Follows your power profile — roughly one frame every 30s when the screen is idle"
+          ui("Follows your power profile — roughly one frame every 30s when the screen is idle")
         ) : (
           <>
             At least one frame every{" "}
@@ -64,11 +68,12 @@ function DayStripRow({
   active: boolean;
   children: React.ReactNode;
 }) {
+  const ui = useGT();
   return (
     <div className={cn("flex items-center gap-2", !active && "opacity-40")}>
       <span className="w-16 shrink-0 text-[10px] text-muted-foreground">
         {label}
-        {active && " · now"}
+        {active && ui(" · now")}
       </span>
       <span className="min-w-0 flex-1">{children}</span>
     </div>
@@ -76,13 +81,14 @@ function DayStripRow({
 }
 
 export function AudioCaptureModePreview({ mode }: { mode: string }) {
+  const ui = useGT();
   const meetings = mode === "meetings-only";
   return (
     <div className="mt-2.5 space-y-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-2">
-      <DayStripRow label="Always" active={!meetings}>
+      <DayStripRow label={ui("Always")} active={!meetings}>
         <span className="block h-2.5 rounded-[2px] bg-foreground" />
       </DayStripRow>
-      <DayStripRow label="Meetings" active={meetings}>
+      <DayStripRow label={ui("Meetings")} active={meetings}>
         <span className="relative block h-2.5 rounded-[2px] bg-foreground/15">
           <span className="absolute inset-y-0 left-[16%] w-[12%] rounded-[2px] bg-foreground" />
           <span className="absolute inset-y-0 left-[46%] w-[8%] rounded-[2px] bg-foreground" />
@@ -91,8 +97,8 @@ export function AudioCaptureModePreview({ mode }: { mode: string }) {
       </DayStripRow>
       <p className="text-[10px] text-muted-foreground">
         {meetings
-          ? "Records only during detected meetings — saves battery, disk & transcription cost"
-          : "Records continuously, 24/7"}
+          ? ui("Records only during detected meetings — saves battery, disk & transcription cost")
+          : ui("Records continuously, 24/7")}
       </p>
     </div>
   );
@@ -118,6 +124,7 @@ export function RetentionModePreview({
 }: {
   mode: "media" | "lean" | "all";
 }) {
+
   const kept = RETENTION_KEPT[mode];
   return (
     <div className="mt-2.5 ml-6 rounded-md border border-border bg-muted/40 px-2.5 py-2">
@@ -149,6 +156,7 @@ export function RetentionModePreview({
 // ── shared: a 5-segment geometric meter ──────────────────────────────
 // Filled segments = level (0–5). Black-on-grey, sharp — brand house style.
 function SegMeter({ label, level }: { label: string; level: number }) {
+
   return (
     <div className="flex items-center gap-2">
       <span className="w-[5.5rem] shrink-0 text-[10px] text-muted-foreground">
@@ -195,12 +203,13 @@ export function PowerModePreview({
 }: {
   mode: "auto" | "performance" | "battery_saver";
 }) {
+  const ui = useGT();
   const p = POWER_PROFILE[mode] ?? POWER_PROFILE.auto;
   return (
     <div className="mt-3 space-y-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-2">
-      <SegMeter label="Capture cadence" level={p.meters[0]} />
-      <SegMeter label="Capture quality" level={p.meters[1]} />
-      <SegMeter label="Battery life" level={p.meters[2]} />
+      <SegMeter label={ui("Capture cadence")} level={p.meters[0]} />
+      <SegMeter label={ui("Capture quality")} level={p.meters[1]} />
+      <SegMeter label={ui("Battery life")} level={p.meters[2]} />
       <p className="pt-0.5 text-[10px] text-muted-foreground">{p.caption}</p>
     </div>
   );
@@ -261,6 +270,8 @@ function ResultLine({ text, tag }: { text: string; tag: string }) {
 }
 
 export function CloudMediaAnalysisPreview() {
+
+  const ui = useGT();
   // Waveform sticks: each gets its own duration + negative delay so the wave
   // never synchronizes (same trick as the meeting "listening" bars).
   const bars = [0.5, 0.9, 0.35, 0.8, 0.55, 1, 0.45];
@@ -272,7 +283,7 @@ export function CloudMediaAnalysisPreview() {
       <div className="grid grid-cols-[auto_auto_1fr] items-center gap-x-1 gap-y-2.5">
         {/* lane 1 — audio → transcript */}
         <span className="flex items-center">
-          <SourceTile label="Audio">
+          <SourceTile label={ui("Audio")}>
             <span className="flex h-4 items-end gap-[2px]">
               {bars.map((h, i) => (
                 <span
@@ -308,7 +319,7 @@ export function CloudMediaAnalysisPreview() {
 
         {/* lane 2 — video & images → description */}
         <span className="flex items-center">
-          <SourceTile label="Video · images">
+          <SourceTile label={ui("Video · images")}>
             <span className="grid grid-cols-3 gap-[2px]">
               {[0.9, 0.4, 0.7, 0.5, 0.85, 0.35].map((o, i) => (
                 <span

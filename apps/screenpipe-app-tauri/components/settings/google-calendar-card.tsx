@@ -20,6 +20,9 @@ import { toast } from "@/components/ui/use-toast";
 import posthog from "posthog-js";
 import { localFetch } from "@/lib/api";
 import { GoogleOAuthUnverifiedAppHint } from "./google-oauth-unverified-app-hint";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 interface CalendarEventItem {
   id: string;
@@ -40,6 +43,8 @@ interface CalendarAccount {
 }
 
 export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnected?: () => void; onDisconnected?: () => void } = {}) {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
   const [accounts, setAccounts] = useState<CalendarAccount[]>([]);
   const [needsAttention, setNeedsAttention] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -109,14 +114,14 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
               ? accountLabel
               : e.calendarName,
             startDisplay: e.start
-              ? new Date(e.start).toLocaleTimeString("en-US", {
+              ? new Date(e.start).toLocaleTimeString(uiLocale, {
                   hour: "numeric",
                   minute: "2-digit",
                   hour12: true,
                 })
               : "",
             endDisplay: e.end
-              ? new Date(e.end).toLocaleTimeString("en-US", {
+              ? new Date(e.end).toLocaleTimeString(uiLocale, {
                   hour: "numeric",
                   minute: "2-digit",
                   hour12: true,
@@ -163,15 +168,15 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
       } else if (res.status === "error") {
         const msg = String(res.error ?? "");
         toast({
-          title: "Google calendar connect failed",
-          description: msg || "Unknown error",
+          title: ui("Google calendar connect failed"),
+          description: msg || ui("Unknown error"),
           variant: "destructive",
         });
       }
     } catch (e) {
       console.error("google calendar oauth failed:", e);
       toast({
-        title: "Google calendar connect failed",
+        title: ui("Google calendar connect failed"),
         description: String(e),
         variant: "destructive",
       });
@@ -214,7 +219,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
       <CardContent className="p-0">
         <div className="flex items-start p-4 gap-4">
           <div className="flex-shrink-0">
-            <img src="/google-calendar-icon.svg" alt="Google Calendar" className="w-10 h-10 rounded-lg" />
+            <img src="/google-calendar-icon.svg" alt={ui("Google Calendar")} className="w-10 h-10 rounded-lg" />
           </div>
 
           <div className="flex-1 min-w-0">
@@ -258,8 +263,8 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
                     <img src="/google-calendar-icon.svg" alt="" className="h-3 w-3 mr-1.5" />
                   )}
                   {isConnecting
-                    ? "Waiting for Google..."
-                    : "Connect Google Calendar"}
+                    ? ui("Waiting for Google...")
+                    : ui("Connect Google Calendar")}
                 </Button>
                 <GoogleOAuthUnverifiedAppHint />
               </div>
@@ -273,7 +278,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
                       return (
                         <div key={key} className="flex items-center justify-between gap-2 text-xs">
                           <span className="text-muted-foreground truncate">
-                            {account.displayName || account.instance || "Default account"}
+                            {account.displayName || account.instance || ui("Default account")}
                           </span>
                           <Button
                             variant="ghost"
@@ -306,7 +311,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
                   ) : (
                     <Plus className="h-3 w-3 mr-1.5" />
                   )}
-                  {isConnecting ? "Waiting for Google..." : "Add another account"}
+                  {isConnecting ? ui("Waiting for Google...") : ui("Add another account")}
                 </Button>
               </div>
             )}
@@ -404,14 +409,14 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
             <span>
               {connected
                 ? accounts.length > 1
-                  ? `${accounts.length} accounts synced`
+                  ? ui("{value1} accounts synced", { value1: accounts.length })
                   : accountLabel
-                  ? `Synced as ${accountLabel}`
-                  : "Calendar synced"
-                : "Enriches meeting detection with Google Calendar context"}
+                  ? ui("Synced as {value1}", { value1: accountLabel })
+                  : ui("Calendar synced")
+                : ui("Enriches meeting detection with Google Calendar context")}
             </span>
             <span className="ml-auto">
-              {connected ? "● connected" : "○ not connected"}
+              {connected ? ui("● connected") : ui("○ not connected")}
             </span>
           </div>
         </div>

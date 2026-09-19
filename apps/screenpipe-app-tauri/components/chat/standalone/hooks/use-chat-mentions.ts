@@ -23,6 +23,9 @@ import { localFetch } from "@/lib/api";
 import { listConversations } from "@/lib/chat-storage";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { commands } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 const TAG_AUTOCOMPLETE_LIMIT = 50;
 const SPEAKER_SUGGESTION_LIMIT = 50;
@@ -71,6 +74,8 @@ export function useChatMentions({
   onOpenConversation,
   onRunCommand,
 }: UseChatMentionsOptions) {
+  const uiLanguage = useLocale();
+  const ui = useGT();
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
@@ -136,13 +141,13 @@ export function useChatMentions({
   const filterSearchGroups = useMemo(() => {
     const groups: { label: string; suggestions: MentionSuggestion[] }[] = [];
     if (filterTagResults.length > 0) {
-      groups.push({ label: "Tags", suggestions: filterTagResults });
+      groups.push({ label: ui("Tags"), suggestions: filterTagResults });
     }
     if (filterSpeakerResults.length > 0) {
-      groups.push({ label: "Speakers", suggestions: filterSpeakerResults });
+      groups.push({ label: ui("Speakers"), suggestions: filterSpeakerResults });
     }
     return groups;
-  }, [filterTagResults, filterSpeakerResults]);
+  }, [filterTagResults, filterSpeakerResults, uiLanguage]);
 
   const filterSearchResults = useMemo(
     () => filterSearchGroups.flatMap((group) => group.suggestions),
@@ -376,7 +381,7 @@ export function useChatMentions({
             .filter((speaker) => speaker.name)
             .map((speaker) => ({
               tag: speaker.name.includes(" ") ? `@"${speaker.name}"` : `@${speaker.name}`,
-              description: "Speaker",
+              description: ui("Speaker"),
               category: "speaker" as const,
             }));
           setSpeakerSuggestions(suggestions);
@@ -459,7 +464,7 @@ export function useChatMentions({
                   .filter((speaker) => speaker.name)
                   .map((speaker) => ({
                     tag: speaker.name.includes(" ") ? `@"${speaker.name}"` : `@${speaker.name}`,
-                    description: "Speaker",
+                    description: ui("Speaker"),
                     category: "speaker" as const,
                   }))
               : []

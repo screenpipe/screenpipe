@@ -10,6 +10,9 @@ import remarkMath from "remark-math";
 import { CodeBlock } from "./ui/codeblock";
 import { Sparkles, Wrench, Bug, ExternalLink } from "lucide-react";
 import { screenpipeWebUrl } from "@/lib/web-url";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 interface ChangelogEntry {
   version: string;
@@ -73,16 +76,18 @@ function CategorySection({
   );
 }
 
-function formatDate(dateStr: string): string {
+function formatDate(dateStr: string, locale: string): string {
   try {
     const d = new Date(dateStr + "T00:00:00");
-    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    return d.toLocaleDateString(locale, { month: "short", day: "numeric", year: "numeric" });
   } catch {
     return dateStr;
   }
 }
 
 export const ChangelogDialog: React.FC = () => {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
   const [entries, setEntries] = useState<ChangelogEntry[] | null>(null);
   const [bundled, setBundled] = useState<string>("");
   const [loading, setLoading] = useState(true);
@@ -135,24 +140,24 @@ export const ChangelogDialog: React.FC = () => {
                 <div key={entry.version} className="pb-6 border-b border-border/40 last:border-b-0">
                   <div className="flex items-baseline gap-3 mb-2">
                     <span className="font-mono text-sm font-semibold">V{entry.version}</span>
-                    <span className="text-xs text-muted-foreground">{formatDate(entry.date)}</span>
+                    <span className="text-xs text-muted-foreground">{formatDate(entry.date, uiLocale)}</span>
                   </div>
                   {entry.summary && (
                     <p className="text-sm text-foreground/80 mb-2">{entry.summary}</p>
                   )}
                   <CategorySection
                     icon={<Sparkles className="w-3 h-3 text-foreground/60" />}
-                    label="New"
+                    label={ui("New")}
                     items={entry.features ?? []}
                   />
                   <CategorySection
                     icon={<Wrench className="w-3 h-3 text-foreground/60" />}
-                    label="Improved"
+                    label={ui("Improved")}
                     items={entry.improvements ?? []}
                   />
                   <CategorySection
                     icon={<Bug className="w-3 h-3 text-foreground/60" />}
-                    label="Fixed"
+                    label={ui("Fixed")}
                     items={entry.fixes ?? []}
                   />
                 </div>

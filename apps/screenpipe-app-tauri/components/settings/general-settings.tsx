@@ -38,13 +38,13 @@ import posthog from "posthog-js";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Language", keywords: ["locale", "translation"] },
-  { label: "Auto-start", keywords: ["autostart", "launch", "startup"] },
-  { label: "Auto-update", keywords: ["updates"] },
-  { label: "Check for updates", keywords: ["version"] },
-  { label: "Auto-update scheduled tasks", keywords: ["pipes", "store", "tasks"] },
-  { label: "Reset Onboarding", keywords: ["setup"] },
-  { label: "Your goal", keywords: ["onboarding", "purpose", "personalization"] },
+  { label: msg("Language", {}), keywords: ["locale", "translation"] },
+  { label: msg("Auto-start", {}), keywords: ["autostart", "launch", "startup"] },
+  { label: msg("Auto-update", {}), keywords: ["updates"] },
+  { label: msg("Check for updates", {}), keywords: ["version"] },
+  { label: msg("Auto-update scheduled tasks", {}), keywords: ["pipes", "store", "tasks"] },
+  { label: msg("Reset Onboarding", {}), keywords: ["setup"] },
+  { label: msg("Your goal", {}), keywords: ["onboarding", "purpose", "personalization"] },
 ];
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { screenpipeWebUrl } from "@/lib/web-url";
@@ -57,8 +57,11 @@ import {
 import { getRemoteAutoUpdatePolicy } from "@/lib/desktop-remote-control";
 import { useEnterpriseBuildStatus } from "@/lib/hooks/use-is-enterprise-build";
 import { useExperimentalFeaturesEnabled } from "@/lib/experimental-features";
+import { msg } from "gt-react";
+
 
 export default function GeneralSettings() {
+
   const gt = useGT();
   const m = useMessages();
   const { isManagedDeployment } = useManagedPolicy();
@@ -366,7 +369,7 @@ export default function GeneralSettings() {
                     <h3 className="text-sm font-medium text-foreground">App updates</h3>
                     <p className="text-xs text-muted-foreground">
                       {describeEnterpriseUpdateMode(enterpriseAppUpdatePolicy)}
-                      {enterpriseInstallMetadata?.managed ? " · managed device detected" : ""}
+                      {enterpriseInstallMetadata?.managed ? gt(" · managed device detected") : ""}
                     </p>
                   </div>
                 </div>

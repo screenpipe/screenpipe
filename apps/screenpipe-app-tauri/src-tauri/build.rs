@@ -202,6 +202,8 @@ fn build_native_timeline() {
     }
     // Deterministic order so a rebuild is reproducible.
     sources.sort();
+    sources.push(PathBuf::from("swift/UILocalization.swift"));
+    println!("cargo:rerun-if-changed=swift/UILocalization.swift");
 
     if sources.is_empty() {
         println!("cargo:warning=swift/timeline/*.swift not found, skipping native timeline");
@@ -287,6 +289,7 @@ fn build_native_timeline_stub(out_dir: &std::path::Path, lib_path: &std::path::P
 
 typedef void (*timeline_action_callback_t)(const char*);
 
+void timeline_set_ui_locale(const char* json) { (void)json; }
 int timeline_is_available(void) { return 0; }
 void timeline_set_action_callback(timeline_action_callback_t cb) { (void)cb; }
 int timeline_show(const char* json) { (void)json; return -2; }
@@ -336,6 +339,7 @@ fn build_notification_panel() {
     let lib_path = out_dir.join("libnotification_panel.a");
 
     println!("cargo:rerun-if-changed=swift/notification_panel.swift");
+    println!("cargo:rerun-if-changed=swift/UILocalization.swift");
 
     if !swift_src.exists() {
         println!("cargo:warning=swift/notification_panel.swift not found, skipping native notification panel");
@@ -377,6 +381,7 @@ fn build_notification_panel() {
         ])
         .arg(&lib_path)
         .arg(&swift_src)
+        .arg("swift/UILocalization.swift")
         .output()
         .expect("failed to run swiftc for notification_panel");
 
@@ -412,6 +417,7 @@ typedef void (*action_callback_t)(const char*);
 void notif_set_action_callback(action_callback_t cb) { (void)cb; }
 int notif_show(const char* json) { (void)json; return -2; }
 int notif_hide(void) { return -2; }
+void notif_set_ui_locale(const char* json) { (void)json; }
 int notif_is_available(void) { return 0; }
 void notif_free_string(char* ptr) { if (ptr) free(ptr); }
 int inbox_toggle(const char* json) { (void)json; return -2; }
@@ -844,6 +850,7 @@ fn build_shortcut_reminder() {
     let lib_path = out_dir.join("libshortcut_reminder.a");
 
     println!("cargo:rerun-if-changed=swift/shortcut_reminder.swift");
+    println!("cargo:rerun-if-changed=swift/UILocalization.swift");
 
     if !swift_src.exists() {
         println!("cargo:warning=swift/shortcut_reminder.swift not found, building stub");
@@ -885,6 +892,7 @@ fn build_shortcut_reminder() {
         ])
         .arg(&lib_path)
         .arg(&swift_src)
+        .arg("swift/UILocalization.swift")
         .output()
         .expect("failed to run swiftc for shortcut_reminder");
 
@@ -915,6 +923,7 @@ typedef void (*action_callback_t)(const char*);
 void shortcut_set_action_callback(action_callback_t cb) { (void)cb; }
 int shortcut_show(const char* json) { (void)json; return -2; }
 int shortcut_hide(void) { return -2; }
+void shortcut_set_ui_locale(const char* json) { (void)json; }
 int shortcut_is_available(void) { return 0; }
 void shortcut_set_meeting_active(int active) { (void)active; }
 void shortcut_set_meeting_stop_result(int succeeded) { (void)succeeded; }

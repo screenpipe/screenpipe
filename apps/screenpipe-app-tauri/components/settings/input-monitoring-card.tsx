@@ -7,6 +7,8 @@ import React from "react";
 import { Button } from "@/components/ui/button";
 import { ExternalLink, Loader2 } from "lucide-react";
 import { useInputMonitoringPermission } from "@/components/settings/hooks/use-input-monitoring-permission";
+import { useGT } from "gt-react";
+
 
 /**
  * macOS-only Input Monitoring panel, rendered in the Privacy settings
@@ -23,6 +25,7 @@ export function InputMonitoringPanel({
 }: {
   onStatusChange?: (granted: boolean) => void;
 }) {
+  const ui = useGT();
   const {
     granted,
     requesting,
@@ -55,7 +58,7 @@ export function InputMonitoringPanel({
           ) : (
             <ExternalLink className="h-3 w-3 mr-1.5" />
           )}
-          {granted ? "Enabled" : "Enable Input Monitoring"}
+          {granted ? ui("Enabled") : ui("Enable Input Monitoring")}
         </Button>
 
         {suspectedGhost && !granted ? (

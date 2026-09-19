@@ -222,8 +222,8 @@ enum TimelineBackoff {
     static func retryMessage(attempt: Int) -> String? {
         switch attempt {
         case 0: return nil
-        case 1: return "Loading history... server is warming up"
-        default: return "Timeline is still warming up. Try again in a moment."
+        case 1: return uiText("Loading history... server is warming up")
+        default: return uiText("Timeline is still warming up. Try again in a moment.")
         }
     }
 }

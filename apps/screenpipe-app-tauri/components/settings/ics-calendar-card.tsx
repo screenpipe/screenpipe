@@ -20,6 +20,8 @@ import {
 } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
+import { useGT } from "gt-react";
+
 
 interface IcsCalendarEntry {
   name: string;
@@ -41,6 +43,8 @@ interface CalendarEventItem {
 }
 
 export function IcsCalendarCard() {
+
+  const ui = useGT();
   const [entries, setEntries] = useState<IcsCalendarEntry[]>([]);
   const [newUrl, setNewUrl] = useState("");
   const [newName, setNewName] = useState("");
@@ -217,7 +221,7 @@ export function IcsCalendarCard() {
                   className="text-xs h-7 flex-1"
                 />
                 <Input
-                  placeholder="Name (optional)"
+                  placeholder={ui("Name (optional)")}
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   className="text-xs h-7 w-32"
@@ -333,11 +337,11 @@ export function IcsCalendarCard() {
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <span>
               {enabledCount > 0
-                ? `${enabledCount} feed${enabledCount !== 1 ? "s" : ""} active, polls every 10m`
-                : "Paste an ICS/webcal URL to subscribe to a calendar feed"}
+                ? ui("{value1, plural, one {# feed} other {# feeds}} active, polls every 10m", { value1: enabledCount })
+                : ui("Paste an ICS/webcal URL to subscribe to a calendar feed")}
             </span>
             <span className="ml-auto">
-              {entries.length > 0 ? "● connected" : "○ not connected"}
+              {entries.length > 0 ? ui("● connected") : ui("○ not connected")}
             </span>
           </div>
         </div>

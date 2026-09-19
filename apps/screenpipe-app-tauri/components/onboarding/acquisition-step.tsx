@@ -9,6 +9,9 @@ import { motion } from "framer-motion";
 import posthog from "posthog-js";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { commands, type Attribution } from "@/lib/utils/tauri";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 interface AcquisitionStepProps {
   handleNextSlide: () => void;
@@ -26,19 +29,19 @@ interface AcquisitionStepProps {
  * users who made it through.
  */
 export const ACQUISITION_SOURCES = [
-  { value: "search", label: "Search engine" },
-  { value: "friend", label: "Friend or colleague" },
-  { value: "x", label: "X / twitter" },
-  { value: "linkedin", label: "Linkedin" },
-  { value: "reddit", label: "Reddit" },
-  { value: "hacker_news", label: "Hacker news" },
-  { value: "youtube", label: "Youtube or video" },
-  { value: "github", label: "GitHub" },
-  { value: "newsletter", label: "Newsletter" },
-  { value: "podcast", label: "Podcast" },
-  { value: "ai_assistant", label: "An AI assistant" },
-  { value: "ai_directory", label: "AI tool directory" },
-  { value: "other", label: "Something else" },
+  { value: "search", label: msg("Search engine", {}) },
+  { value: "friend", label: msg("Friend or colleague", {}) },
+  { value: "x", label: msg("X / twitter", {}) },
+  { value: "linkedin", label: msg("Linkedin", {}) },
+  { value: "reddit", label: msg("Reddit", {}) },
+  { value: "hacker_news", label: msg("Hacker news", {}) },
+  { value: "youtube", label: msg("Youtube or video", {}) },
+  { value: "github", label: msg("GitHub", {}) },
+  { value: "newsletter", label: msg("Newsletter", {}) },
+  { value: "podcast", label: msg("Podcast", {}) },
+  { value: "ai_assistant", label: msg("An AI assistant", {}) },
+  { value: "ai_directory", label: msg("AI tool directory", {}) },
+  { value: "other", label: msg("Something else", {}) },
 ] as const;
 
 export type AcquisitionSource = (typeof ACQUISITION_SOURCES)[number]["value"];
@@ -69,6 +72,8 @@ export function buildAcquisitionAnalyticsProperties(
 const AcquisitionStep: React.FC<AcquisitionStepProps> = ({
   handleNextSlide,
 }) => {
+
+  const uiMessages = useMessages();
   const { updateSettings } = useSettings();
   const [selected, setSelected] = useState<AcquisitionSource | null>(null);
   const [saving, setSaving] = useState(false);
@@ -142,7 +147,7 @@ const AcquisitionStep: React.FC<AcquisitionStepProps> = ({
         animate={{ opacity: 1 }}
         transition={{ delay: 0.15 }}
       >
-        {ACQUISITION_SOURCES.map((source) => (
+        {localizeDefinitions(ACQUISITION_SOURCES, uiMessages).map((source) => (
           <button
             key={source.value}
             type="button"

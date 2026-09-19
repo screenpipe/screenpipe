@@ -25,6 +25,8 @@ import { entryCardForHomeTemplate } from "@/lib/chat/response-feedback";
 import { type ChatEntryCard } from "@/lib/chat/types";
 import { openExternalUrl } from "@/lib/open-external-url";
 import { commands } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+
 
 type HomeCardAgentId = "claude" | "cursor" | "codex";
 type LaunchState = "opening" | "opened" | "copied" | "unavailable";
@@ -93,21 +95,6 @@ function AgentLogo({ id }: { id: HomeCardAgentId }) {
   );
 }
 
-function statusLabel(state: LaunchState | null): string {
-  if (state === "opening") return "Opening";
-  if (state === "opened") return "Opened";
-  if (state === "copied") return "Copied";
-  if (state === "unavailable") return "Unavailable";
-  return "Run in";
-}
-
-function resultDescription(state: LaunchState, label: string): string {
-  if (state === "opened") return `Opened in ${label}. The prompt is also copied.`;
-  if (state === "copied") return `${label} could not open. Paste the copied prompt there.`;
-  if (state === "unavailable") return `Could not open ${label} or copy the prompt.`;
-  return `Opening ${label}.`;
-}
-
 export function HomeCardAgentActions({
   pipe,
   entryCard,
@@ -117,6 +104,24 @@ export function HomeCardAgentActions({
   entryCard?: ChatEntryCard;
   placement?: "card" | "chip";
 }) {
+
+  const ui = useGT();
+function statusLabel(state: LaunchState | null): string {
+  if (state === "opening") return ui("Opening");
+  if (state === "opened") return ui("Opened");
+  if (state === "copied") return ui("Copied");
+  if (state === "unavailable") return ui("Unavailable");
+  return ui("Run in");
+}
+
+function resultDescription(state: LaunchState, label: string): string {
+  if (state === "opened") return ui("Opened in {agent}. The prompt is also copied.", { agent: label });
+  if (state === "copied") return ui("{agent} could not open. Paste the copied prompt there.", { agent: label });
+  if (state === "unavailable") return ui("Could not open {agent} or copy the prompt.", { agent: label });
+  return ui("Opening {agent}.", { agent: label });
+}
+
+
   const [state, setState] = useState<LaunchState | null>(null);
   const [activeAgent, setActiveAgent] = useState<HomeCardAgentId | null>(null);
   const viewedAgents = useRef(new Set<HomeCardAgentId>());
@@ -171,10 +176,10 @@ export function HomeCardAgentActions({
     toast({
       title:
         nextState === "opened"
-          ? `Opened in ${label}`
+          ? ui("Opened in {value1}", { value1: label })
           : nextState === "copied"
-            ? "Prompt copied"
-            : "Agent handoff unavailable",
+            ? ui("Prompt copied")
+            : ui("Agent handoff unavailable"),
       description: resultDescription(nextState, label),
       ...(nextState === "unavailable" ? { variant: "destructive" as const } : {}),
     });
@@ -198,7 +203,7 @@ export function HomeCardAgentActions({
       data-agent={activeAgent ?? undefined}
       data-placement={placement}
       role="group"
-      aria-label={`Run ${pipe.title} in another agent`}
+      aria-label={ui("Run {value1} in another agent", { value1: pipe.title })}
       className={`absolute top-1/2 z-20 flex -translate-y-1/2 items-center gap-0.5 rounded-md border border-border bg-background p-0.5 text-foreground transition-opacity duration-150 motion-reduce:transition-none ${
         placement === "chip" ? "left-1/2 -translate-x-1/2" : "right-3"
       } ${
@@ -217,7 +222,7 @@ export function HomeCardAgentActions({
       <TooltipProvider delayDuration={120}>
         {HOME_CARD_AGENT_TARGETS.map((target) => {
           const label = AGENT_LABELS[target.id];
-          const actionLabel = `Run in ${label}`;
+          const actionLabel = ui("Run in {agent}", { agent: label });
           const isOpening = pending && activeAgent === target.id;
           const isResult = !pending && state && activeAgent === target.id;
           return (

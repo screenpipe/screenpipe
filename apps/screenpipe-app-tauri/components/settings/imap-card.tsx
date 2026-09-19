@@ -14,6 +14,8 @@ import { localFetch } from "@/lib/api";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { useInterval } from "@/lib/hooks/use-interval";
 import posthog from "posthog-js";
+import { useGT } from "gt-react";
+
 
 const APP_PASSWORDS_URL = "https://myaccount.google.com/apppasswords";
 // Gmail app passwords are 16 lowercase letters, copied as "abcd efgh ijkl mnop".
@@ -42,6 +44,8 @@ function isGmail(email: string): boolean {
 }
 
 export function ImapCard({ onChanged }: { onChanged?: () => void } = {}) {
+
+  const ui = useGT();
   const [savedUsername, setSavedUsername] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [email, setEmail] = useState("");
@@ -108,7 +112,7 @@ export function ImapCard({ onChanged }: { onChanged?: () => void } = {}) {
       posthog.capture("connection_saved", { integration: "imap" });
       onChanged?.();
     } catch (e: any) {
-      setError(e?.message || "Unknown error");
+      setError(e?.message || ui("Unknown error"));
       setStatus("error");
       setWatching(false);
     }
@@ -151,7 +155,7 @@ export function ImapCard({ onChanged }: { onChanged?: () => void } = {}) {
       notifyConnectionsUpdated();
       onChanged?.();
     } catch (e: any) {
-      setError(e?.message || "Disconnect failed");
+      setError(e?.message || ui("Disconnect failed"));
     }
   };
 
@@ -204,7 +208,7 @@ export function ImapCard({ onChanged }: { onChanged?: () => void } = {}) {
           <div className="flex gap-2 pt-2">
             <div className="flex-1 space-y-1">
               <Label className="text-xs">IMAP Host</Label>
-              <Input placeholder={inferredHost || `Imap.${domain || "example.com"}`} value={host} onChange={(e) => setHost(e.target.value)} className="h-8 text-xs" />
+              <Input placeholder={inferredHost || ui("Imap.{value1}", { value1: domain || "example.com" })} value={host} onChange={(e) => setHost(e.target.value)} className="h-8 text-xs" />
             </div>
             <div className="w-24 space-y-1">
               <Label className="text-xs">Port</Label>
@@ -235,11 +239,11 @@ export function ImapCard({ onChanged }: { onChanged?: () => void } = {}) {
         </div>
       )}
       <div className="space-y-1">
-        <Label className="text-xs">{gmail ? "Or paste the app password" : "Password / App Password"}</Label>
+        <Label className="text-xs">{gmail ? ui("Or paste the app password") : ui("Password / App Password")}</Label>
         <div className="relative">
           <Input
             type={showPassword ? "text" : "password"}
-            placeholder={gmail ? "Abcd efgh ijkl mnop" : "App-specific password"}
+            placeholder={gmail ? ui("Abcd efgh ijkl mnop") : ui("App-specific password")}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className="h-8 text-xs pr-8"

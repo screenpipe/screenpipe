@@ -9,8 +9,12 @@ import { listen } from "@tauri-apps/api/event";
 import { Download } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Progress } from "./ui/progress";
+import { useGT } from "gt-react";
+
 
 export function ModelDownloadTracker() {
+
+  const ui = useGT();
   const { toast, dismiss } = useToast();
   const [activeDownloads, setActiveDownloads] = useState<
     Record<string, boolean>
@@ -44,7 +48,7 @@ export function ModelDownloadTracker() {
           // Update toast using its reference
           if (toastRefs[model]) {
             toastRefs[model].update({
-              title: "Downloading model",
+              title: ui("Downloading model"),
               description: (
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center gap-2">
@@ -115,7 +119,7 @@ export function ModelDownloadTracker() {
         console.log("Detected ffmpeg installation starting");
 
         const toastRef = toast({
-          title: "Installing ffmpeg",
+          title: ui("Installing ffmpeg"),
           description: (
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2">
@@ -142,8 +146,8 @@ export function ModelDownloadTracker() {
 
         // Show completion toast
         toast({
-          title: "Ffmpeg installed",
-          description: "Ffmpeg is ready to use",
+          title: ui("Ffmpeg installed"),
+          description: ui("Ffmpeg is ready to use"),
           duration: 3000,
         });
 
@@ -158,7 +162,7 @@ export function ModelDownloadTracker() {
 
         // Show toast for download start with initial progress
         const toastRef = toast({
-          title: "Downloading model",
+          title: ui("Downloading model"),
           description: (
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2">
@@ -188,8 +192,8 @@ export function ModelDownloadTracker() {
 
         // Show completion toast
         toast({
-          title: "Model downloaded",
-          description: `Model is ready to use`,
+          title: ui("Model downloaded"),
+          description: ui("Model is ready to use", {  }),
           duration: 3000,
         });
 

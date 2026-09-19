@@ -3,6 +3,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useGT } from "gt-react";
+
 
 // Screenpipe brand theme — outlined minimalist (DESIGN.md):
 // white fills, black 1px borders, black text in light mode (inverted in dark).
@@ -125,6 +127,8 @@ interface MermaidDiagramProps {
 }
 
 export function MermaidDiagram({ chart, className }: MermaidDiagramProps) {
+
+  const ui = useGT();
   const containerRef = useRef<HTMLDivElement>(null);
   const [svg, setSvg] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
@@ -171,7 +175,7 @@ export function MermaidDiagram({ chart, className }: MermaidDiagramProps) {
         setError(null);
       } catch (err) {
         console.error("Mermaid render error:", err);
-        setError(err instanceof Error ? err.message : "Failed to render diagram");
+        setError(err instanceof Error ? err.message : ui("Failed to render diagram"));
       }
     };
 

@@ -52,6 +52,9 @@ import {
 	shouldRestrictTimelineHistory,
 	useAuthoritativeTimelineHistoryAccess,
 } from "@/lib/hooks/use-timeline-cache";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 export interface StreamTimeSeriesResponse {
 	timestamp: string;
@@ -104,6 +107,8 @@ const easeOutCubic = (x: number): number => {
 };
 
 export default function Timeline({ embedded = false }: { embedded?: boolean }) {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
 	const { isMac } = usePlatform();
 	const { settings } = useSettings();
 	const enterpriseBuild = useEnterpriseBuildStatus();
@@ -632,8 +637,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			if (Number.isNaN(parsed) || parsed < 1) {
 				setPendingNavigation(null);
 				toast({
-					title: "Invalid frame ID",
-					description: `"${raw}" is not a valid frame ID. expected a positive integer.`,
+					title: ui("Invalid frame ID"),
+					description: ui("\"{value1}\" is not a valid frame ID. expected a positive integer.", { value1: raw }),
 					variant: "destructive",
 				});
 				return;
@@ -645,21 +650,21 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 				if (data?.timestamp) {
 					setPendingNavigation(null);
 					await navigateToTimestamp(data.timestamp);
-					toast({ title: "Jumped to frame", description: `Opened frame ${frameId}` });
+					toast({ title: ui("Jumped to frame"), description: ui("Opened frame {value1}", { value1: frameId }) });
 					return;
 				}
 				setPendingNavigation(null);
 				toast({
-					title: "Frame not found",
-					description: `Could not navigate to frame ${frameId} — it may not exist or server is not ready`,
+					title: ui("Frame not found"),
+					description: ui("Could not navigate to frame {value1} — it may not exist or server is not ready", { value1: frameId }),
 					variant: "destructive",
 				});
 			} catch (error) {
 				console.error("Failed to navigate to frame:", error);
 				setPendingNavigation(null);
 				toast({
-					title: "Navigation failed",
-					description: error instanceof Error ? error.message : "Could not resolve frame to timestamp",
+					title: ui("Navigation failed"),
+					description: error instanceof Error ? error.message : ui("Could not resolve frame to timestamp"),
 					variant: "destructive",
 				});
 			}
@@ -786,18 +791,17 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		framesViewedRef.current = 0;
 		framesFailedRef.current = 0;
 		dateChangesRef.current = 0;
-		
+
 		posthog.capture("timeline_opened");
 
 
-		
 		// Send session summary when timeline closes
 		return () => {
 			const sessionDuration = performance.now() - timelineOpenedAtRef.current;
-			const loadingPercentage = sessionDuration > 0 
-				? (totalLoadingTimeRef.current / sessionDuration) * 100 
+			const loadingPercentage = sessionDuration > 0
+				? (totalLoadingTimeRef.current / sessionDuration) * 100
 				: 0;
-			
+
 			posthog.capture("timeline_loading_time_total", {
 				session_duration_ms: Math.round(sessionDuration),
 				loading_time_ms: Math.round(totalLoadingTimeRef.current),
@@ -808,7 +812,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			});
 		};
 	}, []);
-	
+
 	// Track loading state changes for cumulative loading time
 	useEffect(() => {
 		if (isLoading || showBlockingLoader) {
@@ -824,7 +828,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 			}
 		}
 	}, [isLoading, showBlockingLoader]);
-	
+
 	// Track frames viewed. First-frame latency is recorded by the successful
 	// media-load callback above, not by selecting frame metadata.
 	useEffect(() => {
@@ -837,8 +841,8 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	const sendSelectionToChat = useCallback(async (pipe?: TemplatePipe) => {
 		if (!selectionRange) return;
 
-		const startTime = selectionRange.start.toLocaleString();
-		const endTime = selectionRange.end.toLocaleString();
+		const startTime = selectionRange.start.toLocaleString(uiLocale);
+		const endTime = selectionRange.end.toLocaleString(uiLocale);
 
 		// Get OCR/audio context from frames in the selection range
 		const selectedFrames = frames.filter((frame) => {
@@ -914,9 +918,9 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 		});
 
 		if (pipe) {
-			toast({ title: `${pipe.icon} ${pipe.title}`, description: "Running scheduled task with selection context" });
+			toast({ title: ui("{value1} {value2}", { value1: pipe.icon, value2: pipe.title }), description: ui("Running scheduled task with selection context") });
 		}
-	}, [selectionRange, frames]);
+	}, [selectionRange, frames, uiLocale]);
 
 	// Wrapper that opens search in separate window (fullscreen) or inline modal (embedded)
 	const openSearch = useCallback((v: boolean) => {
@@ -1285,7 +1289,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 						/>
 					) : null}
 
-	
+
 					{/* Gate on the *derived* display frame, not the raw selection.
 					    `clearFramesForNavigation` empties the store's `frames` while
 					    `currentFrame` (component state) keeps pointing at the
@@ -1437,7 +1441,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 							<button
 								type="button"
 								className="flex items-center gap-1.5 max-w-lg min-w-0 px-3 py-1 rounded-full bg-black/70 backdrop-blur-sm border border-white/10 hover:bg-black/80 hover:border-white/20 transition-colors cursor-pointer pointer-events-auto"
-								title={`Open ${openableUrl}`}
+								title={ui("Open {value1}", { value1: openableUrl })}
 								onClick={async (e) => {
 									e.stopPropagation();
 									try {
@@ -1480,7 +1484,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 							<button
 								onClick={() => commands.closeWindow("Main")}
 								className="absolute top-4 right-4 p-2 bg-card hover:bg-muted border border-border rounded-md transition-colors z-50"
-								title="Close (Esc)"
+								title={ui("Close (Esc)")}
 							>
 								<X className="w-4 h-4 text-muted-foreground" />
 							</button>
@@ -1511,7 +1515,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 							<button
 								onClick={() => commands.closeWindow("Main")}
 								className="absolute top-4 right-4 p-2 bg-card hover:bg-muted border border-border rounded-md transition-colors z-50"
-								title="Close (Esc)"
+								title={ui("Close (Esc)")}
 							>
 								<X className="w-4 h-4 text-muted-foreground" />
 							</button>
@@ -1602,7 +1606,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 							className="px-1.5 hover:text-white/80 disabled:text-white/30"
 							disabled={searchResultIndex >= searchResults.length - 1}
 							onClick={() => navigateToSearchResult(searchResultIndex + 1)}
-							title="Older match (←)"
+							title={ui("Older match (←)")}
 						>
 							&#9664;
 						</button>
@@ -1618,14 +1622,14 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 							className="px-1.5 hover:text-white/80 disabled:text-white/30"
 							disabled={searchResultIndex <= 0}
 							onClick={() => navigateToSearchResult(searchResultIndex - 1)}
-							title={isMac ? "Newer match (→ or ⌘G)" : "Newer match (→ or Ctrl+G)"}
+							title={isMac ? ui("Newer match (→ or ⌘G)") : ui("Newer match (→ or Ctrl+G)")}
 						>
 							&#9654;
 						</button>
 						<button
 							className="ml-1 text-white/50 hover:text-white/80"
 							onClick={() => clearSearchHighlight()}
-							title="Exit search review (Esc)"
+							title={ui("Exit search review (Esc)")}
 						>
 							<X className="w-3.5 h-3.5" />
 						</button>

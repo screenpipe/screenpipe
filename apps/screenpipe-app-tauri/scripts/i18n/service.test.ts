@@ -41,7 +41,17 @@ test("only missing messages are sent, with file context, and provider correction
       expect(uploaded.formatMetadata.toast.context).toContain("polite desu/masu");
       return { uploadedFiles: [uploaded] };
     }
-    if (endpoint.endsWith("enqueue")) { expect(body.force).toBe(false); return {}; }
+    if (endpoint === "/v2/translate") {
+      expect(Object.keys(body.requests)).toEqual(["toast"]);
+      expect(body.requests.toast.source).toBe("Hello {name}");
+      expect(body.requests.toast.metadata.actionType).toBe("standard");
+      expect(body.requests.toast.metadata.context).toContain("components/example.tsx");
+      return { toast: { success: true, locale: "ja", dataFormat: "ICU", translation: translated } };
+    }
+    if (endpoint.endsWith("upload-translations")) {
+      expect(JSON.parse(Buffer.from(body.data[0].translations[0].content, "base64").toString())).toEqual({ toast: translated });
+      return {};
+    }
     if (endpoint.endsWith("download")) return { files: [{ ...body[0], fileFormat: "GTJSON", data: Buffer.from(JSON.stringify({ toast: translated })).toString("base64") }] };
     throw new Error(endpoint);
   };
@@ -59,15 +69,47 @@ test("only missing messages are sent, with file context, and provider correction
   expect(f.cache.translations.ja.title).toBe("設定");
 });
 
-test("mismatched downloaded source identity is a fatal artifact error", async () => {
+test("mismatched translated locale is a fatal artifact error", async () => {
   const f = await fixture();
   const request = async (endpoint: string, body: any) => {
     if (endpoint.endsWith("branches/create")) return { branch: { id: "branch" } };
     if (endpoint.endsWith("upload-files")) return { uploadedFiles: [body.data[0].source] };
-    if (endpoint.endsWith("enqueue")) return {};
-    return { files: [{ ...body[0], versionId: "wrong-source", data: "e30=" }] };
+    if (endpoint === "/v2/translate") return { toast: { success: true, locale: "de", dataFormat: "ICU", translation: "Hallo {name}" } };
+    throw new Error(endpoint);
   };
   const result = await translateMissing({ ...f, request });
   expect(result.exitCode).toBe(1);
   expect(result.output).toContain("artifact integrity");
+});
+
+
+test("completed batches survive a service failure and resume without translating accepted wording again", async () => {
+  const f = await fixture();
+  f.source = Object.fromEntries(Array.from({length: 45}, (_, i) => [`message-${String(i).padStart(2, "0")}`, `Message ${i}`]));
+  f.cache = { translations: { ja: {} }, native: {} };
+  const persisted = new Map<string, any>();
+  let batches = 0;
+  const request = async (endpoint: string, body: any) => {
+    if (endpoint.endsWith("branches/create")) return { branch: { id: "branch" } };
+    if (endpoint.endsWith("upload-files")) return { uploadedFiles: [body.data[0].source] };
+    if (endpoint === "/v2/translate") {
+      if (++batches === 2) throw new Error("GT HTTP 503 service unavailable");
+      return Object.fromEntries(Object.entries(body.requests).map(([id, item]: [string, any]) =>
+        [id, { success: true, locale: "ja", dataFormat: "ICU", translation: `翻訳 ${item.source}` }]));
+    }
+    if (endpoint.endsWith("upload-translations")) {
+      const file = body.data[0];
+      persisted.set(file.source.fileId, {fileFormat: file.source.fileFormat, data: file.translations[0].content});
+      return {};
+    }
+    if (endpoint.endsWith("download")) return { files: body.map((ref: any) => ({...ref, ...persisted.get(ref.fileId)})) };
+    throw new Error(endpoint);
+  };
+  const first = await translateMissing({...f, request});
+  expect(first.exitCode).toBe(1);
+  expect(first.downloaded).toBe(true);
+  const second = await translateMissing({...f, request});
+  expect(second.exitCode).toBe(0);
+  expect(second.output).toContain("5 missing messages");
+  expect(batches).toBe(3);
 });

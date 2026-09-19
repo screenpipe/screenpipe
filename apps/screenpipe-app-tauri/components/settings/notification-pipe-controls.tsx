@@ -8,6 +8,8 @@ import { Switch } from "@/components/ui/switch";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { cn } from "@/lib/utils";
 import { Search, Star } from "lucide-react";
+import { useGT } from "gt-react";
+
 
 /**
  * Per-pipe notification controls. Renders one row per installed pipe with a
@@ -43,6 +45,8 @@ export function NotificationPipeControls({
   onAllowChange,
   disabled = false,
 }: NotificationPipeControlsProps) {
+
+  const ui = useGT();
   const { pipes, loading } = usePipes();
   const [query, setQuery] = React.useState("");
 
@@ -130,8 +134,8 @@ export function NotificationPipeControls({
       <div className="flex items-center justify-between gap-2">
         <p className="text-[11px] text-muted-foreground">
           {mutedCount > 0
-            ? `${mutedCount} of ${pipeRows.length} muted`
-            : `${pipeRows.length} scheduled task${pipeRows.length === 1 ? "" : "s"} can notify you`}
+            ? ui("{value1} of {value2} muted", { value1: mutedCount, value2: pipeRows.length })
+            : ui("{count, plural, one {# scheduled task can notify you} other {# scheduled tasks can notify you}}", { count: pipeRows.length })}
           {vipCount > 0 && (
             <span className="text-muted-foreground/80">
               {" · "}
@@ -162,8 +166,8 @@ export function NotificationPipeControls({
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Filter scheduled tasks"
-            aria-label="Filter scheduled tasks"
+            placeholder={ui("Filter scheduled tasks")}
+            aria-label={ui("Filter scheduled tasks")}
             disabled={disabled}
             className="w-full border border-border bg-transparent py-1.5 pl-8 pr-2.5 text-xs outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-foreground/30"
           />
@@ -199,11 +203,11 @@ export function NotificationPipeControls({
                       disabled={disabled}
                       aria-label={
                         isVip
-                          ? `Stop always-notifying ${row.title}`
-                          : `Always notify for ${row.title}`
+                          ? ui("Stop always-notifying {value1}", { value1: row.title })
+                          : ui("Always notify for {value1}", { value1: row.title })
                       }
                       aria-pressed={isVip}
-                      title="Always notify, even while paused"
+                      title={ui("Always notify, even while paused")}
                       data-testid={`notification-pipe-vip-${row.name}`}
                       onClick={() => setVip(row.name, !isVip)}
                       className={cn(

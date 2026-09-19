@@ -12,6 +12,8 @@ import { openPermissionSettingsWithFlow, requestPermissionWithFlow } from "@/lib
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useSettings } from "@/lib/hooks/use-settings";
 import localforage from "localforage";
+import { useGT } from "gt-react";
+
 
 interface PermissionButtonsProps {
   type: "screen" | "audio";
@@ -22,6 +24,8 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
   type,
   hideWindowOnClick = false,
 }) => {
+
+  const ui = useGT();
   const { settings } = useSettings();
   const [permissions, setPermissions] = useState<OSPermissionsCheck | null>(
     null
@@ -89,17 +93,17 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
         await localforage.setItem("screenPermissionRestartPending", true);
 
         toast({
-          title: "Restart required",
+          title: ui("Restart required"),
           description:
-            "Please restart the app to apply screen recording permission",
+            ui("Please restart the app to apply screen recording permission"),
           duration: 5000,
         });
       }
     } catch (error) {
       console.error(`Failed to request ${type} permission:`, error);
       toast({
-        title: "Error",
-        description: `Failed to request ${type} permission`,
+        title: ui("Error"),
+        description: ui("Failed to request {value1} permission", { value1: type }),
         variant: "destructive",
         duration: 3000,
       });
@@ -126,8 +130,8 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
     } catch (error) {
       console.error(`failed to open ${type} permission settings:`, error);
       toast({
-        title: "Error",
-        description: `Failed to open ${type} permission settings`,
+        title: ui("Error"),
+        description: ui("Failed to open {value1} permission settings", { value1: type }),
         variant: "destructive",
         duration: 3000,
       });
@@ -153,8 +157,8 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
           role="img"
           aria-label={
             isPermitted(permissionStatus ?? "empty")
-              ? `${type} permission granted`
-              : `${type} permission denied`
+              ? ui("{value1} permission granted", { value1: type })
+              : ui("{value1} permission denied", { value1: type })
           }
         >
           {isPermitted(permissionStatus ?? "empty") ? (
@@ -171,16 +175,16 @@ export const PermissionButtons: React.FC<PermissionButtonsProps> = ({
         disabled={isDisabled}
       >
         {type === "screen" && permissionStatus === "restartRequired"
-          ? "Restart screenpipe"
-          : `Allow ${type === "screen" ? "screen" : "audio"} access`}
+          ? ui("Restart screenpipe")
+          : ui("Allow {value1} access", { value1: type === "screen" ? "screen" : "audio" })}
       </Button>
       <Button
         variant="ghost"
         size="icon"
         className="h-8 w-8"
         onClick={handleOpenPermissionSettings}
-        title={`Open ${type} settings`}
-        aria-label={`Open ${type} permission settings`}
+        title={ui("Open {value1} settings", { value1: type })}
+        aria-label={ui("Open {value1} permission settings", { value1: type })}
         disabled={isDisabled}
       >
         <Settings className="h-4 w-4" aria-hidden="true" />

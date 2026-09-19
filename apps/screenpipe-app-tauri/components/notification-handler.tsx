@@ -21,6 +21,8 @@ import {
   type NotificationAnalyticsContext,
 } from "@/lib/notification-analytics";
 import { appServerFetch } from "@/lib/notifications/app-server";
+import { useGT } from "gt-react";
+
 
 // notify_rust on Linux calls block_on for D-Bus inside the tokio runtime,
 // which panics and kills the worker thread. Skip OS notifications on Linux.
@@ -35,11 +37,14 @@ type NotificationRequested = {
 };
 
 const NotificationHandler: React.FC = () => {
+
+  const ui = useGT();
   const nativeNotificationRef = useRef<NotificationAnalyticsContext | null>(
     null,
   );
 
   useEffect(() => {
+
     const checkAndRequestPermission = async () => {
       let permission = await isPermissionGranted();
 
@@ -54,8 +59,8 @@ const NotificationHandler: React.FC = () => {
 
           if (!welcomeShown) {
             sendNotification({
-              title: "Welcome to screenpipe",
-              body: "Thank you for using screenpipe! We're dedicated to help you get the most out of screenpipe.",
+              title: ui("Welcome to screenpipe"),
+              body: ui("Thank you for using screenpipe! We're dedicated to help you get the most out of screenpipe."),
             });
             localStorage?.setItem("welcomeNotificationShown", "true");
           }

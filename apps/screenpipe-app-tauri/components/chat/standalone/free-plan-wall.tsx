@@ -30,12 +30,16 @@ import {
 import { formatAllowanceReset, useUsageStatus } from "@/lib/hooks/use-usage-status";
 import { openExternalUrl } from "@/lib/open-external-url";
 import { UpgradeVignette } from "@/components/chat/standalone/upgrade-vignettes";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 const VALUE_CARDS = [
-  { scene: "pipes", title: "Scheduled automations" },
-  { scene: "meeting", title: "Meeting summaries" },
-  { scene: "timeline", title: "Timeline recaps" },
-  { scene: "models", title: "Premium models" },
+  { scene: "pipes", title: msg("Scheduled automations", {}) },
+  { scene: "meeting", title: msg("Meeting summaries", {}) },
+  { scene: "timeline", title: msg("Timeline recaps", {}) },
+  { scene: "models", title: msg("Premium models", {}) },
 ] as const;
 
 /** Stage 1 — quiet remaining-messages counter beside the model controls. */
@@ -69,6 +73,8 @@ export function FreePlanCounterChip() {
 
 /** Stage 2 — the wall strip. Not dismissible while the wall holds. */
 export function FreePlanWallStrip() {
+
+  const ui = useGT();
   const wall = useFreeWall();
   if (!wall) return null;
   const resets = formatAllowanceReset(wall.resetsAt);
@@ -83,7 +89,7 @@ export function FreePlanWallStrip() {
         <div className="min-w-0 flex-1 text-[12px] leading-snug">
           <span className="font-medium">Ran out of messages</span>
           <span className="text-muted-foreground">
-            {resets ? ` · resets ${resets}` : ""} · local &amp; own-key models
+            {resets ? ui(" · resets {value1}", { value1: resets }) : ""} · local &amp; own-key models
             still work
           </span>
         </div>
@@ -108,6 +114,9 @@ export function FreePlanWallStrip() {
 
 /** Stage 3 — conversion sheet, once per reset window. */
 export function FreeUpgradeSheet() {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const wall = useFreeWall();
   const [openFor, setOpenFor] = useState<FreeWallState | null>(null);
 
@@ -131,12 +140,12 @@ export function FreeUpgradeSheet() {
         <DialogHeader>
           <DialogTitle>Upgrade to keep going</DialogTitle>
           <DialogDescription>
-            Free messages{resets ? ` reset ${resets}` : " reset daily"}.
+            Free messages{resets ? ` reset ${resets}` : ui(" reset daily")}.
             Upgrading unlocks:
           </DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {VALUE_CARDS.map((card) => (
+          {localizeDefinitions(VALUE_CARDS, uiMessages).map((card) => (
             <div key={card.scene} className="border border-border bg-background">
               <UpgradeVignette scene={card.scene} />
               <div className="px-3 py-2 font-mono text-[10px] normal-case tracking-wide">

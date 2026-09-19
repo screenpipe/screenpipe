@@ -133,6 +133,7 @@ private enum Brand {
 /// Compact action with restrained neutral hover and rounded control geometry.
 @available(macOS 13.0, *)
 struct BrandButton: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let label: String
     let isPrimary: Bool
     let fillsAvailableWidth: Bool
@@ -205,6 +206,7 @@ struct BrandButton: View {
 /// non-activating NSPanel windows.
 @available(macOS 13.0, *)
 private struct ActionLabelTooltip: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let label: String
 
     var body: some View {
@@ -233,6 +235,7 @@ private struct ActionLabelTooltip: View {
 /// Subtle text link with brand hover (color inversion on text)
 @available(macOS 13.0, *)
 struct BrandTextButton: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let label: String
     let fontSize: CGFloat
     let action: () -> Void
@@ -256,6 +259,7 @@ struct BrandTextButton: View {
 
 @available(macOS 13.0, *)
 struct BrandIconTextButton: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let systemName: String
     let label: String
     let help: String
@@ -320,6 +324,7 @@ final class NotificationFeedbackModel: ObservableObject {
 
 @available(macOS 13.0, *)
 private struct NativeNotificationFeedbackView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: NotificationFeedbackModel
     let onSubmit: (String, String?) -> Void
     let onLayoutChange: () -> Void
@@ -331,7 +336,7 @@ private struct NativeNotificationFeedbackView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if model.saveState == .submitted {
-                Text("feedback sent")
+                Text(uiText("feedback sent"))
                     .font(Brand.swiftUIMonoFont(size: 9))
                     .foregroundColor(.primary.opacity(0.4))
             } else {
@@ -355,7 +360,7 @@ private struct NativeNotificationFeedbackView: View {
 
                 if model.rating == .down {
                     HStack(spacing: 6) {
-                        TextField("what should improve?", text: $model.correction)
+                        TextField(uiText("what should improve?"), text: $model.correction)
                             .textFieldStyle(.plain)
                             .font(Brand.swiftUIMonoFont(size: 10))
                             .padding(.horizontal, 8)
@@ -379,8 +384,8 @@ private struct NativeNotificationFeedbackView: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(!correctionReady)
-                        .help("send feedback")
-                        .accessibilityLabel("send feedback")
+                        .help(uiText("send feedback"))
+                        .accessibilityLabel(uiText("send feedback"))
                     }
                 }
             }
@@ -402,7 +407,7 @@ private struct NativeNotificationFeedbackView: View {
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.primary.opacity(0.12), lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(rating == .up ? "useful notification" : "not useful notification")
+        .accessibilityLabel(rating == .up ? uiText("useful notification") : uiText("not useful notification"))
     }
 
     private func sendCorrection() {
@@ -421,6 +426,7 @@ private struct NativeNotificationFeedbackView: View {
 
 @available(macOS 13.0, *)
 struct NotificationContentView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let payload: NotificationPayload
     let progress: Double
     let onDismiss: () -> Void
@@ -434,7 +440,7 @@ struct NotificationContentView: View {
     @State private var hoveredActionLabel: String?
 
     private var visibleActions: [NotificationAction] {
-        payload.actions.filter { ($0.type ?? $0.action) != "dismiss" }
+        payload.actions.filter { ($0.type ?? $0.action) != uiText("dismiss") }
     }
 
     private var feedbackEligible: Bool {
@@ -468,9 +474,9 @@ struct NotificationContentView: View {
                         ))
                 }
                 .buttonStyle(.plain)
-                .help("notification options")
-                .accessibilityLabel("notification options")
-                .accessibilityValue(feedback.optionsExpanded ? "expanded" : "collapsed")
+                .help(uiText("notification options"))
+                .accessibilityLabel(uiText("notification options"))
+                .accessibilityValue(feedback.optionsExpanded ? uiText("expanded") : uiText("collapsed"))
                 Button(action: onDismiss) {
                     Text("✕")
                         .font(Brand.swiftUIMonoFont(size: 12))
@@ -479,7 +485,7 @@ struct NotificationContentView: View {
                 }
                 .buttonStyle(.plain)
                 .contentShape(Rectangle())
-                .accessibilityLabel("dismiss notification")
+                .accessibilityLabel(uiText("dismiss notification"))
                 .onHover { h in
                     withAnimation(.linear(duration: Brand.animDuration)) { closeHovered = h }
                 }
@@ -500,7 +506,7 @@ struct NotificationContentView: View {
                 .contentShape(Rectangle())
                 .padding(.horizontal, 14)
                 .padding(.top, 8)
-                .help("open source chat")
+                .help(uiText("open source chat"))
             } else {
                 Text(payload.title)
                     .font(Brand.swiftUIMonoFont(size: 12, weight: .medium))
@@ -584,8 +590,8 @@ struct NotificationContentView: View {
                 HStack(spacing: 8) {
                     BrandIconTextButton(
                         systemName: copied ? "checkmark" : "doc.on.doc",
-                        label: copied ? "copied" : "copy",
-                        help: "copy notification"
+                        label: copied ? uiText("copied") : uiText("copy"),
+                        help: uiText("copy notification")
                     ) {
                         copyNotificationText()
                         sendActionPayload(["type": "copy", "value": notificationClipboardText()])
@@ -596,20 +602,20 @@ struct NotificationContentView: View {
                     }
 
                     if payload.source_url != nil {
-                        BrandIconTextButton(systemName: "arrow.up.right.square", label: "source", help: "open source chat") {
+                        BrandIconTextButton(systemName: "arrow.up.right.square", label: uiText("source"), help: uiText("open source chat")) {
                             onOpenSource()
                         }
                     }
 
                     if feedbackEligible {
-                        BrandIconTextButton(systemName: "bubble.left", label: "feedback", help: "give feedback") {
+                        BrandIconTextButton(systemName: "bubble.left", label: uiText("feedback"), help: uiText("give feedback")) {
                             feedback.feedbackExpanded.toggle()
                             DispatchQueue.main.async(execute: onFeedbackLayoutChange)
                         }
                     }
                     Spacer(minLength: 0)
 
-                    BrandIconTextButton(systemName: "bell", label: "manage", help: "manage notification settings") {
+                    BrandIconTextButton(systemName: "bell", label: uiText("manage"), help: uiText("manage notification settings")) {
                         onDismiss()
                         // Small delay so the panel hides before the window appears
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -718,15 +724,15 @@ struct NotificationContentView: View {
         }
         switch action.type {
         case "copy":
-            return copied ? "copied" : "copy"
+            return copied ? uiText("copied") : uiText("copy")
         case "source":
-            return "source"
+            return uiText("source")
         case "deeplink":
-            return "open"
+            return uiText("open")
         case "dismiss":
-            return "dismiss"
+            return uiText("dismiss")
         default:
-            return action.action ?? action.type ?? "action"
+            return action.action ?? action.type ?? uiText("action")
         }
     }
 
@@ -764,6 +770,7 @@ struct NotificationContentView: View {
 
 @available(macOS 13.0, *)
 struct MarkdownText: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let raw: String
 
     init(_ text: String) {
@@ -945,6 +952,7 @@ struct MarkdownText: View {
 /// in-app viewer (e.g. Obsidian for `.md`, Preview for `.json`).
 @available(macOS 13.0, *)
 private struct ViewerOverrideButton: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let path: String
     @State private var isHovered = false
 
@@ -968,7 +976,7 @@ private struct ViewerOverrideButton: View {
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
-        .help("open in default app")
+        .help(uiText("open in default app"))
         .onHover { h in
             withAnimation(.linear(duration: Brand.animDuration)) { isHovered = h }
         }
@@ -997,6 +1005,7 @@ private func openLinkUrl(_ url: URL) {
 /// which non-activating panels don't provide. Button works without activation.
 @available(macOS 13.0, *)
 private struct LinkButton: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let label: String
     let url: URL
     @State private var isHovered = false
@@ -1431,7 +1440,7 @@ fileprivate func inboxRowActions(_ entry: InboxEntry) -> [NotificationAction] {
     (entry.actions ?? []).filter { a in
         let label = (a.label ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let t = a.type ?? ""
-        return !label.isEmpty && t != "dismiss" && t != "copy" && t != "source"
+        return !label.isEmpty && t != uiText("dismiss") && t != uiText("copy") && t != uiText("source")
     }
 }
 
@@ -1468,17 +1477,12 @@ fileprivate func inboxTimeAgo(_ ts: String?) -> String {
         date = iso.date(from: ts)
     }
     guard let d = date else { return "" }
-    let diff = Date().timeIntervalSince(d)
-    if diff < 60 { return "just now" }
-    if diff < 3600 { return "\(Int(diff / 60))m ago" }
-    if diff < 86400 { return "\(Int(diff / 3600))h ago" }
-    let df = DateFormatter()
-    df.dateStyle = .short
-    return df.string(from: d)
+    return UILocalization.shared.relativeDate(d)
 }
 
 @available(macOS 13.0, *)
 private struct InboxRowView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let entry: InboxEntry
     let isExpanded: Bool
     let onToggleExpand: () -> Void
@@ -1508,7 +1512,7 @@ private struct InboxRowView: View {
                                     .foregroundColor(.primary)
                                     .lineLimit(1)
                                 if inboxIsHighPriority(entry) {
-                                    Text("high")
+                                    Text(uiText("high"))
                                         .font(Brand.swiftUIMonoFont(size: 7, weight: .medium))
                                         .foregroundColor(.primary.opacity(0.7))
                                         .padding(.horizontal, 5)
@@ -1563,11 +1567,11 @@ private struct InboxRowView: View {
                     }
                     HStack(spacing: 6) {
                         ForEach(Array(inboxRowActions(entry).enumerated()), id: \.offset) { _, action in
-                            BrandTextButton(label: action.label ?? "action", fontSize: 9) {
+                            BrandTextButton(label: action.label ?? uiText("action"), fontSize: 9) {
                                 onRunAction(action)
                             }
                         }
-                        BrandTextButton(label: copied ? "copied" : "copy", fontSize: 9) {
+                        BrandTextButton(label: copied ? uiText("copied") : uiText("copy"), fontSize: 9) {
                             let pb = NSPasteboard.general
                             pb.clearContents()
                             pb.setString("\(entry.title)\n\n\(entry.body)", forType: .string)
@@ -1599,6 +1603,7 @@ private struct InboxRowView: View {
 
 @available(macOS 13.0, *)
 private struct InboxListView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let entries: [InboxEntry]
     let viewMode: InboxViewMode
     let expandedId: String?
@@ -1642,19 +1647,19 @@ private struct InboxListView: View {
         VStack(spacing: 0) {
             VStack(spacing: 7) {
                 HStack {
-                    Text("inbox")
+                    Text(uiText("inbox"))
                         .font(Brand.swiftUIMonoFont(size: 11, weight: .medium))
                         .foregroundColor(.primary)
                     Spacer()
                     // Clears both tabs, so it stays reachable from either one —
                     // switching to All just to empty the inbox was busywork.
                     if !entries.isEmpty {
-                        BrandTextButton(label: "clear all", fontSize: 9, action: onClearAll)
+                        BrandTextButton(label: uiText("clear all"), fontSize: 9, action: onClearAll)
                     }
                 }
                 HStack(spacing: 2) {
                     Button(action: { onViewModeChange(.priority) }) {
-                        Text("priority  \(priorityEntries.count)")
+                        Text(uiText("priority  {value1}", ["value1": String(describing: priorityEntries.count)]))
                             .font(Brand.swiftUIMonoFont(size: 9, weight: .medium))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 5)
@@ -1663,7 +1668,7 @@ private struct InboxListView: View {
                     }
                     .buttonStyle(.plain)
                     Button(action: { onViewModeChange(.all) }) {
-                        Text("all  \(entries.count)")
+                        Text(uiText("all  {value1}", ["value1": String(describing: entries.count)]))
                             .font(Brand.swiftUIMonoFont(size: 9, weight: .medium))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 5)
@@ -1682,12 +1687,12 @@ private struct InboxListView: View {
             if entries.isEmpty || (viewMode == .priority && priorityEntries.isEmpty) {
                 Spacer()
                 VStack(spacing: 4) {
-                    Text(entries.isEmpty ? "no notifications yet" : "you’re caught up")
+                    Text(entries.isEmpty ? uiText("no notifications yet") : uiText("you’re caught up"))
                         .font(Brand.swiftUIMonoFont(size: 10, weight: .medium))
                         .foregroundColor(.primary.opacity(0.8))
                     if !entries.isEmpty {
                         Button(action: { onViewModeChange(.all) }) {
-                            Text("\(entries.count) other \(entries.count == 1 ? "update" : "updates") in all")
+                            Text(entries.count == 1 ? uiText("1 other update in all") : uiText("{count} other updates in all", ["count": uiNumber(entries.count)]))
                                 .font(Brand.swiftUIMonoFont(size: 9))
                                 .foregroundColor(.secondary)
                         }
@@ -1699,13 +1704,13 @@ private struct InboxListView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         if !priorityEntries.isEmpty {
-                            sectionLabel(viewMode == .priority ? "needs your attention" : "high priority")
+                            sectionLabel(viewMode == .priority ? uiText("needs your attention") : uiText("high priority"))
                             ForEach(priorityEntries) { entry in
                                 row(entry)
                             }
                         }
                         if viewMode == .all && !otherEntries.isEmpty {
-                            sectionLabel("other updates")
+                            sectionLabel(uiText("other updates"))
                             ForEach(otherEntries) { entry in
                                 row(entry)
                             }
@@ -2017,4 +2022,9 @@ public func inboxHide() {
     if #available(macOS 13.0, *) {
         InboxPanelController.shared.hide()
     }
+}
+
+@_cdecl("notif_set_ui_locale")
+public func notif_set_ui_locale(_ json: UnsafePointer<CChar>?) {
+    UILocalization.shared.update(json)
 }

@@ -41,6 +41,8 @@ import SplashScreen from "@/components/splash-screen";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { hasCachedData } from "@/lib/hooks/use-timeline-cache";
 import { screenpipeWebBase } from "@/lib/web-url";
+import { useGT } from "gt-react";
+
 
 function TimelineErrorFallback({
   error,
@@ -103,6 +105,8 @@ class TimelineErrorBoundary extends React.Component<
 }
 
 export default function OverlayPage() {
+
+  const ui = useGT();
   const { settings, updateSettings, loadUser, reloadStore, isSettingsLoaded, loadingError } = useSettings();
   const { toast } = useToast();
   const openFeedback = useFeedbackStore((s) => s.openFeedback);
@@ -114,11 +118,11 @@ export default function OverlayPage() {
   const [isSendingLogs, setIsSendingLogs] = useState(false);
   const [logsSent, setLogsSent] = useState(false);
   const isProcessingRef = useRef(false);
-  
+
   // Optimistic UI: track if user has any data (cached or live)
   const { frames, isConnected, loadFromCache } = useTimelineStore();
   const [hasAnyData, setHasAnyData] = useState(false);
-  
+
   // Check for cached data on mount
   useEffect(() => {
     const checkCache = async () => {
@@ -131,7 +135,7 @@ export default function OverlayPage() {
     };
     checkCache();
   }, [loadFromCache]);
-  
+
   // Update hasAnyData when frames change
   useEffect(() => {
     if (frames.length > 0) {
@@ -205,7 +209,7 @@ export default function OverlayPage() {
   // Auto-init cloud sync from saved password on app startup
   useEffect(() => {
     if (!isSettingsLoaded || !settings.user?.token) return;
-    
+
     const autoInitSync = async () => {
       try {
         // Check if sync is already running
@@ -324,35 +328,35 @@ export default function OverlayPage() {
     setIsRestarting(true);
     try {
       toast({
-        title: "Restarting server",
-        description: "Stopping screenpipe server...",
+        title: ui("Restarting server"),
+        description: ui("Stopping screenpipe server..."),
         duration: 3000,
       });
 
       // Stop the server first
       await commands.stopScreenpipe();
-      
+
       // Wait for proper cleanup
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       toast({
-        title: "Restarting server",
-        description: "Starting screenpipe server...",
+        title: ui("Restarting server"),
+        description: ui("Starting screenpipe server..."),
         duration: 3000,
       });
 
       // Start the server
       await commands.spawnScreenpipe(null);
-      
+
       toast({
-        title: "Server restarted",
-        description: "Screenpipe server has been restarted successfully.",
+        title: ui("Server restarted"),
+        description: ui("Screenpipe server has been restarted successfully."),
         duration: 3000,
       });
     } catch (error) {
       console.error("failed to restart server:", error);
       toast({
-        title: "Restart failed",
+        title: ui("Restart failed"),
         description: (
           <span>
             Failed to restart screenpipe server.{" "}
@@ -395,7 +399,7 @@ export default function OverlayPage() {
           {!isManagedDeployment && <LoginDialog />}
           <ModelDownloadTracker />
           <UpdateBanner />
-          
+
           {showTimeline ? (
             <div className="w-full h-screen scrollbar-hide bg-transparent relative">
               <NativeTimelineBridge />
@@ -406,7 +410,7 @@ export default function OverlayPage() {
                   <span>Reconnecting...</span>
                 </div>
               )}
-              
+
               {/* Show connecting overlay only if NO data and still loading */}
               {!hasAnyData && isHealthLoading && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
@@ -459,7 +463,7 @@ export default function OverlayPage() {
                         className="flex items-center gap-2"
                       >
                         <RefreshCw className={`h-4 w-4 ${isRestarting ? 'animate-spin' : ''}`} />
-                        {isRestarting ? "Starting..." : "Start Server"}
+                        {isRestarting ? ui("Starting...") : ui("Start Server")}
                       </Button>
                     </div>
                   </div>
@@ -507,7 +511,7 @@ export default function OverlayPage() {
                     ) : (
                       <Upload className="h-4 w-4 mr-1.5" />
                     )}
-                    {logsSent ? "logs sent" : isSendingLogs ? "sending..." : "send logs"}
+                    {logsSent ? ui("logs sent") : isSendingLogs ? "sending..." : ui("send logs")}
                   </Button>
                   <Button
                     variant="outline"

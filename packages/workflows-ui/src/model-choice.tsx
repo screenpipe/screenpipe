@@ -7,6 +7,8 @@ import { ConfidentialVerificationDetails, useConfidentialVerification, type Conf
 
 import { Check, ChevronDown, Shield, Sparkles } from "lucide-react";
 import styles from "./model-choice.module.css";
+import { useGT } from "gt-react";
+
 
 export type WorkflowModelMode = "intelligent" | "private";
 export type WorkflowModelPreference = {
@@ -25,6 +27,7 @@ export function parseWorkflowModel(text: string | null): WorkflowModelMode {
   return mode;
 }
 export function WorkflowModelControl({ preference }: { preference: WorkflowModelPreference }) {
+  const ui = useGT();
   const [mode, setMode] = useState<WorkflowModelMode | null>(null);
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -49,7 +52,7 @@ export function WorkflowModelControl({ preference }: { preference: WorkflowModel
     let active = true;
     const refresh = () => {
       preference.load().then(value => { if (active) { setMode(value); setError(""); } })
-        .catch(() => { if (active) { setMode(null); setError("Could not read your AI choice. Select it again."); } });
+        .catch(() => { if (active) { setMode(null); setError(ui("Could not read your AI choice. Select it again.")); } });
     };
     refresh();
     window.addEventListener("focus", refresh);
@@ -63,20 +66,20 @@ export function WorkflowModelControl({ preference }: { preference: WorkflowModel
   const choose = async (next: WorkflowModelMode) => {
     setBusy(true); setError("");
     try { await preference.save(next); setMode(next); setOpen(false); trigger.current?.focus(); }
-    catch { setError("Could not save your AI choice. Try again."); }
+    catch { setError(ui("Could not save your AI choice. Try again.")); }
     finally { setBusy(false); }
   };
   return <div ref={root} className={styles.control} onKeyDown={event => {
     if (event.key === "Escape" && open) { event.preventDefault(); setOpen(false); trigger.current?.focus(); }
   }}>
-    <button ref={trigger} type="button" className={styles.trigger} aria-label="Workflows AI" aria-haspopup="menu" aria-expanded={open} aria-controls={menuId}
+    <button ref={trigger} type="button" className={styles.trigger} aria-label={ui("Workflows AI")} aria-haspopup="menu" aria-expanded={open} aria-controls={menuId}
       disabled={busy} onClick={() => setOpen(!open)} onKeyDown={event => {
         if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); setOpen(true); }
       }}>
       {mode === "private" ? <Shield size={15} aria-hidden="true" /> : <Sparkles size={15} aria-hidden="true" />}
-      <span>{busy ? "Saving…" : mode ? WORKFLOW_MODELS[mode].label : "Choose AI"}</span><ChevronDown size={13} aria-hidden="true" />
+      <span>{busy ? ui("Saving…") : mode ? WORKFLOW_MODELS[mode].label : ui("Choose AI")}</span><ChevronDown size={13} aria-hidden="true" />
     </button>
-    {open && <div ref={menu} id={menuId} className={styles.menu} role="menu" aria-label="Workflows AI" onKeyDown={event => {
+    {open && <div ref={menu} id={menuId} className={styles.menu} role="menu" aria-label={ui("Workflows AI")} onKeyDown={event => {
       if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || (event.target as HTMLElement).closest("dialog")) return;
       event.preventDefault();
       const choices = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')).filter(button => !button.closest("dialog"));

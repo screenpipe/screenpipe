@@ -4,6 +4,13 @@
 
 import "@testing-library/jest-dom/vitest";
 import { JSDOM } from "jsdom";
+import React from "react";
+import { vi } from "vitest";
+import { GTProvider, initializeGT } from "gt-react";
+import localeConfig from "./gt.config.json";
+
+// Isolated components use the same offline English default as ordinary dev.
+initializeGT({ defaultLocale: localeConfig.defaultLocale, locales: localeConfig.locales, loadTranslations: async () => ({}), runtimeUrl: null, _disableDevHotReload: true });
 
 class ResizeObserverMock implements ResizeObserver {
   observe() {}
@@ -32,3 +39,22 @@ if (typeof window === "undefined") {
   globalWithDom.location = dom.window.location;
   globalWithDom.HTMLElement = dom.window.HTMLElement;
 }
+
+
+// Component/hook tests get the app's provider even when they supply their own
+// additional wrapper. Nested providers in localization tests still choose their
+// explicit locale and catalog, so the runtime itself remains under test.
+vi.mock("@testing-library/react", async () => {
+  const actual = await vi.importActual<typeof import("@testing-library/react")>("@testing-library/react");
+  const translations = {};
+  function optionsWithLocale(options: any = {}) {
+    const Wrapper = options.wrapper;
+    return {...options, wrapper: ({children}: {children: React.ReactNode}) =>
+      React.createElement(GTProvider, {locale: "en", translations},
+        Wrapper ? React.createElement(Wrapper, null, children) : children)};
+  }
+  return {...actual,
+    render: (ui: any, options?: any) => actual.render(ui, optionsWithLocale(options)),
+    renderHook: (hook: any, options?: any) => actual.renderHook(hook, optionsWithLocale(options)),
+  };
+});

@@ -1,7 +1,35 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-import { parse } from "@generaltranslation/icu";
+import { parse, printAST } from "@generaltranslation/icu";
+
+// Providers can preserve English branches that the target locale can never
+// select. Drop only those unreachable branches; retain exact-count overrides,
+// all live branches, and placeholders, then run the ordinary integrity checks.
+export function normalizePluralBranches(message, locale) {
+  if (typeof message !== "string") return message;
+  try {
+    const nodes = parse(message, { requiresOtherClause: true, ignoreTag: true });
+    let changed = false;
+    function visit(nodes) {
+      for (const node of nodes) {
+        if (node.type === 6) {
+          const categories = new Intl.PluralRules(locale, { type: node.pluralType }).resolvedOptions().pluralCategories;
+          for (const category of Object.keys(node.options)) {
+            if (!category.startsWith("=") && !categories.includes(category)) {
+              delete node.options[category];
+              changed = true;
+            }
+          }
+        }
+        if (node.options) for (const option of Object.values(node.options)) visit(option.value);
+        if (node.children) visit(node.children);
+      }
+    }
+    visit(nodes);
+    return changed ? printAST(nodes) : message;
+  } catch { return message; }
+}
 
 const stable = (value) => {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
@@ -93,9 +121,10 @@ export function validateTranslation(source, translated, sourceLocale, locale) {
 export function validateCatalog(source, translated, sourceLocale, locale) {
   const valid = {}, fallbacks = {};
   for (const [id, message] of Object.entries(source)) {
-    const reason = validateTranslation(message, translated[id], sourceLocale, locale);
+    const normalized = normalizePluralBranches(translated[id], locale);
+    const reason = validateTranslation(message, normalized, sourceLocale, locale);
     if (reason) fallbacks[id] = reason;
-    else valid[id] = translated[id];
+    else valid[id] = normalized;
   }
   return { valid, fallbacks, total: Object.keys(source).length, translated: Object.keys(valid).length };
 }

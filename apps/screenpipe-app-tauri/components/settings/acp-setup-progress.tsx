@@ -6,6 +6,8 @@
 
 import { Check, CheckCircle2, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 export type AcpSetupPhase =
   | "checking"
@@ -70,6 +72,8 @@ export function AcpSetupProgress({
   installKind?: "download" | "install";
   compact?: boolean;
 }) {
+
+  const ui = useGT();
   const stages = includesInstall
     ? [installKind === "download" ? "Download" : "Install", "Start", "Connect"]
     : ["Start", "Connect"];
@@ -114,7 +118,7 @@ export function AcpSetupProgress({
         <div className="space-y-1.5">
           <div
             className="flex items-center"
-            aria-label={`${currentStep} of ${stages.length} setup steps`}
+            aria-label={ui("{value1} of {value2} setup steps", { value1: currentStep, value2: stages.length })}
           >
             {stages.map((label, index) => {
               const step = index + 1;

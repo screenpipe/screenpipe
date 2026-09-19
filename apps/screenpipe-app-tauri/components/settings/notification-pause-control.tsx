@@ -15,6 +15,9 @@ import {
   isQuietActive,
   type QuietHoursPref,
 } from "./notification-registry";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 /**
  * Do Not Disturb control — the best-in-class "at scale" affordance users
@@ -49,6 +52,8 @@ export function NotificationPauseControl({
   onTurnOff,
   onQuietChange,
 }: NotificationPauseControlProps) {
+  const uiPlural = useGT();
+  const uiLocale = useUiLocale();
   // Re-render once a minute so an expiring snooze clears itself in the UI;
   // pause the ticker (null delay) once nothing is snoozed.
   const [, setTick] = React.useState(0);
@@ -65,16 +70,16 @@ export function NotificationPauseControl({
   // a hard off — so only surface the exception count in those states.
   const vipSuffix =
     masterOn && (isSnoozed || quietNow) && vipCount > 0
-      ? ` · ${vipCount} pipe${vipCount === 1 ? "" : "s"} still notify`
+      ? uiPlural(" · {value1, plural, one {# pipe} other {# pipes}} still notify", { value1: vipCount })
       : "";
 
   const statusLabel = !masterOn
-    ? "off — until you turn it back on"
+    ? uiPlural("off — until you turn it back on")
     : isSnoozed
-      ? `paused ${formatSnoozeUntil(snoozeUntil)}${vipSuffix}`
+      ? uiPlural("paused until {time}{exception}", { time: new Intl.DateTimeFormat(uiLocale, { weekday: "short", hour: "numeric", minute: "2-digit" }).format(snoozeUntil), exception: vipSuffix })
       : quietNow
-        ? `quiet hours active${vipSuffix}`
-        : "on";
+        ? uiPlural("quiet hours active{exception}", { exception: vipSuffix })
+        : uiPlural("on");
 
   return (
     <div
@@ -108,13 +113,13 @@ export function NotificationPauseControl({
           <span className="mr-1 text-[11px] text-muted-foreground">Pause for</span>
           {SNOOZE_PRESETS.map((p) => (
             <button
-              key={p.label}
+              key={p.minutes === 30 ? uiPlural("30 min") : p.minutes === 60 ? uiPlural("1 hour") : p.minutes === 120 ? uiPlural("2 hours") : uiPlural("Until tomorrow")}
               type="button"
               data-testid={`notification-snooze-${p.label.replace(/\s+/g, "-")}`}
               onClick={() => onSnooze(snoozeUntilMs(p))}
               className="border border-border px-2.5 py-1 text-[11px] transition-colors hover:border-foreground hover:bg-foreground hover:text-background"
             >
-              {p.label}
+              {p.minutes === 30 ? uiPlural("30 min") : p.minutes === 60 ? uiPlural("1 hour") : p.minutes === 120 ? uiPlural("2 hours") : uiPlural("Until tomorrow")}
             </button>
           ))}
           <button

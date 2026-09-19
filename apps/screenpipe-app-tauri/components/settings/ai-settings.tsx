@@ -12,12 +12,16 @@ import { commands } from "@/lib/utils/tauri";
 import { Lock, MessageSquare, Sparkles } from "lucide-react";
 import { CloudMediaAnalysisPreview } from "./setting-previews";
 import type { SettingsField } from "./settings-search";
+import { msg } from "gt-react";
+import { useGT } from "gt-react";
+
+
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Enhanced AI", keywords: ["cloud", "suggestions", "daily summary", "timeline"] },
+  { label: msg("Enhanced AI", {}), keywords: ["cloud", "suggestions", "daily summary", "timeline"] },
   {
-    label: "AI audio & video analysis",
+    label: msg("AI audio & video analysis", {}),
     keywords: [
       "transcription",
       "transcribe",
@@ -30,10 +34,12 @@ export const searchIndex: SettingsField[] = [
       "audio",
     ],
   },
-  { label: "Auto-generate chat titles", keywords: ["chat", "tokens"] },
+  { label: msg("Auto-generate chat titles", {}), keywords: ["chat", "tokens"] },
 ];
 
 export function AISettings() {
+  const ui = useGT();
+
   const { settings, updateSettings } = useSettings();
 
   const handleSettingsChange = useCallback(
@@ -132,7 +138,7 @@ export function AISettings() {
               <div>
                 <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                   AI audio &amp; video analysis
-                  <HelpTooltip text="Lets Pi and Claude Code call screenpipe's confidential enclave (Gemma 4 E4B inside a Tinfoil-attested AMD SEV-SNP container, encrypted in flight + at rest, no plaintext at the provider) to transcribe meetings, describe video clips, and analyze image frames from your screenpipe data. When off, the capability is stripped from the agent skill markdown so Pi won't try to use it." />
+                  <HelpTooltip text={ui("Lets Pi and Claude Code call screenpipe's confidential enclave (Gemma 4 E4B inside a Tinfoil-attested AMD SEV-SNP container, encrypted in flight + at rest, no plaintext at the provider) to transcribe meetings, describe video clips, and analyze image frames from your screenpipe data. When off, the capability is stripped from the agent skill markdown so Pi won't try to use it.")} />
                 </h3>
                 <p className="text-xs text-muted-foreground">
                   Transcribe audio and understand video &amp; images in a confidential enclave.

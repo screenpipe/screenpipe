@@ -20,6 +20,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/components/ui/use-toast";
+import { useGT } from "gt-react";
+
 
 const RESET_CONFIRMATION = "delete remote sync data";
 
@@ -40,6 +42,8 @@ export function SyncKeyRecovery({
   visible,
   onRecovered,
 }: SyncKeyRecoveryProps) {
+
+  const ui = useGT();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
 
@@ -54,14 +58,14 @@ export function SyncKeyRecovery({
         body: JSON.stringify({ confirmation: RESET_CONFIRMATION }),
       });
       toast({
-        title: "Sync is ready on this device",
+        title: ui("Sync is ready on this device"),
         description:
-          "Remote sync was restarted with a new account key. Your local recordings and database were not changed.",
+          ui("Remote sync was restarted with a new account key. Your local recordings and database were not changed."),
       });
       onRecovered?.();
     } catch (error) {
       toast({
-        title: "Could not restart sync",
+        title: ui("Could not restart sync"),
         description: error instanceof Error ? error.message : String(error),
         variant: "destructive",
       });
@@ -135,8 +139,8 @@ export function SyncKeyRecovery({
               onClick={resetRemoteSync}
             >
               {resetting
-                ? "Starting fresh..."
-                : "Delete remote sync and start fresh"}
+                ? ui("Starting fresh...")
+                : ui("Delete remote sync and start fresh")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

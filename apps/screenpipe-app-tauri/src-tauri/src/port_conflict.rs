@@ -48,17 +48,14 @@ pub fn show_healthy_screenpipe(app: &AppHandle, port: u16) {
     }
 
     let message = if port == 11435 {
-        "another healthy screenpipe is already running but could not be focused. quit the other screenpipe, then reopen this one."
-            .to_string()
+        crate::localization::ui_text("another healthy screenpipe is already running but could not be focused. quit the other screenpipe, then reopen this one.")
     } else {
-        format!(
-            "another healthy screenpipe is already using local port {port}. quit the other screenpipe, then retry recording."
-        )
+        crate::localization::ui_format("another healthy screenpipe is already using local port {port}. quit the other screenpipe, then retry recording.", &[("port", port.to_string())])
     };
 
     app.dialog()
         .message(message)
-        .title("screenpipe is already running")
+        .title(crate::localization::ui_text("screenpipe is already running"))
         .buttons(MessageDialogButtons::Ok)
         .show(|_| {});
 }
@@ -72,10 +69,8 @@ pub fn show_reclaim_failed(app: &AppHandle, port: u16) {
     }
 
     app.dialog()
-        .message(format!(
-            "local port {port} is still in use by an unhealthy process. close it, then retry screenpipe."
-        ))
-        .title("screenpipe could not reclaim its local port")
+        .message(crate::localization::ui_format("local port {value1} is still in use by an unhealthy process. close it, then retry screenpipe.", &[("value1", (port).to_string())]))
+        .title(crate::localization::ui_text("screenpipe could not reclaim its local port"))
         .buttons(MessageDialogButtons::Ok)
         .show(|_| {});
 }

@@ -27,6 +27,7 @@ type StoreChange = {
 };
 
 export interface BrowserIpcMockOptions {
+  systemLocale?: string;
   mode: BrowserDevMode;
   scenario?: BrowserDevScenario;
   apiPort: number;
@@ -783,7 +784,7 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
       case "plugin:app|supports_multiple_windows":
         return false;
       case "plugin:os|locale":
-        return "en-US";
+        return options.systemLocale ?? "en-US";
       case "plugin:os|hostname":
         return "browser-dev";
       case "plugin:updater|check":

@@ -11,6 +11,9 @@ import { commands } from "@/lib/utils/tauri";
 import { formatChatAsMarkdown } from "@/lib/chat/markdown-export";
 import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
 import type { Message } from "@/lib/chat/types";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 interface UseChatExportMenuOptions {
   messages: Message[];
@@ -18,12 +21,14 @@ interface UseChatExportMenuOptions {
 }
 
 export function useChatExportMenu({ messages, citationPlan }: UseChatExportMenuOptions) {
+  const uiLanguage = useLocale();
+  const ui = useGT();
   const copyFullChatAsMarkdown = useCallback(async () => {
     if (messages.length === 0) return;
     const md = formatChatAsMarkdown(messages, citationPlan);
     await commands.copyTextToClipboard(md);
-    toast({ title: "Copied full chat as markdown" });
-  }, [citationPlan, messages]);
+    toast({ title: ui("Copied full chat as markdown") });
+  }, [citationPlan, messages, uiLanguage]);
 
   const exportChatAsMarkdownFile = useCallback(async () => {
     if (messages.length === 0) return;
@@ -35,13 +40,13 @@ export function useChatExportMenu({ messages, citationPlan }: UseChatExportMenuO
       });
       if (filePath) {
         await writeTextFile(filePath, md);
-        toast({ title: "Chat exported as markdown" });
+        toast({ title: ui("Chat exported as markdown") });
       }
     } catch (e) {
       console.error("Failed to export chat:", e);
-      toast({ title: "Failed to export chat", variant: "destructive" });
+      toast({ title: ui("Failed to export chat"), variant: "destructive" });
     }
-  }, [citationPlan, messages]);
+  }, [citationPlan, messages, uiLanguage]);
 
   const handleChatContextMenu = useCallback((e: React.MouseEvent) => {
     if (messages.length === 0) return;

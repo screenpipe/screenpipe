@@ -19,6 +19,8 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { localFetch } from "@/lib/api";
+import { useGT } from "gt-react";
+
 
 export interface RecordingDevice {
   name: string;
@@ -79,6 +81,8 @@ export function RecordingStatus({
   allCaptureDisabled,
   onOpenRecordingSettings,
 }: RecordingStatusProps) {
+
+  const ui = useGT();
   const [open, setOpen] = React.useState(false);
   const [pauseLoading, setPauseLoading] = React.useState(false);
 
@@ -91,11 +95,11 @@ export function RecordingStatus({
 
   const summary =
     visibleDevices.length === 0
-      ? "Not recording"
+      ? ui("Not recording")
       : pausedCount === 0
-        ? "Recording"
-        : `${pausedCount} device${pausedCount > 1 ? "s" : ""} paused`;
-  const label = meetingActive ? `${summary} · meeting notes` : summary;
+        ? ui("Recording")
+        : ui("{value1, plural, one {# device} other {# devices}} paused", { value1: pausedCount });
+  const label = meetingActive ? ui("{status} · meeting notes", { status: summary }) : summary;
 
   // Monitors pause via /vision/device/* (screen capture only — audio keeps
   // running); mics/speakers pause via /audio/device/*. Both flip optimistically
@@ -239,17 +243,17 @@ export function RecordingStatus({
               onClick={() => void toggleAllRecording()}
               disabled={pauseLoading || (allPaused ? (isGloballyPaused && !onResumeRecording) : !onPauseRecording)}
               data-testid="recording-status-pause-all"
-              title={allPaused ? "Resume all recording" : "Pause all screen and audio recording — resume anytime"}
+              title={allPaused ? ui("Resume all recording") : ui("Pause all screen and audio recording — resume anytime")}
               className="flex w-full items-center justify-center gap-1.5 rounded-md bg-foreground px-2 py-1.5 text-[11px] font-medium text-background transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {allPaused
                 ? <Play aria-hidden="true" className="h-3 w-3 fill-current" />
                 : <Pause aria-hidden="true" className="h-3 w-3 fill-current" />}
               {pauseLoading
-                ? allPaused ? "resuming…" : "pausing…"
+                ? allPaused ? ui("resuming…") : ui("pausing…")
                 : allPaused
-                  ? "resume all recording"
-                  : "pause all recording"}
+                  ? ui("resume all recording")
+                  : ui("pause all recording")}
             </button>
           </div>
         )}
@@ -271,7 +275,7 @@ export function RecordingStatus({
                   </button>
                 </>
               ) : (
-                "No capture devices reported"
+                ui("No capture devices reported")
               )}
             </div>
           )}
@@ -312,15 +316,15 @@ export function RecordingStatus({
                     title={
                       device.kind === "monitor"
                         ? device.active
-                          ? "Pause screen recording for this display"
-                          : "Resume screen recording for this display"
+                          ? ui("Pause screen recording for this display")
+                          : ui("Resume screen recording for this display")
                         : device.active
-                          ? "Pause recording for this device"
-                          : "Resume recording for this device"
+                          ? ui("Pause recording for this device")
+                          : ui("Resume recording for this device")
                     }
                     className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors shrink-0"
                   >
-                    {device.active ? "Pause" : "Resume"}
+                    {device.active ? ui("Pause") : ui("Resume")}
                   </button>
                 )}
               </div>

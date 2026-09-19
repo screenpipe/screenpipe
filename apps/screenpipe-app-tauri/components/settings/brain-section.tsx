@@ -94,6 +94,9 @@ import {
   consumeOnboardingBrainHandoff,
   ONBOARDING_BRAIN_HANDOFF_EVENT,
 } from "@/lib/live-views/onboarding-activation";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 interface MemoryRecord {
   id: number;
@@ -337,6 +340,7 @@ function memoryCardTags(
 }
 
 function BrainSkeleton() {
+
   return (
     <div className="space-y-1.5 flex-1 overflow-y-auto pr-1">
       {Array.from({ length: 6 }).map((_, index) => (
@@ -393,6 +397,8 @@ type SortField = "created_at" | "importance";
 type SortDir = "desc" | "asc";
 
 export function BrainSection() {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
   const { toast } = useToast();
   const { isMac } = usePlatform();
   // App-wide convention (chat sidebar, chat history, recent-chat switcher):
@@ -904,7 +910,7 @@ export function BrainSection() {
       } catch (err) {
         if (offset === 0) {
           toast({
-            title: "Failed to load memories",
+            title: ui("Failed to load memories"),
             description: String(err),
             variant: "destructive",
           });
@@ -915,15 +921,7 @@ export function BrainSection() {
         loadingMoreRef.current = false;
       }
     },
-    [
-      toast,
-      parsedSearch.contentQuery,
-      parsedSearch.memorySource,
-      memorySearchTags,
-      sortField,
-      sortDir,
-      typeFilter,
-    ],
+    [toast, parsedSearch.contentQuery, parsedSearch.memorySource, memorySearchTags, sortField, sortDir, typeFilter, uiLocale],
   );
 
   // fetch on mount + refetch when search/tag filter changes
@@ -970,7 +968,7 @@ export function BrainSection() {
         mode: "single",
         count: 1,
       });
-      toast({ title: "Memory deleted" });
+      toast({ title: ui("Memory deleted") });
       setMemories((prev) => prev.filter((m) => m.id !== id));
       setSelectedItem((prev) =>
         prev?.kind === "memory" && prev.key === `mem:${id}` ? null : prev,
@@ -978,7 +976,7 @@ export function BrainSection() {
       setTotal((prev) => prev - 1);
     } catch (err) {
       toast({
-        title: "Failed to delete memory",
+        title: ui("Failed to delete memory"),
         description: String(err),
         variant: "destructive",
       });
@@ -1038,10 +1036,10 @@ export function BrainSection() {
             : m,
         ),
       );
-      toast({ title: "Memory updated" });
+      toast({ title: ui("Memory updated") });
     } catch (err) {
       toast({
-        title: "Failed to update memory",
+        title: ui("Failed to update memory"),
         description: String(err),
         variant: "destructive",
       });
@@ -1101,12 +1099,12 @@ export function BrainSection() {
       posthog.capture("brain_memory_created", {
         tag_count: newTags.length,
       });
-      toast({ title: "Memory created" });
+      toast({ title: ui("Memory created") });
       closeAddMemoryDialog();
       fetchPage(0, false);
     } catch (err) {
       toast({
-        title: "Failed to create memory",
+        title: ui("Failed to create memory"),
         description: String(err),
         variant: "destructive",
       });
@@ -1469,9 +1467,9 @@ export function BrainSection() {
       setSelectedItem((prev) =>
         prev?.kind === "artifact" && prev.key === key ? null : prev,
       );
-      toast({ title: "Artifact deleted" });
+      toast({ title: ui("Artifact deleted") });
     },
-    [deleteRegistered, toast],
+    [deleteRegistered, toast, uiLocale],
   );
 
   const toggleSelectAll = () => {
@@ -1539,11 +1537,11 @@ export function BrainSection() {
       }
 
       const deletedCount = memIds.length + artKeys.filter((k) => k.startsWith("output:")).length;
-      toast({ title: `Deleted ${deletedCount} items` });
+      toast({ title: ui("Deleted {value1} items", { value1: deletedCount }) });
       setSelectedIds(new Set());
     } catch (err) {
       toast({
-        title: "Failed to delete some items",
+        title: ui("Failed to delete some items"),
         description: String(err),
         variant: "destructive",
       });
@@ -1562,19 +1560,19 @@ export function BrainSection() {
   const brainViewOptions = [
     {
       value: "overview" as const,
-      label: "Live Views",
+      label: ui("Live Views"),
       count: liveViewsTabCount,
       Icon: LayoutDashboard,
     },
     {
       value: "memories" as const,
-      label: "Memories",
+      label: ui("Memories"),
       count: memoriesTabCount,
       Icon: Eye,
     },
     {
       value: "artifacts" as const,
-      label: "Artifacts",
+      label: ui("Artifacts"),
       count: artifactsTabCount,
       Icon: FolderOpen,
     },
@@ -1590,8 +1588,8 @@ export function BrainSection() {
           type="button"
           data-testid="brain-view-switcher"
           className="inline-flex h-9 w-9 shrink-0 items-center justify-center border border-border bg-background transition-colors hover:bg-foreground hover:text-background"
-          aria-label={`Switch Brain view, current: ${activeBrainView.label}`}
-          title={`Switch Brain view, current: ${activeBrainView.label}`}
+          aria-label={ui("Switch Brain view, current: {value1}", { value1: activeBrainView.label })}
+          title={ui("Switch Brain view, current: {value1}", { value1: activeBrainView.label })}
         >
           <ActiveBrainViewIcon className="h-3.5 w-3.5" />
         </button>
@@ -1613,7 +1611,7 @@ export function BrainSection() {
             <span className="flex-1">{label}</span>
             {count !== null && (
               <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-                {count.toLocaleString()}
+                {count.toLocaleString(uiLocale)}
               </span>
             )}
           </DropdownMenuItem>
@@ -1641,7 +1639,7 @@ export function BrainSection() {
         <div className="flex items-start gap-2 rounded-md border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-600 dark:text-yellow-400">
           <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
           <span>
-            Memories haven&apos;t updated in {staleDays} day{staleDays !== 1 ? "s" : ""}.
+            Memories haven&apos;t updated in {ui("{count, plural, one {# day} other {# days}}", { count: staleDays })}.
             check that a memory-writing scheduled task is installed and enabled
             &mdash;{" "}
             <a
@@ -1698,8 +1696,8 @@ export function BrainSection() {
                     onChange={(e) => setFilterSearch(e.target.value)}
                     placeholder={
                       typeFilter === "memories"
-                        ? "Find filters..."
-                        : "Find filters..."
+                        ? ui("Find filters...")
+                        : ui("Find filters...")
                     }
                     className="h-8 pl-7 text-xs"
                     autoFocus
@@ -1723,7 +1721,7 @@ export function BrainSection() {
                 {labelFilterTags.length > 0 && (
                   <div className="space-y-1">
                     <div className="px-2 py-1 text-[10px] font-medium normal-case tracking-wide text-muted-foreground/70">
-                      {typeFilter === "memories" ? "Labels" : "Sources"}
+                      {typeFilter === "memories" ? ui("Labels") : ui("Sources")}
                     </div>
                     {labelFilterTags.map(renderFilterMenuItem)}
                   </div>
@@ -1774,8 +1772,8 @@ export function BrainSection() {
             data-testid="brain-search-input"
             placeholder={
               typeFilter === "memories"
-                ? "Search memory content..."
-                : "Search artifact content..."
+                ? ui("Search memory content...")
+                : ui("Search artifact content...")
             }
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -1824,7 +1822,7 @@ export function BrainSection() {
               ref={newContentRef}
               value={newContent}
               onChange={(e) => setNewContent(e.target.value)}
-              placeholder="What should the AI remember?"
+              placeholder={ui("What should the AI remember?")}
               className="min-h-[140px] resize-y text-sm"
               rows={6}
               onKeyDown={(e) => {
@@ -1863,7 +1861,7 @@ export function BrainSection() {
                     removeTagFromNew(newTags[newTags.length - 1]);
                   }
                 }}
-                placeholder="Add tag..."
+                placeholder={ui("Add tag...")}
                 className="h-6 text-[10px] w-20 px-1.5 border-dashed"
               />
             </div>
@@ -1887,7 +1885,7 @@ export function BrainSection() {
               {savingNew ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
               ) : (
-                "Save"
+                ui("Save")
               )}
             </Button>
           </DialogFooter>
@@ -1959,7 +1957,7 @@ export function BrainSection() {
                     removeTagFromEdit(editTags[editTags.length - 1]);
                   }
                 }}
-                placeholder="Add tag..."
+                placeholder={ui("Add tag...")}
                 className="h-6 text-[10px] w-20 px-1.5 border-dashed"
               />
             </div>
@@ -1986,7 +1984,7 @@ export function BrainSection() {
               {savingId !== null ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
               ) : (
-                "Save"
+                ui("Save")
               )}
             </Button>
           </DialogFooter>
@@ -1999,7 +1997,7 @@ export function BrainSection() {
           <Skeleton className="h-6 w-16 rounded-full" />
         ) : (
           <Badge variant="secondary" className="text-xs shrink-0">
-            {totalCount.toLocaleString()} {totalCount === 1 ? "item" : "items"}
+            {totalCount.toLocaleString(uiLocale)} {totalCount === 1 ? ui("item") : ui("items")}
           </Badge>
         )}
 
@@ -2038,7 +2036,7 @@ export function BrainSection() {
             >
               {sortField === field
                 ? sortDir === "desc" ? descLabel : ascLabel
-                : field === "created_at" ? "Date" : "Importance"}
+                : field === "created_at" ? ui("Date") : ui("Importance")}
             </button>
           ))}
         </div>
@@ -2062,7 +2060,7 @@ export function BrainSection() {
               onClick={toggleSelectAll}
               className="text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
             >
-              {allVisibleSelected ? "Deselect all" : "Select all"}
+              {allVisibleSelected ? ui("Deselect all") : ui("Select all")}
             </button>
             <button
               type="button"
@@ -2091,8 +2089,8 @@ export function BrainSection() {
                 Delete
               </Button>
             }
-            title={`Delete ${selectedIds.size} item${selectedIds.size !== 1 ? "s" : ""}?`}
-            description="The selected items will be permanently deleted. This cannot be undone."
+            title={ui("Delete {value1, plural, one {# item} other {# items}}?", { value1: selectedIds.size })}
+            description={ui("The selected items will be permanently deleted. This cannot be undone.")}
             confirmLabel={`delete ${selectedIds.size}`}
             onConfirm={() => { setConfirmBatchDelete(false); batchDelete(); }}
           />
@@ -2221,7 +2219,7 @@ export function BrainSection() {
                         }
                       >
                         <MessageSquare className="mr-2 h-3.5 w-3.5" />
-                        {target.mode === "pipe-run" ? "Go to task run" : "Go to chat"}
+                        {target.mode === "pipe-run" ? ui("Go to task run") : ui("Go to chat")}
                       </DropdownMenuItem>
                     )}
                     <DropdownMenuItem
@@ -2245,7 +2243,7 @@ export function BrainSection() {
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => toggleSelected(artKey)}>
                       <Check className="mr-2 h-3.5 w-3.5" />
-                      {isChecked ? "Deselect" : "Select"}
+                      {isChecked ? ui("Deselect") : ui("Select")}
                     </DropdownMenuItem>
                     {artItem.registered && (
                       <DropdownMenuItem
@@ -2420,7 +2418,7 @@ export function BrainSection() {
                     <div className="flex items-center justify-between gap-1.5">
                       <div className="flex items-center gap-1.5">
                         <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-normal">
-                          {target.mode === "artifact-only" ? "Artifact" : target.mode}
+                          {target.mode === "artifact-only" ? ui("Artifact") : target.mode}
                         </Badge>
                         {artItem.saf_kind && (
                           <span
@@ -2567,7 +2565,7 @@ export function BrainSection() {
                     {memory.importance > 0 && (
                       <span
                         className="flex items-center gap-1"
-                        title={`Importance: ${(memory.importance * 100).toFixed(0)}%`}
+                        title={ui("Importance: {value1}%", { value1: (memory.importance * 100).toFixed(0) })}
                       >
                         <span className="relative inline-block w-10 h-1 bg-border overflow-hidden">
                           <span
@@ -2593,7 +2591,7 @@ export function BrainSection() {
                       e.stopPropagation();
                       startEditing(memory);
                     }}
-                    title="Edit"
+                    title={ui("Edit")}
                   >
                     <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
                   </Button>
@@ -2607,7 +2605,7 @@ export function BrainSection() {
                       setCopiedId(memory.id);
                       setTimeout(() => setCopiedId(null), 2000);
                     }}
-                    title="Copy"
+                    title={ui("Copy")}
                   >
                     {copiedId === memory.id ? (
                       <Check className="h-3.5 w-3.5 text-muted-foreground" />
@@ -2623,7 +2621,7 @@ export function BrainSection() {
                         variant="ghost"
                         className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
                         disabled={isDeleting}
-                        title="Delete"
+                        title={ui("Delete")}
                         onClick={(e) => e.stopPropagation()}
                       >
                         {isDeleting ? (
@@ -2633,8 +2631,8 @@ export function BrainSection() {
                         )}
                       </Button>
                     }
-                    title="Delete memory"
-                    description="This memory will be permanently deleted. This cannot be undone."
+                    title={ui("Delete memory")}
+                    description={ui("This memory will be permanently deleted. This cannot be undone.")}
                     onConfirm={() => deleteMemory(memory.id)}
                   />
                 </div>
@@ -2664,17 +2662,17 @@ export function BrainSection() {
                 <div className="space-y-2">
                   <h2 className="text-base font-semibold">
                     {artifactRequestState.status === "locating"
-                      ? "Opening result"
+                      ? ui("Opening result")
                       : artifactRequestState.status === "missing"
-                        ? "Result unavailable"
-                        : "Couldn't load result"}
+                        ? ui("Result unavailable")
+                        : ui("Couldn't load result")}
                   </h2>
                   <p className="text-xs leading-relaxed text-muted-foreground">
                     {artifactRequestState.status === "locating"
-                      ? "Finding the saved artifact and its run context"
+                      ? ui("Finding the saved artifact and its run context")
                       : artifactRequestState.status === "missing"
-                        ? "Screenpipe couldn't find this saved result. It may have been moved or deleted."
-                        : "Screenpipe couldn't reach the local artifact index. Your result has not been changed."}
+                        ? ui("Screenpipe couldn't find this saved result. It may have been moved or deleted.")
+                        : ui("Screenpipe couldn't reach the local artifact index. Your result has not been changed.")}
                   </p>
                 </div>
                 {artifactRequestState.status !== "locating" && (
@@ -2772,7 +2770,7 @@ export function BrainSection() {
                         variant="ghost"
                         className="h-7 w-7 shrink-0"
                         onClick={() => setSelectedItem(null)}
-                        title="Close detail"
+                        title={ui("Close detail")}
                       >
                         <X className="h-3.5 w-3.5" />
                       </Button>
@@ -2855,7 +2853,7 @@ export function BrainSection() {
                               variant="ghost"
                               className="h-7 w-7"
                               data-testid="brain-detail-actions"
-                              title="Artifact actions"
+                              title={ui("Artifact actions")}
                             >
                               <MoreVertical className="h-4 w-4" />
                             </Button>
@@ -2874,8 +2872,8 @@ export function BrainSection() {
                               >
                                 <MessageSquare className="mr-2 h-3.5 w-3.5" />
                                 {target.mode === "pipe-run"
-                                  ? "Go to task run"
-                                  : "Go to chat"}
+                                  ? ui("Go to task run")
+                                  : ui("Go to chat")}
                               </DropdownMenuItem>
                             )}
                             <DropdownMenuItem

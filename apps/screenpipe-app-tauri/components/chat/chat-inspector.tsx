@@ -29,6 +29,8 @@ import {
   openSearchForQuery,
 } from "@/lib/timeline-navigation";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 interface ChatInspectorProps {
   outputs: SourceCitation[];
@@ -48,6 +50,8 @@ export function ChatInspectorPopover({
   sources,
   onOpenFile,
 }: ChatInspectorPopoverProps) {
+
+  const ui = useGT();
   // Keep the control out of the toolbar until there is something to inspect,
   // while still mounting it when an explicit action such as `/inspector`
   // opens the empty state.
@@ -64,8 +68,8 @@ export function ChatInspectorPopover({
             "h-7 w-7",
             open && "bg-muted ring-2 ring-primary ring-offset-1 ring-offset-background",
           )}
-          title="Toggle pinned summary"
-          aria-label="Toggle pinned summary"
+          title={ui("Toggle pinned summary")}
+          aria-label={ui("Toggle pinned summary")}
           aria-pressed={open}
           onMouseDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
@@ -94,10 +98,12 @@ export function ChatInspector({
   sources,
   onOpenFile,
 }: ChatInspectorProps) {
+
+  const ui = useGT();
   return (
     <div
       role="region"
-      aria-label="Pinned summary"
+      aria-label={ui("Pinned summary")}
       className="max-h-[min(34rem,calc(100vh-5rem))] overflow-y-auto"
     >
       <div className="px-4 pb-2 pt-3">
@@ -162,6 +168,7 @@ function SourceIcon({
   source: SourceCitation;
   onOpenFile: (path: string) => void;
 }) {
+
   const Icon = KIND_ICON[source.kind] ?? FileText;
 
   const handleClick = React.useCallback(() => {

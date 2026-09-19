@@ -23,6 +23,8 @@ import {
 import { cn } from "@/lib/utils";
 import type { SourceCitation, SourceCitationKind } from "@/lib/source-citations";
 import { jumpToTimelineMoment, openSearchForQuery } from "@/lib/timeline-navigation";
+import { useGT } from "gt-react";
+
 
 interface SourceCitationFooterProps {
   citations: SourceCitation[];
@@ -96,6 +98,8 @@ const CONNECTION_SOURCE_ICON_PATHS: Array<[string, string]> = [
 ];
 
 export function SourceCitationFooter({ citations, className, onOpenFile }: SourceCitationFooterProps) {
+  const uiPlural = useGT();
+
   const [expanded, setExpanded] = React.useState(false);
 
   if (citations.length === 0) return null;
@@ -105,7 +109,7 @@ export function SourceCitationFooter({ citations, className, onOpenFile }: Sourc
     .map((citation) => citation.title)
     .join(", ");
   const hiddenCount = Math.max(0, citations.length - 2);
-  const label = `${citations.length} source${citations.length === 1 ? "" : "s"}`;
+  const label = uiPlural("{value1, plural, one {# source} other {# sources}}", { value1: citations.length });
 
   return (
     <div className={cn("mt-3 border-t border-border/40 pt-2 text-xs", className)}>
@@ -159,6 +163,7 @@ function SourceCitationRow({
   citation: SourceCitation;
   onOpenFile?: (path: string) => void;
 }) {
+  const ui = useGT();
   const Icon = KIND_ICON[citation.kind] ?? FileText;
   const kindLabel = KIND_LABEL[citation.kind] ?? citation.kind;
   const canOpen = Boolean(citation.href);
@@ -210,11 +215,11 @@ function SourceCitationRow({
       data-testid={canPreview ? "source-citation-file" : undefined}
       title={
         canSearch
-          ? "Open in search"
+          ? ui("Open in search")
           : canJump
-            ? "Open in timeline"
+            ? ui("Open in timeline")
             : canPreview
-              ? "Open in preview"
+              ? ui("Open in preview")
               : undefined
       }
       onClick={() => {

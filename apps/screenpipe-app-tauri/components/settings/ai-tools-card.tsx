@@ -40,6 +40,8 @@ import {
 } from "@/lib/hooks/use-hardcoded-tiles";
 
 import { isGrokBotConnected } from "@/lib/grokbot-connection";
+import { useGT } from "gt-react";
+
 
 const DISPLAY_NAMES: Record<ConnectAllToolId, string> = {
   ...CONNECT_ALL_TOOL_NAMES,
@@ -142,6 +144,8 @@ function ToolIcon({ id }: { id: ConnectAllToolId }) {
 }
 
 export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
+
+  const ui = useGT();
   const [detected, setDetected] = useState<ConnectAllToolId[]>([]);
   const [connected, setConnected] = useState<Partial<Record<ConnectAllToolId, boolean>>>({});
   const [busy, setBusy] = useState<Partial<Record<ConnectAllToolId, ToolBusy>>>({});
@@ -323,7 +327,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
             ) : (
               <Plus className="h-3.5 w-3.5" />
             )}
-            {bulkRunning ? "Connecting..." : "Connect all"}
+            {bulkRunning ? ui("Connecting...") : ui("Connect all")}
           </Button>
         ) : (
           <Button
@@ -393,7 +397,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
                   {toolBusy ? (
                     <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                       <Loader2 className="h-3 w-3 animate-spin" />
-                      {toolBusy === "connecting" ? "Connecting..." : "Removing..."}
+                      {toolBusy === "connecting" ? ui("Connecting...") : ui("Removing...")}
                     </span>
                   ) : isOn ? (
                     <>
@@ -462,7 +466,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
                   disabled={bulkRunning}
                   className="text-xs text-muted-foreground/60 hover:text-foreground transition-colors disabled:opacity-50"
                 >
-                  {confirmingDisconnect ? "Click again to confirm" : "Disconnect all…"}
+                  {confirmingDisconnect ? ui("Click again to confirm") : ui("Disconnect all…")}
                 </button>
                 {!allConnected && (
                   <Button

@@ -40,6 +40,9 @@ import {
   artifactOpenRequestFromUrl,
   OPEN_BRAIN_ARTIFACT_EVENT,
 } from "@/lib/artifact-deeplink";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 const DEEPLINK_RECENT_TTL_MS = 1_000;
 const activeDeepLinks = new Set<string>();
@@ -69,6 +72,8 @@ function finishDeepLink(url: string) {
 }
 
 export function DeeplinkHandler() {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
   const { toast } = useToast();
   const { setShowChangelogDialog } = useChangelogDialog();
   const { open: openStatusDialog } = useStatusDialog();
@@ -205,8 +210,8 @@ export function DeeplinkHandler() {
           try {
             await loadUser(apiKey);
             toast({
-              title: "Logged in!",
-              description: "You have been logged in",
+              title: ui("Logged in!"),
+              description: ui("You have been logged in"),
             });
             // Notify the chat UI to restart Pi with the new token so it
             // picks up the new account immediately. The chat component knows
@@ -221,8 +226,8 @@ export function DeeplinkHandler() {
             const msg = error instanceof Error ? error.message : String(error);
             console.error("failed to load user:", msg);
             toast({
-              title: "Failed to load user",
-              description: msg || "Unknown error",
+              title: ui("Failed to load user"),
+              description: msg || ui("Unknown error"),
             });
           }
         }
@@ -239,21 +244,21 @@ export function DeeplinkHandler() {
           try {
             await loadUser(userToken, true);
             toast({
-              title: "Subscription active",
-              description: "Screenpipe Business is ready",
+              title: ui("Subscription active"),
+              description: ui("Screenpipe Business is ready"),
             });
           } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
             toast({
-              title: "Couldn't refresh subscription",
-              description: msg || "Try signing in again",
+              title: ui("Couldn't refresh subscription"),
+              description: msg || ui("Try signing in again"),
               variant: "destructive",
             });
           }
         } else {
           toast({
-            title: "Sign in to finish",
-            description: "Open Account and sign in with the email used at checkout",
+            title: ui("Sign in to finish"),
+            description: ui("Open Account and sign in with the email used at checkout"),
           });
         }
       }
@@ -271,14 +276,14 @@ export function DeeplinkHandler() {
           try {
             await loadUser(purchaseToken);
             toast({
-              title: "Welcome to screenpipe business!",
-              description: "Your subscription is now active",
+              title: ui("Welcome to screenpipe business!"),
+              description: ui("Your subscription is now active"),
             });
           } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
             toast({
-              title: "Activation failed",
-              description: msg || "Try logging out and back in",
+              title: ui("Activation failed"),
+              description: msg || ui("Try logging out and back in"),
               variant: "destructive",
             });
           }
@@ -298,11 +303,11 @@ export function DeeplinkHandler() {
         await openSettingsWindow();
         toast({
           title: success
-            ? "Google calendar connected!"
-            : "Google calendar connection failed",
+            ? ui("Google calendar connected!")
+            : ui("Google calendar connection failed"),
           description: success
-            ? "Your google calendar is now linked"
-            : error || "Something went wrong",
+            ? ui("Your google calendar is now linked")
+            : error || ui("Something went wrong"),
           variant: success ? undefined : "destructive",
         });
       }
@@ -337,8 +342,8 @@ export function DeeplinkHandler() {
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
           toast({
-            title: "Sign-in hand-off failed",
-            description: msg || "Couldn't reach the local screenpipe engine",
+            title: ui("Sign-in hand-off failed"),
+            description: msg || ui("Couldn't reach the local screenpipe engine"),
             variant: "destructive",
           });
         }
@@ -410,8 +415,8 @@ export function DeeplinkHandler() {
               await commands.showWindow("Main");
               await emit("navigate-to-timestamp", timestamp);
               toast({
-                title: "Navigating to timestamp",
-                description: `Jumping to ${date.toLocaleString()}`,
+                title: ui("Navigating to timestamp"),
+                description: ui("Jumping to {value1}", { value1: date.toLocaleString(uiLocale) }),
               });
             } else {
               throw new Error("Invalid date");
@@ -419,8 +424,8 @@ export function DeeplinkHandler() {
           } catch (error) {
             console.error("Failed to parse timeline timestamp:", error);
             toast({
-              title: "Invalid timestamp",
-              description: "Could not parse the timeline link",
+              title: ui("Invalid timestamp"),
+              description: ui("Could not parse the timeline link"),
               variant: "destructive",
             });
           }
@@ -429,8 +434,8 @@ export function DeeplinkHandler() {
           parsedUrl.searchParams.has("start_time")
         ) {
           toast({
-            title: "Invalid timestamp",
-            description: "Could not parse the timeline link",
+            title: ui("Invalid timestamp"),
+            description: ui("Could not parse the timeline link"),
             variant: "destructive",
           });
         }
@@ -508,7 +513,7 @@ export function DeeplinkHandler() {
           } catch (error) {
             console.error("Failed to open viewer:", error);
             toast({
-              title: "Couldn't open file",
+              title: ui("Couldn't open file"),
               description: filePath,
               variant: "destructive",
             });
@@ -526,8 +531,8 @@ export function DeeplinkHandler() {
             await commands.showWindow("Main");
             await emit("navigate-to-frame", frameId);
             toast({
-              title: "Navigating to frame",
-              description: `Jumping to frame ${frameId}`,
+              title: ui("Navigating to frame"),
+              description: ui("Jumping to frame {value1}", { value1: frameId }),
             });
           } catch (error) {
             console.error("Failed to navigate to frame:", error);
@@ -599,7 +604,7 @@ export function DeeplinkHandler() {
 
         if (result.status === "error") {
           toast({
-            title: "Recording could not start",
+            title: ui("Recording could not start"),
             description: result.error,
             variant: "destructive",
           });
@@ -607,8 +612,8 @@ export function DeeplinkHandler() {
         }
 
         toast({
-          title: "Recording started",
-          description: "Screen recording has been initiated",
+          title: ui("Recording started"),
+          description: ui("Screen recording has been initiated"),
         });
       }),
 
@@ -616,8 +621,8 @@ export function DeeplinkHandler() {
         await commands.stopCapture();
 
         toast({
-          title: "Recording paused",
-          description: "Capture paused — scheduled tasks and search still available",
+          title: ui("Recording paused"),
+          description: ui("Capture paused — scheduled tasks and search still available"),
         });
       }),
 
@@ -627,10 +632,10 @@ export function DeeplinkHandler() {
       listen<string>("tray-recording-state-changed", (event) => {
         const started = event.payload === "started";
         toast({
-          title: started ? "Recording started" : "Recording paused",
+          title: started ? ui("Recording started") : ui("Recording paused"),
           description: started
-            ? "Screen recording has been initiated"
-            : "Capture paused — scheduled tasks and search still available",
+            ? ui("Screen recording has been initiated")
+            : ui("Capture paused — scheduled tasks and search still available"),
         });
       }),
 
@@ -639,8 +644,8 @@ export function DeeplinkHandler() {
         await commands.spawnScreenpipe(null);
 
         toast({
-          title: "Audio recording started",
-          description: "Audio capture has been enabled",
+          title: ui("Audio recording started"),
+          description: ui("Audio capture has been enabled"),
         });
       }),
 
@@ -649,8 +654,8 @@ export function DeeplinkHandler() {
         await commands.spawnScreenpipe(null);
 
         toast({
-          title: "Audio recording stopped",
-          description: "Audio capture has been disabled",
+          title: ui("Audio recording stopped"),
+          description: ui("Audio capture has been disabled"),
         });
       }),
 
@@ -679,4 +684,4 @@ export function DeeplinkHandler() {
   ]);
 
   return null; // This component doesn't render anything
-} 
+}

@@ -12,6 +12,8 @@ import type {
   ComposerMentionsProps,
 } from "./composer-types";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 export function ComposerInputBox({
   input,
@@ -20,6 +22,7 @@ export function ComposerInputBox({
   input: ComposerInputProps;
   mentions: ComposerMentionsProps;
 }) {
+  const ui = useGT();
   return (
     <div
       className={cn(
@@ -49,7 +52,7 @@ export function ComposerInputBox({
             </div>
             <button
               type="button"
-              aria-label="Remove connection context"
+              aria-label={ui("Remove connection context")}
               onClick={input.onClearConnectionChip}
               className="absolute right-2.5 top-2 z-10 text-muted-foreground/60 hover:text-foreground transition-colors shrink-0"
             >
@@ -69,7 +72,7 @@ export function ComposerInputBox({
           placeholder={
             input.disabledReason
               ? input.disabledReason
-              : input.placeholder ?? "Ask a question or describe a task"
+              : input.placeholder ?? ui("Ask a question or describe a task")
           }
           disabled={!input.canChat}
           spellCheck={false}

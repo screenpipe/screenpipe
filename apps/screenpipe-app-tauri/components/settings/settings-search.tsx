@@ -11,6 +11,7 @@ import { usePlatform } from "@/lib/hooks/use-platform";
 import { searchInputBehaviorProps } from "@/lib/search-input-behavior";
 import Fuse, { type IFuseOptions } from "fuse.js";
 
+
 // Fuzzy match config. Mirrors the WinSTT / MetaMask / KittyCAD desktop patterns:
 //   - threshold 0.3   accepts typos like "dispaly" → "display" without flooding
 //   - ignoreLocation  match anywhere in the string (we don't care about pos)
@@ -346,6 +347,7 @@ export function useSettingsIndexDriftCheck(
   index: SettingsField[],
   rootRef: React.RefObject<HTMLElement | null>,
 ): void {
+
   // Serialize the index to a stable primitive dep so the effect runs once per
   // mount and re-runs only when the index content (labels or conditional flags)
   // actually changes — NOT on every render. Array literals are a fresh reference
@@ -456,7 +458,7 @@ export const SettingsSearchInput = forwardRef<HTMLInputElement, InputProps>(
                 : "border-border/60 text-muted-foreground/60 bg-card",
             )}
           >
-            {isMac ? "⌘K" : "Ctrl K"}
+            {isMac ? "⌘K" : gt("Ctrl K")}
           </kbd>
         )}
       </div>
@@ -479,6 +481,7 @@ type PopoverProps<T extends SearchableNavItem> = {
 export function SettingsSearchPopover<T extends SearchableNavItem>({
   query, results, activeIndex, onHover, onPick, renderIcon, translucent,
 }: PopoverProps<T>) {
+
   if (!query) return null;
   return (
     <div

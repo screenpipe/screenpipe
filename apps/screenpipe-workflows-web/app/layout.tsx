@@ -4,6 +4,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
+import { LocalizationProvider } from "./localization-provider";
 
 export const metadata: Metadata = {
   title: "Screenpipe Workflows",
@@ -11,5 +12,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
-  return <html lang="en"><body>{children}</body></html>;
+  return <html lang="en"><body><LocalizationProvider>{children}</LocalizationProvider></body></html>;
 }

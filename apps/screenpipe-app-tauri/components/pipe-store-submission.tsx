@@ -20,6 +20,8 @@ import {
   PIPE_STORE_SUBMISSION_EMAIL,
   buildPipeStoreSubmissionMailto,
 } from "@/lib/pipe-store-submission";
+import { useGT } from "gt-react";
+
 
 export function PipeStoreSubmissionDialog({
   open,
@@ -30,6 +32,7 @@ export function PipeStoreSubmissionDialog({
   onOpenChange: (open: boolean) => void;
   defaultPipe?: string;
 }) {
+  const ui = useGT();
   const contactHref = buildPipeStoreSubmissionMailto({ pipeName: defaultPipe });
 
   return (
@@ -79,7 +82,7 @@ export function PipeStoreSubmissionDialog({
           <Button
             size="sm"
             className="text-xs"
-            aria-label={`Email ${PIPE_STORE_SUBMISSION_EMAIL} about a Screenpipe Store submission`}
+            aria-label={ui("Email {value1} about a Screenpipe Store submission", { value1: PIPE_STORE_SUBMISSION_EMAIL })}
             onClick={() => void openUrl(contactHref)}
           >
             <Mail className="h-3.5 w-3.5 mr-1.5" />

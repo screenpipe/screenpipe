@@ -13,6 +13,8 @@ import { toast } from "@/components/ui/use-toast";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import { screenpipeWebUrl } from "@/lib/web-url";
+import { useGT } from "gt-react";
+
 
 interface ReferralData {
   code: string;
@@ -23,6 +25,8 @@ interface ReferralData {
 }
 
 export function ReferralCard() {
+
+  const ui = useGT();
   const { settings } = useSettings();
   const [referral, setReferral] = useState<ReferralData | null>(null);
   const [noCode, setNoCode] = useState(false);
@@ -118,11 +122,11 @@ export function ReferralCard() {
     try {
       await commands.copyTextToClipboard(referral.link);
       setCopied(true);
-      toast({ title: "Referral link copied" });
+      toast({ title: ui("Referral link copied") });
       setTimeout(() => setCopied(false), 2000);
     } catch {
       toast({
-        title: "Failed to copy",
+        title: ui("Failed to copy"),
         variant: "destructive",
       });
     }
@@ -154,11 +158,11 @@ export function ReferralCard() {
       }
 
       setEmail("");
-      toast({ title: "Invite sent" });
+      toast({ title: ui("Invite sent") });
     } catch (error) {
       toast({
         title:
-          error instanceof Error ? error.message : "Failed to send invite",
+          error instanceof Error ? error.message : ui("Failed to send invite"),
         variant: "destructive",
       });
     } finally {
@@ -297,7 +301,7 @@ export function ReferralCard() {
           ) : (
             <Send className="h-4 w-4 mr-1.5" />
           )}
-          {sending ? "Sending..." : "Invite"}
+          {sending ? ui("Sending...") : ui("Invite")}
         </Button>
       </div>
     </Card>

@@ -79,6 +79,9 @@ import {
   DEFAULT_SLACK_INSTANCE,
   SELF_SLACK_TARGET,
 } from "@/lib/connected-share-send";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 /**
  * Where a reviewed snapshot can go.
@@ -219,6 +222,8 @@ export function ConnectedShareDialog({
   onConnect?: (connectionId: ConnectedShareApp) => void;
   connectionsRevision?: number;
 }) {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
   const { toast } = useToast();
   const allSectionIds = useMemo(
     () => artifact.sections.map((section) => section.id),
@@ -734,7 +739,7 @@ export function ConnectedShareDialog({
       instance: slackInstance,
     });
     setReceipt({
-      title: "Sent to Slack",
+      title: ui("Sent to Slack"),
       detail: `${result.team || "Slack"} · ${channel ? `#${channel.name}` : "your messages"} · ${result.ts || "delivered"}`,
     });
   };
@@ -748,7 +753,7 @@ export function ConnectedShareDialog({
       description: message,
     });
     setReceipt({
-      title: `Created ${issue.identifier || "Linear issue"}`,
+      title: ui("Created {value1}", { value1: issue.identifier || "Linear issue" }),
       detail: `${team.name} · ${issue.title || linearTitle}`,
       url: issue.url,
     });
@@ -815,7 +820,7 @@ export function ConnectedShareDialog({
         });
         toast({
           title:
-            destination === "slack" ? "Sent to Slack" : "Linear issue created",
+            destination === "slack" ? ui("Sent to Slack") : ui("Linear issue created"),
         });
       }
     } catch (error) {
@@ -828,7 +833,7 @@ export function ConnectedShareDialog({
         error instanceof Error ? error.message : "The action did not complete.";
       setActionError(message);
       toast({
-        title: "Couldn't complete sharing",
+        title: ui("Couldn't complete sharing"),
         description: message,
         variant: "destructive",
       });
@@ -996,7 +1001,7 @@ export function ConnectedShareDialog({
     selectedSectionIds.length === artifact.sections.length
       ? `all ${artifact.sections.length} blocks`
       : `${selectedSectionIds.length} of ${artifact.sections.length} blocks`
-  } · ${outgoingMessage.length.toLocaleString()} characters`;
+  } · ${outgoingMessage.length.toLocaleString(uiLocale)} characters`;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1061,7 +1066,7 @@ export function ConnectedShareDialog({
               <div
                 className="grid grid-cols-2 border border-border"
                 data-testid="connected-share-mode"
-                aria-label="How to send"
+                aria-label={ui("How to send")}
               >
                 <button
                   type="button"
@@ -1123,7 +1128,7 @@ export function ConnectedShareDialog({
                   <span className="flex min-w-0 items-center gap-2">
                     {currentOption?.icon}
                     <span className="shrink-0 text-sm">
-                      {currentOption?.name ?? "No destination"}
+                      {currentOption?.name ?? ui("No destination")}
                     </span>
                     <span className="shrink-0 text-muted-foreground">·</span>
                     <span className="truncate text-xs text-muted-foreground">
@@ -1281,7 +1286,7 @@ export function ConnectedShareDialog({
                   </SelectItem>
                   {slackChannels.map((channel) => (
                     <SelectItem key={channel.id} value={channel.id}>
-                      {channel.is_private ? "Private · " : "#"}
+                      {channel.is_private ? ui("Private · ") : "#"}
                       {channel.name}
                     </SelectItem>
                   ))}
@@ -1327,7 +1332,7 @@ export function ConnectedShareDialog({
                 <SelectTrigger className="h-9 rounded-md text-xs">
                   <SelectValue
                     placeholder={
-                      linearTeamsLoading ? "Loading teams" : "Choose team"
+                      linearTeamsLoading ? ui("Loading teams") : ui("Choose team")
                     }
                   />
                 </SelectTrigger>
@@ -1381,7 +1386,7 @@ export function ConnectedShareDialog({
         <div className="border-y border-border/60">
           {artifact.sections.length > 1 && (
             <SummaryRow
-              label="Contents"
+              label={ui("Contents")}
               value={contentsSummary}
               action="edit"
               open={contentsOpen}
@@ -1408,7 +1413,7 @@ export function ConnectedShareDialog({
           )}
 
           <SummaryRow
-            label="Message"
+            label={ui("Message")}
             value={
               currentIsChat
                 ? "what Chat will review"
@@ -1428,13 +1433,13 @@ export function ConnectedShareDialog({
                   className="text-[11px] text-muted-foreground"
                 >
                   {destination === "slack"
-                    ? "Edits here apply only to Slack"
-                    : "Edit before sending"}
+                    ? ui("Edits here apply only to Slack")
+                    : ui("Edit before sending")}
                 </label>
                 <span
                   className={`text-[10px] tabular-nums ${outgoingMessage.length > 39_000 ? "text-destructive" : "text-muted-foreground"}`}
                 >
-                  {outgoingMessage.length.toLocaleString()} / 39,000
+                  {outgoingMessage.length.toLocaleString(uiLocale)} / 39,000
                 </span>
               </div>
               <Textarea

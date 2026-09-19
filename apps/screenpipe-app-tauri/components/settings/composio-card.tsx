@@ -32,6 +32,10 @@ import {
   type ComposioStatusMap,
   type ComposioToolkit,
 } from "@/lib/composio";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 export { COMPOSIO_TOOLKITS } from "@/lib/composio";
 export type { ComposioStatusMap } from "@/lib/composio";
@@ -52,35 +56,35 @@ interface ToolkitMeta {
 
 const TOOLKIT_META: Record<ComposioToolkit, ToolkitMeta> = {
   gmail: {
-    label: "Gmail",
+    label: msg("Gmail", {}),
     provider: "Google",
     value: "let your AI read and search your Gmail inbox.",
     data: "emails are",
     connectedNoun: "recent emails",
   },
   zoom: {
-    label: "Zoom",
+    label: msg("Zoom", {}),
     provider: "Zoom",
     value: "let your AI see your Zoom meetings, recordings, and transcripts.",
     data: "meeting data is",
     connectedNoun: "meetings, recordings and transcripts",
   },
   googledrive: {
-    label: "Google Drive",
+    label: msg("Google Drive", {}),
     provider: "Google",
     value: "let your AI search, read, and organize files across your Google Drive.",
     data: "files are",
     connectedNoun: "Drive files",
   },
   googledocs: {
-    label: "Google Docs",
+    label: msg("Google Docs", {}),
     provider: "Google",
     value: "let your AI read, create, and edit your Google Docs.",
     data: "documents are",
     connectedNoun: "documents",
   },
   googlesheets: {
-    label: "Google Sheets",
+    label: msg("Google Sheets", {}),
     provider: "Google",
     value: "let your AI read, create, and edit your Google Sheets.",
     data: "spreadsheets are",
@@ -102,9 +106,12 @@ export function ComposioCard({
   initialConnected?: boolean;
   onChanged?: (status: ComposioStatusMap) => void;
 }) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const { settings } = useSettings();
   const token = settings.user?.token;
-  const { label, provider } = TOOLKIT_META[toolkit];
+  const { label, provider } = localizeDefinitions(TOOLKIT_META, uiMessages)[toolkit];
 
   const [loaded, setLoaded] = useState(initialConnected !== undefined);
   const [connected, setConnected] = useState(initialConnected ?? false);
@@ -168,7 +175,7 @@ export function ComposioCard({
       pollCount.current += 1;
       if (pollCount.current > MAX_POLLS) {
         setWaiting(false);
-        setError("Connection timed out — try again");
+        setError(ui("Connection timed out — try again"));
         return;
       }
       const status = await fetchComposioStatus(token);
@@ -179,7 +186,7 @@ export function ComposioCard({
         try {
           await registerComposioMcpServer(token);
         } catch {
-          setError("Connected, but registering the agent tools failed — reconnect to retry");
+          setError(ui("Connected, but registering the agent tools failed — reconnect to retry"));
         }
         await foregroundAfterOAuth();
         notifyConnectionsUpdated();
@@ -245,7 +252,7 @@ export function ComposioCard({
       setAccounts(accounts.map((a) => (a.id === accountId ? { ...a, alias: alias || null } : a)));
       setRenamingId(null);
     } catch (e: any) {
-      setError(e?.message || "Rename failed");
+      setError(e?.message || ui("Rename failed"));
     } finally {
       setBusy(false);
       setPendingAction(null);
@@ -283,7 +290,7 @@ export function ComposioCard({
       if (!stillConnected && !otherConnected) await removeComposioMcpServer();
       notifyConnectionsUpdated();
     } catch (e: any) {
-      setError(e?.message || "Disconnect failed");
+      setError(e?.message || ui("Disconnect failed"));
     } finally {
       setBusy(false);
       setPendingAction(null);
@@ -293,7 +300,7 @@ export function ComposioCard({
   // Lead with the user outcome. The third-party sign-in and data path remain
   // available one click away in the privacy disclosure below.
   const valueLine = (
-    <p className="text-xs text-foreground/90">{TOOLKIT_META[toolkit].value}</p>
+    <p className="text-xs text-foreground/90">{localizeDefinitions(TOOLKIT_META, uiMessages)[toolkit].value}</p>
   );
 
   // Treatment 1 (design round 4): the expanded state is a labeled fact grid
@@ -310,7 +317,7 @@ export function ComposioCard({
     [
       "your data",
       <>
-        {TOOLKIT_META[toolkit].data} processed through
+        {localizeDefinitions(TOOLKIT_META, uiMessages)[toolkit].data} processed through
         Composio&apos;s cloud (
         <b className="font-medium text-foreground/80">SOC 2 certified, encrypted</b>), not
         stored by screenpipe.
@@ -389,7 +396,7 @@ export function ComposioCard({
           <p className="text-xs">
             <Check className="h-3 w-3 inline mr-1" />
             {label} connected — your AI can now read your{" "}
-            {TOOLKIT_META[toolkit].connectedNoun}.
+            {localizeDefinitions(TOOLKIT_META, uiMessages)[toolkit].connectedNoun}.
           </p>
           {/* Named-instance rows — same pattern as OAuthPanel's multi-account
               list (rounded muted rows, name left, quiet actions right). The
@@ -415,7 +422,7 @@ export function ComposioCard({
                             if (e.key === "Escape") setRenamingId(null);
                           }}
                           maxLength={64}
-                          placeholder="Label — e.g. work"
+                          placeholder={ui("Label — e.g. work")}
                           autoFocus
                           className="h-6 w-36 rounded px-1.5 text-xs bg-transparent border border-border focus:outline-none focus:border-foreground/40 placeholder:text-muted-foreground/60"
                         />
@@ -443,7 +450,7 @@ export function ComposioCard({
                             disabled={busy}
                             variant="ghost"
                             size="sm"
-                            title="Save label"
+                            title={ui("Save label")}
                             className="h-6 px-2 text-muted-foreground hover:text-foreground"
                           >
                             {pendingAction === `rename:${account.id}` ? (
@@ -457,7 +464,7 @@ export function ComposioCard({
                             disabled={busy}
                             variant="ghost"
                             size="sm"
-                            title="Cancel"
+                            title={ui("Cancel")}
                             className="h-6 px-2 text-muted-foreground"
                           >
                             <X className="h-3 w-3" />
@@ -473,7 +480,7 @@ export function ComposioCard({
                             disabled={busy}
                             variant="ghost"
                             size="sm"
-                            title="Edit label"
+                            title={ui("Edit label")}
                             className="h-6 px-2 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity"
                           >
                             <Pencil className="h-3 w-3" />
@@ -483,7 +490,7 @@ export function ComposioCard({
                             disabled={busy}
                             variant="ghost"
                             size="sm"
-                            title="Disconnect this account"
+                            title={ui("Disconnect this account")}
                             className="h-6 px-2 text-muted-foreground hover:text-destructive"
                           >
                             {pendingAction === `disconnect:${account.id}` ? (
@@ -520,7 +527,7 @@ export function ComposioCard({
                   if (e.key === "Escape") setAddingAccount(false);
                 }}
                 maxLength={64}
-                placeholder="Label — e.g. work, personal"
+                placeholder={ui("Label — e.g. work, personal")}
                 autoFocus
                 className="h-7 w-52 rounded-md px-2 text-xs bg-transparent border border-border focus:outline-none focus:border-foreground/40 placeholder:text-muted-foreground/60"
               />
@@ -575,7 +582,7 @@ export function ComposioCard({
               ) : (
                 <X className="h-3 w-3" />
               )}
-              {accounts.length > 1 ? "disconnect all" : "disconnect"}
+              {accounts.length > 1 ? ui("disconnect all") : ui("disconnect")}
             </Button>
           </div>
           {privacyNote}

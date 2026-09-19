@@ -10,6 +10,8 @@ import { getFrameAppName } from "@/components/rewind/timeline/timeline";
 import { toast } from "@/components/ui/use-toast";
 import type { TemplatePipe } from "@/lib/hooks/use-pipes";
 import type { StreamTimeSeriesResponse } from "@/components/rewind/timeline";
+import { useGT } from "gt-react";
+
 
 export function useTimelineKeyboard(opts: {
 	frames: StreamTimeSeriesResponse[];
@@ -41,6 +43,7 @@ export function useTimelineKeyboard(opts: {
 	selectedDeviceIdRef: React.MutableRefObject<string>;
 	selectedAppNameRef: React.MutableRefObject<string>;
 }): void {
+  const ui = useGT();
 	const {
 		frames,
 		currentIndex,
@@ -156,15 +159,15 @@ export function useTimelineKeyboard(opts: {
 			commands.copyFrameToClipboard(parseInt(String(frameId), 10))
 				.then(() =>
 					toast({
-						title: "Copied image",
-						description: "Frame copied to clipboard",
+						title: ui("Copied image"),
+						description: ui("Frame copied to clipboard"),
 					}),
 				)
 				.catch((err) => {
 					console.warn("Copy frame failed:", err);
 					toast({
-						title: "Copy failed",
-						description: err instanceof Error ? err.message : "Could not copy",
+						title: ui("Copy failed"),
+						description: err instanceof Error ? err.message : ui("Could not copy"),
 						variant: "destructive",
 					});
 				});

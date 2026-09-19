@@ -46,6 +46,7 @@ export default defineConfig({
 		alias: {
 			// Resolve the shared workflow package peer from the desktop test host.
 			"lucide-react": path.resolve(__dirname, "node_modules/lucide-react"),
+			"gt-react": path.resolve(__dirname, "node_modules/gt-react/dist/index.client.mjs"),
 			"@": path.resolve(__dirname, "./"),
 			"@screenpipe-ext": path.resolve(__dirname, "../../crates/screenpipe-core/assets/extensions"),
 		},

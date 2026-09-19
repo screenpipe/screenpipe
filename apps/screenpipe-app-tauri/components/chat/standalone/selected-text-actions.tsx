@@ -5,6 +5,8 @@
 
 import * as React from "react";
 import { createPortal } from "react-dom";
+import { useGT } from "gt-react";
+
 
 const TARGET_SELECTOR = '[data-selected-text-actions-target="true"]';
 const VIEWPORT_GUTTER_PX = 8;
@@ -103,6 +105,8 @@ export function SelectedTextActions({
   onAddToChat,
   onAskInSideChat,
 }: SelectedTextActionsProps) {
+
+  const ui = useGT();
   const toolbarRef = React.useRef<HTMLDivElement | null>(null);
   const selectionSyncPendingRef = React.useRef(false);
   const [isReady, setIsReady] = React.useState(false);
@@ -203,7 +207,7 @@ export function SelectedTextActions({
     <div
       ref={toolbarRef}
       role="toolbar"
-      aria-label="Selected text actions"
+      aria-label={ui("Selected text actions")}
       data-testid="selected-text-actions"
       className="fixed z-[100] flex max-w-[calc(100vw-1rem)] overflow-hidden rounded-md border border-border bg-surface font-sans text-xs shadow-[0_4px_18px_rgba(0,0,0,0.16)] dark:shadow-[0_4px_18px_rgba(0,0,0,0.36)]"
       style={{

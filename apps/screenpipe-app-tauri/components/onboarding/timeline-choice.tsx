@@ -9,6 +9,10 @@ import { motion } from "framer-motion";
 import { Camera, Check, EyeOff, HardDrive, Loader } from "lucide-react";
 import posthog from "posthog-js";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+import { useGT } from "gt-react";
+
 
 interface TimelineChoiceProps {
   handleNextSlide: () => void;
@@ -30,10 +34,10 @@ const isLowTier = (tier: string | null | undefined) =>
 
 // Each "frame" is a skeleton layout of a different app the user was in.
 const MOCK_FRAMES = [
-  { label: "Now · your editor", bars: [85, 60, 72, 40, 65] },
-  { label: "-2m · browser", bars: [50, 90, 45, 78, 30] },
-  { label: "-10m · a meeting", bars: [70, 35, 88, 55, 62] },
-  { label: "-1h · slack", bars: [40, 75, 52, 85, 48] },
+  { label: msg("Now · your editor", {}), bars: [85, 60, 72, 40, 65] },
+  { label: msg("-2m · browser", {}), bars: [50, 90, 45, 78, 30] },
+  { label: msg("-10m · a meeting", {}), bars: [70, 35, 88, 55, 62] },
+  { label: msg("-1h · slack", {}), bars: [40, 75, 52, 85, 48] },
 ];
 
 const FRAME_MS = 1800;
@@ -58,6 +62,8 @@ const PREVIEW_CSS = `
 `;
 
 function TimelinePreview() {
+
+  const uiMessages = useMessages();
   return (
     <div
       className="w-full border border-border/50 overflow-hidden select-none"
@@ -73,7 +79,7 @@ function TimelinePreview() {
           <div className="w-1.5 h-1.5 rounded-full bg-foreground/20" />
         </div>
         {/* skeleton content: one stacked layer per "app", crossfaded by CSS */}
-        {MOCK_FRAMES.map((frame, i) => (
+        {localizeDefinitions(MOCK_FRAMES, uiMessages).map((frame, i) => (
           <div
             key={i}
             className={`ob-tl-frame ${i === 0 ? "ob-tl-frame-0" : ""} absolute inset-x-4 top-8 opacity-0`}
@@ -153,6 +159,8 @@ const COSTS = [
 export default function TimelineChoice({
   handleNextSlide,
 }: TimelineChoiceProps) {
+
+  const ui = useGT();
   const { settings, updateSettings } = useSettings();
   const mountTimeRef = useRef(Date.now());
   const hasAdvanced = useRef(false);
@@ -199,7 +207,7 @@ export default function TimelineChoice({
       posthog.capture("onboarding_timeline_choice_failed", {
         stage: "persist",
       });
-      setError("Couldn't save that choice. check disk space and try again.");
+      setError(ui("Couldn't save that choice. check disk space and try again."));
       inFlight.current = false;
       setPending(null);
       return;

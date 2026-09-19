@@ -23,6 +23,8 @@ import {
 import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
 import type { AIPreset } from "@/lib/utils/tauri";
 import type { LiveViewGenerationScope } from "@/lib/live-views/generate-live-view-with-pi";
+import { useGT } from "gt-react";
+
 
 const SUGGESTIONS = [
   "show how I spend my time today",
@@ -109,6 +111,8 @@ export function LiveViewAiComposer({
   onSelectedPresetIdChange,
   onGenerate,
 }: LiveViewAiComposerProps) {
+
+  const ui = useGT();
   const { settings } = useSettings();
   const usage = useUsageStatus();
   const presets = useMemo(
@@ -219,10 +223,10 @@ export function LiveViewAiComposer({
           }
           placeholder={
             hostedUsageExhausted
-              ? "AI limit reached"
+              ? ui("AI limit reached")
               : compact
-                ? "Ask AI to change this Live View..."
-                : "For example: show how I spend my time and what changed this week"
+                ? ui("Ask AI to change this Live View...")
+                : ui("For example: show how I spend my time and what changed this week")
           }
           onChange={(event) => {
             setPrompt(event.target.value);

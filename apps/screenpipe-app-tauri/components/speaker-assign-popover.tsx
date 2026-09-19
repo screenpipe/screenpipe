@@ -15,6 +15,9 @@ import { MediaComponent } from "@/components/rewind/media";
 import { ToastAction } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { localFetch } from "@/lib/api";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 interface Speaker {
 	id: number;
@@ -39,6 +42,9 @@ export function SpeakerAssignPopover({
 	onAssigned,
 	children,
 }: SpeakerAssignPopoverProps) {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
 	const [open, setOpen] = useState(false);
 	const [searchTerm, setSearchTerm] = useState("");
 	const [speakers, setSpeakers] = useState<Speaker[]>([]);
@@ -152,8 +158,8 @@ export function SpeakerAssignPopover({
 						});
 						if (!resp.ok) throw new Error("rename undo failed");
 						toast({
-							title: "Undone",
-							description: "The voice is unnamed again",
+							title: ui("Undone"),
+							description: ui("The voice is unnamed again"),
 						});
 						return;
 					}
@@ -168,16 +174,16 @@ export function SpeakerAssignPopover({
 					if (!undoResp.ok) throw new Error("undo failed");
 					const undoResult = await undoResp.json();
 					toast({
-						title: "Undone",
-						description: `Restored ${undoResult.restored} transcriptions`,
+						title: ui("Undone"),
+						description: ui("Restored {value1} transcriptions", { value1: undoResult.restored }),
 					});
 				};
 
 				toast({
-					title: `Assigned to "${trimmedName}"`,
+					title: ui("Assigned to \"{value1}\"", { value1: trimmedName }),
 					description: result.renamed_whole_speaker
-						? `Every line from this voice${lines > 1 ? ` (${lines})` : ""} is now ${trimmedName}`
-						: "This line only — the rest of the voice is unchanged",
+						? ui("Every line from this voice{value1} is now {value2}", { value1: lines > 1 ? ` (${lines})` : "", value2: trimmedName })
+						: ui("This line only — the rest of the voice is unchanged"),
 					action: undoable ? (
 						<ToastAction
 							altText="Undo speaker assignment"
@@ -186,7 +192,7 @@ export function SpeakerAssignPopover({
 									await undo();
 									onAssigned?.(result.new_speaker_id, result.new_speaker_name);
 								} catch {
-									toast({ title: "Undo failed", variant: "destructive" });
+									toast({ title: ui("Undo failed"), variant: "destructive" });
 								}
 							}}
 						>
@@ -197,14 +203,14 @@ export function SpeakerAssignPopover({
 			} catch (error) {
 				console.error("Error assigning speaker:", error);
 				toast({
-					title: "Error",
-					description: "Failed to assign speaker. Please try again.",
+					title: ui("Error"),
+					description: ui("Failed to assign speaker. Please try again."),
 					variant: "destructive",
 				});
 				setIsAssigning(false);
 			}
 		},
-		[audioChunkId, onAssigned, toast]
+		[audioChunkId, onAssigned, toast, uiLanguage]
 	);
 
 	const handleMarkAsHallucination = useCallback(async () => {
@@ -223,22 +229,22 @@ export function SpeakerAssignPopover({
 			}
 
 			toast({
-				title: "Marked as noise",
-				description: "This audio will be ignored in future processing.",
+				title: ui("Marked as noise"),
+				description: ui("This audio will be ignored in future processing."),
 			});
 
 			setOpen(false);
 		} catch (error) {
 			console.error("Error marking hallucination:", error);
 			toast({
-				title: "Error",
-				description: "Failed to mark as noise. Please try again.",
+				title: ui("Error"),
+				description: ui("Failed to mark as noise. Please try again."),
 				variant: "destructive",
 			});
 		} finally {
 			setIsAssigning(false);
 		}
-	}, [speakerId, toast]);
+	}, [speakerId, toast, uiLanguage]);
 
 	const handleSelectSpeaker = (speaker: Speaker) => {
 		handleAssign(speaker.name);
@@ -276,7 +282,7 @@ export function SpeakerAssignPopover({
 					{/* Search input */}
 					<div className="relative">
 						<Input
-							placeholder="Type speaker name..."
+							placeholder={ui("Type speaker name...")}
 							value={searchTerm}
 							onChange={(e) => setSearchTerm(e.target.value)}
 							onKeyDown={(e) => {
@@ -345,7 +351,7 @@ export function SpeakerAssignPopover({
 								onClick={() => setShowAudioPreview(!showAudioPreview)}
 							>
 								<Volume2 className="h-3 w-3 mr-2" />
-								{showAudioPreview ? "Hide audio preview" : "Play audio to confirm"}
+								{showAudioPreview ? ui("Hide audio preview") : ui("Play audio to confirm")}
 							</Button>
 
 							{showAudioPreview && (

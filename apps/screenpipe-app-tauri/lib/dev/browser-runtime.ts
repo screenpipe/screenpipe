@@ -60,6 +60,7 @@ export function installBrowserRuntime() {
   mockConvertFileSrc("macos");
   mockIPC(
     createBrowserIpcMock({
+      systemLocale: new URLSearchParams(window.location.search).get("mockLocale") ?? undefined,
       mode,
       scenario,
       apiPort,

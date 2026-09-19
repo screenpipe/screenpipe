@@ -16,6 +16,8 @@ import {
   type ActivitySummary,
   type WindowActivity,
 } from "@/lib/utils/meeting-context";
+import { useGT } from "gt-react";
+
 
 interface ReceiptsProps {
   activity: ActivitySummary;
@@ -71,6 +73,8 @@ export function buildAppWindowChatRequest(
 }
 
 export function Receipts({ activity }: ReceiptsProps) {
+
+  const ui = useGT();
   const { toast } = useToast();
   const [askingKey, setAskingKey] = useState<string | null>(null);
   const askingRef = useRef(false);
@@ -91,8 +95,8 @@ export function Receipts({ activity }: ReceiptsProps) {
     } catch (error) {
       console.error("failed to ask about meeting activity", error);
       toast({
-        title: "Couldn't open chat",
-        description: "Try again in a moment.",
+        title: ui("Couldn't open chat"),
+        description: ui("Try again in a moment."),
         variant: "destructive",
       });
     } finally {
@@ -155,7 +159,7 @@ export function Receipts({ activity }: ReceiptsProps) {
                   type="button"
                   onClick={() => void askAboutWindow(w)}
                   disabled={askingKey !== null}
-                  aria-label={`Ask screenpipe about ${w.app_name}, ${w.window_name}`}
+                  aria-label={ui("Ask screenpipe about {value1}, {value2}", { value1: w.app_name, value2: w.window_name })}
                   className="group inline-flex items-center gap-1.5 border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors duration-150 hover:border-foreground hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-wait disabled:opacity-60 motion-reduce:transition-none"
                 >
                   <span className="text-foreground/80 transition-colors duration-150 group-hover:text-background group-focus-visible:text-foreground motion-reduce:transition-none">

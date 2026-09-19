@@ -4,7 +4,9 @@
 import React, { useState } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { GTProvider, initializeGT, T, useGT } from "gt-react";
+import { initializeGT, T, useGT, useMessages, msg } from "gt-react";
+import { OfflineGTProvider as GTProvider } from "./offline-provider";
+import { localizeDefinitions } from "./definitions";
 import { hashMessage } from "gt-i18n/internal";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -23,12 +25,33 @@ test("React 18 changes bundled JSX and interpolated messages without losing draf
     const [draft, setDraft] = useState("");
     return <><T>Settings</T><p>{gt("Hello {name}", { name: "Alice" })}</p><input aria-label="Draft" value={draft} onChange={(e) => setDraft(e.target.value)} /></>;
   }
-  const view = render(<GTProvider locale="en" translations={translations}><Example /></GTProvider>);
+  const MemoExample = React.memo(Example);
+  const view = render(<GTProvider locale="en" translations={translations}><MemoExample /></GTProvider>);
   fireEvent.change(screen.getByRole("textbox", { name: "Draft" }), { target: { value: "private draft" } });
   expect(screen.getByText("Hello Alice")).toBeVisible();
-  view.rerender(<GTProvider locale="ja" translations={translations}><Example /></GTProvider>);
+  view.rerender(<GTProvider locale="ja" translations={translations}><MemoExample /></GTProvider>);
   expect(await screen.findByText("設定")).toBeVisible();
   expect(screen.getByText("こんにちは、Aliceさん")).toBeVisible();
   expect(screen.getByRole("textbox", { name: "Draft" })).toHaveValue("private draft");
   expect(fetch).not.toHaveBeenCalled();
+});
+
+
+test("compiled shared definitions resolve on a language switch without exposing markers or translating values", async () => {
+  const label = "Recording";
+  const id = hashMessage(label, { $format: "ICU" });
+  const definitions = [{id: "recording", label: msg(label, {}), prompt: "Recording"}];
+  const translations = { ja: {[id]: "録画中"} };
+  initializeGT({defaultLocale: "en", locales: ["ja"], loadTranslations: async () => translations.ja, runtimeUrl: null, _disableDevHotReload: true});
+  function Options() {
+    const message = useMessages();
+    const [item] = localizeDefinitions(definitions, message);
+    return <><span>{item.label}</span><input aria-label="Prompt" value={item.prompt} readOnly /><code>{item.id}</code></>;
+  }
+  const view = render(<GTProvider locale="en" translations={translations}><Options /></GTProvider>);
+  expect(screen.getByText("Recording")).toBeVisible();
+  view.rerender(<GTProvider locale="ja" translations={translations}><Options /></GTProvider>);
+  expect(await screen.findByText("録画中")).toBeVisible();
+  expect(screen.getByRole("textbox")).toHaveValue("Recording");
+  expect(screen.getByText("recording")).toBeVisible();
 });

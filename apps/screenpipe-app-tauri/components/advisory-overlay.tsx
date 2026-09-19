@@ -6,6 +6,8 @@
 import { AlertTriangle, Info, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdvisoryStore, type Advisory } from "@/lib/advisories";
+import { useGT } from "gt-react";
+
 
 /**
  * Renders the active advisories — a calm, non-modal stack in the bottom-right
@@ -19,6 +21,8 @@ import { useAdvisoryStore, type Advisory } from "@/lib/advisories";
 const MAX_VISIBLE = 3;
 
 function AdvisoryCard({ advisory }: { advisory: Advisory }) {
+
+  const ui = useGT();
   const remove = useAdvisoryStore((s) => s.remove);
   const Icon = advisory.severity === "info" ? Info : AlertTriangle;
 
@@ -69,7 +73,7 @@ function AdvisoryCard({ advisory }: { advisory: Advisory }) {
         <button
           type="button"
           onClick={() => remove(advisory.id)}
-          aria-label="Dismiss"
+          aria-label={ui("Dismiss")}
           className="shrink-0 text-muted-foreground/60 transition-colors hover:text-foreground"
         >
           <X className="h-3.5 w-3.5" />
@@ -80,6 +84,7 @@ function AdvisoryCard({ advisory }: { advisory: Advisory }) {
 }
 
 export function AdvisoryOverlay() {
+
   const advisories = useAdvisoryStore((s) => s.advisories);
   if (advisories.length === 0) return null;
 

@@ -4,19 +4,23 @@
 
 import { Clock, Lightbulb, Megaphone, type LucideIcon } from "lucide-react";
 import type { AnnouncementKind } from "@/lib/announcements";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 export const ANNOUNCEMENT_KIND_META: Record<
   AnnouncementKind,
   { icon: LucideIcon; label: string }
 > = {
   // Grayscale, differentiated by shape rather than color (DESIGN.md).
-  news: { icon: Megaphone, label: "News" },
-  tip: { icon: Lightbulb, label: "Tip" },
-  reminder: { icon: Clock, label: "Reminder" },
+  news: { icon: Megaphone, label: msg("News", {}) },
+  tip: { icon: Lightbulb, label: msg("Tip", {}) },
+  reminder: { icon: Clock, label: msg("Reminder", {}) },
 };
 
 export function AnnouncementKindChip({ kind }: { kind: AnnouncementKind }) {
-  const { icon: Icon, label } = ANNOUNCEMENT_KIND_META[kind];
+  const uiMessages = useMessages();
+  const { icon: Icon, label } = localizeDefinitions(ANNOUNCEMENT_KIND_META, uiMessages)[kind];
   return (
     <span className="inline-flex w-fit items-center gap-1.5 border border-border px-1.5 py-0.5 font-mono text-[10px] normal-case tracking-wide text-muted-foreground">
       <Icon className="h-3 w-3" />

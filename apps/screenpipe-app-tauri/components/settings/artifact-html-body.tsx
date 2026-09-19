@@ -8,6 +8,8 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { HtmlPreviewFrame } from "@/components/file-viewer-html-frame";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { shouldRenderHtmlByDefault } from "@/lib/utils/html-sandbox";
+import { useGT } from "gt-react";
+
 
 interface ArtifactHtmlBodyProps {
   /** Row title (collapsed line). */
@@ -52,6 +54,8 @@ export function ArtifactHtmlBody({
   hideTitle = false,
   fillHeight = false,
 }: ArtifactHtmlBodyProps) {
+
+  const ui = useGT();
   // Source vs rendered. Every non-empty HTML artifact opens rendered on each
   // expansion, then stays under the user's control.
   const [showSource, setShowSource] = useState(false);
@@ -76,7 +80,7 @@ export function ArtifactHtmlBody({
     body = (
       <div className={`space-y-2 ${fillHeight ? "flex h-full flex-col" : ""}`}>
         <div className="flex shrink-0 items-center justify-between gap-2 font-mono text-[10px] normal-case tracking-wide text-muted-foreground">
-          <span>Html · sandboxed{showSource ? " · source" : " · rendered"}</span>
+          <span>Html · sandboxed{showSource ? ui(" · source") : ui(" · rendered")}</span>
           <button
             data-testid="brain-html-render-toggle"
             onClick={(e) => {
@@ -85,7 +89,7 @@ export function ArtifactHtmlBody({
             }}
             className="underline opacity-80 hover:opacity-100 hover:text-foreground transition-colors"
           >
-            {showSource ? "Preview rendered" : "View source"}
+            {showSource ? ui("Preview rendered") : ui("View source")}
           </button>
         </div>
         {showSource ? (

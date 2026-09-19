@@ -24,6 +24,8 @@ import {
   type FrameSample,
   type MeetingAudioChunk,
 } from "@/lib/utils/meeting-context";
+import { useGT } from "gt-react";
+
 
 interface ReplayStripProps {
   meetingId: number;
@@ -108,6 +110,8 @@ function releasePointer(el: Element, pointerId: number) {
 }
 
 export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps) {
+
+  const ui = useGT();
   // Bounds from notable-quotes sample (cheap, already loaded).
   const sampleSorted = useMemo(
     () =>
@@ -519,7 +523,7 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
         <button
           onClick={openInTimeline}
           className="text-[11px] normal-case tracking-[0.15em] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5"
-          title="Open this moment in the full timeline"
+          title={ui("Open this moment in the full timeline")}
         >
           Open in timeline
           <ExternalLink className="h-3 w-3" />
@@ -542,7 +546,7 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
                 data-testid="replay-active-frame"
                 data-frame-id={activeFrame.frameId}
                 src={appendAuthToken(`${getApiBaseUrl()}/frames/${activeFrame.frameId}`)}
-                alt={`Screen at ${formatClock(activeFrame.timestamp)}`}
+                alt={ui("Screen at {value1}", { value1: formatClock(activeFrame.timestamp) })}
                 className="max-w-full max-h-full object-contain"
                 onError={() => markFrameUnavailable(activeFrame.frameId)}
               />
@@ -563,7 +567,7 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
               onClick={togglePlayback}
               disabled={!canPlay}
               aria-label={
-                isPlaying ? "Pause silent replay" : "Play silent replay"
+                isPlaying ? ui("Pause silent replay") : ui("Play silent replay")
               }
               className="inline-flex h-7 w-7 shrink-0 items-center justify-center border border-white/30 transition-colors duration-150 hover:border-white hover:bg-white hover:text-black focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none"
             >
@@ -580,7 +584,7 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
             <div
               role="slider"
               tabIndex={0}
-              aria-label="Silent replay progress"
+              aria-label={ui("Silent replay progress")}
               aria-valuemin={0}
               aria-valuemax={Math.round(durationMs / 1000)}
               aria-valuenow={Math.round((cursorMs - rangeStartMs) / 1000)}
@@ -604,7 +608,7 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
               data-testid="replay-speed"
               onClick={cyclePlaybackRate}
               disabled={!canPlay}
-              aria-label={`Playback speed ${playbackRate}x`}
+              aria-label={ui("Playback speed {value1}x", { value1: playbackRate })}
               className="h-7 min-w-8 border border-white/25 px-1.5 font-mono text-[10px] tabular-nums text-white/80 transition-colors duration-150 hover:border-white hover:bg-white hover:text-black focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none"
             >
               {playbackRate}x
@@ -640,7 +644,7 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
               >
                 <button
                   className="text-[11px] text-muted-foreground hover:text-foreground underline decoration-dotted underline-offset-2 mr-1.5 transition-colors"
-                  title="Click to rename or merge this speaker"
+                  title={ui("Click to rename or merge this speaker")}
                 >
                   {speakerLabel}
                 </button>
@@ -654,10 +658,10 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
             )}
             <span className="text-sm text-foreground/90 line-clamp-3">
               {chunksLoading
-                ? "Loading transcript…"
+                ? ui("Loading transcript…")
                 : activeChunk
                 ? activeChunk.transcription.replace(/\s+/g, " ").trim()
-                : "No transcript at this moment"}
+                : ui("No transcript at this moment")}
             </span>
           </div>
         </div>
@@ -667,7 +671,7 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
           data-testid="replay-scrubber"
           role="slider"
           tabIndex={0}
-          aria-label="Replay position"
+          aria-label={ui("Replay position")}
           aria-valuemin={0}
           aria-valuemax={Math.round(durationMs / 1000)}
           aria-valuenow={Math.round((cursorMs - rangeStartMs) / 1000)}
@@ -733,8 +737,8 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
           <span>{formatClock(new Date(rangeStartMs).toISOString())}</span>
           <span>
             {chunksLoading
-              ? "Loading transcript…"
-              : `${enrichedChunks.length} segments · ${renderableFrames.length} frames · click or drag to scrub`}
+              ? ui("Loading transcript…")
+              : ui("{value1} segments · {value2} frames · click or drag to scrub", { value1: enrichedChunks.length, value2: renderableFrames.length })}
           </span>
           <span>{formatClock(new Date(rangeEndMs).toISOString())}</span>
         </div>

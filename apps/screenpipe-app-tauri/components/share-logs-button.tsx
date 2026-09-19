@@ -48,6 +48,8 @@ import {
   mimeFromName,
   type VideoExt,
 } from "@/lib/utils/feedback-attachments";
+import { useGT } from "gt-react";
+
 
 // Read an image File and return a compressed JPEG data URL (max 1920px wide).
 // Shared by the file-picker, clipboard paste, and drag-drop entry points.
@@ -158,6 +160,8 @@ export const ShareLogsButton = ({
   onBackgroundStart?: () => void;
   prefillText?: string;
 }) => {
+
+  const ui = useGT();
   const { toast } = useToast();
   const { settings } = useSettings();
   const [machineId, setMachineId] = useState("");
@@ -201,12 +205,13 @@ export const ShareLogsButton = ({
     listen<FeedbackUploadCompleted>(
       FEEDBACK_UPLOAD_COMPLETED_EVENT,
       ({ payload }) => {
+
         if (payload.jobId !== activeJobIdRef.current) return;
         activeJobIdRef.current = null;
         if (payload.status === "failed") {
           setPhase("idle");
           toast({
-            title: "Sharing failed",
+            title: ui("Sharing failed"),
             description: payload.message,
             variant: "destructive",
           });
@@ -214,7 +219,7 @@ export const ShareLogsButton = ({
         }
 
         toast({
-          title: "Feedback sent",
+          title: ui("Feedback sent"),
           description: payload.message,
         });
         setPhase("sent");
@@ -298,10 +303,10 @@ export const ShareLogsButton = ({
       // Distinguish "nothing was recorded" (recording off / video disabled)
       // from a transient failure — the former isn't fixed by retrying.
       toast({
-        title: "Couldn't capture recording",
+        title: ui("Couldn't capture recording"),
         description: String(err).includes("no recent screen frames")
-          ? "No screen recording found for the last 5 minutes — check that video recording is on."
-          : "Could not record the last 5 minutes — try again.",
+          ? ui("No screen recording found for the last 5 minutes — check that video recording is on.")
+          : ui("Could not record the last 5 minutes — try again."),
         variant: "destructive",
       });
     }
@@ -320,12 +325,12 @@ export const ShareLogsButton = ({
       toast({
         title:
           classified.reason === "too-large"
-            ? "File too large"
-            : "Unsupported file",
+            ? ui("File too large")
+            : ui("Unsupported file"),
         description:
           classified.reason === "too-large"
-            ? `File is ${formatBytes(file.size)} — the 50 mb limit was exceeded.`
-            : "Accepts png, jpg, mov, mp4.",
+            ? ui("File is {value1} — the 50 mb limit was exceeded.", { value1: formatBytes(file.size) })
+            : ui("Accepts png, jpg, mov, mp4."),
         variant: "destructive",
       });
       return;
@@ -352,8 +357,8 @@ export const ShareLogsButton = ({
       console.error("failed to attach screenshot:", err);
       setImage(null);
       toast({
-        title: "Couldn't attach screenshot",
-        description: "That image couldn't be read — try a different file.",
+        title: ui("Couldn't attach screenshot"),
+        description: ui("That image couldn't be read — try a different file."),
         variant: "destructive",
       });
     }
@@ -371,8 +376,8 @@ export const ShareLogsButton = ({
     const classified = classifyAttachmentMeta(name, "", 0);
     if (classified.kind === "error") {
       toast({
-        title: "Unsupported file",
-        description: "Accepts png, jpg, mov, mp4.",
+        title: ui("Unsupported file"),
+        description: ui("Accepts png, jpg, mov, mp4."),
         variant: "destructive",
       });
       return;
@@ -386,8 +391,8 @@ export const ShareLogsButton = ({
     } catch (err) {
       console.error("failed to read dropped file:", err);
       toast({
-        title: "Couldn't attach",
-        description: "That file couldn't be read — try a different one.",
+        title: ui("Couldn't attach"),
+        description: ui("That file couldn't be read — try a different one."),
         variant: "destructive",
       });
     }
@@ -583,11 +588,11 @@ export const ShareLogsButton = ({
 
       if (onBackgroundStart) {
         toast({
-          title: "Thanks — sending in background",
+          title: ui("Thanks — sending in background"),
           description:
             video?.status === "ready"
-              ? "You can keep using screenpipe. keep the app running while the video uploads; we'll notify you when it's sent."
-              : "You can keep using screenpipe. please keep the app running for the next minute; we'll notify you when it's sent.",
+              ? ui("You can keep using screenpipe. keep the app running while the video uploads; we'll notify you when it's sent.")
+              : ui("You can keep using screenpipe. please keep the app running for the next minute; we'll notify you when it's sent."),
         });
         onBackgroundStart();
       }
@@ -596,7 +601,7 @@ export const ShareLogsButton = ({
       activeJobIdRef.current = null;
       setPhase("idle");
       toast({
-        title: "Sharing failed",
+        title: ui("Sharing failed"),
         description: String(err),
         variant: "destructive",
       });
@@ -679,7 +684,7 @@ export const ShareLogsButton = ({
           type="button"
           className="text-muted-foreground hover:text-foreground p-0.5 leading-none"
           onClick={a.onRemove}
-          aria-label={`Remove ${a.testId === "image-attachment" ? "screenshot" : "video"}`}
+          aria-label={ui("Remove {value1}", { value1: a.testId === "image-attachment" ? "screenshot" : "video" })}
         >
           <X className="h-3.5 w-3.5" />
         </button>
@@ -700,7 +705,7 @@ export const ShareLogsButton = ({
         onDragLeave={handleDragLeave}
       >
         <Textarea
-          placeholder="Describe your feedback or issue..."
+          placeholder={ui("Describe your feedback or issue...")}
           value={feedbackText}
           onChange={(e) => setFeedbackText(e.target.value)}
           onPaste={handlePaste}
@@ -715,7 +720,7 @@ export const ShareLogsButton = ({
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={image.dataUrl}
-                alt="Screenshot preview"
+                alt={ui("Screenshot preview")}
                 className="w-full h-full object-cover"
               />
             ) : (

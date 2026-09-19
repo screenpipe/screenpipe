@@ -35,6 +35,9 @@ import { AppFilterList } from "./app-filter-list";
 import { CategorySwitches } from "./category-switches";
 import { appIconUrl } from "./icon-urls";
 import { WebsiteRuleList, type ObservedDomain } from "./website-filter-list";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 export interface ContentFiltersCardProps {
 	rules: WindowRules;
@@ -80,6 +83,9 @@ export function ContentFiltersCard({
 	onTargetsChange,
 	onBrowse,
 }: ContentFiltersCardProps) {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
 	const [tab, setTab] = useState<"apps" | "websites">("apps");
 	const [showRules, setShowRules] = useState(false);
 
@@ -121,7 +127,7 @@ export function ContentFiltersCard({
 				label: scoped,
 				icon: AppWindowMac,
 				iconUrl: appIconUrl(window.app_name),
-				description: `Only this window of ${window.app_name}`,
+				description: ui("Only this window of {value1}", { value1: window.app_name }),
 			});
 		}
 
@@ -138,7 +144,7 @@ export function ContentFiltersCard({
 		}
 
 		return options;
-	}, [observedWindows, rules]);
+	}, [observedWindows, rules, uiLanguage]);
 
 	const advancedIgnored = useMemo(() => advancedRules(rules.ignored), [rules.ignored]);
 	const advancedIncluded = useMemo(() => advancedRules(rules.included), [rules.included]);
@@ -237,7 +243,7 @@ export function ContentFiltersCard({
 									<div className="space-y-1.5">
 										<h4 className="flex items-center gap-1.5 text-[12px] font-medium text-foreground">
 											Skip specific windows
-											<HelpTooltip text="Narrower than switching off a whole app. 'Slack::#hr' skips only that channel; '::confidential' skips any window whose title contains the word, in any app." />
+											<HelpTooltip text={ui("Narrower than switching off a whole app. 'Slack::#hr' skips only that channel; '::confidential' skips any window whose title contains the word, in any app.")} />
 										</h4>
 										<div data-testid="privacy-ignored-apps-select">
 											<MultiSelect
@@ -245,7 +251,7 @@ export function ContentFiltersCard({
 												defaultValue={advancedIgnored}
 												value={advancedIgnored}
 												onValueChange={(next) => handleAdvancedChange(next, "ignored")}
-												placeholder="E.g. Slack::#hr"
+												placeholder={ui("E.g. Slack::#hr")}
 												allowCustomValues
 											/>
 										</div>
@@ -254,7 +260,7 @@ export function ContentFiltersCard({
 									<div className="space-y-1.5">
 										<h4 className="flex items-center gap-1.5 text-[12px] font-medium text-foreground">
 											Only capture these
-											<HelpTooltip text="Leave empty to capture everything except what you switched off. Adding entries turns capture into an allowlist: 'Slack::#engineering' keeps only that channel of Slack and leaves other apps alone." />
+											<HelpTooltip text={ui("Leave empty to capture everything except what you switched off. Adding entries turns capture into an allowlist: 'Slack::#engineering' keeps only that channel of Slack and leaves other apps alone.")} />
 										</h4>
 										<div data-testid="privacy-included-apps-select">
 											<MultiSelect
@@ -262,7 +268,7 @@ export function ContentFiltersCard({
 												defaultValue={advancedIncluded}
 												value={advancedIncluded}
 												onValueChange={(next) => handleAdvancedChange(next, "included")}
-												placeholder="Optional allowlist..."
+												placeholder={ui("Optional allowlist...")}
 												allowCustomValues
 											/>
 										</div>

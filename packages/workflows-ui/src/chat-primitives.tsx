@@ -8,6 +8,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChevronDown } from "lucide-react";
 import styles from "./chat-primitives.module.css";
+import { useGT } from "gt-react";
+
 
 // Extracted from Screenpipe's MarkdownBlock. Completed blocks stay formatted
 // while only the unfinished tail changes; the final render uses the exact text.
@@ -58,6 +60,7 @@ type ChatMarkdownProps = {
 };
 
 const FormattedBlock = memo(function FormattedBlock({ text, allowLink, onOpenLink }: Pick<ChatMarkdownProps, "text" | "allowLink" | "onOpenLink">) {
+  const ui = useGT();
   const allowed = (url: string) => {
     if (allowLink) return allowLink(url);
     try { const link = new URL(url); return ["http:", "https:"].includes(link.protocol) && !link.username && !link.password; }
@@ -73,7 +76,7 @@ const FormattedBlock = memo(function FormattedBlock({ text, allowLink, onOpenLin
       a: ({ href, children }) => href && allowed(href)
         ? <a href={href} target="_blank" rel="noreferrer noopener" onClick={onOpenLink ? (event) => { event.preventDefault(); onOpenLink(href); } : undefined}>{children}</a>
         : <span>{children}</span>,
-      table: ({ children }) => <div className={styles.tableScroll} role="region" aria-label="Scrollable table" tabIndex={0}><table>{children}</table></div>,
+      table: ({ children }) => <div className={styles.tableScroll} role="region" aria-label={ui("Scrollable table")} tabIndex={0}><table>{children}</table></div>,
     }}
   >{text}</ReactMarkdown>;
 });
@@ -125,9 +128,10 @@ export function ChatJumpToLatest({ hasMessages, scrolledUp, onJump, className, a
   hasMessages: boolean; scrolledUp: boolean; onJump: () => void;
   className?: string; anchorClassName?: string;
 }) {
+  const ui = useGT();
   if (!hasMessages) return null;
   return <div className={anchorClassName ?? styles.jumpAnchor}>
-    <button type="button" data-testid="chat-jump-to-latest" aria-label="Jump to latest" aria-hidden={!scrolledUp}
+    <button type="button" data-testid="chat-jump-to-latest" aria-label={ui("Jump to latest")} aria-hidden={!scrolledUp}
       tabIndex={scrolledUp ? 0 : -1} onClick={onJump} className={className ?? styles.jump} data-visible={scrolledUp}>
       <ChevronDown size={16} aria-hidden="true" />
     </button>

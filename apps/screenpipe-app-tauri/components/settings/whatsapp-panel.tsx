@@ -9,6 +9,8 @@ import { AlertCircle, Loader2, LogOut, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { localFetch } from "@/lib/api";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
+import { useGT } from "gt-react";
+
 
 export const WHATSAPP_POLL_INTERVAL_MS = 2_000;
 export const WHATSAPP_PAIRING_TIMEOUT_MS = 60_000;
@@ -104,6 +106,8 @@ async function responseError(response: Response, fallback: string): Promise<stri
 }
 
 export function WhatsAppPanel() {
+
+  const ui = useGT();
   const [status, setStatus] = useState<PanelStatus>("idle");
   const [qr, setQr] = useState<string | null>(null);
   const [info, setInfo] = useState<{ name: string; phone: string } | null>(null);
@@ -323,7 +327,7 @@ export function WhatsAppPanel() {
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-xs text-muted-foreground" role="status">
             <Loader2 className="h-3 w-3 animate-spin" />
-            {status === "reconnecting" ? message : "Waiting for QR code…"}
+            {status === "reconnecting" ? message : ui("Waiting for QR code…")}
           </div>
           <Button onClick={() => void resetAndPair()} variant="ghost" size="sm" className="h-7 text-xs normal-case font-sans tracking-normal">
             Taking too long? Reset and try again
@@ -337,7 +341,7 @@ export function WhatsAppPanel() {
           <div className="bg-white p-3 rounded-lg inline-block border dark:border-border">
             <Image
               src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qr)}`}
-              alt="WhatsApp QR Code"
+              alt={ui("WhatsApp QR Code")}
               width={200}
               height={200}
               unoptimized

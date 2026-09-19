@@ -6,6 +6,8 @@
 import { X } from "lucide-react";
 import { getApiBaseUrl, appendAuthToken } from "@/lib/api";
 import type { PrefillComposerProps } from "./composer-types";
+import { useGT } from "gt-react";
+
 
 type ContextPresentation = {
   label: string;
@@ -52,6 +54,7 @@ export function PrefillContextBanner({
 }: {
   prefill: PrefillComposerProps;
 }) {
+  const ui = useGT();
   if (!prefill.context && !prefill.frameId) return null;
   const contextPresentation = prefill.context
     ? prefillContextPresentation(prefill.context, prefill.source)
@@ -68,7 +71,7 @@ export function PrefillContextBanner({
                 src={appendAuthToken(
                   `${getApiBaseUrl()}/frames/${prefill.frameId}`,
                 )}
-                alt="Attached frame"
+                alt={ui("Attached frame")}
                 className="w-16 h-12 object-cover rounded border border-border/50"
               />
               <button

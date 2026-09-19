@@ -9,7 +9,7 @@ import type { SettingsField } from "./settings-search";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Usage stats", keywords: ["stats", "activity", "analytics", "metrics", "ai", "allowance", "quota", "percent"] },
+  { label: msg("Usage stats", {}), keywords: ["stats", "activity", "analytics", "metrics", "ai", "allowance", "quota", "percent"] },
 ];
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -25,6 +25,10 @@ import {
   type UsageStatusQuery,
   useUsageStatusQuery,
 } from "@/lib/hooks/use-usage-status";
+import { useGT } from "gt-react";
+import { msg } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 type TimeRange = "day" | "week" | "month" | "all";
 
@@ -146,6 +150,8 @@ function getTimeSince(range: TimeRange): number | undefined {
 }
 
 export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
+
+  const ui = useGT();
   const hosted = query.usage?.hosted_ai;
   const allowances = hosted?.allowances;
 
@@ -191,8 +197,8 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
             <h2 className="text-sm font-medium normal-case">Usage unavailable</h2>
             <p className="mt-1 text-xs text-muted-foreground">
               {hosted.plan === "unknown"
-                ? "Sign in to view your usage limits."
-                : "No balance was assumed. Try refreshing."}
+                ? ui("Sign in to view your usage limits.")
+                : ui("No balance was assumed. Try refreshing.")}
             </p>
           </div>
           {hosted.plan !== "unknown" && (
@@ -241,7 +247,7 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
 
         <div className="flex items-center justify-between border-t border-border pt-4 text-[11px] text-muted-foreground">
           <span className="font-mono">
-            {updatedAt ? `Last updated ${updatedAt}` : "Last updated unavailable"}
+            {updatedAt ? ui("Last updated {value1}", { value1: updatedAt }) : ui("Last updated unavailable")}
           </span>
           <Button
             type="button"
@@ -266,7 +272,7 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
             rel="noopener noreferrer"
             className="inline-block text-xs underline underline-offset-4 hover:text-foreground"
           >
-            Upgrade to {quotaPlanLabel(hosted.upgrade.requiredPlan) ?? "a higher plan"}
+            Upgrade to {quotaPlanLabel(hosted.upgrade.requiredPlan) ?? ui("a higher plan")}
           </a>
         )}
       </CardContent>
@@ -275,6 +281,8 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
 }
 
 export function UsageSection() {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
   const hostedUsageQuery = useUsageStatusQuery();
   const [entries, setEntries] = useState<UsageEntry[]>([]);
   const [totalChats, setTotalChats] = useState(0);
@@ -444,7 +452,7 @@ export function UsageSection() {
     if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
     if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
     if (diff < 604800000) return `${Math.floor(diff / 86400000)}d ago`;
-    return d.toLocaleDateString();
+    return d.toLocaleDateString(uiLocale);
   };
 
   const providerLabel = (p: string) => {
@@ -479,7 +487,7 @@ export function UsageSection() {
     { value: "day", label: "24h" },
     { value: "week", label: "7d" },
     { value: "month", label: "30d" },
-    { value: "all", label: "All" },
+    { value: "all", label: ui("All") },
   ];
 
   if (loading) {
@@ -574,8 +582,8 @@ export function UsageSection() {
         <div className="rounded-lg border border-dashed p-6 text-center">
           <p className="text-sm text-muted-foreground">
             {timeRange === "all"
-              ? "No model data yet — tracking starts from your next conversation"
-              : `No usage in the last ${timeRange === "day" ? "24 hours" : timeRange === "week" ? "7 days" : "30 days"}`}
+              ? ui("No model data yet — tracking starts from your next conversation")
+              : ui("No usage in the last {value1}", { value1: timeRange === "day" ? "24 hours" : timeRange === "week" ? "7 days" : "30 days" })}
           </p>
           {timeRange === "all" && untrackedMessages > 0 && (
             <p className="text-xs text-muted-foreground mt-2">

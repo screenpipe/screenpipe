@@ -26,6 +26,8 @@ import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { cn } from "@/lib/utils";
 import { sanitizeToolCallXml } from "@/lib/utils/sanitize-tool-call-xml";
 import { LinkPreviewAnchor } from "@/components/chat/link-preview-anchor";
+import { useGT } from "gt-react";
+
 
 // The transport snapshots text every 80 ms. Parse only complete blocks
 // (blank-line / closed-fence boundaries) and commit each one on the same
@@ -73,6 +75,8 @@ export function MarkdownBlock({
   suppressImages = false,
   className,
 }: MarkdownBlockProps) {
+
+  const ui = useGT();
   const renderText = rewriteLocalMarkdownLinksForChat(
     isUser ? text : sanitizeToolCallXml(text),
   );
@@ -93,7 +97,7 @@ export function MarkdownBlock({
             <div
               className="scrollbar-minimal my-4 w-full max-w-full overflow-x-auto overscroll-x-contain rounded-md border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               role="region"
-              aria-label="Scrollable table"
+              aria-label={ui("Scrollable table")}
               tabIndex={0}
             >
               <table

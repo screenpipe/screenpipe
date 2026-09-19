@@ -25,6 +25,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { localFetch } from "@/lib/api";
 import { toast } from "@/components/ui/use-toast";
 import { commands } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+
 
 const POLL_INTERVAL_MS = 5_000;
 
@@ -38,6 +40,8 @@ type Status =
   | { kind: "error"; message: string };
 
 export function UserBrowserCard() {
+
+  const ui = useGT();
   const [status, setStatus] = useState<Status>({ kind: "loading" });
 
   const refresh = useCallback(async () => {
@@ -138,8 +142,8 @@ export function UserBrowserCard() {
                   } catch {
                     try { await commands.copyTextToClipboard(CHROME_WEBSTORE_URL); } catch { /* clipboard may be denied */ }
                     toast({
-                      title: "Couldn't open your browser",
-                      description: `Link copied — paste in Chrome: ${CHROME_WEBSTORE_URL}`,
+                      title: ui("Couldn't open your browser"),
+                      description: ui("Link copied — paste in Chrome: {value1}", { value1: CHROME_WEBSTORE_URL }),
                     });
                   }
                 }}

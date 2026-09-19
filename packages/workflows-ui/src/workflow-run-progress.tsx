@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Circle, Loader2, RefreshCw, Square, AlertCircle } from "lucide-react";
 import type { WorkflowAnalysisJob, WorkflowRunActivity, WorkflowsPlatform } from "./platform";
 import styles from "./workflows-app.module.css";
+import { useGT } from "gt-react";
+
 
 export function WorkflowRunProgress({ job, active, subscribe, stop, analyze, updatedAt, checkedThrough, changes, disabledReason }: {
   disabledReason?: string;
@@ -13,6 +15,7 @@ export function WorkflowRunProgress({ job, active, subscribe, stop, analyze, upd
   stop?: () => void; analyze: () => void; updatedAt?: string; checkedThrough?: string;
   changes?: { created: number; updated: number };
 }) {
+  const ui = useGT();
   const [activity, setActivity] = useState<{ jobId: string; items: WorkflowRunActivity[] }>({ jobId: "", items: [] });
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -55,23 +58,23 @@ export function WorkflowRunProgress({ job, active, subscribe, stop, analyze, upd
     : updatedAt ? result : "";
   return <div className={styles.refreshControls}>
     {(active || items.length > 0 || job || updatedAt) ? <div ref={root} className={styles.runProgress}>
-      <button ref={toggle} type="button" className={styles.runToggle} aria-expanded={open} aria-label={`${label}. Show agent activity`} onClick={() => setOpen(!open)}>
+      <button ref={toggle} type="button" className={styles.runToggle} aria-expanded={open} aria-label={ui("{value1}. Show agent activity", { value1: label })} onClick={() => setOpen(!open)}>
         {active ? <Loader2 size={14} className={styles.runSpinner} /> : job?.status === "failed" ? <AlertCircle size={14} /> : job?.status === "incomplete" ? <Circle size={14} /> : <Check size={14} />}
         <span role="status">{label}{!active && reviewed && <small style={{ display: "block" }}>Through {reviewed}</small>}</span>
         {active && Number.isFinite(seconds) && <time>{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}</time>}
         <ChevronDown size={12} style={{ transform: open ? "rotate(180deg)" : undefined }} />
       </button>
-      {open && <section className={styles.runActivity} aria-label="Agent activity">
-        <header><strong>{active ? "Updating workflows" : "Workflow update"}</strong><span>{active ? "Live activity" : "Recent activity"}</span></header>
+      {open && <section className={styles.runActivity} aria-label={ui("Agent activity")}>
+        <header><strong>{active ? ui("Updating workflows") : ui("Workflow update")}</strong><span>{active ? ui("Live activity") : ui("Recent activity")}</span></header>
         {reviewed && !active && <p>Data reviewed through <time dateTime={checkedThrough}>{reviewed}</time></p>}
         {items.length ? <ol>{items.map(item => <li key={item.id}>
           {item.status === "error" ? <AlertCircle size={13} /> : item.status === "complete" ? <Check size={13} /> : active ? <Loader2 size={13} className={styles.runSpinner} /> : <Circle size={13} />}
-          <span>{item.label}{!active && item.status === "running" ? " · ended" : ""}</span>
-        </li>)}</ol> : active ? <p>{unavailable ? "Live activity is unavailable. The task status will keep updating." : "Waiting for the next agent action…"}</p> : null}
-        <footer>{active ? "Your saved workflows stay available." : (job?.status === "failed" || job?.status === "incomplete") ? job.message : result}</footer>
+          <span>{item.label}{!active && item.status === "running" ? ui(" · ended") : ""}</span>
+        </li>)}</ol> : active ? <p>{unavailable ? ui("Live activity is unavailable. The task status will keep updating.") : ui("Waiting for the next agent action…")}</p> : null}
+        <footer>{active ? ui("Your saved workflows stay available.") : (job?.status === "failed" || job?.status === "incomplete") ? job.message : result}</footer>
       </section>}
     </div> : <span role="status">{label}</span>}
     {active && stop ? <button className={styles.secondaryButton} onClick={stop}><Square size={11} />Stop</button>
-      : <button className={styles.secondaryButton} onClick={analyze} disabled={active || !!disabledReason} title={disabledReason}><RefreshCw size={14} />{job?.status === "incomplete" ? "Resume update" : "Update now"}</button>}
+      : <button className={styles.secondaryButton} onClick={analyze} disabled={active || !!disabledReason} title={disabledReason}><RefreshCw size={14} />{job?.status === "incomplete" ? ui("Resume update") : ui("Update now")}</button>}
   </div>;
 }

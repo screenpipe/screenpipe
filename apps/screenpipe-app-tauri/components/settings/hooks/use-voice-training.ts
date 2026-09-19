@@ -6,10 +6,15 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { Settings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import { useToast } from "@/components/ui/use-toast";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 export function useVoiceTraining(opts: {
   settings: Settings;
 }) {
+  const uiLanguage = useLocale();
+  const ui = useGT();
   const { settings } = opts;
   const { toast } = useToast();
 
@@ -38,7 +43,7 @@ export function useVoiceTraining(opts: {
   const handleStartTraining = useCallback(() => {
     const name = (settings.userName || "").trim();
     if (!name) {
-      toast({ title: "Enter your name first", variant: "destructive" });
+      toast({ title: ui("Enter your name first"), variant: "destructive" });
       return;
     }
     setVoiceTraining({ active: true, secondsLeft: 30, dialogOpen: true });
@@ -52,7 +57,7 @@ export function useVoiceTraining(opts: {
         return { ...prev, secondsLeft: prev.secondsLeft - 1 };
       });
     }, 1000);
-  }, [settings.userName, toast]);
+  }, [settings.userName, toast, uiLanguage]);
 
   const handleFinishTraining = useCallback(async () => {
     if (trainingIntervalRef.current) clearInterval(trainingIntervalRef.current);
@@ -66,11 +71,11 @@ export function useVoiceTraining(opts: {
 
     try {
       await commands.trainVoice(name, startTime.toISOString(), now.toISOString());
-      toast({ title: "Voice training started", description: "Screenpipe will match your voice in the background — this may take a few minutes" });
+      toast({ title: ui("Voice training started"), description: ui("Screenpipe will match your voice in the background — this may take a few minutes") });
     } catch (e) {
-      toast({ title: "Failed to start voice training", description: String(e), variant: "destructive" });
+      toast({ title: ui("Failed to start voice training"), description: String(e), variant: "destructive" });
     }
-  }, [settings.userName, toast]);
+  }, [settings.userName, toast, uiLanguage]);
 
   return {
     voiceTraining,

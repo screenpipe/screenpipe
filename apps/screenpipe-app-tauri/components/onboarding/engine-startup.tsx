@@ -25,6 +25,8 @@ import {
 import { ParticleStream, ProgressSteps } from "./particle-stream";
 import { screenpipeWebBase } from "@/lib/web-url";
 import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
+import { useGT } from "gt-react";
+
 
 interface EngineStartupProps {
   handleNextSlide: () => void;
@@ -146,6 +148,8 @@ async function readEngineHealth(
 }
 
 export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
+
+  const ui = useGT();
   const [state, setState] = useState<StartupState>("starting");
   const [serverStarted, setServerStarted] = useState(false);
   const [audioReady, setAudioReady] = useState(false);
@@ -737,14 +741,14 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
   };
 
   const progressSteps = [
-    { label: "Engine", done: serverStarted, active: !serverStarted },
+    { label: ui("Engine"), done: serverStarted, active: !serverStarted },
     {
-      label: "Audio",
+      label: ui("Audio"),
       done: audioReady,
       active: serverStarted && !audioReady,
     },
     {
-      label: "Vision",
+      label: ui("Vision"),
       done: visionReady,
       active: serverStarted && !visionReady && audioReady,
     },
@@ -764,7 +768,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
         transition={{ duration: 0.4 }}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="w-12 h-12 mb-2" src="/128x128.png" alt="Screenpipe" />
+        <img className="w-12 h-12 mb-2" src="/128x128.png" alt={ui("Screenpipe")} />
         <h1 className="font-mono text-base font-bold text-foreground">
           Screenpipe
         </h1>
@@ -793,7 +797,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
             >
-              {bootPhase?.message ?? "Starting engine..."}
+              {bootPhase?.message ?? ui("Starting engine...")}
             </motion.p>
           )}
         </AnimatePresence>
@@ -924,7 +928,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
                       {isResettingPerm ? (
                         <Loader className="w-3 h-3 animate-spin" />
                       ) : (
-                        "Reset & re-request"
+                        ui("Reset & re-request")
                       )}
                     </Button>
                   </div>

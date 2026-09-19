@@ -14,6 +14,8 @@ import { useSelectableAcpAdapters } from "@/lib/acp-rollout";
 import { AcpInstallGate } from "@/components/settings/acp-install-gate";
 import { AcpPresetDefaults } from "@/components/settings/acp-preset-defaults";
 import { AcpBoundaries } from "@/components/settings/acp-boundaries";
+import { useGT } from "gt-react";
+
 
 const DEFAULT_AGENT_ID = "pi-acp";
 
@@ -82,6 +84,8 @@ export function AcpAgentPicker({
   /** The quick AI dialog puts these choices in its main grid. */
   showAgentChoices?: boolean;
 }) {
+
+  const ui = useGT();
   const [installBlocked, setInstallBlocked] = useState(false);
   // Advanced settings stay hidden until the agent is actually usable. Showing a
   // custom command box and an env editor next to "sign in to continue" implies
@@ -139,7 +143,7 @@ export function AcpAgentPicker({
           <div
             {...(compact ? {} : { id: "acpAgent" })}
             role="listbox"
-            aria-label={compact ? "Agent" : "Agent"}
+            aria-label={compact ? ui("Agent") : ui("Agent")}
             className={cn("grid", compact ? "grid-cols-2 gap-1.5" : "grid-cols-2 gap-2 sm:grid-cols-3")}
           >
             {adapters.map((adapter) => {
@@ -192,16 +196,16 @@ export function AcpAgentPicker({
       {info.supportsCloudRouting && (
         <div className="space-y-1">
           <Label className={compact ? "text-xs" : undefined}>
-            {compact ? "Model billing" : "Model calls"}
+            {compact ? ui("Model billing") : ui("Model calls")}
           </Label>
           <div
             role="radiogroup"
-            aria-label="Where the agent's model calls go"
+            aria-label={ui("Where the agent's model calls go")}
             className="grid grid-cols-2 gap-1.5"
           >
             {[
-              { cloud: true, label: "Screenpipe Cloud", hint: "Included in your plan" },
-              { cloud: false, label: `Your ${info.name} account`, hint: "Billed by them" },
+              { cloud: true, label: ui("Screenpipe Cloud"), hint: "Included in your plan" },
+              { cloud: false, label: ui("Your {value1} account", { value1: info.name }), hint: "Billed by them" },
             ].map((choice) => {
               const selected = useCloud === choice.cloud;
               return (
@@ -234,8 +238,8 @@ export function AcpAgentPicker({
           </div>
           <p className={cn("text-muted-foreground", compact ? "text-[10px]" : "text-xs")}>
             {useCloud
-              ? `${info.name} still runs locally and signs in as itself. Only its model calls go through Screenpipe.`
-              : `${info.name} bills its own account for model use. You need to be signed in to it.`}
+              ? ui("{value1} still runs locally and signs in as itself. Only its model calls go through Screenpipe.", { value1: info.name })
+              : ui("{value1} bills its own account for model use. You need to be signed in to it.", { value1: info.name })}
           </p>
         </div>
       )}
@@ -281,7 +285,7 @@ export function AcpAgentPicker({
               id="acpCommandQuick"
               value={agent?.command || ""}
               onChange={(e) => merge({ command: e.target.value })}
-              placeholder="Path or command that starts an ACP agent"
+              placeholder={ui("Path or command that starts an ACP agent")}
               className="h-8 font-mono text-xs"
               spellCheck={false}
               autoCorrect="off"
@@ -314,7 +318,7 @@ export function AcpAgentPicker({
                 id="acpCommand"
                 value={agent?.command || ""}
                 onChange={(e) => merge({ command: e.target.value })}
-                placeholder="Path or command used to start your agent"
+                placeholder={ui("Path or command used to start your agent")}
                 spellCheck={false}
                 autoCorrect="off"
               />
@@ -332,7 +336,7 @@ export function AcpAgentPicker({
                     args: e.target.value.split("\n").map((arg) => arg.trim()).filter(Boolean),
                   })
                 }
-                placeholder={"One option per line\n--acp"}
+                placeholder={ui("One option per line\n--acp")}
                 className="min-h-[80px] font-mono text-xs"
                 spellCheck={false}
               />
@@ -348,7 +352,7 @@ export function AcpAgentPicker({
             id="acpEnv"
             value={Object.keys(agent?.env || {}).join("\n")}
             onChange={(e) => merge({ env: inheritedEnvFromText(e.target.value) })}
-            placeholder={"Optional variable names, one per line\nOPENAI_API_KEY"}
+            placeholder={ui("Optional variable names, one per line\nOPENAI_API_KEY")}
             className="min-h-[80px] font-mono text-xs"
             spellCheck={false}
           />

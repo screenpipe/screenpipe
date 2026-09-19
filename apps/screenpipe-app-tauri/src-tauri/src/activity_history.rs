@@ -1619,16 +1619,11 @@ async fn generate_inner(
             format!("Activity history was saved but its update event failed: {error}")
         })?;
     if should_notify_completion(source) {
-        crate::notifications::client::send_typed_with_actions_and_priority(
-            "activities updated",
-            if updated.activity_count == 1 {
+        crate::notifications::client::send_typed_with_actions_and_priority(crate::localization::ui_text("activities updated"), if updated.activity_count == 1 {
                 "1 new activity is ready."
             } else {
                 "Your latest activities are ready."
-            },
-            "activity_history",
-            Some(20_000),
-            vec![json!({
+            }, "activity_history", Some(20_000), vec![json!({
                 "id": "open-activity-history",
                 "action": "open-activity-history",
                 "label": "view activities",
@@ -1636,9 +1631,7 @@ async fn generate_inner(
                 "url": "screenpipe://activity",
                 "primary": true,
                 "sourceUrl": "screenpipe://activity",
-            })],
-            crate::notifications::store::NotificationPriority::High,
-        );
+            })], crate::notifications::store::NotificationPriority::High);
     }
     Ok(ActivityGenerationResult {
         history: result,

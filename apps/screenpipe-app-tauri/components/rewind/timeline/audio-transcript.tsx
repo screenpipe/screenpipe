@@ -25,6 +25,9 @@ import { Meeting, deduplicateAudioItems } from "@/lib/hooks/use-meetings";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { localFetch } from "@/lib/api";
 import { commands } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 // Extended audio item with timestamp for conversation view
 interface AudioItemWithTimestamp extends AudioData {
@@ -84,6 +87,9 @@ export function AudioTranscript({
 	onJumpToTime,
 	isPlaying = false,
 }: AudioTranscriptProps) {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
 	const [playing, setPlaying] = useState<string | null>(null);
 	const { templatePipes } = usePipes();
 	const meetingScrollRef = useRef<HTMLDivElement | null>(null);
@@ -482,7 +488,7 @@ export function AudioTranscript({
 	const handleSendToChat = useCallback(async () => {
 		const data = activeMeeting ? meetingConversationData : conversationData;
 		if (!data.items.length) {
-			toast({ title: "No transcript data to send", variant: "destructive" });
+			toast({ title: ui("No transcript data to send"), variant: "destructive" });
 			return;
 		}
 
@@ -504,7 +510,7 @@ export function AudioTranscript({
 		const context = `here is my ${label}:\n\n${lines.join("\n")}`;
 
 		await showChatWithPrefill({ context, prompt: "" });
-	}, [activeMeeting, meetingConversationData, conversationData, getSpeakerInfo]);
+	}, [activeMeeting, meetingConversationData, conversationData, getSpeakerInfo, uiLanguage]);
 
 	// Summarize: works for meeting (preferred) or nearby audio (fallback)
 	const summarizeInfo = useMemo(() => {
@@ -664,8 +670,8 @@ export function AudioTranscript({
 						<GripHorizontal className="w-4 h-4 shrink-0" />
 						<span className="truncate">
 							{activeMeeting
-								? `Meeting · ${activeMeeting.audioEntries.length} seg`
-								: "Audio"}
+								? ui("Meeting · {value1} seg", { value1: activeMeeting.audioEntries.length })
+								: ui("Audio")}
 						</span>
 					</div>
 
@@ -699,7 +705,7 @@ export function AudioTranscript({
 									{copied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
 								</Button>
 							</TooltipTrigger>
-							<TooltipContent side="bottom"><p>{copied ? "Copied!" : "Copy"}</p></TooltipContent>
+							<TooltipContent side="bottom"><p>{copied ? ui("Copied!") : ui("Copy")}</p></TooltipContent>
 						</Tooltip>
 						<DropdownMenu>
 							<Tooltip>

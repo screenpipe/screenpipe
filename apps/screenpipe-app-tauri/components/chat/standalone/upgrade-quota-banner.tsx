@@ -20,6 +20,8 @@ import { openExternalUrl } from "@/lib/open-external-url";
 import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
 import { quotaPlanLabel } from "@/lib/chat/quota-errors";
 import type { AIPreset } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+
 
 /**
  * At-the-cap upgrade prompt (the "intensity" lever). Appears in the composer
@@ -39,6 +41,8 @@ export function UpgradeQuotaBanner({
 }: {
   activePreset: AIPreset | null | undefined;
 }) {
+
+  const ui = useGT();
   const usesHostedAllowance = presetUsesHostedAllowance(activePreset);
   const usage = useUsageStatusQuery(usesHostedAllowance).usage;
   const upsellEnabled = useModelUpsellGating(usage?.upgrade_eligible);
@@ -163,17 +167,17 @@ export function UpgradeQuotaBanner({
             <div className="font-medium">
               {blockedUpgrade || serverBlocked
                 ? blockedTitle
-                : "You're out of premium AI for today."}
+                : ui("You're out of premium AI for today.")}
             </div>
             <div className="mt-0.5 text-muted-foreground">
               {cloudflareBlocked ? (
                 <>
                   {formatUsagePercent(cloudflareAllowance.used_percent)} used
-                  {weeklyAllowance ? " this week." : "."}
-                  {resets ? ` Resets ${resets}.` : " Usage falls as the window moves."}{" "}
+                  {weeklyAllowance ? ui(" this week.") : "."}
+                  {resets ? ui(" Resets {value1}.", { value1: resets }) : ui(" Usage falls as the window moves.")}{" "}
                   {activeUpgrade
-                    ? "Switch to Auto or upgrade."
-                    : "Switch to Auto or view plans."}
+                    ? ui("Switch to Auto or upgrade.")
+                    : ui("Switch to Auto or view plans.")}
                 </>
               ) : legacyCostBlocked ? (
                 activeUpgrade ? (
@@ -186,12 +190,12 @@ export function UpgradeQuotaBanner({
                 )
               ) : blockedUpgrade ? (
                 <>
-                  {resets ? `Resets ${resets}. ` : ""}
+                  {resets ? ui("Resets {value1}. ", { value1: resets }) : ""}
                   Upgrade to {requiredPlanProse} for a higher limit, or switch to a
                   local or own-key AI preset.
                 </>
               ) : (
-                <>Free models still work{resets ? ` · resets ${resets}` : ""}.</>
+                <>Free models still work{resets ? ui(" · resets {value1}", { value1: resets }) : ""}.</>
               )}
             </div>
           </div>
@@ -208,12 +212,12 @@ export function UpgradeQuotaBanner({
                   stays exact; a terminal or older response opens Account
                   without inventing a higher plan. */}
               {requiredPlanLabel
-                ? `Upgrade to ${requiredPlanLabel}`
+                ? ui("Upgrade to {value1}", { value1: requiredPlanLabel })
                 : activeUpgrade
-                  ? "See plans"
+                  ? ui("See plans")
                   : serverBlocked
-                    ? "View plans"
-                    : "View Business"}
+                    ? ui("View plans")
+                    : ui("View Business")}
             </Button>
             <button
               type="button"
@@ -225,7 +229,7 @@ export function UpgradeQuotaBanner({
                 }
               }}
               className="ml-0.5 shrink-0 text-muted-foreground/50 transition-colors hover:text-foreground"
-              aria-label="Dismiss AI usage notice"
+              aria-label={ui("Dismiss AI usage notice")}
             >
               <X className="h-3.5 w-3.5" />
             </button>

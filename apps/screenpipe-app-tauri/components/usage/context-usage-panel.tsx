@@ -11,6 +11,8 @@ import {
 } from "@/lib/chat/context-usage";
 import { UsageMeter } from "@/components/usage/usage-meter";
 import type { UsageAllowanceState } from "@/lib/hooks/use-usage-status";
+import { useGT } from "gt-react";
+
 
 export function contextUsagePercent(
   snapshot: ContextUsageSnapshot | null,
@@ -31,6 +33,8 @@ export function ContextUsagePanel({
 }: {
   snapshot: ContextUsageSnapshot | null;
 }) {
+
+  const ui = useGT();
   const percent = contextUsagePercent(snapshot);
   if (!snapshot || percent === null) {
     return (
@@ -71,7 +75,7 @@ export function ContextUsagePanel({
           <div
             className="mt-2 flex h-1.5 w-full gap-px overflow-hidden rounded-full bg-muted"
             role="progressbar"
-            aria-label="Context window usage"
+            aria-label={ui("Context window usage")}
             aria-valuemin={0}
             aria-valuemax={snapshot.maxTokens}
             aria-valuenow={snapshot.totalUsedTokens}
@@ -79,7 +83,7 @@ export function ContextUsagePanel({
             {visibleCategories.map((category) => (
               <div
                 key={category.id}
-                title={`${CONTEXT_CATEGORY_META[category.id].label}: ${category.estimatedTokens} tokens`}
+                title={ui("{value1}: {value2} tokens", { value1: CONTEXT_CATEGORY_META[category.id].label, value2: category.estimatedTokens })}
                 style={{
                   backgroundColor: CONTEXT_CATEGORY_META[category.id].color,
                   flexGrow: category.estimatedTokens,
@@ -94,7 +98,7 @@ export function ContextUsagePanel({
             <UsageMeter
               percent={percent}
               state={contextUsageState(percent)}
-              label="Context window usage"
+              label={ui("Context window usage")}
               valueText={`${roundedPercent}% full`}
             />
           </div>
@@ -144,8 +148,8 @@ export function ContextUsagePanel({
         )}
         <div>
           {detailed
-            ? "Total is reported by the model; breakdown values are estimated."
-            : "This harness reports context totals without a category breakdown."}
+            ? ui("Total is reported by the model; breakdown values are estimated.")
+            : ui("This harness reports context totals without a category breakdown.")}
         </div>
       </div>
     </section>

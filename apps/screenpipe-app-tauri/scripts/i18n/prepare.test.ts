@@ -177,7 +177,9 @@ test("Japanese plurals accept other without English categories and preserve exac
   const valid = validateCatalog(source, { files: "{count, plural, =0 {ファイルはありません} other {# 件のファイル}}" }, "en", "ja");
   expect(valid.translated).toBe(1);
   const englishCategory = validateCatalog(source, { files: "{count, plural, =0 {ファイルはありません} one {# 件のファイル} other {# 件のファイル}}" }, "en", "ja");
-  expect(englishCategory.fallbacks.files).toBe("invalid_message_structure");
+  expect(englishCategory.translated).toBe(1);
+  expect(englishCategory.valid.files).not.toMatch(/one\s*\{/);
+  expect(englishCategory.valid.files).toMatch(/=0\s*\{/);
   const missingExactCount = validateCatalog(source, { files: "{count, plural, other {# 件のファイル}}" }, "en", "ja");
   expect(missingExactCount.fallbacks.files).toBe("invalid_placeholders");
 });

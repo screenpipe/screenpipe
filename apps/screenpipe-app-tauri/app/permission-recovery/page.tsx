@@ -11,6 +11,8 @@ import { commands } from "@/lib/utils/tauri";
 import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import posthog from "posthog-js";
+import { useGT } from "gt-react";
+
 
 // Same permission wheel as onboarding: rows recede in opacity, scale, and
 // depth (blur) by distance from the focused step — plain CSS transitions.
@@ -52,6 +54,7 @@ function PermissionRow({
   onFix: () => void;
   testId: string;
 }) {
+
   const isGranted = status === "granted";
   const interactive = focused && status === "denied";
   return (
@@ -121,6 +124,8 @@ function PermissionRow({
 }
 
 export default function PermissionRecoveryPage() {
+
+  const ui = useGT();
   const [permissions, setPermissions] = useState<Record<string, string> | null>(null);
   // Keychain: "granted" if enabled or unavailable (no keychain on this OS),
   // "denied" only if the user previously opted in but access is now refused.
@@ -244,8 +249,8 @@ export default function PermissionRecoveryPage() {
     {
       id: "microphone",
       icon: <Mic className="w-4 h-4" strokeWidth={1.5} />,
-      label: "Microphone",
-      description: "Transcribe audio",
+      label: ui("Microphone"),
+      description: ui("Transcribe audio"),
       status: micStatus,
       onFix: () => handleFix("microphone"),
       testId: "permission-row-microphone",
@@ -255,8 +260,8 @@ export default function PermissionRecoveryPage() {
           {
             id: "accessibility",
             icon: <Keyboard className="w-4 h-4" strokeWidth={1.5} />,
-            label: "Accessibility",
-            description: "Read text from apps",
+            label: ui("Accessibility"),
+            description: ui("Read text from apps"),
             status: accessibilityStatus,
             onFix: () => handleFix("accessibility"),
             testId: "permission-row-accessibility",
@@ -266,8 +271,8 @@ export default function PermissionRecoveryPage() {
     {
       id: "screen",
       icon: <Monitor className="w-4 h-4" strokeWidth={1.5} />,
-      label: "Screen",
-      description: "Capture display",
+      label: ui("Screen"),
+      description: ui("Capture display"),
       status: screenStatus,
       onFix: () => handleFix("screenRecording"),
       testId: "permission-row-screen",
@@ -277,8 +282,8 @@ export default function PermissionRecoveryPage() {
           {
             id: "keychain",
             icon: <Lock className="w-4 h-4" strokeWidth={1.5} />,
-            label: "Secure storage",
-            description: "Encrypt API keys & credentials",
+            label: ui("Secure storage"),
+            description: ui("Encrypt API keys & credentials"),
             status: keychainStatus,
             onFix: handleFixKeychain,
             testId: "permission-row-keychain",
@@ -336,7 +341,7 @@ export default function PermissionRecoveryPage() {
               <RefreshCw
                 className={`h-3.5 w-3.5 ${restartingApp ? "animate-spin" : ""}`}
               />
-              {restartingApp ? "Restarting..." : "Restart screenpipe"}
+              {restartingApp ? ui("Restarting...") : ui("Restart screenpipe")}
             </button>
           </div>
         ) : allOk ? (

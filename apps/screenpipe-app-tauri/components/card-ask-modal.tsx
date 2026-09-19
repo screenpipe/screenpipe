@@ -19,6 +19,10 @@ import {
 import type { CardAskTrigger } from "@/lib/card-ask/gating";
 import { openExternalUrl } from "@/lib/open-external-url";
 import { screenpipeWebBase } from "@/lib/web-url";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 /**
  * Kept for the analytics landing page only. The modal no longer sends anyone
@@ -38,36 +42,36 @@ const COPY: Record<
   // Copy still lives here so the map stays exhaustive over CardAskTrigger and
   // a remote payload cannot route `onboarding` to the modal and find nothing.
   onboarding: {
-    title: "Start your 7-day Business trial",
+    title: msg("Start your 7-day Business trial", {}),
     body: "Full access to AI, unlimited pipes, and cloud transcription. Cancel anytime before day 7 and you are not charged.",
     cta: "Start trial",
   },
   login: {
-    title: "Start your 7-day Business trial",
+    title: msg("Start your 7-day Business trial", {}),
     body: "Full access to AI, unlimited pipes, and cloud transcription. Cancel anytime before day 7 and you are not charged.",
     cta: "Start trial",
   },
   // Mid-journey placement: the user is deep in a session and has seen the app
   // work, so the ask leads with continuity rather than setup.
   mid_session: {
-    title: "Keep Business features running",
+    title: msg("Keep Business features running", {}),
     body: "A 7-day Business trial keeps AI, pipes, and cloud transcription at full capacity while you work. Cancel anytime before day 7 and you are not charged.",
     cta: "Start trial",
   },
   first_value: {
-    title: "Keep this running",
+    title: msg("Keep this running", {}),
     body: "You just got your first result. A 7-day Business trial keeps AI, pipes, and transcription running at full capacity. Cancel anytime before day 7 and you are not charged.",
     cta: "Start trial",
   },
   limit: {
-    title: "You have hit today's AI limit",
+    title: msg("You have hit today's AI limit", {}),
     body: "A 7-day Business trial lifts the cap and keeps your pipes running. Cancel anytime before day 7 and you are not charged.",
     cta: "Start trial",
   },
   // Someone already on a cardless grant is *in* a trial. Offering to "start"
   // one is nonsense to them; the real ask is to keep what they already have.
   grant_expiry: {
-    title: "Your trial ends soon",
+    title: msg("Your trial ends soon", {}),
     body: "Add a card to keep AI, pipes, and transcription running. Nothing is charged until your trial ends, and you can cancel before then.",
     cta: "Keep Business",
   },
@@ -118,6 +122,9 @@ export function CardAskModal({
   // checkout at staging; a bare literal is blocked by lib/web-url.guard.test.
   checkoutBaseUrl = screenpipeWebBase("https://screenpipe.com"),
 }: Props) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const shownAtRef = useRef<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -362,11 +369,11 @@ export function CardAskModal({
   const copy =
     trigger === "grant_expiry" && daysRemaining !== null
       ? {
-          title: "Keep Business access",
+          title: ui("Keep Business access"),
           body: `You will lose your trial in ${daysRemaining} ${daysRemaining === 1 ? "day" : "days"}. add your card to keep access.`,
           cta: "add card & keep access",
         }
-      : COPY[trigger];
+      : localizeDefinitions(COPY, uiMessages)[trigger];
 
   return (
     <Dialog
@@ -400,7 +407,7 @@ export function CardAskModal({
               <iframe
                 ref={checkoutFrameRef}
                 src={`${checkoutBaseUrl}/business-trial/checkout?embedded=1`}
-                title="Secure Business trial card form"
+                title={ui("Secure Business trial card form")}
                 allow="payment"
                 className="h-[420px] w-full border-0 bg-background"
                 data-testid="business-trial-checkout-frame"
@@ -412,7 +419,7 @@ export function CardAskModal({
                 disabled={busy}
                 data-testid="card-ask-start"
               >
-                {busy ? "Opening checkout" : error ? "Try again" : copy.cta}
+                {busy ? ui("Opening checkout") : error ? ui("Try again") : copy.cta}
               </Button>
             )}
             {error && (

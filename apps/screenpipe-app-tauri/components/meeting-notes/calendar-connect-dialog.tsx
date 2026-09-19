@@ -24,6 +24,8 @@ import { Input } from "@/components/ui/input";
 import { commands, type IcsCalendarEntry } from "@/lib/utils/tauri";
 import { getStore, saveAndEncrypt } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 export type CalendarProviderId = "native" | "google" | "ics";
 
@@ -151,6 +153,7 @@ export function CalendarConnectDialog({
   platform,
   onConnected,
 }: CalendarConnectDialogProps) {
+
   const option = useMemo(
     () =>
       calendarProviderOptions(platform).find(
@@ -212,6 +215,8 @@ function NativeCalendarConnect({
   onConnected: () => void | Promise<void>;
   onClose: () => void;
 }) {
+
+  const ui = useGT();
   const [busy, setBusy] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
@@ -268,10 +273,10 @@ function NativeCalendarConnect({
       </p>
       <div className="border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
         {platform.isMac
-          ? "For Google, Outlook, or Exchange via Apple Calendar, add the account in macOS Internet Accounts first."
+          ? ui("For Google, Outlook, or Exchange via Apple Calendar, add the account in macOS Internet Accounts first.")
           : platform.isWindows
-            ? "For Google, Outlook, or Exchange via Windows Calendar, add the account in Windows Email & accounts first."
-            : "Use your operating system's calendar account settings to choose which calendars are available."}
+            ? ui("For Google, Outlook, or Exchange via Windows Calendar, add the account in Windows Email & accounts first.")
+            : ui("Use your operating system's calendar account settings to choose which calendars are available.")}
       </div>
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -280,7 +285,7 @@ function NativeCalendarConnect({
           ) : (
             <Monitor className="h-3.5 w-3.5" />
           )}
-          {connected ? "connected" : "not connected"}
+          {connected ? ui("connected") : ui("not connected")}
         </div>
         <Button onClick={connect} disabled={busy} className="rounded-md">
           {busy ? (
@@ -305,6 +310,7 @@ function GoogleCalendarConnect({
   onConnected: () => void | Promise<void>;
   onClose: () => void;
 }) {
+
   const [busy, setBusy] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
 
@@ -361,6 +367,8 @@ function IcsCalendarConnect({
   onConnected: () => void | Promise<void>;
   onClose: () => void;
 }) {
+
+  const ui = useGT();
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -424,7 +432,7 @@ function IcsCalendarConnect({
         <Input
           value={name}
           onChange={(event) => setName(event.target.value)}
-          placeholder="Name, optional"
+          placeholder={ui("Name, optional")}
           className="rounded-md"
         />
       </div>

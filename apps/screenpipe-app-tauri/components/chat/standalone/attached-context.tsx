@@ -9,6 +9,8 @@ import {
   parseAttachedContext,
   type AttachedContext,
 } from "@/lib/chat/attached-context";
+import { useGT } from "gt-react";
+
 
 export { parseAttachedContext } from "@/lib/chat/attached-context";
 
@@ -38,6 +40,8 @@ export { parseAttachedContext } from "@/lib/chat/attached-context";
  */
 
 export function AttachedContextCard({ context }: { context: AttachedContext }) {
+
+  const ui = useGT();
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -65,8 +69,8 @@ export function AttachedContextCard({ context }: { context: AttachedContext }) {
             }}
             onMouseUp={(event) => event.stopPropagation()}
             aria-expanded={expanded}
-            aria-label={expanded ? "Hide attached context" : "Show attached context"}
-            title={expanded ? "Hide attached context" : "Show attached context"}
+            aria-label={expanded ? ui("Hide attached context") : ui("Show attached context")}
+            title={expanded ? ui("Hide attached context") : ui("Show attached context")}
             className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-muted-foreground/10 hover:text-foreground"
           >
             {expanded ? (
