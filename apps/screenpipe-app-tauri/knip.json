@@ -11,6 +11,7 @@
     "e2e/mock-updates/windows-persistence-server.ts",
     "e2e/scripts/verify-spotlight-exclusion.ts",
     "scripts/timeline-parity-export.ts",
+    "scripts/eval-pi-compaction.ts",
     "scripts/eval-workflow-assistant.ts",
     "scripts/eval-workflow-discovery.ts",
     "scripts/eval-workflow-guide.ts",

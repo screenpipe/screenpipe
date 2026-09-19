@@ -31,7 +31,6 @@ import extension, {
   maxMessageChars,
   normalizeContextOverflowError,
   resolveContextWindowTokens,
-  shouldProactivelyCompact,
 } from "@screenpipe-ext/context-pruning";
 
 // ── helpers ────────────────────────────────────────────────────────────
@@ -46,7 +45,6 @@ function registerExtension() {
   };
   extension(pi as any);
   return {
-    agent_settled: handlers["agent_settled"][0],
     context: handlers["context"][0],
     message_end: handlers["message_end"][0],
     tool_result: handlers["tool_result"][0],
@@ -101,64 +99,6 @@ describe("provider overflow normalization", () => {
         errorMessage: "context_length_exceeded: Context size has been exceeded.",
       }),
     ).toBeUndefined();
-  });
-});
-
-describe("proactive compaction", () => {
-  it("uses 70% as the inclusive quality threshold", () => {
-    expect(shouldProactivelyCompact({ percent: 69.9 })).toBe(false);
-    expect(shouldProactivelyCompact({ percent: 70 })).toBe(true);
-    expect(shouldProactivelyCompact({ percent: 85 })).toBe(true);
-    expect(shouldProactivelyCompact({ percent: null })).toBe(false);
-    expect(shouldProactivelyCompact(undefined)).toBe(false);
-  });
-
-  it("compacts after a successful settled turn reaches 70%", async () => {
-    const handlers = registerExtension();
-    await handlers.message_end({
-      type: "message_end",
-      message: { role: "assistant", content: [], stopReason: "stop" },
-    });
-    const compactCalls: any[] = [];
-
-    await handlers.agent_settled(
-      { type: "agent_settled" },
-      {
-        getContextUsage: () => ({ tokens: 140_000, contextWindow: 200_000, percent: 70 }),
-        hasPendingMessages: () => false,
-        compact: (options: any) => compactCalls.push(options),
-      },
-    );
-
-    expect(compactCalls).toHaveLength(1);
-    expect(compactCalls[0].onComplete).toBeTypeOf("function");
-    expect(compactCalls[0].onError).toBeTypeOf("function");
-  });
-
-  it("does not compact below 70%, after an error, or with queued work", async () => {
-    for (const testCase of [
-      { stopReason: "stop", percent: 69.9, pending: false },
-      { stopReason: "error", percent: 90, pending: false },
-      { stopReason: "stop", percent: 90, pending: true },
-    ]) {
-      const handlers = registerExtension();
-      await handlers.message_end({
-        type: "message_end",
-        message: { role: "assistant", content: [], stopReason: testCase.stopReason },
-      });
-      const compactCalls: any[] = [];
-
-      await handlers.agent_settled(
-        { type: "agent_settled" },
-        {
-          getContextUsage: () => ({ percent: testCase.percent }),
-          hasPendingMessages: () => testCase.pending,
-          compact: (options: any) => compactCalls.push(options),
-        },
-      );
-
-      expect(compactCalls).toHaveLength(0);
-    }
   });
 });
 

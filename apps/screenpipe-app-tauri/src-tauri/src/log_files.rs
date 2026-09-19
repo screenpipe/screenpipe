@@ -21,6 +21,22 @@ pub struct LogFile {
     pub modified_at: u64,
 }
 
+impl LogFile {
+    pub(crate) fn bundle_header(&self) -> String {
+        let modified_at = i64::try_from(self.modified_at)
+            .ok()
+            .filter(|secs| *secs > 0)
+            .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))
+            .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+            .unwrap_or_else(|| "unknown".to_string());
+        format!("\n=== {} ===\nFile modified at: {modified_at}\n", self.name)
+    }
+}
+
+pub(crate) fn is_panic_log(name: &str) -> bool {
+    matches!(name, "last-panic.log" | "last-panic.log.prev")
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn read_log_tail(path: String, max_bytes: u32) -> Result<String, String> {
@@ -77,7 +93,9 @@ pub async fn get_active_data_dir(app: AppHandle) -> Result<String, String> {
         .map_err(|error| error.to_string())
 }
 
-/// Gather `.log` files from the given directories, newest first.
+/// Gather `.log` files and the rotated panic log from the given directories.
+/// Panic logs come first so report limits do not displace crash evidence after
+/// a restart; within each group, files are newest first.
 ///
 /// Resilience is the whole point of this helper: a directory that can't be read
 /// (missing, unmounted, permission denied — all common on Windows with a custom
@@ -96,14 +114,20 @@ pub(crate) async fn collect_log_files(dirs: &[PathBuf]) -> Vec<LogFile> {
         collect_from_dir(dir_path, &mut seen, &mut entries).await;
     }
 
-    entries.sort_by_key(|(_, metadata)| {
-        std::cmp::Reverse(
-            metadata
-                .modified()
-                .ok()
-                .and_then(|m| m.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
+    entries.sort_by_key(|(path, metadata)| {
+        (
+            !path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(is_panic_log),
+            std::cmp::Reverse(
+                metadata
+                    .modified()
+                    .ok()
+                    .and_then(|m| m.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            ),
         )
     });
 
@@ -130,7 +154,7 @@ pub(crate) async fn collect_log_files(dirs: &[PathBuf]) -> Vec<LogFile> {
         .collect()
 }
 
-/// Push `.log` entries from a single directory into `entries`, deduping by
+/// Push log entries from a single directory into `entries`, deduping by
 /// canonical path via `seen`. A directory that can't be opened is logged and
 /// skipped rather than propagated as an error.
 async fn collect_from_dir(
@@ -150,7 +174,12 @@ async fn collect_from_dir(
         match dir.next_entry().await {
             Ok(Some(entry)) => {
                 let path = entry.path();
-                if path.extension().map(|ext| ext == "log").unwrap_or(false) {
+                if path.extension().map(|ext| ext == "log").unwrap_or(false)
+                    || path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(is_panic_log)
+                {
                     if let Ok(metadata) = entry.metadata().await {
                         // Canonicalize for dedup; fall back to the raw path if
                         // the file vanished between listing and canonicalizing.
@@ -225,12 +254,23 @@ mod tests {
     async fn collects_only_log_files() {
         let dir = tempdir().unwrap();
         write_file(dir.path(), "screenpipe.log", "hello").await;
+        write_file(dir.path(), "last-panic.log", "current panic").await;
+        write_file(dir.path(), "last-panic.log.prev", "previous panic").await;
         write_file(dir.path(), "notes.txt", "ignore me").await;
         write_file(dir.path(), "db.sqlite", "ignore me too").await;
+        write_file(dir.path(), "private.log.prev", "ignore unrelated backups").await;
 
         let files = collect_log_files(&[dir.path().to_path_buf()]).await;
 
-        assert_eq!(names(&files), HashSet::from(["screenpipe.log".to_string()]));
+        assert_eq!(
+            names(&files),
+            HashSet::from([
+                "screenpipe.log".to_string(),
+                "last-panic.log".to_string(),
+                "last-panic.log.prev".to_string(),
+            ])
+        );
+        assert!(files[..2].iter().all(|file| is_panic_log(&file.name)));
     }
 
     #[tokio::test]

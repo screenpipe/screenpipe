@@ -257,6 +257,10 @@ async fn collect_log_text(app: &AppHandle) -> String {
         }
     };
 
+    collect_log_text_from_files(files).await
+}
+
+async fn collect_log_text_from_files(files: Vec<crate::log_files::LogFile>) -> String {
     let mut logs = stream::iter(files.into_iter().take(MAX_LOG_FILES).enumerate().map(
         |(index, file)| async move {
             let content = match timeout(
@@ -275,7 +279,7 @@ async fn collect_log_text(app: &AppHandle) -> String {
                     "[Error reading file: timed out]".to_string()
                 }
             };
-            (index, file.name, content)
+            (index, file, content)
         },
     ))
     .buffer_unordered(MAX_LOG_FILES)
@@ -284,7 +288,7 @@ async fn collect_log_text(app: &AppHandle) -> String {
     logs.sort_unstable_by_key(|(index, _, _)| *index);
 
     logs.into_iter()
-        .map(|(_, name, content)| format!("\n\n=== {name} ===\n{content}"))
+        .map(|(_, file, content)| format!("\n{}{content}", file.bundle_header()))
         .collect()
 }
 
@@ -307,6 +311,10 @@ async fn collect_migration_diagnostics(app: &AppHandle) -> String {
     let Some(root) = root else {
         return "[Storage directory unavailable]".into();
     };
+    collect_migration_diagnostics_from_root(root).await
+}
+
+async fn collect_migration_diagnostics_from_root(root: std::path::PathBuf) -> String {
     match timeout(
         DIAGNOSTIC_PROBE_TIMEOUT,
         tokio::task::spawn_blocking(move || screenpipe_db::storage::diagnostics::recent(&root)),
@@ -734,6 +742,184 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn migration_conflict_reaches_support_after_log_rotation_and_redaction() {
+        use screenpipe_db::{storage, DatabaseManager};
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("db.sqlite");
+        let db = DatabaseManager::new(source.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        db.execute_raw_sql_write(
+            "INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-09-18','private history')",
+        )
+        .await
+        .unwrap();
+        db.close().await;
+        let report = storage::migrate(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap();
+        let descriptor = storage::StorageDescriptor::read(root.path())
+            .unwrap()
+            .unwrap();
+        let extra = root.path().join("extra.sqlite");
+        let db = DatabaseManager::new(extra.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        db.execute_raw_sql_write("INSERT INTO frames(id,timestamp,full_text) VALUES(2,'2026-09-18','additional private history')").await.unwrap();
+        db.close().await;
+        std::fs::rename(extra, &source).unwrap();
+        std::fs::write(
+            root.path().join("storage-migration.json"),
+            serde_json::to_vec(&json!({
+                "format": 2, "phase": "paused", "descriptor": descriptor,
+                "source": report.tables, "snapshot": null, "report": null
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let error = storage::migrate(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("source contains recorded history"));
+        timeout(Duration::from_secs(3), async {
+            loop {
+                if storage::diagnostics::recent(root.path())
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|snapshot| snapshot.status == "failed")
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        // A later support submission has no original rolling log in memory or on disk.
+        let diagnostics = collect_migration_diagnostics_from_root(root.path().to_owned()).await;
+        let raw =
+            format!("[no log files found]\n\n=== Storage Migration Diagnostics ===\n{diagnostics}");
+        let redacted = crate::feedback_redact::redact_pii_for_feedback(raw, "{}".into())
+            .await
+            .unwrap();
+        assert!(redacted.contains("source contains recorded history"));
+        assert!(redacted.contains("validating_migration_source"));
+        assert!(redacted.contains("\"source_exists\": true"));
+        assert!(redacted.contains("\"index_exists\": true"));
+        assert!(!redacted.contains("private history"));
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "signedUrl": format!("{}/upload/log", server.uri()), "path": "logs/report.log"
+            }})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"id": 42}})))
+            .mount(&server)
+            .await;
+        upload_report(
+            &Client::new(),
+            &server.uri(),
+            &request(),
+            redacted.clone(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let upload = requests.iter().find(|r| r.method == "PUT").unwrap();
+        assert_eq!(upload.body, redacted.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn transcription_gateway_failure_reaches_support_after_log_rotation() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(
+                ResponseTemplate::new(504).set_body_string("upstream inference timed out"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let failure = screenpipe_audio::transcription::openai_compatible::batch::transcribe_with_openai_compatible(
+            None, &server.uri(), None, "whisper-1", &vec![0.0; 120 * 16000],
+            "test", 16000, vec![], &[], None, true,
+        ).await.unwrap_err();
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("screenpipe-app.2026-09-18.log");
+        tokio::fs::write(
+            &log_path,
+            format!("meeting retranscribe: transcription failed: {failure}\npassword=hunter2\n"),
+        )
+        .await
+        .unwrap();
+        // A subsequent process/day has a healthy log; support must retain the
+        // originating failure from the previous log as well.
+        tokio::fs::write(
+            dir.path().join("screenpipe-app.2026-09-19.log"),
+            "recording resumed\n",
+        )
+        .await
+        .unwrap();
+        let files = crate::log_files::collect_log_files(&[dir.path().to_path_buf()]).await;
+        let logs = collect_log_text_from_files(files).await;
+        let redacted = crate::feedback_redact::redact_diagnostics_locally(logs)
+            .await
+            .unwrap();
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "signedUrl": format!("{}/upload/log", server.uri()), "path": "logs/report.log"
+            }})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"id": 42}})))
+            .mount(&server)
+            .await;
+        upload_report(
+            &Client::new(),
+            &server.uri(),
+            &request(),
+            redacted,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let upload = requests.iter().find(|r| r.method == "PUT").unwrap();
+        let report = String::from_utf8_lossy(&upload.body);
+        assert!(
+            report.contains("meeting retranscribe: transcription failed"),
+            "{report}"
+        );
+        assert!(report.contains("audio=120s, timeout=120s"), "{report}");
+        assert!(report.contains("504 Gateway Timeout"), "{report}");
+        assert!(report.contains("upstream inference timed out"), "{report}");
+        assert!(!report.contains("hunter2"));
+    }
+
     #[test]
     fn validates_job_identity_and_video_source() {
         let mut input = request();
@@ -839,6 +1025,35 @@ mod tests {
         let server = MockServer::start().await;
         let mut input = request();
         input.video_ext = Some("mp4".to_string());
+        let dir = tempfile::tempdir().unwrap();
+        screenpipe_engine::crash_log::write_panic_log(
+            dir.path(),
+            "[2026-09-18 19:19:44.000] PANIC on thread 'capture': encoder failed; recording stopped\nBacktrace:\n0: capture_frame\npassword=hunter2",
+        );
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(dir.path().join("last-panic.log"))
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1789759184))
+            .unwrap();
+        screenpipe_engine::crash_log::rotate_panic_log(dir.path());
+        assert!(!dir.path().join("last-panic.log").exists());
+        for day in 1..=MAX_LOG_FILES + 1 {
+            tokio::fs::write(
+                dir.path()
+                    .join(format!("screenpipe-app.2026-09-{day:02}.log")),
+                "recording resumed\n",
+            )
+            .await
+            .unwrap();
+        }
+        let files = crate::log_files::collect_log_files(&[dir.path().to_path_buf()]).await;
+        let logs = collect_log_text_from_files(files).await;
+        // Exercise the deterministic redaction shared by manual feedback and
+        // unattended logs, without contacting the optional enrichment service.
+        let redacted_logs = crate::feedback_redact::redact_diagnostics_locally(logs)
+            .await
+            .unwrap();
 
         Mock::given(method("POST"))
             .and(path("/api/logs"))
@@ -862,7 +1077,7 @@ mod tests {
         Mock::given(method("PUT"))
             .and(path("/upload/log"))
             .and(header("Content-Type", "text/plain"))
-            .and(body_bytes(b"safe logs"))
+            .and(body_bytes(redacted_logs.as_bytes()))
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
@@ -904,7 +1119,7 @@ mod tests {
             &Client::new(),
             &server.uri(),
             &input,
-            "safe logs".to_string(),
+            redacted_logs,
             Some(AttachmentBytes {
                 bytes: Bytes::from_static(b"image"),
                 content_type: "image/jpeg",
@@ -922,7 +1137,20 @@ mod tests {
         assert_eq!(receipt.follow_up.as_deref(), Some("email"));
         assert!(receipt.screenshot_uploaded);
         assert!(receipt.video_uploaded);
-        assert_eq!(server.received_requests().await.unwrap().len(), 5);
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 5);
+        let uploaded = requests
+            .iter()
+            .find(|request| request.url.path() == "/upload/log")
+            .unwrap();
+        let report = std::str::from_utf8(&uploaded.body).unwrap();
+        assert!(report.contains("=== last-panic.log.prev ==="));
+        assert!(report.contains("File modified at: 2026-09-18T19:19:44Z"));
+        assert!(report.contains("[2026-09-18 19:19:44.000]"));
+        assert!(report.contains("encoder failed; recording stopped"));
+        assert!(report.contains("Backtrace:\n0: capture_frame"));
+        assert!(report.contains("recording resumed"));
+        assert!(!report.contains("hunter2"));
     }
 
     #[tokio::test]

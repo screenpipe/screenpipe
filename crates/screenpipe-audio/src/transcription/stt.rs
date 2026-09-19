@@ -59,7 +59,8 @@ pub const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT: &str = "http://127.0.0.1:8080";
 /// Default model name for OpenAI-compatible transcription.
 pub const DEFAULT_OPENAI_COMPATIBLE_MODEL: &str = "whisper-1";
 
-/// Timeout for OpenAI-compatible transcription requests.
+/// Minimum timeout for OpenAI-compatible transcription requests.
+/// Longer audio gets a per-request timeout based on its duration.
 pub const OPENAI_COMPATIBLE_TIMEOUT_SECS: u64 = 30;
 
 /// Configuration for OpenAI Compatible transcription engine

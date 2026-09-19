@@ -7,7 +7,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 /**
  * Context management extension for screenpipe pipes and chat.
  *
- * Five mechanisms that keep pi's existing compaction path effective. The
+ * Four mechanisms that keep pi's existing compaction path effective. The
  * `context` hook is pi's `transformContext` slot, which runs before every LLM
  * call and whose returned messages are what actually gets sent:
  *
@@ -38,9 +38,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
  *    that wording, so normalize it to pi's standard overflow marker before
  *    pi decides between ordinary retry and compaction.
  *
- * 5. `agent_settled` (proactive compaction) — Compact after a successful turn
- *    reaches 70% of the configured context window. This protects answer
- *    quality before pi's near-limit threshold or provider overflow fallback.
+ * Proactive compaction and retained-history budgeting live in the managed
+ * Pi runtime (pi-context-compaction.patch), at its safe between-tool-step
+ * boundary. Calling ctx.compact here would abort an active agent run.
  */
 
 // A single tool result above this threshold triggers the "too large" feedback.
@@ -81,17 +81,6 @@ const CHARS_PER_TOKEN = 4;
 const HISTORY_OPEN = "<conversation_history>";
 const HISTORY_CLOSE = "</conversation_history>";
 const CONTEXT_SIZE_EXCEEDED = /context size has been exceeded/i;
-const PROACTIVE_COMPACTION_PERCENT = 70;
-
-/** Whether the reported context usage has reached the quality guardrail. */
-export function shouldProactivelyCompact(usage: any): boolean {
-  return (
-    typeof usage?.percent === "number" &&
-    Number.isFinite(usage.percent) &&
-    usage.percent >= PROACTIVE_COMPACTION_PERCENT
-  );
-}
-
 /**
  * Mark the provider's generic HTTP 500 overflow wording for pi's existing
  * overflow classifier. The original error remains intact for diagnostics and
@@ -215,45 +204,10 @@ export function boundOversizedMessages(messages: any[], contextWindowTokens: num
 }
 
 export default function (pi: ExtensionAPI) {
-  let lastAssistantSucceeded = false;
-  let proactiveCompactionInFlight = false;
-
-  // ── 4. Route provider overflow into pi's compact-and-retry path ─────
+  // Route provider overflow into pi's compact-and-retry path.
   pi.on("message_end", async (event) => {
-    if (event.message?.role === "assistant") {
-      lastAssistantSucceeded = event.message.stopReason === "stop";
-    }
     const message = normalizeContextOverflowError(event.message);
     if (message) return { message };
-  });
-
-  // ── 5. Compact proactively at 70% after a successful settled turn ──
-  pi.on("agent_settled", async (_event, ctx) => {
-    if (
-      !lastAssistantSucceeded ||
-      proactiveCompactionInFlight ||
-      ctx.hasPendingMessages()
-    ) {
-      return;
-    }
-
-    let usage;
-    try {
-      usage = ctx.getContextUsage();
-    } catch {
-      return;
-    }
-    if (!shouldProactivelyCompact(usage)) return;
-
-    proactiveCompactionInFlight = true;
-    ctx.compact({
-      onComplete: () => {
-        proactiveCompactionInFlight = false;
-      },
-      onError: () => {
-        proactiveCompactionInFlight = false;
-      },
-    });
   });
 
   // ── 1. Feedback on oversized tool results ──────────────────────────

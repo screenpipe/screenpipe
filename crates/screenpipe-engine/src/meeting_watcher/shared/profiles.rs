@@ -94,6 +94,7 @@ pub struct MeetingDetectionProfile {
 pub(crate) const BROWSER_NAMES: &[&str] = &[
     "google chrome",
     "arc",
+    "dia",
     "firefox",
     "safari",
     "microsoft edge",
@@ -251,7 +252,25 @@ pub fn load_detection_profiles() -> Vec<MeetingDetectionProfile> {
             ignore_window_titles: &[],
             requires_call_signal: false,
         },
-        // Slack Huddle (browser + desktop)
+        // Browser Slack: the Huddles list shares the in-call title and /client/
+        // URL. Use those only to find the browser, then require a huddle-specific
+        // control. A generic "Leave" button can belong to another tab or dialog.
+        MeetingDetectionProfile {
+            app_identifiers: AppIdentifiers {
+                macos_app_names: &[],
+                windows_process_names: &[],
+                browser_url_patterns: &["app.slack.com/huddle"],
+                browser_title_patterns: &["Huddles"],
+            },
+            call_signals: vec![CallSignal::RoleWithName {
+                role: "AXButton",
+                name_contains: "leave huddle",
+            }],
+            min_signals_required: 1,
+            ignore_window_titles: &[],
+            requires_call_signal: true,
+        },
+        // Native Slack retains its start policy and service-level ignore aliases.
         MeetingDetectionProfile {
             app_identifiers: AppIdentifiers {
                 macos_app_names: &["slack"],

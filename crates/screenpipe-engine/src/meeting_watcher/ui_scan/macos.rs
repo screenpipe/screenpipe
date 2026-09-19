@@ -366,7 +366,7 @@ pub fn find_running_meeting_apps(
 
                 // Check browser URL patterns — only if this is a browser
                 if !profile.app_identifiers.browser_url_patterns.is_empty()
-                    && BROWSER_NAMES.iter().any(|b| name_lower.contains(b))
+                    && is_browser_app(&name_lower)
                     && has_browser_meeting_url(pid, profile)
                 {
                     results.push(RunningMeetingApp {
@@ -652,7 +652,7 @@ mod live_tests {
                     let app = &running[i];
                     let name = process_name_for_pid(app.pid()).unwrap_or_default();
                     let name_lower = name.to_lowercase();
-                    if BROWSER_NAMES.iter().any(|b| name_lower.contains(b)) {
+                    if is_browser_app(&name_lower) {
                         println!("\nBROWSER: {} (pid={})", name, app.pid());
                         let ax_app = cidre::ax::UiElement::with_app_pid(app.pid());
                         let _ = ax_app.set_messaging_timeout_secs(2.0);

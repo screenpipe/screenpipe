@@ -22,6 +22,7 @@ which = { workspace = true }
 ffmpeg-sidecar = { git = "https://github.com/nathanbabcock/ffmpeg-sidecar", rev = "b0f48a514235d1278d860f4a0af66aa9d6e1618d" }
 log = { workspace = true }
 anyhow = { workspace = true }
+diffy = "0.4"
 arc-swap = { workspace = true }
 agent-client-protocol = { version = "=1.2.0", features = ["unstable_auth_methods"], optional = true }
 

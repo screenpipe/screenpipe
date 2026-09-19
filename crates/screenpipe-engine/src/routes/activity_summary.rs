@@ -550,6 +550,50 @@ fn resolved_frames_cte(start: &str, end: &str) -> String {
     )
 }
 
+fn key_texts_query(resolved_frames_cte: &str, app_filter_f: &str) -> String {
+    // One representative text per app+window context. Prefer user input
+    // (AXTextArea/AXTextField) over static text, cap at 300 chars to skip
+    // marketing copy walls.
+    // CROSS JOIN keeps the time-bounded frames outermost even without planner
+    // statistics; an ordinary JOIN can scan all historical accessibility text.
+    format!(
+        "{resolved_frames_cte}, ranked_contexts AS ( \
+           SELECT e.text, f.app_name, \
+             COALESCE(f.window_name, '') as window_name, \
+             f.timestamp, \
+             DATE(f.timestamp) AS bucket, \
+             ROW_NUMBER() OVER ( \
+               PARTITION BY DATE(f.timestamp), f.app_name, f.window_name \
+               ORDER BY \
+                 CASE WHEN e.role IN ('AXTextArea', 'AXTextField') THEN 0 ELSE 1 END, \
+                 LENGTH(e.text) DESC, \
+                 f.timestamp DESC \
+             ) as rn \
+           FROM resolved_frames f \
+           CROSS JOIN elements e ON e.frame_id = f.id \
+           WHERE 1 = 1{app_filter_f} \
+           AND e.text IS NOT NULL \
+           AND e.source = 'accessibility' \
+           AND LENGTH(e.text) BETWEEN 30 AND 300 \
+           AND e.text NOT LIKE 'http%' \
+           AND e.text NOT LIKE 'cdn.%' \
+         ), balanced AS ( \
+           SELECT text, app_name, window_name, timestamp, bucket, \
+             ROW_NUMBER() OVER (PARTITION BY bucket ORDER BY timestamp DESC) AS bucket_rank \
+           FROM ranked_contexts \
+           WHERE rn = 1 \
+         ) \
+         SELECT text, app_name, window_name, timestamp \
+         FROM balanced \
+         ORDER BY bucket_rank ASC, timestamp ASC \
+         LIMIT 20"
+    )
+}
+
+#[cfg(test)]
+#[path = "activity_summary_key_text_tests.rs"]
+mod key_text_tests;
+
 async fn collect_summary_core(
     db: &DatabaseManager,
     query: &ActivitySummaryQuery,
@@ -715,41 +759,7 @@ async fn collect_summary_core(
          ORDER BY section_order, row_order"
     );
 
-    // One representative text per app+window context. Prefer user input
-    // (AXTextArea/AXTextField) over static text, cap at 300 chars to skip
-    // marketing copy walls.
-    let texts_query = format!(
-        "{resolved_frames_cte}, ranked_contexts AS ( \
-           SELECT e.text, f.app_name, \
-             COALESCE(f.window_name, '') as window_name, \
-             f.timestamp, \
-             DATE(f.timestamp) AS bucket, \
-             ROW_NUMBER() OVER ( \
-               PARTITION BY DATE(f.timestamp), f.app_name, f.window_name \
-               ORDER BY \
-                 CASE WHEN e.role IN ('AXTextArea', 'AXTextField') THEN 0 ELSE 1 END, \
-                 LENGTH(e.text) DESC, \
-                 f.timestamp DESC \
-             ) as rn \
-           FROM elements e \
-           JOIN resolved_frames f ON f.id = e.frame_id \
-           WHERE 1 = 1{app_filter_f} \
-           AND e.text IS NOT NULL \
-           AND e.source = 'accessibility' \
-           AND LENGTH(e.text) BETWEEN 30 AND 300 \
-           AND e.text NOT LIKE 'http%' \
-           AND e.text NOT LIKE 'cdn.%' \
-         ), balanced AS ( \
-           SELECT text, app_name, window_name, timestamp, bucket, \
-             ROW_NUMBER() OVER (PARTITION BY bucket ORDER BY timestamp DESC) AS bucket_rank \
-           FROM ranked_contexts \
-           WHERE rn = 1 \
-         ) \
-         SELECT text, app_name, window_name, timestamp \
-         FROM balanced \
-         ORDER BY bucket_rank ASC, timestamp ASC \
-         LIMIT 20"
-    );
+    let texts_query = key_texts_query(&resolved_frames_cte, &app_filter_f);
 
     let audio_speakers_query = format!(
         "SELECT COALESCE(s.name, 'Unknown') as speaker_name, COUNT(*) as segment_count \
@@ -1910,7 +1920,7 @@ mod db_tests {
     /// A throwaway migrated DB. We use a temp FILE rather than `sqlite::memory:`
     /// because the manager opens a multi-connection pool and each connection to
     /// `:memory:` is a separate database; a file is shared across the pool.
-    async fn fresh_db() -> (DatabaseManager, tempfile::TempDir) {
+    pub(super) async fn fresh_db() -> (DatabaseManager, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("test.db");
         let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())

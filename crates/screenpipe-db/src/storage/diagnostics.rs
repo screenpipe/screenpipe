@@ -27,6 +27,19 @@ tokio::task_local! {
 
 /// Contains counters and operation names only, never captured text or SQL.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SourceState {
+    pub journal_phase: String,
+    pub source_exists: bool,
+    pub index_exists: bool,
+    pub active_descriptor_present: bool,
+    pub active_descriptor_matches: bool,
+    pub expected_source_bytes: Option<u64>,
+    pub actual_source_bytes: Option<u64>,
+    pub source_modified_matches: Option<bool>,
+    pub source_file_id_matches: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
     pub schema_version: u32,
     pub process_id: u32,
@@ -51,6 +64,8 @@ pub struct Snapshot {
     pub idle_seconds: u64,
     pub failure_stage: Option<String>,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_state: Option<SourceState>,
 }
 
 struct Run {
@@ -92,6 +107,15 @@ pub fn app_version(version: String) {
             .unwrap_or_else(|e| e.into_inner())
             .snapshot
             .app_version = Some(version);
+    });
+}
+
+pub(super) fn source_state(state: SourceState) {
+    let _ = ACTIVE.try_with(|run| {
+        run.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .snapshot
+            .source_state = Some(state);
     });
 }
 
@@ -214,6 +238,7 @@ async fn observe_with_timing<T, E: Display>(
             idle_seconds: 0,
             failure_stage: None,
             error: None,
+            source_state: None,
         },
         started,
         advanced: started,

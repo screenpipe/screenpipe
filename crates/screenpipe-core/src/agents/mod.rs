@@ -18,6 +18,7 @@ pub mod cli_runtime;
 pub mod cloud;
 mod cloud_context;
 pub mod pi;
+pub mod pi_compaction;
 pub mod worktree;
 
 use anyhow::Result;

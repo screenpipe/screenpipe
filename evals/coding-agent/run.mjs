@@ -18,6 +18,7 @@ import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import process from "node:process";
+import { classifyGraderError } from "./grader-outcome.mjs";
 
 const HERE = dirname(new URL(import.meta.url).pathname);
 let REPO = resolve(HERE, "../..");
@@ -370,7 +371,8 @@ function runTrial(evalCase, mode, trial, options, runDir) {
     writeFileSync(join(trialDir, "grader.stdout.log"), grader.stdout);
     writeFileSync(join(trialDir, "grader.stderr.log"), grader.stderr);
     const agentOk = !["agent", "regrade"].includes(mode) || (agent.status === 0 && !agent.error);
-    const graderErrored = Boolean(grader.error || grader.signal || grader.status === null);
+    const graderErrorKind = classifyGraderError(grader);
+    const graderErrored = graderErrorKind !== null;
     const passed = agentOk && !graderErrored && grader.status === 0;
     const outcome = !agentOk || graderErrored ? "error" : passed ? "pass" : "fail";
     const result = {
@@ -385,6 +387,7 @@ function runTrial(evalCase, mode, trial, options, runDir) {
       grader_exit: grader.status,
       grader_signal: grader.signal,
       grader_error: grader.error,
+      grader_error_kind: graderErrorKind,
       changed_files: candidate.changedFiles,
       workspace: options.keep ? workspace : undefined,
     };

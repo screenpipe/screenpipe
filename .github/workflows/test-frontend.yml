@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - 'crates/screenpipe-core/assets/extensions/skill-learning*'
+      - 'crates/screenpipe-core/assets/pi-context-compaction*'
       - 'crates/screenpipe-core/assets/skills/**'
       - 'crates/screenpipe-core/src/starter_skills.rs'
       - 'apps/screenpipe-app-tauri/**/*.ts'
@@ -21,6 +22,7 @@ on:
   pull_request:
     paths:
       - 'crates/screenpipe-core/assets/extensions/skill-learning*'
+      - 'crates/screenpipe-core/assets/pi-context-compaction*'
       - 'crates/screenpipe-core/assets/skills/**'
       - 'crates/screenpipe-core/src/starter_skills.rs'
       - 'apps/screenpipe-app-tauri/**/*.ts'
@@ -75,6 +77,9 @@ jobs:
         # (vitest.config.ts excludes the same discovered set). Both runners
         # must pass for CI green.
         run: bun run test:bun
+
+      - name: Pi context compaction runtime eval
+        run: bun scripts/eval-pi-compaction.ts
 
       - name: Biome lint (root config)
         # Biome auto-discovers ../../biome.json from the repo root. Running

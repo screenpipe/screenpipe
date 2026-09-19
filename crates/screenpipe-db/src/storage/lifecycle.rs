@@ -153,6 +153,137 @@ fn read_journal(root: &Path) -> Result<Journal, sqlx::Error> {
     Ok(journal)
 }
 
+/// Inspect the journal's actual files before opening a manager, which may create
+/// a missing SQLite file. Never infer the source from descriptor publication:
+/// recovery can stop between its durable paused journal and storage.json.
+async fn reconcile_migration_source(root: &Path, journal: &mut Journal) -> Result<(), sqlx::Error> {
+    super::diagnostics::stage("validating_migration_source");
+    let source = source_identity(root)?;
+    let index = checked_path(root, &journal.descriptor.index)?;
+    let active = StorageDescriptor::read(root)?;
+    super::diagnostics::source_state(super::diagnostics::SourceState {
+        journal_phase: serde_json::to_value(&journal.phase)
+            .map_err(storage_error)?
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        source_exists: source.is_some(),
+        index_exists: index.exists(),
+        active_descriptor_present: active.is_some(),
+        active_descriptor_matches: active.as_ref() == Some(&journal.descriptor),
+        expected_source_bytes: journal.snapshot.as_ref().map(|s| s.bytes),
+        actual_source_bytes: source.as_ref().map(|s| s.bytes),
+        source_modified_matches: source
+            .as_ref()
+            .zip(journal.snapshot.as_ref())
+            .map(|(a, b)| a.modified == b.modified),
+        source_file_id_matches: source
+            .as_ref()
+            .and_then(|s| s.file_id)
+            .zip(journal.snapshot.as_ref().and_then(|s| s.file_id))
+            .map(|(a, b)| a == b),
+    });
+    if active.as_ref().is_some_and(|d| d != &journal.descriptor) {
+        return Err(storage_error(
+            "active descriptor differs from migration index; both files have been kept",
+        ));
+    }
+    if !index.is_file() {
+        if active.is_some() || source.is_none() {
+            return Err(storage_error(
+                "migration index is missing; source files have been kept",
+            ));
+        }
+        return Ok(());
+    }
+    if source.is_none() {
+        return Ok(());
+    }
+
+    // Older explicit retries could create an empty legacy database while the
+    // real index was awaiting descriptor publication. Only retire that empty
+    // artifact, and only beside an index with this journal's stored identity.
+    crate::db::register_sqlite_extensions()?;
+    let _index_owner = screenpipe_sqlite_coordinator::acquire_sqlite_manager_lease(&index)
+        .map_err(storage_error)?;
+    let mut conn = sqlx::SqliteConnection::connect_with(
+        &sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&index)
+            .read_only(true)
+            .create_if_missing(false),
+    )
+    .await?;
+    let stored = sqlx::query_scalar::<_, String>(
+        "SELECT descriptor FROM storage_metadata WHERE singleton=1",
+    )
+    .fetch_one(&mut conn)
+    .await;
+    if let Err(error) = &stored {
+        super::diagnostics::failure(error);
+    }
+    conn.close().await?;
+    let stored: StorageDescriptor = serde_json::from_str(&stored?).map_err(storage_error)?;
+    if stored != journal.descriptor {
+        return Err(storage_error(
+            "migration index identity differs from journal; both files have been kept",
+        ));
+    }
+
+    let source_path = root.join("db.sqlite");
+    let _source_owner = screenpipe_sqlite_coordinator::acquire_sqlite_manager_lease(&source_path)
+        .map_err(storage_error)?;
+    let mut conn = sqlx::SqliteConnection::connect_with(
+        &sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&source_path)
+            .create_if_missing(false)
+            .pragma("locking_mode", "EXCLUSIVE")
+            .busy_timeout(std::time::Duration::from_secs(5)),
+    )
+    .await?;
+    let empty = async {
+        sqlx::query("BEGIN EXCLUSIVE").execute(&mut conn).await?;
+        // Shadow tables belong to their virtual table. Query every logical
+        // table, including unknown extensions, rather than just frames/audio.
+        // SQLite statistics/sequences and SQLx's ledger contain no history.
+        let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_list WHERE schema='main' AND type!='shadow' AND name NOT GLOB 'sqlite_*' AND name!='_sqlx_migrations'")
+            .fetch_all(&mut conn).await?;
+        for table in tables {
+            let populated: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)", quote(&table))))
+                .fetch_one(&mut conn).await?;
+            if populated {
+                super::diagnostics::batch(&table, None, None, None, None);
+                return Err(storage_error(format!("migration source conflicts with existing index: source contains recorded history in {table}; both files have been kept")));
+            }
+        }
+        sqlx::query("COMMIT").execute(&mut conn).await?;
+        // Checkpoint before moving the closed file; never orphan a WAL.
+        let mode: String = sqlx::query_scalar("PRAGMA journal_mode=DELETE").fetch_one(&mut conn).await?;
+        if mode != "delete" {
+            return Err(storage_error("empty migration source is still in use; both files have been kept"));
+        }
+        Ok::<_, sqlx::Error>(())
+    }.await;
+    if let Err(error) = &empty {
+        super::diagnostics::failure(error);
+    }
+    conn.close().await?;
+    empty?;
+    // The old retry may have overwritten receipts with the empty DB's counts.
+    // Persist the need to refresh them before moving anything, so interruption
+    // after the rename cannot make a later retry trust those stale receipts.
+    journal.phase = Phase::Paused;
+    durable_json(&root.join("storage-migration.json"), journal)?;
+    let retained = index.parent().unwrap().join(format!(
+        "recovered-empty-source-{}.sqlite",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::rename(&source_path, &retained)?;
+    sync_directory(index.parent().unwrap())?;
+    sync_directory(root)?;
+    super::faults::checkpoint("migration_empty_source_retired");
+    Ok(())
+}
+
 pub(super) fn migration_is_paused(root: &Path) -> Result<bool, sqlx::Error> {
     let journal = read_journal(root)?;
     Ok(journal.phase == Phase::Paused && checked_path(root, Path::new("db.sqlite"))?.is_file())
@@ -234,6 +365,7 @@ async fn recover_observed(
     fs2::FileExt::try_lock_exclusive(&lock)
         .map_err(|_| storage_error("storage lifecycle is already owned"))?;
     let mut journal = read_journal(&root)?;
+    reconcile_migration_source(&root, &mut journal).await?;
     let index = checked_path(&root, &journal.descriptor.index)?;
     if root.join("db.sqlite").is_file() {
         if index.exists() || StorageDescriptor::read(&root)?.is_some() {
@@ -493,20 +625,38 @@ async fn migrate_observed(
         journal
     };
     super::diagnostics::tables(&journal.source);
+    reconcile_migration_source(&root, &mut journal).await?;
+    let index = checked_path(&root, &journal.descriptor.index)?;
+    let recheck_unrenamed_source = source_path.is_file()
+        && !index.exists()
+        && journal.phase == Phase::Building
+        && source_identity(&root)? != journal.snapshot;
+    if recheck_unrenamed_source {
+        // A timestamp/checkpoint change alone must not strand valid history.
+        // Verify its saved logical receipts before accepting a new identity.
+        journal.phase = Phase::Paused;
+    }
     if journal.phase == Phase::Paused {
         progress(MigrationProgress::phase("checking history before retry"));
+        if index.is_file() {
+            super::in_place::recover_recording(
+                HybridStorage::new(root.clone(), journal.descriptor.clone())?,
+                &progress,
+            )
+            .await?;
+        }
         super::diagnostics::stage("opening_retry_history");
         // Recording may have appended, edited, or retained history since the
         // failure. The explicit retry verifies that current logical dataset,
         // keeping all already committed archive files and their generations.
-        let active = StorageDescriptor::read(&root)?;
-        let path = if active.is_some() {
-            root.join(&journal.descriptor.index)
+        let path = if index.is_file() {
+            index.clone()
         } else {
             source_path.clone()
         };
-        let storage = active
-            .map(|d| HybridStorage::new(root.clone(), d))
+        let storage = index
+            .is_file()
+            .then(|| HybridStorage::new(root.clone(), journal.descriptor.clone()))
             .transpose()?;
         let db = DatabaseManager::new_with_storage(
             path.to_str().unwrap(),
@@ -518,7 +668,13 @@ async fn migrate_observed(
         .await?;
         let refreshed = async {
             super::diagnostics::stage("retry_parity");
+            verify_integrity(&db.pool).await?;
             let receipts = table_receipts(&db, Some(&journal.source)).await?;
+            if recheck_unrenamed_source && receipts != journal.source {
+                return Err(storage_error(
+                    "migration source content changed before rename; source has been kept",
+                ));
+            }
             let mut searches = Vec::new();
             for (term, _) in &journal.search_receipts {
                 let ids = sqlx::query_scalar(MIGRATION_SEARCH)
@@ -551,7 +707,7 @@ async fn migrate_observed(
             ));
         }
     }
-    let index = checked_path(&root, &journal.descriptor.index)?;
+    super::diagnostics::stage("validating_source_before_rename");
     if source_path.exists() {
         if index.exists() || source_identity(&root)? != journal.snapshot {
             return Err(storage_error(

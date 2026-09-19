@@ -30,6 +30,7 @@ export const audioSearchIndex: SettingsField[] = [
   { label: "Audio Recording", keywords: ["mic", "microphone", "audio"] },
   { label: "Capture audio", keywords: ["continuous", "meetings only"] },
   { label: "Transcription engine", keywords: ["whisper", "cloud", "stt"] },
+  { label: "Max batch duration (seconds)", keywords: ["batch", "timeout", "openai", "retranscription"], conditional: true },
   { label: "Live meeting notes", keywords: ["captions", "meeting", "live"], conditional: true },
   { label: "Append typed text to note", keywords: ["note", "append"], conditional: true },
   { label: "Automatic meeting detection", keywords: ["zoom", "teams", "meet"], conditional: true },
@@ -3056,6 +3057,37 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                   <p className="text-xs text-destructive" role="alert">
                     {openAICompatibleTestError}
                   </p>
+                )}
+
+                {settings.audioTranscriptionEngine === "openai-compatible" && (
+                  <div className="space-y-1">
+                    <label htmlFor="batchMaxDurationSecs" className="text-xs text-muted-foreground">
+                      Max batch duration (seconds)
+                    </label>
+                    <Input
+                      id="batchMaxDurationSecs"
+                      type="number"
+                      min={0}
+                      step={1}
+                      key={settings.batchMaxDurationSecs ?? 0}
+                      defaultValue={settings.batchMaxDurationSecs || ""}
+                      placeholder="Auto"
+                      onBlur={(e) => {
+                        const seconds = Number(e.target.value);
+                        if (!e.target.validity.valid || !Number.isSafeInteger(seconds) || seconds < 0) {
+                          e.target.value = String(settings.batchMaxDurationSecs || "");
+                          return;
+                        }
+                        if (seconds !== (settings.batchMaxDurationSecs ?? 0)) {
+                          handleSettingsChange({ batchMaxDurationSecs: seconds }, true);
+                        }
+                      }}
+                      className="h-7 text-xs"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Applies to background batches and meeting retranscription. Lower this if your server or gateway times out. Leave blank or set 0 for automatic sizing.
+                    </p>
+                  </div>
                 )}
 
                 {/* Connection Test Panel */}

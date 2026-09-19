@@ -49,7 +49,7 @@ pub(crate) fn browser_title_matches_pattern(title_lower: &str, pattern: &str) ->
 pub(crate) fn is_browser_app(app_name: &str) -> bool {
     BROWSER_NAMES
         .iter()
-        .any(|b| contains_case_insensitive(app_name, b))
+        .any(|b| contains_at_word_boundary(app_name, b))
         || ends_with_ascii_case_insensitive(app_name, ".exe")
             && [
                 "chrome.exe",
@@ -133,18 +133,18 @@ pub(crate) fn url_without_query_or_fragment(url: &str) -> &str {
 /// Decide whether a browser window belongs to a meeting profile, given its page
 /// URL (when the browser exposes it) and window title.
 ///
-/// URL-first: when a URL is known, ONLY the URL is matched against
-/// `browser_url_patterns` (query/fragment stripped). Page titles are never
+/// URL-first: match a known URL against `browser_url_patterns`
+/// (query/fragment stripped). Page titles are never
 /// searched for URL patterns — titles carry arbitrary text (an Amazon listing
 /// for a "Meeting Owl … Certified for Microsoft Teams … Works with Zoom, Google
 /// Meet" camera, the jitsi-meet GitHub repo, or "meet - App on Amazon Appstore")
 /// and matching meeting patterns there produces phantom meetings (#4246).
 ///
 /// `browser_title_patterns` (anchored, see `browser_title_matches_pattern`) are
-/// a fallback used ONLY when no URL is available — e.g. Arc, which titles its
-/// window "Meet" but does not expose the tab URL via AXDocument. When a URL IS
-/// available and is not a meeting URL, the page title is not evidence of a
-/// meeting.
+/// a fallback when no URL is available, or when its parsed HTTP(S) host belongs
+/// to the profile. Slack huddles keep a `/client/` URL, so their title identifies
+/// a candidate for the required call-control scan, not proof of an active call.
+/// A known foreign URL always suppresses the title fallback.
 pub(crate) fn browser_window_matches_meeting(
     url: Option<&str>,
     title: Option<&str>,
@@ -153,10 +153,40 @@ pub(crate) fn browser_window_matches_meeting(
     let ids = &profile.app_identifiers;
     if let Some(u) = url.map(str::trim).filter(|u| !u.is_empty()) {
         let doc = url_without_query_or_fragment(u);
-        return ids
+        if ids
             .browser_url_patterns
             .iter()
-            .any(|p| browser_url_pattern_matches(doc, p));
+            .any(|p| browser_url_pattern_matches(doc, p))
+        {
+            return true;
+        }
+        if let Some(t) = title.filter(|_| !ids.browser_title_patterns.is_empty()) {
+            // A hostname in a path, userinfo, query, or fragment is not the
+            // page's host. Only allow this fallback on the actual platform.
+            let url_on_profile_host = url::Url::parse(u).ok().is_some_and(|url| {
+                matches!(url.scheme(), "http" | "https")
+                    && url.host_str().is_some_and(|host| {
+                        ids.browser_url_patterns
+                            .iter()
+                            .filter_map(|p| p.split('/').next())
+                            .filter(|p| p.contains('.') && !p.contains(' '))
+                            .any(|profile_host| {
+                                host.eq_ignore_ascii_case(profile_host)
+                                    || host
+                                        .strip_suffix(profile_host)
+                                        .is_some_and(|prefix| prefix.ends_with('.'))
+                            })
+                    })
+            });
+            if url_on_profile_host {
+                let t_lower = t.to_lowercase();
+                return ids
+                    .browser_title_patterns
+                    .iter()
+                    .any(|p| browser_title_matches_pattern(&t_lower, p));
+            }
+        }
+        return false;
     }
     if let Some(t) = title {
         let t_lower = t.to_lowercase();
@@ -237,7 +267,7 @@ pub(crate) fn windows_browser_title_match(
 /// - Anchored `browser_title_patterns` (see `browser_title_matches_pattern`):
 ///   consulted ONLY when the window exposes no page URL, mirroring the
 ///   URL-first rule of `browser_window_matches_meeting`, AND only when the
-///   title also carries a Google-Meet-code-shaped token (see
+///   Google Meet title also carries a meeting-code-shaped token (see
 ///   `title_contains_meeting_code`). This is what catches a Chrome/Edge Meet
 ///   pop-out titled "Meet – abc-defg-hij" (no AXDocument, no domain in the
 ///   title) without letting a page whose URL is known to be non-meeting
@@ -248,11 +278,8 @@ pub(crate) fn windows_browser_title_match(
 /// anchored-but-ordinary title ("Meet the Team - Acme", "Meet Kevin -
 /// YouTube", "Meet: quarterly planning") in any open browser window was
 /// enough live evidence to start a false meeting. Only the Google Meet
-/// profile declares `browser_title_patterns` today, and every real
-/// Chrome/Edge pop-out title embeds the meeting code, so requiring it costs
-/// no genuine detection. The mic-gated URL probe and DB-evidence paths
-/// (`browser_window_matches_meeting`) are unchanged, and non-Meet platforms
-/// keep their coverage via URL patterns and the Windows UIA path.
+/// pop-out title embeds the meeting code. Slack's title only identifies a
+/// candidate: its browser profile separately requires huddle call controls.
 // Only the macOS AX sweep calls this (plus the shared tests).
 #[cfg(any(target_os = "macos", test))]
 pub(crate) fn ax_window_matches_meeting(
@@ -281,18 +308,35 @@ pub(crate) fn ax_window_matches_meeting(
         {
             return true;
         }
-        if doc.is_none() && title_contains_meeting_code(title) {
-            let title_lower = title.to_lowercase();
-            if ids
-                .browser_title_patterns
-                .iter()
-                .any(|p| browser_title_matches_pattern(&title_lower, p))
-            {
-                return true;
-            }
+        if doc.is_none() && title_matches_with_profile_gate(title, ids) {
+            return true;
         }
     }
     false
+}
+
+/// Anchored `browser_title_patterns` fallback for the macOS AX sweep.
+///
+/// The Google Meet profile is gated on a Meet-code token in the title (see
+/// `title_contains_meeting_code`): Chrome/Edge title the post-call page "Meet"
+/// too, and the sweep is not mic-gated, so the bare anchor alone phantom-fired
+/// on idle Meet pages. That gate is Meet-specific — other platforms' titles
+/// (e.g. Slack's "Huddles - <workspace> - Slack") carry no code, so requiring
+/// one would disable their fallback entirely. Profiles with no title patterns
+/// are unaffected either way.
+#[cfg(any(target_os = "macos", test))]
+fn title_matches_with_profile_gate(title: &str, ids: &AppIdentifiers) -> bool {
+    let is_meet_profile = ids
+        .browser_url_patterns
+        .iter()
+        .any(|p| p.contains("meet.google.com"));
+    if is_meet_profile && !title_contains_meeting_code(title) {
+        return false;
+    }
+    let title_lower = title.to_lowercase();
+    ids.browser_title_patterns
+        .iter()
+        .any(|p| browser_title_matches_pattern(&title_lower, p))
 }
 
 /// True when `title` contains a standalone Google-Meet-code-shaped token:
@@ -329,6 +373,52 @@ pub(crate) fn title_contains_meeting_code(title: &str) -> bool {
             && (start == 0 || !extends_token(bytes[start - 1]))
             && (start + CODE_LEN == bytes.len() || !extends_token(bytes[start + CODE_LEN]))
     })
+}
+
+/// Case-insensitive substring match that must land on word boundaries.
+///
+/// `BROWSER_NAMES` holds entries as short as `"dia"` and `"arc"`, which sit
+/// inside ordinary app names: `"nvidia"` and `"media"` both contain `dia`,
+/// `"search"` contains `arc`. A plain substring test therefore reports those
+/// windows as browsers, and a window classified as a browser has its title and
+/// URL matched against every meeting pattern — so the cost is false meeting
+/// detection on a per-window hot path, not just wasted work.
+///
+/// A match counts only when the characters on both sides are non-alphanumeric
+/// or absent, so `"Dia"` and `"Dia Browser"` match while `"NVIDIA"` does not.
+pub(crate) fn contains_at_word_boundary(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+
+    if haystack.is_ascii() && needle.is_ascii() {
+        let needle = needle.as_bytes();
+        let bytes = haystack.as_bytes();
+        if bytes.len() < needle.len() {
+            return false;
+        }
+        return (0..=bytes.len() - needle.len()).any(|start| {
+            let end = start + needle.len();
+            bytes[start..end].eq_ignore_ascii_case(needle)
+                && (start == 0 || !bytes[start - 1].is_ascii_alphanumeric())
+                && (end == bytes.len() || !bytes[end].is_ascii_alphanumeric())
+        });
+    }
+
+    let haystack_lower = haystack.to_lowercase();
+    let needle_lower = needle.to_lowercase();
+    haystack_lower
+        .match_indices(&needle_lower)
+        .any(|(start, matched)| {
+            haystack_lower[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_alphanumeric())
+                && haystack_lower[start + matched.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !c.is_alphanumeric())
+        })
 }
 
 pub(crate) fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {

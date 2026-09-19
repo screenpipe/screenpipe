@@ -50,12 +50,26 @@ Agent-process, grader-process and harness failures are reported as `error` and e
 the success denominator. They are never silently converted into model failures.
 Grader timeouts and terminating signals cannot establish a failing baseline:
 `--verify` requires a behavioral `fail` followed by an oracle `pass`.
-Ordinary nonzero grader exits are still treated as behavioral failures, so
-inspect grader logs to distinguish assertion failures from setup failures.
+Known command-unavailable exits (126/127), Bun unhandled test-load errors, and
+Node missing-module/syntax diagnostics and Vitest URL-load collection failures
+with zero tests are also reported as `error`, with a
+`grader_error_kind` in the result. A missing import followed by an oracle pass
+therefore cannot certify a regression. Plain failed assertions and successful
+commands containing diagnostic words retain their previous outcomes.
+
+This is bounded diagnostic recognition, not universal error attribution. Unknown
+setup/compiler failures, including other test frameworks, may still be ordinary
+nonzero exits. Inspect logs before promoting a case; preserve command exit codes
+in wrappers. An error is not proof that infrastructure, rather than a candidate
+change, caused it. Report error counts and inspect candidate-caused errors before
+comparing model success rates. No isolation or model-quality claim follows.
 
 Run the synthetic runner controls with `bun test ./evals/coding-agent/run.test.ts`.
-They cover baseline/reference timeouts and signals, a genuine failing baseline,
-an already-passing baseline, and exclusion of process errors from scored trials.
+Nineteen end-to-end controls cover baseline/reference timeouts and signals,
+missing ESM/CommonJS modules, Node/Bun syntax and Bun import errors, Vitest
+collection failures and quoted diagnostics followed by real assertions, unavailable
+or non-executable commands, genuine failures, assertions quoting diagnostic words or complete diagnostic blocks,
+already-passing baselines and exclusion of known setup/process errors from scores.
 The controls use temporary local Git fixtures and invoke no model or provider.
 
 The same runner can score another checkout and manifest with `--repo` and

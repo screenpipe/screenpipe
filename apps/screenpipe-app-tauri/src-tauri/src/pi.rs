@@ -1542,7 +1542,9 @@ fn verify_pi_package_install(install_dir: &Path) -> Result<(), String> {
             "Pi install completed but dependency verification failed: {}",
             error
         )),
-        None => Ok(()),
+        None => screenpipe_core::agents::pi_compaction::ensure(install_dir).map_err(|error| {
+            format!("Pi install completed but dependency verification failed: compaction: {error}")
+        }),
     }
 }
 
@@ -3193,6 +3195,8 @@ pub async fn pi_start_inner(
         }
     };
 
+    screenpipe_core::agents::pi_compaction::ensure_for_entrypoint(Path::new(&pi_path))
+        .map_err(|error| format!("Failed to prepare Pi compaction: {error}"))?;
     let bun_path = find_bun_executable().unwrap_or_else(|| "NOT FOUND".to_string());
     info!(
         "Starting {} from {} in dir: {} with provider: {} model: {} bun: {}",
@@ -6057,6 +6061,14 @@ pub fn ensure_pi_installed_background() {
                 !pkg_contents.is_empty() && !pkg_contents.contains("@anthropic-ai/sdk");
             let needs_upgrade = !is_local_pi_version_current(&install_dir);
 
+            if !needs_upgrade {
+                if let Err(error) = screenpipe_core::agents::pi_compaction::ensure(&install_dir) {
+                    set_pi_install_error(format!("Failed to prepare Pi compaction: {error}"));
+                    PI_INSTALL_DONE.store(true, Ordering::SeqCst);
+                    return;
+                }
+            }
+
             if needs_lru_fix || needs_anthropic_sdk || needs_upgrade {
                 if needs_lru_fix {
                     info!("Pi installed but missing lru-cache overrides — patching");
@@ -8396,6 +8408,6 @@ error: InstallFailed extracting tarball"#;
         let pruning = std::fs::read_to_string(ext_dir.join("context-pruning.ts"))
             .expect("read seeded context-pruning extension");
         assert!(pruning.contains("normalizeContextOverflowError"));
-        assert!(pruning.contains("PROACTIVE_COMPACTION_PERCENT = 70"));
+        assert!(!pruning.contains("ctx.compact("));
     }
 }
