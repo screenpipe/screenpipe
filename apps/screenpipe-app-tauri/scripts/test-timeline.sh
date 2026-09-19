@@ -75,6 +75,7 @@ fi
 echo "==> building timeline core tests"
 compile "$out_dir/core-tests" "${core_sources[@]}" "$swift_dir/timeline_tests.swift"
 "$out_dir/core-tests"
+if [[ "${1:-}" == "--core" ]]; then exit 0; fi
 
 echo "==> building timeline deletion tests"
 compile "$out_dir/deletion-tests" -parse-as-library \

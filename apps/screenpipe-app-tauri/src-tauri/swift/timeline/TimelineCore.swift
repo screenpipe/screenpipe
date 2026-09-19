@@ -216,7 +216,7 @@ enum TimelineFrames {
             let name = device.metadata.appName.trimmingCharacters(in: .whitespaces)
             if !name.isEmpty { return name }
         }
-        return uiText("Unknown")
+        return "Unknown"
     }
 
     /// Every distinct non-empty app name on the frame, in device order.
@@ -541,7 +541,7 @@ struct TimelineAppGroup: Equatable {
 
 enum TimelineHoverMetadata {
     static func effectiveAppName(raw: String, carried: String?) -> String {
-        if raw == "Unknown", let carried, carried != uiText("Unknown"), !carried.isEmpty {
+        if raw == "Unknown", let carried, carried != "Unknown", !carried.isEmpty {
             return carried
         }
         return raw
@@ -679,7 +679,7 @@ enum TimelineGrouping {
 
             // "Unknown" inherits the previous app so a capture gap does not
             // shatter one run into three segments.
-            if appName == "Unknown", !currentApp.isEmpty, currentApp != uiText("Unknown") {
+            if appName == "Unknown", !currentApp.isEmpty, currentApp != "Unknown" {
                 appName = currentApp
             }
 
@@ -699,10 +699,10 @@ enum TimelineGrouping {
                 currentIndices = [i + indexOffset]
                 currentAllApps = []
                 currentAllAppsSeen = []
-                for name in allApps where name != uiText("Unknown") {
+                for name in allApps where name != "Unknown" {
                     if currentAllAppsSeen.insert(name).inserted { currentAllApps.append(name) }
                 }
-                if currentApp != uiText("Unknown"), currentAllAppsSeen.insert(currentApp).inserted {
+                if currentApp != "Unknown", currentAllAppsSeen.insert(currentApp).inserted {
                     currentAllApps.append(currentApp)
                 }
                 currentDayKey = key
@@ -714,7 +714,7 @@ enum TimelineGrouping {
                 }
             } else {
                 currentIndices.append(i + indexOffset)
-                for name in allApps where name != uiText("Unknown") {
+                for name in allApps where name != "Unknown" {
                     if currentAllAppsSeen.insert(name).inserted { currentAllApps.append(name) }
                 }
                 if currentDayKey.isEmpty { currentDayKey = key }

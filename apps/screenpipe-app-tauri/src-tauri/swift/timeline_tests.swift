@@ -15,6 +15,7 @@
 // original JavaScript, so these constants cannot silently drift.
 
 import Foundation
+import CryptoKit
 
 private var failures: [String] = []
 private var checks = 0
@@ -1286,6 +1287,17 @@ private func testTopChromeSafeInset() {
 
 // MARK: - Runner
 
+// The grouping sentinel belongs to captured metadata, not the UI language.
+private func testLocalizedAppMetadata() {
+    let id = SHA256.hash(data: Data("Unknown".utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+    let payload = try! JSONSerialization.data(withJSONObject: ["locale": "ja", "messages": [id: "localized unknown"]])
+    String(data: payload, encoding: .utf8)!.withCString { UILocalization.shared.update($0) }
+    defer { "{\"locale\":\"en\",\"messages\":{}}".withCString { UILocalization.shared.update($0) } }
+    testGrouping()
+    testFrameAccessors()
+    expectEqual(TimelineHoverMetadata.effectiveAppName(raw: "Unknown", carried: "Unknown"), "Unknown", "unknown metadata stays language independent")
+}
+
 private let allTests: [(String, () -> Void)] = [
     ("timestamp parsing", testTimestampParsing),
     ("stream decoding", testStreamDecoding),
@@ -1303,6 +1315,7 @@ private let allTests: [(String, () -> Void)] = [
     ("geometry", testGeometry),
     ("viewport", testViewport),
     ("grouping", testGrouping),
+    ("localized app metadata", testLocalizedAppMetadata),
     ("browser grouping", testBrowserGrouping),
     ("browser url carry-forward", testBrowserURLCarryForward),
     ("day boundary", testDayBoundary),

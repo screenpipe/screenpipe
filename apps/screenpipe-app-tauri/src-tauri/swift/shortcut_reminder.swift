@@ -825,12 +825,12 @@ func disclosureContent(
     metrics: OverlayMetrics
 ) -> (String, String?)? {
     switch control {
-    case "brand": return ("screenpipe", "right-click")
-    case "timeline": return ("timeline", overlayShortcut)
+    case "brand": return ("screenpipe", uiText("right-click"))
+    case "timeline": return (uiText("timeline"), overlayShortcut)
     case "chat": return (uiText("ask chat"), chatShortcut)
-    case "search": return ("search", searchShortcut)
+    case "search": return (uiText("search"), searchShortcut)
     case "audio": return (uiText("mic capture"), metrics.audioActive ? uiText("live") : uiText("idle"))
-    case "settings": return ("settings", nil)
+    case "settings": return (uiText("settings"), nil)
     default: return nil
     }
 }

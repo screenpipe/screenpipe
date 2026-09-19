@@ -440,7 +440,7 @@ struct NotificationContentView: View {
     @State private var hoveredActionLabel: String?
 
     private var visibleActions: [NotificationAction] {
-        payload.actions.filter { ($0.type ?? $0.action) != uiText("dismiss") }
+        payload.actions.filter { ($0.type ?? $0.action) != "dismiss" }
     }
 
     private var feedbackEligible: Bool {
@@ -1440,7 +1440,7 @@ fileprivate func inboxRowActions(_ entry: InboxEntry) -> [NotificationAction] {
     (entry.actions ?? []).filter { a in
         let label = (a.label ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let t = a.type ?? ""
-        return !label.isEmpty && t != uiText("dismiss") && t != uiText("copy") && t != uiText("source")
+        return !label.isEmpty && t != "dismiss" && t != "copy" && t != "source"
     }
 }
 
