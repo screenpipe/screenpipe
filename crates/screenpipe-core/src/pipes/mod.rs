@@ -4444,7 +4444,12 @@ impl PipeManager {
                         &output.stderr,
                         &filtered_stdout,
                     );
-                    log_read_tool_failures(&pipe_name, exec_id, classified.status, &filtered_stdout);
+                    log_read_tool_failures(
+                        &pipe_name,
+                        exec_id,
+                        classified.status,
+                        &filtered_stdout,
+                    );
                     let session_path =
                         find_latest_pi_session(&pipe_dir).map(|p| p.to_string_lossy().to_string());
                     if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
@@ -7093,7 +7098,12 @@ impl PipeManager {
                                     &output.stderr,
                                     &filtered_stdout,
                                 );
-                                log_read_tool_failures(&pipe_name, exec_id, classified.status, &filtered_stdout);
+                                log_read_tool_failures(
+                                    &pipe_name,
+                                    exec_id,
+                                    classified.status,
+                                    &filtered_stdout,
+                                );
                                 let session_path = find_latest_pi_session(&pipe_dir)
                                     .map(|p| p.to_string_lossy().to_string());
                                 if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
@@ -9191,7 +9201,9 @@ mod tests {
         assert!(summary.contains("read cause=unknown target=local_file failures=1"));
         assert!(!summary.contains("private"));
         assert!(!summary.contains("customer"));
-        assert!(super::read_tool_failure_summary(&event("private successful file", false)).is_empty());
+        assert!(
+            super::read_tool_failure_summary(&event("private successful file", false)).is_empty()
+        );
     }
 
     #[test]
