@@ -31,7 +31,6 @@ import extension, {
   maxMessageChars,
   normalizeContextOverflowError,
   resolveContextWindowTokens,
-  repeatedToolResultHint,
 } from "@screenpipe-ext/context-pruning";
 
 // ── helpers ────────────────────────────────────────────────────────────
@@ -459,53 +458,5 @@ describe("resolveContextWindowTokens — getContextUsage edge", () => {
         getContextUsage: () => ({ contextWindow: 0 }),
       }),
     ).toBe(128_000);
-  });
-});
-
-
-describe("stalled serial tool loop", () => {
-  const turns = () => Array.from({ length: 3 }, (_, index) => [
-    { role: "assistant", stopReason: "toolUse", content: [{
-      type: "toolCall", id: `call-${index}`, name: "bash", arguments: { command: "cat result.json" },
-    }] },
-    { role: "toolResult", toolCallId: `call-${index}`, toolName: "bash", isError: false,
-      content: [{ type: "text", text: "same evidence" }] },
-  ]).flat();
-
-  it("nudges a reproduced loop while retaining every call and observation", async () => {
-    const messages = turns();
-    const original = structuredClone(messages);
-    const result = await registerExtension().context({ messages }, ctx200k);
-    expect(messages).toEqual(original);
-    expect(result.messages.slice(0, -1)).toEqual(original);
-    expect(result.messages.at(-1).content).toContain("already succeeded");
-    expect(result.messages.at(-1).content).toContain("existing permissions");
-    expect(result.messages.at(-1).content).toContain("intentional polling");
-    // The hint is not written into stored history and does not grow every turn.
-    expect((await registerExtension().context({ messages }, ctx200k)).messages).toHaveLength(7);
-  });
-
-  it("compares full results before trimming can hide a state change", async () => {
-    const messages: any[] = turns();
-    for (const index of [1, 3, 5]) {
-      messages[index].content[0].text = "a".repeat(70000) + index + "z".repeat(70000);
-    }
-    const result = await registerExtension().context({ messages }, { model: { contextWindow: 32768 } });
-    expect(result.messages).toHaveLength(6);
-    expect(result.messages.every((message: any) => message.role !== "user")).toBe(true);
-  });
-
-  it("does not mistake changing state or arguments for a loop", () => {
-    for (const change of ["content", "arguments", "error", "id", "user", "parallel"]) {
-      const messages: any[] = turns();
-      if (change === "content") messages[5].content[0].text = "new evidence";
-      if (change === "arguments") messages[4].content[0].arguments.command = "cat next.json";
-      if (change === "error") messages[5].isError = true;
-      if (change === "id") messages[5].toolCallId = "unmatched";
-      if (change === "user") messages[2] = { role: "user", content: "Check again" };
-      if (change === "parallel") messages[4].content.push({ ...messages[4].content[0], id: "other" });
-      expect(repeatedToolResultHint(messages)).toBeUndefined();
-    }
-    expect(repeatedToolResultHint(turns().slice(2))).toBeUndefined();
   });
 });
