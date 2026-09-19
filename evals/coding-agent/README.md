@@ -109,3 +109,17 @@ The five controls require the historical contrast, accept equivalent helper
 renaming, reject an identifier-trusting fast path, and reject blanket anonymous
 fallback. These are grader controls, not model trials. The July 10 historical
 case does not require machine-service-token support introduced afterward.
+
+## Bounded history discovery
+
+`mine-history.mjs` scans all reachable history by default, including merged
+branches and merge commits. Page with `--limit` and `--skip`; continue using the
+returned `resolved_ref` SHA and `next_skip` to keep page boundaries stable.
+An explicit `--since` narrows the scan. Merge candidates expose each parent diff
+and require resolution review before choosing a broken baseline. The miner is
+still a subject/test-path heuristic, so its output is discovery evidence, not
+complete source review or verified regressions. See [DESIGN.md](./DESIGN.md).
+
+`bun test evals/coding-agent/mine-history.test.ts` runs four synthetic controls
+covering old and merged fixes, per-parent merge paths, complete bounded paging,
+root/non-fix exclusions, explicit date filtering and invalid inputs.
