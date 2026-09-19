@@ -229,6 +229,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workflow_file_read_failure_survives_rotation_and_support_redaction() {
+        let dir = tempdir().unwrap();
+        let log = std::fs::File::create(dir.path().join("screenpipe.2026-09-18.0.log")).unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(log)
+            .finish();
+        let event = serde_json::json!({
+            "type": "tool_execution_end", "toolName": "read", "isError": true,
+            "result": {"content": [{"type": "text", "text": "ENOENT: no such file or directory, access '/workflows/context'"}]}
+        });
+        tracing::subscriber::with_default(subscriber, || {
+            screenpipe_core::pipes::log_read_tool_failures(
+                "workflow-activity",
+                Some(42),
+                "completed",
+                &event.to_string(),
+            );
+        });
+        tokio::fs::write(
+            dir.path().join("screenpipe.2026-09-19.0.log"),
+            "recorder restarted\npassword=hunter2\n",
+        )
+        .await
+        .unwrap();
+        let files = crate::log_files::collect_log_files(&[dir.path().to_path_buf()]).await;
+        let report = redact_files(&owned_log_files(files)).await.unwrap();
+        assert!(report.contains("pipe file read failed"));
+        assert!(report.contains("workflow-activity"));
+        assert!(report.contains("run_status=\"completed\""));
+        assert!(report.contains("cause=ENOENT target=workflow_api_endpoint failures=1"));
+        assert!(!report.contains("hunter2"));
+    }
+
+    #[tokio::test]
     async fn rotated_panic_survives_collection_limits_and_redaction_with_timestamp() {
         let dir = tempdir().unwrap();
         screenpipe_engine::crash_log::write_panic_log(

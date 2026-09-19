@@ -2280,6 +2280,57 @@ struct ClassifiedPipeProcessResult {
     error_message: Option<String>,
 }
 
+/// Keep failed file reads diagnosable without copying private paths or tool
+/// contents into the support logs. A recovered tool error is not a failed run.
+fn read_tool_failure_summary(stdout: &str) -> String {
+    let mut failures = std::collections::BTreeMap::new();
+    for line in stdout.lines() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if event["type"] != "tool_execution_end"
+            || event["toolName"] != "read"
+            || event["isError"] != true
+        {
+            continue;
+        }
+        let text = event["result"]["content"]
+            .as_array()
+            .and_then(|parts| parts.iter().find_map(|part| part["text"].as_str()))
+            .unwrap_or("");
+        let cause = ["ENOENT", "EACCES", "EPERM", "EISDIR", "ENOTDIR"]
+            .into_iter()
+            .find(|code| text.starts_with(&format!("{code}:")))
+            .unwrap_or("unknown");
+        let target = if text.contains("access '/workflows/") {
+            "workflow_api_endpoint"
+        } else {
+            "local_file"
+        };
+        *failures.entry((cause, target)).or_insert(0usize) += 1;
+    }
+    failures
+        .into_iter()
+        .map(|((cause, target), count)| {
+            format!("read cause={cause} target={target} failures={count}")
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Emit the bounded diagnostic used by both manual and scheduled Pipe runs.
+pub fn log_read_tool_failures(pipe: &str, execution_id: Option<i64>, status: &str, stdout: &str) {
+    let failures = read_tool_failure_summary(stdout);
+    if !failures.is_empty() {
+        warn!(
+            pipe,
+            execution_id,
+            run_status = status,
+            "pipe file read failed: {failures}"
+        );
+    }
+}
+
 fn classify_pipe_process_result(
     process_success: bool,
     was_cancelled: bool,
@@ -4393,6 +4444,7 @@ impl PipeManager {
                         &output.stderr,
                         &filtered_stdout,
                     );
+                    log_read_tool_failures(&pipe_name, exec_id, classified.status, &filtered_stdout);
                     let session_path =
                         find_latest_pi_session(&pipe_dir).map(|p| p.to_string_lossy().to_string());
                     if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
@@ -5071,6 +5123,7 @@ impl PipeManager {
                         &output.stderr,
                         &filtered_stdout,
                     );
+                    log_read_tool_failures(name, exec_id, classified.status, &filtered_stdout);
                     let session_path =
                         find_latest_pi_session(&pipe_dir).map(|p| p.to_string_lossy().to_string());
                     if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
@@ -7040,6 +7093,7 @@ impl PipeManager {
                                     &output.stderr,
                                     &filtered_stdout,
                                 );
+                                log_read_tool_failures(&pipe_name, exec_id, classified.status, &filtered_stdout);
                                 let session_path = find_latest_pi_session(&pipe_dir)
                                     .map(|p| p.to_string_lossy().to_string());
                                 if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
@@ -9108,6 +9162,37 @@ mod tests {
     use futures::{FutureExt, StreamExt};
     use std::path::Path;
     use std::sync::atomic::Ordering;
+
+    #[test]
+    fn file_read_failure_diagnostics_exclude_private_tool_content() {
+        let event = |text: &str, is_error: bool| {
+            serde_json::json!({
+                "type": "tool_execution_end", "toolName": "read", "isError": is_error,
+                "result": {"content": [{"type": "text", "text": text}]}
+            })
+            .to_string()
+        };
+        let stdout = [
+            event(
+                "ENOENT: no such file or directory, access '/workflows/context'",
+                true,
+            ),
+            event(
+                "EACCES: permission denied, access '/private/customer.txt'",
+                true,
+            ),
+            event("ENOENT: this is successful file content", false),
+            event("private unknown failure", true),
+        ]
+        .join("\n");
+        let summary = super::read_tool_failure_summary(&stdout);
+        assert!(summary.contains("read cause=ENOENT target=workflow_api_endpoint failures=1"));
+        assert!(summary.contains("read cause=EACCES target=local_file failures=1"));
+        assert!(summary.contains("read cause=unknown target=local_file failures=1"));
+        assert!(!summary.contains("private"));
+        assert!(!summary.contains("customer"));
+        assert!(super::read_tool_failure_summary(&event("private successful file", false)).is_empty());
+    }
 
     #[test]
     fn oversized_agent_history_preserves_terminal_success_and_error() {

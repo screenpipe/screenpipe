@@ -269,6 +269,8 @@ try {
       await writeFile(join(reportDir,`${task}.stderr`),stderr,{mode:0o600});
     }
     const events = stdout.split("\n").flatMap(line=>{try{return [JSON.parse(line)];}catch{return [];}});
+    const apiFileReads = events.filter(event => event.type === "tool_execution_start" && event.toolName === "read" && /^\/workflows(?:\/|$)/.test(event.args?.path || ""));
+    if (apiFileReads.length) throw new Error(`${task} tried to read an HTTP endpoint as a local file: ${apiFileReads.map(event => event.args.path).join(", ")}`);
     if (privateModel && !events.some(event => event.type === "extension_ui_request" && event.key === "screenpipe-confidential" && (() => { try { return JSON.parse(event.text).state === "response_verified"; } catch { return false; } })())) throw new Error("Private evaluation did not verify encrypted responses");
     if (events.some(event=>event.type === "tool_execution_start" && event.toolName?.startsWith("workflow_"))) throw new Error("Unexpected custom workflow tool");
     const assistantMessages = (events.filter(e=>e.type==="agent_end").at(-1)?.messages || []).filter((m:any)=>m.role==="assistant");
