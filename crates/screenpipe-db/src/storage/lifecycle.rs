@@ -16,6 +16,151 @@ use std::path::{Path, PathBuf};
 mod tests {
     use super::*;
 
+    // Frozen pre-optimization receipt reader/codec: an independent oracle for
+    // old journals and the paired benchmark, never used by production.
+    async fn legacy_receipt(db: &DatabaseManager, table: &str) -> TableParity {
+        let mut columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info(?) ORDER BY cid")
+                .bind(table)
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        columns.retain(|column| !column.starts_with("_archive_"));
+        let mut hash = Sha256::new();
+        let mut count = 0;
+        let mut last = i64::MIN;
+        let mut first = true;
+        loop {
+            let sql = format!(
+                "SELECT rowid,{} FROM {} WHERE rowid{}? AND rowid<=? ORDER BY rowid LIMIT 128",
+                columns
+                    .iter()
+                    .map(|c| quote(c))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                quote(table),
+                if first { ">=" } else { ">" }
+            );
+            super::super::diagnostics::batch(table, Some(last), None, Some(count), None);
+            super::super::diagnostics::stage("reading_parity_rows");
+            let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+                .bind(last)
+                .bind(i64::MAX)
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+            if rows.is_empty() {
+                break;
+            }
+            first = false;
+            super::super::diagnostics::stage("hashing_parity_rows");
+            for row in rows {
+                last = row.get(0);
+                for index in 0..columns.len() {
+                    legacy_hash_value(&mut hash, &row, index + 1, None).unwrap();
+                }
+                hash.update(b"E");
+                count += 1;
+            }
+        }
+        TableParity {
+            table: table.into(),
+            rows: count,
+            sha256: format!("{:x}", hash.finalize()),
+        }
+    }
+
+    fn legacy_hash_value(
+        hash: &mut Sha256,
+        row: &sqlx::sqlite::SqliteRow,
+        index: usize,
+        replacement: Option<&Option<String>>,
+    ) -> Result<(), sqlx::Error> {
+        if let Some(value) = replacement {
+            if let Some(value) = value {
+                hash.update(b"T");
+                hash.update((value.len() as u64).to_le_bytes());
+                hash.update(value.as_bytes());
+            } else {
+                hash.update(b"N");
+            }
+            return Ok(());
+        }
+        let raw = row.try_get_raw(index)?;
+        if raw.is_null() {
+            hash.update(b"N");
+            return Ok(());
+        }
+        match raw.type_info().name() {
+            "INTEGER" => {
+                hash.update(b"I");
+                hash.update(row.try_get::<i64, _>(index)?.to_le_bytes());
+            }
+            "REAL" => {
+                hash.update(b"R");
+                hash.update(row.try_get::<f64, _>(index)?.to_bits().to_le_bytes());
+            }
+            "TEXT" => {
+                let bytes: Vec<u8> = row.try_get(index)?;
+                hash.update(b"T");
+                hash.update((bytes.len() as u64).to_le_bytes());
+                hash.update(bytes);
+            }
+            _ => {
+                let bytes: Vec<u8> = row.try_get(index)?;
+                hash.update(b"B");
+                hash.update((bytes.len() as u64).to_le_bytes());
+                hash.update(bytes);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "paired migration verification throughput benchmark on an isolated million-row history"]
+    async fn parity_throughput() {
+        let root = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new(
+            root.path().join("db.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        // Use the actual legacy element column layout, without capture/FTS
+        // triggers in fixture setup. Both implementations hash the same cells.
+        db.execute_raw_sql_write("CREATE TABLE parity_benchmark AS SELECT * FROM elements WHERE 0; CREATE UNIQUE INDEX parity_benchmark_id ON parity_benchmark(id);").await.unwrap();
+        let rows = 1_000_000_i64;
+        let mut tx = db.begin_immediate_with_retry().await.unwrap();
+        sqlx::query("WITH RECURSIVE n(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM n WHERE id<?) INSERT INTO parity_benchmark(id,frame_id,source,role,text,properties) SELECT id,id/100,'accessibility','AXText','searchable historical element '||id,'{\"label\":\"東京 history\",\"enabled\":true}' FROM n")
+            .bind(rows).execute(&mut **tx.conn()).await.unwrap();
+        tx.commit().await.unwrap();
+        let tables = [TableParity {
+            table: "parity_benchmark".into(),
+            rows: 0,
+            sha256: String::new(),
+        }];
+        for run in 1..=3 {
+            let mut receipts = Vec::new();
+            for legacy in if run % 2 == 1 {
+                [true, false]
+            } else {
+                [false, true]
+            } {
+                let started = std::time::Instant::now();
+                let receipt = if legacy {
+                    legacy_receipt(&db, "parity_benchmark").await
+                } else {
+                    table_receipts(&db, Some(&tables)).await.unwrap().remove(0)
+                };
+                assert_eq!(receipt.rows, rows as u64);
+                eprintln!("parity benchmark: run={run} legacy={legacy} rows={rows} elapsed_ms={:.3} sha256={}", started.elapsed().as_secs_f64()*1000.0, receipt.sha256);
+                receipts.push(receipt);
+            }
+            assert_eq!(receipts[0], receipts[1]);
+        }
+        db.close().await;
+    }
+
     #[tokio::test]
     async fn parity_includes_domain_payload_columns_and_minimum_rowids() {
         let root = tempfile::tempdir().unwrap();
@@ -42,6 +187,43 @@ mod tests {
                 .sha256
         );
         db.close().await;
+    }
+
+    #[tokio::test]
+    async fn streaming_parity_matches_existing_receipts_for_every_storage_class() {
+        for encoding in ["UTF-8", "UTF-16le"] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("db.sqlite");
+            {
+                let db = rusqlite::Connection::open(&path).unwrap();
+                db.execute_batch(&format!(
+                    "PRAGMA encoding='{encoding}'; CREATE TABLE encoding_probe(n INTEGER);"
+                ))
+                .unwrap();
+            }
+            let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+                .await
+                .unwrap();
+            let table = "receipt \"probe";
+            db.execute_raw_sql_write(&format!("CREATE TABLE {}(id INTEGER PRIMARY KEY,untyped,\"text value\" TEXT,bytes BLOB,number REAL,flag BOOLEAN,_archive_ignored TEXT); CREATE TABLE empty_receipt(id INTEGER PRIMARY KEY,payload TEXT);",quote(table))).await.unwrap();
+            db.execute_raw_sql_write(&format!("INSERT INTO {} VALUES(-9223372036854775808,NULL,'',X'',NULL,0,'ignored'),(-2,1,'東京'||char(0)||'tail',X'0001FF',1.25,1,'ignored'),(7,'1',CAST(X'80FF' AS TEXT),NULL,-1e200,NULL,'ignored'),(9223372036854775807,X'31',NULL,X'00',0.0,1,'ignored');",quote(table))).await.unwrap();
+            let mut tx = db.begin_immediate_with_retry().await.unwrap();
+            sqlx::query(sqlx::AssertSqlSafe(format!("WITH RECURSIVE n(id) AS (VALUES(10) UNION ALL SELECT id+1 FROM n WHERE id<9000) INSERT INTO {}(id,untyped,\"text value\",bytes) SELECT id,id,'retained history '||id,zeroblob(128) FROM n", quote(table))))
+                .execute(&mut **tx.conn()).await.unwrap();
+            tx.commit().await.unwrap();
+            for table in [table, "empty_receipt"] {
+                let expected = legacy_receipt(&db, table).await;
+                let actual = table_receipts(&db, Some(std::slice::from_ref(&expected)))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    actual,
+                    vec![expected],
+                    "{encoding}: old journals must remain usable"
+                );
+            }
+            db.close().await;
+        }
     }
 }
 
@@ -1181,43 +1363,25 @@ pub(super) fn hash_value(
     index: usize,
     replacement: Option<&Option<String>>,
 ) -> Result<(), sqlx::Error> {
-    if let Some(value) = replacement {
-        if let Some(value) = value {
-            hash.update(b"T");
-            hash.update((value.len() as u64).to_le_bytes());
-            hash.update(value.as_bytes());
+    use rusqlite::types::ValueRef as Cell;
+    let value = if let Some(value) = replacement {
+        value
+            .as_ref()
+            .map_or(Cell::Null, |text| Cell::Text(text.as_bytes()))
+    } else {
+        let raw = row.try_get_raw(index)?;
+        if raw.is_null() {
+            Cell::Null
         } else {
-            hash.update(b"N");
+            match raw.type_info().name() {
+                "INTEGER" => Cell::Integer(row.try_get(index)?),
+                "REAL" => Cell::Real(row.try_get(index)?),
+                "TEXT" => Cell::Text(row.try_get(index)?),
+                _ => Cell::Blob(row.try_get(index)?),
+            }
         }
-        return Ok(());
-    }
-    let raw = row.try_get_raw(index)?;
-    if raw.is_null() {
-        hash.update(b"N");
-        return Ok(());
-    }
-    match raw.type_info().name() {
-        "INTEGER" => {
-            hash.update(b"I");
-            hash.update(row.try_get::<i64, _>(index)?.to_le_bytes());
-        }
-        "REAL" => {
-            hash.update(b"R");
-            hash.update(row.try_get::<f64, _>(index)?.to_bits().to_le_bytes());
-        }
-        "TEXT" => {
-            let bytes: Vec<u8> = row.try_get(index)?;
-            hash.update(b"T");
-            hash.update((bytes.len() as u64).to_le_bytes());
-            hash.update(bytes);
-        }
-        _ => {
-            let bytes: Vec<u8> = row.try_get(index)?;
-            hash.update(b"B");
-            hash.update((bytes.len() as u64).to_le_bytes());
-            hash.update(bytes);
-        }
-    }
+    };
+    super::parity::hash_cell(hash, value);
     Ok(())
 }
 
@@ -1314,6 +1478,22 @@ pub(super) async fn table_receipts(
         } else {
             "rowid"
         };
+        if table != "frames" || db.storage.is_none() {
+            let sql = format!(
+                "SELECT {key},{} FROM {} ORDER BY {key}",
+                columns
+                    .iter()
+                    .map(|column| quote(column))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                quote(&table),
+            );
+            let receipt = super::parity::scan(db.pool.clone(), table.clone(), sql).await?;
+            tracing::info!(table=%table, rows=receipt.rows, "storage parity receipt complete");
+            result.push(receipt);
+            continue;
+        }
+        // Hybrid frames still hydrate sealed payloads in byte-bounded batches.
         let mut hash = Sha256::new();
         let mut count = 0;
         let mut last = i64::MIN;

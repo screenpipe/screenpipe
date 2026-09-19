@@ -110,6 +110,16 @@ pub fn app_version(version: String) {
     });
 }
 
+/// Native SQLite scans run on a blocking worker, outside Tokio's task-local
+/// scope. Keep their progress and originating failure in the same attempt.
+pub(super) fn blocking_scope<T>(work: impl FnOnce() -> T + Send) -> impl FnOnce() -> T + Send {
+    let run = ACTIVE.try_with(Arc::clone).ok();
+    move || match run {
+        Some(run) => ACTIVE.sync_scope(run, work),
+        None => work(),
+    }
+}
+
 pub(super) fn source_state(state: SourceState) {
     let _ = ACTIVE.try_with(|run| {
         run.lock()

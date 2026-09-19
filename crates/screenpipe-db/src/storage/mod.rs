@@ -16,6 +16,7 @@ mod in_place;
 mod inventory;
 mod lifecycle;
 mod maintenance;
+mod parity;
 pub(crate) mod read_schema;
 mod reader;
 mod reclaim;

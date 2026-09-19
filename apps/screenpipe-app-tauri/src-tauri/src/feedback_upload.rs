@@ -743,6 +743,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn parity_scan_failure_reaches_support_without_rolling_logs() {
+        use screenpipe_db::{storage, DatabaseManager};
+        let root = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new(
+            root.path().join("db.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        // Valid SQLite with a source shape the existing migration cannot read:
+        // the actual receipt SELECT fails after integrity verification passes.
+        db.execute_raw_sql_write("CREATE TABLE parity_probe(key TEXT PRIMARY KEY,payload TEXT) WITHOUT ROWID; INSERT INTO parity_probe VALUES('key','private history')")
+            .await.unwrap();
+        db.close().await;
+        let error = storage::migrate(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("no such column: rowid"));
+        assert_migration_failure_uploaded(
+            root.path(),
+            &[
+                "scanning_parity_rows",
+                "no such column: rowid",
+                "\"table\": \"parity_probe\"",
+                "\"status\": \"failed\"",
+            ],
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn element_selection_failure_reaches_support_without_rolling_logs() {
         use screenpipe_db::{storage, DatabaseManager};
         let root = tempfile::tempdir().unwrap();
