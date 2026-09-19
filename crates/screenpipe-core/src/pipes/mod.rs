@@ -12670,13 +12670,20 @@ Run the scheduled task.
             .find_map(|line| line.strip_prefix("Run context time: "))
             .unwrap();
         let rendered = chrono::DateTime::parse_from_rfc3339(timestamp).unwrap();
-        assert!((Utc::now() - rendered.with_timezone(&Utc)).num_seconds().abs() < 5);
+        assert!(
+            (Utc::now() - rendered.with_timezone(&Utc))
+                .num_seconds()
+                .abs()
+                < 5
+        );
         let shorter = PipeConfig {
             timeout: Some(90),
             ..config.clone()
         };
-        assert!(render_prompt_with_port(&shorter, "body text", 3031, None, None)
-            .contains("Execution budget: 90 seconds."));
+        assert!(
+            render_prompt_with_port(&shorter, "body text", 3031, None, None)
+                .contains("Execution budget: 90 seconds.")
+        );
         // User prompt contains a default lookback and the "Execute" instruction.
         assert!(prompt.contains("Default run lookback:"));
         assert!(prompt.contains("authoritative time range"));
