@@ -38,13 +38,11 @@ A request, plan or assistant report does not prove the work was completed.
 Start with upstream sources and successful cached responses. Preserve literal
 quotes and original timestamp/app metadata; do not stitch unrelated sightings.
 For a missing or invalid frame quote, use `GET /frames/{frame_id}/context`.
-For other sources, `/search` accepts `start_time`, `end_time` (ISO timestamps),
-`app_name`, `content_type` (`audio` for transcripts, `all` for mixed sources),
-`limit`, and `offset`. Use a narrow source window, encode query parameters, and
-respect returned pagination. The screenpipe-api skill documents other operations
-if needed; do not load unrelated API sections for an already supported claim.
-Use the existing attribution headers `X-Screenpipe-Client: api` and
-`X-Screenpipe-Agent: unknown` for REST history retrievals.
+For other sources, first read the Essential read parameters section of the
+screenpipe-api skill. Use its documented query names, nested or fields-projected
+response shape, authenticated REST fallback and pagination. Keep queries narrow
+around the original timestamp/app; do not load unrelated API sections or re-search
+an already supported claim.
 
 Only attach a screenshot after viewing that exact image. Unknown timing stays
 empty. These optional fields must not block supported text updates. Failed source

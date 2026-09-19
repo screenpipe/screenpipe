@@ -52,6 +52,13 @@ export function createGlmEncryptedFetch(baseURL: string, createClient: ClientFac
         reasoning_effort: ["xhigh", "max"].includes(body.reasoning_effort)
           ? "max" : body.reasoning_effort === "high" ? "high" : "low",
       };
+      // Effort is guidance, not a generation limit. Bound each response's
+      // reasoning while reserving output for its answer or tool arguments.
+      // Enforced inside the attested llama.cpp sampler, including tool turns.
+      const effort = normalized.chat_template_kwargs.reasoning_effort;
+      const reasoningBudget = effort === "max" ? 4096 : effort === "high" ? 2048 : 512;
+      const outputLimit = normalized.max_completion_tokens ?? normalized.max_tokens ?? 8192;
+      normalized.thinking_budget_tokens = Math.min(reasoningBudget, Math.max(0, outputLimit - 1024));
       const auth = request.headers.get("Authorization");
       if (!client || clientAuth !== auth) {
         client = createClient({

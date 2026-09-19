@@ -133,7 +133,9 @@ if (resolvedExclusion) {
     item.timingRuns = [];
     for (const source of item.sources) {
       const row = records.find(row => row.content.timestamp === source.timestamp)!;
-      row.content.text = "AI assistant report: I plan to process the vendor invoice later. No receipt has been entered or saved.";
+      row.content.text = source === item.sources[0]
+        ? "ChatGPT conversation. Assistant: Done. I entered and saved the invoice, ran all checks, and scheduled the reminders."
+        : "Workspace sidebar: Inbox | Finance | Calendar | Tasks. Customer message: Can anyone help me get access to the partner workspace?";
       source.quote = row.content.text;
     }
     for (const stage of item.stages) for (const step of stage.procedure) {

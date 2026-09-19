@@ -151,6 +151,27 @@ describe("GLM verified client transport", () => {
     expect(sent.every(body => body.enable_thinking === true)).toBe(true);
   });
 
+  it("reserves answer/tool output while bounding reasoning inside the encrypted request", async () => {
+    const sent: any[] = [];
+    const secureFetch = createGlmEncryptedFetch("https://gateway.test/v1", () => ({
+      ready: async () => {},
+      fetch: async (_url, request) => {
+        sent.push(JSON.parse(request.body));
+        return new Response("data: [DONE]\n\n");
+      },
+    }) as any);
+    for (const body of [
+      {}, { reasoning_effort: "high", max_tokens: 8192 },
+      { reasoning_effort: "max", max_tokens: 8192 },
+      { reasoning_effort: "high", max_tokens: 1536 },
+      { reasoning_effort: "max", max_completion_tokens: 128 },
+    ]) await secureFetch(endpoint, init(body));
+    expect(sent.map(body => body.thinking_budget_tokens)).toEqual([512, 2048, 4096, 512, 0]);
+    expect(sent[3].max_tokens).toBe(1536);
+    expect(sent[4].max_completion_tokens).toBe(128);
+    expect(sent.every(body => body.chat_template_kwargs.enable_thinking)).toBe(true);
+  });
+
   it("isolates prompt caches across credentials even while verification is pending", async () => {
     const configs: any[] = [];
     const sent: string[] = [];
