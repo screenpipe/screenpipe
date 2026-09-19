@@ -33,6 +33,113 @@ impl Drop for Pause {
 }
 
 #[tokio::test]
+async fn offline_selection_seeks_past_retained_history() {
+    use std::sync::atomic::AtomicU64;
+    unsafe extern "C" fn count_steps(context: *mut std::ffi::c_void) -> i32 {
+        let steps = unsafe { &*context.cast::<AtomicU64>() };
+        // Abort a regressed scan instead of letting large fixtures hang CI.
+        i32::from(steps.fetch_add(1000, Ordering::Relaxed) > 100_000)
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let mut options = crate::storage::MigrationOptions::default();
+    options.privacy.identity = "migration-cursor-test".into();
+    options.privacy.required_surfaces = 1;
+    let db = DatabaseManager::new_hybrid(root.path(), Default::default(), options)
+        .await
+        .unwrap();
+    db.execute_raw_sql_write(
+        "INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-09-19','private frame')",
+    )
+    .await
+    .unwrap();
+    let count = 200_000_i64;
+    let mut tx = db.begin_immediate_with_retry().await.unwrap();
+    // Keep a large privacy-pending prefix. This models an interrupted migration
+    // after recording recovery has restored all elements to the resident table.
+    sqlx::query("WITH RECURSIVE n(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM n WHERE id<?) INSERT INTO _bulk_element_rows(id,frame_id,source,role,text,_archive_generation) SELECT id,1,'accessibility','AXText','private',1 FROM n")
+        .bind(count).execute(&mut **tx.conn()).await.unwrap();
+    sqlx::query("WITH RECURSIVE n(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM n WHERE id<?) INSERT INTO ui_events(id,timestamp,event_type,text_content) SELECT id,'2026-09-19','text','private' FROM n")
+        .bind(count).execute(&mut **tx.conn()).await.unwrap();
+    // In-place migration deliberately postpones these indexes until completion.
+    sqlx::query("DROP INDEX _bulk_ui_events_pending")
+        .execute(&mut **tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    db.execute_raw_sql_write("INSERT INTO elements(id,frame_id,source,role,text,redacted_at) VALUES(200001,1,'accessibility','AXText','eligible',1); INSERT INTO ui_events(id,timestamp,event_type,text_content,redacted_at) VALUES(200001,'2026-09-19','text','eligible',1)").await.unwrap();
+
+    let storage = db.storage.as_ref().unwrap();
+    let index = storage.root.join(&storage.descriptor.index);
+    let pool = pool_options(Some(storage.clone()), false)
+        .max_connections(1)
+        .connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(&index))
+        .await
+        .unwrap();
+    let writer = screenpipe_sqlite_coordinator::SqliteWritePool::new(
+        pool.clone(),
+        screenpipe_sqlite_coordinator::sqlite_write_lock(&index),
+    );
+    let steps = Box::new(AtomicU64::new(0));
+    {
+        let mut conn = pool.acquire().await.unwrap();
+        let mut handle = conn.lock_handle().await.unwrap();
+        // Context remains alive until the callback is removed below.
+        unsafe {
+            libsqlite3_sys::sqlite3_progress_handler(
+                handle.as_raw_handle().as_ptr(),
+                1000,
+                Some(count_steps),
+                (&*steps as *const AtomicU64).cast_mut().cast(),
+            );
+        }
+    }
+    let bulk = storage
+        .select_bulk(&pool, &TABLES[2], None, Some(count))
+        .await;
+    let elements = elements::seal_after(storage, &pool, &writer, Some(count)).await;
+    let work = steps.load(Ordering::Relaxed);
+    {
+        let mut conn = pool.acquire().await.unwrap();
+        let mut handle = conn.lock_handle().await.unwrap();
+        unsafe {
+            libsqlite3_sys::sqlite3_progress_handler(
+                handle.as_raw_handle().as_ptr(),
+                0,
+                None,
+                std::ptr::null_mut(),
+            );
+        }
+    }
+    pool.close().await;
+    let bulk = bulk
+        .unwrap_or_else(|error| panic!("bulk scan exceeded work budget at {work} steps: {error}"));
+    assert_eq!(
+        bulk.iter().map(|r| r.id).collect::<Vec<_>>(),
+        vec![count + 1]
+    );
+    assert_eq!(
+        elements.unwrap_or_else(|error| panic!(
+            "element scan exceeded work budget at {work} steps: {error}"
+        )),
+        (1, Some(count + 1))
+    );
+    assert!(
+        work < 100_000,
+        "selection revisited retained history: {work}"
+    );
+    eprintln!("offline cursor: retained_rows_per_table={count}, sqlite_steps={work}");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM _bulk_element_rows")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        count
+    );
+    db.close().await;
+}
+
+#[tokio::test]
 async fn element_publication_ignores_new_captures_but_rejects_changed_range_members() {
     for archived in [false, true] {
         for mutation in [

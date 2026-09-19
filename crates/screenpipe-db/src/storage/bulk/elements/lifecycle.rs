@@ -50,12 +50,28 @@ pub(crate) async fn seal(
     pool: &SqlitePool,
     writer: &SqliteWritePool,
 ) -> Result<usize, sqlx::Error> {
-    crate::storage::diagnostics::batch("elements", None, None, None, None);
-    crate::storage::diagnostics::stage("selecting_staged_elements");
+    Ok(seal_after(storage, pool, writer, None).await?.0)
+}
+
+// Only the exclusive offline owner carries a cursor across calls. Live
+// recording can edit older rows and therefore always starts a fresh search.
+pub(crate) async fn seal_after(
+    storage: &Arc<HybridStorage>,
+    pool: &SqlitePool,
+    writer: &SqliteWritePool,
+    mut after: Option<i64>,
+) -> Result<(usize, Option<i64>), sqlx::Error> {
     // A dirty archive must be rewritten as a whole. If privacy processing
     // blocks that range, continue after it instead of starving newer work.
-    let mut after = None;
     loop {
+        crate::storage::diagnostics::batch(
+            "elements",
+            after.and_then(|id| id.checked_add(1)),
+            None,
+            None,
+            None,
+        );
+        crate::storage::diagnostics::stage("selecting_staged_elements");
         let lower = after.map_or_else(|| "1".to_owned(), |id| format!("id>{id}"));
         let id: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT id FROM _bulk_element_rows WHERE _archive_deleted=0 AND {lower} AND ({}) ORDER BY id LIMIT 1",
@@ -63,7 +79,7 @@ pub(crate) async fn seal(
         )))
         .fetch_optional(pool)
         .await?;
-        let Some(id) = id else { return Ok(0) };
+        let Some(id) = id else { return Ok((0, after)) };
         let range: Option<(i64, i64, i64)> = sqlx::query_as("SELECT first_id,last_id,file_id FROM _bulk_element_ranges WHERE first_id=(SELECT max(first_id) FROM _bulk_element_ranges WHERE first_id<=?1) AND last_id>=?1")
             .bind(id).fetch_optional(pool).await?;
         if let Some((first, last, _)) = range {
@@ -195,7 +211,7 @@ async fn rewrite(
     writer: &SqliteWritePool,
     id: i64,
     range: Option<(i64, i64, i64)>,
-) -> Result<usize, sqlx::Error> {
+) -> Result<(usize, Option<i64>), sqlx::Error> {
     let _token = storage.read_token(pool).await?;
     let version: i64 = sqlx::query_scalar("SELECT version FROM _bulk_element_state")
         .fetch_one(pool)
@@ -206,7 +222,7 @@ async fn rewrite(
             .await?;
     let (first, last) = if let Some((first, last, _)) = range {
         if range_blocked(pool, first, last).await? {
-            return Ok(0);
+            return Ok((0, None));
         }
         (first, last)
     } else {
@@ -234,8 +250,21 @@ async fn rewrite(
             None,
         );
         crate::storage::diagnostics::stage("selecting_element_batch");
+        // A new range contains only resident rows. Reading its logical virtual
+        // table would materialize every private/oversized row while looking
+        // for enough eligible records, including a huge recovered backlog.
+        let source = if range.is_some() {
+            "elements"
+        } else {
+            "_bulk_element_rows"
+        };
+        let visible = if range.is_some() {
+            "1"
+        } else {
+            "_archive_deleted=0"
+        };
         let candidates: Vec<(i64, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT id,{} FROM elements WHERE id BETWEEN ? AND ? AND {lower} AND ({}) ORDER BY id LIMIT {FILE_ROWS}",
+            "SELECT id,{} FROM {source} WHERE id BETWEEN ? AND ? AND {lower} AND {visible} AND ({}) ORDER BY id LIMIT {FILE_ROWS}",
             TABLE.all_bytes(""), TABLE.eligible
         )))
         .bind(first).bind(last).fetch_all(pool).await?;
@@ -263,7 +292,7 @@ async fn rewrite(
         );
         crate::storage::diagnostics::stage("reading_elements_to_seal");
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT id,_archive_generation,{} FROM elements WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id", names()
+            "SELECT id,_archive_generation,{} FROM {source} WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id", names()
         )))
         .bind(serde_json::to_string(&ids).map_err(storage_error)?)
         .fetch_all(pool).await?
@@ -280,7 +309,7 @@ async fn rewrite(
     } else if let Some(file) = files.last() {
         file.last
     } else {
-        return Ok(0);
+        return Ok((0, None));
     };
     crate::storage::diagnostics::stage("publishing_element_archive");
     #[cfg(test)]
@@ -314,7 +343,7 @@ async fn rewrite(
                 .await?;
         }
         tx.commit().await?;
-        return Ok(0);
+        return Ok((0, None));
     }
     let selection = if range.is_some() {
         "1".into()
@@ -367,7 +396,7 @@ async fn rewrite(
     crate::storage::faults::checkpoint("bulk_committed");
     let count = files.iter().map(|f| f.rows).sum();
     tracing::info!(rows = count, files = files.len(), "sealed element records");
-    Ok(count)
+    Ok((count, Some(last)))
 }
 
 async fn resident_range_unchanged(

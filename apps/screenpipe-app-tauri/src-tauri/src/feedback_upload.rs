@@ -743,6 +743,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn element_selection_failure_reaches_support_without_rolling_logs() {
+        use screenpipe_db::{storage, DatabaseManager};
+        let root = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap();
+        // A broken resident source makes the real element selector fail. The
+        // support report must retain that cause even after the pool is closed.
+        db.execute_raw_sql_write("DROP TABLE _bulk_element_rows")
+            .await
+            .unwrap();
+        let error =
+            storage::diagnostics::observe(root.path(), "conversion", |_, _| {}, db.seal_payloads())
+                .await
+                .unwrap_err();
+        assert!(error.to_string().contains("no such table"));
+        db.close().await;
+        assert_migration_failure_uploaded(
+            root.path(),
+            &[
+                "selecting_staged_elements",
+                "no such table",
+                "_bulk_element_rows",
+                "\"status\": \"failed\"",
+                "\"table\": \"elements\"",
+            ],
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn migration_conflict_reaches_support_after_log_rotation_and_redaction() {
         use screenpipe_db::{storage, DatabaseManager};
         let root = tempfile::tempdir().unwrap();
@@ -784,9 +815,22 @@ mod tests {
         assert!(error
             .to_string()
             .contains("source contains recorded history"));
+        assert_migration_failure_uploaded(
+            root.path(),
+            &[
+                "source contains recorded history",
+                "validating_migration_source",
+                "\"source_exists\": true",
+                "\"index_exists\": true",
+            ],
+        )
+        .await;
+    }
+
+    async fn assert_migration_failure_uploaded(root: &std::path::Path, expected: &[&str]) {
         timeout(Duration::from_secs(3), async {
             loop {
-                if storage::diagnostics::recent(root.path())
+                if screenpipe_db::storage::diagnostics::recent(root)
                     .unwrap_or_default()
                     .iter()
                     .any(|snapshot| snapshot.status == "failed")
@@ -799,16 +843,18 @@ mod tests {
         .await
         .unwrap();
         // A later support submission has no original rolling log in memory or on disk.
-        let diagnostics = collect_migration_diagnostics_from_root(root.path().to_owned()).await;
+        let diagnostics = collect_migration_diagnostics_from_root(root.to_owned()).await;
         let raw =
             format!("[no log files found]\n\n=== Storage Migration Diagnostics ===\n{diagnostics}");
         let redacted = crate::feedback_redact::redact_pii_for_feedback(raw, "{}".into())
             .await
             .unwrap();
-        assert!(redacted.contains("source contains recorded history"));
-        assert!(redacted.contains("validating_migration_source"));
-        assert!(redacted.contains("\"source_exists\": true"));
-        assert!(redacted.contains("\"index_exists\": true"));
+        for expected in expected {
+            assert!(
+                redacted.contains(expected),
+                "missing {expected}: {redacted}"
+            );
+        }
         assert!(!redacted.contains("private history"));
 
         let server = MockServer::start().await;

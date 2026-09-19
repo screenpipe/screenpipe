@@ -10,8 +10,8 @@ mod vtab;
 use super::{integer, real, text, Column, Kind, Table};
 use sqlx::{Row, SqliteConnection};
 
-pub(crate) use lifecycle::seal;
 pub(super) use lifecycle::{export, reclaim, verify};
+pub(crate) use lifecycle::{seal, seal_after};
 pub(crate) use vtab::register;
 
 pub(super) const TABLE: Table = Table {
