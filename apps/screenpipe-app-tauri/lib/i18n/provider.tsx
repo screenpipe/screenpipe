@@ -7,7 +7,7 @@ import { GTProvider, initializeGT, getLocaleProperties } from "gt-react";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { locale as operatingSystemLocale } from "@tauri-apps/plugin-os";
 import { resolveLocale } from "./locale";
-import bundled from "./empty.json";
+import bundled from "@/lib/i18n/generated.json";
 import { OfflineGTProvider } from "./offline-provider";
 
 type Snapshot = {

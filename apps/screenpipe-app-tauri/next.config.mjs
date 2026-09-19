@@ -11,12 +11,12 @@ const nextConfig = {
     transpilePackages: ['@screenpipe/workflows-ui'],
   webpack: (config) => {
     const mode = localizationMode();
-    const emptySnapshot = fileURLToPath(new URL("./lib/i18n/empty.json", import.meta.url));
     const snapshot = fileURLToPath(new URL("./lib/i18n/generated.json", import.meta.url));
-    if (mode !== "off" && !existsSync(snapshot)) {
+    if (!existsSync(snapshot)) {
       throw new Error("Localization snapshot missing. Start with bun run dev or bun run build.");
     }
-    config.resolve.alias[emptySnapshot] = mode === "off" ? emptySnapshot : snapshot;
+    // Every mode prepares this file, including an English-only snapshot in off
+    // mode. Import it directly so production JSON resolution cannot bypass an alias.
     if (mode !== "off") config.plugins.push(desktopCompiler.webpack());
         config.resolve.symlinks = false;
         // This local file dependency changes without a package version bump.

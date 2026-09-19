@@ -78,3 +78,21 @@ test('local package edits invalidate the frontend input hash', async () => {
 		await fs.rm(fixture, { recursive: true, force: true })
 	}
 })
+
+test('localized packaging rejects a missing or English-only snapshot, including cached artifacts', async () => {
+	const { verifyLocalizationArtifact } = await import('./build-frontend.js')
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), 'screenpipe-localization-export-'))
+	const chunks = path.join(root, '_next/static/chunks')
+	const snapshot = { mode: 'cached', revision: 'finalized-translation-revision' }
+	try {
+		await fs.mkdir(chunks, { recursive: true })
+		await expect(verifyLocalizationArtifact(root, snapshot)).rejects.toThrow('missing')
+		await fs.writeFile(path.join(chunks, 'provider.js'), snapshot.revision)
+		await verifyLocalizationArtifact(root, snapshot)
+		await fs.writeFile(path.join(chunks, 'stale-provider.js'), '{"revision":"off"}')
+		await expect(verifyLocalizationArtifact(root, snapshot)).rejects.toThrow('English-only')
+		await verifyLocalizationArtifact(root, { mode: 'off' })
+	} finally {
+		await fs.rm(root, { recursive: true, force: true })
+	}
+})

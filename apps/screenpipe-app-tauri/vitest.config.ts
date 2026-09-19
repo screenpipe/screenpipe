@@ -44,6 +44,7 @@ export default defineConfig({
 	resolve: {
 		preserveSymlinks: true,
 		alias: {
+			"@/lib/i18n/generated.json": path.resolve(__dirname, "lib/i18n/empty.json"),
 			// Resolve the shared workflow package peer from the desktop test host.
 			"lucide-react": path.resolve(__dirname, "node_modules/lucide-react"),
 			"gt-react": path.resolve(__dirname, "node_modules/gt-react/dist/index.client.mjs"),
