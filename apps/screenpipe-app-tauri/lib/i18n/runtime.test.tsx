@@ -9,9 +9,12 @@ import { OfflineGTProvider as GTProvider } from "./offline-provider";
 import { localizeDefinitions } from "./definitions";
 import { hashMessage } from "gt-i18n/internal";
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-test("React 18 changes bundled JSX and interpolated messages without losing drafts or fetching", async () => {
+test("a cookieless Tauri origin changes bundled JSX and messages without losing drafts or fetching", async () => {
+  // WKWebView's tauri://localhost origin does not persist document.cookie.
+  vi.spyOn(document, "cookie", "get").mockReturnValue("");
+  vi.spyOn(document, "cookie", "set").mockImplementation(() => {});
   const fetch = vi.fn(() => { throw new Error("Runtime localization must stay offline"); });
   vi.stubGlobal("fetch", fetch);
   const source = "Hello {name}";
