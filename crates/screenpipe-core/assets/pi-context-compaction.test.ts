@@ -3,7 +3,7 @@
 
 // Run via apps/screenpipe-app-tauri/scripts/eval-pi-compaction.ts. The real
 // pinned SDK runs in a disposable install; only the model and tool are synthetic.
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, test, setSystemTime } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -16,6 +16,7 @@ const { createAssistantMessageEventStream } = await import(pathToFileURL(join(in
 const roots: string[] = [];
 const sessions: any[] = [];
 afterEach(async () => {
+  setSystemTime();
   for (const session of sessions.splice(0)) session.dispose();
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
@@ -56,7 +57,11 @@ async function harness(options: { steps?: number; enabled?: boolean; failSummary
       void session.steer("USER CORRECTION: preserve my newest instruction");
     }
   });
+  // Real provider turns advance wall time. Instant synthetic turns can share
+  // the compaction timestamp and incorrectly look like pre-summary usage.
+  let clock = Date.now();
   session.agent.streamFunction = (_model: any, context: any, requestOptions: any) => {
+    setSystemTime(new Date(clock += 10));
     const stream = createAssistantMessageEventStream();
     const summary = !context.tools?.length;
     const tokens = Math.ceil((context.systemPrompt?.length ?? 0) / 4)
@@ -124,6 +129,7 @@ test("delivers a user correction queued during compaction exactly once", async (
   const h = await harness({ steerOnSummary: true });
   await h.session.prompt("Finish the research.");
   expect(h.toolCalls).toHaveLength(14);
+  expect(h.requests.every(request => request.tokens <= 32768)).toBe(true);
   expect(h.requests.some(request => !request.summary && request.corrected)).toBe(true);
   expect(h.events.filter(event => event.type === "message_end" && event.message.role === "user"
     && JSON.stringify(event.message.content).includes("USER CORRECTION"))).toHaveLength(1);
