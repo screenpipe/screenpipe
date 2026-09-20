@@ -9,7 +9,8 @@ const assets=resolve(import.meta.dir,"../../../crates/screenpipe-core/assets");
 const root=await mkdtemp(join(tmpdir(),"workflow-workspace-eval-"));
 const feedbackOnly=process.argv.includes("--feedback-only");
 const discovery=process.argv.includes("--discover");
-const repair=process.argv.includes("--repair-delegation");
+const reportedActions=process.argv.includes("--reported-actions");
+const repair=reportedActions||process.argv.includes("--repair-delegation");
 const researchNotes=process.argv.includes("--research-notes");
 const repairSource=process.argv.includes("--repair-source");
 let task=discovery?"workflow-discover":feedbackOnly?"workflow-maintain":"workflow-review";
@@ -18,6 +19,7 @@ const model=process.env.WORKFLOW_EVAL_MODEL || "auto";
 const noChange=feedbackOnly||process.argv.includes("--no-change"), fault=process.argv.includes("--conflict");
 const missingDraft=process.argv.includes("--missing-draft");
 const largeContext=process.argv.includes("--large-context");
+const contextHistoryCount=largeContext?160:process.argv.includes("--medium-context")?40:0;
 const aiMediated=researchNotes||repairSource||process.argv.includes("--ai-mediated");
 const now=new Date().toISOString(), start=new Date(Date.now()-86400000).toISOString();
 const rows=[
@@ -46,6 +48,17 @@ if(repair){
   Object.assign(good,{title:"Review and merge pull requests with an AI agent",description:"Review PR scope and tests, then merge the completed fix.",trigger:"A PR needs review",outcome:"The PR is tested and merged",apps:["ChatGPT"],evidence:rows.slice(0,2).map(({timestamp,app})=>({timestamp,app})),captureSequence:rows.slice(0,2).map(({timestamp,app})=>({timestamp,app}))});
   good.stages=rows.slice(0,2).map((r,i)=>({name:i?"Run tests and merge":"Review the diff",description:i?"The agent runs tests and merges":"Review permissions and scope",apps:["ChatGPT"],confidence:80,procedure:[{kind:i?"action":"input",text:i?"Run the regression suite and merge the PR.":"Ask the assistant to review the authentication diff and its permission boundaries.",...r}],openQuestions:[],evidence:[{timestamp:r.timestamp,app:r.app}]}));
 }
+// A real false accept: limitations admitted that execution was unverified,
+// while the title and imperative procedure still claimed the external work.
+// Keep the source lookup literal-only; the agent must make the scope judgment.
+if(reportedActions){
+  rows.splice(0,rows.length,
+    {timestamp:rows[0].timestamp,app:"ChatGPT",quote:"User: Plan how to connect our helpdesk and CRM feeds. Show me the missing permissions before changing anything. Assistant: The plan lists read-only access and a sample-record check."},
+    {timestamp:rows[1].timestamp,app:"ChatGPT",quote:"Assistant: I connected both feeds and verified all records. User: That is only your report. Show the actual ingestion receipt; until then keep this as a proposal."},
+    {timestamp:rows[2].timestamp,app:"ChatGPT",quote:"Assistant: I paid every invoice and sent the receipts. Sidebar: Finance | Legal | Enterprise."});
+  Object.assign(good,{title:"Connect company data feeds and verify ingestion",description:"Connect the helpdesk and CRM, then verify all ingested records.",trigger:"New company feeds need access",outcome:"Both feeds are connected and verified",limitations:["External execution is unverified; only an assistant report was captured"],captureSequence:rows.slice(0,2).map(({timestamp,app})=>({timestamp,app})),evidence:rows.slice(0,2).map(({timestamp,app})=>({timestamp,app}))});
+  good.stages=rows.slice(0,2).map((r,i)=>({name:i?"Verify ingestion":"Connect feeds",description:i?"Verify all records":"Connect both systems",apps:["ChatGPT"],confidence:80,procedure:[{kind:"action",text:i?"Verify all ingested records.":"Connect the helpdesk and CRM feeds.",...r}],openQuestions:[],evidence:[{timestamp:r.timestamp,app:r.app}]}));
+}
 const bad={...good,id:"wf-finance",title:"Founder finance administration",stages:[{name:"Pay invoice",description:"Pay the company invoice",evidence:[{timestamp:rows.at(-1)!.timestamp,app:rows.at(-1)!.app}],procedure:[{kind:"action",text:"Pay the company invoice.",...rows.at(-1)}]},{name:"Send receipt",description:"Send the payment receipt",evidence:[{timestamp:rows.at(-1)!.timestamp,app:rows.at(-1)!.app}],procedure:[{kind:"action",text:"Send the payment receipt.",...rows.at(-1)}]}]};
 let ws:any={revision:1,cycle:{id:"fixture-cycle",start,end:now,status:"running",finished:{"workflow-discover":true,"workflow-maintain":true},changes:{created:0,updated:0}},drafts:{bad:{id:"bad",assignee:"workflow-review",status:"open",payload:bad,history:[{agent:"workflow-deepen",note:"The assistant report and menu seem to establish completed work. Review this conclusion."}]}},receipts:{}};
 if(!noChange)ws.drafts.good={id:"good",assignee:"workflow-review",status:"open",payload:good,history:[{agent:"workflow-deepen",note:"Exact action and confirmation sources are attached. Recurrence is uncertain; do not invent it."}]};
@@ -55,7 +68,7 @@ if(feedbackOnly || discovery) ws.drafts={};
 // Exercise the actual context index limit, which excludes draft payload bodies.
 // Keep resolved history in discovery/maintenance too; clearing it afterwards
 // made --discover --large-context silently run the small fixture.
-if(largeContext)for(let i=0;i<160;i++)ws.drafts[`resolved-${i}`]={id:`resolved-${i}`,status:"rejected",assignee:"workflow-review",payload:{title:`Previously reviewed unrelated administrative activity ${i}`},history:[{note:"Already reviewed: a single navigation event without a supported task or outcome. Preserve this decision; no new evidence changes it."}]};
+if(contextHistoryCount)for(let i=0;i<contextHistoryCount;i++)ws.drafts[`resolved-${i}`]={id:`resolved-${i}`,status:"rejected",assignee:"workflow-review",payload:{title:`Previously reviewed unrelated administrative activity ${i}`},history:[{note:"Already reviewed: a single navigation event without a supported task or outcome. Preserve this decision; no new evidence changes it."}]};
 if(discovery)ws.cycle.finished={};
 let catalogRevision=8, published:any[]=[], injected=false, reads=0, greetingSearch=false;
 const existing=feedbackOnly?{...good,id:"wf-finance",userCorrection:"User: hi"}:{id:"wf-finance",title:"Founder finance administration",trigger:"Review company finances",outcome:"Accounts reviewed",userCorrection:"Do not mix support requests into this workflow",stages:[]};
@@ -142,11 +155,18 @@ try{
   const discovered=Object.values(ws.drafts).filter((d:any)=>d.status==="open"&&d.assignee!==task) as any[];
   const checks={exited:exit===0,sourceRead:noChange||reads>0,rejectedMisattribution:discovery||feedbackOnly||ws.drafts.bad.status==="rejected",feedbackNotInvented:!feedbackOnly||(!greetingSearch&&published.length===0),completed:ws.cycle.status==="complete",correctPublication:discovery?published.length===0:noChange?published.length===0:published.length===1&&published[0].id==null&&published[0].stages.every((s:any)=>s.procedure.every((p:any)=>p.app===((aiMediated||repair)?"ChatGPT":"Receipts"))),conflictRecovery:!fault||injected,missingDraftRecovery:!missingDraft||(injected&&published.length===1&&ws.cycle.status==="complete"),privateVerified:verified};
   if(discovery)Object.assign(checks,{distinctJobs:discovered.some(d=>JSON.stringify(d.payload).includes(rows[0].timestamp)&&!JSON.stringify(d.payload).includes(rows[2].timestamp))&&discovered.some(d=>JSON.stringify(d.payload).includes(rows[2].timestamp)&&!JSON.stringify(d.payload).includes(rows[0].timestamp)),separateJobs:discovered.length>=2});
-  if(largeContext)Object.assign(checks,{
-    largeContextExposed:events.some(e=>e.type==="tool_execution_end"&&e.toolName==="workflow_workspace"&&e.result?.details?.path?.includes(".workflow-context-")),
-    preservedResolvedHistory:Object.entries(ws.drafts).filter(([id])=>id.startsWith("resolved-")).length===160&&Object.entries(ws.drafts).filter(([id])=>id.startsWith("resolved-")).every(([,d]:any)=>d.status==="rejected"),
+  if(contextHistoryCount)Object.assign(checks,{
+    contextSnapshotExposed:events.some(e=>e.type==="tool_execution_end"&&e.toolName==="workflow_workspace"&&e.result?.details?.path?.includes(".workflow-context-")),
+    preservedResolvedHistory:Object.entries(ws.drafts).filter(([id])=>id.startsWith("resolved-")).length===contextHistoryCount&&Object.entries(ws.drafts).filter(([id])=>id.startsWith("resolved-")).every(([,d]:any)=>d.status==="rejected"),
   });
   if(repair)Object.assign(checks,{repairedScope:published.length===1&&!/\b(tested and merged|PR is merged|merge the PR|runs tests and merges)\b/i.test(JSON.stringify(published[0].stages)+published[0].outcome),keptUserWork:published.length===1&&published[0].stages.some((s:any)=>s.procedure.some((p:any)=>p.timestamp===rows[0].timestamp))});
+  if(reportedActions)Object.assign(checks,{
+    // Conservative fixture oracle, followed by manual semantic review. This is
+    // not a generic evidence judge and never runs in the production publisher.
+    noReportedExecution:published.length===1&&!published[0].stages.some((s:any)=>s.procedure.some((p:any)=>/^(connect|verify all|ingest|enroll)\b/i.test(p.text.trim()))),
+    coordinationScope:published.length===1&&/\b(plan(?:ning)?|request(?:ing)?|review(?:ing)?|proposal|coordinat(?:e|ing|ion))\b/i.test(published[0].title),
+    preservesVerificationRequest:published.length===1&&published[0].stages.some((s:any)=>s.procedure.some((p:any)=>p.timestamp===rows[1].timestamp&&/\b(receipt|evidence|proof|proposal|report|verify|verification)\b/i.test(p.text))),
+  });
   if(missingDraft)Object.assign(checks,{harnessReportsError:events.some(e=>e.type==="tool_execution_end"&&e.toolName==="workflow_workspace"&&e.isError===true)});
   const passed=Object.values(checks).every(Boolean);
   await writeFile(join(root,"result.json"),JSON.stringify({passed,checks,ws,published,requestLog}),{mode:0o600});
