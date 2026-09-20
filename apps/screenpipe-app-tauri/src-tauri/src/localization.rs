@@ -85,6 +85,7 @@ fn refresh(configured: &str) -> bool {
 }
 
 fn refresh_surfaces(app: &AppHandle) {
+    crate::tray::request_menu_refresh();
     let locale = resolved_locale();
     let payload = json!({"locale": locale, "messages": SNAPSHOT["native"][&locale].as_object().cloned().unwrap_or_default()}).to_string();
     if let Err(error) = app.run_on_main_thread(move || {

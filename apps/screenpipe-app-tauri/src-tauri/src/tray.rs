@@ -230,6 +230,14 @@ static HD_STOP_MENU_ITEM: Lazy<Mutex<Option<MenuItem<Wry>>>> = Lazy::new(|| Mute
 // Track last known state to avoid unnecessary updates
 static LAST_MENU_STATE: Lazy<Mutex<MenuState>> = Lazy::new(|| Mutex::new(MenuState::default()));
 
+static MENU_REFRESH_REQUESTED: Lazy<tokio::sync::Notify> = Lazy::new(tokio::sync::Notify::new);
+
+/// Wake the existing updater for a language change. Keep menu installation on
+/// its normal safe path; never replace an open menu or recreate the tray icon.
+pub(crate) fn request_menu_refresh() {
+    MENU_REFRESH_REQUESTED.notify_one();
+}
+
 /// Optimistic recording status override — set on start/stop click for instant UI feedback.
 /// Tuple of (status, expiry_instant). Cleared when real status matches or after timeout.
 static OPTIMISTIC_STATUS: Lazy<Mutex<Option<(RecordingStatus, std::time::Instant)>>> =
@@ -2348,7 +2356,10 @@ pub fn setup_tray_menu_updater(app: AppHandle, update_item: Option<&tauri::menu:
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
-            interval.tick().await;
+            tokio::select! {
+                _ = interval.tick() => {},
+                _ = MENU_REFRESH_REQUESTED.notified() => {},
+            }
             if QUIT_REQUESTED.load(Ordering::SeqCst) {
                 info!("Tray menu updater received quit request, shutting down.");
                 break;
