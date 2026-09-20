@@ -626,7 +626,10 @@ pub(crate) async fn correct(
     apply_feedback(workflow, &body)?;
     let updated_workflow = workflow.clone();
     next["needsWorkflowReview"] = json!(true);
-    if next["agentWorkspace"]["cycle"]["status"] == "running" {
+    if matches!(
+        next["agentWorkspace"]["cycle"]["status"].as_str(),
+        Some("running" | "paused")
+    ) {
         next["agentWorkspace"]["cycle"]["finished"]["workflow-maintain"] = json!(false);
         let revision = workspace::revision(&next["agentWorkspace"]) + 1;
         next["agentWorkspace"]["revision"] = json!(revision);

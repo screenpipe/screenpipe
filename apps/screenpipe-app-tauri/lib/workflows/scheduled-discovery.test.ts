@@ -81,10 +81,32 @@ describe("workflow agent workspace adapter",()=>{
     await expect(startWorkflowJob()).rejects.toThrow("Enable workflow tasks");
     await enableWorkflowTask();expect(await loadWorkflowTaskSetup()).toMatchObject({enabled:true});
   });
-  it("pauses every role before stopping any agent",async()=>{
+  it("stops this cycle before cancelling all roles, preserving schedule preferences",async()=>{
+    enabled.set("workflow-maintain",false);
+    const before=new Map(enabled);
     await stopWorkflowJob();
-    expect(fetchMock.mock.calls.slice(0,4).every(([path])=>String(path).endsWith("/enable"))).toBe(true);
-    expect(fetchMock.mock.calls.slice(4).every(([path])=>String(path).endsWith("/stop"))).toBe(true);
+    expect(fetchMock.mock.calls[0][0]).toBe("/workflows/workspace");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({action:"pause",task:"workflow-discover"});
+    expect(fetchMock.mock.calls.slice(1).map(([path])=>path)).toEqual(WORKFLOW_TASKS.map(t=>`/pipes/${t}/stop`));
+    expect(enabled).toEqual(before);
+  });
+  it("attempts every cancellation even when one runner fails to stop",async()=>{
+    const original=fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async(path,init)=>String(path)==="/pipes/workflow-discover/stop"
+      ? response({error:"Runner unavailable"},500) : original(path,init));
+    await expect(stopWorkflowJob()).rejects.toThrow("Runner unavailable");
+    expect(fetchMock.mock.calls.filter(([path])=>String(path).endsWith("/stop"))).toHaveLength(4);
+    expect([...enabled.values()].every(Boolean)).toBe(true);
+  });
+  it("does not change tasks when persisting the pause fails",async()=>{
+    fetchMock.mockResolvedValueOnce(response({error:"Save failed"},500));
+    await expect(stopWorkflowJob()).rejects.toThrow("Save failed");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it("reports a persisted stop after restart instead of an old agent failure",async()=>{
+    ws.cycle.status="paused";
+    executions["workflow-review"]={id:26,status:"cancelled",started_at:end};
+    expect(await getWorkflowJob("workflow-review:26")).toMatchObject({status:"incomplete",message:"Update stopped. Resume to continue from saved progress."});
   });
   it("never treats an old catalog as completion of a fresh request",async()=>{
     ws.cycle.status="complete";

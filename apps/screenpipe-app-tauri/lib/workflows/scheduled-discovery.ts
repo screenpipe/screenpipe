@@ -113,6 +113,7 @@ export async function getWorkflowJob(id: string): Promise<WorkflowAnalysisJob> {
   const running = tasks.find(item => ["running", "queued"].includes(item.execution?.status));
   if (running) return tracked(running.execution, running.task);
   const startedAt = ws.cycle?.end;
+  if (ws.cycle?.status === "paused") return { id, startedAt, status: "incomplete", message: "Update stopped. Resume to continue from saved progress." };
   if (ws.cycle?.status === "complete") {
     const result = await loadScheduledCatalog();
     // Completion is the atomic receipt for this exact requested interval.
@@ -171,9 +172,12 @@ export async function startWorkflowJob(): Promise<WorkflowAnalysisJob> {
 }
 
 export async function stopWorkflowJob() {
-  // Pause the group first so completion events cannot launch its next stage.
-  for (const task of WORKFLOW_TASKS) await request(`/pipes/${task}/enable`, { enabled: false });
-  for (const task of WORKFLOW_TASKS) await request(`/pipes/${task}/stop`, {});
+  // Persist this cycle's stop before cancelling runners. Readiness checks and
+  // late writes observe the pause without changing recurring task preferences.
+  await request("/workflows/workspace", { action: "pause", task: WORKFLOW_TASKS[0] });
+  const stopped = await Promise.allSettled(WORKFLOW_TASKS.map(task => request(`/pipes/${task}/stop`, {})));
+  const failed = stopped.find(result => result.status === "rejected");
+  if (failed?.status === "rejected") throw failed.reason;
 }
 
 // Human edits share the backend writer with background commits. They cannot

@@ -10,11 +10,13 @@ From `apps/screenpipe-app-tauri`, with the local Screenpipe Pi runtime and an au
 bun scripts/eval-workflow-workspace.ts --large-context --conflict
 bun scripts/eval-workflow-workspace.ts --ai-mediated --conflict
 bun scripts/eval-workflow-workspace.ts --feedback-only
+bun scripts/eval-workflow-workspace.ts --missing-draft
+bun scripts/eval-workflow-workspace.ts --no-change
 bun scripts/eval-workflow-workspace.ts --discover
 bun scripts/eval-workflow-workspace.ts --repair-delegation
 bun scripts/eval-workflow-workspace.ts --research-notes
 bun scripts/eval-workflow-workspace.ts --repair-source
-WORKFLOW_EVAL_MODEL=glm-5 bun scripts/eval-workflow-workspace.ts --no-change
+WORKFLOW_EVAL_MODEL=glm-5.3-flash-reap50-iq3m bun scripts/eval-workflow-workspace.ts --no-change
 ```
 
 These trials use real model calls and consume account usage. Recording data and persistence are fictional and isolated on a temporary loopback server. They do not modify the user's catalog. The script stops the child after 180 seconds and writes private trajectory/result artifacts to a temporary directory.
@@ -46,3 +48,7 @@ On September 20, native investigation found that Deepen could hand off a researc
 Two subsequent native cycles brought the catalog to thirteen. Twelve procedure quotations across the first three added workflows matched original records. The third cycle exposed a separate publication defect: Review supplied an edited `publish.payload`, but the endpoint ignored it and saved the older draft. Publication now validates that supplied object and persists it with the receipt atomically. A targeted replay of the actual agent edit against the rebuilt native app updated the existing record without a duplicate; the catalog description and stored draft matched the submitted edit. Replaying the identical request returned the same receipt; replaying a different payload was rejected without changing the catalog. This targeted API replay is distinct from the autonomous discovery trials.
 
 A subsequent native resume exposed repeated mistyped UUIDs during context reads and handoff. Missing-draft errors now list exact currently assigned open IDs without substituting or retrying writes. Tool tests cover this error recovery contract. Preserve this failed trial separately from the completed native publication trials.
+
+`--missing-draft` invalidates the first publication target while retaining its contents under another opaque ID. The agent must use the returned exact candidate, publish only the supported workflow, and finish the whole cycle. This is fault injection against the tool contract, not a claim that production IDs change. Successful save responses now include remaining work and current revisions. A failed follow-up state read must preserve the successful receipt.
+
+The no-change fixture now omits directly observed invoice actions. Its earlier version included those actions while requiring rejection, so repairing the candidate was a valid response that the grader incorrectly rejected. Keep that earlier trial separate from runs of the corrected fixture; do not treat the fixture correction as a measured model improvement.

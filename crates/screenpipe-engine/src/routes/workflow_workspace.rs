@@ -56,7 +56,7 @@ pub(crate) async fn context(
     let catalog = read_catalog(&source).await?;
     let ws = workspace::state(&catalog);
     Ok(Json(
-        json!({"task":query.task,"ready":workspace::ready(&ws,&query.task),"workspace":ws,
+        json!({"task":query.task,"ready":workspace::ready(&ws,&query.task),"canFinish":workspace::can_finish(&ws),"workspace":ws,
         "catalogRevision":catalog["revision"].as_u64().unwrap_or(0),
         "receiptRevision":ws["receipts"][&query.task]["revision"].as_u64().unwrap_or(0)}),
     ))
@@ -158,11 +158,27 @@ pub(crate) async fn update(
     }
     let previous = read_catalog(&source).await?;
     let mut ws = workspace::state(&previous);
-    let receipt = if action == "start" {
+    let receipt = if action == "pause" {
+        // A model may finish its own work, but only the owner can stop the group.
+        if perms.0.is_some() {
+            return Err(error(
+                StatusCode::FORBIDDEN,
+                "Only the owner can stop workflow updates.",
+            ));
+        }
+        workspace::pause(&mut ws);
+        json!({"revision":workspace::revision(&ws),"cycle":ws["cycle"]})
+    } else if action == "start" {
         if task != workspace::TASKS[0] {
             return Err(error(
                 StatusCode::FORBIDDEN,
                 "Discover starts or resumes updates.",
+            ));
+        }
+        if perms.0.is_some() && ws["cycle"]["status"] == "paused" && !workspace::ready(&ws, task) {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "This update was stopped. Resume from Workflows or wait for the next daily update.",
             ));
         }
         workspace::start(&mut ws, &previous);

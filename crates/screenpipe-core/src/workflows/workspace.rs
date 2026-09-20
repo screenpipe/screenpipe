@@ -39,6 +39,14 @@ pub fn ready(ws: &Value, task: &str) -> bool {
     if ws["cycle"].is_null() {
         return task == TASKS[0];
     }
+    if ws["cycle"]["status"] == "paused" {
+        // Stop affects this run, not the user's recurring task settings.
+        return task == TASKS[0]
+            && ws["cycle"]["pausedAt"]
+                .as_str()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .is_some_and(|at| Utc::now().signed_duration_since(at) >= Duration::hours(24));
+    }
     if ws["cycle"]["status"] == "complete" {
         // Completion events must not start an endless sequence of fresh scans.
         return task == TASKS[0]
@@ -76,7 +84,23 @@ pub struct Change {
     pub note: String,
 }
 
+/// Persist the stop before cancelling runners so late writes and queued wakes
+/// cannot advance the cycle. Drafts and scheduling preferences remain intact.
+pub fn pause(ws: &mut Value) {
+    if ws["cycle"]["status"] == "running" {
+        ws["cycle"]["status"] = json!("paused");
+        ws["cycle"]["pausedAt"] = json!(Utc::now().to_rfc3339());
+        ws["revision"] = json!(revision(ws) + 1);
+    }
+}
+
 pub fn start(ws: &mut Value, catalog: &Value) {
+    if ws["cycle"]["status"] == "paused" {
+        ws["cycle"]["status"] = json!("running");
+        ws["cycle"].as_object_mut().unwrap().remove("pausedAt");
+        ws["revision"] = json!(revision(ws) + 1);
+        return;
+    }
     if !ws["cycle"].is_null() && ws["cycle"]["status"] == "running" {
         return;
     }
@@ -159,6 +183,9 @@ pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, Strin
         }
         "reject" => {
             let key = id.as_deref().ok_or("draft_id is required.")?;
+            if ws["drafts"][key].is_null() {
+                return Err("Draft not found.".into());
+            }
             if task != TASKS[2]
                 || ws["drafts"][key]["assignee"] != task
                 || ws["drafts"][key]["status"] != "open"
@@ -201,7 +228,13 @@ pub fn check_publish(ws: &Value, rev: u64, id: Option<&str>) -> Result<(), Strin
     if revision(ws) != rev {
         return Err("Workspace changed. Read context before publishing.".into());
     }
+    if ws["cycle"]["status"] != "running" {
+        return Err("Start or resume an update first.".into());
+    }
     if let Some(id) = id {
+        if ws["drafts"][id].is_null() {
+            return Err("Draft not found.".into());
+        }
         if ws["drafts"][id]["status"] != "open" || ws["drafts"][id]["assignee"] != TASKS[2] {
             return Err("Review must own an open draft before publishing.".into());
         }
@@ -298,6 +331,76 @@ mod tests {
             note: "Investigate actual observed actions, not menu labels".into(),
         }
     }
+    #[test]
+    fn missing_targets_are_distinct_from_ownership_and_never_mutate() {
+        let mut ws = empty();
+        start(&mut ws, &json!({}));
+        let proposal = change("propose", &ws, None, Some(TASKS[1]));
+        let id = apply(&mut ws, TASKS[0], &proposal).unwrap()["draft_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let before = ws.clone();
+        for action in ["handoff", "reject"] {
+            let c = change(action, &ws, Some("mistyped-id".into()), Some(TASKS[1]));
+            assert_eq!(
+                apply(&mut ws, TASKS[2], &c).unwrap_err(),
+                "Draft not found."
+            );
+            assert_eq!(ws, before);
+        }
+        assert_eq!(
+            check_publish(&ws, revision(&ws), Some("mistyped-id")).unwrap_err(),
+            "Draft not found."
+        );
+        assert!(check_publish(&ws, revision(&ws), Some(&id))
+            .unwrap_err()
+            .contains("Review must own"));
+        assert!(check_publish(&ws, revision(&ws) - 1, Some("mistyped-id"))
+            .unwrap_err()
+            .contains("Workspace changed"));
+        assert_eq!(ws, before);
+    }
+
+    #[test]
+    fn stop_preserves_drafts_blocks_late_writes_and_resumes_the_same_cycle() {
+        let mut ws = empty();
+        start(&mut ws, &json!({}));
+        let proposal = change("propose", &ws, None, Some(TASKS[2]));
+        let id = apply(&mut ws, TASKS[0], &proposal).unwrap()["draft_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let before = ws.clone();
+        pause(&mut ws);
+        let paused = ws.clone();
+        pause(&mut ws);
+        assert_eq!(ws, paused); // repeated Stop does not postpone the daily run
+        assert_eq!(ws["drafts"], before["drafts"]);
+        for task in TASKS {
+            assert!(!ready(&ws, task));
+        }
+        assert!(!can_finish(&ws));
+        assert!(check_publish(&ws, revision(&ws), Some(&id)).is_err());
+        let c = change("reject", &ws, Some(id), None);
+        assert!(apply(&mut ws, TASKS[2], &c).is_err());
+        assert_eq!(ws, paused);
+        // The serialized state survives restart; a scheduled Discover may resume
+        // the saved work the next day. Other roles cannot wake it prematurely.
+        let mut restored: Value =
+            serde_json::from_slice(&serde_json::to_vec(&ws).unwrap()).unwrap();
+        restored["cycle"]["pausedAt"] = json!((Utc::now() - Duration::hours(25)).to_rfc3339());
+        assert!(ready(&restored, TASKS[0]));
+        for task in &TASKS[1..] {
+            assert!(!ready(&restored, task));
+        }
+        start(&mut restored, &json!({}));
+        assert_eq!(restored["drafts"], before["drafts"]);
+        assert_eq!(restored["cycle"], before["cycle"]);
+        assert!(ready(&restored, TASKS[2]));
+        assert!(revision(&restored) > revision(&before));
+    }
+
     #[test]
     fn publication_cannot_silently_drop_reviewed_steps() {
         let raw = json!({"workflows":[{"stages":[{"procedure":[{"text":"Open invoice"},{"text":"Save receipt"}]}]}]});

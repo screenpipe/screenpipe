@@ -26,18 +26,17 @@ test("structured saves serialize quotes and JSON-like source content without she
 });
 test("server conflicts are errors, not success text",async()=>{
   server.reload({fetch:()=>Response.json({error:"Workspace changed"},{status:409})});
-  const result=await tool.execute("id",{action:"publish",draft_id:"a"},new AbortController().signal);
-  expect(result.isError).toBe(true);expect(result.details.saved).toBe(false);expect(result.content[0].text).toContain("Workspace changed");
+  await expect(tool.execute("id",{action:"publish",draft_id:"a"},new AbortController().signal)).rejects.toThrow("Workspace changed");
 });
 test("missing capability never falls back to a broad owner token",async()=>{
   writeFileSync(join(dir,".screenpipe-permissions.json"),"{}");
-  const result=await tool.execute("id",{action:"context"},new AbortController().signal);
-  expect(result.isError).toBe(true);expect(requests).toHaveLength(0);
+  await expect(tool.execute("id",{action:"context"},new AbortController().signal)).rejects.toThrow("Local recorder capability unavailable");
+  expect(requests).toHaveLength(0);
 });
 test("an already-aborted task cannot save",async()=>{
   const abort=new AbortController();abort.abort();
-  const result=await tool.execute("id",{action:"publish",draft_id:"a"},abort.signal);
-  expect(result.isError).toBe(true);expect(requests).toHaveLength(0);
+  await expect(tool.execute("id",{action:"publish",draft_id:"a"},abort.signal)).rejects.toThrow();
+  expect(requests).toHaveLength(0);
 });
 
 function contextFixture(payload:any = {title:"Invoice review",evidence:[{quote:"Full source"}]}) {
@@ -63,7 +62,7 @@ test("explicit context selectors preserve the exact draft and catalog record",as
   expect((await call({draft_id:"draft-a"})).draft).toEqual(draft);
   expect((await call({workflow_id:"wf-a"})).workflow).toEqual(workflow);
   expect((await call({draft_id:"draft-a"})).outputContract).toBe("Exact output contract");
-  expect((await tool.execute("id",{action:"context",draft_id:"missing"},new AbortController().signal)).isError).toBe(true);
+  await expect(tool.execute("id",{action:"context",draft_id:"missing"},new AbortController().signal)).rejects.toThrow("not found");
 });
 test("oversized selected context is preserved in a private readable snapshot",async()=>{
   const {draft}=contextFixture({title:"Invoice review",evidence:"exact source ".repeat(4000)});
@@ -77,21 +76,38 @@ test("oversized selected context is preserved in a private readable snapshot",as
 
 test("mistyped draft selectors return exact owned ids without substituting or writing",async()=>{
   contextFixture();
-  const result=await tool.execute("id",{action:"context",draft_id:"draft-b"},new AbortController().signal);
-  expect(result.isError).toBe(true);
-  expect(result.content[0].text).toContain('"id":"draft-a"');
-  expect(result.content[0].text).toContain("Invoice review");
-  expect(result.details.saved).toBe(false);
+  await expect(tool.execute("id",{action:"context",draft_id:"draft-b"},new AbortController().signal))
+    .rejects.toThrow(/"id":"draft-a","title":"Invoice review"/);
 });
-test("unknown draft write returns exact candidates but never retries the mutation",async()=>{
+test.each(["handoff", "publish", "reject"])("unknown draft %s returns exact candidates but never retries the mutation",async(action)=>{
   let writes=0;
   server.reload({fetch:(req:Request)=>{
     if(req.method==="POST"){writes++;return Response.json({error:"Draft not found."},{status:409});}
     return Response.json({workspace:{drafts:{a:{id:"exact-id",status:"open",assignee:"workflow-review",payload:{title:"Review invoice"}},b:{id:"other-owner",status:"open",assignee:"workflow-deepen"}}}});
   }});
-  const result=await tool.execute("id",{action:"handoff",draft_id:"typo",note:"repair"},new AbortController().signal);
-  expect(result.isError).toBe(true);expect(writes).toBe(1);
-  expect(result.content[0].text).toContain("exact-id");
-  expect(result.content[0].text).not.toContain("other-owner");
-  expect(result.details.saved).toBe(false);
+  const error=await tool.execute("id",{action,draft_id:"typo",note:"repair"},new AbortController().signal).catch((e:Error)=>e);
+  expect(error).toBeInstanceOf(Error);expect(writes).toBe(1);
+  expect(error.message).toContain("exact-id");
+  expect(error.message).not.toContain("other-owner");
+  expect(error.message).toContain("No changes were saved");
+});
+
+
+test("publication returns remaining work with current revisions, distinct from its save receipt",async()=>{
+  server.reload({fetch:(req:Request)=>Response.json(req.method==="POST"
+    ? {revision:8,changes:{created:1},checkedThrough:"previous-window"}
+    : {workspace:{revision:12,cycle:{status:"running"},drafts:{done:{status:"published"}}},catalogRevision:8,canFinish:true})});
+  const result=await tool.execute("id",{action:"publish",draft_id:"done"},new AbortController().signal);
+  expect(result.isError).not.toBe(true);
+  expect(JSON.parse(result.content[0].text)).toMatchObject({revision:8,remaining:{revision:12,catalogRevision:8,cycleStatus:"running",canFinish:true,openDrafts:[]}});
+});
+test("a failed state read after saving preserves the successful receipt",async()=>{
+  let writes=0;
+  server.reload({fetch:(req:Request)=>{
+    if(req.method==="POST"){writes++;return Response.json({revision:8,changes:{created:1}});}
+    return Response.json({error:"Recorder unavailable"},{status:503});
+  }});
+  const result=await tool.execute("id",{action:"publish",draft_id:"done"},new AbortController().signal);
+  expect(result.isError).not.toBe(true);expect(writes).toBe(1);
+  expect(JSON.parse(result.content[0].text)).toMatchObject({revision:8,remaining:{unavailable:true}});
 });
