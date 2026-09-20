@@ -182,7 +182,18 @@ describe("SidebarNavList", () => {
     expect(handlers.onSetHidden).toHaveBeenCalledWith("meetings", false);
   });
 
-  it("adds no sidebar-options chrome before the layout changes", () => {
+  it("offers Show Library from the default layout without a no-op reset", () => {
+    const handlers = renderCustomizationMenu({
+      hiddenItems: [{ id: "brain", label: "Library" }],
+      canReset: false,
+    });
+    openDropdown("sidebar-options");
+    expect(screen.queryByTestId("sidebar-options-reset")).toBeNull();
+    fireEvent.click(screen.getByText("Show Library"));
+    expect(handlers.onSetHidden).toHaveBeenCalledWith("brain", false);
+  });
+
+  it("adds no sidebar-options chrome when nothing can be restored or reset", () => {
     renderCustomizationMenu({ hiddenItems: [], canReset: false });
     expect(screen.queryByTestId("sidebar-options")).toBeNull();
   });

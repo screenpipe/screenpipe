@@ -337,7 +337,7 @@ export function SidebarCustomizationMenu({
   onSetHidden,
   onReset,
 }: SidebarCustomizationMenuProps) {
-  if (!canReset) return null;
+  if (!canReset && hiddenItems.length === 0) return null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -369,15 +369,19 @@ export function SidebarCustomizationMenu({
             Show {hidden.label}
           </DropdownMenuItem>
         ))}
-        {hiddenItems.length > 0 && <DropdownMenuSeparator />}
-        <DropdownMenuItem
-          className={ITEM_CLS}
-          data-testid="sidebar-options-reset"
-          onSelect={onReset}
-        >
-          <RotateCcw />
-          Reset sidebar
-        </DropdownMenuItem>
+        {canReset && (
+          <>
+            {hiddenItems.length > 0 && <DropdownMenuSeparator />}
+            <DropdownMenuItem
+              className={ITEM_CLS}
+              data-testid="sidebar-options-reset"
+              onSelect={onReset}
+            >
+              <RotateCcw />
+              Reset sidebar
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
