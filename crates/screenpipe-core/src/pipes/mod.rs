@@ -6449,7 +6449,7 @@ impl PipeManager {
                     // Check not already queued or running
                     {
                         let qr = queued_or_running.lock().await;
-                        if qr.contains(name) {
+                        if qr.contains(name) || running.lock().await.contains_key(name) {
                             // Hold an event trigger back rather than dropping it —
                             // the run in flight may be for a different event.
                             if let Some(t) = event_triggered.get(name) {
@@ -6772,6 +6772,39 @@ impl PipeManager {
                         }
                     };
 
+                    // Manual starts and scheduler starts must reserve the same
+                    // slot before touching per-run files or waiting for a
+                    // semaphore. A PID of zero means startup, not an idle pipe.
+                    // Recheck atomically: a manual start may have won since the
+                    // earlier queue/PID guards.
+                    let shared_pid = Arc::new(std::sync::atomic::AtomicU32::new(0));
+                    let handle = ExecutionHandle::new(shared_pid.clone());
+                    let claimed = {
+                        let mut active = running.lock().await;
+                        if active.contains_key(name) {
+                            false
+                        } else {
+                            active.insert(name.clone(), handle.clone());
+                            true
+                        }
+                    };
+                    if !claimed {
+                        queued_or_running.lock().await.remove(name);
+                        if let (Some((event, key)), Some(store)) = (&event_claim, store.as_ref()) {
+                            let _ = store.release_event_run(name, event, key).await;
+                        }
+                        if let Some(t) = event_triggered.get(name) {
+                            deferred.push(PendingEvent {
+                                name: t.name.clone(),
+                                data: t.data.clone(),
+                                target_pipe: t.target_pipe.clone(),
+                            });
+                        }
+                        continue;
+                    }
+                    let run_handle = handle.clone();
+                    let stop_requested = handle.stop_requested.clone();
+
                     // Pre-configure pi with the pipe's provider
                     let mut pipe_token: Option<String> = None;
                     if run_agent == "pi" {
@@ -6872,6 +6905,16 @@ impl PipeManager {
                                 name
                             );
                             queued_or_running.lock().await.remove(name);
+                            handle.mark_finished();
+                            running.lock().await.remove(name);
+                            if let Some(ref token) = pipe_token {
+                                cleanup_pipe_token(token, token_registry.as_ref());
+                            }
+                            if let (Some((event, key)), Some(store)) =
+                                (&event_claim, store.as_ref())
+                            {
+                                let _ = store.release_event_run(name, event, key).await;
+                            }
                             deferred.push(PendingEvent {
                                 name: t.name.clone(),
                                 data: t.data.clone(),
@@ -6928,17 +6971,8 @@ impl PipeManager {
                             None
                         };
 
-                        let shared_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-                        let handle = ExecutionHandle::new(shared_pid.clone());
-                        let run_handle = handle.clone();
-                        let stop_requested = handle.stop_requested.clone();
-
-                        // Mark running + write PID file only after acquiring the permit,
-                        // so the UI shows accurate state (not "running" while queued).
-                        {
-                            let mut r = running_ref.lock().await;
-                            r.insert(pipe_name.clone(), handle);
-                        }
+                        // The shared slot was reserved before preparation. Keep
+                        // that same handle, including a Stop requested in queue.
                         // Sentinel 0 — see start_pipe_background.
                         write_pid_file(&pipes_dir_for_mark, &pipe_name, 0);
 
@@ -9513,6 +9547,162 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert!(!write_event_trigger_context(dir.path(), &event));
         assert!(!dir.path().join(EVENT_TRIGGER_CONTEXT_FILE).exists());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn scheduled_event_cannot_replace_a_manual_start_or_its_context() {
+        let temp = tempfile::tempdir().unwrap();
+        let pipes_dir = temp.path().join("pipes");
+        let name = "manual-scheduled-admission";
+        let dir = pipes_dir.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pipe.md"), "---\nschedule: manual\nagent: mock\nmodel: test\ntrigger:\n  sources:\n    - app: audio\n      kind: phrase\n      filter:\n        phrases: start job\n---\nSave the matched transcript.\n").unwrap();
+        let src: SourceTrigger = serde_json::from_value(serde_json::json!({"app": "audio", "kind": "phrase", "filter": {"phrases": "start job"}})).unwrap();
+        let key = connection_triggers::subscription_key(name, &src);
+        let initial_context = r#"{"items":[{"preview":"manual"}]}"#;
+        std::fs::write(dir.join(EVENT_TRIGGER_CONTEXT_FILE), initial_context).unwrap();
+        let executor = Arc::new(SourceContextExecutor {
+            contexts: std::sync::Mutex::new(Vec::new()),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        let mut executors: HashMap<String, Arc<dyn AgentExecutor>> = HashMap::new();
+        executors.insert("mock".into(), executor.clone());
+        let mut manager = PipeManager::new(pipes_dir, executors, None, 0);
+        manager.load_pipes().await.unwrap();
+        manager.start_scheduler().await.unwrap();
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        manager.start_pipe_background(name).await.unwrap();
+        for _ in 0..100 {
+            if executor.contexts.lock().unwrap().len() == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(executor.contexts.lock().unwrap().len(), 1);
+        // No child PID yet. This is the native startup window that the old
+        // scheduler mistook for a stale PID file and an available task.
+        let manual_stop = manager.running.lock().await[name].stop_requested.clone();
+        screenpipe_events::send_event(
+            "connection_trigger",
+            screenpipe_events::ConnectionTriggerEvent {
+                pipe: name.into(),
+                app: "audio".into(),
+                kind: "phrase".into(),
+                path: None,
+                count: 1,
+                timestamp: Utc::now(),
+                delivery_id: Some("deferred".into()),
+                subscription_key: Some(key),
+                context: Some(serde_json::json!({"app":"audio","items":[{"preview":"scheduled"}]})),
+            },
+        )
+        .unwrap();
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        for _ in 0..100 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            executor.contexts.lock().unwrap().len(),
+            1,
+            "scheduler launched a duplicate agent"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join(EVENT_TRIGGER_CONTEXT_FILE)).unwrap(),
+            initial_context
+        );
+        assert!(Arc::ptr_eq(
+            &manager.running.lock().await[name].stop_requested,
+            &manual_stop
+        ));
+        assert_eq!(
+            manager.stop_pipe(name).await.unwrap(),
+            PipeStopStatus::StopPending
+        );
+        assert!(manual_stop.load(Ordering::SeqCst));
+        executor.release.add_permits(1);
+        for _ in 0..100 {
+            if !manager.running.lock().await.contains_key(name) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        for _ in 0..100 {
+            if executor.contexts.lock().unwrap().len() == 2 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            executor.contexts.lock().unwrap().len(),
+            2,
+            "deferred event was lost"
+        );
+        executor.release.add_permits(1);
+        for _ in 0..100 {
+            tokio::task::yield_now().await;
+        }
+        manager.stop_scheduler().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn queued_scheduler_reservation_blocks_a_racing_manual_start() {
+        let temp = tempfile::tempdir().unwrap();
+        let pipes_dir = temp.path().join("pipes");
+        let event = "test_queued_manual_admission";
+        // Fill all event permits, leaving the last task queued with no PID.
+        // The old scheduler reserved only after acquiring a permit, so a
+        // manual run could start and later have its handle overwritten.
+        for i in 0..=EVENT_TRIGGERED_CONCURRENCY_LIMIT {
+            let dir = pipes_dir.join(format!("queued-admission-{i}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("pipe.md"), format!("---\nschedule: manual\nagent: mock\nmodel: test\ntrigger:\n  events:\n    - {event}\n---\nCheck the source.\n")).unwrap();
+            std::fs::write(
+                dir.join(EVENT_TRIGGER_CONTEXT_FILE),
+                r#"{"items":[{"preview":"original"}]}"#,
+            )
+            .unwrap();
+        }
+        let executor = Arc::new(SourceContextExecutor {
+            contexts: std::sync::Mutex::new(Vec::new()),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        let mut executors: HashMap<String, Arc<dyn AgentExecutor>> = HashMap::new();
+        executors.insert("mock".into(), executor.clone());
+        let mut manager = PipeManager::new(pipes_dir, executors, None, 0);
+        manager.load_pipes().await.unwrap();
+        manager.start_scheduler().await.unwrap();
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        screenpipe_events::send_event("workflow_event", serde_json::json!({"event_type":event}))
+            .unwrap();
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        for _ in 0..100 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            executor.contexts.lock().unwrap().len(),
+            EVENT_TRIGGERED_CONCURRENCY_LIMIT
+        );
+        let queued = format!("queued-admission-{}", EVENT_TRIGGERED_CONCURRENCY_LIMIT);
+        assert!(
+            manager.start_pipe_background(&queued).await.is_err(),
+            "manual run stole the scheduled task's reserved slot"
+        );
+        executor
+            .release
+            .add_permits(EVENT_TRIGGERED_CONCURRENCY_LIMIT + 1);
+        for _ in 0..200 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            executor.contexts.lock().unwrap().len(),
+            EVENT_TRIGGERED_CONCURRENCY_LIMIT + 1
+        );
+        manager.stop_scheduler().await;
     }
 
     #[tokio::test(start_paused = true)]
