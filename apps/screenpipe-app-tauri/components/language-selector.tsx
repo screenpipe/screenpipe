@@ -4,7 +4,7 @@
 
 import { useGT } from "gt-react";
 import { useSettings } from "@/lib/hooks/use-settings";
-import { bundledLocales, localeName } from "@/lib/i18n/provider";
+import { bundledLocales, localeName, useLocalizationEnabled } from "@/lib/i18n/provider";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
@@ -13,6 +13,8 @@ export function LanguageSelector() {
   const { settings, updateSettings } = useSettings();
   const gt = useGT();
   const { toast } = useToast();
+  const enabled = useLocalizationEnabled();
+  if (!enabled) return null;
   const changeLocale = async (uiLocale: string) => {
     try { await updateSettings({ uiLocale }); }
     catch {

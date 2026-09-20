@@ -79,10 +79,18 @@ the live app; see [`docs/macos-dev-builds.md`](../../docs/macos-dev-builds.md).
 ## localization integration
 
 `gt.config.json` owns the source language and bundled languages. The initial
-pilot is Japanese (`ja`), shown as 日本語 in Settings and onboarding. Japanese
+pilot is Japanese (`ja`), behind the PostHog flag `desktop-localization`.
+The flag defaults off: the app stays English and hides the language selector.
+When enabled, Japanese appears as 日本語 in Settings and onboarding, and Japanese
 system locales such as `ja-JP` resolve to `ja`. English stays
 in JSX and `useGT()` calls; shared definitions use `msg()` and `useMessages()`.
 Explicit native labels use `ui_text("English")`.
+The primary window persists successful flag evaluations in `uiLocalizationEnabled`
+through the existing settings store, so every window and native surface shares
+the decision, including after restart. Loading/network failures retain the last
+decision; an explicit false or a missing flag in a successful response disables
+localization without clearing `uiLocale`. The existing PostHog refresh loop picks
+up rollout changes without restarting the app. Build-time generation is unchanged.
 Generated translations are ignored build artifacts. Never pass recorded text,
 user messages, AI output, executable prompts, or diagnostic logs to these helpers.
 
@@ -133,8 +141,10 @@ Memoized render data depends on `useUiLocale()` rather than GT callback identity
 which can change on each render in development.
 
 For a Japanese system-language browser fixture, open
-`http://127.0.0.1:1420/home?mockLocale=ja-JP` in cached mode. This affects only
-the browser mock OS locale. Settings still override it normally. The mock store
+`http://127.0.0.1:1420/home?mockLocale=ja-JP&mockLocalization=true` in cached mode.
+`mockLocalization=true` explicitly seeds the rollout decision only in browser-mock
+builds; omit it to check the disabled state. `mockLocale` sets the mock OS locale.
+Settings still override it normally. The mock store
 resets on a full reload; native restart persistence requires a disposable app test.
 Current snapshot coverage and fallback causes are in `.localization/coverage.json`.
 Counts describe extracted messages; verify rendered surfaces before delivery.

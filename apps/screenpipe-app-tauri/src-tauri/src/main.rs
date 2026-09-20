@@ -1411,7 +1411,7 @@ async fn main() {
             // `NotRequired` without invoking either checker.
             startup_auth::bootstrap(&app_handle, &mut store);
             app.manage(store.clone());
-            localization::initialize(app.handle(), &store.ui_locale);
+            localization::initialize(app.handle(), &store.ui_locale, store.ui_localization_enabled);
 
             crate::recording::refresh_history_access_policy(
                 &app.state::<RecordingState>().history_access,

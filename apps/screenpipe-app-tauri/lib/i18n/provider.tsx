@@ -25,6 +25,8 @@ initializeGT({ defaultLocale, locales, loadTranslations: async (locale) => trans
 
 const LocaleContext = createContext(defaultLocale);
 export function useUiLocale() { return useContext(LocaleContext); }
+const LocalizationEnabledContext = createContext(false);
+export function useLocalizationEnabled() { return useContext(LocalizationEnabledContext); }
 
 export function LocalizationProvider({ children }: { children: ReactNode }) {
   const { settings } = useSettings();
@@ -42,17 +44,22 @@ export function LocalizationProvider({ children }: { children: ReactNode }) {
     return () => { active = false; window.removeEventListener("languagechange", update); };
   }, []);
   const configured = typeof settings.uiLocale === "string" ? settings.uiLocale : "system";
-  const locale = resolveLocale(configured, system, bundledLocales, defaultLocale);
+  const rolloutEnabled = settings.uiLocalizationEnabled === true;
+  const enabled = rolloutEnabled && locales.length > 0;
+  const locale = enabled ? resolveLocale(configured, system, bundledLocales, defaultLocale) : defaultLocale;
   useEffect(() => {
     document.documentElement.lang = locale;
-    try { localStorage.setItem("screenpipe-ui-locale", locale); } catch { /* Optional crash-screen cache. */ }
+    try {
+      localStorage.setItem("screenpipe-ui-localization-enabled", String(enabled));
+      localStorage.setItem("screenpipe-ui-locale", locale);
+    } catch { /* Optional crash-screen cache. */ }
     const info = new Intl.Locale(locale) as Intl.Locale & { textInfo?: { direction: string }; getTextInfo?: () => { direction: string } };
     document.documentElement.dir = info.getTextInfo?.().direction ?? info.textInfo?.direction ?? "ltr";
     // This is an allow-listed diagnostic summary: no message text or interpolation
     // values. The bridge includes it in the normal collected support report.
-    console.info("[localization]", JSON.stringify({ configured, resolved: locale, revision: localizationSnapshot.revision, coverage: localizationSnapshot.coverage[locale], causes: localizationSnapshot.causes, fallbackCount: Object.keys(localizationSnapshot.fallbacks[locale] ?? {}).length }));
-  }, [configured, locale]);
-  return <LocaleContext.Provider value={locale}><OfflineGTProvider locale={locale} translations={translations}>{children}</OfflineGTProvider></LocaleContext.Provider>;
+    console.info("[localization]", JSON.stringify({ configured, resolved: locale, rolloutEnabled, revision: localizationSnapshot.revision, coverage: localizationSnapshot.coverage[locale], causes: localizationSnapshot.causes, fallbackCount: Object.keys(localizationSnapshot.fallbacks[locale] ?? {}).length }));
+  }, [configured, locale, rolloutEnabled, enabled]);
+  return <LocalizationEnabledContext.Provider value={enabled}><LocaleContext.Provider value={locale}><OfflineGTProvider locale={locale} translations={translations}>{children}</OfflineGTProvider></LocaleContext.Provider></LocalizationEnabledContext.Provider>;
 }
 
 export function localeName(locale: string) {
@@ -76,7 +83,10 @@ export function EmergencyLocalizationProvider({children}: {children: ReactNode})
   const [locale] = useState(() => {
     if (typeof window === "undefined") return defaultLocale;
     let stored: string | null = null;
-    try { stored = localStorage.getItem("screenpipe-ui-locale"); } catch { /* Use system preference. */ }
+    try {
+      if (localStorage.getItem("screenpipe-ui-localization-enabled") !== "true") return defaultLocale;
+      stored = localStorage.getItem("screenpipe-ui-locale");
+    } catch { return defaultLocale; }
     return resolveLocale(stored ?? "system", navigator.languages, bundledLocales, defaultLocale);
   });
   return <LocaleContext.Provider value={locale}><OfflineGTProvider locale={locale} translations={translations}>{children}</OfflineGTProvider></LocaleContext.Provider>;

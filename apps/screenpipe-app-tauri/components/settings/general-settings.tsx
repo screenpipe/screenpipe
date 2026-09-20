@@ -5,6 +5,7 @@
 
 import React, { useEffect, useState } from "react";
 import { LanguageSelector } from "@/components/language-selector";
+import { useLocalizationEnabled } from "@/lib/i18n/provider";
 import { useGT, useMessages } from "gt-react";
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -61,6 +62,7 @@ import { msg } from "gt-react";
 
 
 export default function GeneralSettings() {
+  const localizationEnabled = useLocalizationEnabled();
 
   const gt = useGT();
   const m = useMessages();
@@ -247,7 +249,7 @@ export default function GeneralSettings() {
       </div>
 
       <div className="space-y-2">
-        <Card><CardContent className="px-3 py-2.5"><LanguageSelector /></CardContent></Card>
+        {localizationEnabled && <Card><CardContent className="px-3 py-2.5"><LanguageSelector /></CardContent></Card>}
         <LockedSetting settingKey="auto_start">
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">

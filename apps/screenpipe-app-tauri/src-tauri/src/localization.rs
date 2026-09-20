@@ -51,6 +51,7 @@ static SNAPSHOT: Lazy<Value> = Lazy::new(|| {
 struct LocaleState {
     configured: String,
     resolved: String,
+    rollout_enabled: bool,
     fallbacks: BTreeMap<String, &'static str>,
 }
 static STATE: Lazy<RwLock<LocaleState>> = Lazy::new(|| RwLock::new(LocaleState::default()));
@@ -69,19 +70,26 @@ pub fn resolve_locale(configured: &str, system: &[String], available: &[String],
     default.to_string()
 }
 
-fn refresh(configured: &str) -> bool {
+impl LocaleState {
+    fn update(&mut self, configured: &str, rollout_enabled: bool, system: &[String], available: &[String], default: &str) -> bool {
+        let resolved = if rollout_enabled { resolve_locale(configured, system, available, default) } else { default.to_string() };
+        let changed = self.resolved != resolved;
+        self.configured = configured.to_string();
+        self.resolved = resolved;
+        self.rollout_enabled = rollout_enabled;
+        changed
+    }
+}
+
+fn refresh(configured: &str, rollout_enabled: bool) -> bool {
     let default = SNAPSHOT["defaultLocale"].as_str().unwrap_or("en");
     let mut available = vec![default.to_string()];
     if let Some(locales) = SNAPSHOT["locales"].as_array() {
         available.extend(locales.iter().filter_map(Value::as_str).map(String::from));
     }
     let system: Vec<String> = sys_locale::get_locales().collect();
-    let resolved = resolve_locale(configured, &system, &available, default);
     let mut state = STATE.write().unwrap_or_else(|e| e.into_inner());
-    let changed = state.resolved != resolved;
-    state.configured = configured.to_string();
-    state.resolved = resolved;
-    changed
+    state.update(configured, rollout_enabled, &system, &available, default)
 }
 
 fn refresh_surfaces(app: &AppHandle) {
@@ -106,8 +114,8 @@ fn refresh_surfaces(app: &AppHandle) {
     }) { tracing::warn!("localization: native locale dispatch failed: {error}"); }
 }
 
-pub fn initialize(app: &AppHandle, configured: &str) {
-    refresh(configured);
+pub fn initialize(app: &AppHandle, configured: &str, rollout_enabled: bool) {
+    refresh(configured, rollout_enabled);
     refresh_surfaces(app);
     let app = app.clone();
     let handle = app.clone();
@@ -119,7 +127,7 @@ pub fn initialize(app: &AppHandle, configured: &str) {
         let app = handle.clone();
         tauri::async_runtime::spawn_blocking(move || {
             if let Ok(Some(settings)) = crate::store::SettingsStore::get(&app) {
-                if refresh(&settings.ui_locale) { refresh_surfaces(&app); }
+                if refresh(&settings.ui_locale, settings.ui_localization_enabled) { refresh_surfaces(&app); }
             }
         });
     });
@@ -178,6 +186,7 @@ fn diagnostics_for(snapshot: &Value, state: &LocaleState) -> String {
     json!({
         "configured": state.configured,
         "resolved": state.resolved,
+        "rolloutEnabled": state.rollout_enabled,
         "revision": snapshot["revision"],
         "mode": snapshot["mode"],
         "coverage": snapshot["coverage"],
@@ -212,13 +221,59 @@ mod tests {
         let mut settings = crate::store::SettingsStore::default();
         let before = serde_json::to_value(&settings).unwrap();
         assert_eq!(settings.ui_locale, "system");
+        assert!(!settings.ui_localization_enabled);
         settings.ui_locale = "fr".into();
+        settings.ui_localization_enabled = true;
         let saved = serde_json::to_vec(&settings).unwrap();
         let restored: crate::store::SettingsStore = serde_json::from_slice(&saved).unwrap();
         assert_eq!(restored.ui_locale, "fr");
+        assert!(restored.ui_localization_enabled);
         let mut after = serde_json::to_value(&restored).unwrap();
         after["uiLocale"] = json!("system");
+        after["uiLocalizationEnabled"] = json!(false);
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn localization_rollout_controls_native_locale_without_erasing_preference() {
+        let available = vec!["en".into(), "ja".into()];
+        let system = vec!["ja-JP".into()];
+        for configured in ["system", "ja"] {
+            let mut state = LocaleState::default();
+            assert!(state.update(configured, false, &system, &available, "en"));
+            assert_eq!(state.resolved, "en");
+            assert!(state.update(configured, true, &system, &available, "en"));
+            assert_eq!(state.resolved, "ja");
+            assert!(state.update(configured, false, &system, &available, "en"));
+            assert_eq!(state.resolved, "en");
+            assert_eq!(state.configured, configured);
+        }
+        let mut legacy = serde_json::to_value(crate::store::SettingsStore::default()).unwrap();
+        legacy["uiLocale"] = json!("ja");
+        legacy.as_object_mut().unwrap().remove("uiLocalizationEnabled");
+        let settings: crate::store::SettingsStore = serde_json::from_value(legacy).unwrap();
+        assert!(!settings.ui_localization_enabled);
+        assert_eq!(settings.ui_locale, "ja");
+    }
+
+    #[tokio::test]
+    async fn localization_rollout_decision_reaches_redacted_support_after_restart() {
+        let mut settings = crate::store::SettingsStore::default();
+        settings.ui_locale = "ja".into();
+        for enabled in [false, true, false] {
+            settings.ui_localization_enabled = enabled;
+            let saved = serde_json::to_vec(&settings).unwrap();
+            let restarted: crate::store::SettingsStore = serde_json::from_slice(&saved).unwrap();
+            let mut state = LocaleState::default();
+            state.update(&restarted.ui_locale, restarted.ui_localization_enabled, &[], &["en".into(), "ja".into()], "en");
+            let collected = crate::feedback_upload::append_localization_diagnostics(
+                "[no log files found]".into(), &diagnostics_for(&json!({"revision": "rollout-test"}), &state),
+            );
+            let report = crate::feedback_redact::redact_diagnostics_locally(collected).await.unwrap();
+            assert!(report.contains(&format!("\"rolloutEnabled\":{enabled}")));
+            assert!(report.contains("\"configured\":\"ja\""));
+            assert!(report.contains(if enabled { "\"resolved\":\"ja\"" } else { "\"resolved\":\"en\"" }));
+        }
     }
 
     #[tokio::test]
@@ -231,7 +286,7 @@ mod tests {
         });
         // A fresh process has no in-memory fallback history and no old log file.
         for _restart in 0..2 {
-            let state = LocaleState { configured: "system".into(), resolved: "fr".into(), ..Default::default() };
+            let state = LocaleState { configured: "system".into(), resolved: "fr".into(), rollout_enabled: true, ..Default::default() };
             let collected = crate::feedback_upload::append_localization_diagnostics(
                 "[no log files found]".into(), &diagnostics_for(&snapshot, &state),
             );

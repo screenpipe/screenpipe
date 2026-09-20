@@ -6,6 +6,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { LanguageSelector } from "@/components/language-selector";
+import { useLocalizationEnabled } from "@/lib/i18n/provider";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/use-toast";
 import OnboardingLogin from "@/components/onboarding/login-gate";
@@ -298,6 +299,7 @@ const applyOnboardingWindowSize = async () => {
 };
 
 export default function OnboardingPage() {
+  const localizationEnabled = useLocalizationEnabled();
   const router = useRouter();
   const { toast } = useToast();
   const [checkoutReturnStatus] = useState(() =>
@@ -851,7 +853,7 @@ export default function OnboardingPage() {
     <div className="flex flex-col w-full h-screen overflow-hidden bg-background">
       {/* Drag region */}
       <div className="w-full bg-background p-3" data-tauri-drag-region />
-      <div className="mx-auto w-full max-w-lg px-6 pb-2"><LanguageSelector /></div>
+      {localizationEnabled && <div className="mx-auto w-full max-w-lg px-6 pb-2"><LanguageSelector /></div>}
 
       {/* Keep short steps centered, but let content taller than the available
           display grow naturally and scroll from its top instead of clipping. */}
