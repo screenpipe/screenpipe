@@ -18,6 +18,7 @@ const GLM_CORE_SKILLS = new Set([
 	'screenpipe-chats',
 	'screenpipe-cli',
 	'screenpipe-team',
+	'screenpipe-workflow-maintenance',
 ]);
 const GLM_COMPACTED_MIN_OUTPUT_TOKENS = 4096;
 const GLM_MAX_TOOL_RESULT_CHARS = 8000;
@@ -254,7 +255,7 @@ export function normalizeGlmToolCallStream(stream: ReadableStream, tools: unknow
 	});
 }
 
-function compactGlmSkillCatalog(content: string): string {
+export function compactGlmSkillCatalog(content: string): string {
 	return content.replace(
 		/<available_skills>([\s\S]*?)<\/available_skills>/g,
 		(fullCatalog, entries: string) => {
@@ -281,7 +282,7 @@ function isGlmCatalogMessage(message: GlmRequest['messages'][number]): boolean {
 	);
 }
 
-function compactGlmToolResultText(content: string): string {
+export function compactGlmToolResultText(content: string): string {
 	if (content.length <= GLM_MAX_TOOL_RESULT_CHARS) return content;
 	const available = GLM_MAX_TOOL_RESULT_CHARS - GLM_TOOL_RESULT_COMPACTION_MARKER.length;
 	const headChars = Math.ceil(available * 0.82);
