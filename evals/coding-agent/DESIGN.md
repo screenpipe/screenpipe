@@ -43,11 +43,31 @@ may begin with a deliberately lower success rate.
 node evals/coding-agent/mine-history.mjs \
   --repo /path/to/repository \
   --ref origin/main \
-  --since '18 months ago' > /tmp/eval-candidates.json
+  --limit 100 --skip 0 > /tmp/eval-candidates.json
 ```
+
+The miner defaults to all history reachable from the selected ref, including
+merged branch commits and merges, with no date cutoff. Each invocation is bounded
+by `--limit` (default 500); `--skip` selects a page. Continue with the returned
+`resolved_ref` SHA and `next_skip` so a moving branch cannot shift the page
+boundary. `next_skip: null` means this traversal is exhausted, not that all
+behavior has been reviewed. An explicit `--since` remains available for a
+purposefully narrower scan.
 
 The miner finds fix-shaped commits that changed potential deterministic graders.
 Promotion is intentionally reviewed: confirm the original failure from the
 commit/PR, write a sanitized outcome-focused prompt, select graders that cover
 both the fix and preserved behavior, then add the exact parent/fix pair to the
 manifest and run `--verify`.
+
+Merge candidates include changed paths against every parent and
+`requires_merge_review: true`. Their first `broken_parent` is only a discovery
+hint: inspect the resolution, establish the appropriate broken state, and
+deduplicate constituent or cherry-picked fixes before promotion. Root commits
+have no broken parent and are not promoted. `scanned_commit_ids` tracks metadata
+visited, not source review or behavior verification. Non-fix subjects and fixes
+without recognizable test paths still require separate path-based review.
+
+Run `bun test evals/coding-agent/mine-history.test.ts` for synthetic old-history,
+merged-branch, merge-resolution, bounded-page and explicit-filter controls. They
+exercise discovery without models, network access or changes to product code.

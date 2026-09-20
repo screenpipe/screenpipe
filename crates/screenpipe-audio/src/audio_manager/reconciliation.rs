@@ -128,16 +128,22 @@ pub(crate) struct PendingChunkTranscription {
 ///   documented minimum latency isn't sub-20s. Diarization quality plateaus
 ///   above ~3 min audio per Deepgram's docs, so 8 min keeps the quality win
 ///   without flirting with the 10-min cliff.
-/// - OpenAI-compatible: user-configurable (unknown engine limits), default 3000 s (~50 min)
+/// - OpenAI-compatible: user-configurable (unknown engine speed and gateway limits),
+///   default 120 s (2 min). Upload size alone does not bound processing time.
 /// - Parakeet: ONNX int8 encoder handles up to ~52s but quality degrades past 30s.
 ///   Benchmarked: full audio = 33.1% WER, 30s chunks = 33.9% WER (best chunked).
 ///   Cap at 45s — the engine layer safety-chunks at 30s if exceeded.
 /// - Local Whisper: processes in 30s windows with context carryover → cap at 600 s (10 min)
 /// - Qwen3-ASR: similar to Whisper architecture → cap at 600 s (10 min)
-pub fn default_max_batch_duration_secs(engine: &AudioTranscriptionEngine) -> u64 {
+pub fn max_batch_duration_secs(
+    engine: &AudioTranscriptionEngine,
+    user_override: Option<u64>,
+) -> u64 {
     match engine {
         AudioTranscriptionEngine::Deepgram => 480,
-        AudioTranscriptionEngine::OpenAICompatible => 3000,
+        AudioTranscriptionEngine::OpenAICompatible => {
+            user_override.filter(|&v| v > 0).unwrap_or(120)
+        }
         AudioTranscriptionEngine::Parakeet => 45,
         _ => 600,
     }
@@ -345,11 +351,7 @@ pub async fn reconcile_untranscribed(
     // Group consecutive chunks by device for batched transcription.
     // User override only applies to OpenAI-compatible (unknown engine limits).
     // All other engines use hardcoded optimal defaults.
-    let max_duration = match *audio_engine {
-        AudioTranscriptionEngine::OpenAICompatible => batch_max_duration_secs
-            .unwrap_or_else(|| default_max_batch_duration_secs(&audio_engine)),
-        _ => default_max_batch_duration_secs(&audio_engine),
-    };
+    let max_duration = max_batch_duration_secs(&audio_engine, batch_max_duration_secs);
     let batches = group_chunks_by_device(&chunks, max_duration);
     debug!(
         "reconciliation: grouped into {} batches (max {}s each)",
@@ -2709,6 +2711,35 @@ mod tests {
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].len(), 10);
         assert_eq!(batches[1].len(), 3);
+    }
+
+    #[test]
+    fn openai_batch_limit_bounds_reconciliation_and_preserves_custom_limits() {
+        let now = chrono::Utc::now();
+        let chunks: Vec<_> = (0..100)
+            .map(|i| UntranscribedChunk {
+                id: i,
+                file_path: format!("/data/input (input)_2026-02-27_{i}.mp4"),
+                timestamp: now + chrono::Duration::seconds(i * 30),
+            })
+            .collect();
+        for (setting, expected_chunks) in [(None, 4), (Some(0), 4), (Some(60), 2), (Some(600), 20)]
+        {
+            let limit =
+                max_batch_duration_secs(&AudioTranscriptionEngine::OpenAICompatible, setting);
+            let batches = group_chunks_by_device(&chunks, limit);
+            assert_eq!(batches[0].len(), expected_chunks);
+            assert!(batches.iter().all(|batch| batch.len() <= expected_chunks));
+            assert_eq!(batches.iter().map(Vec::len).sum::<usize>(), chunks.len());
+        }
+        assert_eq!(
+            max_batch_duration_secs(&AudioTranscriptionEngine::Deepgram, Some(60)),
+            480
+        );
+        assert_eq!(
+            max_batch_duration_secs(&AudioTranscriptionEngine::Parakeet, Some(60)),
+            45
+        );
     }
 
     #[test]

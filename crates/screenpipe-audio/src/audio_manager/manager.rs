@@ -1412,17 +1412,10 @@ impl AudioManager {
 
             // Max deferral cap: hardcoded per engine (user override only for OpenAI-compatible).
             // This lets meetings accumulate audio up to the engine's optimal capacity.
-            let max_deferral_secs = match *audio_transcription_engine {
-                AudioTranscriptionEngine::OpenAICompatible => batch_max_duration_secs
-                    .unwrap_or_else(|| {
-                        super::reconciliation::default_max_batch_duration_secs(
-                            &audio_transcription_engine,
-                        )
-                    }),
-                _ => super::reconciliation::default_max_batch_duration_secs(
-                    &audio_transcription_engine,
-                ),
-            };
+            let max_deferral_secs = super::reconciliation::max_batch_duration_secs(
+                &audio_transcription_engine,
+                batch_max_duration_secs,
+            );
             let mut deferral_started: Option<std::time::Instant> = None;
 
             while let Ok(audio) = whisper_receiver.recv() {
@@ -2065,6 +2058,11 @@ impl AudioManager {
     /// Returns the current OpenAI Compatible config.
     pub async fn openai_compatible_config(&self) -> Option<crate::OpenAICompatibleConfig> {
         self.options.read().await.openai_compatible_config.clone()
+    }
+
+    /// Returns the user override for OpenAI-compatible batch duration.
+    pub async fn batch_max_duration_secs(&self) -> Option<u64> {
+        self.options.read().await.batch_max_duration_secs
     }
 
     /// Returns the current languages.

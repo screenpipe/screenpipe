@@ -748,6 +748,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn parity_scan_failure_reaches_support_without_rolling_logs() {
+        use screenpipe_db::{storage, DatabaseManager};
+        let root = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new(
+            root.path().join("db.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        // Valid SQLite with a source shape the existing migration cannot read:
+        // the actual receipt SELECT fails after integrity verification passes.
+        db.execute_raw_sql_write("CREATE TABLE parity_probe(key TEXT PRIMARY KEY,payload TEXT) WITHOUT ROWID; INSERT INTO parity_probe VALUES('key','private history')")
+            .await.unwrap();
+        db.close().await;
+        let error = storage::migrate(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("no such column: rowid"));
+        assert_migration_failure_uploaded(
+            root.path(),
+            &[
+                "scanning_parity_rows",
+                "no such column: rowid",
+                "\"table\": \"parity_probe\"",
+                "\"status\": \"failed\"",
+            ],
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn element_selection_failure_reaches_support_without_rolling_logs() {
+        use screenpipe_db::{storage, DatabaseManager};
+        let root = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap();
+        // A broken resident source makes the real element selector fail. The
+        // support report must retain that cause even after the pool is closed.
+        db.execute_raw_sql_write("DROP TABLE _bulk_element_rows")
+            .await
+            .unwrap();
+        let error =
+            storage::diagnostics::observe(root.path(), "conversion", |_, _| {}, db.seal_payloads())
+                .await
+                .unwrap_err();
+        assert!(error.to_string().contains("no such table"));
+        db.close().await;
+        assert_migration_failure_uploaded(
+            root.path(),
+            &[
+                "selecting_staged_elements",
+                "no such table",
+                "_bulk_element_rows",
+                "\"status\": \"failed\"",
+                "\"table\": \"elements\"",
+            ],
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn migration_conflict_reaches_support_after_log_rotation_and_redaction() {
         use screenpipe_db::{storage, DatabaseManager};
         let root = tempfile::tempdir().unwrap();
@@ -789,9 +851,22 @@ mod tests {
         assert!(error
             .to_string()
             .contains("source contains recorded history"));
+        assert_migration_failure_uploaded(
+            root.path(),
+            &[
+                "source contains recorded history",
+                "validating_migration_source",
+                "\"source_exists\": true",
+                "\"index_exists\": true",
+            ],
+        )
+        .await;
+    }
+
+    async fn assert_migration_failure_uploaded(root: &std::path::Path, expected: &[&str]) {
         timeout(Duration::from_secs(3), async {
             loop {
-                if storage::diagnostics::recent(root.path())
+                if screenpipe_db::storage::diagnostics::recent(root)
                     .unwrap_or_default()
                     .iter()
                     .any(|snapshot| snapshot.status == "failed")
@@ -804,16 +879,18 @@ mod tests {
         .await
         .unwrap();
         // A later support submission has no original rolling log in memory or on disk.
-        let diagnostics = collect_migration_diagnostics_from_root(root.path().to_owned()).await;
+        let diagnostics = collect_migration_diagnostics_from_root(root.to_owned()).await;
         let raw =
             format!("[no log files found]\n\n=== Storage Migration Diagnostics ===\n{diagnostics}");
         let redacted = crate::feedback_redact::redact_pii_for_feedback(raw, "{}".into())
             .await
             .unwrap();
-        assert!(redacted.contains("source contains recorded history"));
-        assert!(redacted.contains("validating_migration_source"));
-        assert!(redacted.contains("\"source_exists\": true"));
-        assert!(redacted.contains("\"index_exists\": true"));
+        for expected in expected {
+            assert!(
+                redacted.contains(expected),
+                "missing {expected}: {redacted}"
+            );
+        }
         assert!(!redacted.contains("private history"));
 
         let server = MockServer::start().await;
@@ -847,6 +924,82 @@ mod tests {
         let requests = server.received_requests().await.unwrap();
         let upload = requests.iter().find(|r| r.method == "PUT").unwrap();
         assert_eq!(upload.body, redacted.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn transcription_gateway_failure_reaches_support_after_log_rotation() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(
+                ResponseTemplate::new(504).set_body_string("upstream inference timed out"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let failure = screenpipe_audio::transcription::openai_compatible::batch::transcribe_with_openai_compatible(
+            None, &server.uri(), None, "whisper-1", &vec![0.0; 120 * 16000],
+            "test", 16000, vec![], &[], None, true,
+        ).await.unwrap_err();
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("screenpipe-app.2026-09-18.log");
+        tokio::fs::write(
+            &log_path,
+            format!("meeting retranscribe: transcription failed: {failure}\npassword=hunter2\n"),
+        )
+        .await
+        .unwrap();
+        // A subsequent process/day has a healthy log; support must retain the
+        // originating failure from the previous log as well.
+        tokio::fs::write(
+            dir.path().join("screenpipe-app.2026-09-19.log"),
+            "recording resumed\n",
+        )
+        .await
+        .unwrap();
+        let files = crate::log_files::collect_log_files(&[dir.path().to_path_buf()]).await;
+        let logs = collect_log_text_from_files(files).await;
+        let redacted = crate::feedback_redact::redact_diagnostics_locally(logs)
+            .await
+            .unwrap();
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "signedUrl": format!("{}/upload/log", server.uri()), "path": "logs/report.log"
+            }})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"id": 42}})))
+            .mount(&server)
+            .await;
+        upload_report(
+            &Client::new(),
+            &server.uri(),
+            &request(),
+            redacted,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let upload = requests.iter().find(|r| r.method == "PUT").unwrap();
+        let report = String::from_utf8_lossy(&upload.body);
+        assert!(
+            report.contains("meeting retranscribe: transcription failed"),
+            "{report}"
+        );
+        assert!(report.contains("audio=120s, timeout=120s"), "{report}");
+        assert!(report.contains("504 Gateway Timeout"), "{report}");
+        assert!(report.contains("upstream inference timed out"), "{report}");
+        assert!(!report.contains("hunter2"));
     }
 
     #[test]

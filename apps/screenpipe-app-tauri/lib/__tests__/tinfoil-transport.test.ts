@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createGlmEncryptedFetch, GLM_CONFIG_REPO, GLM_ENCLAVE } from "../../../../crates/screenpipe-core/assets/extensions/lib/tinfoil-transport";
+import { normalizeGlmRequest } from "../../../../crates/screenpipe-core/assets/extensions/lib/glm-protocol";
 
 const endpoint = "https://gateway.test/v1/tinfoil/glm/chat/completions";
 const model = "glm-5.3-flash-reap50-iq3m";
@@ -23,6 +24,24 @@ const originalFetch = globalThis.fetch;
 afterEach(() => { mock.restore(); globalThis.fetch = originalFetch; });
 
 describe("GLM verified client transport", () => {
+  it("retains the shared API's usable read contract after a full skill read is compacted", () => {
+    const skill = readFileSync(resolve(import.meta.dir,
+      "../../../../crates/screenpipe-core/assets/skills/screenpipe-api/SKILL.md"), "utf8");
+    const request = normalizeGlmRequest({ model, messages: [
+      { role: "system", content: "<available_skills><skill><name>screenpipe-api</name></skill></available_skills>" },
+      { role: "tool", content: skill },
+    ] });
+    const visible = request.messages[1].content;
+    expect(visible.length).toBeLessThanOrEqual(8000);
+    expect(visible).toContain("/activity-summary?start_time=...&end_time=...");
+    expect(visible).toContain("/search?start_time=...&end_time=...&content_type=all");
+    expect(visible).toContain("content.transcription");
+    expect(visible).toContain("Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY");
+    expect(visible).toContain("expected_revision, input_revision, checked_through, items, coverage");
+    expect(visible).toContain("with `JSON.stringify`");
+    expect(visible).toContain("read that section in a bounded range");
+  });
+
   it("runs the installed Pi provider through real encrypted SSE and a second-turn tool replay", async () => {
     const suite = new CipherSuite(KEM_DHKEM_X25519_HKDF_SHA256, KDF_HKDF_SHA256, AEAD_AES_256_GCM);
     const pair = await suite.GenerateKeyPair(true);
@@ -43,10 +62,20 @@ describe("GLM verified client transport", () => {
       expect(plain.model).toBe(model);
       calls++;
       if (calls === 2) {
-        expect(plain.messages.some((m: any) => m.role === "tool" && m.content === "tool evidence")).toBe(true);
+        const previous = plain.messages.find((m: any) => m.role === "assistant" && m.tool_calls?.length);
+        expect(previous.reasoning_content).toBe("Inspect the source before answering.");
+        expect(previous.content ?? "").not.toContain("Inspect the source before answering.");
+        expect(previous.tool_calls[0].function.name).toBe("read");
+        expect(JSON.parse(previous.tool_calls[0].function.arguments)).toEqual({ path: "file.txt" });
+        expect(plain.messages).toContainEqual(expect.objectContaining({
+          role: "tool", content: "tool evidence", tool_call_id: previous.tool_calls[0].id,
+        }));
       }
       const content = calls === 1 ? '<tool_call>read<arg_key>path</arg_key><arg_value>file.txt</arg_value></tool_call>' : "VERIFIED_FINAL";
-      const sse = `data: ${JSON.stringify({ id: "fixture", choices: [{ index: 0, delta: { content } }] })}\n\ndata: [DONE]\n\n`;
+      const reasoning = calls === 1
+        ? `data: ${JSON.stringify({ id: "fixture", choices: [{ index: 0, delta: { reasoning_content: "Inspect the source before answering." } }] })}\n\n`
+        : "";
+      const sse = reasoning + `data: ${JSON.stringify({ id: "fixture", choices: [{ index: 0, delta: { content } }] })}\n\ndata: [DONE]\n\n`;
       const nonce = crypto.getRandomValues(new Uint8Array(32));
       const secret = await recipient.Export(new TextEncoder().encode(EXPORT_LABEL), EXPORT_LENGTH);
       const keys = await deriveResponseKeys(secret, enc, nonce);
@@ -96,7 +125,7 @@ describe("GLM verified client transport", () => {
       expect(new Headers(request.headers).get("Authorization")).toBe("Bearer user-token");
       expect(request.signal.aborted).toBe(false);
       expect(request.redirect).toBe("error");
-      expect(JSON.parse(request.body).chat_template_kwargs.enable_thinking).toBe(false);
+      expect(JSON.parse(request.body).chat_template_kwargs).toEqual({ enable_thinking: true, reasoning_effort: "low" });
       return new Response("data: [DONE]\n\n");
     });
     const factory = mock(() => ({ ready: async () => { order.push("verify"); }, fetch }));
@@ -104,6 +133,43 @@ describe("GLM verified client transport", () => {
     await secureFetch(endpoint, { ...init(), signal: controller.signal });
     expect(factory).toHaveBeenCalledWith({ enclaveURL: GLM_ENCLAVE, configRepo: GLM_CONFIG_REPO, baseURL: endpoint, transport: "ehbp", userCacheSecret: expect.any(String) });
     expect(order).toEqual(["verify", "fetch"]);
+  });
+
+  it("maps ordinary reasoning settings to GLM's supported effort levels before sealing", async () => {
+    const sent: any[] = [];
+    const secureFetch = createGlmEncryptedFetch("https://gateway.test/v1", () => ({
+      ready: async () => {},
+      fetch: async (_url, request) => {
+        sent.push(JSON.parse(request.body).chat_template_kwargs);
+        return new Response("data: [DONE]\n\n");
+      },
+    }) as any);
+    for (const effort of [undefined, "off", "minimal", "low", "medium", "high", "xhigh", "max"]) {
+      await secureFetch(endpoint, init({ reasoning_effort: effort }));
+    }
+    expect(sent.map(body => body.reasoning_effort)).toEqual(["low", "low", "low", "low", "low", "high", "max", "max"]);
+    expect(sent.every(body => body.enable_thinking === true)).toBe(true);
+  });
+
+  it("reserves answer/tool output while bounding reasoning inside the encrypted request", async () => {
+    const sent: any[] = [];
+    const secureFetch = createGlmEncryptedFetch("https://gateway.test/v1", () => ({
+      ready: async () => {},
+      fetch: async (_url, request) => {
+        sent.push(JSON.parse(request.body));
+        return new Response("data: [DONE]\n\n");
+      },
+    }) as any);
+    for (const body of [
+      {}, { reasoning_effort: "high", max_tokens: 8192 },
+      { reasoning_effort: "max", max_tokens: 8192 },
+      { reasoning_effort: "high", max_tokens: 1536 },
+      { reasoning_effort: "max", max_completion_tokens: 128 },
+    ]) await secureFetch(endpoint, init(body));
+    expect(sent.map(body => body.thinking_budget_tokens)).toEqual([512, 2048, 4096, 512, 0]);
+    expect(sent[3].max_tokens).toBe(1536);
+    expect(sent[4].max_completion_tokens).toBe(128);
+    expect(sent.every(body => body.chat_template_kwargs.enable_thinking)).toBe(true);
   });
 
   it("isolates prompt caches across credentials even while verification is pending", async () => {

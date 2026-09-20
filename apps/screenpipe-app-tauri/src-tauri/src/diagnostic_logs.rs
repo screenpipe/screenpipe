@@ -218,6 +218,28 @@ async fn build_bundle(files: &[LogFile]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn capture_pause_cause_and_resume_survive_support_collection() {
+        // The native focus-warm-pause E2E also asserts these actual messages.
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("screenpipe-app.2026-09-19.log");
+        tokio::fs::write(&current,
+            "INFO monitor 1: entering pause state (locked=false, power_paused=true, drm=false, schedule=false); releasing capture stream before focus probes\n"
+        ).await.unwrap();
+        tokio::fs::rename(&current, dir.path().join("screenpipe-app.2026-09-19.1.log"))
+            .await
+            .unwrap();
+        tokio::fs::write(&current,
+            "INFO monitor 1: exiting pause state, capture resumes\nINFO contact=private-person@example.com\n"
+        ).await.unwrap();
+        let files = crate::log_files::collect_log_files(&[dir.path().to_path_buf()]).await;
+        let report = redact_files(&owned_log_files(files)).await.unwrap();
+        assert!(report.contains("power_paused=true, drm=false, schedule=false"));
+        assert!(report.contains("releasing capture stream before focus probes"));
+        assert!(report.contains("exiting pause state, capture resumes"));
+        assert!(!report.contains("private-person@example.com"));
+    }
     use tempfile::tempdir;
 
     fn log_file(path: &Path, modified_at: u64) -> LogFile {
@@ -226,6 +248,41 @@ mod tests {
             path: path.to_string_lossy().to_string(),
             modified_at,
         }
+    }
+
+    #[tokio::test]
+    async fn workflow_file_read_failure_survives_rotation_and_support_redaction() {
+        let dir = tempdir().unwrap();
+        let log = std::fs::File::create(dir.path().join("screenpipe.2026-09-18.0.log")).unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(log)
+            .finish();
+        let event = serde_json::json!({
+            "type": "tool_execution_end", "toolName": "read", "isError": true,
+            "result": {"content": [{"type": "text", "text": "ENOENT: no such file or directory, access '/workflows/context'"}]}
+        });
+        tracing::subscriber::with_default(subscriber, || {
+            screenpipe_core::pipes::log_read_tool_failures(
+                "workflow-activity",
+                Some(42),
+                "completed",
+                &event.to_string(),
+            );
+        });
+        tokio::fs::write(
+            dir.path().join("screenpipe.2026-09-19.0.log"),
+            "recorder restarted\npassword=hunter2\n",
+        )
+        .await
+        .unwrap();
+        let files = crate::log_files::collect_log_files(&[dir.path().to_path_buf()]).await;
+        let report = redact_files(&owned_log_files(files)).await.unwrap();
+        assert!(report.contains("pipe file read failed"));
+        assert!(report.contains("workflow-activity"));
+        assert!(report.contains("run_status=\"completed\""));
+        assert!(report.contains("cause=ENOENT target=workflow_api_endpoint failures=1"));
+        assert!(!report.contains("hunter2"));
     }
 
     #[tokio::test]

@@ -465,6 +465,18 @@ pub fn normalized_frequency(repetitions: u64, days: u16) -> String {
 
 // Exact quote/reference validation is a traceability gate, not semantic proof.
 // Semantic correctness is evaluated separately; the UI still labels drafts.
+// Accessibility layouts and compact parsed views can wrap the same words
+// differently. Preserve word order, spelling and punctuation when verifying.
+fn contains_source_quote(text: &str, quote: &str) -> bool {
+    let quote = quote.split_whitespace().collect::<Vec<_>>().join(" ");
+    !quote.is_empty()
+        && text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .contains(&quote)
+}
+
 pub fn normalize_procedure(stage: &Value, evidence: &[Value]) -> Vec<Value> {
     stage
         .get("procedure")
@@ -501,7 +513,7 @@ pub fn normalize_procedure(stage: &Value, evidence: &[Value]) -> Vec<Value> {
                     && source
                         .get("detail")
                         .and_then(Value::as_str)
-                        .is_some_and(|body| body.contains(&quote))
+                        .is_some_and(|body| contains_source_quote(body, &quote))
             })?;
             Some(
                 json!({"kind": kind, "text": text.chars().take(800).collect::<String>(),
@@ -1473,3 +1485,35 @@ pub fn work_profile_payload(profile: Option<&Value>) -> Option<Value> {
 
 pub mod evidence;
 pub mod timing;
+
+#[cfg(test)]
+mod quote_tests {
+    use super::*;
+
+    #[test]
+    fn procedure_accepts_layout_whitespace_but_keeps_source_identity() {
+        let evidence = vec![json!({
+            "timestamp":"2026-09-18T10:00:00Z", "app":"Receipts", "source":"screen",
+            "detail":"Invoice view\nReceipt\n    saved\t successfully.\nReturn to inbox"
+        })];
+        let step = json!({"kind":"check", "text":"Check the save confirmation",
+            "timestamp":"2026-09-18T10:00:00Z", "app":"Receipts",
+            "quote":"Receipt saved successfully."});
+        let stage = json!({"procedure":[step.clone()]});
+        assert_eq!(normalize_procedure(&stage, &evidence).len(), 1);
+        for (key, value) in [
+            ("quote", "Invoice saved successfully."),
+            ("quote", "Receipt ... successfully."),
+            ("quote", "Receipt saved and sent successfully."),
+            ("timestamp", "2026-09-18T10:00:01Z"),
+            ("app", "Mail"),
+        ] {
+            let mut invalid = step.clone();
+            invalid[key] = json!(value);
+            assert!(normalize_procedure(&json!({"procedure":[invalid]}), &evidence).is_empty());
+        }
+        let mut audio = evidence.clone();
+        audio[0]["source"] = json!("audio");
+        assert!(normalize_procedure(&stage, &audio).is_empty());
+    }
+}

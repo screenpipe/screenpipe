@@ -34,6 +34,6 @@ try {
     && proof.codeFingerprint === proof.enclaveFingerprint && proof.configRepo === "screenpipe/privacy-filter"
     && proof.enclaveHost === "pii.screenpipe.containers.tinfoil.dev" && answer?.stopReason === "stop"
     && answer.content.some((part: any) => part.type === "text" && part.text.trim() === "READY");
-  console.log(JSON.stringify({ passed, exit, states: statuses.map(e => e.state), model: answer?.model, stderrPresent: !!stderr.trim() }));
+  console.log(JSON.stringify({ passed, exit, states: statuses.map(e => e.state), model: answer?.model, error: answer?.errorMessage, stderrPresent: !!stderr.trim() }));
   if (!passed) process.exitCode = 1;
 } finally { await rm(dir, { recursive: true, force: true }); }

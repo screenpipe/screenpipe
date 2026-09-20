@@ -33,22 +33,20 @@ Preserve user corrections and valid prior steps of the matched job. Personal
 material and incidental browser tabs are not professional workflow steps.
 A request, plan or assistant report does not prove the work was completed.
 
-## Repair evidence only when needed
+## Keep final review bounded
 
-Start with upstream sources and successful cached responses. Preserve literal
-quotes and original timestamp/app metadata; do not stitch unrelated sightings.
-For a missing or invalid frame quote, use `GET /frames/{frame_id}/context`.
-For other sources, `/search` accepts `start_time`, `end_time` (ISO timestamps),
-`app_name`, `content_type` (`audio` for transcripts, `all` for mixed sources),
-`limit`, and `offset`. Use a narrow source window, encode query parameters, and
-respect returned pagination. The screenpipe-api skill documents other operations
-if needed; do not load unrelated API sections for an already supported claim.
-Use the existing attribution headers `X-Screenpipe-Client: api` and
-`X-Screenpipe-Agent: unknown` for REST history retrievals.
+For the scheduled final review, evaluate the supplied literal quotes and metadata.
+Earlier enrichment stages own source investigation. Do not query raw history to
+rescue a rejected claim. Omit unsupported entries while retaining supported peers.
+A conclusive exclusion differs from unavailable evidence: an assistant report or
+incidental menu is enough to reject the proposed action, while a failed/missing
+source cannot establish that there were no changes.
 
-Only attach a screenshot after viewing that exact image. Unknown timing stays
-empty. These optional fields must not block supported text updates. Failed source
-reads are not evidence of no changes; defer the affected claim, not valid peers.
+Interactive investigations explicitly requested by the user can retrieve the
+original frame with `GET /frames/{frame_id}/context`, or use the shared
+screenpipe-api skill's documented history reads. That is not a prerequisite for
+committing the scheduled review. Only attach an image after viewing it; preserve
+verified unchanged images. Unknown timing stays empty.
 
 ## Save and verify
 
@@ -58,10 +56,9 @@ Use `/workflows/context.revision` for `expected_revision`, and the pipeline's
 `inputRevision` and `checkedThrough` for the other fields. Follow `outputContract`
 for workflow objects. Serialize a JavaScript object with `JSON.stringify`; validate
 the file before POSTing with `Content-Type: application/json` and `--data-binary @file`.
-Inspect errors. Repair rejected claims from their original evidence, or omit them.
+Inspect errors. Omit rejected claims while preserving independently supported peers.
 If a quote is rejected, changing the action's wording cannot repair its source.
-Read that original capture and copy the literal quote, or remove only the affected
-claim while retaining supported peers. Do not repeatedly submit the same rejected
+Remove only the affected claim while retaining supported peers. Do not repeatedly submit the same rejected
 quote or replace a rejected batch with an empty success.
 For a revision conflict, reread current state and preserve newer edits before retrying.
 

@@ -181,6 +181,7 @@ ort = { workspace = true, features = ["download-binaries", "tls-native", "coreml
 ort = { workspace = true, default-features = false, features = ["load-dynamic", "api-24"] }
 
 [dev-dependencies]
+wiremock = { workspace = true }
 tempfile = { workspace = true }
 infer = "0.15"
 criterion = { workspace = true }

@@ -43,9 +43,22 @@ export function createGlmEncryptedFetch(baseURL: string, createClient: ClientFac
       // Match the established gateway adapter before sealing, then normalize
       // native GLM tool calls only after the SDK has decrypted the SSE response.
       const normalized = normalizeGlmRequest(body);
+      // GLM 5.3 is a reasoning-only model with low/high/max effort. The old
+      // enable_thinking=false switch suppresses its reasoning delimiter, not
+      // its reasoning budget, and can leak thoughts into visible content.
+      // There is no medium level: unsupported values otherwise become max.
       normalized.chat_template_kwargs = {
-        enable_thinking: ["high", "xhigh", "max"].includes(body.reasoning_effort),
+        enable_thinking: true,
+        reasoning_effort: ["xhigh", "max"].includes(body.reasoning_effort)
+          ? "max" : body.reasoning_effort === "high" ? "high" : "low",
       };
+      // Effort is guidance, not a generation limit. Bound each response's
+      // reasoning while reserving output for its answer or tool arguments.
+      // Enforced inside the attested llama.cpp sampler, including tool turns.
+      const effort = normalized.chat_template_kwargs.reasoning_effort;
+      const reasoningBudget = effort === "max" ? 4096 : effort === "high" ? 2048 : 512;
+      const outputLimit = normalized.max_completion_tokens ?? normalized.max_tokens ?? 8192;
+      normalized.thinking_budget_tokens = Math.min(reasoningBudget, Math.max(0, outputLimit - 1024));
       const auth = request.headers.get("Authorization");
       if (!client || clientAuth !== auth) {
         client = createClient({

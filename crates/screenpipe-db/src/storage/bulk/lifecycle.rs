@@ -20,7 +20,7 @@ impl HybridStorage {
         if table.name == "elements" {
             return super::elements::seal(self, pool, writer).await;
         }
-        let rows = self.select_bulk(pool, table, None).await?;
+        let rows = self.select_bulk(pool, table, None, None).await?;
         if !rows.is_empty() {
             return self.publish_bulk(pool, writer, table, rows, None).await;
         }
@@ -32,15 +32,25 @@ impl HybridStorage {
         pool: &SqlitePool,
         table: &Table,
         file: Option<i64>,
+        after: Option<i64>,
     ) -> Result<Vec<Record>, sqlx::Error> {
-        crate::storage::diagnostics::batch(table.name, None, None, None, None);
+        crate::storage::diagnostics::batch(
+            table.name,
+            after.and_then(|id| id.checked_add(1)),
+            None,
+            None,
+            None,
+        );
         crate::storage::diagnostics::stage("selecting_bulk_records");
         let _token = self.read_token(pool).await?;
-        let condition = if let Some(file) = file {
+        let mut condition = if let Some(file) = file {
             format!("pending._archive_file={file}")
         } else {
             "pending._archive_mask!=0".into()
         };
+        if let Some(after) = after {
+            condition.push_str(&format!(" AND pending.id>{after}"));
+        }
         // Keep the pending index as the outer loop so LIMIT bounds work before
         // materializing IDs from a large history.
         let candidates=sqlx::query(sqlx::AssertSqlSafe(format!("SELECT v.id,({bytes}) AS bytes FROM main.{t} pending CROSS JOIN (SELECT * FROM {view} WHERE {eligible}) v ON v.id=pending.id WHERE {condition} AND ({bytes})<=? ORDER BY pending.id LIMIT {FILE_ROWS}",bytes=table.all_bytes("v."),view=table.view(),t=table.name,eligible=table.eligible))).bind(self.descriptor.budget.record_bytes as i64).fetch_all(pool).await?;
@@ -275,7 +285,7 @@ impl HybridStorage {
                 .iter()
                 .find(|t| t.name == name)
                 .ok_or_else(|| storage_error("unknown bulk table"))?;
-            let rows = self.select_bulk(pool, table, Some(id)).await?;
+            let rows = self.select_bulk(pool, table, Some(id), None).await?;
             if !rows.is_empty() {
                 self.publish_bulk(pool, writer, table, rows, Some(id))
                     .await?;

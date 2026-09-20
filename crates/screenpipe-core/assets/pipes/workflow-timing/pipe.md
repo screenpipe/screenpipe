@@ -61,6 +61,10 @@ Preserve concrete supported improvement opportunities; none is a valid result.
 
 Save the enriched items promptly with POST /workflows/pipeline. Construct the
 body from the parsed input file, preserving every upstream item and its identity.
+Add timingRuns and timingNote directly to each candidate item, beside candidateId
+and workflowId: `{...item, timingRuns, timingNote}`. If the item contains a nested
+workflow object, keep it intact; putting timing only inside it does not enrich
+the candidate passed to the next stage.
 Use task, expected_revision (GET revision), input_revision (GET inputRevision),
 checked_through (GET checkedThrough), items, and coverage (input.coverage unchanged).
 Do not advance the checkpoint or claim new coverage from timing searches.

@@ -225,6 +225,73 @@ async fn migration_diagnostics_preserve_table_totals_and_verified_completion() {
 }
 
 #[tokio::test]
+async fn migration_preserves_search_when_frames_and_bulk_history_are_both_present() {
+    assert_migration_search(false).await;
+}
+
+#[tokio::test]
+#[cfg(feature = "storage-fault-injection")]
+async fn retry_repairs_search_for_already_archived_bulk_history() {
+    assert_migration_search(true).await;
+}
+
+async fn assert_migration_search(resume: bool) {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("db.sqlite");
+    let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+        .await
+        .unwrap();
+    db.execute_raw_sql_write("INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-09-19','frame history'),(2,'2026-09-19','other frame'); INSERT INTO audio_chunks(id,file_path) VALUES(1,'test.wav'); INSERT INTO audio_transcriptions(id,audio_chunk_id,offset_index,timestamp,transcription,device) VALUES(1,1,0,'2026-09-19','migrationneedle spoken history','test'); INSERT INTO ui_events(id,timestamp,event_type,text_content) VALUES(1,'2026-09-19','text','migrationneedle typed history'); INSERT INTO semantic_items(id,entity_fingerprint,version_fingerprint,kind,item_key,identity_quality,title,body,metadata_json) VALUES(1,randomblob(32),randomblob(32),'document','migration','stable','title','migrationneedle document','{}');").await.unwrap();
+    db.close().await;
+    if resume {
+        let crashed = std::process::Command::new(env!("CARGO_BIN_EXE_screenpipe-storage"))
+            .arg("migrate")
+            .arg(root.path())
+            .env("SCREENPIPE_STORAGE_CRASH_AT", "bulk_committed")
+            .output()
+            .unwrap();
+        assert_eq!(crashed.status.code(), Some(86));
+        screenpipe_db::storage::recover_interrupted_migration(root.path(), Default::default())
+            .await
+            .unwrap();
+        let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM main.audio_transcriptions WHERE _archive_file IS NOT NULL"
+            )
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+            1
+        );
+        // Older attempts could publish this archive before populating FTS.
+        db.execute_raw_sql_write("DELETE FROM audio_transcriptions_fts; DELETE FROM _storage_conversion_steps WHERE step LIKE '%-all-fts-%'")
+            .await.unwrap();
+        db.close().await;
+    }
+    let report = migrate(root.path(), Default::default(), Default::default())
+        .await
+        .unwrap();
+    assert_eq!(report.frames, 2);
+    let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+        .await
+        .unwrap();
+    for table in ["audio_transcriptions", "ui_events", "semantic_items"] {
+        let found: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) FROM {table}_fts WHERE {table}_fts MATCH 'migrationneedle'"
+        )))
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(found, 1, "migrated {table} must remain searchable");
+    }
+    db.verify_storage().await.unwrap();
+    db.close().await;
+}
+
+#[tokio::test]
 #[ignore = "migration throughput benchmark; generates an isolated recording history"]
 async fn migration_throughput() {
     use std::{sync::Mutex, time::Instant};
@@ -1256,6 +1323,12 @@ async fn recording_recovery_keeps_committed_payloads_and_survives_restarts() {
         )
         .await
         .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM _bulk_element_rows")
+                .fetch_one(&db.pool).await.unwrap(),
+            0,
+            "explicit retry must archive restored elements even after recovery removed the source table"
+        );
         assert_eq!(
             db.frame_payloads(&[49, 50], Projection::Search)
                 .await

@@ -294,7 +294,7 @@ impl HybridStorage {
         Ok(0)
     }
 
-    async fn seal_frames(
+    pub(super) async fn seal_frames(
         self: &Arc<Self>,
         pool: &SqlitePool,
         writer: &SqliteWritePool,

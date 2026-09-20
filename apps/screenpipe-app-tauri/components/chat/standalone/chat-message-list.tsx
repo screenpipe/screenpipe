@@ -27,12 +27,12 @@ import {
   getMessageIntentLabel,
   isNormalUserMessage,
   isSteeredAssistantMessage,
-  hasAssistantToolWorkBody,
   hasRenderableAssistantBody,
   isPendingAgentActionMessage,
   hasPendingPermissionRequest,
 } from "@/lib/chat/message-rendering";
 import { cn } from "@/lib/utils";
+import { presentMcpStartup } from "@/lib/chat/tool-presentation";
 import { useAcpBootLabel } from "@/lib/stores/acp-boot-state";
 import type { ContentBlock, Message } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
@@ -225,9 +225,8 @@ export function ChatMessageList({
     activeAssistantIndex >= 0 &&
     hasPendingPermissionRequest(messages.slice(activeAssistantIndex));
 
-  // A steered child keeps its parent tool receipt live. This set also lets the
-  // generic status row ask whether a visible tool group truly owns liveness,
-  // instead of disappearing merely because some historical tool block exists.
+  // A steered child keeps its parent tool receipt live. Include its running
+  // tools when deciding whether tool activity owns the turn's progress display.
   const steerChildActiveParentIds = new Set<string>();
   if (turnActive && activeAssistantMessageId) {
     const activeIdx = visibleMessages.findIndex((message) => message.id === activeAssistantMessageId);
@@ -243,11 +242,14 @@ export function ChatMessageList({
       }
     }
   }
-  const hasLiveToolStatusOwner = transformationActive && visibleMessages.some(
+  const hasRunningToolStatusOwner = transformationActive && visibleMessages.some(
     (message) =>
       message.role === "assistant" &&
-      hasAssistantToolWorkBody(message) &&
-      (message.id === activeAssistantMessageId || steerChildActiveParentIds.has(message.id)),
+      (message.id === activeAssistantMessageId || steerChildActiveParentIds.has(message.id)) &&
+      message.contentBlocks?.some((block) =>
+        block.type === "tool" && block.toolCall.isRunning &&
+        presentMcpStartup(block.toolCall) === null,
+      ),
   );
 
   return (
@@ -658,17 +660,16 @@ export function ChatMessageList({
         })()}
       </AnimatePresence>
       <AnimatePresence>
-        {isLoading && (() => {
+        {turnActive && (() => {
           const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
           const blocks = lastAssistant?.contentBlocks;
           // A pending permission/sign-in card already states the turn is blocked
           // on the user ("needs your approval"); a generic status row below it
           // is both redundant and wrong (the agent is waiting, not working).
           if (lastAssistant && isPendingAgentActionMessage(lastAssistant)) return null;
-          // Suppress the fallback only when the active turn's visible tool
-          // group is actually rendering its live state. Historical tool blocks
-          // cannot erase the only indication that a newer turn is still active.
-          if (hasLiveToolStatusOwner) return null;
+          // A completed tool receipt is not a loader. Keep the turn status
+          // visible while the model continues after tool execution finishes.
+          if (hasRunningToolStatusOwner || waitingForApproval) return null;
 
           // One row, one phase. The ACP boot label is a phase of this row
           // rather than a second loader mounted beside it: a cold npx fetch can

@@ -21,6 +21,43 @@ Screenpipe instance.
 5. Start broad activity questions with `activity-summary`; use `/search` only for specific or verbatim evidence. Let `activity-summary` own time math and check `data_status` before claiming there is no activity.
 6. Separate observed activity, explicit commitments, inferred open loops, and completed outcomes. Seeing a task or discussion is not evidence that the user performed or completed it.
 
+## Essential read parameters
+
+Use the documented query names, not guessed aliases. Both `/activity-summary`
+and `/search` use **start_time** and **end_time**, never `start` or `end`.
+Copy ISO bounds from the task; check returned timestamps/time_range against them.
+A successful response for a different interval does not cover the requested work.
+
+- `/activity-summary?start_time=...&end_time=...`: start here. Inspect `data_status`,
+  `query_status`, apps/windows and bounded snippets. `include_key_texts=false`
+  avoids large capture dumps. `max_snippets` and `max_snippet_chars` bound excerpts.
+- `/search?start_time=...&end_time=...&content_type=all&limit=10&offset=0`:
+  literal sources. Prefer `content_type=parsed` for compact screen messages/tasks
+  when available; if empty, fall back to `accessibility`. Use `content_type=audio`
+  for transcripts. Parsed rows expose structured `content.items` and `content.text`;
+  raw accessibility text may repeat the entire chat history and app chrome. `app_name`, `window_name`, `q` narrow screen searches; don't search
+  audio by speaker email. Inspect the actual speaker metadata before attributing.
+- Request JSON with `fields=type,content.timestamp,content.app_name,content.text,content.transcription,content.frame_id`.
+  Fields are flat keys, e.g. `row["content.timestamp"]`. Transcripts use
+  `content.transcription`. Keep limit <=20; JSON includes pagination. Advance
+  offset by returned rows, keeping ALL query filters and time bounds unchanged.
+  A changed query starts at offset 0. Never jump to total-minus-limit: totals may
+  be estimates. An empty page ends that query. Do not parse CSV by commas.
+- Send `Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY`, `X-Screenpipe-Client: api`,
+  `X-Screenpipe-Agent: unknown`; save with `curl --fail-with-body -o response.json`.
+  Inspect the actual row shape before extracting fields:
+  `bun -e 'const d=await Bun.file("response.json").json(); console.log(JSON.stringify({pagination:d.pagination,data:d.data?.slice(0,3)}))'`.
+  Bun file reads are asynchronous: await `.json()`/`.text()` before accessing
+  fields or serializing. A Promise can print as `{}` while the saved file is valid.
+  Fix parsing of that file instead of fetching it again. For multiline scripts,
+  use the write tool to create a JavaScript file, then run `bun filename.js`;
+  embedding captured text or long programs in shell quotes can break the command.
+  Empty derived objects are a parsing error, not proof of no captured data.
+
+This file is a reference, not a required full-context read. For other operations,
+find its heading and read that section in a bounded range. A truncated file read
+is not the complete API contract. Use the sections below to resolve unknown fields.
+
 ## Workflow maintenance
 
 Scheduled workflow Pipes use these endpoints through the normal tools. No special
@@ -47,6 +84,10 @@ audio rows without app_name use "Conversation" in workflow citations.
 If fields= returns flat keys, read row["content.timestamp"] and
 row["content.text"], not row.content.timestamp. Use JSON when you need pagination
 metadata; a CSV page alone does not show whether more results exist.
+
+For every write, build a JavaScript object from parsed input files and serialize
+with `JSON.stringify`. Do not hand-write large JSON strings or repair JSON with
+text replacements. Validate the file, POST it and verify the receipt.
 
 For stages 0–3, save via `POST /workflows/pipeline` with JSON:
 `{task, expected_revision, input_revision, checked_through, items, coverage}`.

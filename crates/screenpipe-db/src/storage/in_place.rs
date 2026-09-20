@@ -175,7 +175,10 @@ async fn run(
         if !archive { progress(MigrationProgress::phase("restoring saved screen records")); }
         loop {
             if archive { reserve(&storage)?; }
-            if archive && storage.seal_once(&pool, &writer).await? != 0 {
+            // The offline owner visits each table after building its search
+            // entries. The live round-robin sealer would repeatedly scan other
+            // unfinished tables and archive them before that backfill.
+            if archive && storage.seal_frames(&pool, &writer).await? != 0 {
                 let reclaimed = reclaim(&storage, &writer, file, &mut reclamation, false).await?;
                 report(&storage, &pool, original_allocated, total_records, progress, &mut last_report, reclaimed).await?;
                 continue;
@@ -201,16 +204,25 @@ async fn run(
             super::faults::checkpoint("migration_batch_staged");
         }
         let source_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='_bulk_elements_source')").fetch_one(&pool).await?;
-        if source_exists {
+        {
             if !archive { progress(MigrationProgress::phase("restoring saved accessibility records")); }
-            let columns = super::import::columns(&pool, "_bulk_elements_source").await?;
+            let columns = if source_exists { super::import::columns(&pool, "_bulk_elements_source").await? } else { Vec::new() };
+            let mut after = None;
             loop {
                 if archive { reserve(&storage)?; }
-                if archive && bulk::elements::seal(&storage, &pool, &writer).await? != 0 {
-                    let reclaimed = reclaim(&storage, &writer, file, &mut reclamation, false).await?;
-                    report(&storage, &pool, original_allocated, total_records, progress, &mut last_report, reclaimed).await?;
-                    continue;
+                if archive {
+                    let (sealed, last) = bulk::elements::seal_after(&storage, &pool, &writer, after).await?;
+                    if sealed != 0 {
+                        after = last;
+                        let reclaimed = reclaim(&storage, &writer, file, &mut reclamation, false).await?;
+                        report(&storage, &pool, original_allocated, total_records, progress, &mut last_report, reclaimed).await?;
+                        continue;
+                    }
                 }
+                if !source_exists { break; }
+                // Everything currently staged was visited. Retained private or
+                // oversized rows must not be rescanned for every source batch.
+                after = sqlx::query_scalar("SELECT max(id) FROM _bulk_element_rows").fetch_one(&pool).await?;
                 // Move existing records inside SQLite, including records larger
                 // than any encoder/decoder batch. Sealing can leave them resident.
                 let range = resident_range(&pool, "_bulk_elements_source", None,
@@ -237,31 +249,38 @@ async fn run(
                 drop(permit);
                 if archive { reclaim(&storage, &writer, file, &mut reclamation, false).await?; }
             }
-            let permit = writer.lock().await?;
-            super::diagnostics::stage("dropping_empty_element_source");
-            sqlx::query("DROP TABLE _bulk_elements_source").execute(permit.pool()).await?;
+            if source_exists {
+                let permit = writer.lock().await?;
+                super::diagnostics::stage("dropping_empty_element_source");
+                sqlx::query("DROP TABLE _bulk_elements_source").execute(permit.pool()).await?;
+            }
         }
         if !archive { progress(MigrationProgress::phase("restoring history search indexes")); }
         for table in bulk::TABLES.iter().filter(|t| t.name != "elements") {
+            let mut after = None;
             while archive {
                 reserve(&storage)?;
-                let rows = storage.select_bulk(&pool, table, None).await?;
+                let rows = storage.select_bulk(&pool, table, None, after).await?;
                 if rows.is_empty() { break; }
                 if !table.fts.is_empty() {
                     let ids = serde_json::to_string(&rows.iter().map(|r| r.id).collect::<Vec<_>>()).map_err(storage_error)?;
                     let permit = writer.lock().await?;
-                    let mut conn = permit.pool().acquire().await?;
-                    let mut tx = conn.begin().await?;
-                    for sql in [format!("DELETE FROM {t}_fts WHERE rowid IN (SELECT value FROM json_each(?))",t=table.name), format!("INSERT INTO {t}_fts(rowid,{columns}) SELECT id,{columns} FROM {view} WHERE id IN (SELECT value FROM json_each(?)) AND ({condition})",t=table.name,columns=table.fts_columns(),view=table.view(),condition=table.fts_condition)] {
-                        sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&ids).execute(&mut *tx).await?;
-                    }
+                    let mut tx = permit.pool().begin().await?;
+                    index_bulk_fts(&mut tx, table, &ids).await?;
                     tx.commit().await?;
                 }
-                storage.publish_bulk(&pool, &writer, table, rows, None).await?;
+                let last = rows.last().unwrap().id;
+                let expected = rows.len();
+                if storage.publish_bulk(&pool, &writer, table, rows, None).await? != expected {
+                    return Err(storage_error("offline bulk batch changed before publication"));
+                }
+                // Exclusive ownership makes this cursor safe. A retry starts
+                // from committed resident state, never from an uncommitted ID.
+                after = Some(last);
                 let reclaimed = reclaim(&storage, &writer, file, &mut reclamation, false).await?;
                 report(&storage, &pool, original_allocated, total_records, progress, &mut last_report, reclaimed).await?;
             }
-            backfill_resident_fts(&storage, &pool, &writer, table, file, &mut reclamation, archive).await?;
+            backfill_bulk_fts(&storage, &pool, &writer, table, file, &mut reclamation, archive).await?;
         }
         if !archive { progress(MigrationProgress::phase("finishing recording recovery")); }
         {
@@ -364,9 +383,22 @@ async fn reclaim(
     Ok(reclaimed)
 }
 
-// Privacy-ineligible records remain resident. Their search entries still need
-// the same bounded, committed backfill as records that were sealed above.
-async fn backfill_resident_fts(
+async fn index_bulk_fts(
+    conn: &mut sqlx::SqliteConnection,
+    table: &bulk::Table,
+    ids: &str,
+) -> Result<(), sqlx::Error> {
+    super::diagnostics::stage("indexing_bulk_search_batch");
+    for sql in [format!("DELETE FROM {t}_fts WHERE rowid IN (SELECT value FROM json_each(?))",t=table.name),format!("INSERT INTO {t}_fts(rowid,{columns}) SELECT id,{columns} FROM {view} WHERE id IN (SELECT value FROM json_each(?)) AND ({condition})",t=table.name,view=table.view(),columns=table.fts_columns(),condition=table.fts_condition)] {
+        sqlx::query(sqlx::AssertSqlSafe(sql)).bind(ids).execute(&mut *conn).await?;
+    }
+    Ok(())
+}
+
+// Fill missing search entries for resident/private records and archives
+// committed by older migration attempts that used the live sealer too early.
+// Normal conversion still indexes, seals and reclaims one batch at a time.
+async fn backfill_bulk_fts(
     storage: &HybridStorage,
     pool: &SqlitePool,
     writer: &SqliteWritePool,
@@ -380,7 +412,7 @@ async fn backfill_resident_fts(
         return Ok(());
     }
     let step = format!(
-        "{}-fts-{}",
+        "{}-all-fts-{}",
         if archive { "resident" } else { "recovery" },
         table.name
     );
@@ -389,7 +421,7 @@ async fn backfill_resident_fts(
         .iter()
         .map(|c| {
             format!(
-                "COALESCE(length(CAST({} AS BLOB)),0)",
+                "COALESCE(length(CAST(v.{} AS BLOB)),0)",
                 c.split_whitespace().next().unwrap()
             )
         })
@@ -405,7 +437,21 @@ async fn backfill_resident_fts(
                 .fetch_optional(pool)
                 .await?
                 .flatten();
-        let sql = format!("SELECT id,{size} FROM {t} WHERE _archive_file IS NULL AND id {comparison} ? ORDER BY id LIMIT {rows}",t=table.name,comparison=if after.is_some(){">"}else{">="},rows=bulk::FILE_ROWS);
+        super::diagnostics::batch(
+            table.name,
+            after.and_then(|id| id.checked_add(1)),
+            None,
+            None,
+            None,
+        );
+        super::diagnostics::stage("selecting_bulk_search_batch");
+        let sql = format!(
+            "SELECT v.id,{size} FROM {view} v WHERE v.id {comparison} ? AND NOT EXISTS(SELECT 1 FROM {t}_fts WHERE rowid=v.id) ORDER BY v.id LIMIT {rows}",
+            view = table.view(),
+            t = table.name,
+            comparison = if after.is_some() { ">" } else { ">=" },
+            rows = bulk::FILE_ROWS
+        );
         let mut stream = sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(after.unwrap_or(i64::MIN))
             .fetch(pool);
@@ -427,9 +473,7 @@ async fn backfill_resident_fts(
         let permit = writer.lock().await?;
         let mut conn = permit.pool().acquire().await?;
         let mut tx = conn.begin().await?;
-        for sql in [format!("DELETE FROM {t}_fts WHERE rowid IN (SELECT value FROM json_each(?))",t=table.name),format!("INSERT INTO {t}_fts(rowid,{columns}) SELECT id,{columns} FROM {t} WHERE id IN (SELECT value FROM json_each(?)) AND ({condition})",t=table.name,columns=table.fts_columns(),condition=table.fts_condition)] {
-            sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&ids).execute(&mut *tx).await?;
-        }
+        index_bulk_fts(&mut tx, table, &ids).await?;
         sqlx::query("INSERT INTO _storage_conversion_steps(step,last_id) VALUES(?,?) ON CONFLICT(step) DO UPDATE SET last_id=excluded.last_id").bind(&step).bind(last).execute(&mut *tx).await?;
         tx.commit().await?;
         if archive {

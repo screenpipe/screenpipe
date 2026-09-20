@@ -1738,6 +1738,27 @@
       "notes": "Home is the single first-summary lifecycle owner: reset events clear the mounted Home state, while the separate Chat webview neither renders nor claims a second learning window from the shared onboarding completion."
     },
     {
+      "spec": "focus-warm-pause.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "capture-ocr",
+        "local-api",
+        "os-integration",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "app-launch",
+        "capture-ocr",
+        "health"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "mixed",
+      "notes": "Opt-in disposable macOS test supplies Warm focus and pause inputs, verifies the real OS capture stream stays released throughout pause while loop heartbeats advance, then proves capture and durable frame writes resume in the same process."
+    },
+    {
       "spec": "focus-server.spec.ts",
       "platforms": [
         "windows",

@@ -131,13 +131,11 @@ curl "http://localhost:3030/speakers/similar?speaker_id=1"
 
 ## Long meetings and batch sizing
 
-By default, Screenpipe batches audio for transcription in chunks. Each engine (Whisper, OpenAI, Deepgram) has its own configurable batch-duration limit.
+Screenpipe splits long recordings into batches using limits appropriate to each transcription engine.
 
-If you notice meetings longer than one hour losing context between batches, you can customize the batch size in settings > advanced > `batch_max_duration_secs`. Set to your meeting's typical duration to preserve context across the entire recording.
+For **OpenAI-compatible** servers, open **Settings > Audio & meetings** and set **Max batch duration (seconds)** beneath the endpoint configuration. This controls both background batches and meeting retranscription. Leave it blank or set it to `0` to use automatic sizing. Other engines keep their engine-specific limits.
 
-In smart/batch transcription mode, large meetings may be split across multiple transcription jobs. If you need full meeting context in a single batch, consider:
-- Switching to **realtime** transcription (transcription happens immediately as audio is captured, trading cost/latency for guaranteed continuity)
-- Increasing `batch_max_duration_secs` to match your meeting length (capped at each engine's configurable limit)
+Lower the duration if your server or gateway times out. You can increase it for a faster server, but upload size is only one constraint: the server also needs time to transcribe the audio. Screenpipe allows more request time for longer audio; your gateway may enforce a shorter timeout of its own.
 
 ## Privacy
 

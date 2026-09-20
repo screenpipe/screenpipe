@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite": "screenpipe-app-coding-agent-regressions",
-  "dataset_version": "2026-09-18.2",
+  "dataset_version": "2026-09-20.1",
   "suite_type": "regression",
   "owner": "screenpipe engineering",
   "policy": {
@@ -482,24 +482,44 @@
     {
       "id": "app-privacy-category-rule-ownership",
       "name": "Never delete user-owned privacy rules with a category",
-      "source": { "kind": "git_regression", "fix_commit": "4450aaa82d" },
-      "base_ref": "4450aaa82d^",
-      "oracle_ref": "4450aaa82d",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "4450aaa82d30d262a5375520a734f1dff143e81d"
+      },
+      "base_ref": "9ebcd29c6ada189922c02e4ab65f1a08e228e1a1",
+      "oracle_ref": "4450aaa82d30d262a5375520a734f1dff143e81d",
       "gate": "advisory",
-      "trigger_paths": ["apps/screenpipe-app-tauri/lib/settings/capture-categories.ts"],
-      "tags": ["regression", "escaped-failure", "privacy", "settings", "data-loss"],
-      "prompt": "Disabling a privacy capture category deletes an identical exclusion rule or domain the user created manually. Track category ownership so disabling removes only entries that category actually created, preserves hand-written and other-category entries, and still cleans up all owned filters. Keep a safe compatibility path for legacy state with no provenance.",
-      "agent_timeout_seconds": 900,
-      "dependency_links": [
-        { "source_path": "apps/screenpipe-app-tauri/node_modules", "destination_path": "apps/screenpipe-app-tauri/node_modules" }
+      "trigger_paths": [
+        "apps/screenpipe-app-tauri/components/settings/privacy-section.tsx",
+        "apps/screenpipe-app-tauri/components/settings/capture-filters/content-filters-card.tsx",
+        "apps/screenpipe-app-tauri/lib/settings/capture-categories.ts",
+        "apps/screenpipe-app-tauri/lib/hooks/use-settings.tsx"
       ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "privacy",
+        "settings",
+        "data-loss"
+      ],
+      "prompt": "Disabling a privacy capture category deletes an identical exclusion rule or domain the user created manually. Fix the actual Settings > Privacy category switches so enabling then disabling preserves hand-written exclusions and other categories, including after closing and reopening settings. Persist whatever ownership information the UI needs. Still add the category filters when enabled, clean up all filters it created when disabled, preserve unrelated include rules, and tolerate repeated disable. Keep a safe compatibility path so legacy enabled categories without provenance can still be disabled. No particular helper, callback or ownership field name is required. Preserve the existing category choices and privacy controls.",
+      "agent_timeout_seconds": 900,
       "grader": {
         "timeout_seconds": 300,
         "fixtures": [
-          { "source_path": "apps/screenpipe-app-tauri/lib/settings/__tests__/capture-categories.test.ts" }
+          {
+            "local_path": "graders/app-privacy-ownership.test.js",
+            "destination_path": "evals/coding-agent/graders/app-privacy-ownership.test.js"
+          }
         ],
-        "command": "cd apps/screenpipe-app-tauri && bun x vitest run --config vitest.config.ts lib/settings/__tests__/capture-categories.test.ts"
-      }
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/app-privacy-ownership.test.js"
+      },
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/components/settings/privacy-section.tsx",
+        "apps/screenpipe-app-tauri/components/settings/capture-filters/content-filters-card.tsx",
+        "apps/screenpipe-app-tauri/lib/settings/capture-categories.ts",
+        "apps/screenpipe-app-tauri/lib/hooks/use-settings.tsx"
+      ]
     },
     {
       "id": "app-acp-explicit-full-access-boundary",
@@ -1389,6 +1409,253 @@
           }
         ],
         "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/gateway-verified-identity.test.js"
+      }
+    },
+    {
+      "id": "ai-gateway-billing-capacity-compatibility",
+      "name": "Resolve canonical billing capacity without widening access",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "d9ff95802e6566a7b3ea3242800aef59cacb9aa0",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/5779"
+      },
+      "base_ref": "8b455607ffbaef204a6f6a0a62e973bac6211e48",
+      "oracle_ref": "d9ff95802e6566a7b3ea3242800aef59cacb9aa0",
+      "oracle_paths": [
+        "packages/ai-gateway/src/utils/auth.ts"
+      ],
+      "gate": "advisory",
+      "tags": [
+        "regression",
+        "ai-gateway",
+        "billing",
+        "entitlement",
+        "compatibility",
+        "identity"
+      ],
+      "prompt": "Customers with Max or Ultra billing plans receive ordinary Business capacity when the website returns the older compatible pro/Business access labels. Repair validateAuth so canonical billing_plan refines a matching, active app entitlement to the purchased capacity. Preserve normalized aliases and legacy responses with no billing_plan, ordinary Basic/Business access and explicit app/cloud denial. Billing data must not independently establish access: reject null, empty, unknown, free, malformed or incompatible billing values as unknown plan truth, and require matching subscription/entitlement plans plus app_entitled, entitlement.active and features.app. Keep broad cloud subscription access separate from capacity, and do not issue a power usage tier without subscribed access. Bind plan truth to the verified Clerk subject; mismatched identity and unsuccessful or unavailable website responses must not transfer capacity. Retry unknown or mismatched plan responses on the next request; retain caching of valid paid plan truth. Preserve anonymous access without credentials and the dedicated service credential. Exercise synthetic credentials only; no live billing operations and no prescribed helper structure.",
+      "agent_timeout_seconds": 900,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/gateway-billing-capacity.test.js",
+            "destination_path": "evals/coding-agent/graders/gateway-billing-capacity.test.js"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/gateway-billing-capacity.test.js"
+      }
+    },
+    {
+      "id": "mcp-team-credential-reload",
+      "name": "Reload enterprise credentials in the running MCP server",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "909c9360a4379896df49507140017e9989d41428"
+      },
+      "base_ref": "e681fc3f44f44fc377c771988814db00021b2e84",
+      "oracle_ref": "909c9360a4379896df49507140017e9989d41428",
+      "oracle_paths": [
+        "packages/screenpipe-mcp/src/index.ts",
+        "packages/screenpipe-mcp/src/team-config.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "mcp",
+        "enterprise",
+        "identity"
+      ],
+      "prompt": "The desktop can save a replacement enterprise token or team gateway while its MCP server keeps running, but team requests continue using stale credentials. Make the next team-tool request and tool listing reflect the current saved configuration without restarting the process, including credentials saved for the first time. Keep token and gateway from the same configuration snapshot. Clearing, deleting or corrupting the saved configuration must hide unavailable team tools and reject their calls before any team request; restoring valid settings must recover. Preserve local tools and explicit environment-token overrides, and preserve gateway precedence: command-line override, environment override, saved gateway, then hosted default. An expired explicit token must stay authoritative and give recovery guidance identifying the environment override and enterprise.json settings without exposing the credential. Verify observable requests and results through the running MCP process using synthetic tokens and local test servers.",
+      "agent_timeout_seconds": 1200,
+      "grader_dependency_links": [
+        {
+          "source_path": "packages/screenpipe-mcp/node_modules",
+          "destination_path": "packages/screenpipe-mcp/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 180,
+        "fixtures": [
+          {
+            "local_path": "graders/mcp-team-reload.fixture.ts",
+            "destination_path": "packages/screenpipe-mcp/src/eval-team-auth.test.ts"
+          }
+        ],
+        "command": "cd packages/screenpipe-mcp && SCREENPIPE_DISABLE_TELEMETRY=1 \"${BUN_BIN:-bun}\" run test -- src/eval-team-auth.test.ts"
+      }
+    },
+    {
+      "id": "grok-installer-explicit-consent",
+      "name": "Require explicit action before the Grok installer reads credentials",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "b6b18e4fa628e53bbf7eccef974faf04a07a95cc"
+      },
+      "base_ref": "b247eb3c674af026fe28c628a098e9f8c748c8a5",
+      "oracle_ref": "b6b18e4fa628e53bbf7eccef974faf04a07a95cc",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/lib/grokbot-installer.mjs"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "privacy",
+        "credentials",
+        "consent"
+      ],
+      "prompt": "The Grok installer credential bridge currently accepts passive status requests and reads another application's credential files. Require an explicit connect or disconnect action before discovering the application files, reading protected credentials or contacting its gateway. Reject status and all other unsupported actions before those effects, whether or not the app is installed. Preserve explicit connect and disconnect: use the existing saved gateway credential only for its authorized gateway requests, verify installation, retry without creating duplicate skills, remove only this device's owned skill on disconnect, and preserve unrelated user workflows. Explicit requests with no installed app should report not detected/disconnected without credential or network access. Credential-command and network failures must not disclose credentials in returned errors. Verify the actual JavaScript installer entry point using synthetic files and provider/OS ports. Native status-cache behavior, UI consent and Windows credential handling are outside this task.",
+      "agent_timeout_seconds": 1200,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/grok-installer-consent.test.js",
+            "destination_path": "evals/coding-agent/graders/grok-installer-consent.test.js"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/grok-installer-consent.test.js"
+      }
+    },
+    {
+      "id": "app-private-reasoning-budget",
+      "name": "Bound Private model reasoning while reserving answer and tool output",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "6666ed74c051bb536d255fb4520702ae520f9c3d"
+      },
+      "base_ref": "5e6d3712c4034c67e600a184dcde5b6e19e16ec2",
+      "oracle_ref": "6666ed74c051bb536d255fb4520702ae520f9c3d",
+      "oracle_paths": [
+        "crates/screenpipe-core/assets/extensions/lib/tinfoil-transport.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "private-ai",
+        "transport",
+        "resource-bounds"
+      ],
+      "prompt": "Private requests can consume their generation allowance on reasoning or lose the reasoning delimiter. Fix the real GLM request transport to enable the delimiter and translate ordinary reasoning settings into supported low/high/max values: high maps to high, xhigh/max map to max, all other values map to low. Bound reasoning per response at 512/2048/4096 tokens for low/high/max, while reserving 1024 tokens for answer or tool output and never producing a negative budget. Use max_completion_tokens before max_tokens and an 8192 default when neither is supplied; preserve supplied output limits. Body-supplied template or reasoning-budget overrides must not evade this policy. Preserve the existing verified-client boundary: verify before sending, no plaintext fallback, only the configured HTTPS endpoint/model/POST, propagate cancellation, forward the current authorization and content, refuse redirects, reuse a client for unchanged credentials and isolate its cache after credential rotation. Exercise the actual adapter with a synthetic verified-client port. Actual encryption, attestation cryptography and live model output are outside this task.",
+      "agent_timeout_seconds": 1200,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/private-reasoning-budget.test.ts",
+            "destination_path": "evals/coding-agent/graders/private-reasoning-budget.test.ts"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/private-reasoning-budget.test.ts"
+      }
+    },
+    {
+      "id": "app-preset-deletion-save-recovery",
+      "name": "Reassign preset dependencies before committing deletion",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "923294f6848b0aaf5800aee3b33b1f07a9eb9c3f"
+      },
+      "base_ref": "18661dfab746eb2d1f37e224ef8c4f91841473ff",
+      "oracle_ref": "923294f6848b0aaf5800aee3b33b1f07a9eb9c3f",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/lib/hooks/use-settings.tsx",
+        "apps/screenpipe-app-tauri/lib/ai-preset-deletion.ts",
+        "apps/screenpipe-app-tauri/lib/chat-storage.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "settings",
+        "automation",
+        "persistence",
+        "retry"
+      ],
+      "prompt": "Deleting an AI preset leaves scheduled tasks and saved conversations referring to a preset that no longer exists. Fix the actual settings update path so affected task chains, saved conversations including hidden explicit task destinations, legacy conversation settings, activity settings, open chat selections and the active selection move to a surviving default before deletion is committed. Preserve unrelated presets, wildcard/default task references, conversation content and timestamps, and a newer conversation selection made after dependency discovery. Deduplicate rewritten task chains. Discovery, task-write or conversation-write failures must reject deletion, retain the original durable preset and support retry after partial dependency success without rewriting already-repaired task references. A failed final settings save must not announce committed changes or update active/open selections. Model edits and reordering must not trigger dependency work; empty preset lists must be refused. Concurrent queued unrelated settings updates must preserve both changes. No particular helper name or extraction is required. UI rendering, native filesystem guarantees and retry after a failed final store save are outside this task.",
+      "agent_timeout_seconds": 1200,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/preset-save-recovery.test.js",
+            "destination_path": "evals/coding-agent/graders/preset-save-recovery.test.js"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && \"${BUN_BIN:-bun}\" test ../../evals/coding-agent/graders/preset-save-recovery.test.js"
+      }
+    },
+    {
+      "id": "app-onboarding-fresh-assignment-login",
+      "name": "Resolve absent fresh flags and retain login completion across assignment",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "b2a2b1a8c33cdba993c81d063065b86856f94acb",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/6921"
+      },
+      "base_ref": "590f6e55f57e161d7e66e550bd39bb9e86384481",
+      "oracle_ref": "b2a2b1a8c33cdba993c81d063065b86856f94acb",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/app/onboarding/page.tsx",
+        "apps/screenpipe-app-tauri/components/onboarding/login-gate.tsx"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "onboarding",
+        "auth",
+        "trial",
+        "recovery"
+      ],
+      "prompt": "A fresh desktop login can lose its completion event when experiment assignment temporarily replaces the login screen, and a successful fresh flag response that omits the disabled experiment leaves setup waiting until timeout. Resolve an absent flag from the final authenticated identity immediately to the persisted control route without reporting assignment failure. Record onboarding_login_completed exactly once for a real signed-out to signed-in transition, both with and without assignment, even if the login screen unmounts; settings hydration, an already-authenticated resume, repeated callbacks, and advancing without a new auth transition must not count as another login. Preserve final-identity freshness against cached and earlier in-flight flag responses, explicit loading-error fallback, a pinned route after checkout navigation, and summary-first enrollment for eligible fresh installs with no plan label. Preserve the paid-account fresh-install bypass, never enroll upgraded existing installs after reset, and do not start the standard funnel for managed or resumed onboarding. Keep enrollment telemetry free of email. Exercise the real React page and login screen with synthetic provider/native ports; do not contact live services or change billing, native publication, or recording behavior. No particular internal state variable or telemetry-owner component is required.",
+      "agent_timeout_seconds": 1200,
+      "grader_dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 120,
+        "fixtures": [
+          {
+            "source_ref": "b2a2b1a8c33cdba993c81d063065b86856f94acb",
+            "source_path": "apps/screenpipe-app-tauri/app/onboarding/page.test.tsx"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && NODE_OPTIONS=--localstorage-file=.eval-localstorage bun x vitest run --config vitest.config.ts app/onboarding/page.test.tsx -t 'continues immediately when fresh authenticated flags|records a fresh login once|does not count an authenticated settings hydration|records one fresh login without|does not expose the control checkout|falls back explicitly to control|restores the pinned route|assigns a fresh-install treatment user|uses a paid account only|never enrolls an upgraded free install|does not start the standard funnel for managed|does not start a new funnel when standard onboarding resumes|leaves login completion analytics' --maxWorkers=1 --minWorkers=1"
+      }
+    },
+    {
+      "id": "ai-gateway-glm-bounded-tool-history",
+      "name": "Bound compacted Pi tool history before GLM dispatch",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "7f626da4ffde0e838a022044047a2835660b263d"
+      },
+      "base_ref": "0f2423d2976e04455ac51fde2879f00bbc491cd6",
+      "oracle_ref": "7f626da4ffde0e838a022044047a2835660b263d",
+      "oracle_paths": [
+        "packages/ai-gateway/src/providers/screenpipe-glm.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "ai-gateway",
+        "glm",
+        "context",
+        "streaming"
+      ],
+      "prompt": "Large Pi tool results still exceed the GLM context budget after the gateway compacts its skill catalog. Before both streaming and non-streaming GLM provider dispatch, bound oversized string tool results to at most 8,000 characters when the request has a system/developer available-skills catalog (including text-part arrays) or the subagent function tool. Preserve at least the first and last 128 characters, preserve tool-call/result pairing and message order, and mark the omission with guidance to reread a narrower range. Keep results at or below 8,000 characters unchanged. Preserve user and assistant prose, original input objects, normal completion/stream delivery, model routing, ordinary tools/tool-choice, existing subagent removal, and the useful minimum output allowance for compacted Pi requests. Ordinary clients and requests with catalog text only in a user message must retain their full tool results and intentional small output limits. Other OpenAI-compatible providers must retain their original context. Check the real provider methods and outgoing SDK request with synthetic external ports; no live model calls. Any head/tail allocation satisfying these outcomes is acceptable.",
+      "agent_timeout_seconds": 1200,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/ai-gateway-glm-tool-history.test.js",
+            "destination_path": "evals/coding-agent/graders/ai-gateway-glm-tool-history.test.js"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/ai-gateway-glm-tool-history.test.js"
       }
     }
   ]
