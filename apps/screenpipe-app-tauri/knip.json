@@ -18,6 +18,7 @@
     "scripts/eval-private-ai.ts",
     "scripts/eval-workflow-quality.ts",
     "scripts/eval-workflow-pipeline.ts",
+    "scripts/eval-workflow-workspace.ts",
     "scripts/eval-workflows-context.ts",
     "scripts/**/*.js"
   ],
