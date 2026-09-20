@@ -312,12 +312,14 @@ pub(crate) async fn commit(
             .map_err(|e| error(StatusCode::CONFLICT, &e))?;
         if let Some(id) = body.draft_id.as_deref() {
             if ws["drafts"][id]["status"] == "published" {
+                workspace::publication_payload(&ws, id, body.workflows.first())
+                    .map_err(|e| error(StatusCode::CONFLICT, &e))?;
                 return Ok(Json(ws["drafts"][id]["receipt"].clone()));
             }
-            if body.workflows != vec![ws["drafts"][id]["payload"].clone()] {
+            if body.workflows.len() != 1 {
                 return Err(error(
                     StatusCode::CONFLICT,
-                    "Publish the reviewed draft without replacing its payload.",
+                    "Publish exactly one reviewed workflow for the owned draft.",
                 ));
             }
         } else if !body.workflows.is_empty() {
@@ -457,12 +459,14 @@ pub(crate) async fn commit(
             .map_err(|e| error(StatusCode::CONFLICT, &e))?;
         if let Some(id) = body.draft_id.as_deref() {
             if ws["drafts"][id]["status"] == "published" {
+                workspace::publication_payload(&ws, id, body.workflows.first())
+                    .map_err(|e| error(StatusCode::CONFLICT, &e))?;
                 return Ok(Json(ws["drafts"][id]["receipt"].clone()));
             }
-            if body.workflows != vec![ws["drafts"][id]["payload"].clone()] {
+            if body.workflows.len() != 1 {
                 return Err(error(
                     StatusCode::CONFLICT,
-                    "Publish the reviewed draft without replacing its payload.",
+                    "Publish exactly one reviewed workflow for the owned draft.",
                 ));
             }
         } else if !body.workflows.is_empty() {
@@ -520,7 +524,7 @@ pub(crate) async fn commit(
             next["checkedThrough"] = previous["checkedThrough"].clone();
         }
         let receipt = json!({"revision":next["revision"],"changes":next["changes"],"checkedThrough":next["checkedThrough"]});
-        workspace::published(&mut ws, body.draft_id.as_deref(), &receipt);
+        workspace::published(&mut ws, body.draft_id.as_deref(), body.workflows.first(), &receipt);
         if body.draft_id.is_none() {
             next["changes"] = ws["cycle"]["changes"].clone();
             next["needsWorkflowReview"] = json!(false);

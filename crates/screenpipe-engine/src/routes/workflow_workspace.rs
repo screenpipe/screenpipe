@@ -110,6 +110,12 @@ pub(crate) async fn update(
             None
         };
         workspace::check_publish(&ws, rev, id).map_err(|e| error(StatusCode::CONFLICT, &e))?;
+        let workflows = if let Some(id) = id {
+            vec![workspace::publication_payload(&ws, id, body.get("payload"))
+                .map_err(|e| error(StatusCode::BAD_REQUEST, &e))?]
+        } else {
+            Vec::new()
+        };
         if let Some(id) = id {
             if ws["drafts"][id]["status"] == "published" {
                 return Ok(Json(ws["drafts"][id]["receipt"].clone()));
@@ -118,9 +124,6 @@ pub(crate) async fn update(
         let through = ws["cycle"]["end"]
             .as_str()
             .ok_or_else(|| error(StatusCode::CONFLICT, "Start an update first."))?;
-        let workflows = id
-            .map(|id| vec![ws["drafts"][id]["payload"].clone()])
-            .unwrap_or_default();
         return super::workflow_catalog::commit(
             State(state),
             Extension(source),

@@ -26,7 +26,7 @@ export default function (pi: ExtensionAPI) {
         draft_id: {type:"string", description:"For context, read this draft in full; for writes, the owned draft to change."},
         workflow_id: {type:"string", description:"With context, read one existing catalog workflow in full."},
         assignee: {type:"string", enum: tasks},
-        payload: {type:"object", description:"Draft research or one workflow matching outputContract. Handoff can omit payload to preserve it."},
+        payload: {type:"object", description:"One workflow matching outputContract. With handoff, replaces the draft. With publish, validates and atomically saves this reviewed version; omit to publish the stored draft. Include description and stages with procedure/evidence. note never changes the payload."},
         note: {type:"string", description:"Evidence decision, specific question for the next agent, or what was actually checked. Required for writes."},
       }, required: ["action"], additionalProperties: false,
     } as any,

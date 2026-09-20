@@ -712,6 +712,11 @@ fn meeting_summary_evidence_steps() -> Option<&'static str> {
 /// the shipped pipeline prompts from #7020, #7045, #7071, #7095 and the handoff repairs.
 fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> {
     let shipped_hashes: &[&str] = match name {
+        // v2.7.56: retain observed knowledge work while repairing unsupported outcomes.
+        "workflow-discover" => &["c68d5744f8a33504"],
+        "workflow-deepen" => &["b278bd6a8abcfc77"],
+        "workflow-review" => &["ac29fac407670584"],
+        "workflow-maintain" => &["a769acb2f48eb6c3"],
         "workflow-discovery" => &["9e7b057416c5e119", "57b754f5d27ad27d", "3cb46a10a341de9b"],
         "workflow-activity" => &[
             "f5adb347d838aff7",
@@ -871,6 +876,10 @@ mod tests {
     #[test]
     fn all_staged_workflow_prompts_upgrade_without_changing_user_configuration() {
         let fixtures = [
+            ("workflow-discover", include_str!("../../assets/pipes/legacy-workflow-prompts/before-knowledge-work-workflow-discover.md")),
+            ("workflow-deepen", include_str!("../../assets/pipes/legacy-workflow-prompts/before-knowledge-work-workflow-deepen.md")),
+            ("workflow-review", include_str!("../../assets/pipes/legacy-workflow-prompts/before-knowledge-work-workflow-review.md")),
+            ("workflow-maintain", include_str!("../../assets/pipes/legacy-workflow-prompts/before-knowledge-work-workflow-maintain.md")),
             ("workflow-activity", include_str!("../../assets/pipes/legacy-workflow-prompts/before-shared-runtime-workflow-activity.md")),
             ("workflow-discovery", include_str!("../../assets/pipes/legacy-workflow-prompts/before-resolved-exclusions-workflow-discovery.md")),
             ("workflow-activity", include_str!("../../assets/pipes/legacy-workflow-prompts/before-bounded-activity-workflow-activity.md")),

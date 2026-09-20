@@ -491,7 +491,10 @@ pub fn normalize_procedure(stage: &Value, evidence: &[Value]) -> Vec<Value> {
             }
             let text = non_empty_string(detail, "text")?;
             let quote = non_empty_string(detail, "quote")?;
-            if quote.chars().count() < 12 || quote.chars().count() > 1_200 {
+            // Short user instructions and control labels are valid evidence.
+            // Source identity and exact matching, not character count, establish
+            // provenance; Review still evaluates what the quote actually proves.
+            if quote.chars().count() > 1_200 {
                 return None;
             }
             let timestamp =
@@ -591,7 +594,27 @@ pub fn normalize_analysis(
         .is_some_and(|version| version >= 2);
     let mut normalized = Vec::new();
 
-    for item in raw_workflows.iter().take(MAX_WORKFLOWS) {
+    for (workflow_index, item) in raw_workflows.iter().take(MAX_WORKFLOWS).enumerate() {
+        // Research notes are valid workspace drafts, but not catalog records.
+        // Give the agent a repairable field error, not a semantic rejection.
+        if detailed_contract {
+            let path = format!("workflows[{workflow_index}]");
+            for field in ["title", "description"] {
+                if non_empty_string(item, field).is_none() {
+                    return Err(format!("Incomplete workflow: {path}.{field} must be a non-empty string. Update the draft payload to match outputContract and retry; this is not an evidence or recurrence judgment. No workflow was saved."));
+                }
+            }
+            let stages = item.get("stages").and_then(Value::as_array)
+                .filter(|stages| stages.len() >= 2)
+                .ok_or_else(|| format!("Incomplete workflow: {path}.stages must contain at least two described stages. Research notes alone cannot be published. Update the draft payload to match outputContract and retry. No workflow was saved."))?;
+            for (index, stage) in stages.iter().enumerate() {
+                for field in ["name", "description"] {
+                    if non_empty_string(stage, field).is_none() {
+                        return Err(format!("Incomplete workflow: {path}.stages[{index}].{field} must be a non-empty string. Update the draft payload and retry. No workflow was saved."));
+                    }
+                }
+            }
+        }
         let Some(title) = non_empty_string(item, "title") else {
             continue;
         };
@@ -793,7 +816,7 @@ pub fn normalize_analysis(
             .cloned()
             .collect();
         if detailed_contract && procedural_evidence.is_empty() {
-            continue;
+            return Err(format!("workflows[{workflow_index}] has no stage evidence matching captured screen or input records. Check stages[].evidence timestamp/app references against the original recorder results and retry. Recurrence is not required. No workflow was saved."));
         }
         if !detailed_contract && (evidence.len() < 2 || observed_runs < 2 || direct_days < 2) {
             continue;
@@ -1481,6 +1504,33 @@ mod quote_tests {
     use super::*;
 
     #[test]
+    fn research_notes_get_field_errors_not_a_recurrence_rejection() {
+        let mut draft = json!({"title":"Draft customer replies", "observations":["A draft was prepared"], "evidence":[]});
+        for (field, value, expected) in [
+            ("description", Value::Null, "workflows[0].description"),
+            ("description", json!("Prepare a draft for review"), "workflows[0].stages"),
+            ("stages", json!([{"name":"Request draft"},{"name":"Revise draft"}]), "workflows[0].stages[0].description"),
+        ] {
+            draft[field] = value;
+            let error = normalize_analysis(json!({"evidenceVersion":2,"workflows":[draft]}),90,&EvidenceCatalog::default()).unwrap_err();
+            assert!(error.contains(expected), "{error}");
+            assert!(!error.contains("No repeated workflow"));
+            assert!(error.contains("No workflow was saved"));
+        }
+    }
+
+    #[test]
+    fn missing_source_references_are_not_reported_as_missing_recurrence() {
+        let error = normalize_analysis(json!({"evidenceVersion":2,"workflows":[{
+            "title":"Draft reply", "description":"Prepare and revise a reply",
+            "stages":[{"name":"Draft","description":"Write reply","evidence":[]},
+                      {"name":"Revise","description":"Revise reply","evidence":[]}]
+        }]}),90,&EvidenceCatalog::default()).unwrap_err();
+        assert!(error.contains("stages[].evidence timestamp/app"));
+        assert!(error.contains("Recurrence is not required"));
+    }
+
+    #[test]
     fn one_document_can_support_distinct_steps_without_consuming_its_frame() {
         let timestamp = "2026-09-18T10:00:00Z";
         let catalog = EvidenceCatalog {
@@ -1503,6 +1553,9 @@ mod quote_tests {
         let raw = json!({"evidenceVersion":2,"workflows":[{"title":"Record invoice","description":"Enter and save invoice","stages":stages}]});
         let result = normalize_analysis(raw.clone(), 90, &catalog).unwrap();
         workspace::validate_publication(&raw, &result).unwrap();
+        assert_eq!(result["workflows"][0]["quality"]["distinctDays"], 1);
+        assert!(result["workflows"][0]["limitations"].as_array().unwrap().iter()
+            .any(|v| v.as_str().is_some_and(|s| s.contains("repetition is not established"))));
         assert_eq!(
             result["workflows"][0]["stages"][1]["procedure"]
                 .as_array()
@@ -1528,6 +1581,15 @@ mod quote_tests {
             "quote":"Receipt saved successfully."});
         let stage = json!({"procedure":[step.clone()]});
         assert_eq!(normalize_procedure(&stage, &evidence).len(), 1);
+        let mut short = step.clone();
+        short["quote"] = json!("Return to inbox");
+        assert_eq!(normalize_procedure(&json!({"procedure":[short.clone()]}), &evidence).len(), 1);
+        short["quote"] = json!("Receipt");
+        assert_eq!(normalize_procedure(&json!({"procedure":[short.clone()]}), &evidence).len(), 1);
+        for quote in ["", "   ", "draft reply"] {
+            short["quote"] = json!(quote);
+            assert!(normalize_procedure(&json!({"procedure":[short.clone()]}), &evidence).is_empty());
+        }
         for (key, value) in [
             ("quote", "Invoice saved successfully."),
             ("quote", "Receipt ... successfully."),
