@@ -74,3 +74,24 @@ test("oversized selected context is preserved in a private readable snapshot",as
   expect(statSync(pointer.path).mode & 0o777).toBe(0o600);
   expect(pointer.revision).toBe(7);expect(pointer.catalogRevision).toBe(4);
 });
+
+test("mistyped draft selectors return exact owned ids without substituting or writing",async()=>{
+  contextFixture();
+  const result=await tool.execute("id",{action:"context",draft_id:"draft-b"},new AbortController().signal);
+  expect(result.isError).toBe(true);
+  expect(result.content[0].text).toContain('"id":"draft-a"');
+  expect(result.content[0].text).toContain("Invoice review");
+  expect(result.details.saved).toBe(false);
+});
+test("unknown draft write returns exact candidates but never retries the mutation",async()=>{
+  let writes=0;
+  server.reload({fetch:(req:Request)=>{
+    if(req.method==="POST"){writes++;return Response.json({error:"Draft not found."},{status:409});}
+    return Response.json({workspace:{drafts:{a:{id:"exact-id",status:"open",assignee:"workflow-review",payload:{title:"Review invoice"}},b:{id:"other-owner",status:"open",assignee:"workflow-deepen"}}}});
+  }});
+  const result=await tool.execute("id",{action:"handoff",draft_id:"typo",note:"repair"},new AbortController().signal);
+  expect(result.isError).toBe(true);expect(writes).toBe(1);
+  expect(result.content[0].text).toContain("exact-id");
+  expect(result.content[0].text).not.toContain("other-owner");
+  expect(result.details.saved).toBe(false);
+});
