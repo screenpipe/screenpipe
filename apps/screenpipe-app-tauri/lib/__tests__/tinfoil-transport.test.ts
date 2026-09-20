@@ -37,8 +37,10 @@ describe("GLM verified client transport", () => {
     expect(visible).toContain("/search?start_time=...&end_time=...&content_type=all");
     expect(visible).toContain("content.transcription");
     expect(visible).toContain("Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY");
-    expect(visible).toContain("expected_revision, input_revision, checked_through, items, coverage");
-    expect(visible).toContain("with `JSON.stringify`");
+    expect(visible).toContain("`workflow_workspace`");
+    expect(visible).toContain("all workflow saves");
+    expect(visible).toContain("Read `screenpipe-workflow-maintenance`");
+    expect(visible).toContain("request a draft_id or workflow_id");
     expect(visible).toContain("read that section in a bounded range");
   });
 
