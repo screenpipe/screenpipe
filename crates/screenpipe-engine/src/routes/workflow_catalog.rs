@@ -524,7 +524,12 @@ pub(crate) async fn commit(
             next["checkedThrough"] = previous["checkedThrough"].clone();
         }
         let receipt = json!({"revision":next["revision"],"changes":next["changes"],"checkedThrough":next["checkedThrough"]});
-        workspace::published(&mut ws, body.draft_id.as_deref(), body.workflows.first(), &receipt);
+        workspace::published(
+            &mut ws,
+            body.draft_id.as_deref(),
+            body.workflows.first(),
+            &receipt,
+        );
         if body.draft_id.is_none() {
             next["changes"] = ws["cycle"]["changes"].clone();
             next["needsWorkflowReview"] = json!(false);

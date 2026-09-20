@@ -135,7 +135,10 @@ pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, Strin
             }
             if change.action == "handoff"
                 && assignee == task
-                && change.payload.as_ref().is_none_or(|payload| payload == &old["payload"])
+                && change
+                    .payload
+                    .as_ref()
+                    .is_none_or(|payload| payload == &old["payload"])
             {
                 return Err("This self-handoff does not edit the draft. Supply the changed workflow object in payload, or hand the draft to another agent with a question. note is commentary only; it never changes description, stages or procedure. No changes were saved.".into());
             }
@@ -207,7 +210,11 @@ pub fn check_publish(ws: &Value, rev: u64, id: Option<&str>) -> Result<(), Strin
     }
     Ok(())
 }
-pub fn publication_payload(ws: &Value, id: &str, proposed: Option<&Value>) -> Result<Value, String> {
+pub fn publication_payload(
+    ws: &Value,
+    id: &str,
+    proposed: Option<&Value>,
+) -> Result<Value, String> {
     if ws["drafts"][id]["status"] == "published"
         && proposed.is_some_and(|payload| payload != &ws["drafts"][id]["payload"])
     {
@@ -215,7 +222,9 @@ pub fn publication_payload(ws: &Value, id: &str, proposed: Option<&Value>) -> Re
     }
     let payload = proposed.unwrap_or(&ws["drafts"][id]["payload"]);
     if !payload.is_object() {
-        return Err("Publication payload must be a workflow object matching outputContract.".into());
+        return Err(
+            "Publication payload must be a workflow object matching outputContract.".into(),
+        );
     }
     Ok(payload.clone())
 }
@@ -305,31 +314,57 @@ mod tests {
         let mut ws = empty();
         start(&mut ws, &json!({}));
         let proposal = change("propose", &ws, None, Some(TASKS[2]));
-        let id = apply(&mut ws, TASKS[0], &proposal).unwrap()["draft_id"].as_str().unwrap().to_owned();
+        let id = apply(&mut ws, TASKS[0], &proposal).unwrap()["draft_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         let original = ws.clone();
         let edited = json!({"title":"Observed drafting only", "description":"Delivery is unverified", "stages":[]});
-        assert_eq!(publication_payload(&ws, &id, None).unwrap(), ws["drafts"][&id]["payload"]);
-        assert_eq!(publication_payload(&ws, &id, Some(&edited)).unwrap(), edited);
+        assert_eq!(
+            publication_payload(&ws, &id, None).unwrap(),
+            ws["drafts"][&id]["payload"]
+        );
+        assert_eq!(
+            publication_payload(&ws, &id, Some(&edited)).unwrap(),
+            edited
+        );
         for invalid in [Value::Null, json!("notes"), json!([])] {
             assert!(publication_payload(&ws, &id, Some(&invalid)).is_err());
         }
         assert_eq!(ws, original); // validation alone never edits durable state
-        published(&mut ws, Some(&id), Some(&edited), &json!({"changes":{"created":1}}));
+        published(
+            &mut ws,
+            Some(&id),
+            Some(&edited),
+            &json!({"changes":{"created":1}}),
+        );
         assert_eq!(ws["drafts"][&id]["payload"], edited);
-        assert_eq!(publication_payload(&ws, &id, Some(&edited)).unwrap(), edited);
-        assert!(publication_payload(&ws, &id, Some(&proposal.payload.unwrap())).unwrap_err().contains("different payload"));
+        assert_eq!(
+            publication_payload(&ws, &id, Some(&edited)).unwrap(),
+            edited
+        );
+        assert!(
+            publication_payload(&ws, &id, Some(&proposal.payload.unwrap()))
+                .unwrap_err()
+                .contains("different payload")
+        );
     }
     #[test]
     fn self_handoff_requires_a_real_edit_but_research_handoffs_preserve_payload() {
         let mut ws = empty();
         start(&mut ws, &json!({}));
         let proposed = change("propose", &ws, None, Some(TASKS[2]));
-        let id = apply(&mut ws, TASKS[0], &proposed).unwrap()["draft_id"].as_str().unwrap().to_owned();
+        let id = apply(&mut ws, TASKS[0], &proposed).unwrap()["draft_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         let before = ws.clone();
         let mut edit = change("handoff", &ws, Some(id.clone()), Some(TASKS[2]));
         for payload in [None, Some(before["drafts"][&id]["payload"].clone())] {
             edit.payload = payload;
-            assert!(apply(&mut ws, TASKS[2], &edit).unwrap_err().contains("note is commentary only"));
+            assert!(apply(&mut ws, TASKS[2], &edit)
+                .unwrap_err()
+                .contains("note is commentary only"));
             assert_eq!(ws, before);
         }
         edit.payload = Some(json!({"title":"Corrected workflow", "stages":[]}));

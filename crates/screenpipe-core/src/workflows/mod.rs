@@ -1508,11 +1508,24 @@ mod quote_tests {
         let mut draft = json!({"title":"Draft customer replies", "observations":["A draft was prepared"], "evidence":[]});
         for (field, value, expected) in [
             ("description", Value::Null, "workflows[0].description"),
-            ("description", json!("Prepare a draft for review"), "workflows[0].stages"),
-            ("stages", json!([{"name":"Request draft"},{"name":"Revise draft"}]), "workflows[0].stages[0].description"),
+            (
+                "description",
+                json!("Prepare a draft for review"),
+                "workflows[0].stages",
+            ),
+            (
+                "stages",
+                json!([{"name":"Request draft"},{"name":"Revise draft"}]),
+                "workflows[0].stages[0].description",
+            ),
         ] {
             draft[field] = value;
-            let error = normalize_analysis(json!({"evidenceVersion":2,"workflows":[draft]}),90,&EvidenceCatalog::default()).unwrap_err();
+            let error = normalize_analysis(
+                json!({"evidenceVersion":2,"workflows":[draft]}),
+                90,
+                &EvidenceCatalog::default(),
+            )
+            .unwrap_err();
             assert!(error.contains(expected), "{error}");
             assert!(!error.contains("No repeated workflow"));
             assert!(error.contains("No workflow was saved"));
@@ -1521,11 +1534,16 @@ mod quote_tests {
 
     #[test]
     fn missing_source_references_are_not_reported_as_missing_recurrence() {
-        let error = normalize_analysis(json!({"evidenceVersion":2,"workflows":[{
-            "title":"Draft reply", "description":"Prepare and revise a reply",
-            "stages":[{"name":"Draft","description":"Write reply","evidence":[]},
-                      {"name":"Revise","description":"Revise reply","evidence":[]}]
-        }]}),90,&EvidenceCatalog::default()).unwrap_err();
+        let error = normalize_analysis(
+            json!({"evidenceVersion":2,"workflows":[{
+                "title":"Draft reply", "description":"Prepare and revise a reply",
+                "stages":[{"name":"Draft","description":"Write reply","evidence":[]},
+                          {"name":"Revise","description":"Revise reply","evidence":[]}]
+            }]}),
+            90,
+            &EvidenceCatalog::default(),
+        )
+        .unwrap_err();
         assert!(error.contains("stages[].evidence timestamp/app"));
         assert!(error.contains("Recurrence is not required"));
     }
@@ -1554,8 +1572,13 @@ mod quote_tests {
         let result = normalize_analysis(raw.clone(), 90, &catalog).unwrap();
         workspace::validate_publication(&raw, &result).unwrap();
         assert_eq!(result["workflows"][0]["quality"]["distinctDays"], 1);
-        assert!(result["workflows"][0]["limitations"].as_array().unwrap().iter()
-            .any(|v| v.as_str().is_some_and(|s| s.contains("repetition is not established"))));
+        assert!(result["workflows"][0]["limitations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v
+                .as_str()
+                .is_some_and(|s| s.contains("repetition is not established"))));
         assert_eq!(
             result["workflows"][0]["stages"][1]["procedure"]
                 .as_array()
@@ -1583,12 +1606,20 @@ mod quote_tests {
         assert_eq!(normalize_procedure(&stage, &evidence).len(), 1);
         let mut short = step.clone();
         short["quote"] = json!("Return to inbox");
-        assert_eq!(normalize_procedure(&json!({"procedure":[short.clone()]}), &evidence).len(), 1);
+        assert_eq!(
+            normalize_procedure(&json!({"procedure":[short.clone()]}), &evidence).len(),
+            1
+        );
         short["quote"] = json!("Receipt");
-        assert_eq!(normalize_procedure(&json!({"procedure":[short.clone()]}), &evidence).len(), 1);
+        assert_eq!(
+            normalize_procedure(&json!({"procedure":[short.clone()]}), &evidence).len(),
+            1
+        );
         for quote in ["", "   ", "draft reply"] {
             short["quote"] = json!(quote);
-            assert!(normalize_procedure(&json!({"procedure":[short.clone()]}), &evidence).is_empty());
+            assert!(
+                normalize_procedure(&json!({"procedure":[short.clone()]}), &evidence).is_empty()
+            );
         }
         for (key, value) in [
             ("quote", "Invoice saved successfully."),
