@@ -95,7 +95,10 @@ export default function (pi: ExtensionAPI) {
         // research steps or treating an incomplete investigation as finished.
         result = {...result, observedAt:new Date().toISOString()};
         const text = JSON.stringify(result);
-        if (text.length > 24_000) {
+        // Use the existing snapshot path before the smallest supported
+        // transport's 8K text boundary can cut JSON in the middle. Preserve the
+        // full context for both modes, without choosing what the agent reads.
+        if (text.length > 8_000) {
           // Preserve the exact snapshot. The normal read tool supports bounded
           // reads; a truncated preview is never a substitute for agent context.
           const path = join(process.cwd(),`.workflow-context-${randomUUID()}.json`);

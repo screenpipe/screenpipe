@@ -5,6 +5,7 @@ import { mkdtempSync, writeFileSync, readFileSync, statSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import extension from "./workflow-workspace";
+import { compactGlmToolResultText } from "./lib/glm-protocol";
 let cwd:string, dir:string, originalTask:string|undefined, tool:any, server:any, requests:any[];
 beforeEach(()=>{
   cwd=process.cwd();originalTask=process.env.SCREENPIPE_PIPE_NAME;
@@ -72,6 +73,18 @@ test("oversized selected context is preserved in a private readable snapshot",as
   expect(JSON.parse(readFileSync(pointer.path,"utf8")).draft).toEqual(draft);
   expect(statSync(pointer.path).mode & 0o777).toBe(0o600);
   expect(pointer.revision).toBe(7);expect(pointer.catalogRevision).toBe(4);
+});
+test("medium context survives the Private transport with an exact snapshot",async()=>{
+  const {draft}=contextFixture({title:"Invoice review",evidence:"source fragment ".repeat(800)});
+  const result=await tool.execute("id",{action:"context",draft_id:"draft-a"},new AbortController().signal);
+  // The native failure lived between the old 24K inline limit and Private's
+  // 8K tool-text limit: its JSON became unparseable, with no snapshot to read.
+  const delivered=compactGlmToolResultText(result.content[0].text);
+  const pointer=JSON.parse(delivered);
+  expect(delivered).toBe(result.content[0].text);
+  expect(JSON.parse(readFileSync(pointer.path,"utf8")).draft).toEqual(draft);
+  expect(pointer.revision).toBe(7);
+  expect(pointer.catalogRevision).toBe(4);
 });
 
 test("mistyped draft selectors return exact owned ids without substituting or writing",async()=>{
