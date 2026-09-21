@@ -9,6 +9,221 @@ use screenpipe_db::{
 };
 use std::path::Path;
 
+const RECOVERY_KEY: [u8; 32] = [7; 32];
+
+async fn credential_source(root: &Path) {
+    use screenpipe_secrets::{secrets_database_path, shared_secret_pool, SecretStore};
+    // Seal the old one-time import before a legacy process recreates db.sqlite.
+    let dedicated = SecretStore::open_for_data_dir(root, Some(RECOVERY_KEY))
+        .await
+        .unwrap();
+    dedicated
+        .set("dedicated-newer", b"current token")
+        .await
+        .unwrap();
+    dedicated.set("source-newer", b"old token").await.unwrap();
+    let pool = shared_secret_pool(secrets_database_path(root).to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE secrets SET updated_at=CASE key WHEN 'dedicated-newer' THEN '2026-09-21' ELSE '2026-09-19' END")
+        .execute(&pool).await.unwrap();
+    pool.close().await;
+
+    let source = root.join("db.sqlite");
+    let store = SecretStore::open(source.to_str().unwrap(), Some(RECOVERY_KEY))
+        .await
+        .unwrap();
+    store
+        .set("recovered-only", b"preserved token")
+        .await
+        .unwrap();
+    store.set("dedicated-newer", b"stale token").await.unwrap();
+    store.set("source-newer", b"refreshed token").await.unwrap();
+    let pool = shared_secret_pool(source.to_str().unwrap()).await.unwrap();
+    sqlx::query("UPDATE secrets SET created_at='2026-09-14', updated_at='2026-09-20', expires_at='2099-01-01'")
+        .execute(&pool).await.unwrap();
+    pool.close().await;
+}
+
+async fn verify_recovered_credentials(root: &Path) {
+    use screenpipe_secrets::{secrets_database_path, shared_secret_pool, SecretStore};
+    let path = secrets_database_path(root);
+    shared_secret_pool(path.to_str().unwrap())
+        .await
+        .unwrap()
+        .close()
+        .await;
+    let store = SecretStore::open_for_data_dir(root, Some(RECOVERY_KEY))
+        .await
+        .unwrap();
+    for (key, expected) in [
+        ("recovered-only", "preserved token"),
+        ("dedicated-newer", "current token"),
+        ("source-newer", "refreshed token"),
+    ] {
+        assert_eq!(store.get(key).await.unwrap().unwrap(), expected.as_bytes());
+    }
+    let pool = shared_secret_pool(path.to_str().unwrap()).await.unwrap();
+    let dates: (String, String, String) = sqlx::query_as(
+        "SELECT created_at,updated_at,expires_at FROM secrets WHERE key='recovered-only'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        dates,
+        (
+            "2026-09-14".into(),
+            "2026-09-20".into(),
+            "2099-01-01".into()
+        )
+    );
+    pool.close().await;
+
+    let descriptor = screenpipe_db::storage::StorageDescriptor::read(root)
+        .unwrap()
+        .unwrap();
+    let retained: Vec<_> = std::fs::read_dir(root.join(descriptor.index).parent().unwrap())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("recovered-secrets-source-")
+        })
+        .collect();
+    assert_eq!(retained.len(), 1);
+    let conn = rusqlite::Connection::open_with_flags(
+        retained[0].path(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM secrets", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn retry_recovers_credentials_only_source_and_preserves_newer_secrets() {
+    for (active, startup_recovery) in [(false, false), (true, false), (false, true)] {
+        let root = paused_before_activation().await;
+        if active {
+            recover_interrupted_migration(root.path(), Default::default())
+                .await
+                .unwrap();
+        }
+        credential_source(root.path()).await;
+        if startup_recovery {
+            recover_interrupted_migration(root.path(), Default::default())
+                .await
+                .unwrap();
+            assert!(root.path().join("storage-migration.json").is_file());
+            assert!(!root.path().join("storage-migration-complete.json").exists());
+        }
+        finish_and_verify(root.path()).await;
+        verify_recovered_credentials(root.path()).await;
+    }
+}
+
+#[tokio::test]
+async fn credentials_recovery_survives_copy_and_retirement_interruptions() {
+    for point in [
+        "migration_source_secrets_copied",
+        "migration_source_retired",
+    ] {
+        let root = paused_before_activation().await;
+        recover_interrupted_migration(root.path(), Default::default())
+            .await
+            .unwrap();
+        credential_source(root.path()).await;
+        crash_migration(root.path(), point);
+        finish_and_verify(root.path()).await;
+        verify_recovered_credentials(root.path()).await;
+    }
+}
+
+#[tokio::test]
+async fn failed_credential_recovery_is_atomic_and_retryable() {
+    use screenpipe_secrets::{secrets_database_path, shared_secret_pool};
+    let root = paused_before_activation().await;
+    credential_source(root.path()).await;
+    let source = root.path().join("db.sqlite");
+    let before = std::fs::read(&source).unwrap();
+    let journal = std::fs::read(root.path().join("storage-migration.json")).unwrap();
+    let pool = shared_secret_pool(secrets_database_path(root.path()).to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::query("CREATE TRIGGER refuse_recovery BEFORE INSERT ON secrets WHEN NEW.key='source-newer' BEGIN SELECT RAISE(ABORT,'credential destination refused write'); END")
+        .execute(&pool).await.unwrap();
+    let error = migrate(root.path(), Default::default(), Default::default())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("credential destination refused write"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), before);
+    assert_eq!(
+        std::fs::read(root.path().join("storage-migration.json")).unwrap(),
+        journal
+    );
+    let partial: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM secrets WHERE key='recovered-only')")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!partial, "failed import must roll back every credential");
+    sqlx::query("DROP TRIGGER refuse_recovery")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    finish_and_verify(root.path()).await;
+    verify_recovered_credentials(root.path()).await;
+}
+
+#[tokio::test]
+async fn credentials_do_not_hide_other_source_history() {
+    use screenpipe_secrets::{secrets_database_path, shared_secret_pool};
+    let root = paused_before_activation().await;
+    credential_source(root.path()).await;
+    let source = root.path().join("db.sqlite");
+    {
+        let conn = rusqlite::Connection::open(&source).unwrap();
+        conn.execute_batch("CREATE TABLE extension_history(text TEXT); INSERT INTO extension_history VALUES('additional history')").unwrap();
+    }
+    let before = std::fs::read(&source).unwrap();
+    let error = migrate(root.path(), Default::default(), Default::default())
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("source contains recorded history in extension_history"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(source).unwrap(), before);
+    let pool = shared_secret_pool(secrets_database_path(root.path()).to_str().unwrap())
+        .await
+        .unwrap();
+    let imported: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM secrets WHERE key='recovered-only')")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        !imported,
+        "validate every source table before importing credentials"
+    );
+    pool.close().await;
+}
+
 async fn seed(path: &Path, text: Option<&str>) {
     let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
         .await
@@ -206,7 +421,7 @@ async fn conflicting_nonempty_source_is_preserved_and_diagnosed() {
 async fn retry_resumes_if_interrupted_after_retaining_the_empty_source() {
     let root = paused_before_activation().await;
     recreate_old_retry(root.path()).await;
-    crash_migration(root.path(), "migration_empty_source_retired");
+    crash_migration(root.path(), "migration_source_retired");
     assert!(!root.path().join("db.sqlite").exists());
     // An explicit retry must also work without another startup recovery first.
     finish_and_verify(root.path()).await;

@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-use sqlx::{Row, SqlitePool};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow};
+use sqlx::{Row, SqliteConnection, SqlitePool};
 use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 
 use crate::crypto;
@@ -25,6 +25,8 @@ use screenpipe_sqlite_coordinator::{
 pub const SECRETS_DATABASE_FILENAME: &str = "secrets.sqlite";
 const LEGACY_DATABASE_FILENAME: &str = "db.sqlite";
 const LEGACY_MIGRATION_KEY: &str = "legacy_main_db_migrated_v1";
+const LEGACY_SECRET_ROWS: &str =
+    "SELECT key, value, nonce, created_at, updated_at, expires_at FROM secrets";
 
 pub fn secrets_database_path(data_dir: impl AsRef<Path>) -> PathBuf {
     data_dir.as_ref().join(SECRETS_DATABASE_FILENAME)
@@ -326,6 +328,39 @@ impl SecretStore {
         Self::open_for_data_dir(data_dir, key).await
     }
 
+    /// Import credentials from a recreated legacy source before storage recovery
+    /// retains that file. The caller must hold exclusive source ownership until
+    /// retirement. Replays deliberately bypass the one-time import marker: an
+    /// older process may have written these rows after that import completed.
+    /// Ciphertext, nonces and expiry are copied unchanged without a vault key.
+    pub async fn recover_legacy_source(
+        data_dir: &Path,
+        source: &mut SqliteConnection,
+    ) -> Result<()> {
+        let legacy_path = data_dir.join(LEGACY_DATABASE_FILENAME);
+        if let Some(code) = registered_sqlite_hard_fault(&legacy_path) {
+            anyhow::bail!("legacy credential source needs verification (SQLite code {code})");
+        }
+        let rows = sqlx::query(LEGACY_SECRET_ROWS).fetch_all(source).await;
+        if let Err(error) = &rows {
+            latch_sqlite_error(&legacy_path, error);
+        }
+        let rows = rows.context("failed to read legacy secrets")?;
+        let path = secrets_database_path(data_dir);
+        let store = Self::open(&path.to_string_lossy(), None).await?;
+        crate::migration::fix_secret_file_permissions(data_dir);
+        let (pool, write_lock) = store.operation_database().await?;
+        let _write_permit = acquire_write_permit(&write_lock).await?;
+        let mut transaction = store
+            .observe(pool.begin().await)
+            .context("failed to begin credential recovery")?;
+        store.copy_legacy_rows(&mut transaction, rows).await?;
+        store
+            .observe(transaction.commit().await)
+            .context("failed to commit credential recovery")?;
+        Ok(())
+    }
+
     async fn migrate_legacy_main_database(&self, legacy_path: &Path) -> Result<()> {
         let (pool, write_lock) = self.operation_database().await?;
         let _write_permit = acquire_write_permit(&write_lock).await?;
@@ -394,11 +429,9 @@ impl SecretStore {
                 }
             };
             let rows = if has_table {
-                match sqlx::query(
-                    "SELECT key, value, nonce, created_at, updated_at, expires_at FROM secrets",
-                )
-                .fetch_all(&legacy_pool)
-                .await
+                match sqlx::query(LEGACY_SECRET_ROWS)
+                    .fetch_all(&legacy_pool)
+                    .await
                 {
                     Ok(rows) => rows,
                     Err(error) => {
@@ -419,6 +452,24 @@ impl SecretStore {
         let mut transaction = self
             .observe(pool.begin().await)
             .context("failed to begin legacy secret migration")?;
+        self.copy_legacy_rows(&mut transaction, rows).await?;
+        self.observe(
+            sqlx::query("INSERT INTO secret_store_metadata (key, value) VALUES (?, 'complete')")
+                .bind(LEGACY_MIGRATION_KEY)
+                .execute(&mut *transaction)
+                .await,
+        )
+        .context("failed to seal legacy secret migration")?;
+        self.observe(transaction.commit().await)
+            .context("failed to commit legacy secret migration")?;
+        Ok(())
+    }
+
+    async fn copy_legacy_rows(
+        &self,
+        transaction: &mut SqliteConnection,
+        rows: Vec<SqliteRow>,
+    ) -> Result<()> {
         for row in rows {
             self.observe(
                 sqlx::query(
@@ -443,15 +494,6 @@ impl SecretStore {
             )
             .context("failed to copy a legacy secret")?;
         }
-        self.observe(
-            sqlx::query("INSERT INTO secret_store_metadata (key, value) VALUES (?, 'complete')")
-                .bind(LEGACY_MIGRATION_KEY)
-                .execute(&mut *transaction)
-                .await,
-        )
-        .context("failed to seal legacy secret migration")?;
-        self.observe(transaction.commit().await)
-            .context("failed to commit legacy secret migration")?;
         Ok(())
     }
 

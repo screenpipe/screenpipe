@@ -864,6 +864,83 @@ mod tests {
         .await;
     }
 
+    #[tokio::test]
+    async fn migration_credential_failure_reaches_support_after_log_rotation_and_redaction() {
+        use screenpipe_db::{storage, DatabaseManager};
+        use screenpipe_secrets::{secrets_database_path, shared_secret_pool, SecretStore};
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("db.sqlite");
+        let db = DatabaseManager::new(source.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        db.execute_raw_sql_write(
+            "INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-09-20','private history')",
+        )
+        .await
+        .unwrap();
+        db.close().await;
+        let report = storage::migrate(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap();
+        let descriptor = storage::StorageDescriptor::read(root.path())
+            .unwrap()
+            .unwrap();
+        SecretStore::open_for_data_dir(root.path(), None)
+            .await
+            .unwrap();
+        let pool = shared_secret_pool(secrets_database_path(root.path()).to_str().unwrap())
+            .await
+            .unwrap();
+        pool.close().await;
+        rusqlite::Connection::open(secrets_database_path(root.path()))
+            .unwrap()
+            .execute_batch("CREATE TRIGGER refuse_recovery BEFORE INSERT ON secrets BEGIN SELECT RAISE(ABORT,'credential destination refused write'); END")
+            .unwrap();
+        let legacy = SecretStore::open(source.to_str().unwrap(), None)
+            .await
+            .unwrap();
+        legacy
+            .set("recovered-token", b"private history")
+            .await
+            .unwrap();
+        shared_secret_pool(source.to_str().unwrap())
+            .await
+            .unwrap()
+            .close()
+            .await;
+        std::fs::write(
+            root.path().join("storage-migration.json"),
+            serde_json::to_vec(&json!({
+                "format": 2, "phase": "paused", "descriptor": descriptor,
+                "source": report.tables, "snapshot": null, "report": null
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let error = storage::migrate(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("credential destination refused write"),
+            "{error}"
+        );
+        assert!(source.is_file());
+        assert_migration_failure_uploaded(
+            root.path(),
+            &[
+                "credential destination refused write",
+                "recovering_migration_secrets",
+                "\"table\": \"secrets\"",
+                "\"status\": \"failed\"",
+                "\"source_exists\": true",
+                "\"index_exists\": true",
+            ],
+        )
+        .await;
+    }
+
     async fn assert_migration_failure_uploaded(root: &std::path::Path, expected: &[&str]) {
         timeout(Duration::from_secs(3), async {
             loop {
@@ -893,6 +970,7 @@ mod tests {
             );
         }
         assert!(!redacted.contains("private history"));
+        assert!(!redacted.contains("cHJpdmF0ZSBoaXN0b3J5"));
 
         let server = MockServer::start().await;
         Mock::given(method("POST"))

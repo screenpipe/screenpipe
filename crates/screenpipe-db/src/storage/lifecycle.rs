@@ -382,9 +382,9 @@ async fn reconcile_migration_source(root: &Path, journal: &mut Journal) -> Resul
         return Ok(());
     }
 
-    // Older explicit retries could create an empty legacy database while the
-    // real index was awaiting descriptor publication. Only retire that empty
-    // artifact, and only beside an index with this journal's stored identity.
+    // Older retries/credential writers could recreate the legacy database while
+    // the real history was in this journal's index. Retire only an empty or
+    // credentials-only source, preserving its file and any credentials first.
     crate::db::register_sqlite_extensions()?;
     let _index_owner = screenpipe_sqlite_coordinator::acquire_sqlite_manager_lease(&index)
         .map_err(storage_error)?;
@@ -422,47 +422,63 @@ async fn reconcile_migration_source(root: &Path, journal: &mut Journal) -> Resul
             .busy_timeout(std::time::Duration::from_secs(5)),
     )
     .await?;
-    let empty = async {
+    let recoverable = async {
         sqlx::query("BEGIN EXCLUSIVE").execute(&mut conn).await?;
         // Shadow tables belong to their virtual table. Query every logical
         // table, including unknown extensions, rather than just frames/audio.
         // SQLite statistics/sequences and SQLx's ledger contain no history.
+        // Credentials are handled separately only after all tables are checked.
         let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_list WHERE schema='main' AND type!='shadow' AND name NOT GLOB 'sqlite_*' AND name!='_sqlx_migrations'")
             .fetch_all(&mut conn).await?;
+        let mut has_secrets = false;
         for table in tables {
             let populated: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)", quote(&table))))
                 .fetch_one(&mut conn).await?;
             if populated {
+                if table == "secrets" {
+                    has_secrets = true;
+                    continue;
+                }
                 super::diagnostics::batch(&table, None, None, None, None);
                 return Err(storage_error(format!("migration source conflicts with existing index: source contains recorded history in {table}; both files have been kept")));
             }
         }
+        if has_secrets {
+            super::diagnostics::stage("recovering_migration_secrets");
+            super::diagnostics::batch("secrets", None, None, None, None);
+            screenpipe_secrets::SecretStore::recover_legacy_source(root, &mut conn)
+                .await
+                .map_err(|error| storage_error(format!("credential recovery failed: {error:#}; both files have been kept")))?;
+            super::faults::checkpoint("migration_source_secrets_copied");
+        }
+        super::diagnostics::stage("retaining_migration_source");
         sqlx::query("COMMIT").execute(&mut conn).await?;
         // Checkpoint before moving the closed file; never orphan a WAL.
         let mode: String = sqlx::query_scalar("PRAGMA journal_mode=DELETE").fetch_one(&mut conn).await?;
         if mode != "delete" {
-            return Err(storage_error("empty migration source is still in use; both files have been kept"));
+            return Err(storage_error("migration source is still in use; both files have been kept"));
         }
-        Ok::<_, sqlx::Error>(())
+        Ok::<_, sqlx::Error>(has_secrets)
     }.await;
-    if let Err(error) = &empty {
+    if let Err(error) = &recoverable {
         super::diagnostics::failure(error);
     }
     conn.close().await?;
-    empty?;
+    let has_secrets = recoverable?;
     // The old retry may have overwritten receipts with the empty DB's counts.
     // Persist the need to refresh them before moving anything, so interruption
     // after the rename cannot make a later retry trust those stale receipts.
     journal.phase = Phase::Paused;
     durable_json(&root.join("storage-migration.json"), journal)?;
     let retained = index.parent().unwrap().join(format!(
-        "recovered-empty-source-{}.sqlite",
+        "recovered-{}-source-{}.sqlite",
+        if has_secrets { "secrets" } else { "empty" },
         uuid::Uuid::new_v4()
     ));
     std::fs::rename(&source_path, &retained)?;
     sync_directory(index.parent().unwrap())?;
     sync_directory(root)?;
-    super::faults::checkpoint("migration_empty_source_retired");
+    super::faults::checkpoint("migration_source_retired");
     Ok(())
 }
 
