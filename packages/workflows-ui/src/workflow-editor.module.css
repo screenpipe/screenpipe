@@ -45,7 +45,7 @@
 .stepTop { padding-right: 30px; position: relative; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: start; }
 .number { padding-top: 7px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .step .title { min-width: 0; font-size: 17px; font-weight: 550; line-height: 1.4; }
-.step > textarea { width: calc(100% - 24px); margin-left: 24px; }
+.step > textarea, .step > div[data-testid="procedure-markdown"] { width: calc(100% - 24px); margin-left: 24px; }
 .editor .grip { cursor: grab; color: var(--muted); }
 .editor .grip:active { cursor: grabbing; }
 .stepTop > .grip { position: absolute; left: -30px; top: 0; }
@@ -68,7 +68,7 @@
 .block::before { content: ""; position: absolute; left: -30px; top: 0; bottom: 0; width: 30px; }
 .blockControls { position: absolute; left: -30px; top: 1px; }
 .blockControls[data-open] { z-index: 5; }
-.block textarea { min-width: 0; grid-column: 1; grid-row: 1; }
+.block textarea, .block > div[data-testid="procedure-markdown"] { min-width: 0; grid-column: 1; grid-row: 1; }
 .kindLabel { grid-column: 2; grid-row: 1; padding: 8px 4px; font-size: 11px; line-height: 1.4; color: var(--muted); pointer-events: none; }
 .blockMenu { position: absolute; left: 0; top: 29px; box-sizing: border-box; width: 200px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 4px 12px #00000012; }
 .blockMenu label { display: block; padding: 4px; font-size: 11px; color: var(--muted); }
@@ -96,10 +96,10 @@
   .intro .title { font-size: 25px; }
   .steps { padding-left: 24px; }
   .stepTop { grid-template-columns: 20px minmax(0, 1fr) auto; }
-  .step > textarea { width: calc(100% - 20px); margin-left: 20px; }
+  .step > textarea, .step > div[data-testid="procedure-markdown"] { width: calc(100% - 20px); margin-left: 20px; }
   .blocks { margin-left: 20px; }
   .source { margin-left: 25px; }
   .block { grid-template-columns: minmax(0, 1fr); }
-  .block textarea { grid-column: 1; grid-row: 1; }
+  .block textarea, .block > div[data-testid="procedure-markdown"] { grid-column: 1; grid-row: 1; }
   .kindLabel { grid-column: 1; grid-row: 2; padding: 0 5px 3px; }
 }

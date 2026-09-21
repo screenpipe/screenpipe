@@ -19,6 +19,7 @@ import {
   type WorkflowEdit,
   type StageEdit,
 } from "./workflow-edits";
+import { WorkflowRichText } from "./rich-text";
 import styles from "./workflow-editor.module.css";
 
 function Text({
@@ -27,12 +28,14 @@ function Text({
   onChange,
   title = false,
   placeholder = label,
+  rich = false,
 }: {
   label: string;
   value: string;
   onChange: (text: string) => void;
   title?: boolean;
   placeholder?: string;
+  rich?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
@@ -53,6 +56,7 @@ function Text({
     observer.observe(field);
     return () => observer.disconnect();
   }, [value]);
+  if (rich) return <WorkflowRichText label={label} value={value} onChange={onChange} placeholder={placeholder} maxLength={8000} />;
   return (
     <textarea
       ref={ref}
@@ -190,7 +194,7 @@ export function WorkflowEditor({ workflow, save, actions, renderSource }: {
   function focusField(label: string) {
     requestAnimationFrame(() =>
       document
-        .querySelector<HTMLTextAreaElement>(`textarea[aria-label="${label}"]`)
+        .querySelector<HTMLElement>(`[aria-label="${label}"]`)
         ?.focus(),
     );
   }
@@ -351,6 +355,7 @@ export function WorkflowEditor({ workflow, save, actions, renderSource }: {
                     dragging.current = { stage: index };
                     e.dataTransfer.effectAllowed = "move";
                     e.dataTransfer.setData("text/plain", "workflow-step");
+                    e.dataTransfer.setData("application/x-screenpipe-workflow", "step");
                   }}
                   onDragEnd={() => {
                     dragging.current = null;
@@ -410,6 +415,7 @@ export function WorkflowEditor({ workflow, save, actions, renderSource }: {
                 </div></details>
               </div>
               <Text
+                rich
                 label={`Step ${index + 1} description`}
                 value={stage.description}
                 onChange={(description) =>
@@ -476,6 +482,7 @@ export function WorkflowEditor({ workflow, save, actions, renderSource }: {
                         };
                         e.dataTransfer.effectAllowed = "move";
                         e.dataTransfer.setData("text/plain", "workflow-block");
+                        e.dataTransfer.setData("application/x-screenpipe-workflow", "block");
                       }}
                       onDragEnd={() => {
                         dragging.current = null;
@@ -528,6 +535,7 @@ export function WorkflowEditor({ workflow, save, actions, renderSource }: {
                     </div>
                     {detail.kind !== "action" && <span className={styles.kindLabel}>{detail.kind}</span>}
                     <Text
+                      rich
                       label={`Block ${detailIndex + 1} in step ${index + 1}`}
                       placeholder="Write a step detail…"
                       value={detail.text}

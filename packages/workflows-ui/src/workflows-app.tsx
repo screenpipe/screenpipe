@@ -425,6 +425,13 @@ function AppShell({
   const [assistantMode, setAssistantMode] = useState<AssistantState["mode"] | null>(null);
   const assistantToggleLabel = assistantOpen ? "Collapse right sidebar" : "Open right sidebar";
   const [navigationCollapsed, setNavigationCollapsed] = useState(false);
+  // Compact navigation is transient; resizing must not leave it covering the editor.
+  useEffect(() => {
+    const compact = window.matchMedia("(max-width: 680px)");
+    const onResize = () => { if (compact.matches) setNavigationCollapsed(true); };
+    compact.addEventListener("change", onResize);
+    return () => compact.removeEventListener("change", onResize);
+  }, []);
   const navigationWidth = useNavigationWidth(!navigationCollapsed && !embedded, assistantDocked);
   const shortcuts = useSidebarShortcuts();
   const toggleNavigation = useCallback(() => {
@@ -436,7 +443,7 @@ function AppShell({
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem("workflows:navigation-collapsed");
-      setNavigationCollapsed(saved === null ? window.innerWidth <= 680 : saved === "true");
+      setNavigationCollapsed(window.innerWidth <= 680 || saved === "true");
     } catch { setNavigationCollapsed(window.innerWidth <= 680); }
   }, []);
   useEffect(() => {
@@ -482,7 +489,7 @@ function AppShell({
         </div>}
         <nav className={styles.nav} aria-label={ui("Primary navigation")}>
           {nav.map(([target, Icon, label]) => (
-            <button key={target} className={activeView === target ? styles.navActive : ""} onClick={() => navigate(target)}>
+            <button key={target} className={activeView === target ? styles.navActive : ""} onClick={() => { navigate(target); if (window.innerWidth <= 680) setNavigationCollapsed(true); }}>
               <Icon size={16} />{label}
               {target === "workflows" && <span>{workflowCount || "—"}</span>}
             </button>
@@ -525,7 +532,7 @@ function AppShell({
         </header>
         {embedded && <nav className={styles.embeddedNav} aria-label={ui("Workflows sections")}>
           {nav.map(([target, Icon, label]) => (
-            <button key={target} className={activeView === target ? styles.embeddedNavActive : ""} onClick={() => navigate(target)}><Icon size={14} />{label}</button>
+            <button key={target} className={activeView === target ? styles.embeddedNavActive : ""} onClick={() => { navigate(target); if (window.innerWidth <= 680) setNavigationCollapsed(true); }}><Icon size={14} />{label}</button>
           ))}
         </nav>}
         <main className={styles.main}>{children}</main>
@@ -748,8 +755,10 @@ function WorkflowsView({ workflows, knownWorkflowCount, activityPeriod, filters,
             <article key={workflow.id || workflow.title} className={styles.workflowCard}>
               <div className={styles.workflowCardTop}><span>{String(workflow.rank).padStart(2, "0")}</span><div><Pill>{workflow.catalogStatus === "not-reobserved" ? ui("Kept from earlier scan") : workflow.evidenceStatus === "supported-steps" ? ui("Steps have sources") : ui("Candidate · needs review")}</Pill>{actionableCount > 0 && <Pill tone="warm">{actionableCount} possible improvement{actionableCount === 1 ? "" : "s"}</Pill>}{constraintCount > 0 && <Pill>{ui("{count, plural, one {# constraint} other {# constraints}}", { count: constraintCount })}</Pill>}</div></div>
               <h2>{workflow.title}</h2><p>{workflow.description}</p>
-              <div className={styles.cardPath}><span>{workflow.trigger}</span><ArrowRight size={12} /><span>{workflow.outcome}</span></div>
+              <details className={styles.cardDetails}><summary>Workflow details</summary><div className={styles.cardPath}><span>{workflow.trigger}</span><ArrowRight size={12} /><span>{workflow.outcome}</span></div>
               <div className={styles.cardMetrics}><div title={timing ? ui("Estimated elapsed time from source-backed start and finish moments. Includes pauses; not active work time. Open the map to inspect the runs.") : ui("Not enough evidence of complete workflow runs to estimate an average.")}><span>{timing?.sampleCount === 1 ? ui("Time for one run") : !timing && hasMeasuredDuration(workflow) ? ui("Meeting duration") : ui("Avg. time / run")}</span><strong>{timing ? formatEstimatedMinutes(timing.averageMinutes) : hasMeasuredDuration(workflow) ? formatMinutes(workflow.totalMinutes) : "—"}</strong>{timing && <small>{ui("{count, plural, one {# run} other {# runs}}", { count: timing.sampleCount })} · estimated</small>}</div><div><span>Stages</span><strong>{workflow.stages.length}</strong></div><div><span>Evidence</span><strong>{workflow.quality.evidenceCount}</strong></div><div><span>Screenshots</span><strong>{workflow.quality.screenshotCount}/{workflow.stages.length}</strong></div></div>
+              </details>
+              <div className={styles.cardSummary}>{workflow.stages.length} steps <span>·</span> {workflow.quality.screenshotCount}/{workflow.stages.length} screenshots <span>·</span> {timing ? `${formatEstimatedMinutes(timing.averageMinutes)} / run · estimated` : "Run time not measured"}</div>
               <div className={styles.cardFooter}><span>{workflow.frequency}</span><div className={styles.cardActions}>
                 <button type="button" className={styles.cardOpen} onClick={() => openWorkflow(originalIndex)}>Open map <ChevronRight size={14} /></button>
               </div></div>

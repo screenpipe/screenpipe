@@ -446,14 +446,14 @@
 .filterPanel select:focus { border-color: #a8b47e; box-shadow: 0 0 0 2px #e7edda; }
 .filterPanel > button { height: 32px; padding: 0 10px; border: 0; background: transparent; color: #73776e; font-size: 9px; cursor: pointer; }
 .filterPanel > button:disabled { opacity: .4; cursor: default; }
-.workflowCard { position: relative; min-width: 0; display: flex; flex-direction: column; min-height: 330px; padding: 23px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: inherit; text-align: left; cursor: pointer; transition: .18s ease; }
-.workflowCard:hover { transform: translateY(-2px); border-color: #bdc0b5; box-shadow: 0 13px 30px rgba(30,32,25,.06); }
+.workflowCard { position: relative; min-width: 0; display: flex; flex-direction: column; min-height: 250px; padding: 22px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: inherit; text-align: left; transition: border-color .15s ease; }
+.workflowCard:hover { border-color: var(--muted); }
 .workflowCardTop { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .workflowCardTop > span { color: #999c93; font-size: 9px; }
 .workflowCardTop > div { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 5px; min-width: 0; }
 .workflowCardTop .pill { white-space: normal; }
-.workflowCard h2 { margin: 22px 0 8px; font-size: 18px; letter-spacing: -.025em; }
-.workflowCard > p { min-height: 42px; margin: 0; color: #73776e; font-size: 10px; line-height: 1.55; }
+.workflowCard h2 { margin: 16px 0 8px; font-size: 20px; letter-spacing: -.025em; }
+.workflowCard > p { min-height: 42px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
 .cardPath { display: grid; grid-template-columns: minmax(0,1fr) 16px minmax(0,1fr); gap: 7px; align-items: center; margin: 18px 0; padding: 12px; border-radius: 7px; background: #f5f6f1; color: #696d63; font-size: 8px; line-height: 1.4; }
 .cardPath svg { color: #969990; }
 .cardMetrics { display: grid; grid-template-columns: repeat(4,1fr); border-top: 1px solid #e6e7e1; border-bottom: 1px solid #e6e7e1; }
@@ -462,7 +462,7 @@
 .cardMetrics strong { display: block; margin-top: 5px; font-size: 11px; }
 .cardMetrics small { display: block; margin-top: 3px; color: #78786f; font-size: 9px; }
 .cardFooter { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-top: auto; padding-top: 17px; }
-.cardFooter span { color: #83867e; font-size: 8px; }
+.cardFooter span { color: var(--muted); font-size: 11px; }
 .cardActions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .cardActions button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--ink); font: inherit; font-size: 11px; font-weight: 550; white-space: nowrap; cursor: pointer; }
 .cardActions button:hover { background: var(--soft); }
@@ -1021,4 +1021,24 @@
 @container workflow-pane (max-width: 540px) {
   .workflowNotes .bottleneckList article { grid-template-columns: 20px minmax(0, 1fr); }
   .workflowNotes .bottleneckTime { grid-column: 2; }
+}
+
+/* Details stay above the stretched open target and remain independently accessible. */
+.cardDetails { position: relative; z-index: 1; order: 4; margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.cardDetails summary { width: fit-content; cursor: pointer; color: var(--muted); font-size: 11px; }
+.cardDetails summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.cardDetails .cardPath { margin: 12px 0; font-size: 11px; }
+.cardDetails .cardMetrics span { font-size: 10px; }
+.cardSummary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin: 16px 0; }
+.cardSummary span { opacity: .5; }
+.filterBar { border: 0; padding-left: 0; background: transparent; }
+.filterBar > div strong { font-size: 12px; font-weight: 500; }
+.filterBar > div span { font-size: 11px; }
+.filterButton, .filterButtonActive, .clearButton { font-size: 12px; min-height: 36px; font-weight: 500; }
+.filterButtonActive { background: var(--soft); border-color: var(--muted); color: var(--ink); }
+.filterPanel label > span, .filterPanel select, .filterPanel > button { font-size: 12px; }
+@media (max-width: 680px) {
+  .workflowCard { padding: 18px; }
+  .cardSummary { gap: 6px; }
+  .filterPanel { grid-template-columns: 1fr; }
 }
