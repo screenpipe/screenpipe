@@ -5,6 +5,7 @@
 name: Release workflow contracts
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - .github/workflows/release-app.yml
@@ -61,3 +62,74 @@ jobs:
         with:
           bun-version: "1.3.10"
       - run: bun test ./.github/scripts/release-workflows.test.ts ./.github/scripts/release-performance.test.ts
+
+  localization-generation:
+    if: github.event_name == 'workflow_dispatch'
+    needs: release-contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      snapshot-digest: ${{ steps.verify.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: ./.github/actions/prepare-desktop-localization
+        with:
+          release-sha: ${{ github.sha }}
+          token: ${{ github.token }}
+          gt-project-id: ${{ secrets.GT_PROJECT_ID }}
+          gt-api-key: ${{ secrets.GT_API_KEY }}
+      - name: Require complete, valid translations
+        id: verify
+        working-directory: apps/screenpipe-app-tauri
+        run: |
+          bun - <<'JS'
+            import assert from "node:assert/strict";
+            import { appendFileSync, readFileSync } from "node:fs";
+            import { createHash } from "node:crypto";
+            import { verifySnapshot } from "./scripts/i18n/prepare.mjs";
+            const bytes = readFileSync("../../.release-localization/snapshot.json");
+            const snapshot = verifySnapshot(JSON.parse(bytes));
+            assert.equal(snapshot.mode, "generate");
+            assert(snapshot.locales.length > 0, "No bundled languages");
+            assert.deepEqual(snapshot.causes, [], "Translation service did not complete cleanly");
+            for (const locale of snapshot.locales) {
+              for (const surface of ["frontend", "native"]) {
+                const coverage = snapshot.coverage[locale][surface];
+                assert(coverage.total > 0, `${locale}: no ${surface} messages`);
+                assert.equal(coverage.translated, coverage.total, `${locale}: incomplete ${surface}`);
+                assert.equal(coverage.fallback, 0, `${locale}: ${surface} fallbacks`);
+              }
+              assert.deepEqual(snapshot.fallbacks[locale], {}, `${locale}: invalid translations`);
+            }
+            appendFileSync(process.env.GITHUB_OUTPUT, `digest=${createHash("sha256").update(bytes).digest("hex")}\n`);
+            console.log(JSON.stringify({ revision: snapshot.revision, coverage: snapshot.coverage }));
+          JS
+
+  localization-handoff:
+    if: github.event_name == 'workflow_dispatch'
+    needs: localization-generation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      # Exercise the enterprise handoff on a clean worker with no GT credentials.
+      - uses: ./.github/actions/prepare-desktop-localization
+        with:
+          release-sha: ${{ github.sha }}
+          source-run-id: ${{ github.run_id }}
+          token: ${{ github.token }}
+      - name: Verify byte-identical offline handoff
+        env:
+          EXPECTED_DIGEST: ${{ needs.localization-generation.outputs.snapshot-digest }}
+        run: |
+          echo "$EXPECTED_DIGEST  .release-localization/snapshot.json" | sha256sum --check
