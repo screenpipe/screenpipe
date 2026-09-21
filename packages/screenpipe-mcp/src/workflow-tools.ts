@@ -2,6 +2,9 @@
 // https://screenpipe.com
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 
+// Older catalogs use content hashes; maintained workflows use UUIDs.
+const WORKFLOW_ID = /^wf-(?:[0-9a-f]{64}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/;
+
 export const WORKFLOW_TOOLS: Tool[] = [
   {
     name: "list-workflows",
@@ -37,7 +40,7 @@ export async function readWorkflowTool(name: string, args: Record<string, unknow
     }
     endpoint = `/workflows?${params}`;
   } else if (name === "get-workflow") {
-    if (typeof args.id !== "string" || !/^wf-[0-9a-f]{64}$/.test(args.id)) throw new Error("Use a workflow ID returned by list-workflows");
+    if (typeof args.id !== "string" || args.id.trim() !== args.id || !WORKFLOW_ID.test(args.id)) throw new Error("Use a workflow ID returned by list-workflows");
     if (args.include_automation !== undefined && typeof args.include_automation !== "boolean") throw new Error("include_automation must be a boolean");
     endpoint = `/workflows/${args.id}?include_automation=${args.include_automation !== false}`;
   } else { throw new Error("Unknown workflow tool"); }

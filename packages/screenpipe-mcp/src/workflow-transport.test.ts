@@ -11,13 +11,15 @@ it("discovers and retrieves workflow targeting context through the built MCP tra
   const root=path.resolve(__dirname,"..");
   execFileSync("bun",["run","build"],{cwd:root,stdio:"pipe",timeout:120000});
   const id=`wf-${"b".repeat(64)}`;
+  const uuidId="wf-12345678-1234-4234-8234-123456789abc";
   const requests: string[]=[];
   const api=createServer((req,res)=>{
     requests.push(req.url || "");
     if(req.headers.authorization !== "Bearer fixture-key") {res.writeHead(403);res.end();return;}
     res.setHeader("Content-Type","application/json");
-    if(req.url?.startsWith("/workflows?")) res.end(JSON.stringify({data:[{id,title:"Invoice review"}]}));
+    if(req.url?.startsWith("/workflows?")) res.end(JSON.stringify({data:[{id,title:"Invoice review"},{id:uuidId,title:"Maintained workflow"}]}));
     else if(req.url?.startsWith(`/workflows/${id}?`)) res.end(JSON.stringify({id,workflow:{stages:[{name:"Review"}]},automationEvidence:[{status:"no_captured_frame",actionTarget:"unknown"}]}));
+    else if(req.url?.startsWith(`/workflows/${uuidId}?`)) res.end(JSON.stringify({id:uuidId,workflow:{stages:[{name:"Review maintained workflow"}]}}));
     else if(req.url?.startsWith("/search?")) res.end(JSON.stringify({data:[{type:"Input",content:{id:8,event_type:"click",frame_id:7,x:40,y:60,element_role:"AXButton",element_name:"Approve"}}],pagination:{total:1,offset:0,limit:5}}));
     else if(req.url === "/frames/7/context?include_empty=true") res.end(JSON.stringify({frame_id:7,text_source:"accessibility",nodes:[{role:"AXButton",text:"",bounds:{left:0.25,top:0.5,width:0.125,height:0.0625},properties:{automation_id:"approve"}}]}));
     else { res.writeHead(404);res.end("{}"); }
@@ -35,6 +37,10 @@ it("discovers and retrieves workflow targeting context through the built MCP tra
     expect(JSON.stringify(listed)).toContain(id);
     const detail=await client.callTool({name:"get-workflow",arguments:{id}});
     expect(detail.isError).not.toBe(true);expect(JSON.stringify(detail)).toContain("no_captured_frame");
+    const maintained=await client.callTool({name:"get-workflow",arguments:{id:uuidId,include_automation:false}});
+    expect(maintained.isError).not.toBe(true);
+    expect(JSON.stringify(maintained)).toContain("Review maintained workflow");
+    expect(requests).toContain(`/workflows/${uuidId}?include_automation=false`);
     const frame=await client.callTool({name:"frame-context",arguments:{frame_id:7,purpose:"automation"}});
     expect(frame.isError).not.toBe(true);expect(JSON.stringify(frame)).toContain("automation_id");
     expect(JSON.stringify(frame)).toContain("0.25");

@@ -53,6 +53,13 @@ const REQUIRED_PATHS = [
  * file list but stale or reverted contents.
  */
 const REQUIRED_MARKERS = [
+  ...["dist/index.js", "dist/cli.js"].flatMap((file) =>
+    ["list-workflows", "get-workflow"].map((marker) => ({
+      file,
+      marker,
+      why: "both stdio entry points must expose the desktop workflow catalog",
+    })),
+  ),
   {
     file: "dist/index.js",
     marker: "SCREENPIPE_TEAM_API_URL",
