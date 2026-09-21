@@ -566,3 +566,79 @@ async fn shutdown_releases_sql_workers_waiting_for_decoder_admission() {
         .unwrap();
     assert!(!storage.sql_readers_active());
 }
+
+#[tokio::test]
+async fn auto_extension_registers_payload_sha256_for_index_integrity_check() {
+    use sqlx::sqlite::SqliteConnectOptions;
+    use sqlx::Connection;
+    use sqlx::SqliteConnection;
+
+    crate::db::register_sqlite_extensions().unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("test_index.sqlite");
+
+    let options = SqliteConnectOptions::new()
+        .filename(&db_path)
+        .create_if_missing(true);
+    let mut conn: SqliteConnection = SqliteConnection::connect_with(&options).await.unwrap();
+
+    // Verify the function can be evaluated directly
+    let hash: String =
+        sqlx::query_scalar::<_, String>("SELECT hex(screenpipe_payload_sha256('test_payload'))")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+    assert!(!hash.is_empty());
+
+    // Create table and the exact bulk index from issue #7148
+    sqlx::query(
+        "CREATE TABLE audio_transcriptions (
+            id INTEGER PRIMARY KEY,
+            audio_chunk_id INTEGER,
+            _archive_mask INTEGER,
+            transcription TEXT,
+            _archive_digest TEXT
+        )",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "CREATE UNIQUE INDEX _bulk_audio_identity ON audio_transcriptions(
+            audio_chunk_id,
+            CASE WHEN (_archive_mask&1)!=0
+                 THEN screenpipe_payload_sha256(transcription)
+                 ELSE _archive_digest END
+        )",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO audio_transcriptions (id, audio_chunk_id, _archive_mask, transcription)
+         VALUES (1, 100, 1, 'test speech payload')",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+
+    // Reopen offline without any manual register_hash to simulate recovery / verify_database_before_reopen
+    drop(conn);
+    let mut offline_conn: SqliteConnection =
+        SqliteConnection::connect_with(&options).await.unwrap();
+
+    let check: String = sqlx::query_scalar::<_, String>("PRAGMA integrity_check")
+        .fetch_one(&mut offline_conn)
+        .await
+        .unwrap();
+    assert_eq!(check, "ok");
+
+    let quick_check: String = sqlx::query_scalar::<_, String>("PRAGMA quick_check")
+        .fetch_one(&mut offline_conn)
+        .await
+        .unwrap();
+    assert_eq!(quick_check, "ok");
+}
