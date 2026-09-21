@@ -46,22 +46,24 @@ export function usePermissionMonitor() {
       if (disposed || restartInFlight) return;
       restartInFlight = true;
       try {
-        // A cooldown request can arrive after the user paused recording.
-        // Missing capture and deliberately paused capture are different states.
-        const paused = await commands.isCapturePaused();
-        if (disposed || paused) return;
         console.log("Deferred server restart requested by backend");
-        const result = await commands.spawnScreenpipe(null);
+        // The native retry checks intent under its lifecycle lock and never
+        // re-enables capture. A separate pause check followed by spawn has a
+        // race where a later user pause can be overwritten by the stale event.
+        const result = await commands.retryScreenpipe();
         if (result.status === "error") throw new Error(result.error);
       } catch (error) {
         console.error("Deferred server restart failed:", error);
       } finally {
         restartInFlight = false;
       }
+    }).catch((error) => {
+      console.error("Failed to listen for server restart requests:", error);
+      return null;
     });
     return () => {
       disposed = true;
-      unlistenRestart.then((fn) => fn());
+      unlistenRestart.then((fn) => fn?.());
     };
   }, []);
 

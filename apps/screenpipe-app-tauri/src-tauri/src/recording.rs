@@ -298,6 +298,7 @@ const CAPTURE_RESTART_MEETING_REATTACH_WINDOW: Duration = Duration::from_secs(12
 
 mod db_wedge;
 pub(crate) mod recovery_log;
+mod retry;
 mod server_shutdown;
 pub use db_wedge::{
     make_database_restart_hook, new_db_wedge_breaker, DbWedgeBreaker, DbWedgeState,
@@ -1053,26 +1054,27 @@ pub(crate) fn resume_deferred_account_start(app: tauri::AppHandle) {
 
 /// Automatic retry preserves capture intent; unlike the user command it must
 /// not turn recording back on after the user stopped it.
-pub(crate) async fn retry_screenpipe(
+#[tauri::command]
+#[specta::specta]
+pub async fn retry_screenpipe(
     state: State<'_, RecordingState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let Ok(_lifecycle_guard) = state.server_lifecycle.try_lock() else {
-        return Ok(());
-    };
-    if !state.capture_intended() || crate::process_exit::QUIT_REQUESTED.load(Ordering::SeqCst) {
-        return Ok(());
-    }
     // The watchdog owns retry timing. Do not enter the user command's
     // cooldown path, which schedules a frontend restart request later.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let last_spawn = state.last_spawn_epoch.load(Ordering::SeqCst);
-    if last_spawn > 0 && now.saturating_sub(last_spawn) < RESTART_COOLDOWN_SECS {
+    let Some(_lifecycle_guard) = retry::admit(
+        &state.server_lifecycle,
+        &state.wants_recording,
+        &crate::process_exit::QUIT_REQUESTED,
+        &state.last_spawn_epoch,
+        now,
+    ) else {
         return Ok(());
-    }
+    };
     spawn_screenpipe_inner(&state, app).await
 }
 
