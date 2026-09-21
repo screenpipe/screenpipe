@@ -2,9 +2,13 @@
 // https://screenpipe.com
 // Real agent, fictional history and isolated persistence. Native persistence is
 // tested separately; this trial grades evidence judgment, not model prose.
+import {createHash} from "node:crypto";
 import {mkdtemp, mkdir, writeFile} from "node:fs/promises";
 import {tmpdir,homedir} from "node:os";
 import {join,resolve} from "node:path";
+import { timingFixture, gradeTiming, type TimingCase } from "./workflow-timing-fixture";
+const timingCase = process.argv.find(a => a.startsWith("--timing="))?.split("=")[1] as TimingCase | undefined;
+if (timingCase && !["complete", "sparse", "preserve"].includes(timingCase)) throw new Error("Unknown timing case");
 const assets=resolve(import.meta.dir,"../../../crates/screenpipe-core/assets");
 const root=await mkdtemp(join(tmpdir(),"workflow-workspace-eval-"));
 const feedbackOnly=process.argv.includes("--feedback-only");
@@ -13,7 +17,7 @@ const reportedActions=process.argv.includes("--reported-actions");
 const repair=reportedActions||process.argv.includes("--repair-delegation");
 const researchNotes=process.argv.includes("--research-notes");
 const repairSource=process.argv.includes("--repair-source");
-let task=discovery?"workflow-discover":feedbackOnly?"workflow-maintain":"workflow-review";
+let task=timingCase?"workflow-maintain":discovery?"workflow-discover":feedbackOnly?"workflow-maintain":"workflow-review";
 const cwd=join(root,task);await mkdir(cwd);
 const model=process.env.WORKFLOW_EVAL_MODEL || "auto";
 const noChange=feedbackOnly||process.argv.includes("--no-change"), fault=process.argv.includes("--conflict");
@@ -21,7 +25,7 @@ const missingDraft=process.argv.includes("--missing-draft");
 const largeContext=process.argv.includes("--large-context");
 const contextHistoryCount=largeContext?160:process.argv.includes("--medium-context")?40:0;
 const aiMediated=researchNotes||repairSource||process.argv.includes("--ai-mediated");
-const now=new Date().toISOString(), start=new Date(Date.now()-86400000).toISOString();
+const now=process.env.WORKFLOW_EVAL_NOW || new Date().toISOString(), start=new Date(Date.parse(now)-86400000).toISOString();
 const rows=[
   {timestamp:new Date(Date.now()-7200000).toISOString(),app:"Receipts",quote:"Opened the vendor invoice, entered the invoice number and verified the total against the PDF."},
   {timestamp:new Date(Date.now()-7100000).toISOString(),app:"Receipts",quote:"Saved the receipt. Confirmation: Invoice INV-123 saved successfully."},
@@ -71,11 +75,19 @@ if(feedbackOnly || discovery) ws.drafts={};
 if(contextHistoryCount)for(let i=0;i<contextHistoryCount;i++)ws.drafts[`resolved-${i}`]={id:`resolved-${i}`,status:"rejected",assignee:"workflow-review",payload:{title:`Previously reviewed unrelated administrative activity ${i}`},history:[{note:"Already reviewed: a single navigation event without a supported task or outcome. Preserve this decision; no new evidence changes it."}]};
 if(discovery)ws.cycle.finished={};
 let catalogRevision=8, published:any[]=[], injected=false, reads=0, greetingSearch=false;
-const existing=feedbackOnly?{...good,id:"wf-finance",userCorrection:"User: hi"}:{id:"wf-finance",title:"Founder finance administration",trigger:"Review company finances",outcome:"Accounts reviewed",userCorrection:"Do not mix support requests into this workflow",stages:[]};
+const existing:any=feedbackOnly?{...good,id:"wf-finance",userCorrection:"User: hi"}:{id:"wf-finance",title:"Founder finance administration",trigger:"Review company finances",outcome:"Accounts reviewed",userCorrection:"Do not mix support requests into this workflow",stages:[]};
 // A no-change case contains only unsupported assistant claims. Leaving the
 // real invoice actions in its recorder made repairing the candidate valid,
 // despite the grader requiring rejection. Keep that ambiguous trial as failed.
 if(process.argv.includes("--no-change")) rows.splice(0,2);
+const timing = timingCase ? timingFixture(now, timingCase) : null;
+if (timing) {
+  rows.splice(0, rows.length, ...timing.rows);
+  Object.assign(existing, structuredClone(good), {id:"wf-receipts", userCorrection:null, timingRuns:timingCase==="preserve"?timing.expected:[], limitations:["Time per run has not been investigated."]});
+  existing.stages = [rows[0], rows[timingCase==="sparse"?1:3]].map((r,i)=>({...structuredClone(good.stages[i]), procedure:[{kind:i?"check":"action",text:i?"Check the saved receipt confirmation.":"Enter the invoice details.",...r}],evidence:[{timestamp:r.timestamp,app:r.app}]}));
+  if(timingCase==="sparse") existing.limitations=["Prior procedure retained; current captures do not establish timing boundaries."];
+  ws.drafts={}; ws.cycle.finished={"workflow-discover":true};
+}
 const requestLog:any[]=[];
 const server=Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,async fetch(req){
   if(req.headers.get("authorization")!=="Bearer fixture-workspace")return new Response("Unauthorized",{status:401});
@@ -97,7 +109,7 @@ const server=Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,async fetch(
     if(["publish","reject","handoff"].includes(b.action)&&!ws.drafts[b.draft_id])return Response.json({error:"Draft not found."},{status:409});
     if(b.action==="publish"&&ws.drafts[b.draft_id]?.status==="published")return Response.json(ws.drafts[b.draft_id].receipt);
     if(b.expected_revision!==ws.revision)return Response.json({error:"Workspace changed. Read context again."},{status:409});
-    if(b.action==="propose"&&discovery){const id=b.draft_id||crypto.randomUUID();ws.drafts[id]={id,status:"open",assignee:b.assignee,payload:b.payload,history:[{note:b.note}]};}
+    if(b.action==="propose"&&(discovery||timingCase)){const id=b.draft_id||crypto.randomUUID();ws.drafts[id]={id,status:"open",assignee:b.assignee,payload:b.payload,history:[{note:b.note}]};}
     else if(b.action==="reject") {ws.drafts[b.draft_id].status="rejected";ws.drafts[b.draft_id].decision=b.note;}
     else if(b.action==="handoff") {const d=ws.drafts[b.draft_id];if(b.assignee===task&&(!b.payload||JSON.stringify(b.payload)===JSON.stringify(d.payload)))return Response.json({error:"This self-handoff does not edit the draft. Supply the changed workflow object in payload, or hand the draft to another agent with a question. note is commentary only; it never changes description, stages or procedure. No changes were saved."},{status:409});d.payload=b.payload||d.payload;d.assignee=b.assignee;d.history.push({note:b.note});}
     else if(b.action==="publish") {
@@ -114,13 +126,14 @@ const server=Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,async fetch(
       if(payload.stages?.some((s:any)=>s.procedure?.some((p:any)=>!rows.some(r=>r.timestamp===p.timestamp&&r.app===p.app&&r.quote.includes(p.quote)))))return Response.json({error:"Unsupported source quote"},{status:422});
       d.payload=structuredClone(payload);published.push(structuredClone(payload));catalogRevision++;d.status="published";d.receipt={revision:catalogRevision,changes:{created:payload.id?0:1,updated:payload.id?1:0}};
     } else if(b.action==="finish") {
-      if(Object.values(ws.drafts).some((d:any)=>d.status==="open"&&((!discovery&&task!=="workflow-deepen")||d.assignee===task)))return Response.json({error:"Open drafts remain"},{status:409});
-      if(task==="workflow-deepen")ws.cycle.finished[task]=true;else ws.cycle.status="complete";
+      if(timingCase&&task==="workflow-review"&&!ws.cycle.finished["workflow-maintain"])return Response.json({error:"Maintenance has not finished."},{status:409});
+      if(Object.values(ws.drafts).some((d:any)=>d.status==="open"&&((!timingCase&&!discovery&&task!=="workflow-deepen")||d.assignee===task)))return Response.json({error:"Open drafts remain"},{status:409});
+      if(task==="workflow-deepen"||(timingCase&&task==="workflow-maintain"))ws.cycle.finished[task]=true;else ws.cycle.status="complete";
     }else return Response.json({error:"Unknown action"},{status:400});
     ws.revision++;return Response.json({saved:true,revision:ws.revision});
   }
   if(u.pathname==="/search") {reads++;greetingSearch ||= /^(hi|hello|hey)$/i.test(u.searchParams.get("q")||"");const offset=Number(u.searchParams.get("offset")||0);return Response.json({data:rows.slice(offset,offset+30).map(r=>({type:"OCR",content:{text_source:"accessibility",timestamp:r.timestamp,app_name:r.app,text:r.quote}})),pagination:{total:rows.length,limit:30,offset}});}
-  if(u.pathname==="/activity-summary"){reads++;return Response.json({data_status:"ok",time_range:{start,end:now},apps:rows.map(r=>({name:r.app,frame_count:1})),total_frames:3});}
+  if(u.pathname==="/activity-summary"){reads++;return Response.json({data_status:"ok",time_range:{start,end:now},apps:rows.map(r=>({name:r.app,frame_count:1})),total_frames:rows.length});}
   if(u.pathname==="/mcp-servers"||u.pathname==="/meetings")return Response.json({data:[]});
   return Response.json({error:"No image for this text fixture"},{status:404});
 }});
@@ -135,13 +148,17 @@ if(model.includes("glm")){
 }
 try{
   let stdout="", stderr="", exit=0;
+  const promptVersions: any[] = [];
   const deadline=Date.now()+180000;
-  for(let pass=0;pass<((repair||researchNotes||repairSource)?5:1)&&Date.now()<deadline;pass++){
-  const template=await Bun.file((pass===0&&process.env.WORKFLOW_EVAL_PROMPT_FILE)||join(assets,`pipes/${task}/pipe.md`)).text();
+  for(let pass=0;pass<((timingCase||repair||researchNotes||repairSource)?5:1)&&Date.now()<deadline;pass++){
+  const template=await Bun.file((pass===0&&process.env.WORKFLOW_EVAL_PROMPT_FILE)||(process.env.WORKFLOW_EVAL_PIPE_DIR ? join(process.env.WORKFLOW_EVAL_PIPE_DIR,task,"pipe.md") : join(assets,`pipes/${task}/pipe.md`))).text();
+  const skillFile=process.env.WORKFLOW_EVAL_SKILL_FILE || join(assets,"skills/screenpipe-workflow-maintenance/SKILL.md");
+  const hash=(text:string)=>createHash("sha256").update(text).digest("hex");
+  promptVersions.push({task,promptHash:hash(template),skillHash:hash(await Bun.file(skillFile).text())});
   const allow_rules=[...template.matchAll(/Api\((GET|POST) ([^)]+)\)/g)].map(m=>({type:"api",method:m[1],path:m[2]}));
   await writeFile(join(cwd,".screenpipe-permissions.json"),JSON.stringify({pipe_token:"fixture-workspace",api_base:base,pipe_name:task,pipe_dir:cwd,allow_rules,deny_rules:[],use_default_allowlist:false}));
   const instructions=template.replace(/^---[\s\S]*?---\s*/,"");
-  const child=Bun.spawn([process.execPath,pi,"--provider","screenpipe","--model",model,"--mode","json","--no-session","--no-extensions","--no-skills","--no-context-files","--no-prompt-templates","--skill",join(assets,"skills/screenpipe-api/SKILL.md"),"--skill",join(assets,"skills/screenpipe-workflow-maintenance/SKILL.md"),"--extension",join(assets,"extensions/screenpipe-permissions.ts"),"--extension",join(assets,"extensions/workflow-workspace.ts"),"--extension",join(assets,"extensions/context-pruning.ts"),...transport,"--append-system-prompt",`Use only the isolated fictional recorder ${base}; never contact any other recorder or service. Writes are isolated.\n${instructions}`,"--print",`${discovery?"Discover distinct workflows in the recording":feedbackOnly?"Maintain the saved catalog":"Investigate or review your assigned drafts"} now. Current time: ${now}. Use the workspace tool. You have ${Math.max(1,Math.floor((deadline-Date.now())/1000))} seconds.`],{cwd,env:{...process.env,SCREENPIPE_PIPE_NAME:task,SCREENPIPE_LOCAL_API_URL:base,SCREENPIPE_LOCAL_API_KEY:"fixture-workspace",SCREENPIPE_PORT:String(server.port),BASH_ENV:join(homedir(),".screenpipe/pi-agent/bash-env.sh"),PI_CODING_AGENT_DIR:join(homedir(),".screenpipe/pi-config")},stdout:"pipe",stderr:"pipe"});
+  const child=Bun.spawn([process.execPath,pi,"--provider","screenpipe","--model",model,"--mode","json","--no-session","--no-extensions","--no-skills","--no-context-files","--no-prompt-templates","--skill",join(assets,"skills/screenpipe-api/SKILL.md"),"--skill",(process.env.WORKFLOW_EVAL_SKILL_FILE || join(assets,"skills/screenpipe-workflow-maintenance/SKILL.md")),"--extension",join(assets,"extensions/screenpipe-permissions.ts"),"--extension",join(assets,"extensions/workflow-workspace.ts"),"--extension",join(assets,"extensions/context-pruning.ts"),...transport,"--append-system-prompt",`Use only the isolated fictional recorder ${base}; never contact any other recorder or service. Writes are isolated.\n${instructions}`,"--print",`${discovery?"Discover distinct workflows in the recording":task==="workflow-maintain"?"Maintain the saved catalog":"Investigate or review your assigned drafts"} now. Current time: ${now}. Use the workspace tool. You have ${Math.max(1,Math.floor((deadline-Date.now())/1000))} seconds.`],{cwd,env:{...process.env,SCREENPIPE_PIPE_NAME:task,SCREENPIPE_LOCAL_API_URL:base,SCREENPIPE_LOCAL_API_KEY:"fixture-workspace",SCREENPIPE_PORT:String(server.port),BASH_ENV:join(homedir(),".screenpipe/pi-agent/bash-env.sh"),PI_CODING_AGENT_DIR:join(homedir(),".screenpipe/pi-config")},stdout:"pipe",stderr:"pipe"});
   const timer=setTimeout(()=>child.kill(),Math.max(1,deadline-Date.now()));
   const [out,err,code]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);clearTimeout(timer);
   stdout+=out;stderr+=err;exit=code;
@@ -153,7 +170,7 @@ try{
   const events=stdout.split("\n").flatMap(s=>{try{return[JSON.parse(s)]}catch{return[]}});
   const verified=!model.includes("glm")||events.some(e=>e.type==="extension_ui_request"&&e.key==="screenpipe-confidential"&&e.text?.includes("response_verified"));
   const discovered=Object.values(ws.drafts).filter((d:any)=>d.status==="open"&&d.assignee!==task) as any[];
-  const checks={exited:exit===0,sourceRead:noChange||reads>0,rejectedMisattribution:discovery||feedbackOnly||ws.drafts.bad.status==="rejected",feedbackNotInvented:!feedbackOnly||(!greetingSearch&&published.length===0),completed:ws.cycle.status==="complete",correctPublication:discovery?published.length===0:noChange?published.length===0:published.length===1&&published[0].id==null&&published[0].stages.every((s:any)=>s.procedure.every((p:any)=>p.app===((aiMediated||repair)?"ChatGPT":"Receipts"))),conflictRecovery:!fault||injected,missingDraftRecovery:!missingDraft||(injected&&published.length===1&&ws.cycle.status==="complete"),privateVerified:verified};
+  let checks: Record<string, boolean>={exited:exit===0,sourceRead:noChange||reads>0,rejectedMisattribution:discovery||feedbackOnly||ws.drafts.bad?.status==="rejected",feedbackNotInvented:!feedbackOnly||(!greetingSearch&&published.length===0),completed:ws.cycle.status==="complete",correctPublication:discovery?published.length===0:noChange?published.length===0:published.length===1&&published[0].id==null&&published[0].stages.every((s:any)=>s.procedure.every((p:any)=>p.app===((aiMediated||repair)?"ChatGPT":"Receipts"))),conflictRecovery:!fault||injected,missingDraftRecovery:!missingDraft||(injected&&published.length===1&&ws.cycle.status==="complete"),privateVerified:verified};
   if(discovery)Object.assign(checks,{distinctJobs:discovered.some(d=>JSON.stringify(d.payload).includes(rows[0].timestamp)&&!JSON.stringify(d.payload).includes(rows[2].timestamp))&&discovered.some(d=>JSON.stringify(d.payload).includes(rows[2].timestamp)&&!JSON.stringify(d.payload).includes(rows[0].timestamp)),separateJobs:discovered.length>=2});
   if(contextHistoryCount)Object.assign(checks,{
     contextSnapshotExposed:events.some(e=>e.type==="tool_execution_end"&&e.toolName==="workflow_workspace"&&e.result?.details?.path?.includes(".workflow-context-")),
@@ -168,7 +185,8 @@ try{
     preservesVerificationRequest:published.length===1&&published[0].stages.some((s:any)=>s.procedure.some((p:any)=>p.timestamp===rows[1].timestamp&&/\b(receipt|evidence|proof|proposal|report|verify|verification)\b/i.test(p.text))),
   });
   if(missingDraft)Object.assign(checks,{harnessReportsError:events.some(e=>e.type==="tool_execution_end"&&e.toolName==="workflow_workspace"&&e.isError===true)});
+  if(timing) checks={exited:exit===0, completed:ws.cycle.status==="complete", sourceRead:reads>0, privateVerified:verified, ...gradeTiming(published,existing,timing.expected)};
   const passed=Object.values(checks).every(Boolean);
-  await writeFile(join(root,"result.json"),JSON.stringify({passed,checks,ws,published,requestLog}),{mode:0o600});
+  await writeFile(join(root,"result.json"),JSON.stringify({passed,checks,ws,published,requestLog,promptVersions,model,case:timingCase||null,now}),{mode:0o600});
   console.log(JSON.stringify({passed,checks,artifact:root,model}));if(!passed)process.exitCode=1;
 }finally{server.stop(true);}

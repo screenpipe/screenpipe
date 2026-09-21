@@ -20,7 +20,7 @@ export type AssistantMessage = {
   status?: "stopped" | "error";
   feedbackSaved?: boolean;
 };
-export type AssistantConversation = { id: string; title: string; messages: AssistantMessage[]; draft: string; pageKey?: string; feedbackContext?: AssistantContext };
+export type AssistantConversation = { id: string; title: string; messages: AssistantMessage[]; draft: string; pageKey?: string; clarificationQuestion?: string; feedbackContext?: AssistantContext };
 export type AssistantState = {
   version: 1;
   mode: "floating" | "sidebar";

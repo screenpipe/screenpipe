@@ -13,7 +13,7 @@ async function request(path: string, body?: unknown) {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   const value = await response.json();
-  if (!response.ok || value.error) throw new Error(value.error || "Could not reach the workflow task.");
+  if (!response.ok || value.error) throw Object.assign(new Error(value.error || "Could not reach the workflow task."), { status: response.status });
   return value;
 }
 
@@ -208,4 +208,10 @@ export async function applyWorkflowFeedback(workflow: WorkflowMap, learning: str
   const result = await request("/workflows/corrections", { id: workflow.id, correction, expected_revision: workflow.revision ?? 0, changes });
   if (!result.success || result.workflow?.id !== workflow.id) throw new Error("Could not verify the saved workflow refinement.");
   return result.workflow as WorkflowMap;
+}
+
+export async function saveWorkflowEdits(draft: import("@screenpipe/workflows-ui").WorkflowEdit): Promise<WorkflowMap> {
+  const result = await request("/workflows/edits", draft);
+  if (result.workflow?.id !== draft.id) throw new Error("The saved workflow could not be confirmed. Your draft is kept.");
+  return result.workflow;
 }

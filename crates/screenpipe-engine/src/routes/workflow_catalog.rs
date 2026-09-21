@@ -22,7 +22,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 
 type ApiError = (StatusCode, Json<Value>);
 pub(super) static WRITER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-fn error(status: StatusCode, message: &str) -> ApiError {
+pub(super) fn error(status: StatusCode, message: &str) -> ApiError {
     (status, Json(json!({"error": message})))
 }
 pub(super) fn allowed(state: &AppState, perms: &OptionalPipePerms) -> Result<(), ApiError> {
@@ -181,6 +181,7 @@ pub fn reconcile(mut previous: Value, updates: Vec<Value>, through: &str) -> Res
                 .find(|p| p["id"] == id)
                 .ok_or("Unknown workflow ID. Read the current catalog before updating.")?;
             w["userCorrection"] = prior["userCorrection"].clone();
+            super::workflow_edits::preserve_edits(prior, &mut w);
             w["revision"] = json!(prior["revision"].as_u64().unwrap_or(0) + 1);
             w["createdAt"] = prior["createdAt"].clone();
             w["lastReviewedAt"] = json!(through);
@@ -188,6 +189,10 @@ pub fn reconcile(mut previous: Value, updates: Vec<Value>, through: &str) -> Res
             *prior = w;
             updated += 1;
         } else {
+            if let Some(fields) = w.as_object_mut() {
+                fields.remove("userEdits");
+                fields.remove("userEditedAt");
+            }
             w["id"] = json!(format!("wf-{}", uuid::Uuid::new_v4()));
             w["revision"] = json!(1);
             w["createdAt"] = json!(through);
@@ -584,6 +589,9 @@ fn apply_feedback(workflow: &mut Value, body: &CorrectionRequest) -> Result<(), 
                 StatusCode::BAD_REQUEST,
                 "Only small descriptive workflow corrections are allowed.",
             ));
+        }
+        if fields.keys().any(|key| workflow["userEdits"].get(key).is_some()) {
+            return Err(error(StatusCode::CONFLICT, "This field was manually edited. Use Edit workflow to change it."));
         }
         for (key, value) in fields {
             workflow[key] = value.clone();

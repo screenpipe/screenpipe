@@ -26,7 +26,7 @@ export function CapturedMomentButton({ frameId, timestamp, open, compact = false
     setBusy(true); setFailed(false);
     void open(frameId, timestamp).catch(() => setFailed(true)).finally(() => setBusy(false));
   }}>{compact ? <ExternalLink size={16} aria-hidden="true" /> : busy ? "Opening…" : "Open captured moment"}</button>
-    {failed && <span role="alert"> Could not open Screenpipe. Check that it is installed and try again.</span>}</span>;
+    {failed && <span role="alert"> Could not open this moment in Timeline. Try again.</span>}</span>;
 }
 
 function RecordingVideo({ media, poster, failed }: { media: WorkflowRecording; poster?: string; failed: (message: string) => void }) {

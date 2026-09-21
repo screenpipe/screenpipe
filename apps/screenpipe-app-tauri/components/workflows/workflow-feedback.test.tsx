@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 import React from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { WorkflowAssistant, emptyAssistantState, type WorkflowsAssistantPlatform } from "@screenpipe/workflows-ui";
 import { fixtureWorkflowAnalysis } from "@screenpipe/workflows-ui/fixture";
@@ -24,6 +24,46 @@ function submit() {
 }
 
 describe("workflow feedback conversation", () => {
+  it.each(["floating", "sidebar"] as const)("reopens a saved question and its draft in %s mode", async mode => {
+    const saved = emptyAssistantState(); saved.mode = mode;
+    const question = "Who reviews the synthesis?";
+    saved.conversations.push({ id: "clarification", title: question, draft: "My unfinished answer", clarificationQuestion: question,
+      feedbackContext: feedback, messages: [{ id: "q", role: "assistant", text: question, at: new Date().toISOString() }] });
+    const { platform } = setup({ load: vi.fn().mockResolvedValue(saved) });
+    const open = () => act(() => { window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: { ...feedback, question } })); });
+    open();
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Ask Screenpipe" })).toHaveValue("My unfinished answer"));
+    expect(screen.getByRole("region", { name: "Screenpipe assistant" })).toHaveAttribute("data-mode", mode);
+    open();
+    await waitFor(() => expect(vi.mocked(platform.save).mock.calls.at(-1)![0].activeId).toBe("clarification"));
+    expect(vi.mocked(platform.save).mock.calls.at(-1)![0].conversations).toHaveLength(2);
+    expect(platform.ask).not.toHaveBeenCalled();
+    expect(platform.saveFeedback).not.toHaveBeenCalled();
+  });
+
+  it("opens a selected question without an AI call and keeps its answer scoped after navigation", async () => {
+    const saved = emptyAssistantState(); saved.conversations[0].draft = "Keep my draft";
+    const { platform, props, rerender } = setup({ load: vi.fn().mockResolvedValue(saved) });
+    const question = "Who reviews the synthesis before it is shared?";
+    act(() => { window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: { ...feedback, question } })); });
+    await within(screen.getByRole("log")).findByText(question);
+    expect(platform.ask).not.toHaveBeenCalled();
+    expect(platform.saveFeedback).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Save feedback" })).not.toBeInTheDocument();
+    rerender(<WorkflowAssistant {...props} context={{ key: "different", title: "Another workflow" }} />);
+    submit();
+    await screen.findByRole("button", { name: "Save feedback" });
+    expect(platform.ask).toHaveBeenCalledTimes(1);
+    expect(platform.ask).toHaveBeenLastCalledWith(expect.objectContaining({
+      history: [expect.objectContaining({ role: "assistant", text: question })],
+      context: expect.objectContaining({ workflow: expect.objectContaining({ id: "wf-original" }) }),
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Save feedback" }));
+    await screen.findByText("Feedback saved for the next update");
+    expect(platform.saveFeedback).toHaveBeenCalledWith(expect.objectContaining({ id: "wf-original" }), expect.stringContaining(question));
+    expect(vi.mocked(platform.save).mock.calls.at(-1)![0].conversations[0].draft).toBe("Keep my draft");
+  });
+
   it("automatically reviews a fresh chat on every click and preserves ordinary drafts", async () => {
     const saved = emptyAssistantState(); saved.conversations[0].draft = "An unfinished question";
     const { platform } = setup({ load: vi.fn().mockResolvedValue(saved) });

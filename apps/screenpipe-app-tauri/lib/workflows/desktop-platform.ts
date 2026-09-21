@@ -25,7 +25,7 @@ import {
   saveWorkProfileToDisk,
 } from "./disk-storage";
 
-import { ensureWorkflowTask, startWorkflowJob, getWorkflowJob, latestWorkflowJob, stopWorkflowJob, loadScheduledCatalog, saveWorkflowCorrections } from "./scheduled-discovery";
+import { ensureWorkflowTask, startWorkflowJob, getWorkflowJob, latestWorkflowJob, stopWorkflowJob, loadScheduledCatalog, saveWorkflowCorrections, saveWorkflowEdits } from "./scheduled-discovery";
 
 const WORK_PROFILE_KEY = "screenpipe-workflows:work-profile:v1";
 const BROWSER_ANALYSIS_KEY = "screenpipe-workflows:last-analysis-v2";
@@ -135,7 +135,15 @@ export const desktopWorkflowsPlatform: WorkflowsPlatform = {
   } } : {}),
   ...(!browserPreview ? {
     releaseWorkflowRecording: (url: string) => invoke<void>("release_workflow_recording", { url }),
-    openCapturedMoment: (frameId: number, timestamp: string) => invoke<void>("open_workflow_captured_moment", { frameId, timestamp }),
+    openCapturedMoment: async (frameId: number, timestamp: string) => {
+      if (!Number.isSafeInteger(frameId) || frameId <= 0 || !Number.isFinite(Date.parse(timestamp))) {
+        throw new Error("Invalid captured moment");
+      }
+      // Workflows runs inside Screenpipe. Use the same native Timeline handoff
+      // as Search instead of reopening an installed app through an OS deep link.
+      const result = await commands.searchNavigateToTimeline(timestamp, frameId, null, null, null, null);
+      if (result.status === "error") throw new Error(result.error);
+    },
   } : {}),
   ...(!browserPreview ? { assistant: desktopAssistant } : {}),
   // The main app owns startup. Opening a workspace never starts a recorder.
@@ -143,9 +151,9 @@ export const desktopWorkflowsPlatform: WorkflowsPlatform = {
   fillContext: fillWorkContext,
   ensureRuntime: getWorkflowRuntime,
   analyzeCapturedWork: (days, options) => analyzeCapturedWork(days, options?.workProfile),
-  loadCapturedWork: () => loadSavedAnalysis(),
+  loadCapturedWork: () => browserPreview ? loadSavedAnalysis() : loadScheduledCatalog(),
   saveCapturedWork: (analysis) => browserPreview ? saveAnalysis(analysis) : saveWorkflowCorrections(analysis),
-  ...(!browserPreview ? { managesAnalysis: true, ensureAnalysisTask: ensureWorkflowTask,
+  ...(!browserPreview ? { saveWorkflowEdits, managesAnalysis: true, ensureAnalysisTask: ensureWorkflowTask,
     startAnalysisJob: startWorkflowJob, getAnalysisJob: getWorkflowJob,
     getLatestAnalysisJob: latestWorkflowJob, cancelAnalysisJob: stopWorkflowJob,
     subscribeAnalysisActivity: subscribeWorkflowActivity } : {}),

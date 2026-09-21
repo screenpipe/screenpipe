@@ -39,8 +39,8 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyQuery, setHistoryQuery] = useState("");
   const [displayOpen, setDisplayOpen] = useState(false);
-  const [pendingFeedback, setPendingFeedback] = useState<AssistantContext | null>(null);
-  const consumedFeedback = useRef<AssistantContext | null>(null);
+  const [pendingFeedback, setPendingFeedback] = useState<{ context: AssistantContext; question?: string } | null>(null);
+  const consumedFeedback = useRef<typeof pendingFeedback>(null);
   const savingFeedback = useRef(false);
   const [feedbackSaving, setFeedbackSaving] = useState(false);
   const [feedbackError, setFeedbackError] = useState("");
@@ -168,12 +168,12 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   useEffect(() => {
     if (!active || !platform.saveFeedback) return;
     const openFeedback = (event: Event) => {
-      const selected = (event as CustomEvent<AssistantContext>).detail;
+      const selected = (event as CustomEvent<AssistantContext & { question?: string }>).detail;
       if (!selected?.workflow || selected.purpose !== "feedback") return;
       const snapshot = assistantContextSnapshot(selected);
       // Preserve previous corrections locally while keeping media out of chat history.
       snapshot.workflow!.userCorrection = selected.workflow.userCorrection;
-      setPendingFeedback(snapshot);
+      setPendingFeedback({ context: snapshot, question: typeof selected.question === "string" ? selected.question.trim() : undefined });
       setHistoryOpen(false);
       setOpen(true);
     };
@@ -184,13 +184,19 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   useEffect(() => {
     if (!pendingFeedback || !loaded || busy || controller.current || consumedFeedback.current === pendingFeedback) return;
     consumedFeedback.current = pendingFeedback;
-    const fresh = { ...newAssistantConversation(), feedbackContext: pendingFeedback };
-    update(current => ({ ...current, activeId: fresh.id, conversations: [...current.conversations, fresh] }));
+    const existing = pendingFeedback.question ? [...stateRef.current.conversations].reverse().find(c =>
+      c.clarificationQuestion === pendingFeedback.question && c.feedbackContext?.key === pendingFeedback.context.key) : undefined;
+    const fresh = existing ?? { ...newAssistantConversation(), feedbackContext: pendingFeedback.context, clarificationQuestion: pendingFeedback.question };
+    if (pendingFeedback.question && !existing) {
+      fresh.title = pendingFeedback.question.slice(0, 64);
+      fresh.messages = [{ id: crypto.randomUUID(), role: "assistant", text: pendingFeedback.question, at: new Date().toISOString() }];
+    }
+    update(current => ({ ...current, activeId: fresh.id, conversations: existing ? current.conversations : [...current.conversations, fresh] }));
     setPendingFeedback(null);
     setIncludeContext(true);
     setError("");
     setFeedbackError("");
-    void send(FEEDBACK_PROMPT);
+    if (!pendingFeedback.question) void send(FEEDBACK_PROMPT);
     requestAnimationFrame(() => input.current?.focus());
   }, [pendingFeedback, loaded, busy, update]);
 
@@ -212,7 +218,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
     setBusy(true); setError(""); setHistoryOpen(false); setActivity("Starting…");
     follow.current = true; setAtBottom(true);
     const snapshot = update((s) => ({ ...s, conversations: s.conversations.map((c) => c.id !== current.id ? c : {
-      ...c, draft: retry ? c.draft : "", title: c.feedbackContext ? `Feedback: ${c.feedbackContext.title}` : history.length ? c.title : question.trim().slice(0, 64),
+      ...c, draft: retry ? c.draft : "", title: c.clarificationQuestion ? c.title : c.feedbackContext ? `Feedback: ${c.feedbackContext.title}` : history.length ? c.title : question.trim().slice(0, 64),
       messages: [...history,
         { id: userId, role: "user", feedbackSaved: alreadySavedFeedback || undefined, text: question.trim(), at: new Date().toISOString(), ...(turnContext ? { context: turnContext } : {}) },
         { id: answerId, role: "assistant", text: "", at: new Date().toISOString() }],
@@ -311,7 +317,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
       <header className={styles.header}>
         <button className={styles.title} aria-label="Conversation history" aria-expanded={historyOpen} disabled={!loaded}
           title={conversation.messages.length ? conversation.title : "New chat"} onClick={() => { setHistoryOpen(!historyOpen); setDisplayOpen(false); }}>
-          <span>{feedbackContext ? "Feedback" : conversation.messages.length ? conversation.title : "New chat"}</span><ChevronDown size={13} />
+          <span>{conversation.clarificationQuestion ? conversation.title : feedbackContext ? "Feedback" : conversation.messages.length ? conversation.title : "New chat"}</span><ChevronDown size={13} />
         </button>
         <div className={styles.headerActions}>
           <button aria-label="New conversation" title="New chat" disabled={busy || !loaded} onClick={newConversation}><SquarePen size={16} /></button>

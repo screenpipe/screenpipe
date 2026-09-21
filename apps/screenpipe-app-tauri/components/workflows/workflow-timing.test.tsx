@@ -32,13 +32,13 @@ describe("workflow elapsed timing", () => {
     const platform = createFixtureWorkflowsPlatform();
     platform.assistant!.openLink = openLink;
     await act(async () => { render(<WorkflowsApp platform={platform} initialAnalysis={fixtureWorkflowAnalysis} storageKey={null} />); });
-    const card = screen.getByRole("button", { name: /Research synthesis.*Open map/ });
+    const card = screen.getByRole("heading", { name: "Research synthesis" }).closest("article")!;
     expect(within(card).getByText("Avg. time / run")).toBeVisible();
     expect(within(card).getByText("~24m")).toBeVisible();
     expect(within(card).getByText("3 runs · estimated")).toBeVisible();
-    expect(within(screen.getByRole("button", { name: /Partner meeting preparation.*Open map/ })).getByText("Time for one run")).toBeVisible();
-    expect(within(screen.getByRole("button", { name: /Website release check.*Open map/ })).getByText("—")).toBeVisible();
-    fireEvent.click(card);
+    expect(within(screen.getByRole("heading", { name: "Partner meeting preparation" }).closest("article")!).getByText("Time for one run")).toBeVisible();
+    expect(within(screen.getByRole("heading", { name: "Website release check" }).closest("article")!).getByText("—")).toBeVisible();
+    fireEvent.click(within(card).getByRole("button", { name: "Open map" }));
     expect(screen.queryByText("Correct this workflow")).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("Evidence and limitations"));
     const evidence = screen.getByRole("region", { name: "Time per run" });

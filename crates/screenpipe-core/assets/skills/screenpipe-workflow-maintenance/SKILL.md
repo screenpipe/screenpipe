@@ -61,6 +61,32 @@ unsupported confidence is not. Investigate missing evidence with normal tools,
 or leave a concrete open question for another agent. Correct no-change and
 rejection decisions are useful outcomes; do not manufacture updates or quotas.
 
+## Time per run
+
+Time per run is part of workflow maintenance. An empty timingRuns array means
+not yet measured, not that measurement is impossible. When investigating a
+workflow, look for complete occurrences of that same trigger-to-outcome job.
+Use normal history tools to inspect the surrounding interval and distinguish
+continuous work from breaks, unrelated activity and repeated static screens.
+Choose the searches from the evidence; the update window is not a run boundary.
+
+Save supported occurrences in the workflow's timingRuns, using exact captured
+start/end timestamp, app and verbatim quote, plus a summary explaining the run
+and its continuity. The app validates those sources and computes the average.
+Do not emit an average or duration instead of those source boundaries. One
+supported occurrence is useful; more occurrences can improve the average.
+Elapsed time is not active work time. Preparation, a call and later follow-up
+are not one continuous run merely because they concern the same topic.
+
+Retain existing supported timingRuns for the same workflow when enriching it;
+add distinct nonoverlapping runs, up to the contract's 30-run limit. Remove a
+prior run only when the evidence or changed workflow scope invalidates it,
+and explain why. Do not replace prior measurements with [] just because the
+current interval contains no new occurrence. When timing cannot be established,
+preserve the procedure and explain the specific missing boundary, interruption
+or failed lookup in limitations. An honest unknown is valid after investigation;
+never manufacture a number to populate the UI.
+
 ## Older installed pipeline tasks
 
 Only when workflow_workspace is absent and the task explicitly names the legacy
