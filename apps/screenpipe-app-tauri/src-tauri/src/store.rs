@@ -2645,6 +2645,39 @@ fn restore_headed_mode_for_consumer(
     true
 }
 
+/// Retire the consumer timeline switch in favor of sidebar customization.
+/// Preserve screenshot consent and custom layout, and clear the legacy gate so
+/// users can restore Timeline from the sidebar without restarting capture.
+fn migrate_timeline_visibility_to_sidebar(
+    settings: &mut SettingsStore,
+    is_enterprise_build: bool,
+) -> bool {
+    if is_enterprise_build || !settings.recording.disable_timeline {
+        return false;
+    }
+    let layout = settings
+        .extra
+        .entry("sidebarNavLayout".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !layout.is_object() {
+        *layout = serde_json::json!({});
+    }
+    let hidden = layout
+        .as_object_mut()
+        .unwrap()
+        .entry("hidden".to_string())
+        .or_insert_with(|| serde_json::json!(["brain"]));
+    if !hidden.is_array() {
+        *hidden = serde_json::json!(["brain"]);
+    }
+    let hidden = hidden.as_array_mut().unwrap();
+    if !hidden.iter().any(|id| id.as_str() == Some("timeline")) {
+        hidden.push(Value::String("timeline".to_string()));
+    }
+    settings.recording.disable_timeline = false;
+    true
+}
+
 const WINDOWS_TIMELINE_WINDOW_MODE_MIGRATION: &str =
     "windowsTimelineWindowModeMigrationV1";
 
@@ -2883,6 +2916,12 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         tracing::info!(
             "settings migration: restored headed UI and scheduled pipe runs for consumer install"
         );
+        should_save = true;
+    }
+
+    if can_run_settings_migrations
+        && migrate_timeline_visibility_to_sidebar(&mut store, cfg!(feature = "enterprise-build"))
+    {
         should_save = true;
     }
 
@@ -3466,6 +3505,61 @@ mod tests {
         assert!(!restore_headed_mode_for_consumer(&mut enterprise, true));
         assert!(enterprise.headless);
         assert!(enterprise.headless_record_only);
+    }
+
+    #[test]
+    fn timeline_visibility_migration_preserves_capture_and_custom_layout() {
+        for screenshots_disabled in [true, false] {
+            let mut settings = SettingsStore::default();
+            settings.recording.disable_timeline = true;
+            settings.recording.disable_screenshots = screenshots_disabled;
+            settings.extra.insert(
+                "sidebarNavLayout".into(),
+                serde_json::json!({
+                    "order": ["timeline", "home", "meetings"], "hidden": ["pipes"]
+                }),
+            );
+            assert!(migrate_timeline_visibility_to_sidebar(&mut settings, false));
+            assert!(!settings.recording.disable_timeline);
+            assert_eq!(settings.recording.disable_screenshots, screenshots_disabled);
+            assert_eq!(
+                settings.extra["sidebarNavLayout"],
+                serde_json::json!({
+                    "order": ["timeline", "home", "meetings"], "hidden": ["pipes", "timeline"]
+                })
+            );
+            // Persisted migration must not hide the item again after the user restores it.
+            let mut reloaded: SettingsStore =
+                serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
+            reloaded.extra.get_mut("sidebarNavLayout").unwrap()["hidden"] = serde_json::json!([]);
+            assert!(!migrate_timeline_visibility_to_sidebar(
+                &mut reloaded,
+                false
+            ));
+            assert_eq!(
+                reloaded.extra["sidebarNavLayout"]["hidden"],
+                serde_json::json!([])
+            );
+        }
+    }
+
+    #[test]
+    fn timeline_visibility_migration_preserves_defaults_and_enterprise() {
+        let mut settings = SettingsStore::default();
+        assert!(!migrate_timeline_visibility_to_sidebar(
+            &mut settings,
+            false
+        ));
+        assert!(!settings.extra.contains_key("sidebarNavLayout"));
+        settings.recording.disable_timeline = true;
+        assert!(!migrate_timeline_visibility_to_sidebar(&mut settings, true));
+        assert!(settings.recording.disable_timeline);
+        assert!(!settings.extra.contains_key("sidebarNavLayout"));
+        assert!(migrate_timeline_visibility_to_sidebar(&mut settings, false));
+        assert_eq!(
+            settings.extra["sidebarNavLayout"]["hidden"],
+            serde_json::json!(["brain", "timeline"])
+        );
     }
 
     #[test]

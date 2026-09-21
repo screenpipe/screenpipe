@@ -21,9 +21,6 @@ vi.mock("@/lib/hooks/use-settings", () => ({
     updateSettings: mocks.updateSettings,
   }),
 }));
-vi.mock("@/lib/hooks/use-managed-policy", () => ({
-  useManagedPolicy: () => ({ isSettingLocked: () => false, getManagedValue: () => undefined }),
-}));
 vi.mock("@/components/theme-provider", () => ({
   useTheme: () => ({ theme: "system", setTheme: vi.fn() }),
 }));
@@ -57,6 +54,12 @@ describe("DisplaySection sidebar layout", () => {
   });
 
   afterEach(() => cleanup());
+
+  it("leaves timeline visibility to the sidebar menu instead of another toggle", () => {
+    render(<DisplaySection />);
+    expect(screen.queryByText("Timeline / rewind")).toBeNull();
+    expect(searchIndex.some((field) => (decodeOptions(field.label)?.$_source ?? field.label) === "Timeline / rewind")).toBe(false);
+  });
 
   it("shows meetings in the sidebar by default", () => {
     render(<DisplaySection />);

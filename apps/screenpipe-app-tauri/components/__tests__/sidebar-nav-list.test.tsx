@@ -175,6 +175,23 @@ describe("SidebarNavList", () => {
     expect(handlers.onSetHidden).toHaveBeenCalledWith("pipes", true);
   });
 
+  it("hides Timeline with right-click and restores it from Sidebar options", () => {
+    const hidden = renderList({
+      items: [...ITEMS, { id: "timeline", label: "Timeline", icon: <span /> }],
+    });
+    rightClick("nav-timeline");
+    fireEvent.click(screen.getByText("Hide from sidebar"));
+    expect(hidden.onSetHidden).toHaveBeenCalledWith("timeline", true);
+
+    cleanup();
+    const restored = renderCustomizationMenu({
+      hiddenItems: [{ id: "timeline", label: "Timeline" }],
+    });
+    openDropdown("sidebar-options");
+    fireEvent.click(screen.getByText("Show Timeline"));
+    expect(restored.onSetHidden).toHaveBeenCalledWith("timeline", false);
+  });
+
   it("restores hidden rows through progressive disclosure", () => {
     const handlers = renderCustomizationMenu();
     openDropdown("sidebar-options");

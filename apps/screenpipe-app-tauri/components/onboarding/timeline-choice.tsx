@@ -171,7 +171,7 @@ export default function TimelineChoice({
   const [error, setError] = useState<string | null>(null);
 
   const lowTier = isLowTier(settings.deviceTier);
-  // Recommendation: keep the timeline on unless the device is low tier.
+  // Recommendation: capture screenshots unless the device is low tier.
   const recommendEnabled = !lowTier;
 
   const choose = async (enabled: boolean) => {
@@ -183,7 +183,7 @@ export default function TimelineChoice({
     setPending(enabled);
     setError(null);
     posthog.capture("onboarding_timeline_choice", {
-      timeline_enabled: enabled,
+      capture_choice_version: 2,
       screenshots_enabled: enabled,
       device_tier: settings.deviceTier ?? "unknown",
       followed_recommendation: enabled === recommendEnabled,
@@ -194,12 +194,9 @@ export default function TimelineChoice({
     // capture still on, i.e. the opposite of what the user just asked for —
     // worst on exactly the low-end machines this step exists to protect.
     try {
-      // Both flags move together. On its own `disableTimeline` only skips the
-      // in-memory hot frame cache — screen capture, JPEG writes, the OCR
-      // fallback and the ffmpeg compaction worker all keep running, so "saves
-      // ram, cpu & disk" would not hold.
+      // Capture is independent of navigation. Sidebar visibility is owned by
+      // the sidebar's right-click menu, including when capture stays off.
       await updateSettings({
-        disableTimeline: !enabled,
         disableScreenshots: !enabled,
       });
     } catch (e) {
@@ -244,10 +241,10 @@ export default function TimelineChoice({
         transition={{ delay: 0.1 }}
       >
         <h2 className="font-mono text-base font-bold normal-case">
-          Meet the timeline
+          Record screenshots for the timeline
         </h2>
         <p className="font-mono text-[10px] text-muted-foreground/60 mt-1 max-w-[320px]">
-          Rewind what you&apos;ve seen on screen
+          Choose whether to save new visual history
         </p>
       </motion.div>
 
@@ -290,10 +287,10 @@ export default function TimelineChoice({
           transition={{ delay: 0.3 }}
         >
           <p className="font-mono text-[10px] text-amber-500/90 font-semibold normal-case">
-            Timeline may slow down this device
+            Screenshots may slow down this device
           </p>
           <p className="font-mono text-[10px] text-muted-foreground/70 mt-1 leading-snug">
-            Keeping it off saves memory, CPU and disk. Text exposed by your apps
+            Skipping screenshots saves memory, CPU and disk. Text exposed by your apps
             stays searchable; screenshots and image-only text won&apos;t be
             captured.
           </p>
@@ -330,7 +327,7 @@ export default function TimelineChoice({
         >
           <span className="flex items-center gap-1.5">
             {pending === true && <Loader className="w-3 h-3 animate-spin" />}
-            Timeline on
+            Enable screenshots
           </span>
           {recommendEnabled ? recommendedTag : subtext("visual rewind")}
         </button>
@@ -345,7 +342,7 @@ export default function TimelineChoice({
         >
           <span className="flex items-center gap-1.5">
             {pending === false && <Loader className="w-3 h-3 animate-spin" />}
-            Keep it off
+            Skip screenshots
           </span>
           {!recommendEnabled
             ? recommendedTag
@@ -359,7 +356,7 @@ export default function TimelineChoice({
         animate={{ opacity: 1 }}
         transition={{ delay: 0.45 }}
       >
-        Not a forever choice — change it anytime in settings
+        Change screenshot capture in Screen settings. Right-click Timeline to hide it. Restore it from Sidebar options.
       </motion.p>
     </motion.div>
   );

@@ -20,7 +20,6 @@ import { FONT_SIZE_DEFAULT, FONT_SIZE_OPTIONS } from "@/lib/utils/font-size";
 import { open } from "@tauri-apps/plugin-shell";
 import type { SettingsField } from "./settings-search";
 import { ManagedSwitch } from "@/components/enterprise-locked-setting";
-import { TimelineSetting } from "./timeline-setting";
 import {
   DEFAULT_SIDEBAR_NAV_LAYOUT,
   SIDEBAR_NAV_ORDER,
@@ -38,7 +37,6 @@ export const searchIndex: SettingsField[] = [
   { label: msg("Font Size", {}) },
   { label: msg("Chat Always on Top", {}), keywords: ["pin", "window"] },
   { label: msg("Shortcut Reminder", {}), keywords: ["overlay", "pill", "pin", "drag", "position"] },
-  { label: msg("Timeline / rewind", {}), keywords: ["rewind", "timeline", "backend"] },
   { label: msg("Overlay Size", {}) },
   { label: msg("Hide from screen recordings", {}), keywords: ["capture", "obs", "screen share", "overlay"] },
   { label: msg("Sidebar translucency", {}), keywords: ["vibrancy", "translucent"] },
@@ -155,8 +153,6 @@ export function DisplaySection() {
             </div>
           </CardContent>
         </Card>
-
-        <TimelineSetting />
 
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">

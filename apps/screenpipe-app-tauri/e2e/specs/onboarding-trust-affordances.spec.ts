@@ -332,7 +332,7 @@ const textOfTestId = async (testId: string): Promise<string> =>
         await seedLowDeviceTier();
         await gotoSlide("timeline");
         await browser.waitUntil(
-          async () => (await bodyText()).includes("meet the timeline"),
+          async () => (await bodyText()).includes("record screenshots for the timeline"),
           { timeout: t(45_000), timeoutMsg: "timeline slide never rendered" },
         );
 
