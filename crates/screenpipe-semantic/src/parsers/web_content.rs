@@ -66,7 +66,13 @@ impl WebContentParser {
             "gitlab" => {
                 class(tree, node, "note-comment") || class(tree, node, "work-item-description")
             }
-            "hackernews" => class(tree, node, "comtr") || class(tree, node, "fatitem"),
+            // WebKit omits the layout table rows but exposes each comment body
+            // and its preceding header as sibling AX groups.
+            "hackernews" => {
+                class(tree, node, "comtr")
+                    || class(tree, node, "fatitem")
+                    || class(tree, node, "commtext")
+            }
             _ => false,
         }
     }
@@ -110,14 +116,29 @@ impl SemanticParser for WebContentParser {
     ) -> Result<ParseOutcome, ProjectionError> {
         let title_node = nodes(tree)
             .filter(|&n| match self.app {
-                "github" => class(tree, n, "markdown-title"),
+                "github" => {
+                    (class(tree, n, "markdown-title")
+                        && (matches!(tree.role(n), Some("AXHeading" | "Heading"))
+                            || ancestor(tree, n, |p| {
+                                matches!(tree.role(p), Some("AXHeading" | "Heading"))
+                            })))
+                        || tree
+                            .classes(n)
+                            .any(|c| c.starts_with("PullRequestHeader-module__inlineTitle__"))
+                }
                 "gitlab" => class(tree, n, "gl-heading-1"),
-                "hackernews" => class(tree, n, "titleline"),
+                "hackernews" => class(tree, n, "titleline") || class(tree, n, "title"),
                 "wikipedia" => tree.dom_identifier(n) == Some("firstHeading"),
                 _ => false,
             })
             .find_map(|node| {
-                let text = content(tree, node, 512);
+                let title_source = if self.app == "hackernews" && class(tree, node, "title") {
+                    tree.descendants(node)
+                        .find(|&n| matches!(tree.role(n), Some("AXLink" | "Hyperlink" | "link")))?
+                } else {
+                    node
+                };
+                let text = content(tree, title_source, 512);
                 (!text.is_empty()).then_some((node, text))
             });
         let url = context.app.browser_url.as_deref().unwrap_or_default();
@@ -153,13 +174,25 @@ impl SemanticParser for WebContentParser {
         }
 
         if self.app == "wikipedia" {
-            let body_node = nodes(tree).find(|&n| {
-                class(tree, n, "mw-parser-output")
-                    && !ancestor(tree, n, |p| excluded(tree, p))
-                    && ancestor(tree, n, |p| {
-                        tree.dom_identifier(p) == Some("mw-content-text")
+            let body_node = nodes(tree)
+                .find(|&n| {
+                    class(tree, n, "mw-parser-output")
+                        && !ancestor(tree, n, |p| excluded(tree, p))
+                        && ancestor(tree, n, |p| {
+                            tree.dom_identifier(p) == Some("mw-content-text")
+                        })
+                })
+                .or_else(|| {
+                    // Safari flattens the inert mw-content-text/mw-parser-output
+                    // wrappers into the article's labelled bodyContent group.
+                    nodes(tree).find(|&n| {
+                        tree.dom_identifier(n) == Some("bodyContent")
+                            && class(tree, n, "vector-body")
+                            && class(tree, n, "ve-init-mw-desktopArticleTarget-targetContainer")
+                            && ancestor(tree, n, |p| class(tree, p, "mw-body"))
+                            && !ancestor(tree, n, |p| excluded(tree, p))
                     })
-            });
+                });
             let Some(body_node) = body_node else {
                 return Ok(ParseOutcome::NotHandled);
             };
@@ -178,6 +211,12 @@ impl SemanticParser for WebContentParser {
         let mut items = vec![root];
         let mut remaining = BODY_BUDGET;
         let mut seen = HashSet::new();
+        if self.app == "github" {
+            append_flat_github_posts(tree, &scope, &mut items, &mut remaining);
+        }
+        if self.app == "gitlab" {
+            append_flat_gitlab_description(tree, &scope, &mut items, &mut remaining);
+        }
         for post in nodes(tree).filter(|&n| self.is_post(tree, n)) {
             if items.len() > MAX_POSTS || remaining == 0 {
                 items[0].metadata.insert("truncated".into(), "true".into());
@@ -202,14 +241,27 @@ impl SemanticParser for WebContentParser {
             if body.is_empty() {
                 continue;
             }
-            let author = tree.descendants(post).find(|&n| {
+            let flat_header = (self.app == "hackernews" && class(tree, post, "commtext"))
+                .then(|| hn_sibling_header(tree, post))
+                .flatten();
+            let author = tree.descendants(flat_header.unwrap_or(post)).find(|&n| {
                 self.is_author(tree, n)
                     && n != body_node
                     && !excluded(tree, n)
-                    && !ancestor_until(tree, n, post, |p| p == body_node || excluded(tree, p))
+                    && !ancestor_until(tree, n, flat_header.unwrap_or(post), |p| {
+                        p == body_node || excluded(tree, p)
+                    })
             });
             let native_id = tree
                 .dom_identifier(post)
+                .filter(|id| !id.is_empty())
+                .or_else(|| {
+                    flat_header.and_then(|header| {
+                        tree.descendants(header)
+                            .find(|&n| class(tree, n, "togg"))
+                            .and_then(|n| tree.dom_identifier(n))
+                    })
+                })
                 .filter(|id| !id.is_empty() && id.len() <= 128);
             let (key, quality) = match native_id {
                 Some(id) => (format!("{scope}:{id}"), IdentityQuality::Stable),
@@ -256,6 +308,218 @@ fn nodes(tree: &SemanticTree) -> impl Iterator<Item = NodeId> + '_ {
 fn class(tree: &SemanticTree, node: NodeId, expected: &str) -> bool {
     tree.classes(node).any(|c| c == expected)
 }
+
+/// Only the immediately preceding sibling header owns a flattened HN body.
+/// A recognized collapse control and author are both required, so a nearby
+/// story byline or a previous comment cannot be borrowed as attribution.
+fn hn_sibling_header(tree: &SemanticTree, body: NodeId) -> Option<NodeId> {
+    let parent = tree.parent(body);
+    let header = (0..body.0)
+        .rev()
+        .map(NodeId)
+        .find(|&n| tree.parent(n) == parent)?;
+    let has_toggle = tree.descendants(header).any(|n| class(tree, n, "togg"));
+    let has_author = tree.descendants(header).any(|n| class(tree, n, "hnuser"));
+    (has_toggle
+        && has_author
+        && !excluded(tree, header)
+        && !ancestor(tree, header, |p| excluded(tree, p)))
+    .then_some(header)
+}
+
+/// Safari can omit GitHub's inert comment/body divs. In that shape, accept
+/// only a heading with an author and permalink, closed by the matching edit
+/// form. The pair bounds authored content without swallowing the timeline.
+fn append_flat_github_posts(
+    tree: &SemanticTree,
+    scope: &str,
+    items: &mut Vec<SemanticItem>,
+    remaining: &mut usize,
+) {
+    for header in nodes(tree).filter(|&n| matches!(tree.role(n), Some("AXHeading" | "Heading"))) {
+        if ancestor(tree, header, |n| {
+            class(tree, n, "timeline-comment")
+                || class(tree, n, "react-issue-body")
+                || class(tree, n, "react-issue-comment")
+                || excluded(tree, n)
+        }) {
+            continue;
+        }
+        let Some(permalink) = tree.descendants(header).find(|&n| {
+            class(tree, n, "js-timestamp")
+                && tree.dom_identifier(n).is_some_and(|id| {
+                    (id.starts_with("issue-") || id.starts_with("issuecomment-"))
+                        && id.ends_with("-permalink")
+                })
+        }) else {
+            continue;
+        };
+        let Some(author) = tree.descendants(header).find(|&n| class(tree, n, "author")) else {
+            continue;
+        };
+        let id = tree
+            .dom_identifier(permalink)
+            .unwrap()
+            .trim_end_matches("-permalink");
+        if id.len() > 128 {
+            continue;
+        }
+        let end_id = format!("{id}-edit-form");
+        let siblings: Vec<_> = ((header.0 + 1)..tree.len() as u32)
+            .map(NodeId)
+            .filter(|&n| tree.parent(n) == tree.parent(header))
+            .collect();
+        let Some(end) = siblings.iter().position(|&n| {
+            tree.dom_identifier(n) == Some(end_id.as_str()) && class(tree, n, "js-comment-update")
+        }) else {
+            continue;
+        };
+        if siblings[..end]
+            .iter()
+            .any(|&n| tree.descendants(n).any(|p| class(tree, p, "js-timestamp")))
+        {
+            continue;
+        }
+        if items.len() > MAX_POSTS || *remaining == 0 {
+            items[0].metadata.insert("truncated".into(), "true".into());
+            break;
+        }
+        let mut body = String::new();
+        let mut sources = Vec::new();
+        let mut truncated = false;
+        for &node in &siblings[..end] {
+            if excluded(tree, node)
+                || class(tree, node, "details-overlay")
+                || class(tree, node, "tooltipped")
+                || control(tree, node)
+                || matches!(tree.role(node), Some("AXPopUpButton" | "ComboBox"))
+            {
+                continue;
+            }
+            let separator = usize::from(!body.is_empty());
+            let available = remaining.saturating_sub(body.len() + separator);
+            let (text, cut) = extract_content(tree, node, available);
+            if !text.is_empty() {
+                if separator > 0 {
+                    body.push('\n');
+                }
+                body.push_str(&text);
+                sources.push(node);
+            }
+            if cut {
+                truncated = true;
+                break;
+            }
+        }
+        if body.is_empty() {
+            continue;
+        }
+        *remaining -= body.len();
+        let mut item = SemanticItem::new(
+            format!("post:{}", header.0),
+            SemanticKind::Message,
+            format!("{scope}:{id}"),
+            IdentityQuality::Stable,
+        );
+        item.parent_local_id = Some("page".into());
+        item.body = Some(body);
+        let actor = content(tree, author, 128);
+        if !actor.is_empty() {
+            item.actor = Some(actor);
+        }
+        item.source_nodes = sources;
+        item.source_nodes.push(author);
+        if truncated {
+            item.metadata.insert("truncated".into(), "true".into());
+        }
+        items.push(item);
+    }
+}
+
+/// WebKit exposes a work item's description as siblings between the title
+/// group and attribute sidebar. Require both landmarks in the same content
+/// panel; never extend the description into activity or editor content.
+fn append_flat_gitlab_description(
+    tree: &SemanticTree,
+    scope: &str,
+    items: &mut Vec<SemanticItem>,
+    remaining: &mut usize,
+) {
+    if nodes(tree).any(|n| class(tree, n, "work-item-description")) {
+        return;
+    }
+    let Some(panel) = nodes(tree).find(|&n| tree.dom_identifier(n) == Some("content-body")) else {
+        return;
+    };
+    let siblings: Vec<_> = tree.children(panel).collect();
+    let Some(start) = siblings
+        .iter()
+        .position(|&n| tree.descendants(n).any(|p| class(tree, p, "gl-heading-1")))
+    else {
+        return;
+    };
+    let Some(end) = siblings
+        .iter()
+        .position(|&n| class(tree, n, "gl-detail-layout-sidebar"))
+    else {
+        return;
+    };
+    if start >= end {
+        return;
+    }
+    let mut body = String::new();
+    let mut sources = Vec::new();
+    let mut truncated = false;
+    for &node in &siblings[start + 1..end] {
+        if control(tree, node) {
+            break;
+        }
+        if excluded(tree, node) || ancestor(tree, node, |p| excluded(tree, p)) {
+            continue;
+        }
+        let separator = usize::from(!body.is_empty());
+        let (text, cut) =
+            extract_content(tree, node, remaining.saturating_sub(body.len() + separator));
+        if !text.is_empty() {
+            if separator > 0 {
+                body.push('\n');
+            }
+            body.push_str(&text);
+            sources.push(node);
+        }
+        if cut {
+            truncated = true;
+            break;
+        }
+    }
+    if body.is_empty() {
+        return;
+    }
+    *remaining -= body.len();
+    let mut item = SemanticItem::new(
+        "description",
+        SemanticKind::Message,
+        format!("{scope}:description"),
+        IdentityQuality::Stable,
+    );
+    item.parent_local_id = Some("page".into());
+    item.body = Some(body);
+    item.source_nodes = sources;
+    if let Some(author) = tree
+        .descendants(siblings[start])
+        .find(|&n| class(tree, n, "gl-avatar-link") && class(tree, n, "js-user-link"))
+    {
+        let actor = content(tree, author, 128);
+        if !actor.is_empty() {
+            item.actor = Some(actor);
+        }
+        item.source_nodes.push(author);
+    }
+    if truncated {
+        item.metadata.insert("truncated".into(), "true".into());
+    }
+    items.push(item);
+}
 fn ancestor(tree: &SemanticTree, node: NodeId, predicate: impl Fn(NodeId) -> bool) -> bool {
     let mut parent = tree.parent(node);
     while let Some(p) = parent {
@@ -273,23 +537,51 @@ fn control(tree: &SemanticTree, node: NodeId) -> bool {
     )
 }
 fn excluded(tree: &SemanticTree, node: NodeId) -> bool {
-    matches!(
-        tree.role(node),
-        Some("AXTextArea" | "Edit" | "TextBox" | "AXTextField" | "textbox")
-    ) || [
-        "js-preview-body",
-        "timeline-comment-actions",
-        "mw-editsection",
-        "sitebit",
-        "reply",
-        "description-more",
-        "anchor",
-        "navbox",
-        "sidebar",
-        "portalbox",
-    ]
-    .iter()
-    .any(|c| class(tree, node, c))
+    duplicate_table_axis(tree, node)
+        || (matches!(tree.role(node), Some("AXLink" | "Hyperlink" | "link"))
+            && tree
+                .text(node)
+                .is_some_and(|text| text.eq_ignore_ascii_case("edit"))
+            && tree
+                .description(node)
+                .is_some_and(|description| description.starts_with("Edit section:")))
+        || tree.dom_identifier(node) == Some("siteSub")
+        || matches!(
+            tree.role(node),
+            Some("AXTextArea" | "Edit" | "TextBox" | "AXTextField" | "textbox")
+        )
+        || [
+            "js-preview-body",
+            "timeline-comment-actions",
+            "mw-editsection",
+            "sitebit",
+            "reply",
+            "description-more",
+            "anchor",
+            "navbox",
+            "sidebar",
+            "portalbox",
+        ]
+        .iter()
+        .any(|c| class(tree, node, c))
+}
+
+/// WebKit exposes the same cells through rows, columns and a header group.
+/// Preserve authored repetition within rows, but do not read alternate axes.
+fn duplicate_table_axis(tree: &SemanticTree, node: NodeId) -> bool {
+    let Some(table) = tree
+        .parent(node)
+        .filter(|&p| tree.role(p) == Some("AXTable"))
+    else {
+        return false;
+    };
+    if !tree.children(table).any(|n| tree.role(n) == Some("AXRow")) {
+        return false;
+    }
+    tree.role(node) == Some("AXColumn")
+        || (tree.role(node) == Some("AXGroup")
+            && tree.children(node).next().is_some()
+            && tree.children(node).all(|n| tree.role(n) == Some("AXCell")))
 }
 
 /// Read only leaves so an aggregate AX label and its descendants, or nested
@@ -312,7 +604,22 @@ fn extract_content(tree: &SemanticTree, root: NodeId, limit: usize) -> (String, 
         let value = tree
             .text(node)
             .or_else(|| tree.title(node))
-            .or_else(|| tree.description(node))
+            .or_else(|| {
+                tree.description(node).filter(|description| {
+                    !matches!(
+                        *description,
+                        "text"
+                            | "link"
+                            | "group"
+                            | "heading"
+                            | "image"
+                            | "button"
+                            | "cell"
+                            | "row"
+                            | "column"
+                    )
+                })
+            })
             .or_else(|| tree.value(node));
         let Some(value) = value.filter(|v| !v.trim().is_empty()) else {
             continue;

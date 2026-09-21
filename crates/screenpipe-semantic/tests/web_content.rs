@@ -274,3 +274,182 @@ fn node(depth: u8, role: &str, class: &str, text: &str) -> CapturedAccessibility
         ..Default::default()
     }
 }
+
+#[test]
+fn webkit_flattened_comments_keep_local_authors_and_stable_ids() {
+    let mut case = cases().remove(3);
+    case.nodes = vec![
+        node(0, "AXGroup", "title", ""),
+        node(1, "AXLink", "", "Synthetic discussion"),
+        node(0, "AXGroup", "subtext", ""),
+        node(1, "AXLink", "hnuser", "Story submitter"),
+        node(0, "AXGroup", "", ""),
+        node(1, "AXLink", "hnuser", "Alice"),
+        node(1, "AXLink", "togg clicky", "Collapse"),
+        node(0, "AXGroup", "commtext c00", ""),
+        node(1, "AXStaticText", "", "First authored comment"),
+        node(0, "AXGroup", "commtext c00", ""),
+        node(1, "AXStaticText", "", "Comment with no retained header"),
+    ];
+    case.nodes[6].dom_identifier = Some("123".into());
+    let parsed = items(&case);
+    assert_eq!(parsed.len(), 3);
+    assert_eq!(parsed[0].title.as_deref(), Some("Synthetic discussion"));
+    assert_eq!(parsed[1].actor.as_deref(), Some("Alice"));
+    assert_eq!(
+        parsed[1].identity_quality,
+        screenpipe_semantic::IdentityQuality::Stable
+    );
+    assert_eq!(parsed[2].actor, None, "do not borrow a previous author");
+    assert_eq!(
+        parsed[2].body.as_deref(),
+        Some("Comment with no retained header")
+    );
+}
+
+#[test]
+fn webkit_github_comment_requires_matching_end_and_excludes_timeline() {
+    let mut case = cases().remove(1);
+    case.nodes = vec![
+        node(
+            0,
+            "AXHeading",
+            "PullRequestHeader-module__inlineTitle__example",
+            "",
+        ),
+        node(1, "AXStaticText", "", "Synthetic pull request"),
+        node(0, "AXHeading", "", ""),
+        node(1, "AXLink", "author", "Alice"),
+        node(1, "AXLink", "js-timestamp", "Yesterday"),
+        node(0, "AXGroup", "tooltipped", "Collaborator"),
+        node(0, "AXGroup", "", ""),
+        node(1, "AXStaticText", "", "Authored description"),
+        node(0, "AXGroup", "js-comment-update", ""),
+        node(
+            0,
+            "AXGroup",
+            "TimelineItem-body",
+            "Merged an unrelated commit",
+        ),
+    ];
+    case.nodes[4].dom_identifier = Some("issue-42-permalink".into());
+    case.nodes[8].dom_identifier = Some("issue-42-edit-form".into());
+    let parsed = items(&case);
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].title.as_deref(), Some("Synthetic pull request"));
+    assert_eq!(parsed[1].actor.as_deref(), Some("Alice"));
+    assert_eq!(parsed[1].body.as_deref(), Some("Authored description"));
+    case.nodes[8].dom_identifier = Some("issue-99-edit-form".into());
+    assert!(matches!(
+        parse(&case).outcome,
+        ValidatedParseOutcome::NotHandled
+    ));
+}
+
+#[test]
+fn webkit_wikipedia_body_excludes_sidebar_and_offwindow_content() {
+    let mut case = cases().remove(4);
+    case.nodes = vec![
+        node(0, "AXGroup", "mw-body", ""),
+        node(1, "AXHeading", "", "Synthetic article"),
+        node(
+            1,
+            "AXGroup",
+            "vector-body ve-init-mw-desktopArticleTarget-targetContainer",
+            "",
+        ),
+        node(2, "AXGroup", "sidebar", ""),
+        node(3, "AXStaticText", "", "Unrelated navigation"),
+        node(2, "AXStaticText", "", "Visible article paragraph"),
+        node(2, "AXStaticText", "", "Offscreen article paragraph"),
+    ];
+    case.nodes[1].dom_identifier = Some("firstHeading".into());
+    case.nodes[2].dom_identifier = Some("bodyContent".into());
+    case.nodes[6].on_screen = Some(false);
+    case.nodes[6].offscreen_geometry = true;
+    let parsed = items(&case);
+    assert_eq!(parsed[0].body.as_deref(), Some("Visible article paragraph"));
+    case.nodes[0].class_name = None;
+    assert!(matches!(
+        parse(&case).outcome,
+        ValidatedParseOutcome::NotHandled
+    ));
+}
+
+#[test]
+fn webkit_gitlab_description_is_bounded_before_attributes_and_activity() {
+    let mut case = cases().remove(2);
+    case.nodes = vec![
+        node(0, "AXGroup", "content", ""),
+        node(1, "AXGroup", "", ""),
+        node(2, "AXHeading", "gl-heading-1", "Synthetic issue"),
+        node(2, "AXLink", "gl-avatar-link js-user-link", "Alice"),
+        node(1, "AXHeading", "", "Summary"),
+        node(1, "AXGroup", "", ""),
+        node(2, "AXStaticText", "", "Restore the saved draft"),
+        node(1, "AXButton", "", "Read more"),
+        node(
+            1,
+            "AXGroup",
+            "gl-detail-layout-sidebar",
+            "Sidebar attributes",
+        ),
+        node(1, "AXGroup", "system-note", "Bot changed milestone"),
+    ];
+    case.nodes[0].dom_identifier = Some("content-body".into());
+    let parsed = items(&case);
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[1].actor.as_deref(), Some("Alice"));
+    assert_eq!(
+        parsed[1].body.as_deref(),
+        Some("Summary\nRestore the saved draft")
+    );
+    case.nodes[8].class_name = None;
+    assert!(matches!(
+        parse(&case).outcome,
+        ValidatedParseOutcome::NotHandled
+    ));
+}
+
+#[test]
+fn native_table_axes_do_not_duplicate_rows_or_erase_authored_repetition() {
+    let mut case = cases().remove(1);
+    case.nodes = vec![
+        node(0, "AXGroup", "timeline-comment", ""),
+        node(1, "AXGroup", "markdown-body", ""),
+        node(2, "AXTable", "", ""),
+        node(3, "AXRow", "", ""),
+        node(4, "AXCell", "", ""),
+        node(5, "AXStaticText", "", "Repeated value"),
+        node(3, "AXRow", "", ""),
+        node(4, "AXCell", "", ""),
+        node(5, "AXStaticText", "", "Repeated value"),
+        node(3, "AXColumn", "", ""),
+        node(4, "AXCell", "", ""),
+        node(5, "AXStaticText", "", "Repeated value"),
+        node(3, "AXGroup", "", ""),
+        node(4, "AXCell", "", ""),
+        node(5, "AXStaticText", "", "Repeated value"),
+    ];
+    assert_eq!(
+        items(&case)[1].body.as_deref(),
+        Some("Repeated value\nRepeated value")
+    );
+}
+
+#[test]
+fn native_role_labels_and_section_edit_controls_are_not_authored_text() {
+    let mut case = cases().remove(1);
+    case.nodes = vec![
+        node(0, "AXGroup", "timeline-comment", ""),
+        node(1, "AXGroup", "markdown-body", ""),
+        node(2, "AXStaticText", "", ""),
+        node(2, "AXLink", "", "edit"),
+        node(3, "AXStaticText", "", "edit"),
+        node(2, "AXStaticText", "", "text"),
+        node(2, "AXStaticText", "", "edit"),
+    ];
+    case.nodes[2].role_description = Some("text".into());
+    case.nodes[3].help_text = Some("Edit section: History".into());
+    assert_eq!(items(&case)[1].body.as_deref(), Some("text\nedit"));
+}

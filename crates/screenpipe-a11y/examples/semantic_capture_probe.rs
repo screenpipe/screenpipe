@@ -114,6 +114,9 @@ mod probe {
             node.bounds.as_ref().map(|b| json!(b)),
         );
         insert_some(&mut object, "on_screen", node.on_screen.map(Value::from));
+        if node.semantic_offscreen {
+            object.insert("offscreen_geometry".into(), Value::Bool(true));
+        }
         insert_some(
             &mut object,
             "automation_id",
