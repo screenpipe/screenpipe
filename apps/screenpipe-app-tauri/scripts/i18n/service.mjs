@@ -71,7 +71,10 @@ export async function translateMissing({ root, source, native, config, policy, c
         const valid = validateCatalog(messages, content, config.defaultLocale, file.locale).valid;
         const target = batch.kind === "gt" ? current.translations : current.native;
         target[file.locale] = { ...target[file.locale], ...valid };
-        downloads[batch.kind][file.locale] = { ...downloads[batch.kind][file.locale], ...content };
+        // Retain rejected entries for diagnostics, but an incompatible legacy
+        // file must not replace an accepted translation recovered earlier.
+        // A valid provider correction still supersedes the previous wording.
+        downloads[batch.kind][file.locale] = { ...content, ...downloads[batch.kind][file.locale], ...valid };
         await writeJson(path.join(dir, batch.kind, `${file.locale}.json`), downloads[batch.kind][file.locale]);
         downloaded = true;
       }

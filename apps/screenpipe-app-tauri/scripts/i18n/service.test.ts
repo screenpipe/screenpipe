@@ -26,6 +26,31 @@ test("unchanged source hashes make zero translation requests", async () => {
   expect(calls).toHaveLength(0);
 });
 
+test("cold recovery keeps a valid rich-text translation when a legacy file has incompatible attributes", async () => {
+  const f = await fixture();
+  const source = { field: ["Your correction", { i: 1, t: "textarea" }] };
+  const accepted = ["修正内容", { i: 1, t: "textarea" }];
+  const legacy = ["修正内容", { i: 1, t: "textarea", d: { arl: "Your correction" } }];
+  const calls: string[] = [];
+  const result = await translateMissing({ ...f, source, cache: null, request: async (endpoint: string, body: any) => {
+    calls.push(endpoint);
+    if (endpoint.endsWith("branches/info")) return { branches: [{ id: "branch", name: "desktop-test-policy" }] };
+    if (endpoint.endsWith("files/orphaned")) return { orphanedFiles: [
+      { fileId: "current", versionId: "current", fileName: "desktop/gt/current.json" },
+      { fileId: "legacy", versionId: "legacy", fileName: "__INTERNAL_GT_TEMPLATE_NAME__" },
+    ] };
+    if (endpoint.endsWith("files/download")) return { files: body.map((ref: any) => ({
+      ...ref, fileFormat: "GTJSON", data: Buffer.from(JSON.stringify({ field: ref.fileId === "current" ? accepted : legacy })).toString("base64"),
+    })) };
+    throw new Error(`Unexpected request: ${endpoint}`);
+  } });
+  expect(result.exitCode).toBe(0);
+  expect(result.output).toContain("zero translation requests");
+  expect(calls).not.toContain("/v2/translate");
+  const downloaded = JSON.parse(await fs.readFile(path.join(f.root, ".localization/gt/ja.json"), "utf8"));
+  expect(downloaded.field).toEqual(accepted);
+});
+
 test("only missing messages are sent, with file context, and provider corrections are downloaded without regeneration", async () => {
   const f = await fixture();
   const calls: string[] = [];
