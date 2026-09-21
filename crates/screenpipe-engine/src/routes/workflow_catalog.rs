@@ -590,8 +590,14 @@ fn apply_feedback(workflow: &mut Value, body: &CorrectionRequest) -> Result<(), 
                 "Only small descriptive workflow corrections are allowed.",
             ));
         }
-        if fields.keys().any(|key| workflow["userEdits"].get(key).is_some()) {
-            return Err(error(StatusCode::CONFLICT, "This field was manually edited. Use Edit workflow to change it."));
+        if fields
+            .keys()
+            .any(|key| workflow["userEdits"].get(key).is_some())
+        {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "This field was manually edited. Use Edit workflow to change it.",
+            ));
         }
         for (key, value) in fields {
             workflow[key] = value.clone();

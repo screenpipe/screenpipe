@@ -1018,10 +1018,7 @@ impl SCServer {
                 "/workflows/catalog",
                 crate::routes::workflow_catalog::commit,
             )
-            .post(
-                "/workflows/edits",
-                crate::routes::workflow_edits::edit,
-            )
+            .post("/workflows/edits", crate::routes::workflow_edits::edit)
             .post(
                 "/workflows/corrections",
                 crate::routes::workflow_catalog::correct,
