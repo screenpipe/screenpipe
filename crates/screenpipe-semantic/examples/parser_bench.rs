@@ -142,7 +142,13 @@ fn main() {
                 executable: profile.executables.first().map(|v| (*v).into()),
                 display_name: profile.display_name.into(),
                 version: None,
-                browser_url: profile.sample_url.map(str::to_owned),
+                // Keep native benchmark inputs stable when web aliases are
+                // added to a profile; browser-only profiles use their URL.
+                browser_url: if profile.app_ids.is_empty() && profile.executables.is_empty() {
+                    profile.sample_url.map(str::to_owned)
+                } else {
+                    None
+                },
             };
             let context = ParseContext {
                 frame_id: 1,
