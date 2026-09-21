@@ -453,3 +453,81 @@ fn native_role_labels_and_section_edit_controls_are_not_authored_text() {
     case.nodes[3].help_text = Some("Edit section: History".into());
     assert_eq!(items(&case)[1].body.as_deref(), Some("text\nedit"));
 }
+
+#[test]
+fn windows_chromium_github_body_stays_inside_verified_post() {
+    let mut case = cases().remove(1);
+    case.app.platform = Platform::Windows;
+    case.nodes = vec![
+        node(
+            0,
+            "Text",
+            "PullRequestHeader-module__inlineTitle__synthetic",
+            "Synthetic pull request",
+        ),
+        node(0, "Group", "timeline-comment", ""),
+        node(1, "Hyperlink", "author", "Alice"),
+        node(1, "Hyperlink", "js-timestamp", "Yesterday"),
+        node(1, "Group", "edit-comment-hide", ""),
+        node(2, "Group", "", ""),
+        node(3, "Text", "", "Authored prefix"),
+        node(4, "Hyperlink", "", "linked value"),
+        node(3, "Text", "", "Authored suffix"),
+        node(0, "Group", "TimelineItem-body", "Unrelated activity"),
+    ];
+    case.nodes[3].dom_identifier = Some("issue-42-permalink".into());
+    let parsed = items(&case);
+    assert_eq!(parsed[1].actor.as_deref(), Some("Alice"));
+    assert_eq!(
+        parsed[1].body.as_deref(),
+        Some("Authored prefix\nlinked value\nAuthored suffix")
+    );
+    assert!(!parsed[1].body.as_ref().unwrap().contains("activity"));
+}
+
+#[test]
+fn windows_chromium_hn_requires_local_author_and_numeric_toggle() {
+    let mut case = cases().remove(3);
+    case.app.platform = Platform::Windows;
+    case.nodes = vec![
+        node(0, "Group", "title", ""),
+        node(1, "Hyperlink", "", "Synthetic discussion"),
+        node(0, "Group", "default", ""),
+        node(1, "Hyperlink", "hnuser", "Alice"),
+        node(1, "Hyperlink", "togg clicky", "[–]"),
+        node(1, "Text", "", "Verified comment"),
+    ];
+    case.nodes[4].dom_identifier = Some("15".into());
+    let parsed = items(&case);
+    assert_eq!(parsed[1].actor.as_deref(), Some("Alice"));
+    assert_eq!(parsed[1].body.as_deref(), Some("Verified comment"));
+    case.nodes[4].dom_identifier = Some("not-a-native-comment-id".into());
+    assert_eq!(parse(&case).outcome, ValidatedParseOutcome::NotHandled);
+}
+
+#[test]
+fn windows_chromium_gitlab_creator_requires_by_label() {
+    let mut case = cases().remove(2);
+    case.app.platform = Platform::Windows;
+    case.nodes = vec![
+        node(0, "Group", "content", ""),
+        node(1, "Group", "", ""),
+        node(2, "Text", "gl-heading-1", "Synthetic work item"),
+        node(2, "Text", "", "by"),
+        node(2, "Hyperlink", "gl-avatar-link js-user-link", "Alice"),
+        node(1, "Group", "", ""),
+        node(2, "Group", "work-item-description", ""),
+        node(3, "Text", "", "Verified description"),
+        node(
+            3,
+            "Hyperlink",
+            "author-link js-user-link",
+            "Later commenter",
+        ),
+    ];
+    case.nodes[0].dom_identifier = Some("content-body".into());
+    let parsed = items(&case);
+    assert_eq!(parsed[1].actor.as_deref(), Some("Alice"));
+    case.nodes[3].text = "near".into();
+    assert_eq!(items(&case)[1].actor, None);
+}

@@ -72,6 +72,14 @@ impl WebContentParser {
                 class(tree, node, "comtr")
                     || class(tree, node, "fatitem")
                     || class(tree, node, "commtext")
+                    || (class(tree, node, "default")
+                        && tree.descendants(node).any(|n| class(tree, n, "hnuser"))
+                        && tree.descendants(node).any(|n| {
+                            class(tree, n, "togg")
+                                && tree
+                                    .dom_identifier(n)
+                                    .is_some_and(|id| id.bytes().all(|byte| byte.is_ascii_digit()))
+                        }))
             }
             _ => false,
         }
@@ -229,32 +237,65 @@ impl SemanticParser for WebContentParser {
             {
                 continue;
             }
-            let body_node = tree.descendants(post).find(|&n| {
-                self.is_body(tree, n)
-                    && !excluded(tree, n)
-                    && !ancestor_until(tree, n, post, |p| excluded(tree, p))
-            });
+            let body_node = tree
+                .descendants(post)
+                .find(|&n| {
+                    self.is_body(tree, n)
+                        && !excluded(tree, n)
+                        && !ancestor_until(tree, n, post, |p| excluded(tree, p))
+                })
+                .or_else(|| {
+                    (self.app == "hackernews" && class(tree, post, "default"))
+                        .then(|| hn_windows_body(tree, post))
+                        .flatten()
+                })
+                .or_else(|| {
+                    (self.app == "github")
+                        .then(|| github_windows_body(tree, post))
+                        .flatten()
+                });
             let Some(body_node) = body_node else {
                 continue;
             };
-            let (body, truncated) = extract_content(tree, body_node, remaining);
+            let (body, truncated) =
+                if self.app == "github" && github_windows_body(tree, post) == Some(body_node) {
+                    extract_aggregate_content(tree, body_node, remaining)
+                } else {
+                    extract_content(tree, body_node, remaining)
+                };
             if body.is_empty() {
                 continue;
             }
             let flat_header = (self.app == "hackernews" && class(tree, post, "commtext"))
                 .then(|| hn_sibling_header(tree, post))
                 .flatten();
-            let author = tree.descendants(flat_header.unwrap_or(post)).find(|&n| {
-                self.is_author(tree, n)
-                    && n != body_node
-                    && !excluded(tree, n)
-                    && !ancestor_until(tree, n, flat_header.unwrap_or(post), |p| {
-                        p == body_node || excluded(tree, p)
-                    })
-            });
+            let author = tree
+                .descendants(flat_header.unwrap_or(post))
+                .find(|&n| {
+                    self.is_author(tree, n)
+                        && n != body_node
+                        && !excluded(tree, n)
+                        && !ancestor_until(tree, n, flat_header.unwrap_or(post), |p| {
+                            p == body_node || excluded(tree, p)
+                        })
+                })
+                .or_else(|| {
+                    (self.app == "gitlab" && class(tree, post, "work-item-description"))
+                        .then(|| gitlab_work_item_author(tree, post))
+                        .flatten()
+                });
             let native_id = tree
                 .dom_identifier(post)
                 .filter(|id| !id.is_empty())
+                .or_else(|| {
+                    (self.app == "hackernews" && class(tree, post, "default"))
+                        .then(|| {
+                            tree.descendants(post)
+                                .find(|&n| class(tree, n, "togg"))
+                                .and_then(|n| tree.dom_identifier(n))
+                        })
+                        .flatten()
+                })
                 .or_else(|| {
                     flat_header.and_then(|header| {
                         tree.descendants(header)
@@ -300,6 +341,77 @@ impl SemanticParser for WebContentParser {
         }
         Ok(ParseOutcome::Handled(items))
     }
+}
+
+/// Chromium UIA flattens each HN comment row into a `default` group. Accept
+/// only text after the verified numeric collapse control; separator glyphs and
+/// the preceding byline cannot become authored body content.
+fn hn_windows_body(tree: &SemanticTree, post: NodeId) -> Option<NodeId> {
+    let toggle = tree
+        .descendants(post)
+        .find(|&n| class(tree, n, "togg") && tree.dom_identifier(n).is_some())?;
+    tree.descendants(post).find(|&n| {
+        n.0 > toggle.0
+            && matches!(tree.role(n), Some("Text"))
+            && tree
+                .text(n)
+                .is_some_and(|text| !text.trim().is_empty() && text.trim() != "|")
+            && !excluded(tree, n)
+    })
+}
+
+/// Chromium RawView retains GitHub's post and visible-content boundary but
+/// exposes the inner Markdown container as an unclassified Group. Require the
+/// group to be the direct child of `edit-comment-hide` inside a verified post;
+/// this excludes timeline activity, sidebar content, and edit controls.
+fn github_windows_body(tree: &SemanticTree, post: NodeId) -> Option<NodeId> {
+    let visible = tree
+        .descendants(post)
+        .find(|&n| class(tree, n, "edit-comment-hide") && !excluded(tree, n))?;
+    tree.descendants(visible).find(|&n| {
+        tree.parent(n) == Some(visible)
+            && matches!(tree.role(n), Some("Group"))
+            && !excluded(tree, n)
+    })
+}
+
+/// GitLab Chromium UIA exposes the creator in the work-item header, before the
+/// description wrapper. The explicit avatar/user classes plus the sibling
+/// "by" label establish attribution; a later comment author cannot match.
+fn gitlab_work_item_author(tree: &SemanticTree, post: NodeId) -> Option<NodeId> {
+    let content = ancestor_node(tree, post, |n| {
+        tree.dom_identifier(n) == Some("content-body")
+    })?;
+    (0..post.0).rev().map(NodeId).find(|&candidate| {
+        class(tree, candidate, "gl-avatar-link")
+            && class(tree, candidate, "js-user-link")
+            && ancestor_node(tree, candidate, |n| n == content).is_some()
+            && tree.parent(candidate).is_some_and(|parent| {
+                let siblings: Vec<_> = tree.children(parent).collect();
+                siblings
+                    .iter()
+                    .position(|&node| node == candidate)
+                    .and_then(|index| index.checked_sub(1))
+                    .and_then(|index| siblings.get(index))
+                    .and_then(|&node| tree.text(node))
+                    .is_some_and(|text| text.trim().eq_ignore_ascii_case("by"))
+            })
+    })
+}
+
+fn ancestor_node(
+    tree: &SemanticTree,
+    node: NodeId,
+    predicate: impl Fn(NodeId) -> bool,
+) -> Option<NodeId> {
+    let mut parent = tree.parent(node);
+    while let Some(candidate) = parent {
+        if predicate(candidate) {
+            return Some(candidate);
+        }
+        parent = tree.parent(candidate);
+    }
+    None
 }
 
 fn nodes(tree: &SemanticTree) -> impl Iterator<Item = NodeId> + '_ {
@@ -648,6 +760,46 @@ fn extract_content(tree: &SemanticTree, root: NodeId, limit: usize) -> (String, 
             end -= 1;
         }
         result.push_str(&value[..end]);
+        if end < value.len() {
+            truncated = true;
+            break;
+        }
+    }
+    (result, truncated)
+}
+
+/// Chromium UIA can expose one aggregate Text node with link fragments as its
+/// children. Read the highest authored text at each branch so the aggregate is
+/// preserved without repeating its descendants.
+fn extract_aggregate_content(tree: &SemanticTree, root: NodeId, limit: usize) -> (String, bool) {
+    let mut result = String::new();
+    let mut last_value = None;
+    let mut truncated = false;
+    for node in tree.descendants(root) {
+        if excluded(tree, node) || ancestor_until(tree, node, root, |p| excluded(tree, p)) {
+            continue;
+        }
+        let Some(value) = tree.text(node).filter(|value| !value.trim().is_empty()) else {
+            continue;
+        };
+        let value = value.trim_matches('\n');
+        if last_value == Some(value) {
+            continue;
+        }
+        let separator = usize::from(!result.is_empty());
+        if result.len() + separator >= limit {
+            truncated = true;
+            break;
+        }
+        if separator != 0 {
+            result.push('\n');
+        }
+        let mut end = value.len().min(limit - result.len());
+        while !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        result.push_str(&value[..end]);
+        last_value = Some(value);
         if end < value.len() {
             truncated = true;
             break;

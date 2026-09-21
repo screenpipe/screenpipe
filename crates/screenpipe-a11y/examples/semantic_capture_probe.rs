@@ -18,7 +18,7 @@
 //!
 //! Usage:
 //!   cargo run -p screenpipe-a11y --example semantic_capture_probe -- \
-//!       [--delay-secs 5] [--samples 1] [--interval-ms 1500]
+//!       [--delay-secs 5] [--samples 1] [--interval-ms 1500] [--semantic-off]
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 fn main() {
@@ -49,12 +49,13 @@ mod probe {
         let delay_secs = opt("--delay-secs").unwrap_or(5);
         let samples = opt("--samples").unwrap_or(1).max(1);
         let interval_ms = opt("--interval-ms").unwrap_or(1500);
+        let capture_semantic_structure = !args.iter().any(|arg| arg == "--semantic-off");
 
         std::thread::sleep(Duration::from_secs(delay_secs));
 
         let walker = create_tree_walker(TreeWalkerConfig {
             capture_app_identity: true,
-            capture_semantic_structure: true,
+            capture_semantic_structure,
             ..Default::default()
         });
 
