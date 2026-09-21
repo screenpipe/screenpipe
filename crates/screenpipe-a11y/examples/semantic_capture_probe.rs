@@ -20,19 +20,17 @@
 //!   cargo run -p screenpipe-a11y --example semantic_capture_probe -- \
 //!       [--delay-secs 5] [--samples 1] [--interval-ms 1500]
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn main() {
     probe::run();
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn main() {
-    // The walker itself is cross-platform, but the probe's foreground-focus
-    // driver is Windows-only today.
-    eprintln!("semantic_capture_probe currently targets Windows");
+    eprintln!("semantic_capture_probe currently targets Windows and macOS");
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 mod probe {
     use screenpipe_a11y::tree::{
         create_tree_walker, AccessibilityTreeNode, TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
@@ -81,7 +79,7 @@ mod probe {
                 .unwrap_or_default(),
             "content_hash": snapshot.content_hash,
             "app": {
-                "platform": "windows",
+                "platform": std::env::consts::OS,
                 "app_id": snapshot.app_id,
                 "executable": snapshot.executable,
                 "display_name": snapshot.app_name,
