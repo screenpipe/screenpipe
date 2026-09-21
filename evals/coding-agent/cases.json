@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite": "screenpipe-app-coding-agent-regressions",
-  "dataset_version": "2026-09-20.1",
+  "dataset_version": "2026-09-21.1",
   "suite_type": "regression",
   "owner": "screenpipe engineering",
   "policy": {
@@ -784,9 +784,10 @@
       "grader": {
         "timeout_seconds": 420,
         "fixtures": [
-          { "source_path": "apps/screenpipe-app-tauri/lib/__tests__/save-conversation-race.test.tsx" }
+          { "local_path": "graders/chat-overlapping-load.fixture.tsx",
+            "destination_path": "apps/screenpipe-app-tauri/lib/__tests__/save-conversation-race.test.tsx" }
         ],
-        "command": "cd apps/screenpipe-app-tauri && NODE_OPTIONS=--localstorage-file=.eval-localstorage bun x vitest run --config vitest.config.ts lib/__tests__/save-conversation-race.test.tsx"
+        "command": "cd apps/screenpipe-app-tauri && NODE_OPTIONS=--localstorage-file=.eval-localstorage node node_modules/vitest/vitest.mjs run --config vitest.config.ts lib/__tests__/save-conversation-race.test.tsx --pool=forks --poolOptions.forks.singleFork=true"
       }
     },
     {
@@ -1656,6 +1657,460 @@
           }
         ],
         "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/ai-gateway-glm-tool-history.test.js"
+      }
+    },
+    {
+      "id": "ai-gateway-glm-tool-call-boundary",
+      "name": "Convert recognized GLM tool responses without treating ordinary text as actions",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "da9ca5d1be7ef669cf7edec1d5fba7b99afc6de6"
+      },
+      "base_ref": "50a503a51e0b6f6a529aa2f4751df36ba4a756a7",
+      "oracle_ref": "da9ca5d1be7ef669cf7edec1d5fba7b99afc6de6",
+      "oracle_paths": [
+        "packages/ai-gateway/src/providers/screenpipe-glm.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "tool-calls",
+        "streaming",
+        "gateway"
+      ],
+      "prompt": "GLM returns native function-call text that Pi cannot execute. Repair the actual GLM completion and streaming provider paths so schema-known leading calls become OpenAI tool calls with nonempty distinct IDs, correct function names and argument objects, no duplicated raw call text, and a tool_calls finish reason. Support tagged XML values (string, number, boolean and object types, preserving string leading zeros and Unicode), XML containing JSON arguments, flat JSON call objects, nested function objects with JSON-string arguments, and multiple XML calls. Streaming must work across one-character and seven-character content fragments and retain a single completion terminator. Forward the caller’s declared tools and tool choice and preserve input objects. Unknown tool names, prefixed explanatory prose, malformed JSON and array/null arguments remain unchanged ordinary text; no tools means no conversion. Preserve already-native tool-call IDs/arguments and other OpenAI providers. Use synthetic provider transport, without live calls or executing tools. No particular parser/helper name or ID format is required.",
+      "agent_timeout_seconds": 1200,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/glm-tool-call-boundary.test.js",
+            "destination_path": "evals/coding-agent/graders/glm-tool-call-boundary.test.js"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/glm-tool-call-boundary.test.js"
+      }
+    },
+    {
+      "id": "app-meeting-summary-handoff",
+      "name": "Keep completed meeting summaries visible until authoritative save catches up",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "fc5a65ffbfc785d3b2e2240096ef33fa71d2f5c2",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/6846"
+      },
+      "base_ref": "d86ad74d99fe6df68232ae04fcb6b7b5b3a99c40",
+      "oracle_ref": "fc5a65ffbfc785d3b2e2240096ef33fa71d2f5c2",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/components/meeting-notes/note-view.tsx",
+        "apps/screenpipe-app-tauri/components/meeting-notes/meeting-workspace.tsx"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "meetings",
+        "streaming",
+        "persistence",
+        "recovery"
+      ],
+      "prompt": "A completed meeting summary disappears while its saved note is still catching up. Repair the real note view and summary surface so the matching streamed summary remains visible when execution changes from running to ready. With either no prior summary or an older saved summary, do not report a stale completed-note read as a successful save. Continue reading until the new summary is visible, including after a temporary failed read, and deliver the refreshed note without remounting. Once that execution has been refreshed, do not repeatedly reload its saved note. Preserve an already-saved summary when opening an initially completed meeting, ignore unrelated pipe/execution streams, do not refresh the saved note while execution is still running, and stop polling and event subscriptions on unmount. Preserve legitimate note autosave callbacks and existing title/content. Verify observable UI and save-boundary outcomes using synthetic local API, native and analytics ports. No live meeting data, provider calls or native builds are needed. No particular helper name or state layout is required.",
+      "agent_timeout_seconds": 1200,
+      "grader_dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 120,
+        "fixtures": [
+          {
+            "local_path": "graders/meeting-handoff.eval.test.tsx",
+            "destination_path": "apps/screenpipe-app-tauri/meeting-handoff.eval.test.tsx"
+          },
+          {
+            "local_path": "graders/meeting-handoff.config.ts",
+            "destination_path": "apps/screenpipe-app-tauri/meeting-handoff.config.ts"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && node node_modules/vitest/vitest.mjs run --config meeting-handoff.config.ts"
+      }
+    },
+    {
+      "id": "ai-gateway-enterprise-allowance",
+      "name": "Carry verified enterprise allowance from authenticated account truth to gateway metadata",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "8663ecbef34d7cd786b064a541c0e3740f4a3c14",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/6837"
+      },
+      "base_ref": "d52da0a6484f1b54a349224ed67c6ea52637dcb3",
+      "oracle_ref": "8663ecbef34d7cd786b064a541c0e3740f4a3c14",
+      "oracle_paths": [
+        "packages/ai-gateway/src/utils/auth.ts",
+        "packages/ai-gateway/src/services/cloudflare-ai-gateway.ts"
+      ],
+      "gate": "advisory",
+      "tags": [
+        "regression",
+        "auth",
+        "enterprise",
+        "gateway",
+        "entitlement",
+        "capacity"
+      ],
+      "prompt": "Verified enterprise users inherit a lower consumer allowance when authenticated website account truth includes both enterprise membership and a compatible consumer billing plan. Repair the authentication-to-gateway handoff so an explicit boolean enterprise flag produces enterprise account identity and business_ultra gateway metadata after the existing complete, active, matching entitlement checks pass. Preserve compatible Pro, Max and Ultra billing fields, and ensure the serialized metadata reaches both OpenAI and Anthropic gateway connection headers. A false, missing or string enterprise flag must not upgrade an ordinary consumer. Inactive or denied app entitlement, missing app features, conflicting entitlement/billing plans, wrong verified subject and unsuccessful website responses must not mint paid gateway capacity. Explicit app/cloud denial stays free despite stale enterprise labels. Preserve consumer Max/Ultra capacity, cached verified account identity across device changes, service internal allowance and anonymous refusal without account lookup. Metadata must use a stable hashed account identifier and retain auto lane, caller workload and trial status without exposing the account ID or bearer token. Keep payload logging disabled, remove direct provider authorization headers and keep provider retry amplification disabled. Exercise actual authentication, gateway context and connection functions using synthetic verification/website ports; no live identity, billing, provider or native operations. No particular helper name is required.",
+      "agent_timeout_seconds": 1200,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/enterprise-allowance.test.js",
+            "destination_path": "evals/coding-agent/graders/enterprise-allowance.test.js"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/enterprise-allowance.test.js"
+      }
+    },
+    {
+      "id": "app-restricted-enterprise-onboarding",
+      "name": "Gate restricted enterprise identity when onboarding resolves consumer build",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "46a170f92ea371feecc5a8db139d2fc1e3cac8ba"
+      },
+      "base_ref": "e594a3c7ab8bed3e90310ff05af4c89cff32a166",
+      "oracle_ref": "46a170f92ea371feecc5a8db139d2fc1e3cac8ba",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/components/app-entitlement-gate.tsx"
+      ],
+      "tags": [
+        "regression",
+        "onboarding",
+        "enterprise",
+        "access",
+        "identity"
+      ],
+      "gate": "advisory",
+      "prompt": "A restricted enterprise member can continue consumer onboarding after sign-in because the onboarding route bypasses the enterprise-app gate. Once build detection confirms the consumer app, hide protected onboarding content and show the enterprise-app-required state for a signed-in member whose organization requires that app and restricts consumer access, even if the member also has a paid personal subscription. Observe both live sign-in and a cached identity while detection resolves. Preserve ordinary consumer onboarding, tokenless onboarding, paid personal access when the organization does not restrict it, and accounts whose organization does not require the enterprise app. Do not misclassify an unresolved or managed enterprise build; managed onboarding keeps ownership of its authentication flow. Preserve explicit not_required startup semantics, including cached restricted identities, and do not stop recording on these permitted onboarding paths. Test the real React gate with synthetic settings/managed-policy/native/provider ports. This case covers visible gate decisions and attempted command effects, not real recorder durability or native authentication. No helper or state variable name is required.",
+      "agent_timeout_seconds": 1200,
+      "grader_dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 120,
+        "fixtures": [
+          {
+            "local_path": "graders/restricted-onboarding.fixture.tsx",
+            "destination_path": "apps/screenpipe-app-tauri/components/restricted-onboarding.eval.test.tsx"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && NODE_OPTIONS=--localstorage-file=.eval-localstorage ./node_modules/.bin/vitest run --config vitest.config.ts components/restricted-onboarding.eval.test.tsx --maxWorkers=1 --minWorkers=1"
+      }
+    },
+    {
+      "id": "app-local-preset-preservation",
+      "name": "Preserve local-only presets through settings and account refresh",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "5c3661a0b979e5cd6204ac20fd8872a274efe47a"
+      },
+      "base_ref": "45778f74227cbff7a83f65265e834b5985f7e72b",
+      "oracle_ref": "5c3661a0b979e5cd6204ac20fd8872a274efe47a",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/lib/hooks/use-settings.tsx"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "settings",
+        "account",
+        "local-model"
+      ],
+      "prompt": "A local-only AI preset configuration unexpectedly gains a cloud preset when settings reload or the account changes. Fix the actual settings persistence path so existing nonempty configurations, including custom model, prompt, URL, default selection and ordering, survive cold loads, repeated reloads, sign-in, subscription changes and sign-out unchanged. Explicit valid preset edits and unrelated settings changes must still persist, and intentional mixed cloud/local configurations must remain intact. Persisted missing, malformed or empty preset lists must recover usable defaults. Explicit empty or malformed preset updates must reject before any persistence or events, leaving prior settings intact. Preserve existing managed-policy behavior. No particular helper or internal structure is required. Rendered deletion controls, native durability and account network verification are outside this task.",
+      "agent_timeout_seconds": 1200,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/local-preset-preservation.test.js",
+            "destination_path": "evals/coding-agent/graders/local-preset-preservation.test.js"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && \"${BUN_BIN:-bun}\" test ../../evals/coding-agent/graders/local-preset-preservation.test.js"
+      }
+    },
+    {
+      "id": "mcp-live-database-boundary",
+      "name": "Keep MCP authentication outside the live recording database",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "a43b9757f3133a842bbe0d7764fff97e31f199c9"
+      },
+      "base_ref": "c92d8e5fd67b724846f2b9db5cf32a17fe58f4a5",
+      "oracle_ref": "a43b9757f3133a842bbe0d7764fff97e31f199c9",
+      "oracle_paths": [
+        "packages/screenpipe-mcp/src/index.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "mcp",
+        "recording",
+        "data-integrity",
+        "authentication"
+      ],
+      "prompt": "The MCP authentication discovery fallback can bypass Screenpipe and read the live recording database when environment credentials and CLI discovery fail. Keep database ownership inside Screenpipe: the MCP process must not probe, open, copy or mutate db.sqlite or its WAL/shared-memory companions, or spawn an external SQLite client to recover credentials. With missing credentials or invalid CLI output, keep MCP initialization and tool listing available, surface the backend authentication failure clearly, and never invent a key or report recording results as success. Preserve local environment-key precedence over the legacy environment key, support the legacy key, and preserve successful discovery through the bundled CLI, node-adjacent npx and PATH-based npx. Repeated search calls should reuse discovery and send the resolved credential to the configured Screenpipe API. Verify observable tool responses, authenticated requests and forbidden filesystem/subprocess effects using synthetic inputs; do not access real recordings or credentials.",
+      "agent_timeout_seconds": 1200,
+      "grader_dependency_links": [
+        {
+          "source_path": "packages/screenpipe-mcp/node_modules",
+          "destination_path": "packages/screenpipe-mcp/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 180,
+        "fixtures": [
+          {
+            "local_path": "graders/mcp-db-boundary.fixture.ts",
+            "destination_path": "packages/screenpipe-mcp/src/eval-db-boundary.test.ts"
+          },
+          {
+            "local_path": "graders/mcp-db-boundary.preload.cjs",
+            "destination_path": "packages/screenpipe-mcp/src/eval-db-boundary.preload.cjs"
+          }
+        ],
+        "command": "cd packages/screenpipe-mcp && SCREENPIPE_DISABLE_TELEMETRY=1 \"${BUN_BIN:-bun}\" run test -- src/eval-db-boundary.test.ts"
+      }
+    },
+    {
+      "id": "ai-gateway-image-cache-boundary",
+      "name": "Keep image payloads free of text-only prompt cache markers",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "8696fbe7851f82f1bc1164929e860021790e928c"
+      },
+      "base_ref": "89ca135f648990b52655d5e21f3d334bb72ae3cc",
+      "oracle_ref": "8696fbe7851f82f1bc1164929e860021790e928c",
+      "oracle_paths": [
+        "packages/ai-gateway/src/providers/openai.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "ai-gateway",
+        "media",
+        "provider-compatibility"
+      ],
+      "prompt": "Explicit GPT-5.6 prompt caching can attach text-only cache breakpoint fields to image payloads and cause provider rejection. Fix the actual OpenAI provider request path for both streaming and non-streaming calls. Keep image data, detail and order intact through existing image_url, native image and base64-image normalization; do not add cache fields to image blocks or drop images to avoid rejection. Keep an instruction breakpoint and mark the last nonempty text in eligible multipart history, including text that precedes trailing images; image-only history should stay unchanged without a history marker. Preserve the final-text boundary, disabled history caching and older models without explicit cache fields. Successful provider content must still reach the caller. Verify sent request snapshots and returned responses with a synthetic SDK; do not make real model calls. Audio/file/refusal normalization is outside this task.",
+      "agent_timeout_seconds": 1200,
+      "grader": {
+        "timeout_seconds": 90,
+        "fixtures": [
+          {
+            "local_path": "graders/openai-media-cache.test.js",
+            "destination_path": "evals/coding-agent/graders/openai-media-cache.test.js"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/openai-media-cache.test.js"
+      }
+    },
+    {
+      "id": "app-expired-certificate-recovery",
+      "name": "Recover from expired TLS certificates with provider-specific guidance",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "bc2d014170e9cd8b81785ddf5fab6441c23d12f4"
+      },
+      "base_ref": "791c2018eecb6ff2d602bf6d9cff3ac5232b6df8",
+      "oracle_ref": "bc2d014170e9cd8b81785ddf5fab6441c23d12f4",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/lib/chat/provider-errors.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "provider-recovery",
+        "preserved-behavior"
+      ],
+      "prompt": "Chat displays an unclassified raw Error: certificate has expired failure. Fix the public provider-error presentation and message interfaces so that error, including letter-case variations, becomes retryable provider-specific connection guidance. Hosted screenpipe-cloud and pi presets need Screenpipe Cloud retry guidance without a quota/upgrade claim; remote providers need connection/retry guidance; native Ollama needs its local service-start instruction and configured model. Do not echo the raw certificate error. Keep the message and presentation interfaces consistent. Preserve null fallback for unrecognized failures and ordinary prose mentioning expired certificates, ordinary cloud TLS recovery, distinct rate-limit guidance, nonretryable model safety refusals and custom-provider authentication guidance about the key and endpoint. No live providers, UI or native build are needed; grade observable classifications and guidance rather than exact sentences.",
+      "agent_timeout_seconds": 900,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/certificate-error.test.ts",
+            "destination_path": "evals/coding-agent/graders/certificate-error.test.ts"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/certificate-error.test.ts"
+      }
+    },
+    {
+      "id": "app-workflow-save-receipt-boundary",
+      "name": "Preserve workflow save receipts and expose actual operation failure",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "1f8ecb0858b63e82dc324050338953e7e4b2eb17"
+      },
+      "base_ref": "52706da629809407bf151c09294b677b65a32a78",
+      "oracle_ref": "1f8ecb0858b63e82dc324050338953e7e4b2eb17",
+      "oracle_paths": [
+        "crates/screenpipe-core/assets/extensions/workflow-workspace.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "workflow",
+        "retry-safety",
+        "context-integrity"
+      ],
+      "prompt": "The workflow_workspace extension can report failed operations as successful tool results, omit remaining work after saves and lose medium-size context through the private transport. Execute the actual registered tool. Conflicts, missing capability, aborted operations and missing draft selectors must reject; missing drafts should report exact open ids and titles owned by the current task without substituting another draft or retrying a mutation. Preserve structured literal payloads and the current task. A successful save must retain its receipt and expose freshly read remaining work/current revisions in remaining (revision, catalogRevision, cycleStatus, canFinish, openDrafts); if that follow-up read fails, return the successful receipt with remaining.unavailable true and do not repeat the save. Keep context indexes bounded, explicit selectors complete and oversized context in a private readable snapshot with exact data and revision fields, including context between the private transport limit and the old larger inline threshold. Preserve compact index behavior and full draft/catalog reads. Use synthetic loopback recorder responses and temporary files; no real recorder, workflow publication, agent dispatch, model or native build. These are extension-boundary outcomes, not backend durability or full stop/resume behavior.",
+      "agent_timeout_seconds": 1200,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/workflow-receipt.fixture.ts",
+            "destination_path": "crates/screenpipe-core/assets/extensions/workflow-workspace.eval.test.ts"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test crates/screenpipe-core/assets/extensions/workflow-workspace.eval.test.ts"
+      }
+    },
+    {
+      "id": "app-continued-pipe-recording-directory",
+      "name": "Keep continued Pipe chats with their active recording directory",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "a6a611a159f6d8704acc6ad00d21a6b87db42a95"
+      },
+      "base_ref": "d300cfd9c355ab3568bffe802a5132bc40211615",
+      "oracle_ref": "a6a611a159f6d8704acc6ad00d21a6b87db42a95",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/lib/chat/pi-project-dir.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "workflow",
+        "compatibility"
+      ],
+      "prompt": "Continued Pipe chat follow-ups can select the account settings directory instead of the recording directory, separating their conversation from scheduled runs. Resolve continued Pipe session working directories beneath the currently active recording root, retaining drive identity, spaces and the exact valid pipe name. Read a changed root for later calls. If the native root lookup throws, returns an error or an empty value, fall back to the default home/.screenpipe/pipes directory. Preserve generic home/.screenpipe/pi-chat routing for ordinary chats, per-execution sessions, malformed IDs and unsafe pipe names (dot segments, slash/backslash, NUL or surrounding whitespace); those generic paths must not query native account or recording directories. Use the actual exported directory resolver and existing session parser with synthetic native path/command ports. No particular helper extraction is required. No real chats, scheduler/agent dispatch, native build or filesystem operations; this grades directory selection, not native persistence or complete account-state relocation.",
+      "agent_timeout_seconds": 1200,
+      "grader": {
+        "timeout_seconds": 90,
+        "fixtures": [
+          {
+            "local_path": "graders/pipe-directory.test.ts",
+            "destination_path": "evals/coding-agent/graders/pipe-directory.test.ts"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/pipe-directory.test.ts"
+      }
+    },
+    {
+      "id": "app-device-settings-identity",
+      "name": "Preserve native device identity across frontend settings resets",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "8a51bdac54a6b7ba8444404835fbcfd85161a1f0"
+      },
+      "base_ref": "1837c3daaeeecca1541b8b97d1205f6215c36f97",
+      "oracle_ref": "8a51bdac54a6b7ba8444404835fbcfd85161a1f0",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/lib/hooks/use-settings.tsx"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "identity"
+      ],
+      "prompt": "Frontend settings resets can replace the device identity owned by native startup. New frontend default settings must leave deviceId empty. Full resets must retain the currently persisted identity, including legacy IDs, stable IDs and the compatibility identity created by loading an empty persisted value, while resetting ordinary settings such as font size. Resetting deviceId individually must do nothing and must not persist a write or alter other settings. Individual resets of ordinary fields must still persist their default without changing identity. Repeated resets must read any later native-owned identity, not retain an old cached value. Exercise the actual settings provider and store actions, including disk-write completion and reload, through synthetic storage and native ports. Do not perform native builds or real filesystem/network operations. This grades frontend reset behavior only, not native identity generation or cross-database record collision prevention.",
+      "agent_timeout_seconds": 1200,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/device-settings-identity.test.js",
+            "destination_path": "evals/coding-agent/graders/device-settings-identity.test.js"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && \"${BUN_BIN:-bun}\" test ../../evals/coding-agent/graders/device-settings-identity.test.js"
+      }
+    },
+    {
+      "id": "app-migration-startup-retry",
+      "name": "Wait for storage readiness before offering explicit migration retry",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "65b05ea2ad2cc5c82a92456482ced5da3c27ad10",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/7029"
+      },
+      "base_ref": "69be03c40091bcb1974b12f5d124852f346f69cc",
+      "oracle_ref": "65b05ea2ad2cc5c82a92456482ced5da3c27ad10",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/components/storage-migration-prompt.tsx"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "migration",
+        "recovery",
+        "consent"
+      ],
+      "prompt": "The visible desktop migration prompt can offer a retry while startup still owns the database. Hide the migration dialog and perform no start, cancel or deletion when native status is busy or has a blocking reason, even if a failed in-place migration is pending. Once that status is ready, allow exactly an explicit retry for the selected root. Busy activity also stays quiet. Preserve ordinary legacy-storage offers without automatic start or source deletion; Do later must survive a recreated webview in the same app process, while a new process may offer the choice again without automatically converting. Keep the prompt closed for empty/ineligible, already-converted, vault-blocked and completed-but-reopening storage. Interrupted in-place conversion permits explicit retry without offering the original-database fallback; where native status permits cancellation, that recovery action must call cancel for the selected root and never delete the original. Failed starts must display their error and permit another explicit retry. Repeated app launches after failure/interruption must never automatically retry. During an unresolved explicit start, disable repeated start and deferral until the request resolves. Exercise the actual React prompt and native command boundary with synthetic status and storage ports. No particular helper, wording or internal implementation is required. This case does not establish native recovery, durability, deployment exposure or managed migration authorization; do not broaden automatic conversion, change native code, build native targets, publish or contact live services.",
+      "agent_timeout_seconds": 1200,
+      "grader_dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 120,
+        "fixtures": [
+          {
+            "local_path": "graders/migration-startup-retry.fixture.tsx",
+            "destination_path": "apps/screenpipe-app-tauri/components/storage-migration-prompt.test.tsx"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && NODE_OPTIONS=--localstorage-file=.eval-localstorage bun x vitest run --config vitest.config.ts components/storage-migration-prompt.test.tsx --maxWorkers=1 --minWorkers=1"
+      }
+    },
+    {
+      "id": "mcp-maintained-workflow-retrieval",
+      "name": "Retrieve maintained workflows without weakening ID request boundaries",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "9c38b194f5e324b1fcf78fbc3ece1adf4af29274"
+      },
+      "base_ref": "ea0a6852e1bbb89b87535a1618a44d0bc752640b",
+      "oracle_ref": "9c38b194f5e324b1fcf78fbc3ece1adf4af29274",
+      "oracle_paths": [
+        "packages/screenpipe-mcp/src/workflow-tools.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "mcp",
+        "workflow",
+        "input-validation"
+      ],
+      "prompt": "The MCP workflow tools can list maintained workflows but reject their returned IDs when retrieving details. Make maintained wf-prefixed lowercase hexadecimal UUID IDs retrievable while preserving legacy wf-prefixed 64-character lowercase hexadecimal IDs. Preserve the exact workflow identity and complete returned JSON, including unknown nested fields and evidence. The automation-detail option defaults to true and respects explicit true or false; nonboolean options must fail before a backend call. Reject malformed IDs, wrong lengths, nonhex content, surrounding whitespace and path/query/fragment or encoded-path injection before requesting anything. Preserve list search encoding, empty catalogs and safe integer pagination (limit 1 through 100, offset zero or greater), rejecting invalid inputs and unknown tools without requests. Each valid invocation makes one backend read. Non-success HTTP responses, transport failures and malformed JSON must surface failure instead of an empty success; a later explicit retry can recover. Exercise the actual workflow tool function using a synthetic API port. Do not access real recordings, credentials or providers. Native catalog persistence, stdio transport, authorization and stalled-response timeouts are outside this task.",
+      "agent_timeout_seconds": 1200,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/mcp-workflow-ids.test.js",
+            "destination_path": "evals/coding-agent/graders/mcp-workflow-ids.test.js"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/mcp-workflow-ids.test.js"
       }
     }
   ]

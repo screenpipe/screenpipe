@@ -37,8 +37,10 @@ describe("GLM verified client transport", () => {
     expect(visible).toContain("/search?start_time=...&end_time=...&content_type=all");
     expect(visible).toContain("content.transcription");
     expect(visible).toContain("Authorization: Bearer $SCREENPIPE_LOCAL_API_KEY");
-    expect(visible).toContain("expected_revision, input_revision, checked_through, items, coverage");
-    expect(visible).toContain("with `JSON.stringify`");
+    expect(visible).toContain("`workflow_workspace`");
+    expect(visible).toContain("all workflow saves");
+    expect(visible).toContain("Read `screenpipe-workflow-maintenance`");
+    expect(visible).toContain("request a draft_id or workflow_id");
     expect(visible).toContain("read that section in a bounded range");
   });
 
@@ -99,13 +101,43 @@ describe("GLM verified client transport", () => {
         .replace("__SCREENPIPE_PI_PACKAGE_JSON__", JSON.stringify(resolve(import.meta.dir, "../../package.json"))));
       const extension = (await import(pathToFileURL(join(dir, "tinfoil.ts")).href)).default;
       let provider: any;
-      await extension({ on: () => {}, registerProvider: (name: string, config: any) => {
+      const hooks = new Map<string, Function>();
+      await extension({ on: (name: string, hook: Function) => hooks.set(name, hook), registerProvider: (name: string, config: any) => {
         expect(name).toBe("screenpipe");
         expect(config.api).toBe("screenpipe-tinfoil");
         expect(config.models).toBeUndefined();
         provider = config;
       } });
       const selected: Model<any> = { id: model, name: "GLM", provider: "screenpipe", api: "screenpipe-tinfoil", baseUrl: "https://gateway.test/v1", contextWindow: 32768, maxTokens: 8192, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+      const privateCtx = { model: selected, ui: { setStatus() {} } };
+      const prompt = "Keep this policy. <available_skills>" +
+        ["screenpipe-api", "screenpipe-workflow-maintenance", "unrelated-skill"].map(name =>
+          `<skill><name>${name}</name><description>${"catalog entry ".repeat(300)}</description></skill>`).join("") +
+        "</available_skills> Keep this task.";
+      const prepared = hooks.get("before_agent_start")!({ systemPrompt: prompt }, privateCtx);
+      expect(prepared.systemPrompt).toContain("screenpipe-workflow-maintenance");
+      expect(prepared.systemPrompt).not.toContain("unrelated-skill");
+      expect(prepared.systemPrompt).toContain("Keep this policy.");
+      expect(prepared.systemPrompt).toContain("Keep this task.");
+      const wire = normalizeGlmRequest({ model, messages: [{ role: "system", content: prompt }] });
+      expect(prepared.systemPrompt).toBe(wire.messages[0].content);
+      expect(hooks.get("before_agent_start")!({ systemPrompt: prompt },
+        { ...privateCtx, model: { ...selected, api: "openai-completions" } })).toBeUndefined();
+      const image = { type: "image", data: "image-data", mimeType: "image/png" };
+      const result = { content: [{ type: "text", text: "source evidence ".repeat(4000) }, image],
+        details: { sourceFile: "evidence.json" }, isError: true };
+      const bounded = hooks.get("tool_result")!(result, privateCtx);
+      const sent = normalizeGlmRequest({ model, messages: [
+        { role: "system", content: prompt }, { role: "tool", content: result.content[0].text },
+      ] });
+      expect(bounded.content[0].text).toBe(sent.messages[1].content);
+      expect(bounded.content[0].text.length).toBeLessThanOrEqual(8000);
+      expect(bounded.content[1]).toBe(image);
+      expect(bounded.details).toEqual(result.details);
+      expect(bounded.isError).toBe(true);
+      expect(hooks.get("tool_result")!(bounded, privateCtx)).toBeUndefined();
+      expect(hooks.get("tool_result")!(result,
+        { ...privateCtx, model: { ...selected, api: "openai-completions" } })).toBeUndefined();
       const context: any = { messages: [{ role: "user", content: "PRIVATE_PROMPT_CANARY", timestamp: 1 }], tools: [{ name: "read", description: "Read a file", parameters: { type: "object", properties: { path: { type: "string" } } } }] };
       const first = await provider.streamSimple(selected, context, { apiKey: "user-token" }).result();
       expect(first.stopReason).toBe("toolUse");

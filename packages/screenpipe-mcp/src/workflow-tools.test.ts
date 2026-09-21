@@ -22,6 +22,22 @@ describe("workflow MCP tools", () => {
     await readWorkflowTool("get-workflow",{id,include_automation:false},call);
     expect(call).toHaveBeenLastCalledWith(`/workflows/${id}?include_automation=false`);
   });
+  it("retrieves UUID workflow IDs returned by the maintained catalog", async () => {
+    const uuidId = "wf-12345678-1234-4234-8234-123456789abc";
+    const call = vi.fn(async () => Response.json({ id: uuidId }));
+    const result = await readWorkflowTool("get-workflow", { id: uuidId }, call);
+    expect(call).toHaveBeenCalledWith(`/workflows/${uuidId}?include_automation=true`);
+    expect(JSON.parse(result.content[0].text).id).toBe(uuidId);
+  });
+  it("rejects malformed IDs and URL injection before sending requests", async () => {
+    const call = vi.fn();
+    for (const invalid of ["wf-", "wf-1234", `wf-${"a".repeat(63)}`,
+      "wf-12345678-1234-4234-8234-123456789abz", `${id}/../catalog`,
+      `${id}?include_automation=false`, `${id}#fragment`, `${id}%2f..`, `${id}\n`]) {
+      await expect(readWorkflowTool("get-workflow", { id: invalid }, call)).rejects.toThrow();
+    }
+    expect(call).not.toHaveBeenCalled();
+  });
   it("rejects paths and malformed pagination without making a request", async () => {
     const call=vi.fn();
     for(const args of [{id:"../../secrets"},{id,include_automation:"false"}]) await expect(readWorkflowTool("get-workflow",args,call)).rejects.toThrow();

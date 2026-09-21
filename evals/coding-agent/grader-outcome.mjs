@@ -17,7 +17,9 @@ export function classifyGraderError(grader) {
   const summary = [...stdout.matchAll(/^\s*Tests\s+(.+)$/gm)].at(-1)?.[1]?.trim();
   if (summary === "no tests" && /^\s*Test Files\s+\d+ failed/m.test(stdout) &&
       /Failed Suites [1-9]/.test(stderr) &&
-      (/^Error: Failed to load url /m.test(stderr) ||
+      ((/^Error: Failed to resolve import ['"][^\r\n]+['"] from ['"][^\r\n]+['"]\. Does the file exist\?\s*$/m.test(stderr) &&
+        !/^AssertionError(?: \[[^\]]+\])?:/m.test(stderr)) ||
+       /^Error: Failed to load url /m.test(stderr) ||
        /^Error: Cannot find module ['"][^\n]+['"] imported from ['"][^\n]+['"]\.\s*$/m.test(stderr))) return "vitest_collection_error";
   // A beforeAll build failure can register tests but skip every affected test.
   // Passing neighboring suites do not turn a compile failure into an assertion.

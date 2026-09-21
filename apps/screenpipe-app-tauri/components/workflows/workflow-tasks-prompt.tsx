@@ -71,7 +71,7 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks }: {
     <DialogContent style={{ background: "#fff", color: "#171815", fontFamily: "Inter, -apple-system, BlinkMacSystemFont, sans-serif" }} className="max-w-md" overlayClassName="bg-black/30" hideCloseButton={busy}>
       <DialogHeader>
         <DialogTitle style={{ fontFamily: "inherit", letterSpacing: 0 }} className="font-sans text-xl normal-case">Keep your workflows up to date?</DialogTitle>
-        <DialogDescription style={{ color: "#73766d" }}>Enable five background tasks to organize activity, find recurring workflows, enrich steps, measure time, and review results.</DialogDescription>
+        <DialogDescription style={{ color: "#73766d" }}>Enable four agents to discover workflows, investigate evidence, review drafts, and maintain accuracy.</DialogDescription>
       </DialogHeader>
       {setup && <div style={{ borderColor: "#dedfd8" }} className="flex items-center gap-3 rounded-lg border border-border p-4">
         <Clock3 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />

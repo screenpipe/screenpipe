@@ -18,14 +18,15 @@
     "scripts/eval-private-ai.ts",
     "scripts/eval-workflow-quality.ts",
     "scripts/eval-workflow-pipeline.ts",
+    "scripts/eval-workflow-workspace.ts",
     "scripts/eval-workflows-context.ts",
-    "scripts/**/*.js"
+    "scripts/**/*.{js,mjs}"
   ],
   "project": [
     "app/**/*.{ts,tsx}",
     "components/**/*.{ts,tsx}",
     "lib/**/*.{ts,tsx}",
-    "scripts/**/*.{ts,js}",
+    "scripts/**/*.{ts,js,mjs}",
     "e2e/**/*.{ts,js}"
   ],
   "ignore": [

@@ -12,6 +12,7 @@ import type {
   WorkflowRuntime,
   WorkflowSkillDraft,
   WorkflowSkillProgress,
+  WorkflowStage,
 } from "./model";
 import type { WorkflowsPlatform } from "./platform";
 import { isAssistantState, type AssistantState, type WorkflowsAssistantPlatform } from "./assistant";
@@ -80,6 +81,7 @@ type FixtureWorkflow = {
   outcome: string;
   apps: string[];
   stageNames: [string, string, string];
+  stageDetails?: Array<{ description: string; blocks: Array<{ kind: NonNullable<WorkflowStage["procedure"]>[number]["kind"]; text: string }> }>;
   activeMinutes: number;
   waitingMinutes: number;
   friction: string;
@@ -119,7 +121,8 @@ function fixtureWorkflow(input: FixtureWorkflow, index: number): WorkflowMap {
     variations: ["The source material changes between runs", "Review depth depends on the request"],
     stages: input.stageNames.map((name, stageIndex) => ({
       name,
-      description: [`Gather the inputs needed to begin ${input.title.toLowerCase()}.`, "Work through the main decision and supporting context.", "Review the result and close the loop."][stageIndex],
+      description: input.stageDetails?.[stageIndex]?.description ?? [`Gather the inputs needed to begin ${input.title.toLowerCase()}.`, "Work through the main decision and supporting context.", "Review the result and close the loop."][stageIndex],
+      procedure: input.stageDetails?.[stageIndex]?.blocks.map(block => ({ ...block, quote: "", timestamp: "", app: "" })),
       activeMinutes: stageActive,
       waitingMinutes: stageIndex === 1 ? input.waitingMinutes : 0,
       apps: [input.apps[Math.min(stageIndex, input.apps.length - 1)]],
@@ -127,7 +130,7 @@ function fixtureWorkflow(input: FixtureWorkflow, index: number): WorkflowMap {
       observedOccurrences: 5 + index,
       observedDays: 4 + index,
       evidence: [allEvidence[stageIndex]],
-      screenshot: screenshot(name, input.apps[Math.min(stageIndex, input.apps.length - 1)], index * 10 + stageIndex + 1),
+      screenshot: { ...screenshot(name, input.apps[Math.min(stageIndex, input.apps.length - 1)], index * 10 + stageIndex + 1), timestamp: allEvidence[stageIndex].timestamp, matchDistanceSeconds: 0 },
     })),
     bottlenecks: [{
       label: input.friction,
@@ -183,8 +186,29 @@ const workflows = [
   fixtureWorkflow({ title: "Weekly product review", description: "Pull together recent product signals and turn them into a focused weekly decision review.", trigger: "Weekly review block starts", outcome: "Priorities and owners are clear", apps: ["Linear", "Notion", "Slack"], stageNames: ["Gather signals", "Compare priorities", "Share decisions"], activeMinutes: 46, waitingMinutes: 12, friction: "Review depends on missing updates", control: "influence" }, 1),
   fixtureWorkflow({ title: "Website release check", description: "Validate a website change from implementation through the final live-page review.", trigger: "A change is ready to review", outcome: "The release is verified", apps: ["GitHub", "Figma", "Chrome"], stageNames: ["Inspect the change", "Compare the experience", "Verify the live page"], activeMinutes: 34, waitingMinutes: 18, friction: "Deployment queue adds a wait", control: "external" }, 2),
   fixtureWorkflow({ title: "Partner meeting preparation", description: "Collect the relevant relationship history and prepare a concise meeting brief.", trigger: "A partner meeting is upcoming", outcome: "A focused brief is ready", apps: ["Calendar", "Gmail", "Docs"], stageNames: ["Confirm the meeting", "Review the history", "Write the brief"], activeMinutes: 24, waitingMinutes: 6, friction: "Details require a manual cross-check", control: "required" }, 3),
-  fixtureWorkflow({ title: "Research synthesis", description: "Move from a bounded research question to a traceable summary of findings and open questions.", trigger: "A research question is defined", outcome: "Findings are ready for review", apps: ["Chrome", "Docs", "Slack"], stageNames: ["Collect sources", "Compare findings", "Share the synthesis"], activeMinutes: 51, waitingMinutes: 7, friction: "Frequent tab switching breaks focus", control: "direct" }, 4),
+  fixtureWorkflow({ title: "Research synthesis", description: "Move from a bounded research question to a traceable summary of findings and open questions.", trigger: "A research question is defined", outcome: "Findings are ready for review", apps: ["Chrome", "Docs", "Slack"], stageNames: ["Collect sources", "Compare findings", "Share the synthesis"],
+    stageDetails: [
+      { description: "Build a source list around the question you need to answer.", blocks: [
+        { kind: "action", text: "Write the research question and intended audience at the top of the document." },
+        { kind: "action", text: "For each useful source, save its link, author, date, and the passage that supports the question." },
+        { kind: "check", text: "Open each saved link and confirm that the cited passage is still available." },
+      ] },
+      { description: "Compare the evidence before drawing a conclusion.", blocks: [
+        { kind: "action", text: "Group passages by claim, keeping a source link beside each one." },
+        { kind: "decision", text: "When sources disagree, compare their dates and methods. Keep unresolved differences in the open questions." },
+        { kind: "check", text: "Separate direct observations from your interpretation, and flag claims supported by only one source." },
+      ] },
+      { description: "Turn the findings into a brief that someone else can verify.", blocks: [
+        { kind: "action", text: "Lead with the answer, then list supporting findings with their source links." },
+        { kind: "action", text: "Add the unresolved questions and send the document to the intended reviewer." },
+        { kind: "output", text: "A linked summary with a clear conclusion, supporting evidence, and open questions." },
+      ] },
+    ], activeMinutes: 51, waitingMinutes: 7, friction: "Frequent tab switching breaks focus", control: "direct" }, 4),
 ];
+
+// Fictional uncertainties exercise the same clarification flow as saved workflows.
+workflows[4].openQuestions = ["Who reviews the synthesis before it is shared?", "What makes a source reliable enough to include?"];
+workflows[4].stages[0].openQuestions = ["Where should the source list be saved?"];
 
 const totalMinutes = 1_860;
 
@@ -364,7 +388,7 @@ function fixtureSkillReceipt(draft: WorkflowSkillDraft) {
   };
 }
 
-async function rasterizeFixture(workflow: WorkflowMap) {
+async function rasterizeFixture(workflow: Pick<WorkflowMap, "stages">) {
       // Rasterize this file's fictional SVGs so previews exercise the same raster-only export.
       for (const stage of workflow.stages) {
         if (!stage.screenshot?.dataUrl.startsWith("data:image/svg+xml")) continue;
@@ -410,6 +434,12 @@ export function fixtureGuides(): NonNullable<WorkflowsPlatform["guides"]> {
 
 export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixtureWorkflowAnalysis): WorkflowsPlatform {
   let profile = fixturePersonalWorkProfile;
+  const storageKey = "screenpipe:fictional-workflow-editor-preview";
+  let current = structuredClone(analysis);
+  const restore = () => {
+    try { const saved = JSON.parse(localStorage.getItem(storageKey) || "null"); if (saved?.analysis?.workflows) current = saved; } catch {}
+    return current;
+  };
   let mode: import("./model-choice").WorkflowModelMode = "intelligent";
   return {
     modelPreference: { load: async () => mode, save: async next => { mode = next; } },
@@ -422,8 +452,32 @@ export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixt
       onField({ field: "company", value: "Preview company: a team that helps businesses resolve customer requests." });
       onField({ field: "summary", value: "Preview role: I manage customer operations and improve how our team handles requests." });
     },
+    loadWorkflowRecording: async (timestamp, app) => {
+      const stage = current.analysis.workflows.flatMap(w => w.stages).find(s => s.evidence.some(e => e.timestamp === timestamp && e.app === app));
+      if (!stage?.screenshot) return null;
+      await rasterizeFixture({ stages: [stage] });
+      return { kind: "image", url: stage.screenshot.dataUrl, frameId: stage.screenshot.frameId, timestamp: stage.screenshot.timestamp, offsetSeconds: 0, matchDistanceSeconds: 0 };
+    },
     ensureRuntime: async () => fixtureWorkflowRuntime,
-    analyzeCapturedWork: async () => analysis,
+    loadCapturedWork: async () => { const value = restore(); await Promise.all(value.analysis.workflows.map(rasterizeFixture)); return structuredClone(value); },
+    analyzeCapturedWork: async () => restore(),
+    saveWorkflowEdits: async (draft) => {
+      restore();
+      const workflow = current.analysis.workflows.find(w => (w.id ?? w.title) === draft.id);
+      if (!workflow || (workflow.revision ?? 0) !== draft.expected_revision) throw Object.assign(new Error("Workflow changed. Your draft is kept; reopen the latest version."), { status: 409 });
+      const stages = draft.stages.map(s => {
+        const prior = s.sourceIndex === null ? null : workflow.stages[s.sourceIndex];
+        return { ...(prior ?? { activeMinutes: 0, waitingMinutes: 0, apps: [], confidence: 0, observedOccurrences: 0, observedDays: 0, evidence: [] }),
+          name: s.name.trim(), description: s.description.trim(), userEdited: true,
+          procedure: s.procedure.map(p => ({ ...(p.sourceIndex === null ? { quote: "", timestamp: "", app: "" } : prior?.procedure?.[p.sourceIndex] ?? { quote: "", timestamp: "", app: "" }), kind: p.kind, text: p.text.trim(), userEdited: true })),
+        };
+      });
+      const saved = { ...workflow, id: draft.id, revision: draft.expected_revision + 1, title: draft.title.trim(), description: draft.description.trim(), trigger: draft.trigger.trim(), outcome: draft.outcome.trim(), stages, userEditedAt: new Date().toISOString() };
+      const next = { ...current, analysis: { workflows: current.analysis.workflows.map(w => w === workflow ? saved : w) } };
+      localStorage.setItem(storageKey, JSON.stringify(next));
+      current = next;
+      return saved;
+    },
     loadWorkProfile: async () => profile,
     saveWorkProfile: async (nextProfile) => (profile = nextProfile),
     guides: fixtureGuides(),

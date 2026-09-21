@@ -60,9 +60,23 @@ is not the complete API contract. Use the sections below to resolve unknown fiel
 
 ## Workflow maintenance
 
-Scheduled workflow Pipes use these endpoints through the normal tools. No special
-workflow tools are needed. Use your task's scoped environment token, never obtain
-a broader token to bypass a denied operation.
+When `workflow_workspace` is available, use it for shared draft context, handoffs
+and all workflow saves. Read `screenpipe-workflow-maintenance` for that contract.
+The four agents (Discover, Deepen, Review and Maintain) research with the normal
+Screenpipe tools documented here. Their workspace is not the legacy pipeline
+below. Context initially returns an index; request a draft_id or workflow_id for
+the full record. Draft quotations are proposals, not original recorder results.
+Review retrieves original evidence before publishing positive claims.
+
+Always use the task's scoped environment token; never obtain a broader token to
+bypass a denied operation.
+
+### Legacy pipeline compatibility
+
+The following protocol applies ONLY when `workflow_workspace` is absent and the
+scheduled task is explicitly workflow-activity, workflow-patterns,
+workflow-procedures, workflow-timing or workflow-discovery. Other chats and
+workflow agents must not use these stage instructions.
 
 - `GET /workflows/pipeline?task=$SCREENPIPE_PIPE_NAME` supplies `ready`, `window`,
   `revision`, `inputRevision`, `checkedThrough`, `input.items`, `input.coverage`

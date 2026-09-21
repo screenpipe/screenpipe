@@ -10,11 +10,11 @@ it("receives verification from workflow chat and scheduled runs, excluding unrel
   const receive = vi.fn();
   const off = await workflowModelPreference.verification!.subscribe(receive);
   for (const [source, sessionId] of [
-    ["pi", "__title:workflow-assistant-123"], ["pipe", "pipe:workflow-timing:115"],
-    ["pipe", "pipe:workflow-discovery:continuous"], ["pipe", "pipe:daily-recap:9"], ["pi", "ordinary-chat"],
+    ["pi", "__title:workflow-assistant-123"], ["pipe", "pipe:workflow-deepen:115"],
+    ["pipe", "pipe:workflow-review:continuous"], ["pipe", "pipe:daily-recap:9"], ["pi", "ordinary-chat"],
   ]) state.receive({ payload: { source, sessionId, event: { type: "extension_ui_request" } } });
   expect(receive.mock.calls.map(([value]) => value.sessionId)).toEqual([
-    "__title:workflow-assistant-123", "pipe:workflow-timing:115", "pipe:workflow-discovery:continuous",
+    "__title:workflow-assistant-123", "pipe:workflow-deepen:115", "pipe:workflow-review:continuous",
   ]);
   off();
 });

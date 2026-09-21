@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { createGlmEncryptedFetch, GLM_SECURE_API } from "./lib/tinfoil-transport";
+import { compactGlmSkillCatalog, compactGlmToolResultText } from "./lib/glm-protocol";
 
 // Replaced with the managed runtime package.json path when installed by Rust.
 // Resolve dependencies from that install, never from an arbitrary chat project.
@@ -26,7 +27,7 @@ export default async function (pi: ExtensionAPI) {
   // or failed verification cannot silently send GLM via ordinary OpenAI TLS.
   const sdk = () => import(pathToFileURL(runtimeRequire.resolve("tinfoil")).href);
   let publish: ((text: string) => void) | undefined;
-  pi.on("before_agent_start", (_event, ctx) => {
+  pi.on("before_agent_start", (event, ctx) => {
     publish = text => {
       if (ctx.mode === "json") {
         // Pipes use Pi's JSON mode, where ui.setStatus is a no-op. Emit the
@@ -37,6 +38,25 @@ export default async function (pi: ExtensionAPI) {
         ctx.ui.setStatus("screenpipe-confidential", text);
       }
     };
+    // Budget the same prompt the private provider actually sends. Trimming
+    // only inside fetch left Pi reserving room for skills absent on the wire.
+    if (ctx.model?.api === GLM_SECURE_API) {
+      return { systemPrompt: compactGlmSkillCatalog(event.systemPrompt) };
+    }
+  });
+  pi.on("tool_result", (event, ctx) => {
+    if (ctx.model?.api !== GLM_SECURE_API) return;
+    let changed = false;
+    const content = event.content.map(item => {
+      if (item.type !== "text") return item;
+      const text = compactGlmToolResultText(item.text);
+      changed ||= text !== item.text;
+      return text === item.text ? item : { ...item, text };
+    });
+    // Store the existing provider-visible excerpt before Pi estimates history
+    // or summarizes it. Keep images, errors and details; the marked excerpt
+    // still directs the agent to reread a bounded range of the original file.
+    if (changed) return { content, details: event.details, isError: event.isError };
   });
   pi.on("session_shutdown", () => { publish = undefined; });
   const transports = new Map<string, typeof fetch>();

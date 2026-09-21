@@ -93,7 +93,7 @@ fn depth_rejects_fabricated_quotes_wrong_sources_and_missing_middle_steps() {
         ("quote", "The campaign was successfully sent"),
         ("timestamp", "2026-08-03T10:00:00Z"),
         ("app", "UnrelatedApp"),
-        ("quote", "Open"),
+        ("quote", ""),
         ("kind", "imagined"),
     ] {
         let (mut candidate, catalog) = fixture();

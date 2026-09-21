@@ -22,8 +22,14 @@ describe("normalizeSidebarNavLayout", () => {
     for (const junk of [undefined, null, 42, "layout", [], { order: 3 }]) {
       const layout = normalizeSidebarNavLayout(junk);
       expect(layout.order).toEqual(ALL);
-      expect(layout.hidden).toEqual([]);
+      expect(layout.hidden).toEqual(["brain"]);
     }
+  });
+
+  it("preserves an explicitly saved visible Library on upgrade", () => {
+    const layout = normalizeSidebarNavLayout({ order: ALL, hidden: [] });
+    expect(layout.hidden).toEqual([]);
+    expect(resolveVisibleSidebarNavIds(layout, ALL)).toContain("brain");
   });
 
   it("drops ids that no longer exist", () => {
@@ -72,9 +78,9 @@ describe("normalizeSidebarNavLayout", () => {
 });
 
 describe("resolveVisibleSidebarNavIds", () => {
-  it("shows every row by default, meetings included", () => {
+  it("hides Library by default and keeps the other rows visible", () => {
     const visible = resolveVisibleSidebarNavIds(DEFAULT_SIDEBAR_NAV_LAYOUT, ALL);
-    expect(visible).toEqual(ALL);
+    expect(visible).toEqual(ALL.filter((id) => id !== "brain"));
   });
 
   it("lets enterprise policy win over the user layout", () => {
@@ -90,7 +96,7 @@ describe("resolveVisibleSidebarNavIds", () => {
   });
 
   it("reports the hidden-but-restorable ids", () => {
-    expect(resolveHiddenSidebarNavIds(DEFAULT_SIDEBAR_NAV_LAYOUT, ALL)).toEqual([]);
+    expect(resolveHiddenSidebarNavIds(DEFAULT_SIDEBAR_NAV_LAYOUT, ALL)).toEqual(["brain"]);
     const meetingsHidden = normalizeSidebarNavLayout({
       order: ALL,
       hidden: ["meetings"],
@@ -107,7 +113,7 @@ describe("reordering", () => {
   it("moves an item to an index among the visible rows", () => {
     const next = moveSidebarNavItem(DEFAULT_SIDEBAR_NAV_LAYOUT, ALL, "connections", 0);
     expect(resolveVisibleSidebarNavIds(next, ALL)).toEqual([
-      "connections", "home", "meetings", "timeline", "activity", "brain", "pipes",
+      "connections", "home", "meetings", "timeline", "activity", "pipes",
     ]);
   });
 
@@ -149,6 +155,16 @@ describe("reordering", () => {
 });
 
 describe("hide and show", () => {
+  it("restores Library in place and preserves the choice on reload", () => {
+    const shown = setSidebarNavItemHidden(DEFAULT_SIDEBAR_NAV_LAYOUT, ALL, "brain", false);
+    const reloaded = normalizeSidebarNavLayout(JSON.parse(JSON.stringify(shown)));
+    expect(resolveVisibleSidebarNavIds(reloaded, ALL)).toEqual(ALL);
+    expect(resolveHiddenSidebarNavIds(reloaded, ALL)).toEqual([]);
+    expect(isSidebarNavLayoutDefault(reloaded)).toBe(false);
+    const hidden = setSidebarNavItemHidden(reloaded, ALL, "brain", true);
+    expect(isSidebarNavLayoutDefault(hidden)).toBe(true);
+  });
+
   it("shows meetings in the sidebar again after hiding it", () => {
     const meetingsHidden = normalizeSidebarNavLayout({
       order: ALL,

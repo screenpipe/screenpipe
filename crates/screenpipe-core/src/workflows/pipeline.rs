@@ -35,9 +35,9 @@ pub fn stage(name: &str) -> Option<usize> {
     TASKS.iter().position(|n| *n == name)
 }
 pub fn task_at(path: &Path) -> Option<&str> {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .filter(|n| stage(n).is_some() && path.join("pipe.md").is_file())
+    path.file_name().and_then(|n| n.to_str()).filter(|n| {
+        (stage(n).is_some() || super::workspace::is_task(n)) && path.join("pipe.md").is_file()
+    })
 }
 
 #[cfg(test)]
@@ -123,8 +123,13 @@ async fn read_input(path: &Path, task: &str) -> anyhow::Result<Value> {
     {
         anyhow::bail!("Workflow requires its local recorder");
     }
+    let endpoint = if super::workspace::is_task(task) {
+        "workspace"
+    } else {
+        "pipeline"
+    };
     let response = reqwest::Client::new()
-        .get(format!("{base}/workflows/pipeline?task={task}"))
+        .get(format!("{base}/workflows/{endpoint}?task={task}"))
         .bearer_auth(permissions["pipe_token"].as_str().unwrap_or_default())
         .timeout(std::time::Duration::from_secs(15))
         .send()
@@ -147,7 +152,9 @@ pub async fn save_state(path: &Path) -> anyhow::Result<Option<SaveState>> {
         return Ok(None);
     };
     let value = read_input(path, task).await?;
-    let (revision, applied) = if task == TASKS[4] {
+    let (revision, applied) = if super::workspace::is_task(task) {
+        (value["receiptRevision"].as_u64().unwrap_or(0), 0)
+    } else if task == TASKS[4] {
         (
             value["catalogRevision"]
                 .as_u64()

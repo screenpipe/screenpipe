@@ -6,6 +6,13 @@ credentials for this package.
 
 ---
 
+## 0.20.0 — workflow catalog access
+
+- Publishes `list-workflows` and `get-workflow` for the saved desktop Workflows catalog.
+- Accepts both legacy hash IDs and UUID IDs created by maintained workflows.
+- Adds unit and built-transport regression coverage for UUID retrieval and rejects malformed IDs before sending requests.
+- Requires workflow tool markers in both published stdio entry points.
+
 ## 0.19.0 — release notes (pending publish)
 
 **Headline: `team-*` tools can finally be pointed at a customer's own query

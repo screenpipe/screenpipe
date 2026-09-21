@@ -28,6 +28,13 @@ test("process and setup failures cannot prove a regression or count as scored fa
     git("commit", "-qam", "Synthetic reference state");
     const fix = git("rev-parse", "HEAD");
     const controls = [
+      { id: "baseline-vitest-resolve", baseline: "error", oracle: "pass", valid: false },
+      { id: "reference-vitest-resolve", baseline: "fail", oracle: "error", valid: false },
+      { id: "baseline-vitest-resolve-ansi", baseline: "error", oracle: "pass", valid: false },
+      { id: "vitest-assertion-with-quoted-resolve", baseline: "fail", oracle: "pass", valid: true },
+      { id: "node-assertion-with-quoted-resolve", baseline: "fail", oracle: "pass", valid: true },
+      { id: "both-pass-resolve-diagnostic", baseline: "pass", oracle: "pass", valid: false },
+      { id: "resolve-without-test-summary", baseline: "fail", oracle: "pass", valid: true },
       { id: "baseline-vitest-bun-build", baseline: "error", oracle: "pass", valid: false },
       { id: "reference-vitest-bun-build", baseline: "fail", oracle: "error", valid: false },
       { id: "baseline-vitest-bun-build-with-pass", baseline: "error", oracle: "pass", valid: false },
@@ -79,7 +86,18 @@ import assert from "node:assert/strict";
 const broken = readFileSync("state.txt", "utf8") === "broken";
 const id = process.env.SCREENPIPE_EVAL_CASE_ID;
 const affected = id.startsWith("baseline-") ? broken : !broken;
-if ((id.endsWith("vitest-bun-build") && affected) || (id === "baseline-vitest-bun-build-with-pass" && broken) ||
+if ((id.endsWith("vitest-resolve") && affected) || (id === "baseline-vitest-resolve-ansi" && broken) ||
+    (["vitest-assertion-with-quoted-resolve", "node-assertion-with-quoted-resolve", "resolve-without-test-summary"].includes(id) && broken) || id === "both-pass-resolve-diagnostic") {
+  const summary = "Test Files 1 failed (1)\\nTests no tests\\n";
+  if (id !== "resolve-without-test-summary") process.stdout.write(id.endsWith("-ansi") ? "\\x1b[31m" + summary + "\\x1b[0m" : summary);
+  process.stderr.write('Failed Suites 1\\nError: Failed to resolve import "./missing-synthetic" from "fixture.test.ts". Does the file exist?\\n');
+  if (id === "vitest-assertion-with-quoted-resolve") {
+    process.stdout.write("Test Files 1 failed (1)\\nTests 1 failed (1)\\n");
+    process.stderr.write("AssertionError: intended synthetic outcome failed\\n");
+  }
+  if (id === "node-assertion-with-quoted-resolve") assert.fail("behavior failure after quoted collection diagnostic");
+  process.exit(id === "both-pass-resolve-diagnostic" ? 0 : 1);
+} else if ((id.endsWith("vitest-bun-build") && affected) || (id === "baseline-vitest-bun-build-with-pass" && broken) ||
     (["vitest-build-quoted-assertion", "vitest-build-hook-assertion", "node-build-quoted-assertion", "unknown-build-command"].includes(id) && broken) || id === "both-pass-build-diagnostic") {
   const summary = id === "vitest-build-quoted-assertion" ? "1 failed (1)" : id === "baseline-vitest-bun-build-with-pass" ? "1 passed | 1 skipped (2)" : "1 skipped (1)";
   process.stdout.write(" RUN v4.0.18 /synthetic\\n Test Files 1 failed (1)\\n Tests " + summary + "\\n");
@@ -149,7 +167,7 @@ else if (id === "baseline-syntax" && affected) {
   assert.fail("\\nError [ERR_MODULE_NOT_FOUND]: quoted diagnostic\\nSyntaxError: quoted diagnostic\\n    at quotedFixture");
 } else if (id === "both-pass-diagnostic-words") {
   console.error("Cannot find module; SyntaxError; command not found are fixture words");
-} else if ((id === "reference-vitest-alias" || id === "reference-vitest-postcss" || id === "reference-rust-compile" || id === "reference-vitest-bun-build") && broken) assert.fail("synthetic broken behavior");
+} else if ((id === "reference-vitest-resolve" || id === "reference-vitest-alias" || id === "reference-vitest-postcss" || id === "reference-rust-compile" || id === "reference-vitest-bun-build") && broken) assert.fail("synthetic broken behavior");
 else process.exit(id === "intended-failure" && broken ? 1 : 0);
 `);
     const manifest = join(repo, "cases.json");
@@ -188,7 +206,7 @@ else process.exit(id === "intended-failure" && broken ? 1 : 0);
         if (control.id.endsWith("timeout")) expect(errored.grader_error).toContain("ETIMEDOUT");
       }
     }
-    const scored = invoke("scoring", "--mode", "baseline", "--case", "baseline-signal,baseline-missing-module,baseline-rust-compile,baseline-vitest-bun-build");
+    const scored = invoke("scoring", "--mode", "baseline", "--case", "baseline-signal,baseline-missing-module,baseline-rust-compile,baseline-vitest-bun-build,baseline-vitest-resolve");
     expect(scored.error).toBeUndefined();
     expect(scored.status).toBe(0);
     const summary = JSON.parse(readFileSync(join(repo, "scoring/summary.json"), "utf8"));

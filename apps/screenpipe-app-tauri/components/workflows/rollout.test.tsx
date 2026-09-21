@@ -64,14 +64,14 @@ it("acknowledges the resolved grant before dispatching the selected stage", asyn
   state.fetch.mockImplementation(async (path: string) => {
     if (path === "/workflows/rollout" || path.endsWith("/install")) return new Response("{}");
     if (path.includes("/executions?")) return new Response(JSON.stringify({ data: [] }));
-    if (path.includes("/workflows/pipeline")) return new Response(JSON.stringify({ ready: false }));
+    if (path.includes("/workflows/workspace")) return new Response(JSON.stringify({ ready: path.endsWith("workflow-discover") }));
     if (path.endsWith("/run")) return new Response(JSON.stringify({ execution_id: 12 }));
     return new Response(JSON.stringify({ data: { config: { enabled: true } } }));
   });
-  expect(await startWorkflowJob()).toMatchObject({ id: "workflow-activity:12", status: "queued" });
+  expect(await startWorkflowJob()).toMatchObject({ id: "workflow-discover:12", status: "queued" });
   expect(state.fetch.mock.calls[0][0]).toBe("/workflows/rollout");
   expect(JSON.parse(state.fetch.mock.calls[0][1].body)).toEqual({ enabled: true });
-  expect(state.fetch.mock.calls.at(-1)![0]).toBe("/pipes/workflow-activity/run");
+  expect(state.fetch.mock.calls.at(-1)![0]).toBe("/pipes/workflow-discover/run");
 });
 
 it("does not write before flags resolve, and syncs outside home once resolved", async () => {

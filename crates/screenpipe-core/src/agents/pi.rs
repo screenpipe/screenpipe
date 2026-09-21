@@ -1243,6 +1243,16 @@ impl PiExecutor {
         Ok(())
     }
 
+    pub fn ensure_workflow_workspace_extension(project_dir: &Path) -> Result<()> {
+        let dir = project_dir.join(".pi/extensions");
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(
+            dir.join("workflow-workspace.ts"),
+            include_str!("../../assets/extensions/workflow-workspace.ts"),
+        )?;
+        Ok(())
+    }
+
     pub fn ensure_tinfoil_extension(project_dir: &Path) -> Result<()> {
         let ext_dir = project_dir.join(".pi").join("extensions");
         std::fs::create_dir_all(ext_dir.join("lib"))?;
@@ -2200,12 +2210,6 @@ impl AgentExecutor for PiExecutor {
             provider_api_key
         };
         if workflow_task {
-            crate::workflows::pipeline::check_admission(
-                &self.api_url,
-                self.current_user_token().as_deref(),
-                model,
-            )
-            .await?;
             if !crate::workflows::pipeline::has_pending_input(working_dir).await? {
                 return Ok(AgentOutput {
                     stdout: "No new workflow input; saved results kept.".into(),
@@ -2214,6 +2218,12 @@ impl AgentExecutor for PiExecutor {
                     pid: None,
                 });
             }
+            crate::workflows::pipeline::check_admission(
+                &self.api_url,
+                self.current_user_token().as_deref(),
+                model,
+            )
+            .await?;
         }
         let workflow_save_state = crate::workflows::pipeline::save_state(working_dir).await?;
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
@@ -2366,12 +2376,6 @@ impl AgentExecutor for PiExecutor {
             provider_api_key
         };
         if workflow_task {
-            crate::workflows::pipeline::check_admission(
-                &self.api_url,
-                self.current_user_token().as_deref(),
-                model,
-            )
-            .await?;
             if !crate::workflows::pipeline::has_pending_input(working_dir).await? {
                 return Ok(AgentOutput {
                     stdout: "No new workflow input; saved results kept.".into(),
@@ -2380,6 +2384,12 @@ impl AgentExecutor for PiExecutor {
                     pid: None,
                 });
             }
+            crate::workflows::pipeline::check_admission(
+                &self.api_url,
+                self.current_user_token().as_deref(),
+                model,
+            )
+            .await?;
         }
         let workflow_save_state = crate::workflows::pipeline::save_state(working_dir).await?;
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();

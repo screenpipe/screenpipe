@@ -4,136 +4,146 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { localFetch } from "@/lib/api";
 import { WORKFLOW_TASKS, stopWorkflowJob, ensureWorkflowTask, enableWorkflowTask, loadWorkflowTaskSetup, getWorkflowJob, startWorkflowJob, saveWorkflowCorrections, saveWorkflowFeedback } from "./scheduled-discovery";
 import { fixtureWorkflowAnalysis } from "@screenpipe/workflows-ui/fixture";
-
-vi.mock("@/lib/api", () => ({ localFetch: vi.fn() }));
+vi.mock("@/lib/api", () => ({localFetch:vi.fn()}));
+vi.mock("@/lib/workflows/rollout", () => ({requireWorkflowsRollout:vi.fn(),syncWorkflowsRollout:vi.fn().mockResolvedValue(undefined)}));
 const fetchMock = vi.mocked(localFetch);
-const response = (data: unknown) => new Response(JSON.stringify(data), { status: 200 });
-beforeEach(() => fetchMock.mockReset());
-
-describe("workflow scheduled-task adapter", () => {
-  function pipelineMock(running = false) {
-    const enabled = new Map(WORKFLOW_TASKS.map(name => [name, true]));
-    fetchMock.mockImplementation(async (path, init) => {
-      const url = String(path);
-      if (url.includes("/install")) return response({ installed: false });
-      const task = WORKFLOW_TASKS.find(name => url.startsWith(`/pipes/${name}`))!;
-      if (url.endsWith("/enable")) { enabled.set(task, JSON.parse(String(init?.body)).enabled); return response({ success: true }); }
-      if (url.includes("/executions?")) return response({ data: running && task === "workflow-procedures" ? [{ id:23, status:"running", started_at:"2026-09-15T12:00:00Z" }] : [] });
-      if (url.endsWith("/run")) return response({ execution_id:24 });
-      if (url.endsWith("/stop")) return response({ success:true });
-      if (url.includes("/workflows/pipeline")) return response({ ready:url.endsWith("workflow-timing") });
-      return response({ data:{config:{ enabled:enabled.get(task), title:task, schedule:"every 24h" }} });
-    });
-    return enabled;
-  }
-  it("installs all templates without enabling them", async () => {
-    pipelineMock();
-    await ensureWorkflowTask();
-    expect(fetchMock).toHaveBeenCalledTimes(5);
-    expect(fetchMock.mock.calls.every(([path]) => String(path).endsWith("/install"))).toBe(true);
-  });
-  it("coalesces Update now with any running enrichment stage", async () => {
-    pipelineMock(true);
-    expect(await startWorkflowJob()).toMatchObject({ id:"workflow-procedures:23", status:"processing" });
-    expect(fetchMock.mock.calls.some(([path]) => String(path).endsWith("/run"))).toBe(false);
-  });
-  it("resumes pending downstream work before starting another history scan", async () => {
-    pipelineMock();
-    expect(await startWorkflowJob()).toMatchObject({id:"workflow-timing:24"});
-    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/pipes/workflow-timing/run");
-  });
-  it("keeps a partially disabled group paused until explicit consent", async () => {
-    const enabled = pipelineMock(); enabled.set("workflow-patterns",false);
-    expect(await loadWorkflowTaskSetup()).toMatchObject({enabled:false});
-    await expect(startWorkflowJob()).rejects.toThrow("Enable workflow tasks");
-    await enableWorkflowTask();
-    expect(await loadWorkflowTaskSetup()).toMatchObject({enabled:true});
-  });
-  it("pauses every dependency before stopping running agents", async () => {
-    pipelineMock(); await stopWorkflowJob();
-    expect(fetchMock.mock.calls.slice(0,5).every(([path]) => String(path).endsWith("/enable"))).toBe(true);
-    expect(fetchMock.mock.calls.slice(5).every(([path]) => String(path).endsWith("/stop"))).toBe(true);
-  });
-  it("does not mistake an old saved catalog for a successful new run", async () => {
-    fetchMock.mockResolvedValueOnce(response({ data: { id: 24, status: "completed", started_at: "2026-09-15T12:00:00Z" } }))
-      .mockResolvedValueOnce(response({ analyzedAt: "2026-09-14T12:00:00Z", checkedThrough: "2026-09-14T12:00:00Z" }));
-    expect(await getWorkflowJob("24")).toMatchObject({ status: "failed" });
-  });
-  it("accepts a current no-change checkpoint and reports its zero changes", async () => {
-    const now = "2026-09-15T12:00:00Z";
-    fetchMock.mockResolvedValueOnce(response({ data: { id: 25, status: "completed", started_at: now } }))
-      .mockResolvedValueOnce(response({ analyzedAt: now, checkedThrough: now, changes: { created: 0, updated: 0 } }));
-    expect(await getWorkflowJob("25")).toMatchObject({ status: "complete", result: { changes: { created: 0, updated: 0 } } });
-  });
-  it("shows a missing-save failure without loading the prior run's success counts", async () => {
-    fetchMock.mockResolvedValueOnce(response({ data: { id: 25, status: "failed", error_type: "missing_output" } }));
-    expect(await getWorkflowJob("25")).toMatchObject({ status: "failed", message: expect.stringContaining("previous workflows") });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-  it("preserves a successful legacy receipt before the new tasks are enabled", async () => {
-    const now = "2026-09-15T12:00:00Z";
-    fetchMock.mockImplementation(async path => {
-      const url = String(path);
-      if (url.includes("/executions?")) return response({data:[]});
-      if (url.includes("/executions/")) return response({data:{id:27,status:"completed",started_at:now}});
-      if (url.includes("/pipeline")) return response({inputRevision:0,blockedReason:"Enable workflow-activity"});
-      return response({analyzedAt:now,checkedThrough:now,changes:{created:0,updated:0}});
-    });
-    expect(await getWorkflowJob("workflow-discovery:27")).toMatchObject({status:"complete",result:{changes:{created:0,updated:0}}});
-  });
-  it("allows scheduler handoff time, then offers to resume without a false save failure", async () => {
-    const finished = new Date(Date.now() - 45_000).toISOString();
-    const execution = {id:48,status:"completed",started_at:finished,finished_at:finished};
-    fetchMock.mockImplementation(async path => {
-      const url = String(path);
-      if (url.includes("/executions/")) return response({data:execution});
-      if (url.includes("/executions?")) return response({data:url.includes("workflow-activity")?[execution]:[]});
-      if (url.includes("/pipeline")) return response({inputRevision:0,upToDate:false,blockedReason:null});
-      return response({analyzedAt:"2026-09-14T12:00:00Z",pipelineRevision:0});
-    });
-    expect(await getWorkflowJob("workflow-activity:48")).toMatchObject({status:"queued"});
-    execution.finished_at = new Date(Date.now() - 120_000).toISOString();
-    expect(await getWorkflowJob("workflow-activity:48")).toMatchObject({status:"incomplete",message:expect.stringContaining("Resume")});
-  });
-  it("treats a timed-out task as a terminal failure instead of waiting forever", async () => {
-    fetchMock.mockResolvedValueOnce(response({data:{id:48,status:"timed_out"}}));
-    expect(await getWorkflowJob("48")).toMatchObject({status:"failed"});
-  });
-  it("saves only the edited correction, never a stale full catalog", async () => {
-    const prior = { analyzedAt: "2026-09-15T12:00:00Z", analysis: { workflows: [{ id: "wf-a", title: "Updated elsewhere", userCorrection: "Old" }] } };
-    fetchMock.mockResolvedValueOnce(response(prior)).mockResolvedValueOnce(response({ success: true }));
-    await saveWorkflowCorrections({ ...prior, analysis: { workflows: [{ id: "wf-a", title: "Stale title", userCorrection: "New" }] } } as any);
-    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ id: "wf-a", correction: "New" });
-  });
-  it("keeps an activity failure visible after downstream tasks finish without input", async () => {
-    const activity = {id:30,status:"failed",error_type:"missing_output",started_at:"2026-09-15T10:00:00Z"};
-    const timing = {id:31,status:"completed",started_at:"2026-09-15T10:01:00Z"};
-    fetchMock.mockImplementation(async path => {
-      const url = String(path);
-      if (url.includes("/executions/")) return response({data:timing});
-      if (url.includes("/executions?")) return response({data:url.includes("workflow-activity")?[activity]:url.includes("workflow-timing")?[timing]:[]});
-      return response({inputRevision:0});
-    });
-    expect(await getWorkflowJob("workflow-timing:31")).toMatchObject({id:"workflow-activity:30",status:"failed",message:expect.stringContaining("previous workflows")});
-  });
-  it("saves feedback through the authenticated correction endpoint without starting a task", async () => {
-    fetchMock.mockResolvedValueOnce(response({ success: true }));
-    await saveWorkflowFeedback({ ...fixtureWorkflowAnalysis.analysis.workflows[0], id: "wf-selected" }, "Use Attio.");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith("/workflows/corrections", expect.objectContaining({ method: "POST", body: JSON.stringify({ id: "wf-selected", correction: "Use Attio." }) }));
-  });
-  it("rejects missing workflow identity and reports server save failures", async () => {
-    const workflow = { ...fixtureWorkflowAnalysis.analysis.workflows[0], id: undefined };
-    await expect(saveWorkflowFeedback(workflow, "Use Attio.")).rejects.toThrow("Refresh this workflow");
-    expect(fetchMock).not.toHaveBeenCalled();
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "Workflow no longer exists" }), { status: 404 }));
-    await expect(saveWorkflowFeedback({ ...workflow, id: "deleted" }, "Use Attio.")).rejects.toThrow("Workflow no longer exists");
+const response = (data:unknown,status=200) => new Response(JSON.stringify(data),{status});
+const end = "2026-09-19T12:00:00Z";
+let ws:any, executions:Record<string,any>, enabled:Map<string,boolean>, catalog:any;
+beforeEach(() => {
+  fetchMock.mockReset();
+  ws = {cycle:{status:"running",end,finished:{}},drafts:{}};
+  executions = {};
+  enabled = new Map(WORKFLOW_TASKS.map(task=>[task,true]));
+  catalog = {analyzedAt:"2026-09-18T12:00:00Z",checkedThrough:"2026-09-18T12:00:00Z"};
+  fetchMock.mockImplementation(async (path,init)=>{
+    const url=String(path);
+    if(url.endsWith("/install")) return response({installed:false});
+    if(url==="/workflows/catalog") return response(catalog);
+    if(url==="/workflows/workspace") return response({revision:1,cycle:ws.cycle});
+    if(url.startsWith("/workflows/workspace?")) return response({workspace:ws,ready:url.endsWith("workflow-review")});
+    if(url==="/workflows/corrections") return response({success:true});
+    const task = WORKFLOW_TASKS.find(task=>url.startsWith(`/pipes/${task}`));
+    if(!task) return response({error:"Not installed"},404);
+    if(url.endsWith("/enable")) {enabled.set(task,JSON.parse(String(init?.body)).enabled);return response({success:true});}
+    if(url.endsWith("/stop")) return response({success:true});
+    if(url.endsWith("/run")) return response({execution_id:24});
+    if(url.includes("/executions?")) return response({data:executions[task]?[executions[task]]:[]});
+    return response({data:{config:{enabled:enabled.get(task),title:task}}});
   });
 });
-
-vi.mock("@/lib/workflows/rollout", () => ({ useWorkflowsRolloutEnabled: () => true, requireWorkflowsRollout: vi.fn(), syncWorkflowsRollout: vi.fn().mockResolvedValue(undefined) }));
-
-it("offers resume for a restart interruption, including executions stored as failed", async () => {
-  fetchMock.mockResolvedValueOnce(response({data:{id:51,status:"failed",error_type:"interrupted",error_message:"interrupted by system restart"}}));
-  expect(await getWorkflowJob("51")).toMatchObject({status:"incomplete",message:expect.stringContaining("Screenpipe restarted")});
+describe("workflow agent workspace adapter",()=>{
+  it("installs four templates without opting into background AI",async()=>{
+    await ensureWorkflowTask();expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock.mock.calls.every(([path])=>String(path).endsWith("/install"))).toBe(true);
+  });
+  it("coalesces updates with any running agent",async()=>{
+    executions["workflow-deepen"]={id:23,status:"running",started_at:end};
+    expect(await startWorkflowJob()).toMatchObject({id:"workflow-deepen:23",status:"processing"});
+    expect(fetchMock.mock.calls.some(([path])=>String(path).endsWith("/run"))).toBe(false);
+  });
+  it("starts or resumes a fixed request then runs ready review work",async()=>{
+    expect(await startWorkflowJob()).toMatchObject({id:"workflow-review:24"});
+    const calls=fetchMock.mock.calls.map(([path])=>String(path));
+    expect(calls.indexOf("/workflows/workspace")).toBeLessThan(calls.indexOf("/pipes/workflow-review/run"));
+  });
+  it("resumes all ready agents without waiting for a previously acknowledged event",async()=>{
+    const original=fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async(path,init)=>{
+      if(String(path).startsWith("/workflows/workspace?")) return response({workspace:ws,ready:["workflow-discover","workflow-maintain"].some(task=>String(path).endsWith(task))});
+      return original(path,init);
+    });
+    await startWorkflowJob();
+    expect(fetchMock.mock.calls.filter(([path])=>String(path).endsWith("/run")).map(([path])=>path)).toEqual([
+      "/pipes/workflow-discover/run","/pipes/workflow-maintain/run",
+    ]);
+  });
+  it("tracks a scheduler execution that wins the manual-start race",async()=>{
+    const original=fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async(path,init)=>{
+      if(String(path).endsWith("/run")) {
+        executions["workflow-review"]={id:25,status:"running",started_at:end};
+        return response({error:"Pipe is already running"});
+      }
+      return original(path,init);
+    });
+    expect(await startWorkflowJob()).toMatchObject({id:"workflow-review:25"});
+  });
+  it("keeps start failures visible when no active execution was persisted",async()=>{
+    const original=fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async(path,init)=>String(path).endsWith("/run")
+      ? response({error:"Execution storage unavailable"}) : original(path,init));
+    await expect(startWorkflowJob()).rejects.toThrow("Execution storage unavailable");
+  });
+  it("preserves a disabled role until explicit opt-in",async()=>{
+    enabled.set("workflow-maintain",false);
+    expect(await loadWorkflowTaskSetup()).toMatchObject({enabled:false});
+    await expect(startWorkflowJob()).rejects.toThrow("Enable workflow tasks");
+    await enableWorkflowTask();expect(await loadWorkflowTaskSetup()).toMatchObject({enabled:true});
+  });
+  it("stops this cycle before cancelling all roles, preserving schedule preferences",async()=>{
+    enabled.set("workflow-maintain",false);
+    const before=new Map(enabled);
+    await stopWorkflowJob();
+    expect(fetchMock.mock.calls[0][0]).toBe("/workflows/workspace");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({action:"pause",task:"workflow-discover"});
+    expect(fetchMock.mock.calls.slice(1).map(([path])=>path)).toEqual(WORKFLOW_TASKS.map(t=>`/pipes/${t}/stop`));
+    expect(enabled).toEqual(before);
+  });
+  it("attempts every cancellation even when one runner fails to stop",async()=>{
+    const original=fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async(path,init)=>String(path)==="/pipes/workflow-discover/stop"
+      ? response({error:"Runner unavailable"},500) : original(path,init));
+    await expect(stopWorkflowJob()).rejects.toThrow("Runner unavailable");
+    expect(fetchMock.mock.calls.filter(([path])=>String(path).endsWith("/stop"))).toHaveLength(4);
+    expect([...enabled.values()].every(Boolean)).toBe(true);
+  });
+  it("does not change tasks when persisting the pause fails",async()=>{
+    fetchMock.mockResolvedValueOnce(response({error:"Save failed"},500));
+    await expect(stopWorkflowJob()).rejects.toThrow("Save failed");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it("reports a persisted stop after restart instead of an old agent failure",async()=>{
+    ws.cycle.status="paused";
+    executions["workflow-review"]={id:26,status:"cancelled",started_at:end};
+    expect(await getWorkflowJob("workflow-review:26")).toMatchObject({status:"incomplete",message:"Update stopped. Resume to continue from saved progress."});
+  });
+  it("never treats an old catalog as completion of a fresh request",async()=>{
+    ws.cycle.status="complete";
+    expect(await getWorkflowJob("old-job")).toMatchObject({status:"incomplete"});
+  });
+  it("accepts a verified no-change finish for the exact requested end",async()=>{
+    ws.cycle.status="complete";catalog={analyzedAt:end,checkedThrough:end,changes:{created:0,updated:0}};
+    expect(await getWorkflowJob("review:25")).toMatchObject({status:"complete",result:{changes:{created:0,updated:0}}});
+  });
+  it("partial publication remains incomplete until all drafts are resolved",async()=>{
+    catalog={analyzedAt:end,checkedThrough:end,changes:{created:1,updated:0}};
+    ws.drafts={pending:{status:"open"},published:{status:"published"}};
+    expect(await getWorkflowJob("review:25")).toMatchObject({status:"incomplete",message:expect.stringContaining("1 workflow draft")});
+  });
+  it.each(["missing_output","timed_out","interrupted"])("surfaces %s even after an unrelated idle agent completes",async error=>{
+    executions["workflow-discover"]={id:30,status:error==="timed_out"?error:"failed",error_type:error,started_at:end};
+    executions["workflow-maintain"]={id:31,status:"completed",started_at:end};
+    expect(await getWorkflowJob("workflow-maintain:31")).toMatchObject({id:"workflow-discover:30",status:error==="interrupted"?"incomplete":"failed"});
+  });
+  it("does not resurrect failures from an older request",async()=>{
+    executions["workflow-discover"]={id:20,status:"failed",started_at:"2026-09-18T12:00:00Z"};
+    expect(await getWorkflowJob("legacy:20")).toMatchObject({status:"incomplete"});
+  });
+  it("saves only human corrections, never a stale full catalog",async()=>{
+    catalog={analyzedAt:end,analysis:{workflows:[{id:"wf-a",title:"Changed elsewhere",userCorrection:"Old"}]}};
+    await saveWorkflowCorrections({...catalog,analysis:{workflows:[{id:"wf-a",title:"Stale",userCorrection:"New"}]}});
+    expect(JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body))).toEqual({id:"wf-a",correction:"New"});
+  });
+  it("saves feedback without starting an agent",async()=>{
+    await saveWorkflowFeedback({...fixtureWorkflowAnalysis.analysis.workflows[0],id:"wf-a"},"Use Attio");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("/workflows/corrections");
+  });
+  it("rejects missing identity and propagates failed saves",async()=>{
+    const workflow={...fixtureWorkflowAnalysis.analysis.workflows[0],id:undefined};
+    await expect(saveWorkflowFeedback(workflow,"Feedback")).rejects.toThrow("Refresh");
+    fetchMock.mockResolvedValueOnce(response({error:"Workflow no longer exists"},404));
+    await expect(saveWorkflowFeedback({...workflow,id:"deleted"},"Feedback")).rejects.toThrow("no longer exists");
+  });
 });

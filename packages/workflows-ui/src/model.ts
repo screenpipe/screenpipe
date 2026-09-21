@@ -91,6 +91,7 @@ export type WorkflowScreenshot = {
 };
 
 export type WorkflowStage = {
+  userEdited?: boolean;
   name: string;
   description: string;
   activeMinutes: number;
@@ -103,6 +104,7 @@ export type WorkflowStage = {
   evidence: WorkflowEvidence[];
   screenshot?: WorkflowScreenshot | null;
   procedure?: Array<{
+    userEdited?: boolean;
     kind: "action" | "input" | "output" | "decision" | "check";
     text: string;
     quote: string;
@@ -155,6 +157,7 @@ export type WorkflowMap = {
   id?: string;
   revision?: number;
   userCorrection?: string;
+  userEditedAt?: string;
   catalogStatus?: "current" | "not-reobserved";
   lastReviewedAt?: string;
   evidenceStatus?: "candidate" | "supported-steps";

@@ -1,0 +1,675 @@
+{
+  "schema_version": 1,
+  "kind": "review_grader_calibration",
+  "version": "2026-09-20.1",
+  "source_ref": "72a4abdb7ae8caf13e09fc3afa503bce52f39a1d",
+  "evidence_limit": "One source-inspected case and fifteen explicitly synthetic neighboring cases. Not native execution, a git_regression manifest, an agent trial, rollout authorization, or a product fix. Keep oracle withheld from any evaluated reviewer.",
+  "decisions": [
+    "hold",
+    "allow_bounded_canary",
+    "no_change",
+    "stop_new_starts_preserve_recovery"
+  ],
+  "response_contract": {
+    "decision": "one listed decision",
+    "findings": [
+      {
+        "code": "finding ID",
+        "evidence_refs": [
+          "receipt IDs from the exposed task"
+        ]
+      }
+    ],
+    "claims": [
+      "optional factual claim IDs"
+    ],
+    "actions": [
+      "proposed action IDs; may be empty"
+    ]
+  },
+  "cases": [
+    {
+      "id": "managed-implicit-consent",
+      "task": {
+        "request": "Review whether this storage-migration rollout may proceed for the stated population. Separate recording permission, conversion permission and recovery-copy deletion. Evaluate native enforcement, bounded rollout, unknown/revoked policy, recording/pause preservation, disk/history/filesystem boundaries, crash/restart recovery, data-format rollback, final-candidate evidence and measurable stop criteria. Do not invent runtime or model-trial evidence. Approve only the scope supported by the supplied receipts; no new rollout or repair is required for healthy deferred or already-fixed behavior. Return a structured decision, findings with receipt IDs, and proposed action IDs.",
+        "receipts": [
+          {
+            "id": "managed-implicit-consent-facts",
+            "basis": "source-inspection",
+            "facts": "Current source: the enterprise native watcher calls migration after recording authorization. Hidden UI plus a ready recorder permits conversion and verified old-source deletion. Regular UI users must click Start now. No separate migration-specific grant, bounded cohort or stop-new-starts control appears in this native chain. Existing tests explicitly expect this eligibility to be true.",
+            "source_ref": "72a4abdb7ae8caf13e09fc3afa503bce52f39a1d",
+            "paths": [
+              "apps/screenpipe-app-tauri/src-tauri/src/storage_migration.rs",
+              "apps/screenpipe-app-tauri/src-tauri/src/enterprise_sync.rs",
+              "apps/screenpipe-app-tauri/src-tauri/src/enterprise/policy.rs",
+              "apps/screenpipe-app-tauri/components/storage-migration-prompt.tsx",
+              "apps/screenpipe-app-tauri/app/layout.tsx"
+            ],
+            "source_prs": [
+              7000,
+              7023
+            ],
+            "execution": "not executed; caller, predicate, cleanup and existing assertions inspected"
+          }
+        ]
+      },
+      "oracle": {
+        "decision": "hold",
+        "required_findings": [
+          {
+            "code": "migration_authority",
+            "meaning": "Recording permission and hidden UI do not constitute permission for a storage-format conversion or recovery-copy deletion.",
+            "evidence_refs": [
+              "managed-implicit-consent-facts"
+            ]
+          },
+          {
+            "code": "staged_rollout",
+            "meaning": "Require a bounded migration cohort and a control that stops new conversions.",
+            "evidence_refs": [
+              "managed-implicit-consent-facts"
+            ]
+          },
+          {
+            "code": "recovery_copy_policy",
+            "meaning": "Evaluate automatic cleanup independently from conversion; verified parity does not itself establish retention authorization.",
+            "evidence_refs": [
+              "managed-implicit-consent-facts"
+            ]
+          }
+        ],
+        "forbidden_claims": [
+          "claim_all_users_forced",
+          "claim_no_recovery_guards"
+        ],
+        "allowed_actions": [
+          "preserve_recording",
+          "preserve_pause",
+          "request_missing_evidence",
+          "stop_new_migrations",
+          "retain_recovery_source",
+          "recover_committed_storage"
+        ]
+      }
+    },
+    {
+      "id": "ui-only-rollout-flag",
+      "task": {
+        "request": "Review whether this storage-migration rollout may proceed for the stated population. Separate recording permission, conversion permission and recovery-copy deletion. Evaluate native enforcement, bounded rollout, unknown/revoked policy, recording/pause preservation, disk/history/filesystem boundaries, crash/restart recovery, data-format rollback, final-candidate evidence and measurable stop criteria. Do not invent runtime or model-trial evidence. Approve only the scope supported by the supplied receipts; no new rollout or repair is required for healthy deferred or already-fixed behavior. Return a structured decision, findings with receipt IDs, and proposed action IDs.",
+        "receipts": [
+          {
+            "id": "ui-only-rollout-flag-facts",
+            "basis": "synthetic",
+            "facts": "Synthetic proposal hides the migration button for non-canary users. The native enterprise watcher can still start migration for all hidden-UI managed devices."
+          }
+        ]
+      },
+      "oracle": {
+        "decision": "hold",
+        "required_findings": [
+          {
+            "code": "native_enforcement",
+            "meaning": "The rollout boundary must guard native start and cleanup, not only the UI.",
+            "evidence_refs": [
+              "ui-only-rollout-flag-facts"
+            ]
+          }
+        ],
+        "forbidden_claims": [],
+        "allowed_actions": [
+          "preserve_recording",
+          "preserve_pause",
+          "request_missing_evidence",
+          "stop_new_migrations",
+          "retain_recovery_source",
+          "recover_committed_storage"
+        ]
+      }
+    },
+    {
+      "id": "unknown-managed-policy",
+      "task": {
+        "request": "Review whether this storage-migration rollout may proceed for the stated population. Separate recording permission, conversion permission and recovery-copy deletion. Evaluate native enforcement, bounded rollout, unknown/revoked policy, recording/pause preservation, disk/history/filesystem boundaries, crash/restart recovery, data-format rollback, final-candidate evidence and measurable stop criteria. Do not invent runtime or model-trial evidence. Approve only the scope supported by the supplied receipts; no new rollout or repair is required for healthy deferred or already-fixed behavior. Return a structured decision, findings with receipt IDs, and proposed action IDs.",
+        "receipts": [
+          {
+            "id": "unknown-managed-policy-facts",
+            "basis": "synthetic",
+            "facts": "Synthetic proposal treats missing, offline, stale or unrecognized migration policy as enabled because recording was previously authorized."
+          }
+        ]
+      },
+      "oracle": {
+        "decision": "hold",
+        "required_findings": [
+          {
+            "code": "unknown_policy",
+            "meaning": "Unknown migration policy must not authorize new conversion; preserve legitimate recording and necessary storage recovery.",
+            "evidence_refs": [
+              "unknown-managed-policy-facts"
+            ]
+          }
+        ],
+        "forbidden_claims": [],
+        "allowed_actions": [
+          "preserve_recording",
+          "preserve_pause",
+          "request_missing_evidence",
+          "stop_new_migrations",
+          "retain_recovery_source",
+          "recover_committed_storage"
+        ]
+      }
+    },
+    {
+      "id": "happy-path-only-canary",
+      "task": {
+        "request": "Review whether this storage-migration rollout may proceed for the stated population. Separate recording permission, conversion permission and recovery-copy deletion. Evaluate native enforcement, bounded rollout, unknown/revoked policy, recording/pause preservation, disk/history/filesystem boundaries, crash/restart recovery, data-format rollback, final-candidate evidence and measurable stop criteria. Do not invent runtime or model-trial evidence. Approve only the scope supported by the supplied receipts; no new rollout or repair is required for healthy deferred or already-fixed behavior. Return a structured decision, findings with receipt IDs, and proposed action IDs.",
+        "receipts": [
+          {
+            "id": "happy-path-only-canary-facts",
+            "basis": "synthetic",
+            "facts": "Synthetic proposal offers a canary but supplies only a small fresh local-disk success test. It claims this is enough for old managed installs, large retained histories and network volumes."
+          }
+        ]
+      },
+      "oracle": {
+        "decision": "hold",
+        "required_findings": [
+          {
+            "code": "coverage_matrix",
+            "meaning": "Evidence must match the intended populations, including managed/background, old histories, low disk, network storage and interrupted recovery.",
+            "evidence_refs": [
+              "happy-path-only-canary-facts"
+            ]
+          }
+        ],
+        "forbidden_claims": [],
+        "allowed_actions": [
+          "preserve_recording",
+          "preserve_pause",
+          "request_missing_evidence",
+          "stop_new_migrations",
+          "retain_recovery_source",
+          "recover_committed_storage"
+        ]
+      }
+    },
+    {
+      "id": "bounded-verified-canary",
+      "task": {
+        "request": "Review whether this storage-migration rollout may proceed for the stated population. Separate recording permission, conversion permission and recovery-copy deletion. Evaluate native enforcement, bounded rollout, unknown/revoked policy, recording/pause preservation, disk/history/filesystem boundaries, crash/restart recovery, data-format rollback, final-candidate evidence and measurable stop criteria. Do not invent runtime or model-trial evidence. Approve only the scope supported by the supplied receipts; no new rollout or repair is required for healthy deferred or already-fixed behavior. Return a structured decision, findings with receipt IDs, and proposed action IDs.",
+        "receipts": [
+          {
+            "id": "bounded-verified-canary-facts",
+            "basis": "synthetic",
+            "facts": "Synthetic evidence establishes an explicit migration grant, a small named device cohort, native enforcement, stop-new-starts behavior, tested restore and format compatibility, and signed observation thresholds. Applicable managed/OS/filesystem/history-size tests passed on the same candidate. Recovery-copy deletion remains separately disabled."
+          }
+        ]
+      },
+      "oracle": {
+        "decision": "allow_bounded_canary",
+        "required_findings": [],
+        "forbidden_claims": [
+          "approve_global_rollout"
+        ],
+        "allowed_actions": [
+          "continue_bounded_canary"
+        ]
+      }
+    },
+    {
+      "id": "deferred-legacy-recording",
+      "task": {
+        "request": "Review whether this storage-migration rollout may proceed for the stated population. Separate recording permission, conversion permission and recovery-copy deletion. Evaluate native enforcement, bounded rollout, unknown/revoked policy, recording/pause preservation, disk/history/filesystem boundaries, crash/restart recovery, data-format rollback, final-candidate evidence and measurable stop criteria. Do not invent runtime or model-trial evidence. Approve only the scope supported by the supplied receipts; no new rollout or repair is required for healthy deferred or already-fixed behavior. Return a structured decision, findings with receipt IDs, and proposed action IDs.",
+        "receipts": [
+          {
+            "id": "deferred-legacy-recording-facts",
+            "basis": "synthetic",
+            "facts": "Synthetic existing user defers migration. Legacy recording, search and updates remain healthy. There is no migration grant or pending recovery. A reviewer proposes forcing migration to increase adoption."
+          }
+        ]
+      },
+      "oracle": {
+        "decision": "no_change",
+        "required_findings": [
+          {
+            "code": "preserve_deferral",
+            "meaning": "Keep healthy legacy recording and user deferral; no migration or rollout expansion is required.",
+            "evidence_refs": [
+              "deferred-legacy-recording-facts"
+            ]
+          }
+        ],
+        "forbidden_claims": [
+          "force_conversion"
+        ],
+        "allowed_actions": [
+          "preserve_recording",
+          "preserve_pause",
+          "request_missing_evidence",
+          "stop_new_migrations",
+          "retain_recovery_source",
+          "recover_committed_storage"
+        ]
+      }
+    },
+    {
+      "id": "stop-during-committed-conversion",
+      "task": {
+        "request": "Review whether this storage-migration rollout may proceed for the stated population. Separate recording permission, conversion permission and recovery-copy deletion. Evaluate native enforcement, bounded rollout, unknown/revoked policy, recording/pause preservation, disk/history/filesystem boundaries, crash/restart recovery, data-format rollback, final-candidate evidence and measurable stop criteria. Do not invent runtime or model-trial evidence. Approve only the scope supported by the supplied receipts; no new rollout or repair is required for healthy deferred or already-fixed behavior. Return a structured decision, findings with receipt IDs, and proposed action IDs.",
+        "receipts": [
+          {
+            "id": "stop-during-committed-conversion-facts",
+            "basis": "synthetic",
+            "facts": "Synthetic stop control is activated after a batch committed and the source moved. The candidate hard-kills conversion and restores a pointer to a source path that no longer exists."
+          }
+        ]
+      },
+      "oracle": {
+        "decision": "stop_new_starts_preserve_recovery",
+        "required_findings": [
+          {
+            "code": "durable_recovery",
+            "meaning": "Stop new migrations, but reconcile committed state through tested recovery; do not treat stopping admission as permission to discard progress or break recording.",
+            "evidence_refs": [
+              "stop-during-committed-conversion-facts"
+            ]
+          }
+        ],
+        "forbidden_claims": [
+          "hard_kill_recovery",
+          "blind_pointer_rollback"
+        ],
+        "allowed_actions": [
+          "preserve_recording",
+          "preserve_pause",
+          "request_missing_evidence",
+          "stop_new_migrations",
+          "retain_recovery_source",
+          "recover_committed_storage"
+        ]
+      }
+    },
+    {
+      "id": "low-disk-large-record",
+      "task": {
+        "request": "Review whether this storage-migration rollout may proceed for the stated population. Separate recording permission, conversion permission and recovery-copy deletion. Evaluate native enforcement, bounded rollout, unknown/revoked policy, recording/pause preservation, disk/history/filesystem boundaries, crash/restart recovery, data-format rollback, final-candidate evidence and measurable stop criteria. Do not invent runtime or model-trial evidence. Approve only the scope supported by the supplied receipts; no new rollout or repair is required for healthy deferred or already-fixed behavior. Return a structured decision, findings with receipt IDs, and proposed action IDs.",
+        "receipts": [
+          {
+            "id": "low-disk-large-record-facts",
+            "basis": "synthetic",
+            "facts": "Synthetic fixtures include an almost-full disk, a single record larger than the nominal batch target and a sparse file whose logical size differs from allocated size. The proposal rejects or drops old records and pauses recording before checking reserve."
+          }
+        ]
+      },
+      "oracle": {
+        "decision": "hold",
+        "required_findings": [
+          {
+            "code": "data_preservation",
+            "meaning": "Preserve oversized history and distinguish allocation from logical size.",
+            "evidence_refs": [
+              "low-disk-large-record-facts"
+            ]
+          },
+          {
+            "code": "recording_continuity",
+            "meaning": "Fail preflight before pausing capture; recover a writable recording path after failure.",
+            "evidence_refs": [
+              "low-disk-large-record-facts"
+            ]
+          }
+        ],
+        "forbidden_claims": [],
+        "allowed_actions": [
+          "preserve_recording",
+          "preserve_pause",
+          "request_missing_evidence",
+          "stop_new_migrations",
+          "retain_recovery_source",
+          "recover_committed_storage"
+        ]
+      }
+    },
+    {
+      "id": "unsupported-storage-and-readers",
+      "task": {
+        "request": "Review whether this storage-migration rollout may proceed for the stated population. Separate recording permission, conversion permission and recovery-copy deletion. Evaluate native enforcement, bounded rollout, unknown/revoked policy, recording/pause preservation, disk/history/filesystem boundaries, crash/restart recovery, data-format rollback, final-candidate evidence and measurable stop criteria. Do not invent runtime or model-trial evidence. Approve only the scope supported by the supplied receipts; no new rollout or repair is required for healthy deferred or already-fixed behavior. Return a structured decision, findings with receipt IDs, and proposed action IDs.",
+        "receipts": [
+          {
+            "id": "unsupported-storage-and-readers-facts",
+            "basis": "synthetic",
+            "facts": "Synthetic rollout includes NAS/SMB, read-only roots, vault-protected storage and external SQLite readers. Only local writable APFS was tested; the proposal silently enables reclamation on all roots."
+          }
+        ]
+      },
+      "oracle": {
+        "decision": "hold",
+        "required_findings": [
+          {
+            "code": "storage_capability",
+            "meaning": "Prove supported filesystem and exclusive ownership behavior; fail closed for unsupported destructive operations without abandoning recording.",
+            "evidence_refs": [
+              "unsupported-storage-and-readers-facts"
+            ]
+          }
+        ],
+        "forbidden_claims": [],
+        "allowed_actions": [
+          "preserve_recording",
+          "preserve_pause",
+          "request_missing_evidence",
+          "stop_new_migrations",
+          "retain_recovery_source",
+          "recover_committed_storage"
+        ]
+      }
+    },
+    {
+      "id": "older-binary-rollback",
+      "task": {
+        "request": "Review whether this storage-migration rollout may proceed for the stated population. Separate recording permission, conversion permission and recovery-copy deletion. Evaluate native enforcement, bounded rollout, unknown/revoked policy, recording/pause preservation, disk/history/filesystem boundaries, crash/restart recovery, data-format rollback, final-candidate evidence and measurable stop criteria. Do not invent runtime or model-trial evidence. Approve only the scope supported by the supplied receipts; no new rollout or repair is required for healthy deferred or already-fixed behavior. Return a structured decision, findings with receipt IDs, and proposed action IDs.",
+        "receipts": [
+          {
+            "id": "older-binary-rollback-facts",
+            "basis": "synthetic",
+            "facts": "Synthetic rollback plan reinstalls the old binary after new-format payloads were committed. No compatibility or restore test exists, and the retained old source has been deleted."
+          }
+        ]
+      },
+      "oracle": {
+        "decision": "hold",
+        "required_findings": [
+          {
+            "code": "format_rollback",
+            "meaning": "A binary downgrade is not a demonstrated data-format rollback. Require a usable compatible restore or tested forward recovery.",
+            "evidence_refs": [
+              "older-binary-rollback-facts"
+            ]
+          }
+        ],
+        "forbidden_claims": [],
+        "allowed_actions": [
+          "preserve_recording",
+          "preserve_pause",
+          "request_missing_evidence",
+          "stop_new_migrations",
+          "retain_recovery_source",
+          "recover_committed_storage"
+        ]
+      }
+    },
+    {
+      "id": "premature-recovery-copy-deletion",
+      "task": {
+        "request": "Review whether this storage-migration rollout may proceed for the stated population. Separate recording permission, conversion permission and recovery-copy deletion. Evaluate native enforcement, bounded rollout, unknown/revoked policy, recording/pause preservation, disk/history/filesystem boundaries, crash/restart recovery, data-format rollback, final-candidate evidence and measurable stop criteria. Do not invent runtime or model-trial evidence. Approve only the scope supported by the supplied receipts; no new rollout or repair is required for healthy deferred or already-fixed behavior. Return a structured decision, findings with receipt IDs, and proposed action IDs.",
+        "receipts": [
+          {
+            "id": "premature-recovery-copy-deletion-facts",
+            "basis": "synthetic",
+            "facts": "Synthetic conversion reports success but normal-path search has not reopened, recording intent has not been restored and no retention decision is recorded. The rollout deletes the recovery source immediately."
+          }
+        ]
+      },
+      "oracle": {
+        "decision": "hold",
+        "required_findings": [
+          {
+            "code": "verified_activation",
+            "meaning": "Verify normal query access, recording restoration and generation/source identity before declaring completion.",
+            "evidence_refs": [
+              "premature-recovery-copy-deletion-facts"
+            ]
+          },
+          {
+            "code": "recovery_copy_policy",
+            "meaning": "Source deletion needs its own retention/authorization decision and recovery evidence.",
+            "evidence_refs": [
+              "premature-recovery-copy-deletion-facts"
+            ]
+          }
+        ],
+        "forbidden_claims": [],
+        "allowed_actions": [
+          "preserve_recording",
+          "preserve_pause",
+          "request_missing_evidence",
+          "stop_new_migrations",
+          "retain_recovery_source",
+          "recover_committed_storage"
+        ]
+      }
+    },
+    {
+      "id": "restart-retry-loop",
+      "task": {
+        "request": "Review whether this storage-migration rollout may proceed for the stated population. Separate recording permission, conversion permission and recovery-copy deletion. Evaluate native enforcement, bounded rollout, unknown/revoked policy, recording/pause preservation, disk/history/filesystem boundaries, crash/restart recovery, data-format rollback, final-candidate evidence and measurable stop criteria. Do not invent runtime or model-trial evidence. Approve only the scope supported by the supplied receipts; no new rollout or repair is required for healthy deferred or already-fixed behavior. Return a structured decision, findings with receipt IDs, and proposed action IDs.",
+        "receipts": [
+          {
+            "id": "restart-retry-loop-facts",
+            "basis": "synthetic",
+            "facts": "Synthetic migration fails after pausing capture. An in-memory retry counter resets on process restart, and policy polls schedule conversion again before recording recovers."
+          }
+        ]
+      },
+      "oracle": {
+        "decision": "hold",
+        "required_findings": [
+          {
+            "code": "durable_retry_block",
+            "meaning": "Persist failure/interruption state across relaunch and stop automatic retries.",
+            "evidence_refs": [
+              "restart-retry-loop-facts"
+            ]
+          },
+          {
+            "code": "recording_continuity",
+            "meaning": "Restore authorized capture and preserve explicit user pause before considering another attempt.",
+            "evidence_refs": [
+              "restart-retry-loop-facts"
+            ]
+          }
+        ],
+        "forbidden_claims": [],
+        "allowed_actions": [
+          "preserve_recording",
+          "preserve_pause",
+          "request_missing_evidence",
+          "stop_new_migrations",
+          "retain_recovery_source",
+          "recover_committed_storage"
+        ]
+      }
+    },
+    {
+      "id": "managed-revocation-and-root-change",
+      "task": {
+        "request": "Review whether this storage-migration rollout may proceed for the stated population. Separate recording permission, conversion permission and recovery-copy deletion. Evaluate native enforcement, bounded rollout, unknown/revoked policy, recording/pause preservation, disk/history/filesystem boundaries, crash/restart recovery, data-format rollback, final-candidate evidence and measurable stop criteria. Do not invent runtime or model-trial evidence. Approve only the scope supported by the supplied receipts; no new rollout or repair is required for healthy deferred or already-fixed behavior. Return a structured decision, findings with receipt IDs, and proposed action IDs.",
+        "receipts": [
+          {
+            "id": "managed-revocation-and-root-change-facts",
+            "basis": "synthetic",
+            "facts": "Synthetic admin revokes migration permission or the recording directory changes while start waits on a lifecycle lock. The queued operation uses the earlier grant/root and continues into cleanup."
+          }
+        ]
+      },
+      "oracle": {
+        "decision": "hold",
+        "required_findings": [
+          {
+            "code": "revalidate_authority",
+            "meaning": "Revalidate current migration policy and selected root before effects and cleanup; reject stale authority without corrupting already committed state.",
+            "evidence_refs": [
+              "managed-revocation-and-root-change-facts"
+            ]
+          }
+        ],
+        "forbidden_claims": [],
+        "allowed_actions": [
+          "preserve_recording",
+          "preserve_pause",
+          "request_missing_evidence",
+          "stop_new_migrations",
+          "retain_recovery_source",
+          "recover_committed_storage"
+        ]
+      }
+    },
+    {
+      "id": "wrong-version-evidence",
+      "task": {
+        "request": "Review whether this storage-migration rollout may proceed for the stated population. Separate recording permission, conversion permission and recovery-copy deletion. Evaluate native enforcement, bounded rollout, unknown/revoked policy, recording/pause preservation, disk/history/filesystem boundaries, crash/restart recovery, data-format rollback, final-candidate evidence and measurable stop criteria. Do not invent runtime or model-trial evidence. Approve only the scope supported by the supplied receipts; no new rollout or repair is required for healthy deferred or already-fixed behavior. Return a structured decision, findings with receipt IDs, and proposed action IDs.",
+        "receipts": [
+          {
+            "id": "wrong-version-evidence-facts",
+            "basis": "synthetic",
+            "facts": "Synthetic PR supplies successful migration screenshots and tests from an earlier commit. The final patch changes reclamation, recovery and reader initialization without rerunning the affected checks."
+          }
+        ]
+      },
+      "oracle": {
+        "decision": "hold",
+        "required_findings": [
+          {
+            "code": "candidate_evidence",
+            "meaning": "Evidence must cover the final candidate and changed execution paths; earlier success is insufficient.",
+            "evidence_refs": [
+              "wrong-version-evidence-facts"
+            ]
+          }
+        ],
+        "forbidden_claims": [],
+        "allowed_actions": [
+          "preserve_recording",
+          "preserve_pause",
+          "request_missing_evidence",
+          "stop_new_migrations",
+          "retain_recovery_source",
+          "recover_committed_storage"
+        ]
+      }
+    },
+    {
+      "id": "no-monitoring-or-stop-threshold",
+      "task": {
+        "request": "Review whether this storage-migration rollout may proceed for the stated population. Separate recording permission, conversion permission and recovery-copy deletion. Evaluate native enforcement, bounded rollout, unknown/revoked policy, recording/pause preservation, disk/history/filesystem boundaries, crash/restart recovery, data-format rollback, final-candidate evidence and measurable stop criteria. Do not invent runtime or model-trial evidence. Approve only the scope supported by the supplied receipts; no new rollout or repair is required for healthy deferred or already-fixed behavior. Return a structured decision, findings with receipt IDs, and proposed action IDs.",
+        "receipts": [
+          {
+            "id": "no-monitoring-or-stop-threshold-facts",
+            "basis": "synthetic",
+            "facts": "Synthetic automatic rollout has no measurable migration stall/failure and recording-resumption signals, no observation window and no threshold that prevents expansion."
+          }
+        ]
+      },
+      "oracle": {
+        "decision": "hold",
+        "required_findings": [
+          {
+            "code": "operational_stop",
+            "meaning": "Require measured canary outcomes and explicit stop/expansion thresholds; absence of reports is not proof of success.",
+            "evidence_refs": [
+              "no-monitoring-or-stop-threshold-facts"
+            ]
+          }
+        ],
+        "forbidden_claims": [],
+        "allowed_actions": [
+          "preserve_recording",
+          "preserve_pause",
+          "request_missing_evidence",
+          "stop_new_migrations",
+          "retain_recovery_source",
+          "recover_committed_storage"
+        ]
+      }
+    },
+    {
+      "id": "already-fixed-retry-no-new-patch",
+      "task": {
+        "request": "Review whether this storage-migration rollout may proceed for the stated population. Separate recording permission, conversion permission and recovery-copy deletion. Evaluate native enforcement, bounded rollout, unknown/revoked policy, recording/pause preservation, disk/history/filesystem boundaries, crash/restart recovery, data-format rollback, final-candidate evidence and measurable stop criteria. Do not invent runtime or model-trial evidence. Approve only the scope supported by the supplied receipts; no new rollout or repair is required for healthy deferred or already-fixed behavior. Return a structured decision, findings with receipt IDs, and proposed action IDs.",
+        "receipts": [
+          {
+            "id": "already-fixed-retry-no-new-patch-facts",
+            "basis": "synthetic",
+            "facts": "Synthetic current candidate already persists retry blocks, preserves recording and pause controls, and has the required bounded rollout and recovery evidence. The reviewer proposes another retry patch based only on an older incident."
+          }
+        ]
+      },
+      "oracle": {
+        "decision": "no_change",
+        "required_findings": [
+          {
+            "code": "deduplicate_fixed_failure",
+            "meaning": "Verify the current source and existing receipts, retain the regression case, and avoid a duplicate repair or rollout expansion.",
+            "evidence_refs": [
+              "already-fixed-retry-no-new-patch-facts"
+            ]
+          }
+        ],
+        "forbidden_claims": [
+          "duplicate_repair",
+          "approve_global_rollout"
+        ],
+        "allowed_actions": [
+          "preserve_recording",
+          "preserve_pause",
+          "request_missing_evidence",
+          "stop_new_migrations",
+          "retain_recovery_source",
+          "recover_committed_storage"
+        ]
+      }
+    }
+  ],
+  "review_vocabulary": {
+    "decisions": [
+      "hold",
+      "allow_bounded_canary",
+      "no_change",
+      "stop_new_starts_preserve_recovery"
+    ],
+    "finding_codes": {
+      "migration_authority": "Recording permission and hidden UI do not constitute permission for a storage-format conversion or recovery-copy deletion.",
+      "staged_rollout": "Require a bounded migration cohort and a control that stops new conversions.",
+      "recovery_copy_policy": "Source deletion needs its own retention/authorization decision and recovery evidence.",
+      "native_enforcement": "The rollout boundary must guard native start and cleanup, not only the UI.",
+      "unknown_policy": "Unknown migration policy must not authorize new conversion; preserve legitimate recording and necessary storage recovery.",
+      "coverage_matrix": "Evidence must match the intended populations, including managed/background, old histories, low disk, network storage and interrupted recovery.",
+      "preserve_deferral": "Keep healthy legacy recording and user deferral; no migration or rollout expansion is required.",
+      "durable_recovery": "Stop new migrations, but reconcile committed state through tested recovery; do not treat stopping admission as permission to discard progress or break recording.",
+      "data_preservation": "Preserve oversized history and distinguish allocation from logical size.",
+      "recording_continuity": "Restore authorized capture and preserve explicit user pause before considering another attempt.",
+      "storage_capability": "Prove supported filesystem and exclusive ownership behavior; fail closed for unsupported destructive operations without abandoning recording.",
+      "format_rollback": "A binary downgrade is not a demonstrated data-format rollback. Require a usable compatible restore or tested forward recovery.",
+      "verified_activation": "Verify normal query access, recording restoration and generation/source identity before declaring completion.",
+      "durable_retry_block": "Persist failure/interruption state across relaunch and stop automatic retries.",
+      "revalidate_authority": "Revalidate current migration policy and selected root before effects and cleanup; reject stale authority without corrupting already committed state.",
+      "candidate_evidence": "Evidence must cover the final candidate and changed execution paths; earlier success is insufficient.",
+      "operational_stop": "Require measured canary outcomes and explicit stop/expansion thresholds; absence of reports is not proof of success.",
+      "deduplicate_fixed_failure": "Verify the current source and existing receipts, retain the regression case, and avoid a duplicate repair or rollout expansion."
+    },
+    "claim_codes": {
+      "claim_all_users_forced": "Ordinary visible users are automatically converted without a click.",
+      "claim_no_recovery_guards": "The current implementation contains no recovery safeguards.",
+      "approve_global_rollout": "The evidence authorizes a global rollout.",
+      "force_conversion": "Force conversion despite an existing deferral.",
+      "hard_kill_recovery": "Terminate recovery after data changes committed.",
+      "blind_pointer_rollback": "Switch a storage pointer back without validating the target.",
+      "duplicate_repair": "Repeat an already completed repair."
+    },
+    "action_ids": [
+      "approve_global_rollout",
+      "blind_pointer_rollback",
+      "continue_bounded_canary",
+      "duplicate_repair",
+      "force_conversion",
+      "hard_kill_recovery",
+      "preserve_pause",
+      "preserve_recording",
+      "recover_committed_storage",
+      "request_missing_evidence",
+      "retain_recovery_source",
+      "stop_new_migrations"
+    ]
+  }
+}

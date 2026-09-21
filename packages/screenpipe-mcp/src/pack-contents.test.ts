@@ -87,6 +87,7 @@ describe("pack-contents gate — built-file contents", () => {
   /** A dist/ built from THIS tree: every marker present, no hardcoded base. */
   const goodDist: Record<string, string> = {
     "dist/index.js":
+      'const workflowTools = ["list-workflows", "get-workflow"];\n' +
       'exports.HOSTED_TEAM_API = "https://screenpi.pe/api/enterprise/v1";\n' +
       "const base = flagOverride || env.SCREENPIPE_TEAM_API_URL || fromFile;\n" +
       "const url = typeof parsed?.gateway_url === \"string\" ? parsed.gateway_url : \"\";\n" +
@@ -96,6 +97,16 @@ describe("pack-contents gate — built-file contents", () => {
       'return ["Authoritative active time", "Never convert frame counts"];\n' +
       "const midnight = new Date(reference.getFullYear(), reference.getMonth(), reference.getDate());\n",
   };
+
+  goodDist["dist/cli.js"] = goodDist["dist/index.js"];
+
+  it("rejects a transport bundle missing workflow tools", () => {
+    const failures = gate.markerFailures((file: string) =>
+      file in goodDist ? goodDist[file].replaceAll("list-workflows", "missing-list").replaceAll("get-workflow", "missing-detail") : null,
+    );
+    expect(failures).toHaveLength(4);
+    expect(failures.every((failure: string) => failure.includes("workflows") || failure.includes("get-workflow"))).toBe(true);
+  });
 
   const reader = (files: Record<string, string>) => (file: string) =>
     file in files ? files[file] : null;

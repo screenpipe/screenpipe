@@ -2,7 +2,7 @@
 // https://screenpipe.com
 
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { RecordingStatus } from "@/components/recording-status";
 import { SidebarFooter } from "@/components/sidebar-footer";
@@ -48,7 +48,8 @@ it("opens the existing sharing review from the selected workflow in the main app
   window.history.replaceState(null, "", "/home?mode=workflows");
   render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
   fireEvent.click(await screen.findByRole("button", { name: "Build my workflow catalog" }));
-  fireEvent.click(await screen.findByRole("button", { name: /research synthesis/i }));
+  const card = (await screen.findByRole("heading", { name: "Research synthesis" })).closest("article")!;
+  fireEvent.click(within(card).getByRole("button", { name: "Open map" }));
   expect(screen.queryByRole("dialog", { name: "Sharing review" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Share with team" }));
   expect(screen.getByRole("dialog", { name: "Sharing review" })).toHaveTextContent("Research synthesis");

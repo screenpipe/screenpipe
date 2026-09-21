@@ -41,13 +41,13 @@ const PREVIOUS_DEFAULT_SIDEBAR_NAV_ORDER = [
 export type SidebarNavLayout = {
   /** Ids in render order. May omit ids (they fall back to canonical position). */
   order: SidebarNavId[];
-  /** Ids kept out of the sidebar. Nothing is hidden by default. */
+  /** Ids kept out of the sidebar. Library is hidden by default. */
   hidden: SidebarNavId[];
 };
 
 export const DEFAULT_SIDEBAR_NAV_LAYOUT: SidebarNavLayout = {
   order: [...SIDEBAR_NAV_ORDER],
-  hidden: [],
+  hidden: ["brain"],
 };
 
 /** At least one row must stay in the sidebar — an empty nav is a dead end. */

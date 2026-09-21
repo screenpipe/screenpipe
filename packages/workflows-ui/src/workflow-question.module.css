@@ -1,0 +1,11 @@
+/* screenpipe — AI that knows everything you've seen, said, or heard */
+/* https://screenpipe.com */
+.question { box-sizing: border-box; display: flex; align-items: flex-start; gap: 9px; width: 100%; padding: 9px 6px; border: 0; border-radius: 4px; background: transparent; color: var(--ink, #171914); font: inherit; font-size: 13px; line-height: 1.5; text-align: left; cursor: pointer; }
+.question span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.question svg { flex-shrink: 0; margin-top: 3px; color: var(--muted, #78786f); }
+.question:hover { background: var(--soft, #f1f2ed); }
+.question:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
+
+.question > svg:last-child { opacity: 0; }
+.question:hover > svg:last-child, .question:focus-visible > svg:last-child { opacity: 1; }
+@media (hover: none) { .question { min-height: 44px; } .question > svg:last-child { opacity: 1; } }

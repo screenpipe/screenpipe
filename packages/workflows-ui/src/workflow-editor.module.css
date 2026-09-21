@@ -1,0 +1,105 @@
+/* screenpipe — AI that knows everything you've seen, said, or heard */
+/* https://screenpipe.com */
+.editor {
+  container-type: inline-size;
+  container-name: workflow-editor;
+  max-width: 780px;
+  margin: 0 auto;
+  color: var(--ink);
+}
+.editor fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.editor button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  min-width: 28px; min-height: 28px; padding: 4px;
+  border: 0; border-radius: 4px; background: transparent; color: var(--muted);
+  cursor: pointer; font: inherit; font-size: 12px;
+}
+.editor button:hover { background: var(--soft); color: var(--ink); }
+.editor button:disabled { opacity: .35; cursor: default; }
+.editor button:focus-visible, .editor select:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.editor textarea {
+  display: block; box-sizing: border-box; width: 100%; min-height: 30px;
+  resize: none; overflow: hidden; border: 1px solid transparent; border-radius: 4px;
+  padding: 3px 5px; background: transparent; color: var(--ink);
+  font: inherit; font-size: 14px; line-height: 1.6;
+}
+.editor textarea:hover { background: var(--soft); }
+.editor textarea:focus { outline: none; border-color: var(--line); background: var(--panel); }
+.editor textarea::placeholder { color: var(--muted); }
+.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 0 12px; margin-bottom: 8px; }
+.toolbar > div { display: flex; align-items: center; gap: 6px; }
+.toolbar > div:last-child { flex: 1; min-width: 0; justify-content: flex-end; flex-wrap: wrap; }
+.toolbar > div:last-child > div { margin: 0; gap: 4px; }
+.toolbar > div:first-child { flex: 0 1 auto; }
+.toolbar span { color: var(--muted); font-size: 11px; }
+.intro { margin: 0 0 16px; }
+.intro .title { font-size: 30px; font-weight: 600; line-height: 1.25; letter-spacing: -.03em; margin-bottom: 4px; }
+.endpoint { display: block; color: var(--muted); font-size: 11px; padding: 6px 5px; }
+.endpoint textarea { margin-left: -5px; }
+.stepsHeading { margin: 18px 0 8px; padding: 0 5px; }
+.stepsHeading strong { color: var(--muted); font-size: 11px; font-weight: 500; }
+.steps { margin: 0 0 4px; padding-left: 26px; }
+.step { position: relative; padding: 4px 0; margin: 0 0 24px; border: 0; background: transparent; }
+.step::before { content: ""; position: absolute; left: -30px; top: 0; bottom: 0; width: 30px; }
+.step.drop { box-shadow: 0 -2px 0 var(--ink); }
+.stepTop { padding-right: 30px; position: relative; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: start; }
+.number { padding-top: 7px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.step .title { min-width: 0; font-size: 17px; font-weight: 550; line-height: 1.4; }
+.step > textarea { width: calc(100% - 24px); margin-left: 24px; }
+.editor .grip { cursor: grab; color: var(--muted); }
+.editor .grip:active { cursor: grabbing; }
+.stepTop > .grip { position: absolute; left: -30px; top: 0; }
+.controls { position: relative; }
+.controls > summary { display: flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; border-radius: 4px; color: var(--muted); list-style: none; cursor: pointer; }
+.controls > summary::-webkit-details-marker { display: none; }
+.controls > summary:hover { background: var(--soft); }
+.controls > summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.stepMenu { display: flex; position: absolute; top: 30px; right: 0; z-index: 3; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 4px 12px #0000000d; }
+.controls[open] { opacity: 1; pointer-events: auto; z-index: 6; }
+.stepTop > .grip, .controls, .step > .add, .blockControls > .grip { opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+.step:hover > .stepTop > .grip, .step:focus-within > .stepTop > .grip,
+.step:hover > .stepTop > .controls, .step:focus-within > .stepTop > .controls,
+.step:hover > .add, .step:focus-within > .add,
+.block:hover > .blockControls > .grip, .block:focus-within > .blockControls > .grip,
+.blockControls[data-open] > .grip { opacity: 1; pointer-events: auto; }
+.blocks { margin-left: 24px; }
+.block { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 76px; align-items: start; gap: 4px; margin: 2px 0; }
+.blockDrop { box-shadow: 0 -2px 0 var(--ink); }
+.block::before { content: ""; position: absolute; left: -30px; top: 0; bottom: 0; width: 30px; }
+.blockControls { position: absolute; left: -30px; top: 1px; }
+.blockControls[data-open] { z-index: 5; }
+.block textarea { min-width: 0; grid-column: 1; grid-row: 1; }
+.kindLabel { grid-column: 2; grid-row: 1; padding: 8px 4px; font-size: 11px; line-height: 1.4; color: var(--muted); pointer-events: none; }
+.blockMenu { position: absolute; left: 0; top: 29px; box-sizing: border-box; width: 200px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 4px 12px #00000012; }
+.blockMenu label { display: block; padding: 4px; font-size: 11px; color: var(--muted); }
+.blockMenu select { display: block; box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: inherit; font-size: 13px; color: var(--ink); background: var(--panel); }
+.blockMenu > button { justify-content: flex-start; width: 100%; padding: 7px 4px; }
+.source { margin: 2px 0 0 29px; }
+.source > details { margin: 0; border: 0; border-radius: 0; background: transparent; }
+.source > details > summary { min-height: 26px; width: fit-content; padding: 2px 0; gap: 6px; color: var(--muted); }
+.source > details > summary strong { font-size: 11px; font-weight: 400; }
+.source > details > summary svg { width: 12px; height: 12px; }
+.source p, .source blockquote { font-size: 12px; line-height: 1.5; }
+.source small { display: block; color: var(--muted); }
+.editor .add { position: absolute; top: 4px; right: 0; font-size: 0; gap: 0; }
+.editor .addStep { margin: 0 0 12px 49px; padding: 4px 6px; color: var(--muted); }
+.note { font-size: 11px; color: var(--muted); line-height: 1.5; padding: 0 5px; }
+.error { padding: 12px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; line-height: 1.6; }
+.srOnly { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+@media (hover: none) {
+  .editor button { min-width: 32px; min-height: 32px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stepTop > .grip, .controls, .step > .add, .blockControls > .grip { transition: none; }
+}
+@container workflow-editor (max-width: 560px) {
+  .intro .title { font-size: 25px; }
+  .steps { padding-left: 24px; }
+  .stepTop { grid-template-columns: 20px minmax(0, 1fr) auto; }
+  .step > textarea { width: calc(100% - 20px); margin-left: 20px; }
+  .blocks { margin-left: 20px; }
+  .source { margin-left: 25px; }
+  .block { grid-template-columns: minmax(0, 1fr); }
+  .block textarea { grid-column: 1; grid-row: 1; }
+  .kindLabel { grid-column: 1; grid-row: 2; padding: 0 5px 3px; }
+}
