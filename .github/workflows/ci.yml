@@ -13,6 +13,8 @@ on:
     branches: [main]
     paths:
       - '**.rs'
+      # Core embeds these assets with include_str! and tests their contracts.
+      - 'crates/screenpipe-core/assets/**'
       - '**/Cargo.toml'
       - '**/Cargo.lock'
       - '.github/workflows/ci.yml'
@@ -20,6 +22,7 @@ on:
   pull_request:
     paths:
       - '**.rs'
+      - 'crates/screenpipe-core/assets/**'
       - '**/Cargo.toml'
       - '**/Cargo.lock'
       - '.github/workflows/ci.yml'
