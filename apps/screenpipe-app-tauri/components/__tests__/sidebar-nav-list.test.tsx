@@ -175,21 +175,24 @@ describe("SidebarNavList", () => {
     expect(handlers.onSetHidden).toHaveBeenCalledWith("pipes", true);
   });
 
-  it("hides Timeline with right-click and restores it from Sidebar options", () => {
+  it.each([
+    ["timeline", "Timeline"],
+    ["meetings", "Meetings"],
+  ] as const)("hides %s with right-click and restores it from Sidebar options", (id, label) => {
     const hidden = renderList({
-      items: [...ITEMS, { id: "timeline", label: "Timeline", icon: <span /> }],
+      items: [...ITEMS, { id, label, icon: <span /> }],
     });
-    rightClick("nav-timeline");
+    rightClick(`nav-${id}`);
     fireEvent.click(screen.getByText("Hide from sidebar"));
-    expect(hidden.onSetHidden).toHaveBeenCalledWith("timeline", true);
+    expect(hidden.onSetHidden).toHaveBeenCalledWith(id, true);
 
     cleanup();
     const restored = renderCustomizationMenu({
-      hiddenItems: [{ id: "timeline", label: "Timeline" }],
+      hiddenItems: [{ id, label }],
     });
     openDropdown("sidebar-options");
-    fireEvent.click(screen.getByText("Show Timeline"));
-    expect(restored.onSetHidden).toHaveBeenCalledWith("timeline", false);
+    fireEvent.click(screen.getByText(`Show ${label}`));
+    expect(restored.onSetHidden).toHaveBeenCalledWith(id, false);
   });
 
   it("restores hidden rows through progressive disclosure", () => {
