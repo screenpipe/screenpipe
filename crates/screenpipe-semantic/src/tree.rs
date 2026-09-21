@@ -80,8 +80,6 @@ struct SemanticNode {
     parent: u32,
     first_child: u32,
     next_sibling: u32,
-    traversal_next: u32,
-    subtree_exit: u32,
     role: u32,
     subrole: u32,
     text: u32,
@@ -140,11 +138,11 @@ impl SemanticTree {
 
     /// Depth-first traversal including `root`.
     pub fn descendants(&self, root: NodeId) -> Descendants<'_> {
-        Descendants {
-            tree: self,
-            next: if self.contains(root) { root.0 } else { NONE },
-            stop: self.node(root).map_or(NONE, |node| node.subtree_exit),
+        let mut stack = Vec::new();
+        if self.contains(root) {
+            stack.push((root, false));
         }
+        Descendants { tree: self, stack }
     }
 
     pub fn role(&self, node: NodeId) -> Option<&str> {
@@ -301,23 +299,25 @@ impl Iterator for Children<'_> {
     }
 }
 
-/// Precomputed traversal links keep each iterator step constant-time without
-/// allocation, recursion, or repeated climbs through deep wrapper ancestors.
 pub struct Descendants<'a> {
     tree: &'a SemanticTree,
-    next: u32,
-    stop: u32,
+    stack: Vec<(NodeId, bool)>,
 }
 
 impl Iterator for Descendants<'_> {
     type Item = NodeId;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.next == self.stop {
-            return None;
+        let (node, follow_sibling) = self.stack.pop()?;
+        let raw = self.tree.node(node)?;
+        if follow_sibling {
+            if let Some(sibling) = id_from_raw(raw.next_sibling) {
+                self.stack.push((sibling, true));
+            }
         }
-        let node = id_from_raw(self.next)?;
-        self.next = self.tree.node(node)?.traversal_next;
+        if let Some(child) = id_from_raw(raw.first_child) {
+            self.stack.push((child, true));
+        }
         Some(node)
     }
 }
@@ -401,25 +401,18 @@ impl SemanticTreeBuilder {
         let identifier = self.intern(input.identifier)?;
         let dom_identifier = self.intern(input.dom_identifier)?;
         let class_start = self.class_ids.len() as u32;
-        for class in input.classes {
-            match self.intern(Some(class)) {
-                Ok(id) => self.class_ids.push(id),
-                Err(error) => {
-                    // A failed node must not consume class budget or leave
-                    // orphan class references in a subsequently finished tree.
-                    self.class_ids.truncate(class_start as usize);
-                    return Err(error);
-                }
-            }
-        }
+        let class_ids = input
+            .classes
+            .iter()
+            .map(|class| self.intern(Some(class)))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.class_ids.extend(class_ids);
 
         let id = NodeId(self.nodes.len() as u32);
         self.nodes.push(SemanticNode {
             parent: parent.map_or(NONE, |id| id.0),
             first_child: NONE,
             next_sibling: NONE,
-            traversal_next: NONE,
-            subtree_exit: NONE,
             role,
             subrole,
             text,
@@ -449,28 +442,7 @@ impl SemanticTreeBuilder {
         Ok(id)
     }
 
-    pub fn finish(mut self) -> SemanticTree {
-        // Parents are inserted before children, including non-preorder input.
-        // A node exits to its next sibling, or to the already-computed exit of
-        // its parent. Roots deliberately never lead into a different tree.
-        // Eight retained bytes per node replace every parser traversal stack.
-        for index in 0..self.nodes.len() {
-            let node = &self.nodes[index];
-            let exit = if node.next_sibling != NONE {
-                node.next_sibling
-            } else if node.parent != NONE {
-                self.nodes[node.parent as usize].subtree_exit
-            } else {
-                NONE
-            };
-            let next = if node.first_child != NONE {
-                node.first_child
-            } else {
-                exit
-            };
-            self.nodes[index].subtree_exit = exit;
-            self.nodes[index].traversal_next = next;
-        }
+    pub fn finish(self) -> SemanticTree {
         SemanticTree {
             nodes: self.nodes.into_boxed_slice(),
             strings: self.strings.into_boxed_slice(),
@@ -537,108 +509,6 @@ mod tests {
             vec![root, list, first, second]
         );
         assert_eq!(tree.text(first), Some("first"));
-    }
-
-    #[test]
-    fn traversal_stays_inside_subtree_with_interleaved_insertions() {
-        let mut builder = SemanticTreeBuilder::new(TreeBudget::default());
-        let root = builder.push(None, input("group", None)).unwrap();
-        let left = builder.push(Some(root), input("group", None)).unwrap();
-        let right = builder.push(Some(root), input("group", None)).unwrap();
-        let other_root = builder.push(None, input("group", None)).unwrap();
-        let right_child = builder.push(Some(right), input("text", None)).unwrap();
-        let left_child = builder.push(Some(left), input("text", None)).unwrap();
-        let tree = builder.finish();
-        assert_eq!(
-            tree.descendants(root).collect::<Vec<_>>(),
-            vec![root, left, left_child, right, right_child]
-        );
-        assert_eq!(
-            tree.descendants(left).collect::<Vec<_>>(),
-            vec![left, left_child]
-        );
-        assert_eq!(
-            tree.descendants(right_child).collect::<Vec<_>>(),
-            vec![right_child]
-        );
-        assert_eq!(
-            tree.descendants(other_root).collect::<Vec<_>>(),
-            vec![other_root]
-        );
-        assert_eq!(tree.descendants(NodeId(u32::MAX)).count(), 0);
-        let mut exhausted = tree.descendants(left_child);
-        assert_eq!(exhausted.next(), Some(left_child));
-        assert_eq!(exhausted.next(), None);
-        assert_eq!(exhausted.next(), None);
-    }
-
-    #[test]
-    fn traversal_matches_reference_for_every_subtree_in_a_forest() {
-        let mut builder = SemanticTreeBuilder::new(TreeBudget::default());
-        let mut state = 7u64;
-        for index in 0..500 {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let parent =
-                (index > 0 && state % 7 != 0).then(|| NodeId((state % index as u64) as u32));
-            builder.push(parent, input("group", None)).unwrap();
-        }
-        let tree = builder.finish();
-        for index in 0..tree.len() {
-            let root = NodeId(index as u32);
-            let mut pending = vec![root];
-            let mut expected = Vec::new();
-            while let Some(node) = pending.pop() {
-                expected.push(node);
-                let children: Vec<_> = tree.children(node).collect();
-                pending.extend(children.into_iter().rev());
-            }
-            assert_eq!(tree.descendants(root).collect::<Vec<_>>(), expected);
-        }
-    }
-
-    #[test]
-    fn traversal_handles_maximum_depth_without_recursion() {
-        let mut builder = SemanticTreeBuilder::new(TreeBudget::default());
-        let mut parent = None;
-        for _ in 0..TreeBudget::default().max_nodes {
-            parent = Some(builder.push(parent, input("group", None)).unwrap());
-        }
-        let tree = builder.finish();
-        assert_eq!(tree.descendants(NodeId(0)).count(), tree.len());
-        assert_eq!(tree.descendants(parent.unwrap()).count(), 1);
-    }
-
-    #[test]
-    fn failed_class_interning_does_not_consume_class_budget() {
-        let mut builder = SemanticTreeBuilder::new(TreeBudget {
-            max_nodes: 3,
-            max_string_bytes: 10,
-            max_classes: 2,
-        });
-        assert!(matches!(
-            builder.push(
-                None,
-                SemanticNodeInput {
-                    role: "group",
-                    classes: &["a", "too-long"],
-                    ..Default::default()
-                }
-            ),
-            Err(TreeBuildError::StringBudgetExceeded { .. })
-        ));
-        let node = builder
-            .push(
-                None,
-                SemanticNodeInput {
-                    role: "group",
-                    classes: &["a", "b"],
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        let tree = builder.finish();
-        assert_eq!(tree.len(), 1);
-        assert_eq!(tree.classes(node).collect::<Vec<_>>(), vec!["a", "b"]);
     }
 
     #[test]

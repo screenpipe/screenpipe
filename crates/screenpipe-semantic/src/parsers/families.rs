@@ -90,9 +90,11 @@ impl FamilyParser {
             priority,
         );
         if family == AppFamily::Conversation {
-            manifest.parser_version = "5".into();
+            manifest.parser_version = "6".into();
         } else if family == AppFamily::Mail {
-            manifest.parser_version = "4".into();
+            manifest.parser_version = "5".into();
+        } else if family == AppFamily::Task {
+            manifest.parser_version = "3".into();
         }
         Self { family, manifest }
     }
@@ -720,9 +722,13 @@ fn parse_tasks(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<Semantic
     );
     let mut items = Vec::new();
     for (index, node) in candidates.into_iter().enumerate() {
-        let title = first_marked_text_in(tree, node, &["task-title", "item-title", "title"])
-            .or_else(|| first_text_in(tree, node));
-        let Some(title) = title.map(str::trim).filter(|title| !title.is_empty()) else {
+        let title = task_field(tree, node, &["task-title", "item-title", "title"])
+            .or_else(|| first_text_in(tree, node).map(str::to_owned));
+        let Some(title) = title
+            .as_deref()
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+        else {
             continue;
         };
         let mut task = SemanticItem::new(
@@ -732,12 +738,66 @@ fn parse_tasks(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<Semantic
             IdentityQuality::Derived,
         );
         task.title = Some(title.to_owned());
-        task.status =
-            if signature_has_any(tree, node, &["completed", "complete", "done", "checked"]) {
-                Some("completed".into())
-            } else {
-                first_marked_text_in(tree, node, &["status"]).map(str::to_owned)
-            };
+        // A visible status field outranks a wrapper's presentation class.
+        // Substring matching made `unchecked` and `incomplete` completed, and
+        // also mistook human-readable task descriptions for state evidence.
+        task.status = task_field(
+            tree,
+            node,
+            &["status", "task-status", "item-status", "issue-status"],
+        )
+        .or_else(|| {
+            structural_marker_is(
+                tree,
+                node,
+                &[
+                    "completed",
+                    "complete",
+                    "done",
+                    "checked",
+                    "is-completed",
+                    "is-complete",
+                    "is-done",
+                    "is-checked",
+                    "task-completed",
+                ],
+            )
+            .then(|| "completed".to_owned())
+        });
+        for (key, markers) in [
+            (
+                "assignee",
+                &[
+                    "assignee",
+                    "task-assignee",
+                    "item-assignee",
+                    "issue-assignee",
+                ][..],
+            ),
+            (
+                "due",
+                &[
+                    "due-date",
+                    "task-due-date",
+                    "task-due",
+                    "item-due-date",
+                    "issue-due-date",
+                ][..],
+            ),
+            (
+                "priority",
+                &[
+                    "priority",
+                    "task-priority",
+                    "item-priority",
+                    "issue-priority",
+                ][..],
+            ),
+        ] {
+            if let Some(value) = task_field(tree, node, markers) {
+                task.metadata.insert(key.into(), value);
+            }
+        }
         task.metadata
             .insert("app".into(), profile.display_name.into());
         task.metadata.insert("family".into(), "task".into());
@@ -745,6 +805,35 @@ fn parse_tasks(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<Semantic
         items.push(task);
     }
     items
+}
+
+fn structural_marker_is(tree: &SemanticTree, node: NodeId, markers: &[&str]) -> bool {
+    [tree.identifier(node), tree.dom_identifier(node)]
+        .into_iter()
+        .flatten()
+        .chain(tree.classes(node))
+        .any(|field| {
+            markers
+                .iter()
+                .any(|marker| field.eq_ignore_ascii_case(marker))
+        })
+}
+
+/// Retain explicit decision fields, including labels inside structural wrappers.
+/// Do not infer owners or deadlines from arbitrary task prose or action labels.
+fn task_field(tree: &SemanticTree, root: NodeId, markers: &[&str]) -> Option<String> {
+    tree.descendants(root)
+        .filter(|node| structural_marker_is(tree, *node, markers))
+        .find_map(|node| {
+            let value = collect_text(tree, node).or_else(|| {
+                node_content(tree, node)
+                    .filter(|value| !is_control_type_label(value, tree.role(node)))
+                    .map(str::to_owned)
+            })?;
+            let value = value.trim();
+            (!value.is_empty() && value.len() <= 240 && !value.contains(['\n', '\r']))
+                .then(|| value.to_owned())
+        })
 }
 
 fn parse_calendar(profile: &BuiltinAppProfile, tree: &SemanticTree) -> Vec<SemanticItem> {
@@ -1370,7 +1459,7 @@ fn is_simple_slash_date(token: &str) -> bool {
 
 fn tree_any(tree: &SemanticTree, predicate: impl Fn(NodeId) -> bool) -> bool {
     tree.roots()
-        .any(|root| tree.descendants(root).any(|node| predicate(node)))
+        .any(|root| tree.descendants(root).any(&predicate))
 }
 
 /// `collect_text` starting below `root`. A Fluent message container is itself a
@@ -1622,26 +1711,21 @@ fn leaf_marker_nodes(tree: &SemanticTree, tokens: &[&str]) -> Vec<NodeId> {
             }
         }
     }
-    if candidates.len() < 2 {
-        return candidates;
-    }
-    // Mark each ancestor only once, including shared wrapper chains. Dense
-    // node IDs let one byte per node replace repeatedly grown hash tables.
-    let mut has_candidate_descendant = vec![false; tree.len()];
+    // Keep only leaf-most candidates. One ancestor walk per candidate marks
+    // every candidate that contains another, staying linear in tree depth
+    // where the pairwise check was quadratic on marker-dense trees.
+    let marked: HashSet<NodeId> = candidates.iter().copied().collect();
+    let mut has_candidate_descendant = HashSet::new();
     for &candidate in &candidates {
         let mut current = tree.parent(candidate);
         while let Some(parent) = current {
-            // Shared ancestry has already been marked by an earlier candidate.
-            // Avoid repeatedly walking a deep wrapper chain for every row.
-            let mark = &mut has_candidate_descendant[parent.0 as usize];
-            if *mark {
-                break;
+            if marked.contains(&parent) {
+                has_candidate_descendant.insert(parent);
             }
-            *mark = true;
             current = tree.parent(parent);
         }
     }
-    candidates.retain(|candidate| !has_candidate_descendant[candidate.0 as usize]);
+    candidates.retain(|candidate| !has_candidate_descendant.contains(candidate));
     candidates
 }
 
@@ -1657,6 +1741,12 @@ fn is_descendant_of(tree: &SemanticTree, node: NodeId, ancestor: NodeId) -> bool
 }
 
 fn signature_has_any(tree: &SemanticTree, node: NodeId, tokens: &[&str]) -> bool {
+    tokens
+        .iter()
+        .any(|token| signature_contains(tree, node, token))
+}
+
+fn signature_contains(tree: &SemanticTree, node: NodeId, token: &str) -> bool {
     let fields = [
         tree.role(node),
         tree.subrole(node),
@@ -1665,15 +1755,13 @@ fn signature_has_any(tree: &SemanticTree, node: NodeId, tokens: &[&str]) -> bool
         tree.identifier(node),
         tree.dom_identifier(node),
     ];
-    fields.into_iter().flatten().any(|field| {
-        tokens
-            .iter()
-            .any(|token| contains_ascii_case_insensitive(field, token))
-    }) || tree.classes(node).any(|class| {
-        tokens
-            .iter()
-            .any(|token| contains_ascii_case_insensitive(class, token))
-    })
+    fields
+        .into_iter()
+        .flatten()
+        .any(|field| contains_ascii_case_insensitive(field, token))
+        || tree
+            .classes(node)
+            .any(|class| contains_ascii_case_insensitive(class, token))
 }
 
 /// Per-body byte cap. A single oversized surface (terminal scrollback, a huge
@@ -1685,7 +1773,7 @@ fn collect_text(tree: &SemanticTree, root: NodeId) -> Option<String> {
     let mut lines: Vec<&str> = Vec::new();
     let mut bytes = 0usize;
     'nodes: for node in tree.descendants(root) {
-        if !is_text_role(tree.role(node)) {
+        if !is_text_role(tree.role(node)) || inside_action_control(tree, node, root) {
             continue;
         }
         let Some(content) = node_content(tree, node) else {
@@ -1704,6 +1792,47 @@ fn collect_text(tree: &SemanticTree, root: NodeId) -> Option<String> {
         }
     }
     (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+fn inside_action_control(tree: &SemanticTree, node: NodeId, root: NodeId) -> bool {
+    // Captured trees can reparent real body text below an interactive node.
+    // A control ancestor alone is insufficient: discard only a recognized
+    // action label, preserving link previews, poll choices and attachment names.
+    let Some(content) = node_content(tree, node) else {
+        return false;
+    };
+    if ![
+        "Reply",
+        "Reply to thread",
+        "Add reaction",
+        "More actions",
+        "Copy message",
+        "Copy link",
+        "Edit message",
+        "Delete message",
+        "Download attachment",
+        "Forward message",
+    ]
+    .iter()
+    .any(|label| content.eq_ignore_ascii_case(label))
+    {
+        return false;
+    }
+    let mut ancestor = tree.parent(node);
+    while let Some(parent) = ancestor {
+        if parent == root {
+            return false;
+        }
+        if tree.role(parent).is_some_and(|role| {
+            ["Button", "AXButton", "MenuItem", "AXMenuItem"]
+                .iter()
+                .any(|control| role.eq_ignore_ascii_case(control))
+        }) {
+            return true;
+        }
+        ancestor = tree.parent(parent);
+    }
+    false
 }
 
 fn truncate_body(value: &str) -> &str {
