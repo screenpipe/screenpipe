@@ -94,8 +94,8 @@ pub async fn get_active_data_dir(app: AppHandle) -> Result<String, String> {
 }
 
 /// Gather `.log` files and the rotated panic log from the given directories.
-/// Panic logs come first so report limits do not displace crash evidence after
-/// a restart; within each group, files are newest first.
+/// Panic and recording-recovery logs come first so report limits do not
+/// displace failure evidence after a restart; each group is newest first.
 ///
 /// Resilience is the whole point of this helper: a directory that can't be read
 /// (missing, unmounted, permission denied — all common on Windows with a custom
@@ -119,7 +119,9 @@ pub(crate) async fn collect_log_files(dirs: &[PathBuf]) -> Vec<LogFile> {
             !path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(is_panic_log),
+                .is_some_and(|name| {
+                    is_panic_log(name) || name == crate::recording::recovery_log::LOG_NAME
+                }),
             std::cmp::Reverse(
                 metadata
                     .modified()

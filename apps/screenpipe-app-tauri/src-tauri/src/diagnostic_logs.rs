@@ -63,7 +63,7 @@ pub async fn collect_redacted(app: &AppHandle) -> Result<String, String> {
 ///
 /// Enterprise's mandatory collector uses this entry point so both managed and
 /// opted-in builds share one filesystem, size, timeout, and redaction policy.
-#[cfg(feature = "enterprise-build")]
+#[cfg(any(test, feature = "enterprise-build"))]
 pub async fn collect_redacted_from_dirs(dirs: &[std::path::PathBuf]) -> Result<String, String> {
     let files = crate::log_files::collect_log_files(dirs).await;
     redact_files(&owned_log_files(files)).await
@@ -78,6 +78,7 @@ fn owned_log_files(files: Vec<LogFile>) -> Vec<LogFile> {
 
 fn is_screenpipe_owned_log_name(name: &str) -> bool {
     crate::log_files::is_panic_log(name)
+        || name == crate::recording::recovery_log::LOG_NAME
         || matches!(
             name,
             "screenpipe.log"

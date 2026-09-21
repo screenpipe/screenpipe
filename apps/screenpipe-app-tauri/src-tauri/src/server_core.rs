@@ -99,6 +99,20 @@ const PORT_HOLDER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 const OPENAI_COMPATIBLE_FAILURE_POLL_INTERVAL: Duration = Duration::from_secs(15);
 const OPENAI_COMPATIBLE_FAILURE_NOTIFICATION_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
+async fn initialize_frame_privacy_policy(
+    db: &DatabaseManager,
+    data_dir: &std::path::Path,
+) -> Result<(), String> {
+    if let Err(error) = db.set_frame_privacy_policy(&Default::default()).await {
+        let message = format!("Failed to initialize database frame privacy policy: {error}");
+        crate::health::set_boot_error(&message);
+        crate::recording::recovery_log::append(data_dir, "database_startup_failed", &message);
+        db.close().await;
+        return Err(message);
+    }
+    Ok(())
+}
+
 fn should_notify_openai_compatible_failure(
     previous_error_count: u64,
     current_error_count: u64,
@@ -457,6 +471,12 @@ impl ServerCore {
             }
         };
         info!("Database initialized at {}", db_path);
+
+        // Finish fallible database setup before sharing the owner with pipes,
+        // HTTP, or background workers. A failure must close this generation.
+        if !config.async_pii_redaction {
+            initialize_frame_privacy_policy(&db, &local_data_dir).await?;
+        }
 
         // A pending update may interrupt database recovery, but must exclude
         // native model initialization until the old process exits. Retain the
@@ -1160,11 +1180,6 @@ impl ServerCore {
             }
         }
 
-        if !config.async_pii_redaction {
-            db.set_frame_privacy_policy(&Default::default())
-                .await
-                .map_err(|error| format!("initialize frame privacy policy: {error}"))?;
-        }
         if config.async_pii_redaction {
             use screenpipe_redact::adapters::onnx::{OnnxConfig, OnnxRedactor};
             use screenpipe_redact::adapters::opf::{OpfAdapter, OpfConfig};
@@ -1528,6 +1543,82 @@ impl ServerCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn failed_privacy_setup_releases_owner_and_preserves_recordings() {
+        let root = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+                .await
+                .unwrap(),
+        );
+        db.insert_audio_chunk("before-privacy-startup-failure.wav", None)
+            .await
+            .unwrap();
+        db.execute_raw_sql_write("UPDATE storage_metadata SET policy='previous-policy'")
+            .await
+            .unwrap();
+        db.execute_raw_sql_write("CREATE TRIGGER reject_privacy_setup BEFORE UPDATE ON storage_metadata BEGIN SELECT RAISE(ABORT, 'privacy setup unavailable; contact=private-person@example.com'); END").await.unwrap();
+
+        let error = initialize_frame_privacy_policy(&db, root.path())
+            .await
+            .unwrap_err();
+        assert!(error.contains("privacy setup unavailable"));
+        assert!(db.pool.is_closed());
+        assert!(crate::db_relaunch::is_db_shaped(&error));
+        // Retain the old Arc, just as pipe callbacks may do. Reopening must
+        // depend on completed close, not the last Arc being dropped.
+        let reopened = DatabaseManager::new(
+            root.path().join("db.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        reopened
+            .execute_raw_sql_write("DROP TRIGGER reject_privacy_setup")
+            .await
+            .unwrap();
+        initialize_frame_privacy_policy(&reopened, root.path())
+            .await
+            .unwrap();
+        reopened
+            .insert_audio_chunk("after-privacy-startup-failure.wav", None)
+            .await
+            .unwrap();
+        assert!(reopened
+            .find_audio_chunk_id("before-privacy-startup-failure.wav")
+            .await
+            .unwrap()
+            .is_some());
+        assert!(reopened
+            .find_audio_chunk_id("after-privacy-startup-failure.wav")
+            .await
+            .unwrap()
+            .is_some());
+        reopened.close().await;
+        crate::recording::recovery_log::append(
+            root.path(),
+            "engine_started",
+            "database reopened after privacy setup retry",
+        );
+
+        for day in 1..=7 {
+            std::fs::write(
+                root.path()
+                    .join(format!("screenpipe-app.2026-09-{day:02}.log")),
+                "app restarted\n",
+            )
+            .unwrap();
+        }
+        let report =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[root.path().to_path_buf()])
+                .await
+                .unwrap();
+        assert!(report.contains("database_startup_failed"));
+        assert!(report.contains("privacy setup unavailable"));
+        assert!(report.contains("database reopened after privacy setup retry"));
+        assert!(!report.contains("private-person@example.com"));
+    }
 
     fn localhost(port: u16) -> SocketAddr {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)

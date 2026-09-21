@@ -297,9 +297,12 @@ const RESTART_COOLDOWN_SECS: u64 = 30;
 const CAPTURE_RESTART_MEETING_REATTACH_WINDOW: Duration = Duration::from_secs(120);
 
 mod db_wedge;
+pub(crate) mod recovery_log;
+mod server_shutdown;
 pub use db_wedge::{
     make_database_restart_hook, new_db_wedge_breaker, DbWedgeBreaker, DbWedgeState,
 };
+pub(crate) use server_shutdown::ServerShutdown;
 
 #[derive(Clone, Debug)]
 pub(crate) struct InterruptedMeeting {
@@ -323,6 +326,7 @@ pub struct RecordingState {
     pub server_lifecycle: Arc<Mutex<()>>,
     /// Long-lived server core (DB, HTTP, pipes). None until first start.
     pub server: Arc<Mutex<Option<ServerCore>>>,
+    pub(crate) server_shutdown: ServerShutdown,
     /// Current capture session. None when recording is stopped/paused.
     /// Self-contained — `CaptureSession::stop()` needs no external references.
     pub capture: Arc<Mutex<Option<CaptureSession>>>,
@@ -887,7 +891,13 @@ pub(crate) async fn stop_screenpipe_inner(state: &RecordingState) -> Result<(), 
     // Shut down the server so the next spawn_screenpipe does a full restart
     // with fresh settings (auth key, port, etc.). Without this, spawn_screenpipe
     // sees the server as healthy and skips the restart entirely.
-    shutdown_server(&state.server, ServerCore::shutdown).await;
+    shutdown_server(
+        &state.server,
+        &state.server_shutdown,
+        &crate::db_relaunch::active_data_dir(),
+        ServerCore::shutdown,
+    )
+    .await?;
     info!("Server stopped");
 
     // Reset flags so the next spawn_screenpipe takes the full-start path
@@ -898,19 +908,23 @@ pub(crate) async fn stop_screenpipe_inner(state: &RecordingState) -> Result<(), 
     Ok(())
 }
 
-async fn shutdown_server<T, F, Fut>(slot: &Mutex<Option<T>>, shutdown: F)
+async fn shutdown_server<T, F, Fut>(
+    slot: &Mutex<Option<T>>,
+    pending: &ServerShutdown,
+    data_dir: &std::path::Path,
+    shutdown: F,
+) -> Result<(), String>
 where
+    T: Send + 'static,
     F: FnOnce(T) -> Fut,
-    Fut: std::future::Future<Output = ()>,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
 {
     // Full stop/start callers retain server_lifecycle while cleanup runs. Only
     // the slot lock must be released: readers can need it before returning a
     // connection or storage pin that database close is waiting to drain.
     // Keep this separate from `if let`, whose temporary guard spans the body.
     let server = slot.lock().await.take();
-    if let Some(server) = server {
-        shutdown(server).await;
-    }
+    pending.finish(server, data_dir, shutdown).await
 }
 
 /// Hard ceiling on capture/server teardown that runs *immediately before* the
@@ -1254,6 +1268,22 @@ async fn spawn_screenpipe_after_migration(
         }
     }
 
+    // A timed-out stop can leave the old core draining outside this caller.
+    // Join it before probing the port (which may still be ours) or opening DB.
+    if let Err(error) = state
+        .server_shutdown
+        .finish(
+            None::<ServerCore>,
+            &crate::db_relaunch::active_data_dir(),
+            ServerCore::shutdown,
+        )
+        .await
+    {
+        state.is_starting.store(false, Ordering::SeqCst);
+        state.is_starting_capture.store(false, Ordering::SeqCst);
+        return Err(error);
+    }
+
     // --- Check existing server ---
     {
         let server_guard = state.server.lock().await;
@@ -1312,7 +1342,18 @@ async fn spawn_screenpipe_after_migration(
         session.stop().await;
     }
     // Shutdown existing server if any
-    shutdown_server(&state.server, ServerCore::shutdown).await;
+    if let Err(error) = shutdown_server(
+        &state.server,
+        &state.server_shutdown,
+        &crate::db_relaunch::active_data_dir(),
+        ServerCore::shutdown,
+    )
+    .await
+    {
+        state.is_starting.store(false, Ordering::SeqCst);
+        state.is_starting_capture.store(false, Ordering::SeqCst);
+        return Err(error);
+    }
 
     // The health probe above ruled out a healthy Screenpipe owner. Reclaim an
     // unhealthy or unrelated owner gracefully first, with a forced fallback.
@@ -1632,6 +1673,15 @@ async fn spawn_screenpipe_after_migration(
         Ok(Ok(())) => {
             info!("Screenpipe started successfully");
             crate::db_relaunch::reset_db_boot_failures();
+            recovery_log::append(
+                &crate::db_relaunch::active_data_dir(),
+                "engine_started",
+                if state.capture_intended() {
+                    "recording requested; server and capture startup completed"
+                } else {
+                    "server started; recording deliberately stopped"
+                },
+            );
             state.is_starting.store(false, Ordering::SeqCst);
             state.is_starting_capture.store(false, Ordering::SeqCst);
             // A meeting that was in progress when this restart began is still
@@ -1718,7 +1768,7 @@ mod shutdown_storage_tests {
     use screenpipe_db::DatabaseManager;
     use tokio::sync::oneshot;
 
-    async fn shutdown_with_reader(hybrid: bool) {
+    async fn shutdown_with_reader(hybrid: bool, cancel_waiter: bool) {
         let root = tempfile::tempdir().unwrap();
         let data_dir = root.path().to_path_buf();
         let (runtime_lifetime, runtime_finished) = oneshot::channel::<()>();
@@ -1762,18 +1812,58 @@ mod shutdown_storage_tests {
         let connection = db.pool.acquire().await.unwrap();
         let slot = Arc::new(Mutex::new(Some((Arc::clone(&db), runtime_lifetime))));
         let closing_slot = Arc::clone(&slot);
-        let closing = tokio::spawn(async move {
-            shutdown_server(&closing_slot, |(db, runtime_lifetime)| async move {
-                db.close().await;
-                drop(runtime_lifetime);
-            })
-            .await;
+        let pending = Arc::new(ServerShutdown::default());
+        let pending_for_close = Arc::clone(&pending);
+        let close_root = root.path().to_path_buf();
+        let mut closing = tokio::spawn(async move {
+            shutdown_server(
+                &closing_slot,
+                &pending_for_close,
+                &close_root,
+                |(db, runtime_lifetime)| async move {
+                    db.close().await;
+                    drop(runtime_lifetime);
+                },
+            )
+            .await
+            .unwrap();
         });
         db.pool.close_event().await;
         assert!(
             !closing.is_finished(),
             "shutdown must drain admitted readers"
         );
+
+        if cancel_waiter {
+            // The health overlay bounds stop_screenpipe with a timeout. Dropping
+            // that caller must neither abandon close nor release the old lease.
+            closing.abort();
+            assert!(closing.await.unwrap_err().is_cancelled());
+            let reopen = DatabaseManager::new(
+                root.path().join("db.sqlite").to_str().unwrap(),
+                Default::default(),
+            )
+            .await;
+            assert!(reopen
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("already owns a live DatabaseManager"));
+            let closing_slot = Arc::clone(&slot);
+            let close_root = root.path().to_path_buf();
+            closing = tokio::spawn(async move {
+                shutdown_server(
+                    &closing_slot,
+                    &pending,
+                    &close_root,
+                    |(_db, _lifetime)| async {
+                        panic!("the next start must join the original shutdown, not replace it");
+                    },
+                )
+                .await
+                .unwrap();
+            });
+        }
 
         // A reader on the server runtime needs the state slot before releasing
         // its connection/export pin. Shutdown must neither lock it out nor tear
@@ -1839,16 +1929,48 @@ mod shutdown_storage_tests {
             Some("recording after migration")
         );
         reopened.close().await;
+
+        if cancel_waiter {
+            recovery_log::append(
+                root.path(),
+                "engine_started",
+                "old and new recording payloads verified after database reopen",
+            );
+            // Simulate app-log rotation/restart and enough noisy logs to fill
+            // the normal five-file support limit. Lifecycle evidence persists.
+            for day in 1..=7 {
+                std::fs::write(
+                    root.path()
+                        .join(format!("screenpipe-app.2026-09-{day:02}.log")),
+                    "app restarted\npassword=hunter2\n",
+                )
+                .unwrap();
+            }
+            let report =
+                crate::diagnostic_logs::collect_redacted_from_dirs(&[root.path().to_path_buf()])
+                    .await
+                    .unwrap();
+            assert!(report.contains("shutdown_wait_cancelled"));
+            assert!(report.contains("cleanup continues and database reopen must wait"));
+            assert!(report.contains("shutdown_completed"));
+            assert!(report.contains("engine_started"));
+            assert!(!report.contains("hunter2"));
+        }
     }
 
     #[tokio::test]
     async fn legacy_reader_drains_then_migration_completes_and_recording_can_resume() {
-        shutdown_with_reader(false).await;
+        shutdown_with_reader(false, false).await;
     }
 
     #[tokio::test]
     async fn hybrid_reader_releases_storage_pin_before_runtime_exits() {
-        shutdown_with_reader(true).await;
+        shutdown_with_reader(true, false).await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_shutdown_drains_old_owner_then_reopens_migrated_recordings() {
+        shutdown_with_reader(true, true).await;
     }
 }
 

@@ -238,10 +238,14 @@ async fn recover_from_db_wedge(
         if let Some(session) = capture {
             session.stop().await;
         }
-        let shutdown_outcome = bounded_teardown(DB_WEDGE_SERVER_SHUTDOWN_TIMEOUT, async {
-            server.shutdown().await;
-            Ok(())
-        })
+        let shutdown_outcome = bounded_teardown(
+            DB_WEDGE_SERVER_SHUTDOWN_TIMEOUT,
+            recording_state.server_shutdown.finish(
+                Some(server),
+                &crate::db_relaunch::active_data_dir(),
+                super::ServerCore::shutdown,
+            ),
+        )
         .await;
         match db_wedge_shutdown_action(shutdown_outcome, hard_faulted) {
             DbWedgeShutdownAction::RespawnInProcess => {}
