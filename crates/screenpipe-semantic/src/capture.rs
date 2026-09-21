@@ -168,8 +168,8 @@ pub fn adapt_captured_accessibility_tree(
             class_count += 1;
         }
         let classes = &class_buffer[..class_count];
-        let known_offscreen = node.on_screen == Some(false)
-            && (node.bounds.is_some() || node.offscreen_geometry);
+        let known_offscreen =
+            node.on_screen == Some(false) && (node.bounds.is_some() || node.offscreen_geometry);
         let source_description = node
             .help_text
             .as_deref()

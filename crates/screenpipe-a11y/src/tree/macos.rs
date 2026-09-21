@@ -1945,7 +1945,8 @@ fn capture_structural_node(
     let mut node =
         AccessibilityTreeNode::new(role_str.to_owned(), text, depth.min(255) as u8, bounds);
     node.on_screen = on_screen;
-    node.semantic_offscreen = state.capture_parser_structure && semantic_offscreen(frame, on_screen);
+    node.semantic_offscreen =
+        state.capture_parser_structure && semantic_offscreen(frame, on_screen);
     node.walk_index = state.node_count.min(u32::MAX as usize) as u32;
     node.semantic_only = true;
     node.automation_relevant = automation_relevant;
@@ -2221,7 +2222,8 @@ fn extract_text(
                     bounds.clone(),
                 );
                 node.on_screen = on_screen;
-                node.semantic_offscreen = state.capture_parser_structure && semantic_offscreen(frame, on_screen);
+                node.semantic_offscreen =
+                    state.capture_parser_structure && semantic_offscreen(frame, on_screen);
                 node.walk_index = state.node_count.min(u32::MAX as usize) as u32;
                 node.value = Some(trimmed.clone());
                 fill_ax_props(&mut node, elem, role_str, state.capture_semantic_structure);
@@ -2250,7 +2252,8 @@ fn extract_text(
                     bounds.clone(),
                 );
                 node.on_screen = on_screen;
-                node.semantic_offscreen = state.capture_parser_structure && semantic_offscreen(frame, on_screen);
+                node.semantic_offscreen =
+                    state.capture_parser_structure && semantic_offscreen(frame, on_screen);
                 node.walk_index = state.node_count.min(u32::MAX as usize) as u32;
                 fill_ax_props(&mut node, elem, role_str, state.capture_semantic_structure);
                 apply_primary_semantic_attrs(&mut node, attrs);
@@ -2272,7 +2275,8 @@ fn extract_text(
                 bounds,
             );
             node.on_screen = on_screen;
-            node.semantic_offscreen = state.capture_parser_structure && semantic_offscreen(frame, on_screen);
+            node.semantic_offscreen =
+                state.capture_parser_structure && semantic_offscreen(frame, on_screen);
             node.walk_index = state.node_count.min(u32::MAX as usize) as u32;
             fill_ax_props(&mut node, elem, role_str, state.capture_semantic_structure);
             apply_primary_semantic_attrs(&mut node, attrs);
@@ -2292,7 +2296,8 @@ fn extract_text(
                 bounds,
             );
             node.on_screen = on_screen;
-            node.semantic_offscreen = state.capture_parser_structure && semantic_offscreen(frame, on_screen);
+            node.semantic_offscreen =
+                state.capture_parser_structure && semantic_offscreen(frame, on_screen);
             node.walk_index = state.node_count.min(u32::MAX as usize) as u32;
             fill_ax_props(&mut node, elem, role_str, state.capture_semantic_structure);
             apply_primary_semantic_attrs(&mut node, attrs);
@@ -2378,9 +2383,10 @@ fn is_on_screen(
 /// Keep proof of off-window geometry before screenshot normalization drops it.
 /// Zero-sized accessibility labels remain unknown, preserving screen-reader text.
 fn semantic_offscreen(frame: Option<(f64, f64, f64, f64)>, on_screen: Option<bool>) -> bool {
-    on_screen == Some(false) && frame.is_some_and(|(x, y, w, h)| {
-        x.is_finite() && y.is_finite() && w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0
-    })
+    on_screen == Some(false)
+        && frame.is_some_and(|(x, y, w, h)| {
+            x.is_finite() && y.is_finite() && w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0
+        })
 }
 
 /// Normalize an element's screen-absolute frame to 0-1 coordinates.
@@ -2813,10 +2819,19 @@ mod tests {
 
     #[test]
     fn retains_offwindow_geometry_without_suppressing_zero_sized_labels() {
-        assert!(semantic_offscreen(Some((10.0, 2000.0, 80.0, 20.0)), Some(false)));
-        assert!(!semantic_offscreen(Some((10.0, 20.0, 80.0, 20.0)), Some(true)));
+        assert!(semantic_offscreen(
+            Some((10.0, 2000.0, 80.0, 20.0)),
+            Some(false)
+        ));
+        assert!(!semantic_offscreen(
+            Some((10.0, 20.0, 80.0, 20.0)),
+            Some(true)
+        ));
         assert!(!semantic_offscreen(Some((0.0, 0.0, 0.0, 0.0)), Some(false)));
-        assert!(!semantic_offscreen(Some((f64::NAN, 0.0, 80.0, 20.0)), Some(false)));
+        assert!(!semantic_offscreen(
+            Some((f64::NAN, 0.0, 80.0, 20.0)),
+            Some(false)
+        ));
         assert!(!semantic_offscreen(None, Some(false)));
     }
 
