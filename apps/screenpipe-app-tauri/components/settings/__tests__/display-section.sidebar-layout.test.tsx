@@ -21,6 +21,9 @@ vi.mock("@/lib/hooks/use-settings", () => ({
     updateSettings: mocks.updateSettings,
   }),
 }));
+vi.mock("@/lib/hooks/use-managed-policy", () => ({
+  useManagedPolicy: () => ({ isSettingLocked: () => false, getManagedValue: () => undefined }),
+}));
 vi.mock("@/components/theme-provider", () => ({
   useTheme: () => ({ theme: "system", setTheme: vi.fn() }),
 }));
