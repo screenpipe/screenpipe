@@ -5,6 +5,8 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest";
 import { WorkflowTasksPrompt } from "./workflow-tasks-prompt";
 
+vi.mock("./workflow-sharing-controls", () => ({ WorkflowSharingControls: () => <div data-testid="sharing-controls" /> }));
+
 const setup = { enabled: false, title: "Update my workflows", schedule: "every 24h" };
 function service(enabled = false) {
   return { load: vi.fn().mockResolvedValue({ ...setup, enabled }), enable: vi.fn().mockResolvedValue(undefined) };

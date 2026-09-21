@@ -2,6 +2,7 @@
 // https://screenpipe.com
 "use client";
 
+import { WorkflowSharingControls } from "./workflow-sharing-controls";
 import { useEffect, useRef, useState } from "react";
 import { Clock3, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -79,6 +80,7 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks }: {
       </div>}
       <p style={{ color: "#73766d" }} className="text-sm text-muted-foreground">Uses your AI allowance and sends selected captured text and screenshots to Screenpipe’s AI provider. Recording exclusions apply; personal content may still be included.</p>
       <p style={{ color: "#73766d" }} className="text-sm text-muted-foreground">Runs daily and resumes dependent work in both Chat and Workflows while Screenpipe is open. Turn it off anytime in <span style={{ color: "#171815" }} className="font-medium text-foreground">Chat → Scheduled tasks</span>.</p>
+      <WorkflowSharingControls compact />
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       <DialogFooter className="gap-2 sm:gap-0">
         <Button style={{ background: "#fff", borderColor: "#dedfd8", color: "#171815", fontFamily: "inherit", textTransform: "none", letterSpacing: 0 }} variant="outline" disabled={busy} onClick={() => setOpen(false)}>Not now</Button>

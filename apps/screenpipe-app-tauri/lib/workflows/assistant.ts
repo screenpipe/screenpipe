@@ -1,6 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
+import { workflowContributions } from "./contributions";
 import type { WorkflowsAssistantPlatform } from "@screenpipe/workflows-ui";
 import { type PiProviderConfig } from "@/lib/utils/tauri";
 import { loadAssistantFromDisk, saveAssistantToDisk } from "./disk-storage";
@@ -26,6 +27,7 @@ export const desktopAssistant: WorkflowsAssistantPlatform = {
   load: loadAssistantFromDisk,
   save: saveAssistantToDisk,
   async ask({ question, context, history, signal, onProgress }) {
+    const contribution = workflowContributions.begin();
     const feedback = context?.purpose === "feedback" && context.workflow?.id && history.length > 0;
     if (feedback) {
       const latest = (await loadScheduledCatalog())?.analysis.workflows.find(w => w.id === context!.workflow!.id);
@@ -47,8 +49,10 @@ export const desktopAssistant: WorkflowsAssistantPlatform = {
       const updated = await applyWorkflowFeedback(context.workflow, learning, changes);
       onProgress({ text, activity: "writing", workflow: updated });
       window.dispatchEvent(new CustomEvent("workflows:refined", { detail: updated }));
+      void contribution.then(ticket => { if (!signal.aborted) return workflowContributions.complete(ticket, question, text); });
       return `${text}\n\n${Object.keys(changes).length ? "Workflow updated. " : ""}Feedback remembered for future updates and skill drafts.`;
     }
+    void contribution.then(ticket => { if (!signal.aborted) return workflowContributions.complete(ticket, question, text); });
     return text;
   },
 };

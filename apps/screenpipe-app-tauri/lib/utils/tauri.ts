@@ -2073,6 +2073,18 @@ async redactPiiForFeedback(text: string, settingsJson: string) : Promise<Result<
 }
 },
 /**
+ * Strict contribution redaction. No regex-only fallback, no content-bearing
+ * errors, no capture settings, and no chunk boundaries through identifiers.
+ */
+async redactWorkflowContribution(text: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("redact_workflow_contribution", { text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Tauri command: re-encrypt store.bin after frontend saves.
  *
  * Runs on a blocking worker. The previous sync command ran `fsync` of a
