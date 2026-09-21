@@ -136,20 +136,32 @@ async fn register(
     Ok(())
 }
 
+pub(crate) unsafe extern "C" fn register_payload_sha256_extension(
+    db: *mut ffi::sqlite3,
+    _pz_err_msg: *mut *mut std::ffi::c_char,
+    _p_api: *const ffi::sqlite3_api_routines,
+) -> std::ffi::c_int {
+    ffi::sqlite3_create_function_v2(
+        db,
+        c"screenpipe_payload_sha256".as_ptr(),
+        1,
+        ffi::SQLITE_UTF8 | ffi::SQLITE_DETERMINISTIC | ffi::SQLITE_INNOCUOUS,
+        std::ptr::null_mut(),
+        Some(hash),
+        None,
+        None,
+        None,
+    )
+}
+
 pub(crate) async fn register_hash(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     let mut locked = conn.lock_handle().await?;
     // SAFETY: the callback borrows only SQLite's argument and copies its result.
     let result = unsafe {
-        ffi::sqlite3_create_function_v2(
+        register_payload_sha256_extension(
             locked.as_raw_handle().as_ptr(),
-            c"screenpipe_payload_sha256".as_ptr(),
-            1,
-            ffi::SQLITE_UTF8 | ffi::SQLITE_DETERMINISTIC | ffi::SQLITE_INNOCUOUS,
             std::ptr::null_mut(),
-            Some(hash),
-            None,
-            None,
-            None,
+            std::ptr::null(),
         )
     };
     if result != ffi::SQLITE_OK {

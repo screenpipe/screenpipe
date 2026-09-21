@@ -99,6 +99,15 @@ pub(crate) fn register_sqlite_extensions() -> Result<(), sqlx::Error> {
                 "failed to register sqlite-vec auto-extension: SQLite error code {rc}"
             )));
         }
+
+        let hash_rc = sqlite3_auto_extension(Some(
+            crate::storage::bulk::connection::register_payload_sha256_extension,
+        ));
+        if hash_rc != libsqlite3_sys::SQLITE_OK {
+            return Err(SqlxError::Protocol(format!(
+                "failed to register payload sha256 auto-extension: SQLite error code {hash_rc}"
+            )));
+        }
     }
     Ok(())
 }

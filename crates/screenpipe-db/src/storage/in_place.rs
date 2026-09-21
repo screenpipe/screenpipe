@@ -81,8 +81,8 @@ async fn run(
         progress(MigrationProgress::phase("checking interrupted storage"));
     }
     super::diagnostics::stage("checking_index_before_open");
-    crate::recovery::verify_database_before_reopen(&index).await?;
     crate::db::register_sqlite_extensions()?;
+    crate::recovery::verify_database_before_reopen(&index).await?;
     // Do not close this fd while SQLite holds its process-wide Unix locks.
     let file = OpenOptions::new().read(true).write(true).open(&index)?;
     #[cfg(target_os = "macos")]

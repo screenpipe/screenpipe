@@ -87,6 +87,7 @@ async fn close_registered_database_pools(path: &Path) -> Result<(), sqlx::Error>
 /// Called under database_lifecycle before any startup write. Both interrupted
 /// faults and legacy markers are diagnosed; only verified damage blocks repair.
 pub(crate) async fn verify_database_before_reopen(path: &Path) -> Result<(), sqlx::Error> {
+    crate::db::register_sqlite_extensions()?;
     use screenpipe_sqlite_coordinator as coordinator;
     if coordinator::sqlite_confirmed_corruption_exists(path) {
         return Err(sqlx::Error::Protocol(
