@@ -243,6 +243,45 @@ mod tests {
     }
     use tempfile::tempdir;
 
+    #[tokio::test]
+    async fn pi_compaction_failure_survives_rotation_and_support_redaction() {
+        let install = tempdir().unwrap();
+        let runtime = install
+            .path()
+            .join("node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js");
+        std::fs::create_dir_all(runtime.parent().unwrap()).unwrap();
+        std::fs::write(&runtime, "unrecognized runtime").unwrap();
+        let error = screenpipe_core::agents::pi_compaction::ensure(install.path()).unwrap_err();
+
+        let logs = tempdir().unwrap();
+        let current = logs.path().join("screenpipe-app.2026-09-21.log");
+        // Both Pi startup and pipe execution report errors with Display.
+        std::fs::write(
+            &current,
+            format!("ERROR pipe 'meeting-summary' error: {error}\nWARN Failed to prepare Pi compaction: {error}\n"),
+        )
+        .unwrap();
+        std::fs::rename(
+            &current,
+            logs.path().join("screenpipe-app.2026-09-21.1.log"),
+        )
+        .unwrap();
+        std::fs::write(
+            &current,
+            "recorder restarted\ncontact=private-person@example.com\n",
+        )
+        .unwrap();
+
+        let report = collect_redacted_from_dirs(&[logs.path().to_path_buf()])
+            .await
+            .unwrap();
+        assert!(report.contains("pipe 'meeting-summary' error:"));
+        assert!(report.contains("Failed to prepare Pi compaction:"));
+        assert!(report.contains(&error.to_string()));
+        assert!(report.contains("Pi runtime does not match the pinned compaction patch:"));
+        assert!(!report.contains("private-person@example.com"));
+    }
+
     fn log_file(path: &Path, modified_at: u64) -> LogFile {
         LogFile {
             name: path.file_name().unwrap().to_string_lossy().to_string(),

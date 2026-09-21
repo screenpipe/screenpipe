@@ -20,8 +20,17 @@ try {
   } }));
   await run([process.execPath, "install", "--ignore-scripts"]);
   if (!process.argv.includes("--baseline")) {
-    await run(["git", "apply", join(repo, "crates/screenpipe-core/assets/pi-context-compaction.patch")],
-      join(root, "node_modules/@earendil-works/pi-coding-agent"));
+    // Exercise the same parser and atomic write as app/automation startup.
+    // git apply accepts patch formats that the production diffy parser rejects.
+    const patcher = ["cargo", "run", "--locked", "-p", "screenpipe-core",
+      "--example", "patch_pi_compaction", "--", root];
+    await run(patcher, repo);
+    const runtime = join(root, "node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js");
+    const patched = await readFile(runtime, "utf8");
+    await run(patcher, repo);
+    if (await readFile(runtime, "utf8") !== patched) {
+      throw new Error("Pi compaction patch changed an already-patched runtime");
+    }
   }
   await run([process.execPath, "test", join(repo, "crates/screenpipe-core/assets/pi-context-compaction.test.ts")], root,
     { ...process.env, SCREENPIPE_TEST_PI_DIR: root });

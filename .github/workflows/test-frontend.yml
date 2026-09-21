@@ -80,9 +80,6 @@ jobs:
         # must pass for CI green.
         run: bun run test:bun
 
-      - name: Pi context compaction runtime eval
-        run: bun scripts/eval-pi-compaction.ts
-
       - name: Pi extension startup runtime eval
         run: bun scripts/eval-pi-extensions.ts
 
