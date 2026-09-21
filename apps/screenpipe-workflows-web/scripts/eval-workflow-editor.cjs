@@ -319,7 +319,7 @@ require("node:fs").mkdirSync(out, { recursive: true });
       assert.equal(await legacy.evaluate(() => JSON.parse(localStorage.getItem("screenpipe:fictional-workflow-editor-preview")).analysis.workflows[0].stages[0].evidence[0].detail), stage.evidence[0].detail);
       await legacy.screenshot({ path: out + "/source-metadata-only.png" });
       await legacy.setViewportSize({ width: 390, height: 900 });
-      await legacy.getByRole("button", { name: "Collapse left sidebar", exact: true }).click();
+      await legacy.getByRole("button", { name: "Open left sidebar", exact: true }).waitFor();
       assert(await sources.evaluate(e => e.getBoundingClientRect().right <= innerWidth));
       await context.close();
     });
