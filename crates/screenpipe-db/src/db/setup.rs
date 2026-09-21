@@ -101,7 +101,7 @@ pub(crate) fn register_sqlite_extensions() -> Result<(), sqlx::Error> {
         }
 
         let hash_rc = sqlite3_auto_extension(Some(
-            crate::storage::bulk::connection::register_payload_sha256_extension,
+            crate::storage::bulk::register_payload_sha256_extension,
         ));
         if hash_rc != libsqlite3_sys::SQLITE_OK {
             return Err(SqlxError::Protocol(format!(
