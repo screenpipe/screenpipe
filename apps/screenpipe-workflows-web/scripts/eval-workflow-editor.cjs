@@ -311,7 +311,7 @@ require("node:fs").mkdirSync(out, { recursive: true });
       const grip = touch.getByRole("button", { name: "Move step 1", exact: true });
       assert.equal(await grip.evaluate(e => getComputedStyle(e).opacity), "0");
       await touch.getByRole("textbox", { name: "Step 1 title", exact: true }).tap();
-      await touch.waitForTimeout(150);
+      await touch.waitForFunction(el => getComputedStyle(el).opacity === "1", await grip.elementHandle());
       assert.equal(await grip.evaluate(e => getComputedStyle(e).opacity), "1");
       await context.close();
     });
