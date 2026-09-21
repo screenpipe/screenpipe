@@ -51,8 +51,9 @@ contracts, not a live native-capture accuracy measurement.
 `cases.json` is hand-authored synthetic data using those shapes and invented
 content. Tests replay through the capture adapter and real registry with macOS,
 Windows and Linux identities/role variants. They do not prove that every native
-browser walker supplies those DOM attributes. Cloud macOS/Windows capture tests
-remain blocked by AWS authentication and Azure validated-image/VM compatibility.
+browser walker supplies those DOM attributes. The subsequent isolated AWS Mac
+and Azure Windows campaign exercised the production native walkers. See
+[NATIVE_VALIDATION.md](NATIVE_VALIDATION.md) for observed results, fixes and limits.
 
 Not covered: GitHub source/diff tabs, GitLab merge requests, self-hosted GitHub or
 GitLab, HN listing pages, Wikipedia namespace pages or percent-encoded article
@@ -68,7 +69,7 @@ cargo run --release -p screenpipe-semantic --example web_content_eval --locked
 
 The five fixtures have 60 exact field/relationship and exclusion assertions, all
 passing. The same gold is checked across three platform identities; that does not
-make these 180 independent facts. Eight regression tests additionally cover
+make these 180 independent facts. Regression tests additionally cover
 routing, abstention, scrolled/unknown fields, stable identity, repeated wrappers,
 bounded multibyte output and control reparenting.
 
