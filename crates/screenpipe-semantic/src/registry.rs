@@ -6,7 +6,7 @@ use crate::{
     AppIdentity, AppVersionRequirement, OutputBudget, ParseContext, ParserManifest,
     SemanticCapturePlan, SemanticParser, SemanticTree, ValidatedParseOutcome,
 };
-use regex::Regex;
+use regex::RegexSet;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -39,7 +39,7 @@ pub enum RegistryError {
 
 struct RegisteredParser {
     parser: Box<dyn SemanticParser>,
-    url_patterns: Vec<Regex>,
+    url_patterns: RegexSet,
 }
 
 impl RegisteredParser {
@@ -62,11 +62,10 @@ impl RegisteredParser {
                 expected.eq_ignore_ascii_case(candidate) || expected.eq_ignore_ascii_case(basename)
             })
         });
-        let url_match = app.browser_url.as_deref().is_some_and(|url| {
-            self.url_patterns
-                .iter()
-                .any(|pattern| pattern.is_match(url))
-        });
+        let url_match = app
+            .browser_url
+            .as_deref()
+            .is_some_and(|url| self.url_patterns.is_match(url));
         native_match || url_match
     }
 }
@@ -93,17 +92,15 @@ impl ParserRegistry {
                 parser_id: manifest.id.clone(),
             });
         }
-        let url_patterns = manifest
-            .url_patterns
-            .iter()
-            .map(|pattern| {
-                Regex::new(pattern).map_err(|error| RegistryError::InvalidUrlPattern {
-                    parser_id: manifest.id.clone(),
-                    pattern: pattern.clone(),
-                    message: error.to_string(),
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        // One compiled automaton per parser avoids scanning a browser URL once
+        // for every supported app in a large family manifest.
+        let url_patterns = RegexSet::new(&manifest.url_patterns).map_err(|error| {
+            RegistryError::InvalidUrlPattern {
+                parser_id: manifest.id.clone(),
+                pattern: manifest.url_patterns.join(" | "),
+                message: error.to_string(),
+            }
+        })?;
 
         self.parsers.push(RegisteredParser {
             parser,

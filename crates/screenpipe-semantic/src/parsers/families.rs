@@ -90,9 +90,9 @@ impl FamilyParser {
             priority,
         );
         if family == AppFamily::Conversation {
-            manifest.parser_version = "4".into();
+            manifest.parser_version = "5".into();
         } else if family == AppFamily::Mail {
-            manifest.parser_version = "3".into();
+            manifest.parser_version = "4".into();
         }
         Self { family, manifest }
     }
@@ -1622,21 +1622,26 @@ fn leaf_marker_nodes(tree: &SemanticTree, tokens: &[&str]) -> Vec<NodeId> {
             }
         }
     }
-    // Keep only leaf-most candidates. One ancestor walk per candidate marks
-    // every candidate that contains another, staying linear in tree depth
-    // where the pairwise check was quadratic on marker-dense trees.
-    let marked: HashSet<NodeId> = candidates.iter().copied().collect();
-    let mut has_candidate_descendant = HashSet::new();
+    if candidates.len() < 2 {
+        return candidates;
+    }
+    // Mark each ancestor only once, including shared wrapper chains. Dense
+    // node IDs let one byte per node replace repeatedly grown hash tables.
+    let mut has_candidate_descendant = vec![false; tree.len()];
     for &candidate in &candidates {
         let mut current = tree.parent(candidate);
         while let Some(parent) = current {
-            if marked.contains(&parent) {
-                has_candidate_descendant.insert(parent);
+            // Shared ancestry has already been marked by an earlier candidate.
+            // Avoid repeatedly walking a deep wrapper chain for every row.
+            let mark = &mut has_candidate_descendant[parent.0 as usize];
+            if *mark {
+                break;
             }
+            *mark = true;
             current = tree.parent(parent);
         }
     }
-    candidates.retain(|candidate| !has_candidate_descendant.contains(candidate));
+    candidates.retain(|candidate| !has_candidate_descendant[candidate.0 as usize]);
     candidates
 }
 
@@ -1652,12 +1657,6 @@ fn is_descendant_of(tree: &SemanticTree, node: NodeId, ancestor: NodeId) -> bool
 }
 
 fn signature_has_any(tree: &SemanticTree, node: NodeId, tokens: &[&str]) -> bool {
-    tokens
-        .iter()
-        .any(|token| signature_contains(tree, node, token))
-}
-
-fn signature_contains(tree: &SemanticTree, node: NodeId, token: &str) -> bool {
     let fields = [
         tree.role(node),
         tree.subrole(node),
@@ -1666,13 +1665,15 @@ fn signature_contains(tree: &SemanticTree, node: NodeId, token: &str) -> bool {
         tree.identifier(node),
         tree.dom_identifier(node),
     ];
-    fields
-        .into_iter()
-        .flatten()
-        .any(|field| contains_ascii_case_insensitive(field, token))
-        || tree
-            .classes(node)
-            .any(|class| contains_ascii_case_insensitive(class, token))
+    fields.into_iter().flatten().any(|field| {
+        tokens
+            .iter()
+            .any(|token| contains_ascii_case_insensitive(field, token))
+    }) || tree.classes(node).any(|class| {
+        tokens
+            .iter()
+            .any(|token| contains_ascii_case_insensitive(class, token))
+    })
 }
 
 /// Per-body byte cap. A single oversized surface (terminal scrollback, a huge

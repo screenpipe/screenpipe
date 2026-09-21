@@ -6,6 +6,19 @@ use crate::{
     AccessibilityAttribute, AppIdentity, AppVersionRequirement, ParserManifest, ParserScope,
     Platform, SemanticKind,
 };
+use regex::RegexSet;
+use std::sync::LazyLock;
+
+// Use the same anchored patterns as registry routing. URL marker substrings
+// are only a cheap prefilter, never proof of an app's origin or document path.
+static PROFILE_URL_PATTERNS: LazyLock<Vec<RegexSet>> = LazyLock::new(|| {
+    BUILTIN_APP_PROFILES
+        .iter()
+        .map(|profile| {
+            RegexSet::new(profile.url_patterns).expect("built-in profile URL patterns must compile")
+        })
+        .collect()
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AppFamily {
@@ -331,9 +344,9 @@ pub static BUILTIN_APP_PROFILES: &[BuiltinAppProfile] = &[
         &[C],
         &["com.microsoft.teams2"],
         &["Microsoft Teams", "ms-teams.exe", "teams"],
-        &[],
-        &[],
-        None,
+        &[r"^https://teams\.microsoft\.com/"],
+        &["teams.microsoft.com/"],
+        Some("https://teams.microsoft.com/v2/"),
     ),
     profile(
         "microsofttodo",
@@ -341,9 +354,9 @@ pub static BUILTIN_APP_PROFILES: &[BuiltinAppProfile] = &[
         &[T],
         &["com.microsoft.to-do-mac"],
         &["Microsoft To Do", "Todo.exe", "todo"],
-        &[],
-        &[],
-        None,
+        &[r"^https://to-do\.office\.com/"],
+        &["to-do.office.com/"],
+        Some("https://to-do.office.com/tasks/"),
     ),
     profile(
         "microsoftword",
@@ -362,11 +375,11 @@ pub static BUILTIN_APP_PROFILES: &[BuiltinAppProfile] = &[
         &[],
         &[],
         &[
-            r"^https?://[^/]*officeapps\.live\.com/we/wordeditorframe",
-            r"^https?://[^/]*onedrive\.live\.com/[^?#]+/_layouts/15/[Dd]oc\.aspx",
-            r"^https?://[^/]*sharepoint\.com/[^?#]+/_layouts/15/[Dd]oc\.aspx",
+            r"^https?://(?:[a-zA-Z0-9-]+\.)*officeapps\.live\.com/we/wordeditorframe",
+            r"^https?://(?:[a-zA-Z0-9-]+\.)*onedrive\.live\.com/[^?#]+/_layouts/15/[Dd]oc\.aspx",
+            r"^https?://(?:[a-zA-Z0-9-]+\.)*sharepoint\.com/[^?#]+/_layouts/15/[Dd]oc\.aspx",
             r"^https?://word\.cloud\.microsoft/",
-            r"^https?://[^/]*office\.com/[^?#]+\.docx",
+            r"^https?://(?:[a-zA-Z0-9-]+\.)*office\.com/[^?#]+\.docx",
         ],
         &[
             "officeapps.live.com/",
@@ -403,9 +416,13 @@ pub static BUILTIN_APP_PROFILES: &[BuiltinAppProfile] = &[
         &[D],
         &["notion.id"],
         &["Notion", "Notion.exe", "notion"],
-        &[],
-        &[],
-        None,
+        &[
+            r"^https://(?:www\.)?notion\.so/",
+            r"^https://app\.notion\.com/",
+            r"^https://[a-zA-Z0-9-]+\.notion\.site/",
+        ],
+        &["notion.so/", "app.notion.com/", ".notion.site/"],
+        Some("https://www.notion.so/workspace/example"),
     ),
     profile(
         "obsidian",
@@ -453,9 +470,9 @@ pub static BUILTIN_APP_PROFILES: &[BuiltinAppProfile] = &[
         &[C],
         &["com.tinyspeck.slackmacgap"],
         &["Slack", "slack.exe", "slack"],
-        &[],
-        &[],
-        None,
+        &[r"^https://app\.slack\.com/client/"],
+        &["app.slack.com/client/"],
+        Some("https://app.slack.com/client/TEXAMPLE/CEXAMPLE"),
     ),
     profile(
         "sparkdesktop",
@@ -550,9 +567,12 @@ pub static BUILTIN_APP_PROFILES: &[BuiltinAppProfile] = &[
         &[E],
         &["com.microsoft.VSCode"],
         &["Visual Studio Code", "Code.exe", "code"],
-        &[],
-        &[],
-        None,
+        &[
+            r"^https://(?:insiders\.)?vscode\.dev/",
+            r"^https://github\.dev/",
+        ],
+        &["vscode.dev/", "github.dev/"],
+        Some("https://vscode.dev/"),
     ),
     profile(
         "warp",
@@ -681,11 +701,15 @@ pub(crate) fn profile_for(
     family: AppFamily,
     app: &AppIdentity,
 ) -> Option<&'static BuiltinAppProfile> {
-    profiles_for_family(family).find(|profile| profile.matches(app))
+    BUILTIN_APP_PROFILES
+        .iter()
+        .enumerate()
+        .find(|(index, profile)| profile.families.contains(&family) && profile.matches(app, *index))
+        .map(|(_, profile)| profile)
 }
 
 impl BuiltinAppProfile {
-    fn matches(&self, app: &AppIdentity) -> bool {
+    fn matches(&self, app: &AppIdentity, index: usize) -> bool {
         let app_id_match = app.app_id.as_deref().is_some_and(|candidate| {
             self.app_ids
                 .iter()
@@ -697,12 +721,15 @@ impl BuiltinAppProfile {
                 .iter()
                 .any(|expected| expected.eq_ignore_ascii_case(basename))
         });
-        let url_match = app.browser_url.as_deref().is_some_and(|url| {
+        if app_id_match || executable_match {
+            return true;
+        }
+        app.browser_url.as_deref().is_some_and(|url| {
             self.url_markers
                 .iter()
                 .any(|marker| contains_ascii_case_insensitive(url, marker))
-        });
-        app_id_match || executable_match || url_match
+                && PROFILE_URL_PATTERNS[index].is_match(url)
+        })
     }
 }
 
@@ -716,7 +743,7 @@ pub(crate) fn manifest_for_family(
     let profiles: Vec<_> = profiles_for_family(family).collect();
     ParserManifest {
         id: id.into(),
-        parser_version: "1".into(),
+        parser_version: "2".into(),
         schema_version: 1,
         scope: ParserScope::Family,
         platforms: vec![Platform::Macos, Platform::Windows, Platform::Linux],
@@ -743,6 +770,9 @@ pub(crate) fn manifest_for_family(
 }
 
 pub(crate) fn contains_ascii_case_insensitive(value: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
     value
         .as_bytes()
         .windows(needle.len())
