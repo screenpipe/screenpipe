@@ -1,0 +1,276 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+
+#[allow(dead_code)]
+#[path = "../evals/quality/mod.rs"]
+mod quality;
+
+use screenpipe_semantic::{
+    adapt_captured_accessibility_tree, parsers::builtin_parser_registry, AppIdentity,
+    CapturedAccessibilityNode, OutputBudget, ParseContext, Platform, SemanticItem, TreeBudget,
+    ValidatedParseOutcome,
+};
+use serde::Deserialize;
+
+#[derive(Clone, Deserialize)]
+struct Case {
+    id: String,
+    app: AppIdentity,
+    nodes: Vec<CapturedAccessibilityNode>,
+}
+fn cases() -> Vec<Case> {
+    serde_json::from_str(include_str!("../evals/web_content/cases.json")).unwrap()
+}
+fn parse(case: &Case) -> screenpipe_semantic::ParserChainResult {
+    let tree = adapt_captured_accessibility_tree(&case.nodes, TreeBudget::default()).unwrap();
+    builtin_parser_registry().unwrap().parse(
+        &ParseContext {
+            frame_id: 7,
+            captured_at_unix_ms: 0,
+            utc_offset_minutes: None,
+            locale_hint: None,
+            app: &case.app,
+            input_content_hash: 1,
+        },
+        &tree.tree,
+        OutputBudget::default(),
+    )
+}
+fn items(case: &Case) -> Vec<SemanticItem> {
+    let result = parse(case);
+    assert!(
+        result.failures.is_empty(),
+        "{}: {:?}",
+        case.id,
+        result.failures
+    );
+    assert_eq!(
+        result.selected_parser_id.as_deref(),
+        Some(match case.id.as_str() {
+            "github_issue" | "github_pull" => "app.github.web_content",
+            "gitlab" => "app.gitlab.web_content",
+            "hackernews" => "app.hackernews.web_content",
+            "wikipedia" => "app.wikipedia.web_content",
+            _ => unreachable!(),
+        })
+    );
+    let ValidatedParseOutcome::Handled(p) = result.outcome else {
+        panic!("{} not handled", case.id);
+    };
+    p.into_items()
+}
+
+#[test]
+fn preserves_fields_attribution_and_context_without_page_chrome_on_all_platforms() {
+    for platform in ["macos", "windows", "linux"] {
+        let mut gold: serde_json::Value =
+            serde_json::from_str(include_str!("../evals/web_content/cases.json")).unwrap();
+        for case in gold.as_array_mut().unwrap() {
+            case["app"]["platform"] = platform.into();
+            for node in case["nodes"].as_array_mut().unwrap() {
+                if platform != "macos" {
+                    node["role"] = match node["role"].as_str().unwrap() {
+                        "AXGroup" => "Group",
+                        "AXStaticText" => "Text",
+                        "AXHeading" => "Heading",
+                        "AXLink" => "Hyperlink",
+                        "AXButton" => "Button",
+                        "AXTextArea" => "Edit",
+                        other => other,
+                    }
+                    .into();
+                }
+            }
+        }
+        for report in quality::evaluate_cases(&gold.to_string()).unwrap() {
+            assert!(
+                report.failures.is_empty(),
+                "{platform}/{}: {:?}",
+                report.id,
+                report.failures
+            );
+            assert!(report.context_tokens < report.raw_tokens);
+        }
+    }
+    for (case, count) in cases().iter().zip([3, 2, 3, 4, 1]) {
+        assert_eq!(
+            items(case).len(),
+            count,
+            "{} emitted extra records",
+            case.id
+        );
+    }
+}
+
+#[test]
+fn unsupported_origins_and_surfaces_never_route() {
+    let registry = builtin_parser_registry().unwrap();
+    let mut app = cases()[0].app.clone();
+    for url in [
+        "https://github.com.evil.test/org/repo/issues/1",
+        "https://example.org/?next=https://github.com/org/repo/issues/1",
+        "https://github.com/org/repo/issues/new",
+        "https://github.com/org/repo/pull/1/files",
+        "https://github.com/org/repo/issues/1extra",
+        "https://gitlab.com.evil.test/org/repo/-/issues/1",
+        "https://gitlab.com/org/repo/-/merge_requests/1",
+        "https://news.ycombinator.com/item?id=1extra",
+        "https://news.ycombinator.com/newest",
+        "https://en.wikipedia.org/wiki/Special:Search",
+        "https://en.wikipedia.org/wiki/Talk%3AComputer",
+        "https://en.wikipedia.org.evil.test/wiki/Computer",
+    ] {
+        app.browser_url = Some(url.into());
+        assert!(
+            registry.capture_plan(&app).is_none(),
+            "unexpected route: {url}"
+        );
+    }
+}
+
+#[test]
+fn missing_contracts_and_draft_only_pages_abstain_without_family_fallback() {
+    for mut case in cases() {
+        for node in &mut case.nodes {
+            node.class_name = None;
+            node.dom_identifier = None;
+        }
+        assert_eq!(
+            parse(&case).outcome,
+            ValidatedParseOutcome::NotHandled,
+            "{}",
+            case.id
+        );
+    }
+    let mut case = cases().remove(0);
+    // Even recognized markdown containers underneath an editor are draft text.
+    case.nodes = vec![
+        node(0, "AXTextArea", "", "UNSENT_DRAFT"),
+        node(1, "AXGroup", "react-issue-comment", ""),
+        node(2, "AXGroup", "markdown-body", ""),
+        node(3, "AXStaticText", "", "UNSENT_DRAFT"),
+    ];
+    assert_eq!(parse(&case).outcome, ValidatedParseOutcome::NotHandled);
+    case.nodes = vec![
+        node(0, "AXWebArea", "", ""),
+        node(1, "AXGroup", "timeline-comment", ""),
+        node(2, "AXGroup", "js-preview-body", ""),
+        node(3, "AXGroup", "markdown-body", ""),
+        node(4, "AXStaticText", "", "UNSENT_PREVIEW"),
+    ];
+    assert_eq!(parse(&case).outcome, ValidatedParseOutcome::NotHandled);
+}
+
+#[test]
+fn scrolled_threads_keep_visible_posts_without_inventing_titles_or_authors() {
+    let mut case = cases().remove(0);
+    for node in &mut case.nodes {
+        if node.class_name.as_deref().is_some_and(|c| {
+            c == "markdown-title"
+                || c.starts_with("ActivityHeader-")
+                || c.starts_with("IssueBodyHeaderAuthor-")
+        }) {
+            node.text.clear();
+        }
+    }
+    let parsed = items(&case);
+    assert_eq!(parsed[0].title, None);
+    assert_eq!(parsed[1].actor, None);
+    assert_eq!(
+        parsed[2].actor, None,
+        "quoted author names must not become attribution"
+    );
+    assert!(parsed[2].body.as_ref().unwrap().contains("Quoted Person"));
+}
+
+#[test]
+fn native_post_identity_survives_position_and_query_changes_but_not_different_threads() {
+    let mut case = cases().remove(3);
+    let before = items(&case);
+    case.app.browser_url =
+        Some("https://news.ycombinator.com/item?id=42&tracking=PRIVATE_TOKEN#comment".into());
+    case.nodes
+        .insert(2, node(1, "AXStaticText", "", "NEW_SIDEBAR"));
+    let after = items(&case);
+    assert_eq!(before[0].item_key, after[0].item_key);
+    assert_eq!(before[2].item_key, after[2].item_key);
+    assert!(!serde_json::to_string(&after)
+        .unwrap()
+        .contains("PRIVATE_TOKEN"));
+    // Equal bodies from different people remain distinct messages.
+    assert_eq!(before[2].body, before[3].body);
+    assert_ne!(before[2].item_key, before[3].item_key);
+    case.app.browser_url = Some("https://news.ycombinator.com/item?id=43".into());
+    assert_ne!(before[2].item_key, items(&case)[2].item_key);
+}
+
+#[test]
+fn repeated_native_post_wrappers_do_not_repeat_messages() {
+    let mut case = cases().remove(1);
+    let copy = case.nodes[3..10].to_vec();
+    case.nodes.extend(copy);
+    assert_eq!(items(&case).len(), 2);
+}
+
+#[test]
+fn large_multibyte_discussions_respect_shared_budget_and_mark_truncation() {
+    let mut case = cases().remove(0);
+    case.nodes = vec![node(0, "AXWebArea", "", "")];
+    for index in 0..100 {
+        let mut post = node(1, "AXGroup", "react-issue-comment", "");
+        post.dom_identifier = Some(format!("issuecomment-{index}"));
+        case.nodes.push(post);
+        case.nodes.push(node(
+            2,
+            "AXLink",
+            "ActivityHeader-module__AuthorName__test",
+            &"名".repeat(100),
+        ));
+        case.nodes.push(node(2, "AXGroup", "markdown-body", ""));
+        case.nodes
+            .push(node(3, "AXStaticText", "", &"語".repeat(700)));
+    }
+    for platform in [Platform::Macos, Platform::Windows, Platform::Linux] {
+        case.app.platform = platform;
+        let parsed = items(&case);
+        assert!(parsed.len() <= 65);
+        assert!(
+            parsed
+                .iter()
+                .filter_map(|i| i.body.as_ref())
+                .map(String::len)
+                .sum::<usize>()
+                <= 32 * 1024
+        );
+        assert!(parsed
+            .iter()
+            .any(|i| i.metadata.get("truncated").is_some_and(|s| s == "true")));
+    }
+}
+
+#[test]
+fn authored_content_reparented_under_controls_is_preserved() {
+    let mut case = cases().remove(1);
+    let body = case
+        .nodes
+        .iter()
+        .position(|n| n.text == "Review this report.")
+        .unwrap();
+    case.nodes[body].depth += 1;
+    case.nodes.insert(body, node(3, "AXButton", "", "Copy"));
+    let parsed = items(&case);
+    assert_eq!(
+        parsed[1].body.as_deref(),
+        Some("Review this report.\nreport.csv")
+    );
+}
+
+fn node(depth: u8, role: &str, class: &str, text: &str) -> CapturedAccessibilityNode {
+    CapturedAccessibilityNode {
+        depth,
+        role: role.into(),
+        text: text.into(),
+        class_name: Some(class.into()),
+        ..Default::default()
+    }
+}

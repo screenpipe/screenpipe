@@ -1,0 +1,725 @@
+[
+  {
+    "id": "github_issue",
+    "app": {
+      "platform": "macos",
+      "app_id": null,
+      "executable": "Chrome",
+      "display_name": "Browser",
+      "version": null,
+      "browser_url": "https://github.com/example/project/issues/42"
+    },
+    "nodes": [
+      {
+        "depth": 0,
+        "role": "AXWebArea",
+        "text": ""
+      },
+      {
+        "depth": 1,
+        "role": "AXStaticText",
+        "text": "SIDEBAR_NOISE"
+      },
+      {
+        "depth": 1,
+        "role": "AXHeading",
+        "text": "Keep code indentation",
+        "class_name": "markdown-title"
+      },
+      {
+        "depth": 1,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "react-issue-body",
+        "dom_identifier": "issue-42"
+      },
+      {
+        "depth": 2,
+        "role": "AXLink",
+        "text": "Alice",
+        "class_name": "IssueBodyHeaderAuthor-module__authorLoginLink__abc"
+      },
+      {
+        "depth": 2,
+        "role": "AXGroup",
+        "text": "",
+        "dom_identifier": "issue-body-viewer"
+      },
+      {
+        "depth": 3,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "markdown-body"
+      },
+      {
+        "depth": 4,
+        "role": "AXGroup",
+        "text": "DUPLICATE_AGGREGATE",
+        "class_name": "markdown-body"
+      },
+      {
+        "depth": 5,
+        "role": "AXStaticText",
+        "text": "The parser must keep this example:"
+      },
+      {
+        "depth": 5,
+        "role": "AXStaticText",
+        "text": "if ready:\n    ship()\n    record()"
+      },
+      {
+        "depth": 5,
+        "role": "AXButton",
+        "text": "Copy"
+      },
+      {
+        "depth": 6,
+        "role": "AXStaticText",
+        "text": "Copy"
+      },
+      {
+        "depth": 1,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "react-issue-comment",
+        "dom_identifier": "issuecomment-7"
+      },
+      {
+        "depth": 2,
+        "role": "AXLink",
+        "text": "Bob",
+        "class_name": "ActivityHeader-module__AuthorName__def"
+      },
+      {
+        "depth": 2,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "markdown-body"
+      },
+      {
+        "depth": 3,
+        "role": "AXStaticText",
+        "text": "Reply is an authored word here."
+      },
+      {
+        "depth": 3,
+        "role": "AXLink",
+        "text": "Quoted Person",
+        "class_name": "author"
+      },
+      {
+        "depth": 1,
+        "role": "AXGroup",
+        "text": "UNRELATED_COMMIT",
+        "class_name": "markdown-body"
+      },
+      {
+        "depth": 1,
+        "role": "AXGroup",
+        "text": "UNSENT_PREVIEW",
+        "class_name": "js-preview-body markdown-body"
+      },
+      {
+        "depth": 1,
+        "role": "AXTextArea",
+        "text": "UNSENT_DRAFT"
+      }
+    ],
+    "checks": [
+      {
+        "path": "/0/title",
+        "expected": "Keep code indentation"
+      },
+      {
+        "path": "/0/kind",
+        "expected": "conversation"
+      },
+      {
+        "path": "/1/body",
+        "expected": "The parser must keep this example:\nif ready:\n    ship()\n    record()"
+      },
+      {
+        "path": "/1/actor",
+        "expected": "Alice"
+      },
+      {
+        "path": "/1/parent_local_id",
+        "expected": "page"
+      },
+      {
+        "path": "/2/body",
+        "expected": "Reply is an authored word here.\nQuoted Person"
+      },
+      {
+        "path": "/2/actor",
+        "expected": "Bob"
+      },
+      {
+        "path": "/2/parent_local_id",
+        "expected": "page"
+      },
+      {
+        "path": "/0/metadata/url",
+        "expected": "https://github.com/example/project/issues/42"
+      }
+    ],
+    "forbidden_context": [
+      "SIDEBAR_NOISE",
+      "Copy",
+      "DUPLICATE_AGGREGATE",
+      "UNRELATED_COMMIT",
+      "UNSENT_PREVIEW",
+      "UNSENT_DRAFT"
+    ]
+  },
+  {
+    "id": "github_pull",
+    "app": {
+      "platform": "macos",
+      "app_id": null,
+      "executable": "Chrome",
+      "display_name": "Browser",
+      "version": null,
+      "browser_url": "https://github.com/example/project/pull/51"
+    },
+    "nodes": [
+      {
+        "depth": 0,
+        "role": "AXWebArea",
+        "text": ""
+      },
+      {
+        "depth": 1,
+        "role": "AXStaticText",
+        "text": "SIDEBAR_NOISE"
+      },
+      {
+        "depth": 1,
+        "role": "AXHeading",
+        "text": "Preserve attachments",
+        "class_name": "markdown-title"
+      },
+      {
+        "depth": 1,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "timeline-comment",
+        "dom_identifier": "pullrequest-51"
+      },
+      {
+        "depth": 2,
+        "role": "AXLink",
+        "text": "Carol",
+        "class_name": "author"
+      },
+      {
+        "depth": 2,
+        "role": "AXGroup",
+        "text": "UNSENT_PREVIEW",
+        "class_name": "js-preview-body markdown-body"
+      },
+      {
+        "depth": 2,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "comment-body markdown-body js-comment-body"
+      },
+      {
+        "depth": 3,
+        "role": "AXStaticText",
+        "text": "Review this report."
+      },
+      {
+        "depth": 3,
+        "role": "AXLink",
+        "text": "report.csv"
+      },
+      {
+        "depth": 3,
+        "role": "AXStaticText",
+        "text": "OFFSCREEN_SECRET",
+        "on_screen": false,
+        "bounds": {
+          "left": 0,
+          "top": 4000,
+          "width": 100,
+          "height": 20
+        }
+      },
+      {
+        "depth": 1,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "timeline-new-comment"
+      },
+      {
+        "depth": 2,
+        "role": "AXGroup",
+        "text": "UNSENT_PREVIEW",
+        "class_name": "markdown-body js-preview-body"
+      }
+    ],
+    "checks": [
+      {
+        "path": "/0/title",
+        "expected": "Preserve attachments"
+      },
+      {
+        "path": "/0/kind",
+        "expected": "conversation"
+      },
+      {
+        "path": "/1/body",
+        "expected": "Review this report.\nreport.csv"
+      },
+      {
+        "path": "/1/actor",
+        "expected": "Carol"
+      },
+      {
+        "path": "/1/parent_local_id",
+        "expected": "page"
+      },
+      {
+        "path": "/0/metadata/url",
+        "expected": "https://github.com/example/project/pull/51"
+      }
+    ],
+    "forbidden_context": [
+      "SIDEBAR_NOISE",
+      "UNSENT_PREVIEW",
+      "OFFSCREEN_SECRET"
+    ]
+  },
+  {
+    "id": "gitlab",
+    "app": {
+      "platform": "macos",
+      "app_id": null,
+      "executable": "Chrome",
+      "display_name": "Browser",
+      "version": null,
+      "browser_url": "https://gitlab.com/example/subgroup/project/-/work_items/42"
+    },
+    "nodes": [
+      {
+        "depth": 0,
+        "role": "AXWebArea",
+        "text": ""
+      },
+      {
+        "depth": 1,
+        "role": "AXStaticText",
+        "text": "SIDEBAR_NOISE"
+      },
+      {
+        "depth": 1,
+        "role": "AXHeading",
+        "text": "Recover the draft",
+        "class_name": "gl-heading-1"
+      },
+      {
+        "depth": 1,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "work-item-description description md"
+      },
+      {
+        "depth": 2,
+        "role": "AXStaticText",
+        "text": "Expected: restore the saved description."
+      },
+      {
+        "depth": 2,
+        "role": "AXGroup",
+        "text": "Read more",
+        "class_name": "description-more"
+      },
+      {
+        "depth": 1,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "note note-comment",
+        "dom_identifier": "note_100"
+      },
+      {
+        "depth": 2,
+        "role": "AXLink",
+        "text": "Dana",
+        "class_name": "author-name-link"
+      },
+      {
+        "depth": 2,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "note-text md"
+      },
+      {
+        "depth": 3,
+        "role": "AXStaticText",
+        "text": "Confirmed on version 2."
+      },
+      {
+        "depth": 1,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "system-note"
+      },
+      {
+        "depth": 2,
+        "role": "AXGroup",
+        "text": "LABEL_EVENT_NOISE",
+        "class_name": "note-text md"
+      },
+      {
+        "depth": 1,
+        "role": "Edit",
+        "text": "UNSENT_DRAFT"
+      }
+    ],
+    "checks": [
+      {
+        "path": "/0/title",
+        "expected": "Recover the draft"
+      },
+      {
+        "path": "/0/kind",
+        "expected": "conversation"
+      },
+      {
+        "path": "/1/body",
+        "expected": "Expected: restore the saved description."
+      },
+      {
+        "path": "/1/actor",
+        "expected": null
+      },
+      {
+        "path": "/1/parent_local_id",
+        "expected": "page"
+      },
+      {
+        "path": "/2/body",
+        "expected": "Confirmed on version 2."
+      },
+      {
+        "path": "/2/actor",
+        "expected": "Dana"
+      },
+      {
+        "path": "/2/parent_local_id",
+        "expected": "page"
+      },
+      {
+        "path": "/0/metadata/url",
+        "expected": "https://gitlab.com/example/subgroup/project/-/work_items/42"
+      }
+    ],
+    "forbidden_context": [
+      "SIDEBAR_NOISE",
+      "Read more",
+      "LABEL_EVENT_NOISE",
+      "UNSENT_DRAFT"
+    ]
+  },
+  {
+    "id": "hackernews",
+    "app": {
+      "platform": "macos",
+      "app_id": null,
+      "executable": "Chrome",
+      "display_name": "Browser",
+      "version": null,
+      "browser_url": "https://news.ycombinator.com/item?id=42"
+    },
+    "nodes": [
+      {
+        "depth": 0,
+        "role": "AXWebArea",
+        "text": ""
+      },
+      {
+        "depth": 1,
+        "role": "AXStaticText",
+        "text": "SIDEBAR_NOISE"
+      },
+      {
+        "depth": 1,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "fatitem"
+      },
+      {
+        "depth": 2,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "titleline"
+      },
+      {
+        "depth": 3,
+        "role": "AXLink",
+        "text": "Local first software"
+      },
+      {
+        "depth": 3,
+        "role": "AXGroup",
+        "text": "DOMAIN_NOISE",
+        "class_name": "sitebit comhead"
+      },
+      {
+        "depth": 2,
+        "role": "AXLink",
+        "text": "Erin",
+        "class_name": "hnuser"
+      },
+      {
+        "depth": 2,
+        "role": "AXGroup",
+        "text": "How do you keep data available offline?",
+        "class_name": "toptext"
+      },
+      {
+        "depth": 1,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "comment-tree"
+      },
+      {
+        "depth": 2,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "athing comtr",
+        "dom_identifier": "101"
+      },
+      {
+        "depth": 3,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "comhead"
+      },
+      {
+        "depth": 4,
+        "role": "AXLink",
+        "text": "Frank",
+        "class_name": "hnuser"
+      },
+      {
+        "depth": 3,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "comment"
+      },
+      {
+        "depth": 4,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "commtext c00"
+      },
+      {
+        "depth": 5,
+        "role": "AXStaticText",
+        "text": "Store an append-only log."
+      },
+      {
+        "depth": 3,
+        "role": "AXGroup",
+        "text": "Reply",
+        "class_name": "reply"
+      },
+      {
+        "depth": 2,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "athing comtr",
+        "dom_identifier": "102"
+      },
+      {
+        "depth": 3,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "comhead"
+      },
+      {
+        "depth": 4,
+        "role": "AXLink",
+        "text": "Grace",
+        "class_name": "hnuser"
+      },
+      {
+        "depth": 3,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "comment"
+      },
+      {
+        "depth": 4,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "commtext c00"
+      },
+      {
+        "depth": 5,
+        "role": "AXStaticText",
+        "text": "Store an append-only log."
+      }
+    ],
+    "checks": [
+      {
+        "path": "/0/title",
+        "expected": "Local first software"
+      },
+      {
+        "path": "/0/kind",
+        "expected": "conversation"
+      },
+      {
+        "path": "/1/body",
+        "expected": "How do you keep data available offline?"
+      },
+      {
+        "path": "/1/actor",
+        "expected": "Erin"
+      },
+      {
+        "path": "/1/parent_local_id",
+        "expected": "page"
+      },
+      {
+        "path": "/2/body",
+        "expected": "Store an append-only log."
+      },
+      {
+        "path": "/2/actor",
+        "expected": "Frank"
+      },
+      {
+        "path": "/2/parent_local_id",
+        "expected": "page"
+      },
+      {
+        "path": "/3/body",
+        "expected": "Store an append-only log."
+      },
+      {
+        "path": "/3/actor",
+        "expected": "Grace"
+      },
+      {
+        "path": "/3/parent_local_id",
+        "expected": "page"
+      },
+      {
+        "path": "/0/metadata/url",
+        "expected": "https://news.ycombinator.com/item?id=42"
+      }
+    ],
+    "forbidden_context": [
+      "SIDEBAR_NOISE",
+      "DOMAIN_NOISE",
+      "Reply"
+    ]
+  },
+  {
+    "id": "wikipedia",
+    "app": {
+      "platform": "macos",
+      "app_id": null,
+      "executable": "Chrome",
+      "display_name": "Browser",
+      "version": null,
+      "browser_url": "https://en.wikipedia.org/wiki/Computer_programming"
+    },
+    "nodes": [
+      {
+        "depth": 0,
+        "role": "AXWebArea",
+        "text": ""
+      },
+      {
+        "depth": 1,
+        "role": "AXStaticText",
+        "text": "SIDEBAR_NOISE"
+      },
+      {
+        "depth": 1,
+        "role": "AXHeading",
+        "text": "Computer programming",
+        "dom_identifier": "firstHeading"
+      },
+      {
+        "depth": 1,
+        "role": "AXGroup",
+        "text": "",
+        "dom_identifier": "mw-content-text"
+      },
+      {
+        "depth": 2,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "mw-parser-output"
+      },
+      {
+        "depth": 3,
+        "role": "AXStaticText",
+        "text": "Programming constructs executable instructions."
+      },
+      {
+        "depth": 3,
+        "role": "AXHeading",
+        "text": "History"
+      },
+      {
+        "depth": 3,
+        "role": "AXGroup",
+        "text": "",
+        "class_name": "mw-editsection"
+      },
+      {
+        "depth": 4,
+        "role": "AXLink",
+        "text": "EDIT_ACTION"
+      },
+      {
+        "depth": 3,
+        "role": "AXStaticText",
+        "text": "Programs can be written in many languages."
+      },
+      {
+        "depth": 1,
+        "role": "AXGroup",
+        "text": "CATEGORY_NOISE",
+        "dom_identifier": "catlinks"
+      },
+      {
+        "depth": 1,
+        "role": "AXGroup",
+        "text": "UNRELATED_PREVIEW",
+        "class_name": "mw-parser-output"
+      }
+    ],
+    "checks": [
+      {
+        "path": "/0/title",
+        "expected": "Computer programming"
+      },
+      {
+        "path": "/0/kind",
+        "expected": "document"
+      },
+      {
+        "path": "/0/body",
+        "expected": "Programming constructs executable instructions.\nHistory\nPrograms can be written in many languages."
+      },
+      {
+        "path": "/0/metadata/url",
+        "expected": "https://en.wikipedia.org/wiki/Computer_programming"
+      }
+    ],
+    "forbidden_context": [
+      "SIDEBAR_NOISE",
+      "EDIT_ACTION",
+      "CATEGORY_NOISE",
+      "UNRELATED_PREVIEW"
+    ]
+  }
+]

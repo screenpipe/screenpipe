@@ -33,7 +33,7 @@ pub enum AppFamily {
 
 /// Public app identity and family membership for one built-in parser profile.
 ///
-/// The catalog describes 56 supported app targets using public app identities,
+/// The catalog describes 60 supported app targets using public app identities,
 /// URL patterns, and stable accessibility contracts.
 #[derive(Debug, Clone, Copy)]
 pub struct BuiltinAppProfile {
@@ -257,6 +257,26 @@ pub static BUILTIN_APP_PROFILES: &[BuiltinAppProfile] = &[
         None,
     ),
     profile(
+        "github",
+        "GitHub",
+        &[C],
+        &[],
+        &[],
+        &[r"^https://github\.com/[^/?#]+/[^/?#]+/(?:issues|pull)/[0-9]+(?:[?#].*)?$"],
+        &["github.com/"],
+        Some("https://github.com/screenpipe/screenpipe/issues/1"),
+    ),
+    profile(
+        "gitlab",
+        "GitLab",
+        &[C],
+        &[],
+        &[],
+        &[r"^https://gitlab\.com/(?:[^/?#]+/)+-/(?:issues|work_items)/[0-9]+(?:[?#].*)?$"],
+        &["gitlab.com/"],
+        Some("https://gitlab.com/gitlab-org/gitlab/-/work_items/1"),
+    ),
+    profile(
         "gmail",
         "Gmail",
         &[M],
@@ -265,6 +285,16 @@ pub static BUILTIN_APP_PROFILES: &[BuiltinAppProfile] = &[
         &[r"^https://mail\.google\.com/"],
         &["mail.google.com/"],
         Some("https://mail.google.com/mail/u/0/#inbox/example"),
+    ),
+    profile(
+        "hackernews",
+        "Hacker News",
+        &[C],
+        &[],
+        &[],
+        &[r"^https://news\.ycombinator\.com/item\?id=[0-9]+(?:[&#].*)?$"],
+        &["news.ycombinator.com/"],
+        Some("https://news.ycombinator.com/item?id=1"),
     ),
     profile(
         "hey",
@@ -605,6 +635,16 @@ pub static BUILTIN_APP_PROFILES: &[BuiltinAppProfile] = &[
         Some("https://web.whatsapp.com/"),
     ),
     profile(
+        "wikipedia",
+        "Wikipedia",
+        &[D],
+        &[],
+        &[],
+        &[r"^https://[a-z][a-z0-9-]*\.wikipedia\.org/wiki/[^:%?#]+(?:[?#].*)?$"],
+        &[".wikipedia.org/wiki/"],
+        Some("https://en.wikipedia.org/wiki/Computer_programming"),
+    ),
+    profile(
         "windowsconsole",
         "Console",
         &[R],
@@ -694,7 +734,11 @@ pub(crate) fn profiles_for_family(
 ) -> impl Iterator<Item = &'static BuiltinAppProfile> {
     BUILTIN_APP_PROFILES
         .iter()
-        .filter(move |profile| profile.families.contains(&family))
+        // These reading surfaces have dedicated contracts. In particular, a
+        // Markdown draft must not fall through to the document/editor family.
+        .filter(move |profile| {
+            profile.families.contains(&family) && !super::web_content::IDS.contains(&profile.id)
+        })
 }
 
 pub(crate) fn profile_for(
@@ -704,7 +748,11 @@ pub(crate) fn profile_for(
     BUILTIN_APP_PROFILES
         .iter()
         .enumerate()
-        .find(|(index, profile)| profile.families.contains(&family) && profile.matches(app, *index))
+        .find(|(index, profile)| {
+            profile.families.contains(&family)
+                && !super::web_content::IDS.contains(&profile.id)
+                && profile.matches(app, *index)
+        })
         .map(|(_, profile)| profile)
 }
 

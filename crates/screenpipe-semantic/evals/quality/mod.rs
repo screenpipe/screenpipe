@@ -41,7 +41,11 @@ pub struct Report {
 /// Hand-authored synthetic gold, independent of parser output. Exact field
 /// checks cover attribution, state and relationships, not just word presence.
 pub fn evaluate() -> Result<Vec<Report>, Box<dyn std::error::Error>> {
-    let cases: Vec<Case> = serde_json::from_str(include_str!("cases.json"))?;
+    evaluate_cases(include_str!("cases.json"))
+}
+
+pub fn evaluate_cases(json: &str) -> Result<Vec<Report>, Box<dyn std::error::Error>> {
+    let cases: Vec<Case> = serde_json::from_str(json)?;
     let registry = builtin_parser_registry()?;
     let tokenizer = o200k_base_singleton();
     let mut reports = Vec::new();
