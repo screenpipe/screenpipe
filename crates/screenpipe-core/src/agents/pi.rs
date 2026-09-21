@@ -2783,6 +2783,11 @@ pub fn apply_pi_isolation_env(apply: &mut dyn FnMut(&str, &str)) {
     // We pin the pi version ourselves (ensure_installed); don't let the
     // subprocess phone pi.dev for update checks on every run.
     apply("PI_SKIP_VERSION_CHECK", "1");
+    // Bun's native-first import bypasses Pi's host SDK aliases. Extensions
+    // with top-level await (pi-subagents) can then be only partly initialized
+    // when jiti retries them. Use jiti's alias-aware loader from the start;
+    // nested Pi processes inherit the same setting.
+    apply("JITI_TRY_NATIVE", "0");
     // Same reasoning one layer out: the bundled skills tell agents to run the
     // screenpipe CLI, and `bun x screenpipe@latest` spends ~1.5s resolving the
     // registry on every single call. Hand them an already-resolved native
