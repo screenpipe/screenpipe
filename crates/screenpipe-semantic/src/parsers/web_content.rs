@@ -257,33 +257,37 @@ impl SemanticParser for WebContentParser {
             let Some(body_node) = body_node else {
                 continue;
             };
-            let (body, truncated) =
-                if self.app == "github" && github_windows_body(tree, post) == Some(body_node) {
-                    extract_aggregate_content(tree, body_node, remaining)
-                } else {
-                    extract_content(tree, body_node, remaining)
-                };
+            let (body, truncated) = if self.app == "hackernews" && class(tree, post, "default") {
+                extract_hn_windows_content(tree, post, remaining)
+            } else if self.app == "github" && github_windows_body(tree, post) == Some(body_node) {
+                extract_aggregate_content(tree, body_node, remaining)
+            } else {
+                extract_content(tree, body_node, remaining)
+            };
             if body.is_empty() {
                 continue;
             }
             let flat_header = (self.app == "hackernews" && class(tree, post, "commtext"))
                 .then(|| hn_sibling_header(tree, post))
                 .flatten();
-            let author = tree
-                .descendants(flat_header.unwrap_or(post))
-                .find(|&n| {
-                    self.is_author(tree, n)
-                        && n != body_node
-                        && !excluded(tree, n)
-                        && !ancestor_until(tree, n, flat_header.unwrap_or(post), |p| {
-                            p == body_node || excluded(tree, p)
-                        })
-                })
-                .or_else(|| {
-                    (self.app == "gitlab" && class(tree, post, "work-item-description"))
-                        .then(|| gitlab_work_item_author(tree, post))
-                        .flatten()
-                });
+            let author = if self.app == "hackernews" && class(tree, post, "default") {
+                hn_windows_author(tree, post)
+            } else {
+                tree.descendants(flat_header.unwrap_or(post))
+                    .find(|&n| {
+                        self.is_author(tree, n)
+                            && n != body_node
+                            && !excluded(tree, n)
+                            && !ancestor_until(tree, n, flat_header.unwrap_or(post), |p| {
+                                p == body_node || excluded(tree, p)
+                            })
+                    })
+                    .or_else(|| {
+                        (self.app == "gitlab" && class(tree, post, "work-item-description"))
+                            .then(|| gitlab_work_item_author(tree, post))
+                            .flatten()
+                    })
+            };
             let native_id = tree
                 .dom_identifier(post)
                 .filter(|id| !id.is_empty())
@@ -347,9 +351,8 @@ impl SemanticParser for WebContentParser {
 /// only text after the verified numeric collapse control; separator glyphs and
 /// the preceding byline cannot become authored body content.
 fn hn_windows_body(tree: &SemanticTree, post: NodeId) -> Option<NodeId> {
-    let toggle = tree
-        .descendants(post)
-        .find(|&n| class(tree, n, "togg") && tree.dom_identifier(n).is_some())?;
+    let toggle = hn_windows_toggle(tree, post)?;
+    hn_windows_author(tree, post)?;
     tree.descendants(post).find(|&n| {
         n.0 > toggle.0
             && matches!(tree.role(n), Some("Text"))
@@ -357,7 +360,56 @@ fn hn_windows_body(tree: &SemanticTree, post: NodeId) -> Option<NodeId> {
                 .text(n)
                 .is_some_and(|text| !text.trim().is_empty() && text.trim() != "|")
             && !excluded(tree, n)
+            && !ancestor_until(tree, n, post, |p| p != post && class(tree, p, "default"))
     })
+}
+
+fn hn_windows_toggle(tree: &SemanticTree, post: NodeId) -> Option<NodeId> {
+    tree.descendants(post).find(|&n| {
+        class(tree, n, "togg")
+            && tree
+                .dom_identifier(n)
+                .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+            && !ancestor_until(tree, n, post, |p| p != post && class(tree, p, "default"))
+    })
+}
+
+fn hn_windows_author(tree: &SemanticTree, post: NodeId) -> Option<NodeId> {
+    let toggle = hn_windows_toggle(tree, post)?;
+    tree.descendants(post).find(|&n| {
+        n.0 < toggle.0
+            && class(tree, n, "hnuser")
+            && tree.text(n).is_some_and(|text| !text.trim().is_empty())
+            && !ancestor_until(tree, n, post, |p| p != post && class(tree, p, "default"))
+    })
+}
+
+fn extract_hn_windows_content(tree: &SemanticTree, post: NodeId, limit: usize) -> (String, bool) {
+    let Some(toggle) = hn_windows_toggle(tree, post) else {
+        return (String::new(), false);
+    };
+    if hn_windows_author(tree, post).is_none() {
+        return (String::new(), false);
+    }
+    let mut result = String::new();
+    let mut truncated = false;
+    for node in tree.descendants(post).filter(|node| node.0 > toggle.0) {
+        if excluded(tree, node)
+            || ancestor_until(tree, node, post, |p| {
+                excluded(tree, p) || (p != post && class(tree, p, "default"))
+            })
+            || tree.children(node).next().is_some()
+        {
+            continue;
+        }
+        let Some(value) = tree.text(node).filter(|value| !value.trim().is_empty()) else {
+            continue;
+        };
+        if !append_bounded(&mut result, value.trim_matches('\n'), limit, &mut truncated) {
+            break;
+        }
+    }
+    (result, truncated)
 }
 
 /// Chromium RawView retains GitHub's post and visible-content boundary but
@@ -371,6 +423,7 @@ fn github_windows_body(tree: &SemanticTree, post: NodeId) -> Option<NodeId> {
     tree.descendants(visible).find(|&n| {
         tree.parent(n) == Some(visible)
             && matches!(tree.role(n), Some("Group"))
+            && tree.classes(n).next().is_none()
             && !excluded(tree, n)
     })
 }
@@ -773,9 +826,15 @@ fn extract_content(tree: &SemanticTree, root: NodeId, limit: usize) -> (String, 
 /// preserved without repeating its descendants.
 fn extract_aggregate_content(tree: &SemanticTree, root: NodeId, limit: usize) -> (String, bool) {
     let mut result = String::new();
-    let mut last_value = None;
     let mut truncated = false;
+    let mut skip_descendants_of: Option<NodeId> = None;
     for node in tree.descendants(root) {
+        if skip_descendants_of
+            .is_some_and(|aggregate| ancestor_node(tree, node, |n| n == aggregate).is_some())
+        {
+            continue;
+        }
+        skip_descendants_of = None;
         if excluded(tree, node) || ancestor_until(tree, node, root, |p| excluded(tree, p)) {
             continue;
         }
@@ -783,29 +842,57 @@ fn extract_aggregate_content(tree: &SemanticTree, root: NodeId, limit: usize) ->
             continue;
         };
         let value = value.trim_matches('\n');
-        if last_value == Some(value) {
+        if matches!(
+            value.trim(),
+            "Copy" | "Copy code" | "Edit" | "Reply" | "Read more"
+        ) && (control(tree, node) || ancestor_until(tree, node, root, |p| control(tree, p)))
+        {
             continue;
         }
-        let separator = usize::from(!result.is_empty());
-        if result.len() + separator >= limit {
-            truncated = true;
-            break;
+        let mut saw_descendant_text = false;
+        let contains_all_descendant_text = tree
+            .descendants(node)
+            .skip(1)
+            .filter(|&descendant| {
+                !excluded(tree, descendant)
+                    && !ancestor_until(tree, descendant, node, |p| excluded(tree, p))
+            })
+            .filter_map(|descendant| tree.text(descendant))
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .all(|descendant| {
+                saw_descendant_text = true;
+                value.contains(descendant)
+            });
+        if saw_descendant_text && contains_all_descendant_text {
+            skip_descendants_of = Some(node);
         }
-        if separator != 0 {
-            result.push('\n');
-        }
-        let mut end = value.len().min(limit - result.len());
-        while !value.is_char_boundary(end) {
-            end -= 1;
-        }
-        result.push_str(&value[..end]);
-        last_value = Some(value);
-        if end < value.len() {
-            truncated = true;
+        if !append_bounded(&mut result, value, limit, &mut truncated) {
             break;
         }
     }
     (result, truncated)
+}
+
+fn append_bounded(result: &mut String, value: &str, limit: usize, truncated: &mut bool) -> bool {
+    let separator = usize::from(!result.is_empty());
+    if result.len() + separator >= limit {
+        *truncated = true;
+        return false;
+    }
+    if separator != 0 {
+        result.push('\n');
+    }
+    let mut end = value.len().min(limit - result.len());
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    result.push_str(&value[..end]);
+    if end < value.len() {
+        *truncated = true;
+        return false;
+    }
+    true
 }
 fn ancestor_until(
     tree: &SemanticTree,

@@ -695,6 +695,23 @@ fn normalize_bounds(
     })
 }
 
+/// Preserve trustworthy native visibility evidence even when normalized bounds
+/// are omitted because the element is wholly outside the monitor.
+fn semantic_offscreen(
+    bounds: Option<&crate::events::ElementBounds>,
+    on_screen: Option<bool>,
+) -> bool {
+    on_screen == Some(false)
+        && bounds.is_some_and(|bounds| {
+            bounds.x.is_finite()
+                && bounds.y.is_finite()
+                && bounds.width.is_finite()
+                && bounds.height.is_finite()
+                && bounds.width > 0.0
+                && bounds.height > 0.0
+        })
+}
+
 /// Build an AccessibilityTreeNode from a UIA AccessibilityNode, propagating automation properties.
 fn make_tree_node(
     uia_node: &AccessibilityNode,
@@ -730,6 +747,7 @@ fn make_tree_node(
     if capture_semantic_dom {
         n.semantic_dom_identifier = uia_node.automation_id.clone();
         n.semantic_dom_classes = uia_node.class_name.clone();
+        n.semantic_offscreen = semantic_offscreen(uia_node.bounds.as_ref(), on_screen);
     }
     n
 }
@@ -971,7 +989,7 @@ fn extract_text_from_tree(
             depth,
             norm_bounds.clone(),
             on_screen,
-            false,
+            capture_semantic_dom,
             current_walk_index,
         );
         tree_node.automation_relevant = true;
@@ -1264,6 +1282,83 @@ mod tests {
         assert_eq!(nodes[1].is_password, Some(true));
         assert_eq!(nodes[1].value, None);
         assert!(!buf.contains("must-never-escape"));
+    }
+
+    #[test]
+    fn semantic_offscreen_requires_positive_finite_native_geometry() {
+        use crate::events::ElementBounds;
+
+        let positive = ElementBounds {
+            x: -500.0,
+            y: 20.0,
+            width: 120.0,
+            height: 30.0,
+        };
+        assert!(semantic_offscreen(Some(&positive), Some(false)));
+        assert!(!semantic_offscreen(Some(&positive), Some(true)));
+
+        for invalid in [
+            ElementBounds {
+                width: 0.0,
+                ..positive.clone()
+            },
+            ElementBounds {
+                height: 0.0,
+                ..positive.clone()
+            },
+            ElementBounds {
+                x: f64::NAN,
+                ..positive.clone()
+            },
+            ElementBounds {
+                width: f64::INFINITY,
+                ..positive.clone()
+            },
+        ] {
+            assert!(!semantic_offscreen(Some(&invalid), Some(false)));
+        }
+        assert!(!semantic_offscreen(None, Some(false)));
+    }
+
+    #[test]
+    fn combined_semantic_and_automation_capture_keeps_dom_evidence() {
+        let tree = AccessibilityNode {
+            control_type: "Document".into(),
+            children: vec![AccessibilityNode {
+                control_type: "Button".into(),
+                automation_id: Some("submit".into()),
+                class_name: Some("primary action".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut nodes = Vec::new();
+        let semantic = extract_for_test(
+            &tree,
+            0,
+            10,
+            &mut String::new(),
+            &mut nodes,
+            &mut None,
+            &None,
+            &None,
+            &[],
+            "",
+            &mut false,
+            true,
+            true,
+        );
+
+        assert!(
+            semantic.is_empty(),
+            "automation copy suppresses a duplicate"
+        );
+        let button = nodes.iter().find(|node| node.role == "Button").unwrap();
+        assert_eq!(button.semantic_dom_identifier.as_deref(), Some("submit"));
+        assert_eq!(
+            button.semantic_dom_classes.as_deref(),
+            Some("primary action")
+        );
     }
 
     #[test]

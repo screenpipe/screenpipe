@@ -486,6 +486,76 @@ fn windows_chromium_github_body_stays_inside_verified_post() {
 }
 
 #[test]
+fn synthetic_windows_github_prefers_unclassified_body_and_structural_aggregate() {
+    let mut case = cases().remove(1);
+    case.app.platform = Platform::Windows;
+    case.nodes = vec![
+        node(
+            0,
+            "Text",
+            "PullRequestHeader-module__inlineTitle__synthetic",
+            "Synthetic PR",
+        ),
+        node(0, "Group", "timeline-comment", ""),
+        node(1, "Hyperlink", "author", "Alice"),
+        node(1, "Hyperlink", "js-timestamp", "Yesterday"),
+        node(1, "Group", "edit-comment-hide", ""),
+        node(2, "Group", "toolbar", "Not authored"),
+        node(2, "Group", "", ""),
+        node(3, "Text", "", "Aggregate with linked value and suffix"),
+        node(4, "Hyperlink", "", "linked value"),
+        node(3, "Text", "", "Repeated paragraph"),
+        node(3, "Text", "", "Repeated paragraph"),
+        node(3, "Text", "", "code block\n    indented line"),
+    ];
+    case.nodes[3].dom_identifier = Some("issue-42-permalink".into());
+    let parsed = items(&case);
+    assert_eq!(
+        parsed[1].body.as_deref(),
+        Some(
+            "Aggregate with linked value and suffix\nRepeated paragraph\nRepeated paragraph\ncode block\n    indented line"
+        )
+    );
+}
+
+#[test]
+fn synthetic_windows_github_partial_parent_preserves_child_link_and_budget() {
+    let mut case = cases().remove(1);
+    case.app.platform = Platform::Windows;
+    case.nodes = vec![
+        node(
+            0,
+            "Text",
+            "PullRequestHeader-module__inlineTitle__synthetic",
+            "Synthetic PR",
+        ),
+        node(0, "Group", "timeline-comment", ""),
+        node(1, "Hyperlink", "author", "Alice"),
+        node(1, "Hyperlink", "js-timestamp", "Yesterday"),
+        node(1, "Group", "edit-comment-hide", ""),
+        node(2, "Group", "", ""),
+        node(3, "Text", "", "prefix"),
+        node(4, "Hyperlink", "", "link"),
+        node(3, "Text", "", "suffix"),
+        node(3, "Button", "", "Copy"),
+        node(3, "Text", "sidebar", "excluded"),
+    ];
+    case.nodes[3].dom_identifier = Some("issue-42-permalink".into());
+    assert_eq!(
+        items(&case)[1].body.as_deref(),
+        Some("prefix\nlink\nsuffix")
+    );
+
+    case.nodes[8].text = "x".repeat(40_000);
+    let parsed = items(&case);
+    assert_eq!(
+        parsed[1].metadata.get("truncated").map(String::as_str),
+        Some("true")
+    );
+    assert!(parsed[1].body.as_ref().unwrap().len() <= 32 * 1024);
+}
+
+#[test]
 fn windows_chromium_hn_requires_local_author_and_numeric_toggle() {
     let mut case = cases().remove(3);
     case.app.platform = Platform::Windows;
@@ -502,6 +572,60 @@ fn windows_chromium_hn_requires_local_author_and_numeric_toggle() {
     assert_eq!(parsed[1].actor.as_deref(), Some("Alice"));
     assert_eq!(parsed[1].body.as_deref(), Some("Verified comment"));
     case.nodes[4].dom_identifier = Some("not-a-native-comment-id".into());
+    assert_eq!(parse(&case).outcome, ValidatedParseOutcome::NotHandled);
+}
+
+#[test]
+fn synthetic_windows_hn_preserves_local_multifragment_body_only() {
+    let mut case = cases().remove(3);
+    case.app.platform = Platform::Windows;
+    case.nodes = vec![
+        node(0, "Group", "title", ""),
+        node(1, "Hyperlink", "", "Synthetic discussion"),
+        node(0, "Group", "default", ""),
+        node(1, "Hyperlink", "hnuser", "Alice"),
+        node(1, "Hyperlink", "togg clicky", "[–]"),
+        node(1, "Text", "", "First paragraph"),
+        node(1, "Hyperlink", "", "linked phrase"),
+        node(1, "Text", "", "Second paragraph"),
+        node(1, "Group", "default", ""),
+        node(2, "Hyperlink", "hnuser", "Bob"),
+        node(2, "Hyperlink", "togg", "[–]"),
+        node(2, "Text", "", "Nested body"),
+    ];
+    case.nodes[4].dom_identifier = Some("15".into());
+    case.nodes[10].dom_identifier = Some("16".into());
+    let parsed = items(&case);
+    assert_eq!(parsed[1].actor.as_deref(), Some("Alice"));
+    assert_eq!(
+        parsed[1].body.as_deref(),
+        Some("First paragraph\nlinked phrase\nSecond paragraph")
+    );
+    assert!(!parsed[1].body.as_ref().unwrap().contains("Nested"));
+}
+
+#[test]
+fn synthetic_windows_hn_rejects_missing_local_identity_evidence() {
+    let mut case = cases().remove(3);
+    case.app.platform = Platform::Windows;
+    case.nodes = vec![
+        node(0, "Group", "title", ""),
+        node(1, "Hyperlink", "", "Synthetic discussion"),
+        node(0, "Group", "default", ""),
+        node(1, "Hyperlink", "togg", "[–]"),
+        node(1, "Text", "", "Body without local author"),
+        node(1, "Group", "default", ""),
+        node(2, "Hyperlink", "hnuser", "Borrowed Bob"),
+        node(2, "Hyperlink", "togg", "[–]"),
+        node(2, "Text", "", "Nested body"),
+    ];
+    case.nodes[3].dom_identifier = Some("17".into());
+    case.nodes[7].dom_identifier = Some("18".into());
+    assert_eq!(parse(&case).outcome, ValidatedParseOutcome::NotHandled);
+
+    case.nodes
+        .insert(3, node(1, "Hyperlink", "hnuser", "Alice"));
+    case.nodes[4].dom_identifier = Some(String::new());
     assert_eq!(parse(&case).outcome, ValidatedParseOutcome::NotHandled);
 }
 

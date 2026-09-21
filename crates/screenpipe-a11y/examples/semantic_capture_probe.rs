@@ -79,6 +79,12 @@ mod probe {
                 .map(|since| since.as_millis() as i64)
                 .unwrap_or_default(),
             "content_hash": snapshot.content_hash,
+            "capture": {
+                "truncated": snapshot.truncated,
+                "truncation_reason": format!("{:?}", snapshot.truncation_reason),
+                "node_count": snapshot.node_count,
+                "walk_duration_ms": snapshot.walk_duration.as_millis(),
+            },
             "app": {
                 "platform": std::env::consts::OS,
                 "app_id": snapshot.app_id,
