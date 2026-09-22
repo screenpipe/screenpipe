@@ -45,6 +45,7 @@ import { readFile } from "@tauri-apps/plugin-fs";
 import posthog from "posthog-js";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { Button } from "@/components/ui/button";
+import { LANGUAGE_OPTIONS } from "@/lib/language";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1545,8 +1546,6 @@ export function NoteView({
   };
 
   const attendeeCount = parseAttendees(attendees).length;
-  const englishOnly =
-    settings.languages.length === 1 && settings.languages[0] === "english";
   const meetingDateLabel = formatDateOnly(meeting.meeting_start);
   const meetingStartClock = formatClock(meeting.meeting_start);
   const meetingEndClock = meeting.meeting_end
@@ -1586,18 +1585,6 @@ export function NoteView({
       !!meetingTitle && !!eventTitle && meetingTitle === eventTitle;
     return { link, mapped };
   }, [calendarEvents, dismissedJoinUrl, isLive, meeting, meetingCtx]);
-
-  const setLanguagePreference = async (languages: string[]) => {
-    try {
-      await updateSettings({ languages });
-    } catch (err) {
-      toast({
-        title: ui("Couldn't update language"),
-        description: String(err),
-        variant: "destructive",
-      });
-    }
-  };
 
   const handleResumeAfterInactivity = async () => {
     setInactivityPrompt(false);
@@ -2486,8 +2473,6 @@ export function NoteView({
               devices={audioStatusDevices}
               isLive={isLive}
               settings={settings}
-              englishOnly={englishOnly}
-              onLanguagePreference={setLanguagePreference}
             />
           }
         />
@@ -2809,19 +2794,20 @@ function AudioHealthButton({
   devices,
   isLive,
   settings,
-  englishOnly,
-  onLanguagePreference,
 }: {
   devices: AudioStatusDevice[];
   isLive: boolean;
   settings: Settings;
-  englishOnly: boolean;
-  onLanguagePreference: (languages: string[]) => void | Promise<void>;
 }) {
 
   const ui = useGT();
   const inputs = devices.filter((device) => device.kind === "input");
   const outputs = devices.filter((device) => device.kind === "output");
+  const languageLabel = settings.languages.length === 0
+    ? ui("Auto-detect")
+    : settings.languages
+        .map((code) => LANGUAGE_OPTIONS.find((language) => language.code === code)?.name ?? code)
+        .join(", ");
   const selectedDevices = (settings.audioDevices ?? []).filter(
     (device) => device && device !== "default",
   );
@@ -2940,34 +2926,9 @@ function AudioHealthButton({
             <Languages className="h-3.5 w-3.5 shrink-0" />
             <span className="truncate">Language</span>
           </div>
-          <div className="inline-flex shrink-0 border border-border">
-            <button
-              type="button"
-              onClick={() => void onLanguagePreference(["english"])}
-              className={cn(
-                "flex h-8 min-w-16 items-center justify-center gap-1.5 px-2 text-[11px] transition-colors hover:bg-muted",
-                englishOnly
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground",
-              )}
-            >
-              <span>English</span>
-              {englishOnly && <Check className="h-3 w-3" />}
-            </button>
-            <button
-              type="button"
-              onClick={() => void onLanguagePreference([])}
-              className={cn(
-                "flex h-8 min-w-14 items-center justify-center gap-1.5 border-l border-border px-2 text-[11px] transition-colors hover:bg-muted",
-                !englishOnly
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground",
-              )}
-            >
-              <span>Auto</span>
-              {!englishOnly && <Check className="h-3 w-3" />}
-            </button>
-          </div>
+          <span className="max-w-[170px] truncate text-xs" title={languageLabel}>
+            {languageLabel}
+          </span>
         </div>
       </PopoverContent>
     </Popover>

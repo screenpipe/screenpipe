@@ -37,6 +37,7 @@ import {
   planDisplayName,
   canUseDataSync,
   isSignedInCloudSubscriber,
+  isBusinessSubscriptionPlan,
   type AppUser,
 } from "@/lib/app-entitlement";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
@@ -108,27 +109,6 @@ function hasExistingStripeSubscriptionPlan(plan: string | null | undefined): boo
   if (!plan) return false;
   const normalized = plan.toLowerCase();
   return normalized !== "none" && normalized !== "lifetime";
-}
-
-function isBusinessSubscriptionPlan(plan: string | null | undefined): boolean {
-  // `cloud_subscribed` can remain true in persisted settings after the server
-  // resolves an old one-time license as Lifetime. Explicit plan truth must win
-  // or Lifetime/Basic users land in the Business-active branch with no upgrade
-  // action. Keep the no-plan fallback for older Business responses that only
-  // carried the cloud flag.
-  if (!plan) return true;
-  return [
-    "pro",
-    "business",
-    "pro_max",
-    "business_max",
-    "pro_ultra",
-    "business_ultra",
-    "team",
-    "enterprise",
-    "monthly",
-    "annual",
-  ].includes(plan.toLowerCase());
 }
 
 function analyticsDistinctId(enabled: boolean): string | undefined {

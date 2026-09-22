@@ -114,13 +114,12 @@ describe("SummaryCards", () => {
     const missedTodoActions = screen.getByTestId(
       "home-card-agent-actions-missed-todos",
     );
-    expect(dayRecapActions).toHaveClass("opacity-0", "pointer-events-none");
-    expect(dayRecapActions.className).toContain(
-      "group-hover/home-card:opacity-100",
-    );
-    expect(dayRecapActions.className).toContain(
-      "group-focus-within/home-card:opacity-100",
-    );
+    expect(dayRecapActions).toHaveAttribute("data-stacked", "true");
+    expect(dayRecapActions).toHaveAttribute("data-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Run in Claude" })).not.toBeInTheDocument();
+    for (const trigger of screen.getAllByRole("button", { name: "Choose an AI agent" })) {
+      fireEvent.focus(trigger);
+    }
     expect(missedTodoActions).toBeInTheDocument();
 
     for (const slug of [
@@ -149,6 +148,18 @@ describe("SummaryCards", () => {
     expect(
       screen.getByRole("button", { name: "+ Custom" }),
     ).toBeInTheDocument();
+  });
+
+  it("keeps the in-app card action available while agent choices are expanded", () => {
+    const onSendMessage = vi.fn();
+    render(<SummaryCards onSendMessage={onSendMessage} customTemplates={[]}
+      onSaveCustomTemplate={vi.fn()} onUpdateCustomTemplate={vi.fn()}
+      onDeleteCustomTemplate={vi.fn()} userGoalCategory="work_memory" />);
+    const stack = screen.getByTestId("home-card-agent-actions-time-breakdown");
+    fireEvent.focus(stack.querySelector('[aria-label="Choose an AI agent"]')!);
+    expect(stack).toHaveAttribute("data-expanded", "true");
+    fireEvent.click(screen.getByTestId("summary-card-time-breakdown"));
+    expect(onSendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("makes available home actions visibly interactive and keyboard focusable", () => {

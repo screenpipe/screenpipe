@@ -33,6 +33,11 @@ describe("workflow elapsed timing", () => {
     platform.assistant!.openLink = openLink;
     await act(async () => { render(<WorkflowsApp platform={platform} initialAnalysis={fixtureWorkflowAnalysis} storageKey={null} />); });
     const card = screen.getByRole("heading", { name: "Research synthesis" }).closest("article")!;
+    expect(within(card).getByText(/~24m \/ run · estimated/)).toBeVisible();
+    fireEvent.click(within(card).getByText("Workflow details"));
+    for (const title of ["Partner meeting preparation", "Website release check"]) {
+      fireEvent.click(within(screen.getByRole("heading", { name: title }).closest("article")!).getByText("Workflow details"));
+    }
     expect(within(card).getByText("Avg. time / run")).toBeVisible();
     expect(within(card).getByText("~24m")).toBeVisible();
     expect(within(card).getByText("3 runs · estimated")).toBeVisible();

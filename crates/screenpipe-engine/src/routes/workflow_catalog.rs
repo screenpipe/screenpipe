@@ -122,7 +122,8 @@ pub(crate) async fn context(
         json!({"revision":value["revision"].as_u64().unwrap_or(0), "now":Utc::now().to_rfc3339(),
         "historyStart":(Utc::now()-ChronoDuration::days(90)).to_rfc3339(), "checkedThrough":value["checkedThrough"],
         "profile":work_profile_payload(profile.as_ref()), "workflows":workflows,
-        "outputContract":include_str!("../../../screenpipe-core/assets/pipes/workflow-discovery/output.md")}),
+        "outputContract":include_str!("../../../screenpipe-core/assets/pipes/workflow-discovery/output.md"),
+        "workflowOutputContract":include_str!("../../../screenpipe-core/assets/pipes/workflow-review/output.md")}),
     ))
 }
 

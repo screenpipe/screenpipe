@@ -11,9 +11,29 @@ describe("timing outcome oracle", () => {
     expect(Object.values(grade(fixture.expected)).every(Boolean)).toBe(true);
     expect(fixture.expected.map(r => (Date.parse(r.end.timestamp)-Date.parse(r.start.timestamp))/60000)).toEqual([6,8]);
   });
+  it("keeps historical run sources outside the incremental cycle but inside retained history", () => {
+    const historical = timingFixture(now, "historical");
+    const cycleStart = Date.parse(now) - 86400000;
+    expect(historical.expected).toHaveLength(2);
+    expect(historical.rows.every(r => Date.parse(r.timestamp) < cycleStart)).toBe(true);
+    expect(historical.rows.every(r => Date.parse(r.timestamp) > Date.parse(now) - 90*86400000)).toBe(true);
+    expect(Object.values(gradeTiming([{...existing, timingRuns:historical.expected}], existing, historical.expected)).every(Boolean)).toBe(true);
+  });
+  it("does not time identical completed chat history from two capture timestamps", () => {
+    const chat = timingFixture(now, "static-chat");
+    expect(chat.rows[0].quote).toBe(chat.rows[1].quote);
+    expect(chat.rows[0].timestamp).not.toBe(chat.rows[1].timestamp);
+    expect(chat.expected).toEqual([]);
+    const invented = [{start:chat.rows[0],end:chat.rows[1],summary:"One hour of drafting"}];
+    expect(gradeTiming([{...existing,timingRuns:invented}],existing,chat.expected).exactOccurrences).toBe(false);
+  });
   it("rejects a skipped measurement and missing occurrence", () => {
     expect(grade([]).exactOccurrences).toBe(false);
     expect(grade(fixture.expected.slice(0,1)).exactOccurrences).toBe(false);
+  });
+  it("flags a quantified active-time claim while allowing elapsed-time caveats", () => {
+    expect(grade(fixture.expected.map(r => ({...r, summary:"6 minutes of active work."}))).noQuantifiedActiveTime).toBe(false);
+    expect(grade(fixture.expected.map(r => ({...r, summary:"6 minutes elapsed; this does not establish active work time."}))).noQuantifiedActiveTime).toBe(true);
   });
   it("rejects bridging lunch, duplicate runs and invented source quotes", () => {
     expect(grade([{...fixture.expected[0],end:fixture.expected[1].end}]).exactOccurrences).toBe(false);

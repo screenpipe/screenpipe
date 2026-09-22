@@ -8,7 +8,7 @@ import {tmpdir,homedir} from "node:os";
 import {join,resolve} from "node:path";
 import { timingFixture, gradeTiming, type TimingCase } from "./workflow-timing-fixture";
 const timingCase = process.argv.find(a => a.startsWith("--timing="))?.split("=")[1] as TimingCase | undefined;
-if (timingCase && !["complete", "sparse", "preserve"].includes(timingCase)) throw new Error("Unknown timing case");
+if (timingCase && !["complete", "sparse", "preserve", "historical", "static-chat"].includes(timingCase)) throw new Error("Unknown timing case");
 const assets=resolve(import.meta.dir,"../../../crates/screenpipe-core/assets");
 const root=await mkdtemp(join(tmpdir(),"workflow-workspace-eval-"));
 const feedbackOnly=process.argv.includes("--feedback-only");
@@ -20,6 +20,8 @@ const repairSource=process.argv.includes("--repair-source");
 let task=timingCase?"workflow-maintain":discovery?"workflow-discover":feedbackOnly?"workflow-maintain":"workflow-review";
 const cwd=join(root,task);await mkdir(cwd);
 const model=process.env.WORKFLOW_EVAL_MODEL || "auto";
+const timeoutMs=Number(process.env.WORKFLOW_EVAL_TIMEOUT_MS || 180000);
+if (!Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 900000) throw new Error("Evaluation timeout must be between 1 and 900 seconds");
 const noChange=feedbackOnly||process.argv.includes("--no-change"), fault=process.argv.includes("--conflict");
 const missingDraft=process.argv.includes("--missing-draft");
 const largeContext=process.argv.includes("--large-context");
@@ -69,10 +71,6 @@ if(!noChange)ws.drafts.good={id:"good",assignee:"workflow-review",status:"open",
 if(researchNotes)ws.drafts.good.payload={title:good.title,trigger:good.trigger,outcome:good.outcome,evidence:rows.slice(0,2),observations:["A customer reply was drafted and revised in chat; sending was not observed."]};
 if(repairSource)ws.drafts.good.payload.stages[1].procedure[0].quote="The revised reply was saved after approval.";
 if(feedbackOnly || discovery) ws.drafts={};
-// Exercise the actual context index limit, which excludes draft payload bodies.
-// Keep resolved history in discovery/maintenance too; clearing it afterwards
-// made --discover --large-context silently run the small fixture.
-if(contextHistoryCount)for(let i=0;i<contextHistoryCount;i++)ws.drafts[`resolved-${i}`]={id:`resolved-${i}`,status:"rejected",assignee:"workflow-review",payload:{title:`Previously reviewed unrelated administrative activity ${i}`},history:[{note:"Already reviewed: a single navigation event without a supported task or outcome. Preserve this decision; no new evidence changes it."}]};
 if(discovery)ws.cycle.finished={};
 let catalogRevision=8, published:any[]=[], injected=false, reads=0, greetingSearch=false;
 const existing:any=feedbackOnly?{...good,id:"wf-finance",userCorrection:"User: hi"}:{id:"wf-finance",title:"Founder finance administration",trigger:"Review company finances",outcome:"Accounts reviewed",userCorrection:"Do not mix support requests into this workflow",stages:[]};
@@ -84,15 +82,28 @@ const timing = timingCase ? timingFixture(now, timingCase) : null;
 if (timing) {
   rows.splice(0, rows.length, ...timing.rows);
   Object.assign(existing, structuredClone(good), {id:"wf-receipts", userCorrection:null, timingRuns:timingCase==="preserve"?timing.expected:[], limitations:["Time per run has not been investigated."]});
-  existing.stages = [rows[0], rows[timingCase==="sparse"?1:3]].map((r,i)=>({...structuredClone(good.stages[i]), procedure:[{kind:i?"check":"action",text:i?"Check the saved receipt confirmation.":"Enter the invoice details.",...r}],evidence:[{timestamp:r.timestamp,app:r.app}]}));
-  if(timingCase==="sparse") existing.limitations=["Prior procedure retained; current captures do not establish timing boundaries."];
+  existing.stages = [rows[0], rows[timing.expected.length?3:1]].map((r,i)=>({...structuredClone(good.stages[i]), procedure:[{kind:i?"check":"action",text:i?"Check the saved receipt confirmation.":"Enter the invoice details.",...r}],evidence:[{timestamp:r.timestamp,app:r.app}]}));
+  existing.evidence = (timing.expected.length ? timing.expected.flatMap(run => [run.start,run.end]) : rows).map(({timestamp,app})=>({timestamp,app}));
+  existing.captureSequence = timing.expected.length ? [timing.expected[0].start,timing.expected[0].end].map(({timestamp,app})=>({timestamp,app})) : [];
+  if(!timing.expected.length) existing.limitations=["Prior procedure retained; current captures do not establish timing boundaries."];
+  if(timingCase==="static-chat") {
+    Object.assign(existing,{title:"Draft invoice follow-up replies",description:"Draft and revise a reply requesting a missing invoice receipt.",trigger:"An invoice needs supporting receipts",outcome:"A reply draft is ready to review",apps:["ChatGPT"]});
+    existing.stages.forEach((stage:any,i:number)=>Object.assign(stage,{name:i?"Refine the reply":"Draft the reply",description:i?"Shorten the opening and request the attachment":"Draft an invoice reply in chat",apps:["ChatGPT"],procedure:[{kind:"action",text:i?"Shorten the draft and request the receipt attachment.":"Draft a reply about the missing invoice receipt.",...rows[i]}]}));
+  }
   ws.drafts={}; ws.cycle.finished={"workflow-discover":true};
 }
+const historyStart = new Date(Date.parse(now) - 90 * 86400000).toISOString();
+if (timingCase === "historical") {
+  rows.push({timestamp:new Date(Date.parse(now)-3600000).toISOString(),app:"Browser",quote:"Reading a product announcement. No receipt entry in progress."});
+}
+// Keep resolved history after fixture setup so large-context trials exercise
+// the real snapshot boundary, including timing maintenance.
+if(contextHistoryCount)for(let i=0;i<contextHistoryCount;i++)ws.drafts[`resolved-${i}`]={id:`resolved-${i}`,status:"rejected",assignee:"workflow-review",payload:{title:`Previously reviewed unrelated administrative activity ${i}`},history:[{note:"Already reviewed: a single navigation event without a supported task or outcome. Preserve this decision; no new evidence changes it."}]};
 const requestLog:any[]=[];
 const server=Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,async fetch(req){
   if(req.headers.get("authorization")!=="Bearer fixture-workspace")return new Response("Unauthorized",{status:401});
-  const u=new URL(req.url);requestLog.push({path:u.pathname,method:req.method});
-  if(u.pathname==="/workflows/context")return Response.json({revision:catalogRevision,workflows:[existing,...published],profile:{summary:"I manage vendor invoices. Customer access requests belong to customer support, not finance."},outputContract:await Bun.file(join(assets,"pipes/workflow-discovery/output.md")).text()});
+  const u=new URL(req.url);requestLog.push({path:u.pathname,query:u.search,method:req.method});
+  if(u.pathname==="/workflows/context")return Response.json({revision:catalogRevision,workflows:timingCase && published.length ? [published.at(-1)] : [existing,...published],historyStart,checkedThrough:start,now,profile:{summary:"I manage vendor invoices. Customer access requests belong to customer support, not finance."},outputContract:await Bun.file(join(assets,"pipes/workflow-discovery/output.md")).text(),workflowOutputContract:await Bun.file(join(assets,"pipes/workflow-review/output.md")).text()});
   if(u.pathname==="/workflows/workspace"){
     if(req.method==="GET")return Response.json({workspace:ws,catalogRevision,ready:ws.cycle.status!=="complete",canFinish:ws.cycle.status==="running"&&ws.cycle.finished["workflow-discover"]===true&&ws.cycle.finished["workflow-maintain"]===true&&!Object.values(ws.drafts).some((d:any)=>d.status==="open"),task});
     const b=await req.json();
@@ -108,6 +119,7 @@ const server=Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,async fetch(
     }
     if(["publish","reject","handoff"].includes(b.action)&&!ws.drafts[b.draft_id])return Response.json({error:"Draft not found."},{status:409});
     if(b.action==="publish"&&ws.drafts[b.draft_id]?.status==="published")return Response.json(ws.drafts[b.draft_id].receipt);
+    if(["reject","handoff"].includes(b.action)&&ws.drafts[b.draft_id]?.status!=="open")return Response.json({error:"Draft is no longer open."},{status:409});
     if(b.expected_revision!==ws.revision)return Response.json({error:"Workspace changed. Read context again."},{status:409});
     if(b.action==="propose"&&(discovery||timingCase)){const id=b.draft_id||crypto.randomUUID();ws.drafts[id]={id,status:"open",assignee:b.assignee,payload:b.payload,history:[{note:b.note}]};}
     else if(b.action==="reject") {ws.drafts[b.draft_id].status="rejected";ws.drafts[b.draft_id].decision=b.note;}
@@ -132,6 +144,16 @@ const server=Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,async fetch(
     }else return Response.json({error:"Unknown action"},{status:400});
     ws.revision++;return Response.json({saved:true,revision:ws.revision});
   }
+  if(timingCase && (u.pathname === "/search" || u.pathname === "/activity-summary")) {
+    reads++;
+    const from = u.searchParams.get("start_time"), to = u.searchParams.get("end_time");
+    const q = (u.searchParams.get("q") || "").toLowerCase();
+    const app = (u.searchParams.get("app_name") || "").toLowerCase();
+    const selected = rows.filter(r => (!from || Date.parse(r.timestamp) >= Date.parse(from)) && (!to || Date.parse(r.timestamp) <= Date.parse(to)) && (!q || r.quote.toLowerCase().includes(q)) && (!app || r.app.toLowerCase().includes(app)));
+    if(u.pathname === "/activity-summary") return Response.json({data_status:selected.length?"ok":"no_capture_in_range",time_range:{start:from,end:to},apps:[...new Set(selected.map(r=>r.app))].map(name=>({name})),total_frames:selected.length});
+    const offset = Number(u.searchParams.get("offset") || 0), limit = Math.min(30, Number(u.searchParams.get("limit") || 10));
+    return Response.json({data:selected.slice(offset,offset+limit).map(r=>({type:"OCR",content:{text_source:"accessibility",timestamp:r.timestamp,app_name:r.app,text:r.quote}})),pagination:{total:selected.length,limit,offset}});
+  }
   if(u.pathname==="/search") {reads++;greetingSearch ||= /^(hi|hello|hey)$/i.test(u.searchParams.get("q")||"");const offset=Number(u.searchParams.get("offset")||0);return Response.json({data:rows.slice(offset,offset+30).map(r=>({type:"OCR",content:{text_source:"accessibility",timestamp:r.timestamp,app_name:r.app,text:r.quote}})),pagination:{total:rows.length,limit:30,offset}});}
   if(u.pathname==="/activity-summary"){reads++;return Response.json({data_status:"ok",time_range:{start,end:now},apps:rows.map(r=>({name:r.app,frame_count:1})),total_frames:rows.length});}
   if(u.pathname==="/mcp-servers"||u.pathname==="/meetings")return Response.json({data:[]});
@@ -149,22 +171,22 @@ if(model.includes("glm")){
 try{
   let stdout="", stderr="", exit=0;
   const promptVersions: any[] = [];
-  const deadline=Date.now()+180000;
+  const deadline=Date.now()+timeoutMs;
   for(let pass=0;pass<((timingCase||repair||researchNotes||repairSource)?5:1)&&Date.now()<deadline;pass++){
   const template=await Bun.file((pass===0&&process.env.WORKFLOW_EVAL_PROMPT_FILE)||(process.env.WORKFLOW_EVAL_PIPE_DIR ? join(process.env.WORKFLOW_EVAL_PIPE_DIR,task,"pipe.md") : join(assets,`pipes/${task}/pipe.md`))).text();
   const skillFile=process.env.WORKFLOW_EVAL_SKILL_FILE || join(assets,"skills/screenpipe-workflow-maintenance/SKILL.md");
   const hash=(text:string)=>createHash("sha256").update(text).digest("hex");
-  promptVersions.push({task,promptHash:hash(template),skillHash:hash(await Bun.file(skillFile).text())});
+  promptVersions.push({task,promptHash:hash(template),skillHash:hash(await Bun.file(skillFile).text()),workspaceExtensionHash:hash(await Bun.file(process.env.WORKFLOW_EVAL_EXTENSION_FILE || join(assets,"extensions/workflow-workspace.ts")).text())});
   const allow_rules=[...template.matchAll(/Api\((GET|POST) ([^)]+)\)/g)].map(m=>({type:"api",method:m[1],path:m[2]}));
   await writeFile(join(cwd,".screenpipe-permissions.json"),JSON.stringify({pipe_token:"fixture-workspace",api_base:base,pipe_name:task,pipe_dir:cwd,allow_rules,deny_rules:[],use_default_allowlist:false}));
   const instructions=template.replace(/^---[\s\S]*?---\s*/,"");
-  const child=Bun.spawn([process.execPath,pi,"--provider","screenpipe","--model",model,"--mode","json","--no-session","--no-extensions","--no-skills","--no-context-files","--no-prompt-templates","--skill",join(assets,"skills/screenpipe-api/SKILL.md"),"--skill",(process.env.WORKFLOW_EVAL_SKILL_FILE || join(assets,"skills/screenpipe-workflow-maintenance/SKILL.md")),"--extension",join(assets,"extensions/screenpipe-permissions.ts"),"--extension",join(assets,"extensions/workflow-workspace.ts"),"--extension",join(assets,"extensions/context-pruning.ts"),...transport,"--append-system-prompt",`Use only the isolated fictional recorder ${base}; never contact any other recorder or service. Writes are isolated.\n${instructions}`,"--print",`${discovery?"Discover distinct workflows in the recording":task==="workflow-maintain"?"Maintain the saved catalog":"Investigate or review your assigned drafts"} now. Current time: ${now}. Use the workspace tool. You have ${Math.max(1,Math.floor((deadline-Date.now())/1000))} seconds.`],{cwd,env:{...process.env,SCREENPIPE_PIPE_NAME:task,SCREENPIPE_LOCAL_API_URL:base,SCREENPIPE_LOCAL_API_KEY:"fixture-workspace",SCREENPIPE_PORT:String(server.port),BASH_ENV:join(homedir(),".screenpipe/pi-agent/bash-env.sh"),PI_CODING_AGENT_DIR:join(homedir(),".screenpipe/pi-config")},stdout:"pipe",stderr:"pipe"});
+  const child=Bun.spawn([process.execPath,pi,"--provider","screenpipe","--model",model,"--mode","json","--no-session","--no-extensions","--no-skills","--no-context-files","--no-prompt-templates","--skill",join(assets,"skills/screenpipe-api/SKILL.md"),"--skill",(process.env.WORKFLOW_EVAL_SKILL_FILE || join(assets,"skills/screenpipe-workflow-maintenance/SKILL.md")),"--extension",join(assets,"extensions/screenpipe-permissions.ts"),"--extension",(process.env.WORKFLOW_EVAL_EXTENSION_FILE || join(assets,"extensions/workflow-workspace.ts")),"--extension",join(assets,"extensions/context-pruning.ts"),...transport,"--append-system-prompt",`Use only the isolated fictional recorder ${base}; never contact any other recorder or service. Writes are isolated.\n${instructions}`,"--print",`${discovery?"Discover distinct workflows in the recording":task==="workflow-maintain"?"Maintain the saved catalog":"Investigate or review your assigned drafts"} now. Current time: ${now}. Use the workspace tool. You have ${Math.max(1,Math.floor((deadline-Date.now())/1000))} seconds.`],{cwd,env:{...process.env,SCREENPIPE_PIPE_NAME:task,SCREENPIPE_LOCAL_API_URL:base,SCREENPIPE_LOCAL_API_KEY:"fixture-workspace",SCREENPIPE_PORT:String(server.port),BASH_ENV:join(homedir(),".screenpipe/pi-agent/bash-env.sh"),PI_CODING_AGENT_DIR:join(homedir(),".screenpipe/pi-config")},stdout:"pipe",stderr:"pipe"});
   const timer=setTimeout(()=>child.kill(),Math.max(1,deadline-Date.now()));
   const [out,err,code]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);clearTimeout(timer);
   stdout+=out;stderr+=err;exit=code;
   if(code!==0||ws.cycle.status==="complete")break;
   const next=Object.values(ws.drafts).find((d:any)=>d.status==="open") as any;
-  task=next?.assignee||"workflow-review";
+  task=next?.assignee||(timingCase && !ws.cycle.finished["workflow-maintain"] ? "workflow-maintain" : "workflow-review");
   }
   await writeFile(join(root,"trajectory.jsonl"),stdout,{mode:0o600});await writeFile(join(root,"stderr.txt"),stderr,{mode:0o600});
   const events=stdout.split("\n").flatMap(s=>{try{return[JSON.parse(s)]}catch{return[]}});
@@ -172,10 +194,7 @@ try{
   const discovered=Object.values(ws.drafts).filter((d:any)=>d.status==="open"&&d.assignee!==task) as any[];
   let checks: Record<string, boolean>={exited:exit===0,sourceRead:noChange||reads>0,rejectedMisattribution:discovery||feedbackOnly||ws.drafts.bad?.status==="rejected",feedbackNotInvented:!feedbackOnly||(!greetingSearch&&published.length===0),completed:ws.cycle.status==="complete",correctPublication:discovery?published.length===0:noChange?published.length===0:published.length===1&&published[0].id==null&&published[0].stages.every((s:any)=>s.procedure.every((p:any)=>p.app===((aiMediated||repair)?"ChatGPT":"Receipts"))),conflictRecovery:!fault||injected,missingDraftRecovery:!missingDraft||(injected&&published.length===1&&ws.cycle.status==="complete"),privateVerified:verified};
   if(discovery)Object.assign(checks,{distinctJobs:discovered.some(d=>JSON.stringify(d.payload).includes(rows[0].timestamp)&&!JSON.stringify(d.payload).includes(rows[2].timestamp))&&discovered.some(d=>JSON.stringify(d.payload).includes(rows[2].timestamp)&&!JSON.stringify(d.payload).includes(rows[0].timestamp)),separateJobs:discovered.length>=2});
-  if(contextHistoryCount)Object.assign(checks,{
-    contextSnapshotExposed:events.some(e=>e.type==="tool_execution_end"&&e.toolName==="workflow_workspace"&&e.result?.details?.path?.includes(".workflow-context-")),
-    preservedResolvedHistory:Object.entries(ws.drafts).filter(([id])=>id.startsWith("resolved-")).length===contextHistoryCount&&Object.entries(ws.drafts).filter(([id])=>id.startsWith("resolved-")).every(([,d]:any)=>d.status==="rejected"),
-  });
+
   if(repair)Object.assign(checks,{repairedScope:published.length===1&&!/\b(tested and merged|PR is merged|merge the PR|runs tests and merges)\b/i.test(JSON.stringify(published[0].stages)+published[0].outcome),keptUserWork:published.length===1&&published[0].stages.some((s:any)=>s.procedure.some((p:any)=>p.timestamp===rows[0].timestamp))});
   if(reportedActions)Object.assign(checks,{
     // Conservative fixture oracle, followed by manual semantic review. This is
@@ -186,7 +205,12 @@ try{
   });
   if(missingDraft)Object.assign(checks,{harnessReportsError:events.some(e=>e.type==="tool_execution_end"&&e.toolName==="workflow_workspace"&&e.isError===true)});
   if(timing) checks={exited:exit===0, completed:ws.cycle.status==="complete", sourceRead:reads>0, privateVerified:verified, ...gradeTiming(published,existing,timing.expected)};
+  if(contextHistoryCount)Object.assign(checks,{
+    contextSnapshotExposed:events.some(e=>e.type==="tool_execution_end"&&e.toolName==="workflow_workspace"&&e.result?.details?.path?.includes(".workflow-context-")),
+    preservedResolvedHistory:Object.entries(ws.drafts).filter(([id])=>id.startsWith("resolved-")).length===contextHistoryCount&&Object.entries(ws.drafts).filter(([id])=>id.startsWith("resolved-")).every(([,d]:any)=>d.status==="rejected"),
+  });
   const passed=Object.values(checks).every(Boolean);
-  await writeFile(join(root,"result.json"),JSON.stringify({passed,checks,ws,published,requestLog,promptVersions,model,case:timingCase||null,now}),{mode:0o600});
+  await writeFile(join(root,"result.json"),JSON.stringify({passed,checks,ws,published,requestLog,promptVersions,model,case:timingCase||null,now,timeoutMs}),{mode:0o600});
+  if(timing && timing.expected.length && published.length) await writeFile(join(root,"native-timing-input.json"),JSON.stringify({payload:published.at(-1),rows:timing.rows,expectedAverageMinutes:7,expectedSamples:2}),{mode:0o600});
   console.log(JSON.stringify({passed,checks,artifact:root,model}));if(!passed)process.exitCode=1;
 }finally{server.stop(true);}

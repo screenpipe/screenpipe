@@ -57,7 +57,7 @@ require("node:fs").mkdirSync(out, { recursive: true });
       await field("Workflow title").focus();
     });
     await check("details stay visible while editing controls disclose on hover and focus", async () => {
-      initialBlocks = await page.getByRole("article", { name: "Step 1", exact: true }).getByRole("textbox").evaluateAll(es => es.filter(e => e.getAttribute("aria-label").startsWith("Block ")).map(e => e.value));
+      initialBlocks = await page.getByRole("article", { name: "Step 1", exact: true }).getByRole("textbox").evaluateAll(es => es.filter(e => e.getAttribute("aria-label").startsWith("Block ")).map(e => "value" in e ? e.value : e.innerText));
       assert.equal(initialBlocks.length, 3);
       assert(initialBlocks.every(Boolean));
       assert.equal(await page.getByText("Drag handles to reorder", { exact: false }).count(), 0);
@@ -95,7 +95,7 @@ require("node:fs").mkdirSync(out, { recursive: true });
       const toggle = references.getByRole("button", { name: "1 source", exact: true });
       for (const width of [1440, 720, 390]) {
         await page.setViewportSize({ width, height: 1000 });
-        if (width < 680) await button("Collapse left sidebar").click();
+        if (width < 680) { await button("Open left sidebar").waitFor(); assert.equal(await page.getByRole("complementary", { name: "Navigation sidebar" }).isVisible(), false); }
         await toggle.click();
         const sources = references.getByRole("region", { name: "Sources for Collect sources", exact: true });
         const sourceBounds = await sources.boundingBox();
@@ -252,8 +252,8 @@ require("node:fs").mkdirSync(out, { recursive: true });
       await button("Open map").first().click();
       assert.equal(await field("Workflow title").inputValue(), "Research brief");
       assert.equal(await field("Step 1 title").inputValue(), "Collect sources");
-      assert.equal(await field("Block 4 in step 1").inputValue(), "Check the source author.");
-      assert.equal(await field("Block 1 in step 1").inputValue(), initialBlocks[0]);
+      assert.equal(await field("Block 4 in step 1").innerText(), "Check the source author.");
+      assert.equal(await field("Block 1 in step 1").innerText(), initialBlocks[0]);
     });
     await check("concurrent change rejected with local draft retained", async () => {
       await page.evaluate(() => {
@@ -283,7 +283,7 @@ require("node:fs").mkdirSync(out, { recursive: true });
     await page.screenshot({ path: out + "/inline-workflow.png" });
     for (const width of [1050, 720, 390]) {
       await page.setViewportSize({ width, height: 1000 });
-      if (width < 680) await button("Collapse left sidebar").click();
+      if (width < 680) { await button("Open left sidebar").waitFor(); assert.equal(await page.getByRole("complementary", { name: "Navigation sidebar" }).isVisible(), false); }
       await check(`fields and controls fit at ${width}px`, async () => {
         await page.waitForTimeout(100);
         const bad = await page.locator("main textarea, main button").evaluateAll(es => es.filter(e => e.getBoundingClientRect().width && (e.getBoundingClientRect().right > innerWidth + 1 || (e.tagName === "TEXTAREA" && e.scrollHeight > e.clientHeight + 3))).map(e => e.getAttribute("aria-label") || e.textContent));
@@ -319,7 +319,7 @@ require("node:fs").mkdirSync(out, { recursive: true });
       assert.equal(await legacy.evaluate(() => JSON.parse(localStorage.getItem("screenpipe:fictional-workflow-editor-preview")).analysis.workflows[0].stages[0].evidence[0].detail), stage.evidence[0].detail);
       await legacy.screenshot({ path: out + "/source-metadata-only.png" });
       await legacy.setViewportSize({ width: 390, height: 900 });
-      await legacy.getByRole("button", { name: "Collapse left sidebar", exact: true }).click();
+      await legacy.getByRole("button", { name: "Open left sidebar", exact: true }).waitFor();
       assert(await sources.evaluate(e => e.getBoundingClientRect().right <= innerWidth));
       await context.close();
     });

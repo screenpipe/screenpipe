@@ -636,16 +636,30 @@ pub fn normalize_analysis(
             ) else {
                 continue;
             };
-            // One captured document can contain evidence for several steps.
-            // Validate each quote against its source; consuming the frame once
-            // silently removed later stages from otherwise supported drafts.
-            let evidence =
-                clean_evidence(stage.get("evidence").unwrap_or(&Value::Null), 4, catalog);
+            // One capture may support several stages. Validate all exact sources
+            // before limiting supplemental display references, and retain every
+            // source cited by a verified procedure.
+            let all_evidence = clean_evidence(
+                stage.get("evidence").unwrap_or(&Value::Null),
+                catalog.points.len(),
+                catalog,
+            );
             let confidence = bounded_number(stage, "confidence", 100);
-            if !detailed_contract && (evidence.is_empty() || confidence < 50) {
+            if !detailed_contract && (all_evidence.is_empty() || confidence < 50) {
                 continue;
             }
-            let procedure = normalize_procedure(stage, &evidence);
+            let procedure = normalize_procedure(stage, &all_evidence);
+            let evidence: Vec<Value> = all_evidence
+                .into_iter()
+                .enumerate()
+                .filter(|(index, source)| {
+                    *index < 4
+                        || procedure.iter().any(|item| {
+                            item["timestamp"] == source["timestamp"] && item["app"] == source["app"]
+                        })
+                })
+                .map(|(_, source)| source)
+                .collect();
             let mut open_questions = string_list(stage, "openQuestions", 6);
             if procedure.is_empty() {
                 open_questions.push("This proposed step has no verified procedural detail. Confirm what actually happened.".to_string());
@@ -1591,6 +1605,50 @@ mod quote_tests {
         assert!(result["workflows"][0]["captureSequence"]
             .as_array()
             .is_none_or(Vec::is_empty));
+    }
+
+    #[test]
+    fn procedure_keeps_cited_sources_beyond_the_supplemental_display_limit() {
+        let at = DateTime::parse_from_rfc3339("2026-09-18T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut catalog = EvidenceCatalog::default();
+        for minute in 0..6 {
+            catalog.points.push(EvidencePoint {
+                timestamp: at + ChronoDuration::minutes(minute),
+                app: "Receipts".into(),
+                detail: format!("Verified receipt action number {minute}."),
+                source: "screen".into(),
+                speaker: None,
+            });
+        }
+        let references: Vec<Value> = catalog
+            .points
+            .iter()
+            .map(|p| json!({"timestamp":p.timestamp.to_rfc3339(),"app":p.app}))
+            .collect();
+        let step = |i: usize| json!({"kind":"action","text":"Verify the receipt.","timestamp":references[i]["timestamp"],"app":"Receipts","quote":catalog.points[i].detail});
+        let raw = json!({"evidenceVersion":2,"workflows":[{"title":"Receipt review","description":"Review and save a receipt","stages":[
+            {"name":"Review","description":"Review the receipt","evidence":references,"procedure":[step(0),step(4)]},
+            {"name":"Save","description":"Save the receipt","evidence":[references[1]],"procedure":[step(1)]}
+        ]}]});
+        let result = normalize_analysis(raw.clone(), 90, &catalog).unwrap();
+        workspace::validate_publication(&raw, &result).unwrap();
+        let stage = &result["workflows"][0]["stages"][0];
+        assert_eq!(stage["procedure"].as_array().unwrap().len(), 2);
+        let sources = stage["evidence"].as_array().unwrap();
+        assert!(sources
+            .iter()
+            .any(|s| s["timestamp"] == references[4]["timestamp"]));
+        assert!(!sources
+            .iter()
+            .any(|s| s["timestamp"] == references[5]["timestamp"]));
+        // A late reference is not permission to accept an unsupported quote.
+        let mut invalid = raw;
+        invalid["workflows"][0]["stages"][0]["procedure"][1]["quote"] =
+            json!("An invented receipt action.");
+        let normalized = normalize_analysis(invalid.clone(), 90, &catalog).unwrap();
+        assert!(workspace::validate_publication(&invalid, &normalized).is_err());
     }
 
     #[test]

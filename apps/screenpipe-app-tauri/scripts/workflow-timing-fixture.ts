@@ -1,10 +1,11 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
-export type TimingCase = "complete" | "sparse" | "preserve";
+export type TimingCase = "complete" | "sparse" | "preserve" | "historical" | "static-chat";
 export function timingFixture(now: string, scenario: TimingCase) {
-  const at = (minutes: number) => new Date(Date.parse(now) - 86400000 + minutes * 60000).toISOString();
+  const at = (minutes: number) => new Date(Date.parse(now) - (scenario === "historical" ? 3 : 1) * 86400000 + minutes * 60000).toISOString();
   const row = (minute: number, quote: string, app = "Receipts") => ({ timestamp: at(minute), app, quote });
-  const rows = scenario === "sparse" ? [
+  const staticChat = "User: Draft a reply about invoice INV-123. Assistant: Here is a draft explaining the missing receipt. User: Make the opening shorter and ask for the receipt attachment. Assistant: Please send the receipt attachment for invoice INV-123 so we can review it.";
+  const rows = scenario === "static-chat" ? [row(0, staticChat, "ChatGPT"), row(60, staticChat, "ChatGPT")] : scenario === "sparse" ? [
     row(0, "Invoice INV-123 is visible in the receipt list. No editing activity is visible."),
     row(60, "Invoice INV-123 is visible in the receipt list. No save confirmation or editing activity is visible."),
   ] : [
@@ -20,7 +21,7 @@ export function timingFixture(now: string, scenario: TimingCase) {
     row(68, "Receipt INV-456 saved successfully. Receipt entry complete; new blank form is closed."),
   ];
   const source = (index: number) => ({ ...rows[index] });
-  const expected = scenario === "sparse" ? [] : [
+  const expected = scenario === "sparse" || scenario === "static-chat" ? [] : [
     { start: source(0), end: source(3), summary: "Enter and save receipt INV-123, with editing observed between the boundaries." },
     { start: source(5), end: source(9), summary: "Enter and save receipt INV-456, with editing observed between the boundaries." },
   ];
@@ -37,6 +38,8 @@ export function gradeTiming(published: any[], existing: any, expected: any[]) {
     exactOccurrences: runs.length === expected.length && expected.every(e => runs.some((r: any) => key(r) === key(e))),
     sourceBoundaries: runs.every((r: any) => expected.some(e => key(e) === key(r) && ["start", "end"].every(p =>
       r[p]?.app === e[p].app && typeof r[p]?.quote === "string" && r[p].quote.length >= 12 && e[p].quote.includes(r[p].quote)))),
+    // Regression oracle for a witnessed overclaim; semantic review is still needed.
+    noQuantifiedActiveTime: runs.every((r: any) => !/\b\d+\s*(?:minutes?|mins?|hours?)\s+(?:of\s+)?active\b/i.test(r.summary ?? "")),
     explainedUnknown: expected.length > 0 || [...(workflow.limitations ?? []), ...(workflow.openQuestions ?? [])].some(s => /timing|duration|boundar|elapsed/i.test(s)),
   };
 }

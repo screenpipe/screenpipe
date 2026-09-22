@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite": "screenpipe-app-coding-agent-regressions",
-  "dataset_version": "2026-09-21.11",
+  "dataset_version": "2026-09-22.4",
   "suite_type": "regression",
   "owner": "screenpipe engineering",
   "policy": {
@@ -2196,6 +2196,72 @@
           }
         ],
         "command": "cd apps/screenpipe-app-tauri && node node_modules/vitest/vitest.mjs run lib/__tests__/eval-mcp-home-scope.test.ts --config eval-mcp-home-scope.config.mjs"
+      }
+    },
+    {
+      "id": "app-external-chat-scan-boundary",
+      "name": "Bound recent external chat discovery without losing eligible sources",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "c03f24bba7f180adf95a84c4855da13886ef0375"
+      },
+      "base_ref": "d3517d8396a56488c40684b442e52901c6de2199",
+      "oracle_ref": "c03f24bba7f180adf95a84c4855da13886ef0375",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/lib/chat/external-chat-import.ts"
+      ],
+      "gate": "advisory",
+      "tags": [
+        "regression",
+        "chat",
+        "local-history",
+        "bounded-io",
+        "privacy"
+      ],
+      "prompt": "Opening local chat import can traverse a large archive before showing recent conversations. Repair scanExternalChatHistory while preserving its discovery API. Only include sessions modified within the past seven days, including the exact cutoff, and report lookbackDays=7. Codex stores direct JSONL files in sessions/YYYY/MM/DD: avoid inspecting older date partitions and nested sessions. On a recent partition ordered by session filename, return the latest 100 eligible files and stop inspecting file metadata once 100 eligible files are found. Do not let files over 32 MiB consume that cap; exactly 32 MiB remains eligible. Report availableCount, omittedByLimit and skippedTooLarge consistently: 150 eligible recent files yields 100 candidates and 50 omitted; three newest oversized files followed by 105 eligible files yields 100 candidates, three oversized and five omitted. Preserve Claude direct project JSONL discovery, case-insensitive extensions and its recency/size filters, excluding subagents and non-JSONL files. Missing roots, missing dates, unreadable individual files or Claude projects must not hide other readable sources. Preserve candidate identity/path/metadata and total counts, retain independent sources and reflect newly added files on later scans. Discovery must only inspect directory and file metadata; do not read or parse transcript contents, write source or conversation data, invalidate caches, emit events or use the network. Use synthetic histories only. No particular private helper, sorting implementation or UI wording is required.",
+      "agent_timeout_seconds": 900,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/app-external-chat-scan.test.js",
+            "destination_path": "evals/coding-agent/graders/app-external-chat-scan.test.js"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/app-external-chat-scan.test.js"
+      }
+    },
+    {
+      "id": "ai-gateway-tts-wav-response",
+      "name": "Return requested WAV audio without mislabelling provider bytes",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "ffff7de62e09bcd7058e219dbc13620e38c7189a"
+      },
+      "base_ref": "b68c120070351b90afb9e1df1e5f2c866f7fe396",
+      "oracle_ref": "ffff7de62e09bcd7058e219dbc13620e38c7189a",
+      "oracle_paths": [
+        "packages/ai-gateway/src/utils/voice-utils.ts"
+      ],
+      "gate": "advisory",
+      "tags": [
+        "regression",
+        "gateway",
+        "tts",
+        "binary-response",
+        "provider-failure"
+      ],
+      "prompt": "The text-to-speech handler labels provider bytes audio/wav even when the provider sends another format. Repair the existing handleTextToSpeech/textToSpeech path. The HTTP handler must request linear16 audio in a WAV container from the existing speech endpoint, using the default voice or the explicitly supported voice, the configured provider authorization and the literal text. A successful provider WAV response must reach the caller byte-for-byte with status200 and audio/wav. Empty or shorter-than12-byte results, MP3 bytes, and buffers without both RIFF and WAVE signatures must produce a JSON error with status500, never successful audio. This is a format/signature boundary, not a full WAV decoder requirement. Provider HTTP rejection, transport rejection or body-read failure must similarly fail once without automatic retries, and a later explicit request must recover. Preserve rejection of missing/nonstring/empty text and unsupported voices with400 before provider access; whitespace-only text remains a500 error without provider access. Preserve the utility public API for explicitly requested non-WAV encoding such as mp3: forward that encoding, do not force a WAV container or WAV validation, and preserve successful bytes. Use only synthetic provider responses and text. No specific private helper name or implementation structure is required. This evaluates the actual TTS handler and utility, not gateway authentication/rate limits, transcription, real playback, provider connectivity or full container integrity.",
+      "agent_timeout_seconds": 900,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/tts-wav.test.js",
+            "destination_path": "evals/coding-agent/graders/tts-wav.test.js"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/tts-wav.test.js"
       }
     }
   ]
