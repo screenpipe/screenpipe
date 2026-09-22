@@ -14,6 +14,14 @@ const play = () => fireEvent.click(screen.getByRole("button", { name: `View reco
 afterEach(cleanup);
 
 describe("step evidence media", () => {
+  it("shows the verified screenshot large by default without a redundant source list", () => {
+    render(<WorkflowStepEvidence workflow={workflow} stage={stage} platform={{} as WorkflowsPlatform} />);
+    expect(screen.getByRole("img", { name: `Captured reference for ${stage.name}` })).toBeVisible();
+    expect(screen.getByRole("button", { name: `Reduce screenshot for ${stage.name}` })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByRole("button", { name: /sources?$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: `Sources for ${stage.name}` })).not.toBeInTheDocument();
+  });
+
   it("opens verified captures in native Timeline without loading an inline video", async () => {
     const open = vi.fn().mockResolvedValue(undefined);
     const load = vi.fn();

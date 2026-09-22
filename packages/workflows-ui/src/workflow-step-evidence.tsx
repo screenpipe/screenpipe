@@ -2,7 +2,7 @@
 // https://screenpipe.com
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ChevronDown, Maximize2, Minimize2, Play, X } from "lucide-react";
 import type { WorkflowMap, WorkflowStage } from "./model";
 import type { WorkflowsPlatform } from "./platform";
@@ -16,17 +16,12 @@ const when = (value: string) => Number.isFinite(Date.parse(value))
 export function WorkflowStepEvidence({ workflow, stage, platform }: {
   workflow: WorkflowMap; stage: WorkflowStage; platform: WorkflowsPlatform;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const [sourcesOpen, setSourcesOpen] = useState(false);
-  const sourcesId = useId();
+  const [expanded, setExpanded] = useState(true);
   const [playing, setPlaying] = useState(false);
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState(false);
   const replay = useMemo(() => ({ ...workflow, stages: [stage] }), [workflow, stage]);
   const screenshot = stage.screenshot?.visualVerified ? stage.screenshot : null;
-  const sources = [...(stage.procedure ?? []).filter(p => p.quote).map(p => ({ text: p.quote, timestamp: p.timestamp, app: p.app })),
-    ...stage.evidence.map(e => ({ text: e.detail, timestamp: e.timestamp, app: e.app }))]
-    .filter((entry, index, all) => entry.text && all.findIndex(e => e.text === entry.text && e.timestamp === entry.timestamp && e.app === entry.app) === index);
   const canReplay = platform.loadWorkflowRecording && stage.evidence.some(e => !["audio", "meeting"].includes(e.source ?? "") && Number.isFinite(Date.parse(e.timestamp)));
   const openRecording = async () => {
     if (!platform.openCapturedMoment) { setPlaying(true); return; }
@@ -63,13 +58,7 @@ export function WorkflowStepEvidence({ workflow, stage, platform }: {
     <div className={styles.links}>
       {(canReplay || (screenshot && platform.openCapturedMoment)) && !playing && <button type="button" disabled={opening} onClick={() => void openRecording()} aria-label={`${platform.openCapturedMoment ? "Open" : "View"} recording for ${stage.name}`}><Play size={13} />{opening ? "Opening…" : platform.openCapturedMoment ? "Open recording" : "View recording"}</button>}
       {openError && <span role="alert">Could not open this capture. Try again.</span>}
-      {!!sources.length && <button type="button" className={styles.sourceToggle} aria-expanded={sourcesOpen} aria-controls={sourcesId} onClick={() => setSourcesOpen(!sourcesOpen)}>{sources.length} source{sources.length === 1 ? "" : "s"}<ChevronDown size={12} /></button>}
     </div>
-    {!!sources.length && <div id={sourcesId} hidden={!sourcesOpen} className={styles.sourceList} role="region" aria-label={`Sources for ${stage.name}`}>
-          {sources.map((source, index) => <div className={styles.sourceMeta} key={`${source.timestamp}-${index}`}>
-            {source.app || "Captured source"} · {when(source.timestamp)}
-          </div>)}
-    </div>}
     {!!stage.openQuestions?.length && <details className={styles.questions}><summary>Unresolved details<ChevronDown size={12} /></summary><ul>{stage.openQuestions.map(q => <li key={q}><WorkflowQuestion workflow={workflow} question={q} stage={stage.name} interactive={!!platform.assistant?.saveFeedback} /></li>)}</ul></details>}
   </section>;
 }
