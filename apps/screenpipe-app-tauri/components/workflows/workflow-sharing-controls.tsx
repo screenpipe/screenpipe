@@ -1,6 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 "use client";
+import { PROD_WEB_BASE, screenpipeWebUrl } from "@/lib/web-url";
 import { useEffect, useRef, useState } from "react";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
@@ -106,7 +107,7 @@ export function WorkflowSharingControls({ compact = false, onDone, onUnavailable
     {enabled && !compact && <a href="#workflow-cloud-redaction" className="block text-xs underline">Cloud redaction is on. View settings</a>}
     <details className="text-xs text-muted-foreground"><summary className="cursor-pointer rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground">Sharing details</summary>
       <p className="mt-2">Replies may quote your private context. Screenpipe keeps shared text for up to 30 days, plus the next hourly cleanup. Cloud redaction is required while sharing is on. Recording settings remain separate. You can stop sharing and delete shared copies in Privacy settings. Model training requires separate permission and an eligibility review; no training export is enabled in this version.</p>
-      <a href="https://screenpipe.com/privacy" target="_blank" rel="noreferrer" className="mt-2 inline-block underline">Privacy policy</a>
+      <a href={screenpipeWebUrl("/privacy", PROD_WEB_BASE)} target="_blank" rel="noreferrer" className="mt-2 inline-block underline">Privacy policy</a>
     </details>
     {!compact && <div className="flex flex-wrap gap-2">
       {!!local && <Button size="sm" variant="outline" disabled={busy} onClick={() => void change(false, false)}>Turn off sharing</Button>}

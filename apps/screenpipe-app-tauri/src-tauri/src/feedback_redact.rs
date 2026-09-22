@@ -583,4 +583,43 @@ mod workflow_contribution_tests {
             .await
             .is_err());
     }
+
+    /// Bounded synthetic-data smoke eval through the exact production command.
+    /// Run explicitly; ordinary tests never depend on the live enclave.
+    #[tokio::test]
+    #[ignore = "requires the live attested Tinfoil enclave"]
+    async fn live_workflow_contribution_redaction_eval() {
+        let cases: &[(&str, &[&str])] = &[
+            ("Alice", &["Alice"]),
+            (
+                "Send the invoice to alice@example.com or call 415-555-0142.",
+                &["alice@example.com", "415-555-0142"],
+            ),
+            (
+                "The customer Marcus Chen lives at 123 Maple Street, Springfield.",
+                &["Marcus Chen", "123 Maple Street"],
+            ),
+            (
+                "My password is hunter2 and my API key is sk-test-synthetic-0123456789abcdef.",
+                &["hunter2", "sk-test-synthetic-0123456789abcdef"],
+            ),
+            (
+                "Contact Zoë Martin at zoe@example.org to review the workflow.",
+                &["Zoë Martin", "zoe@example.org"],
+            ),
+        ];
+        for (index, (input, sensitive)) in cases.iter().enumerate() {
+            let output = redact_workflow_contribution((*input).into())
+                .await
+                .unwrap_or_else(|error| panic!("live case {index}: {error}"));
+            assert!(!output.trim().is_empty(), "empty live case {index}");
+            for value in *sensitive {
+                assert!(
+                    !output.to_lowercase().contains(&value.to_lowercase()),
+                    "sensitive value survived live case {index}"
+                );
+            }
+            println!("live workflow redaction case {index}: passed");
+        }
+    }
 }

@@ -1,9 +1,10 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
+import { PROD_WEB_BASE, screenpipeWebUrl } from "@/lib/web-url";
 import { commands } from "@/lib/utils/tauri";
 
 export const SHARING_NOTICE_VERSION = "2026-09-21";
-const endpoint = "https://screenpipe.com/api/trajectories";
+const endpoint = screenpipeWebUrl("/api/trajectories", PROD_WEB_BASE);
 export type LocalSharing = { accountId: string; epoch: string; enabledAt: number; priorBackend: "local" | "tinfoil" };
 export type SharingStatus = {
   accountId: string; available: boolean; sharing: boolean; training: boolean;
