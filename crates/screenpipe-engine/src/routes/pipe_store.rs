@@ -317,8 +317,15 @@ async fn pipe_store_install_with_base(
 pub async fn pipe_store_update(
     State(pm): State<SharedPipeManager>,
     Json(body): Json<StoreInstallRequest>,
-) -> Json<Value> {
-    let base = api_base_url();
+) -> Response {
+    pipe_store_update_with_base(pm, body, api_base_url()).await
+}
+
+async fn pipe_store_update_with_base(
+    pm: SharedPipeManager,
+    body: StoreInstallRequest,
+    base: String,
+) -> Response {
     let client = &*REGISTRY_CLIENT;
 
     // 1. Fetch latest from registry
@@ -330,9 +337,13 @@ pub async fn pipe_store_update(
                 return Json(
                     json!({ "error": format!("failed to parse registry response: {}", e) }),
                 )
+                .into_response()
             }
         },
-        Err(e) => return Json(json!({ "error": format!("failed to reach registry: {}", e) })),
+        Err(e) => {
+            return Json(json!({ "error": format!("failed to reach registry: {}", e) }))
+                .into_response()
+        }
     };
 
     let source_md = match detail
@@ -341,7 +352,9 @@ pub async fn pipe_store_update(
         .and_then(|v| v.as_str())
     {
         Some(md) => md.to_string(),
-        None => return Json(json!({ "error": "pipe not found or missing source_md" })),
+        None => {
+            return Json(json!({ "error": "pipe not found or missing source_md" })).into_response()
+        }
     };
 
     let version = detail
@@ -356,8 +369,14 @@ pub async fn pipe_store_update(
         .update_pipe_from_store(&body.slug, &source_md, &body.slug, version)
         .await
     {
-        Ok(()) => Json(json!({ "success": true, "slug": body.slug, "version": version })),
-        Err(e) => Json(json!({ "error": format!("failed to update pipe: {}", e) })),
+        Ok(()) => {
+            Json(json!({ "success": true, "slug": body.slug, "version": version })).into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(crate::pipes_api::pipe_setup_failure("update", &e)),
+        )
+            .into_response(),
     }
 }
 
@@ -578,6 +597,60 @@ mod tests {
     use axum::body::to_bytes;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn rejected_store_adoption_returns_failure_status_and_safe_cause() {
+        let server = MockServer::start().await;
+        let source_md = "---\nschedule: manual\nenabled: true\n---\nUpdated task.";
+        Mock::given(method("GET"))
+            .and(path("/api/pipes/store/skill-learning"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "source_md": source_md,
+                "version": 2,
+            })))
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let pipes_dir = dir.path().join("pipes");
+        let mut manager = screenpipe_core::pipes::PipeManager::new(
+            pipes_dir.clone(),
+            std::collections::HashMap::new(),
+            None,
+            3030,
+        );
+        manager.set_max_non_template_pipes(Some(2));
+        manager.install_builtin_pipes().unwrap();
+        for name in ["digital-clone", "speaker-reconciliation"] {
+            manager
+                .install_pipe_from_store(source_md, name, 1)
+                .await
+                .unwrap();
+        }
+        let before = std::fs::read(pipes_dir.join("skill-learning/pipe.md")).unwrap();
+        let pm = std::sync::Arc::new(tokio::sync::Mutex::new(manager));
+        let response = pipe_store_update_with_base(
+            pm.clone(),
+            StoreInstallRequest {
+                slug: "skill-learning".into(),
+            },
+            server.uri(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error_code"], "free_pipe_limit_reached");
+        assert_ne!(body["success"], true);
+        assert_eq!(
+            std::fs::read(pipes_dir.join("skill-learning/pipe.md")).unwrap(),
+            before
+        );
+        assert!(!pipes_dir.join("skill-learning/pipe.md.bak").exists());
+        let manager = pm.lock().await;
+        for name in ["digital-clone", "speaker-reconciliation"] {
+            assert!(manager.get_pipe(name).await.unwrap().config.enabled);
+        }
+    }
 
     #[tokio::test]
     async fn install_preserves_safe_registry_failure_without_installing() {
