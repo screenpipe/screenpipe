@@ -9,8 +9,12 @@ import { SidebarFooter } from "@/components/sidebar-footer";
 import { IntegratedWorkflows, workflowAgentTask } from "./integrated-workflows";
 
 vi.mock("@/lib/workflows/desktop-platform", async () => {
-  const { createFixtureWorkflowsPlatform } = await import("@screenpipe/workflows-ui/fixture");
-  return { desktopWorkflowsPlatform: createFixtureWorkflowsPlatform() };
+  const { createFixtureWorkflowsPlatform, fixtureWorkflowAnalysis } = await import("@screenpipe/workflows-ui/fixture");
+  return { desktopWorkflowsPlatform: {
+    ...createFixtureWorkflowsPlatform(),
+    // jsdom cannot rasterize the browser fixture's SVG screenshots.
+    loadCapturedWork: async () => structuredClone(fixtureWorkflowAnalysis),
+  } };
 });
 vi.mock("@/components/connected-share-dialog", () => ({
   ConnectedShareDialog: ({ open, artifact, onOpenChange, onConnect, connectionsRevision }: any) => open ? <div role="dialog" aria-label="Sharing review"><h2>{artifact.title}</h2><p>{artifact.surface}</p><span>Connections revision {connectionsRevision}</span><button onClick={() => onConnect("slack")}>Connect Slack</button><button onClick={() => onOpenChange(false)}>Close sharing</button></div> : null,
@@ -47,11 +51,13 @@ it("keeps Settings and Help in the footer and opens workspace shortcuts from Hel
 it("opens the existing sharing review from the selected workflow in the main app", async () => {
   window.history.replaceState(null, "", "/home?mode=workflows");
   render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
-  fireEvent.click(await screen.findByRole("button", { name: "Build my workflow catalog" }));
+  // Wait for saved data instead of interacting with a transient empty screen.
   const card = (await screen.findByRole("heading", { name: "Research synthesis" })).closest("article")!;
   fireEvent.click(within(card).getByRole("button", { name: "Open map" }));
   expect(screen.queryByRole("dialog", { name: "Sharing review" })).not.toBeInTheDocument();
   const agents = screen.getByRole("group", { name: "Run Research synthesis in another agent" });
+  expect(agents.parentElement).toContainElement(screen.getByRole("button", { name: "Create SOP" }));
+  fireEvent.focus(within(agents).getByRole("button", { name: "Choose an AI agent" }));
   for (const name of ["Claude", "Cursor", "Codex"]) {
     expect(within(agents).getByRole("button", { name: `Run in ${name}` })).toBeVisible();
   }
@@ -70,7 +76,7 @@ it("opens the existing sharing review from the selected workflow in the main app
   expect(screen.getByRole("dialog", { name: "Sharing review" })).toHaveTextContent("Connections revision 2");
   fireEvent.click(screen.getByRole("button", { name: "Close sharing" }));
   expect(screen.queryByRole("dialog", { name: "Sharing review" })).not.toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "Research synthesis" })).toBeVisible();
+  expect(screen.getByRole("textbox", { name: "Workflow title" })).toHaveValue("Research synthesis");
 });
 
 vi.mock("@/lib/workflows/rollout", () => ({ useWorkflowsRolloutEnabled: () => true, requireWorkflowsRollout: vi.fn() }));

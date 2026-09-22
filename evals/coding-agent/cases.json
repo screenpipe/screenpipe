@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite": "screenpipe-app-coding-agent-regressions",
-  "dataset_version": "2026-09-21.2",
+  "dataset_version": "2026-09-22.5",
   "suite_type": "regression",
   "owner": "screenpipe engineering",
   "policy": {
@@ -2150,6 +2150,157 @@
           }
         ],
         "command": "\"${BUN_BIN:-bun}\" test apps/screenpipe-app-tauri/scripts/i18n/eval-localization-recovery.test.js"
+      }
+    },
+    {
+      "id": "app-mcp-home-config-scope",
+      "name": "Connect home-level MCP configuration without forbidden directory creation",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "c06dc27999095443e8815c890d9c7989d53dc5fb"
+      },
+      "base_ref": "073b9d31ad8759db0fd8c33c5ac66972fe4431aa",
+      "oracle_ref": "c06dc27999095443e8815c890d9c7989d53dc5fb",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/lib/ai-tools-mcp.ts"
+      ],
+      "gate": "advisory",
+      "trigger_paths": [
+        "apps/screenpipe-app-tauri/lib/ai-tools-mcp.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "mcp",
+        "configuration",
+        "data-integrity"
+      ],
+      "prompt": "Settings cannot connect Claude Code when filesystem policy permits its configuration file but refuses operations on the existing home directory itself. Restore explicit connect and disconnect for a home-level config, including trailing separators on POSIX and Windows and a native-resolved Windows verbatim path. Existing unrelated settings and servers must survive; preserve the previous file in a backup and leave no temporary files after successful updates. First-time configuration creation must work. Preserve nearby Cursor JSON and Codex TOML behavior: update the resolved target instead of replacing its link, refuse resolution failures and invalid or unreadable files without overwriting them, preserve the local API credential and tool identity, avoid duplicate differently-cased Screenpipe entries, keep at most the two newest backups, and keep disconnect idempotent. Keep the public connection interfaces usable. This task grades Settings-side file effects using synthetic platform ports; native filesystem permission acceptance is outside its scope. Do not access real credentials, configs or agents.",
+      "agent_timeout_seconds": 1200,
+      "grader_dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 90,
+        "fixtures": [
+          {
+            "local_path": "graders/mcp-home-scope.fixture.ts",
+            "destination_path": "apps/screenpipe-app-tauri/lib/__tests__/eval-mcp-home-scope.test.ts"
+          },
+          {
+            "local_path": "graders/mcp-home-scope.config.mjs",
+            "destination_path": "apps/screenpipe-app-tauri/eval-mcp-home-scope.config.mjs"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && node node_modules/vitest/vitest.mjs run lib/__tests__/eval-mcp-home-scope.test.ts --config eval-mcp-home-scope.config.mjs"
+      }
+    },
+    {
+      "id": "app-external-chat-scan-boundary",
+      "name": "Bound recent external chat discovery without losing eligible sources",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "c03f24bba7f180adf95a84c4855da13886ef0375"
+      },
+      "base_ref": "d3517d8396a56488c40684b442e52901c6de2199",
+      "oracle_ref": "c03f24bba7f180adf95a84c4855da13886ef0375",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/lib/chat/external-chat-import.ts"
+      ],
+      "gate": "advisory",
+      "tags": [
+        "regression",
+        "chat",
+        "local-history",
+        "bounded-io",
+        "privacy"
+      ],
+      "prompt": "Opening local chat import can traverse a large archive before showing recent conversations. Repair scanExternalChatHistory while preserving its discovery API. Only include sessions modified within the past seven days, including the exact cutoff, and report lookbackDays=7. Codex stores direct JSONL files in sessions/YYYY/MM/DD: avoid inspecting older date partitions and nested sessions. On a recent partition ordered by session filename, return the latest 100 eligible files and stop inspecting file metadata once 100 eligible files are found. Do not let files over 32 MiB consume that cap; exactly 32 MiB remains eligible. Report availableCount, omittedByLimit and skippedTooLarge consistently: 150 eligible recent files yields 100 candidates and 50 omitted; three newest oversized files followed by 105 eligible files yields 100 candidates, three oversized and five omitted. Preserve Claude direct project JSONL discovery, case-insensitive extensions and its recency/size filters, excluding subagents and non-JSONL files. Missing roots, missing dates, unreadable individual files or Claude projects must not hide other readable sources. Preserve candidate identity/path/metadata and total counts, retain independent sources and reflect newly added files on later scans. Discovery must only inspect directory and file metadata; do not read or parse transcript contents, write source or conversation data, invalidate caches, emit events or use the network. Use synthetic histories only. No particular private helper, sorting implementation or UI wording is required.",
+      "agent_timeout_seconds": 900,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/app-external-chat-scan.test.js",
+            "destination_path": "evals/coding-agent/graders/app-external-chat-scan.test.js"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/app-external-chat-scan.test.js"
+      }
+    },
+    {
+      "id": "ai-gateway-tts-wav-response",
+      "name": "Return requested WAV audio without mislabelling provider bytes",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "ffff7de62e09bcd7058e219dbc13620e38c7189a"
+      },
+      "base_ref": "b68c120070351b90afb9e1df1e5f2c866f7fe396",
+      "oracle_ref": "ffff7de62e09bcd7058e219dbc13620e38c7189a",
+      "oracle_paths": [
+        "packages/ai-gateway/src/utils/voice-utils.ts"
+      ],
+      "gate": "advisory",
+      "tags": [
+        "regression",
+        "gateway",
+        "tts",
+        "binary-response",
+        "provider-failure"
+      ],
+      "prompt": "The text-to-speech handler labels provider bytes audio/wav even when the provider sends another format. Repair the existing handleTextToSpeech/textToSpeech path. The HTTP handler must request linear16 audio in a WAV container from the existing speech endpoint, using the default voice or the explicitly supported voice, the configured provider authorization and the literal text. A successful provider WAV response must reach the caller byte-for-byte with status200 and audio/wav. Empty or shorter-than12-byte results, MP3 bytes, and buffers without both RIFF and WAVE signatures must produce a JSON error with status500, never successful audio. This is a format/signature boundary, not a full WAV decoder requirement. Provider HTTP rejection, transport rejection or body-read failure must similarly fail once without automatic retries, and a later explicit request must recover. Preserve rejection of missing/nonstring/empty text and unsupported voices with400 before provider access; whitespace-only text remains a500 error without provider access. Preserve the utility public API for explicitly requested non-WAV encoding such as mp3: forward that encoding, do not force a WAV container or WAV validation, and preserve successful bytes. Use only synthetic provider responses and text. No specific private helper name or implementation structure is required. This evaluates the actual TTS handler and utility, not gateway authentication/rate limits, transcription, real playback, provider connectivity or full container integrity.",
+      "agent_timeout_seconds": 900,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/tts-wav.test.js",
+            "destination_path": "evals/coding-agent/graders/tts-wav.test.js"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/tts-wav.test.js"
+      }
+    },
+    {
+      "id": "ai-gateway-paid-tts-dispatch",
+      "name": "Enforce paid access before text-to-speech provider work",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "6301ad06342d4bad420598db86db9e44423b05b6"
+      },
+      "base_ref": "8d2fd0135dbfe71e64aa9db2c4300601648c2077",
+      "oracle_ref": "6301ad06342d4bad420598db86db9e44423b05b6",
+      "oracle_paths": [
+        "packages/ai-gateway/src/index.ts"
+      ],
+      "gate": "advisory",
+      "tags": [
+        "regression",
+        "billing",
+        "access",
+        "voice",
+        "provider-effects"
+      ],
+      "prompt": "The text-to-speech gateway route can send speech to the provider without a paid account. Repair the actual POST /v1/text-to-speech boundary. For a valid text body, an anonymous caller must receive 401, a verified Free caller 403, and a verified caller with missing plan truth 503, all as JSON errors before any speech-provider request. Preserve paid Basic and Business callers: one provider request carrying the original text must return the exact provider audio bytes with audio/wav. Paid accounts denied good standing must still receive 403 before provider work; paid requests with invalid empty text must still receive 400 with no provider work. All refusals must be JSON errors. Use synthetic identity-verifier, entitlement API, rate-limit and audio-provider ports only. Do not assume a helper name or particular implementation. This case does not test authentication cryptography, live payment or provider delivery, transcription, native playback, database concurrency, agent isolation or model capability.",
+      "agent_timeout_seconds": 900,
+      "grader_dependency_links": [
+        {
+          "source_path": "packages/ai-gateway/node_modules",
+          "destination_path": "packages/ai-gateway/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/paid-tts-dispatch.test.js",
+            "destination_path": "evals/coding-agent/graders/paid-tts-dispatch.test.js"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/paid-tts-dispatch.test.js"
       }
     }
   ]

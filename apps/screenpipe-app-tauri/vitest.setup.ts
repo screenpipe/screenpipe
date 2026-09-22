@@ -41,6 +41,14 @@ if (typeof window === "undefined") {
 }
 
 
+// jsdom has no media-query implementation. Default to the desktop viewport;
+// responsive behavior is exercised in browser tests or an explicit test mock.
+window.matchMedia ??= (query: string) => ({
+  matches: false, media: query, onchange: null,
+  addListener() {}, removeListener() {},
+  addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true,
+});
+
 // Component/hook tests get the app's provider even when they supply their own
 // additional wrapper. Nested providers in localization tests still choose their
 // explicit locale and catalog, so the runtime itself remains under test.

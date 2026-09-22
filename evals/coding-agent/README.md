@@ -9,7 +9,7 @@ This is an agent eval suite, not a unit-test suite. Every case contains:
 - saved prompt, transcript, candidate patch, grader output, runtime fingerprint, and result;
 - repeated-trial reporting with success rate, `pass@k`, and `pass^k`.
 
-The current app corpus contains 64 git-mined regressions. See
+The current app corpus contains 69 git-mined regressions. See
 [DESIGN.md](./DESIGN.md) for the Anthropic guidance, source contract, and
 history-mining workflow. The companion website manifest uses this same harness.
 
@@ -643,3 +643,71 @@ source separately passes the fourteen outcomes and five existing service tests.
 Fixtures and dependency links are materialized only for grading. No live provider,
 real user content, native build, release or publication is involved. These are
 corpus checks, not model trials, packaging validation or proof of trial isolation.
+
+## Home-level MCP configuration permissions
+
+`app-mcp-home-config-scope` exercises the actual Settings connect/disconnect
+functions through synthetic filesystem and native path-resolution ports. Thirteen
+outcomes cover home-directory permission refusal on POSIX, Windows and verbatim
+Windows targets, plus preservation of existing JSON/TOML settings, backup and
+error behavior. The parent fails three intended connection outcomes and preserves
+ten; the source-only reference passes all thirteen. These are simulated path
+semantics, not native Windows or desktop acceptance.
+
+Run `bun test evals/coding-agent/calibrate-mcp-home-scope.test.js` for controls
+covering parent/reference, unused-correct-source and write/backup bypasses, an
+equivalent implementation and missing-source setup failure. Dependencies are
+linked only for grading. No real config, credential or agent is accessed; these
+checks do not establish model improvement or enforced workspace isolation.
+
+## Bounded external chat discovery
+
+`app-external-chat-scan-boundary` runs the actual historical discovery entry point
+with synthetic directory and metadata ports. Eight outcomes cover the seven-day
+cutoff, eligible-file cap, oversized files, unreadable/missing sources, independent
+sources and repeated discovery. Transcript reads, parsing, storage writes, events
+and network calls are rejected. The parent fails five intended assertions and
+preserves three outcomes; the reference and current scanner pass all eight.
+
+Run `bun test evals/coding-agent/calibrate-external-chat-scan.test.js` for eleven
+controls: parent/reference, unused correct code, equivalent private names and
+comparison, unbounded metadata reads, oversized cap consumption, strict cutoff,
+stale Claude files, empty results, transcript reads and missing-source setup.
+These calibrate the grader; they are not model trials. The historical oracle
+changes only the scanner. UI, native filesystem permissions, actual import
+persistence and newer maintenance/sync behavior are outside this case. The
+separate current product dialog check uses a synthetic scan/import port. No real
+chat histories are read, and no execution-isolation claim follows.
+
+## TTS WAV response boundary
+
+`ai-gateway-tts-wav-response` executes the actual speech handler, voice utility
+and response helpers against a synthetic provider. Fifteen outcomes cover WAV
+request parameters and byte preservation, malformed signatures and short bodies,
+provider HTTP/transport/body failures, explicit recovery, invalid input and
+preserved MP3 utility calls. Only the voice utility is the historical oracle.
+
+Run `bun test evals/coding-agent/calibrate-tts-wav.test.js`. Ten controls cover
+parent/reference, an unused correct utility, equivalent helper naming, missing
+container selection, arbitrary-byte acceptance, discarded audio, forced WAV
+validation, blanket refusal and missing-source setup failure.
+
+These are corpus and grader checks, not model trials. The unrelated transcription
+SDK and completion factory are fail-closed ports. Gateway authentication/rate
+limits, actual playback, live provider compatibility and full WAV container
+integrity are outside this signature-level contract. No real audio, native build,
+model call or dependency link is used; execution isolation remains unproven.
+
+`ai-gateway-paid-tts-dispatch` invokes the actual gateway dispatcher, authentication,
+paid-plan policy and voice handler with synthetic verifier, entitlement API,
+rate-limiter and provider ports. Seven outcomes cover anonymous, Free, unknown
+plan, Basic, Business, denied-standing and invalid-input behavior. Paid responses
+retain exact provider bytes and one original-text request. The oracle applies
+only the historical dispatcher fix.
+
+Run `bun test evals/coding-agent/calibrate-paid-tts.test.js` with gateway JavaScript
+dependencies installed. Grading links them only after the trajectory ends. This
+is not proof of agent isolation, live authentication/payment/provider operation,
+transcription policy, playback or model improvement. Separately selected current
+product route tests preserve transcription behavior; they are not hidden outcomes
+of this case.

@@ -1159,7 +1159,7 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 	// The same Timeline component is used in both overlay and window mode.
 	// The window sizing/decoration is handled by Rust (window_api.rs).
 
-	// Timeline disabled by the user: render a lightweight placeholder and never
+	// Retain the legacy managed timeline gate: render a placeholder and never
 	// mount CurrentFrameTimeline (which attaches the native Live Text overlay).
 	// This both honors the setting and prevents the VisionKit overlay from
 	// leaking a native selection layer over other windows (e.g. the chat input).
@@ -1175,11 +1175,11 @@ export default function Timeline({ embedded = false }: { embedded?: boolean }) {
 						<MonitorOff className="w-8 h-8 text-muted-foreground" />
 					</div>
 					<h3 className="text-lg font-mono font-semibold normal-case tracking-wide mb-2">
-						Timeline Disabled
+						Timeline unavailable
 					</h3>
 					<p className="text-sm font-mono text-muted-foreground leading-relaxed">
-						The timeline is turned off in settings. Re-enable it under
-						Display settings to browse your recorded history.
+						Timeline is disabled for this installation. Contact your
+						administrator to change this setting.
 					</p>
 				</div>
 			</div>

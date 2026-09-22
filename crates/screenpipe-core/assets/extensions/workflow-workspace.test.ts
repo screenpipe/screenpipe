@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync, readFileSync, statSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import extension from "./workflow-workspace";
+import extension, { workflowIndex } from "./workflow-workspace";
 import { compactGlmToolResultText } from "./lib/glm-protocol";
 let cwd:string, dir:string, originalTask:string|undefined, tool:any, server:any, requests:any[];
 beforeEach(()=>{
@@ -27,7 +27,7 @@ test("structured saves serialize quotes and JSON-like source content without she
 });
 test("server conflicts are errors, not success text",async()=>{
   server.reload({fetch:()=>Response.json({error:"Workspace changed"},{status:409})});
-  await expect(tool.execute("id",{action:"publish",draft_id:"a"},new AbortController().signal)).rejects.toThrow("Workspace changed");
+  await expect(tool.execute("id",{action:"publish",expected_revision:1,catalog_revision:1,draft_id:"a"},new AbortController().signal)).rejects.toThrow("Workspace changed");
 });
 test("missing capability never falls back to a broad owner token",async()=>{
   writeFileSync(join(dir,".screenpipe-permissions.json"),"{}");
@@ -36,7 +36,7 @@ test("missing capability never falls back to a broad owner token",async()=>{
 });
 test("an already-aborted task cannot save",async()=>{
   const abort=new AbortController();abort.abort();
-  await expect(tool.execute("id",{action:"publish",draft_id:"a"},abort.signal)).rejects.toThrow();
+  await expect(tool.execute("id",{action:"publish",expected_revision:1,catalog_revision:1,draft_id:"a"},abort.signal)).rejects.toThrow();
   expect(requests).toHaveLength(0);
 });
 
@@ -63,6 +63,10 @@ test("explicit context selectors preserve the exact draft and catalog record",as
   expect((await call({draft_id:"draft-a"})).draft).toEqual(draft);
   expect((await call({workflow_id:"wf-a"})).workflow).toEqual(workflow);
   expect((await call({draft_id:"draft-a"})).outputContract).toBe("Exact output contract");
+  for (const input of [{draft_id:"draft-a"},{workflow_id:"wf-a"}]) {
+    expect((await call(input)).publicationShape).toContain("not publish the outer");
+    expect((await call(input)).publicationShape).toContain("outputContract.workflows");
+  }
   await expect(tool.execute("id",{action:"context",draft_id:"missing"},new AbortController().signal)).rejects.toThrow("not found");
 });
 test("oversized selected context is preserved in a private readable snapshot",async()=>{
@@ -98,7 +102,7 @@ test.each(["handoff", "publish", "reject"])("unknown draft %s returns exact cand
     if(req.method==="POST"){writes++;return Response.json({error:"Draft not found."},{status:409});}
     return Response.json({workspace:{drafts:{a:{id:"exact-id",status:"open",assignee:"workflow-review",payload:{title:"Review invoice"}},b:{id:"other-owner",status:"open",assignee:"workflow-deepen"}}}});
   }});
-  const error=await tool.execute("id",{action,draft_id:"typo",note:"repair"},new AbortController().signal).catch((e:Error)=>e);
+  const error=await tool.execute("id",{action,expected_revision:1,catalog_revision:1,draft_id:"typo",note:"repair"},new AbortController().signal).catch((e:Error)=>e);
   expect(error).toBeInstanceOf(Error);expect(writes).toBe(1);
   expect(error.message).toContain("exact-id");
   expect(error.message).not.toContain("other-owner");
@@ -110,7 +114,7 @@ test("publication returns remaining work with current revisions, distinct from i
   server.reload({fetch:(req:Request)=>Response.json(req.method==="POST"
     ? {revision:8,changes:{created:1},checkedThrough:"previous-window"}
     : {workspace:{revision:12,cycle:{status:"running"},drafts:{done:{status:"published"}}},catalogRevision:8,canFinish:true})});
-  const result=await tool.execute("id",{action:"publish",draft_id:"done"},new AbortController().signal);
+  const result=await tool.execute("id",{action:"publish",expected_revision:1,catalog_revision:1,draft_id:"done"},new AbortController().signal);
   expect(result.isError).not.toBe(true);
   expect(JSON.parse(result.content[0].text)).toMatchObject({revision:8,remaining:{revision:12,catalogRevision:8,cycleStatus:"running",canFinish:true,openDrafts:[]}});
 });
@@ -120,7 +124,67 @@ test("a failed state read after saving preserves the successful receipt",async()
     if(req.method==="POST"){writes++;return Response.json({revision:8,changes:{created:1}});}
     return Response.json({error:"Recorder unavailable"},{status:503});
   }});
-  const result=await tool.execute("id",{action:"publish",draft_id:"done"},new AbortController().signal);
+  const result=await tool.execute("id",{action:"publish",expected_revision:1,catalog_revision:1,draft_id:"done"},new AbortController().signal);
   expect(result.isError).not.toBe(true);expect(writes).toBe(1);
   expect(JSON.parse(result.content[0].text)).toMatchObject({revision:8,remaining:{unavailable:true}});
+});
+
+test("maintenance index exposes timing coverage and source dates without source text", () => {
+  const item = workflowIndex({id:"old",title:"Receipts",evidence:[
+    {timestamp:"2026-09-18T12:08:00Z",detail:"private source"},
+    {timestamp:"2026-09-18T05:00:00-07:00",detail:"private source"},
+    {timestamp:"invalid"}],timingRuns:[{start:{quote:"private"}}]});
+  expect(item.timing.runCount).toBe(1);
+  expect(item.sourceRange).toEqual({first:"2026-09-18T05:00:00-07:00",last:"2026-09-18T12:08:00Z"});
+  expect(JSON.stringify(item)).not.toContain("private");
+  expect(workflowIndex({id:"empty",evidence:[],timingRuns:null})).toMatchObject({timing:{runCount:0},sourceRange:null});
+});
+test("both index and selected workflow retain available history independently of cycle",async()=>{
+  server.reload({fetch:(req:Request)=>Response.json(new URL(req.url).pathname==="/workflows/workspace"
+    ? {workspace:{revision:7,cycle:{start:"2026-09-20T00:00:00Z",end:"2026-09-21T00:00:00Z"},drafts:{}},catalogRevision:4,ready:true}
+    : {historyStart:"2026-06-23T00:00:00Z",workflows:[{id:"old",title:"Receipts",timingRuns:[],evidence:[{timestamp:"2026-09-18T12:00:00Z"}]}],outputContract:"contract"})});
+  for(const input of [{action:"context"},{action:"context",workflow_id:"old"}]) {
+    const result=JSON.parse((await tool.execute("id",input,new AbortController().signal)).content[0].text);
+    expect(result.historyStart).toBe("2026-06-23T00:00:00Z");
+    expect(result.cycle.start).toBe("2026-09-20T00:00:00Z");
+  }
+});
+
+// Missing revisions are invalid input, not a concurrent-write conflict.
+test("finish explains missing revisions before making a request and accepts a corrected call",async()=>{
+  for(const input of [
+    {action:"finish",note:"Done"},
+    {action:"finish",expected_revision:"1",note:"Done"},
+    {action:"finish",expected_revision:-1,note:"Done"},
+  ]) await expect(tool.execute("id",input,new AbortController().signal)).rejects.toThrow("expected_revision is required");
+  await expect(tool.execute("id",{action:"finish",expected_revision:1,note:"Done"},new AbortController().signal)).rejects.toThrow("catalog_revision is required");
+  expect(requests).toHaveLength(0);
+  const result=await tool.execute("id",{action:"finish",expected_revision:1,catalog_revision:4,note:"Done"},new AbortController().signal);
+  expect(JSON.parse(result.content[0].text).saved).toBe(true);
+  expect(requests[0]).toMatchObject({action:"finish",expected_revision:1,catalog_revision:4});
+});
+test("Maintenance can finish with its workspace revision without a publication revision",async()=>{
+  process.env.SCREENPIPE_PIPE_NAME="workflow-maintain";
+  extension({registerTool:(t:any)=>{tool=t}} as any);
+  const result=await tool.execute("id",{action:"finish",expected_revision:1,note:"Investigation handed to Review"},new AbortController().signal);
+  expect(JSON.parse(result.content[0].text).saved).toBe(true);
+  expect(requests[0]).toMatchObject({task:"workflow-maintain",action:"finish",expected_revision:1});
+  expect(requests[0].catalog_revision).toBeUndefined();
+});
+test("workspace selects the single-workflow contract while legacy clients keep the batch contract",async()=>{
+  server.reload({fetch:(req:Request)=>Response.json(new URL(req.url).pathname==="/workflows/workspace"
+    ? {workspace:{revision:1,drafts:{a:{id:"a",status:"open",assignee:"workflow-review",payload:{}}}},catalogRevision:1}
+    : {workflows:[{id:"wf-a"}],outputContract:"legacy batch",workflowOutputContract:"single workflow"})});
+  for(const selector of [{draft_id:"a"},{workflow_id:"wf-a"}]) {
+    const result=JSON.parse((await tool.execute("id",{action:"context",...selector},new AbortController().signal)).content[0].text);
+    expect(result.outputContract).toBe("single workflow");
+    expect(result.publicationShape).toContain("one workflow object");
+    expect(JSON.stringify(result)).not.toContain("legacy batch");
+  }
+});
+test("batch and workspace contracts describe the same workflow fields",()=>{
+  const batch=readFileSync(new URL("../pipes/workflow-discovery/output.md",import.meta.url),"utf8");
+  const item=readFileSync(new URL("../pipes/workflow-review/output.md",import.meta.url),"utf8").trim();
+  expect(item.startsWith('{"id":')).toBe(true);
+  expect(batch).toContain(`"workflows":[${item}]`);
 });

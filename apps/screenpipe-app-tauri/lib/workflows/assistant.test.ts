@@ -1,8 +1,11 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
+import { trajectoryCollector } from "@/lib/trajectories/collector";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEventEnvelope } from "@/lib/events/types";
+
+vi.mock("@/lib/trajectories/collector", () => ({ trajectoryCollector: { begin: vi.fn(async () => null), complete: vi.fn() } }));
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (e: AgentEventEnvelope) => void>(),
@@ -44,6 +47,7 @@ describe("workflow assistant agent transport", () => {
     expect(ASSISTANT_TOOLS).toContain("bash");
     expect(ASSISTANT_TOOLS).not.toContain("search-content");
     expect(progress).toHaveBeenCalledWith({ text: "", activity: "searching" });
+    expect(trajectoryCollector.complete).toHaveBeenCalledWith(null, "Find yesterday’s review", "Found a moment.");
     expect(mocks.stop).toHaveBeenCalled(); expect(mocks.handlers.size).toBe(0);
   });
   it("still rejects tools outside this run's configured scope", async () => {
@@ -53,6 +57,7 @@ describe("workflow assistant agent transport", () => {
     });
     await expect(desktopAssistant.ask({ question: "Find yesterday", context: null, history: [], signal: new AbortController().signal, onProgress: vi.fn() })).rejects.toThrow("unexpected tool");
     expect(mocks.stop).toHaveBeenCalled();
+    expect(trajectoryCollector.complete).not.toHaveBeenCalled();
   });
   it("authenticates Context tool calls with the current account on every run", async () => {
     mocks.token.mockResolvedValueOnce("first-account-token").mockResolvedValueOnce("refreshed-account-token");

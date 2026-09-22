@@ -1323,34 +1323,26 @@ describe("timeline slide sequencing", () => {
     },
   );
 
-  it("skips straight to engine when policy manages disableTimeline", async () => {
+  it("keeps screenshot choice available when only timeline visibility is managed", async () => {
     mocks.isSettingLocked.mockImplementation(
       (key: string) => key === "disableTimeline",
     );
-
     render(<OnboardingPage />);
-
     fireEvent.click(
       await screen.findByRole("button", { name: /finish permissions/i }),
     );
-
-    await waitFor(() =>
-      expect(mocks.setOnboardingStep).toHaveBeenCalledWith("engine"),
-    );
-    expect(await screen.findByText("engine")).toBeInTheDocument();
-    expect(screen.queryByText("timeline choice")).not.toBeInTheDocument();
+    expect(await screen.findByText("timeline choice")).toBeInTheDocument();
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_device_tier_evaluated",
       {
         device_tier: "low",
-        timeline_choice_eligible: false,
-        timeline_choice_policy_locked: true,
+        timeline_choice_eligible: true,
+        timeline_choice_policy_locked: false,
       },
     );
   });
 
-  // The step writes disableTimeline AND disableScreenshots, so a policy owning
-  // either one already decides the outcome and the choice must not be offered.
+  // Screenshot capture must respect both the capture flag and screen policy.
   it("skips straight to engine when policy manages disableScreenshots only", async () => {
     mocks.isSettingLocked.mockImplementation(
       (key: string) => key === "disableScreenshots",
@@ -1404,7 +1396,7 @@ describe("timeline slide sequencing", () => {
     expect(screen.queryByText("engine")).not.toBeInTheDocument();
   });
 
-  it.each(["disableTimeline", "disableScreenshots"])(
+  it.each(["disableScreenshots", "disableVision", "screen_recording"])(
     "does not resume onto the timeline slide when policy manages %s",
     async (lockedKey) => {
       onboardingData.currentStep = "timeline";

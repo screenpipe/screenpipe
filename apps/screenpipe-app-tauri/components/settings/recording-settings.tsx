@@ -27,7 +27,7 @@ import {
 
 /** Search fields for the Audio & meetings destination. */
 export const audioSearchIndex: SettingsField[] = [
-  { label: msg("Audio Recording", {}), keywords: ["mic", "microphone", "audio"] },
+  { label: msg("Audio Recording", {}), keywords: ["mic", "microphone", "audio", "meetings", "recording"] },
   { label: msg("Capture audio", {}), keywords: ["continuous", "meetings only"] },
   { label: msg("Transcription engine", {}), keywords: ["whisper", "cloud", "stt"] },
   { label: msg("Max batch duration (seconds)", {}), keywords: ["batch", "timeout", "openai", "retranscription"], conditional: true },
@@ -44,7 +44,7 @@ export const audioSearchIndex: SettingsField[] = [
 /** Search fields for the Screen destination. */
 export const screenSearchIndex: SettingsField[] = [
   { label: msg("Screen context capture", {}), keywords: ["screen", "video", "accessibility"] },
-  { label: msg("Screen recording", {}), keywords: ["screenshot", "pixels", "ocr", "jpeg", "capture"] },
+  { label: msg("Screenshots", {}), keywords: ["screen recording", "timeline", "rewind", "pixels", "ocr", "jpeg", "capture"] },
   { label: msg("Use all monitors", {}), keywords: ["monitor", "display"], conditional: true },
   // conditional: monitor picker only renders when "Use all monitors" is off — paired right under that toggle.
   { label: msg("Monitors", {}), conditional: true },
@@ -2747,11 +2747,14 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div>
                   <h3 className="text-sm font-medium text-foreground">Audio Recording</h3>
-                  <p className="text-xs text-muted-foreground">Capture audio from microphone and system</p>
+                  <p className="text-xs text-muted-foreground">Record microphone and system audio. Turning this off keeps existing recordings and meeting history.</p>
                 </div>
               </div>
-              <ManagedSwitch settingKey="disableAudio" id="disableAudio" checked={!settings.disableAudio} onCheckedChange={(checked) => handleDisableAudioChange(!checked)} />
+              <ManagedSwitch aria-label={ui("Audio Recording")} settingKey="disableAudio" id="disableAudio" checked={!settings.disableAudio} onCheckedChange={(checked) => handleDisableAudioChange(!checked)} />
             </div>
+            <p className="ml-[26px] mt-2 text-xs text-muted-foreground">
+              Right-click Meetings to hide it. Restore it from Sidebar options. This does not change audio recording.
+            </p>
           </CardContent>
         </Card>
 
@@ -3772,17 +3775,21 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
                 <div className="flex items-center space-x-2.5">
                   <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
                   <div>
-                    <h3 className="text-sm font-medium text-foreground">Screen recording</h3>
-                    <p className="text-xs text-muted-foreground">Record screen pixels for the timeline and image-only text. Turn this off to stop screen recording; accessibility text stays searchable.</p>
+                    <h3 className="text-sm font-medium text-foreground">Screenshots</h3>
+                    <p className="text-xs text-muted-foreground">Record screen images for the timeline and image-only text. Turning this off keeps existing history and searchable app text.</p>
                   </div>
                 </div>
                 <ManagedSwitch
+                  aria-label={ui("Screenshots")}
                   settingKey="disableScreenshots"
                   id="disableScreenshots"
                   checked={!(settings.disableScreenshots ?? false)}
                   onCheckedChange={(checked) => handleSettingsChange({ disableScreenshots: !checked }, true)}
                 />
               </div>
+              <p className="ml-[26px] mt-2 text-xs text-muted-foreground">
+                Right-click Timeline to hide it. Restore it from Sidebar options. This does not change screenshot capture.
+              </p>
             </CardContent>
           </Card>
         )}

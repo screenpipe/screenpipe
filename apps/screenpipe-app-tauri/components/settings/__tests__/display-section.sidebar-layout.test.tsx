@@ -35,12 +35,8 @@ vi.mock("@/lib/utils/tauri", () => ({
   },
 }));
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
-vi.mock("@/components/enterprise-locked-setting", () => ({
-  ManagedSwitch: () => null,
-}));
 
 import { DisplaySection, searchIndex } from "../display-section";
-import { DEFAULT_SIDEBAR_NAV_LAYOUT } from "@/lib/utils/sidebar-nav-layout";
 
 describe("DisplaySection sidebar layout", () => {
   beforeEach(() => {
@@ -55,67 +51,24 @@ describe("DisplaySection sidebar layout", () => {
 
   afterEach(() => cleanup());
 
-  it("shows meetings in the sidebar by default", () => {
+  it("leaves timeline visibility to the sidebar menu instead of another toggle", () => {
     render(<DisplaySection />);
-    expect(screen.getByTestId("meetings-in-sidebar")).toHaveAttribute(
-      "data-state",
-      "checked",
-    );
-    expect(screen.getByText("Labelled row in the sidebar")).toBeInTheDocument();
+    expect(screen.queryByText("Timeline / rewind")).toBeNull();
+    expect(searchIndex.some((field) => (decodeOptions(field.label)?.$_source ?? field.label) === "Timeline / rewind")).toBe(false);
   });
 
-  it("moves meetings out to the chrome strip", () => {
-    render(<DisplaySection />);
-    fireEvent.click(screen.getByTestId("meetings-in-sidebar"));
-    const patch = mocks.updateSettings.mock.calls[0][0];
-    expect(patch.sidebarNavLayout.hidden).toContain("meetings");
-  });
-
-  it("moves meetings back into the sidebar", () => {
+  it("leaves meetings visibility and layout reset in the sidebar menu", () => {
     mocks.settings = {
       ...mocks.settings,
-      sidebarNavLayout: { ...DEFAULT_SIDEBAR_NAV_LAYOUT, hidden: ["meetings"] },
+      disableAudio: true,
+      sidebarNavLayout: { order: ["home", "meetings"], hidden: ["meetings"] },
     };
     render(<DisplaySection />);
-    expect(screen.getByTestId("meetings-in-sidebar")).toHaveAttribute(
-      "data-state",
-      "unchecked",
-    );
-    fireEvent.click(screen.getByTestId("meetings-in-sidebar"));
-    expect(
-      mocks.updateSettings.mock.calls[0][0].sidebarNavLayout.hidden,
-    ).not.toContain("meetings");
-  });
-
-  // The reset escape hatch only appears once the layout actually drifted, so a
-  // stock sidebar is not cluttered with a no-op button.
-  it("offers a reset only for a customized layout", () => {
-    render(<DisplaySection />);
+    expect(screen.queryByText("Meetings in Sidebar")).toBeNull();
+    expect(screen.queryByTestId("meetings-in-sidebar")).toBeNull();
     expect(screen.queryByTestId("reset-sidebar-layout")).toBeNull();
-    cleanup();
-
-    mocks.settings = {
-      ...mocks.settings,
-      sidebarNavLayout: { ...DEFAULT_SIDEBAR_NAV_LAYOUT, hidden: ["meetings"] },
-    };
-    render(<DisplaySection />);
-    fireEvent.click(screen.getByTestId("reset-sidebar-layout"));
-    expect(mocks.updateSettings).toHaveBeenCalledWith({
-      sidebarNavLayout: DEFAULT_SIDEBAR_NAV_LAYOUT,
-    });
-  });
-
-  it("explains how to customize the sidebar", () => {
-    render(<DisplaySection />);
-    expect(screen.getByText(/Drag sidebar rows/i)).toBeInTheDocument();
-    expect(screen.queryByText(/rolling out/i)).toBeNull();
-  });
-
-  // settings-search asserts every indexed label maps to a rendered heading.
-  it("is indexed for settings search under a rendered heading", () => {
-    render(<DisplaySection />);
-    expect(searchIndex.find((f) => (decodeOptions(f.label)?.$_source ?? f.label) === "Meetings in Sidebar")).toBeDefined();
-    expect(screen.getByText("Meetings in Sidebar")).toBeInTheDocument();
+    expect(searchIndex.some((field) => (decodeOptions(field.label)?.$_source ?? field.label) === "Meetings in Sidebar")).toBe(false);
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
   });
 
   it("shows overlays in recordings by default and hides them only when enabled", async () => {

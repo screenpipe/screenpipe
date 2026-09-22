@@ -219,7 +219,7 @@ function TrialActivationFlagAssignment({
   return null;
 }
 
-// When shown, the timeline choice sits before "engine" so disableTimeline is
+// When shown, the screenshot choice sits before "engine" so disableScreenshots is
 // persisted before the engine spawns and reads it — no restart needed.
 const SLIDE_ORDER: SlideKey[] = [
   "login",
@@ -373,11 +373,11 @@ export default function OnboardingPage() {
   // mistaken for hardware evidence.
   const isConfidentLowEndDevice = settings.deviceTier === "low";
 
-  // The timeline slide writes disableTimeline AND disableScreenshots, so a
-  // policy owning either one already decides the outcome — showing the choice
-  // would let it contradict what the user picked.
+  // This choice controls capture only. Timeline visibility is a sidebar
+  // preference; policies controlling screen capture still own this decision.
   const timelineChoiceLocked =
-    isSettingLocked("disableTimeline") || isSettingLocked("disableScreenshots");
+    isSettingLocked("disableScreenshots") || isSettingLocked("disableVision") ||
+    isSettingLocked("screen_recording");
   const timelineChoiceVisible =
     isConfidentLowEndDevice && !timelineChoiceLocked;
   const deviceTierForAnalytics =

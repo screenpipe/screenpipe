@@ -25,3 +25,11 @@
 .player > section { margin: 0 0 8px; border-radius: 6px; }
 .player .close { position: absolute; right: 0; top: -6px; }
 @media (max-width: 560px) { .figure { max-width: 100%; } }
+
+/* Keep sources anchored while revealing the result of a click. */
+@media (prefers-reduced-motion: no-preference) {
+  .sourceToggle > svg, .evidence summary > svg { transition: transform 150ms ease; }
+  .zoom { transition: opacity 150ms ease; }
+  .sourceList:not([hidden]), .questions[open] > ul, .player { animation: evidenceReveal 150ms ease-out; }
+}
+@keyframes evidenceReveal { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }

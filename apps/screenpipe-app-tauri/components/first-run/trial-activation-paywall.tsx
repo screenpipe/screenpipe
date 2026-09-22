@@ -26,6 +26,7 @@ import {
   TRIAL_ACTIVATION_UNLOCKED_STEP,
 } from "@/lib/first-run/trial-activation";
 import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
 
 
 const HOSTED_CHECKOUT_URL = screenpipeWebUrl(
@@ -42,6 +43,7 @@ export function TrialActivationPaywall({
 }) {
 
   const ui = useGT();
+  const locale = useUiLocale();
   const { settings } = useSettings();
   const user = settings.user as AppUser | null | undefined;
   const [checkoutToken, setCheckoutToken] = React.useState<string | null>(
@@ -126,6 +128,7 @@ export function TrialActivationPaywall({
         "pending",
       );
       submitHostedCheckoutStart({
+        locale,
         hostedCheckoutUrl: HOSTED_CHECKOUT_URL,
         token: checkoutToken,
         currentHref: window.location.href,
@@ -139,7 +142,7 @@ export function TrialActivationPaywall({
           : ui("Secure checkout could not be opened"),
       );
     }
-  }, [checkoutToken]);
+  }, [checkoutToken, locale]);
 
   React.useEffect(() => {
     if (!open || !tokenResolved || !checkoutToken || returnedWithoutStatus) {

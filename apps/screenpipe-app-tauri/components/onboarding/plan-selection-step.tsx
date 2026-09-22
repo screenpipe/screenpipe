@@ -15,6 +15,7 @@ import {
 import type { AppUser } from "@/lib/app-entitlement";
 import { isOnboardingCheckoutResolved } from "@/lib/onboarding-checkout";
 import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
 
 
 const HOSTED_CHECKOUT_URL = screenpipeWebUrl(
@@ -36,6 +37,7 @@ export default function PlanSelectionStep({
 }) {
 
   const ui = useGT();
+  const locale = useUiLocale();
   const { settings, loadUser } = useSettings();
   const user = settings.user as AppUser | null | undefined;
   const [returnStatus] = useState(checkoutStatus);
@@ -71,6 +73,7 @@ export default function PlanSelectionStep({
         destination_type: "hosted_stripe_payment_element",
       });
       submitHostedCheckoutStart({
+        locale,
         hostedCheckoutUrl: HOSTED_CHECKOUT_URL,
         token: userToken,
         currentHref: window.location.href,
@@ -84,7 +87,7 @@ export default function PlanSelectionStep({
           : ui("Secure checkout could not be opened"),
       );
     }
-  }, [userToken]);
+  }, [userToken, locale]);
 
   useEffect(() => {
     if (returnStatus !== null) return;

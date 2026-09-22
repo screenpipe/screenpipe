@@ -1,4 +1,5 @@
 "use client";
+import { WorkflowSharingControls } from "@/components/workflows/workflow-sharing-controls";
 
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
@@ -21,6 +22,7 @@ export const searchIndex: SettingsField[] = [
     label: msg("Ignore incognito windows", {}),
     keywords: ["private", "browser", "enhanced", "automation"],
   },
+  { label: msg("Help improve Workflows", {}), keywords: ["sharing", "training", "consent", "delete shared chats"] },
   { label: msg("PII masking", {}), keywords: ["mask", "redact", "columns", "url", "fields"] },
   {
     label: msg("Remote support logs", {}),
@@ -382,6 +384,7 @@ export function PrivacySection() {
   // The managed policy runtime reapplies PII policy on every policy poll.
   const { getManagedValue, isManagedDeployment } = useManagedPolicy();
   const managedPiiBackend = getManagedValue("piiBackend");
+  const sharingRequiresCloud = !!settings.workflowSharing;
   // Same idea for input capture: the admin can force keyboard/click rows on
   // or off org-wide (applied by the managed policy runtime).
   // These settings are inverted ("disable…"), so ManagedSwitch — which assumes
@@ -591,6 +594,7 @@ export function PrivacySection() {
   // Where the AI workers run — one switch covers both modalities.
   const piiBackend = (settings.piiBackend as "local" | "tinfoil" | undefined) ?? "local";
   const handlePiiBackendChange = (next: "local" | "tinfoil") => {
+    if (sharingRequiresCloud) return;
     handleSettingsChange({ piiBackend: next } as any, true);
   };
 
@@ -1350,6 +1354,7 @@ export function PrivacySection() {
       </div>
 
       {/* Data Protection */}
+      <WorkflowSharingControls />
       <LockedSetting settingKey="pii_removal">
       <div className="space-y-2">
         <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
@@ -1479,8 +1484,8 @@ export function PrivacySection() {
                 </div>
               </div>
             )}
-            {aiPiiRemovalEnabled && (
-              <div className="mt-3 ml-6 space-y-2 border-l-2 border-border pl-3">
+            {(aiPiiRemovalEnabled || sharingRequiresCloud) && (
+              <div id="workflow-cloud-redaction" className="mt-3 ml-6 space-y-2 border-l-2 border-border pl-3">
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
                   <span className="font-medium text-foreground">Where it runs</span>
                   <label className={`flex items-center gap-1.5 ${managedPiiBackend ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
@@ -1488,7 +1493,7 @@ export function PrivacySection() {
                       type="radio"
                       name="piiBackend"
                       checked={piiBackend === "local"}
-                      disabled={!!managedPiiBackend}
+                      disabled={!!managedPiiBackend || sharingRequiresCloud}
                       onChange={() => handlePiiBackendChange("local")}
                     />
                     <span className="text-foreground">Local</span>
@@ -1498,13 +1503,14 @@ export function PrivacySection() {
                       type="radio"
                       name="piiBackend"
                       checked={piiBackend === "tinfoil"}
-                      disabled={!!managedPiiBackend}
+                      disabled={!!managedPiiBackend || sharingRequiresCloud}
                       onChange={() => handlePiiBackendChange("tinfoil")}
                     />
                     <span className="text-foreground">Cloud (enclave)</span>
                   </label>
                 </div>
                 <p className="text-[11px] text-muted-foreground">
+                  {sharingRequiresCloud && <span className="block font-medium">Required while Workflows sharing is on. Turn off sharing above to change it. Shared chats always redact all sensitive categories; the choices below apply to recordings.</span>}
                   Local stays on-device — strongest privacy, slower on weak
                   hardware. Cloud uses screenpipe&apos;s attested
                   confidential-compute enclave — fast everywhere; your device

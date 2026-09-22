@@ -2370,7 +2370,7 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "tests": 4,
-      "notes": "Pre-grant reassurance in setup: the login slide carries the storage-locality line and the pause affordance on one line (the only slide every platform sees, since permissions auto-advances on non-mac); the mac permissions slide keeps that promise collapsed to a single line below the permission wheel and on expand renders the data dir the running app actually resolved rather than a reconstructed ~/.screenpipe, with an open action pointed at that path; collapsed and expanded states are both asserted to fit inside the fixed-size onboarding window; and the timeline slide states the capture bounds (incognito skipped, per-app exclusions) where the capture decision is made. The mac assertions share one visit because the slide auto-advances 600ms after all grants land."
+      "notes": "Pre-grant reassurance in setup: the login slide carries the storage-locality line and the pause affordance on one line (the only slide every platform sees, since permissions auto-advances on non-mac); the mac permissions slide keeps that promise collapsed to a single line below the permission wheel and on expand renders the data dir the running app actually resolved rather than a reconstructed ~/.screenpipe, with an open action pointed at that path; collapsed and expanded states are both asserted to fit inside the fixed-size onboarding window; and the screenshot choice slide states the capture bounds (incognito skipped, per-app exclusions) where screenshot capture is chosen independently of sidebar visibility. The mac assertions share one visit because the slide auto-advances 600ms after all grants land."
     },
     {
       "spec": "owned-browser.spec.ts",

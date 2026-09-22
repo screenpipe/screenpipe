@@ -13,6 +13,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  locale: "en",
   capture: vi.fn(),
   getCloudToken: vi.fn(),
   setOnboardingStep: vi.fn().mockResolvedValue({ status: "ok", data: null }),
@@ -25,6 +26,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("posthog-js", () => ({ default: { capture: mocks.capture } }));
+vi.mock("@/lib/i18n/provider", () => ({ useUiLocale: () => mocks.locale }));
 vi.mock("@/lib/hooks/use-settings", () => ({
   useSettings: () => ({
     settings: { user: mocks.user },
@@ -63,6 +65,7 @@ let submitSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.locale = "en";
   window.history.replaceState({}, "", "/home");
   document.querySelectorAll("form").forEach((form) => form.remove());
   window.sessionStorage.clear();
@@ -86,6 +89,14 @@ function checkoutForm(): HTMLFormElement {
 }
 
 describe("TrialActivationPaywall", () => {
+  it("passes the app language to the shared hosted checkout", async () => {
+    mocks.locale = "ja";
+    mocks.getCloudToken.mockResolvedValue("clerk-token");
+    render(<TrialActivationPaywall open locked />);
+    await waitFor(() => expect(submitSpy).toHaveBeenCalledOnce());
+    expect(checkoutForm().querySelector<HTMLInputElement>('input[name="locale"]')?.value).toBe("ja");
+  });
+
   it("uses onboarding's authenticated hosted checkout instead of the cardless trial iframe", async () => {
     mocks.getCloudToken.mockResolvedValue("clerk-token");
 

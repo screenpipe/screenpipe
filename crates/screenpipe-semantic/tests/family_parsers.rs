@@ -108,6 +108,34 @@ fn conversation_fixture_preserves_sender_relationships() {
 }
 
 #[test]
+fn nested_task_wrappers_keep_leaf_tasks_and_independent_siblings() {
+    let source = serde_json::json!({
+        "app": { "platform": "windows", "executable": "Todoist.exe", "display_name": "Todoist" },
+        "nodes": [
+            { "parent": null, "role": "Window" },
+            { "parent": 0, "role": "Group", "classes": ["task-row"] },
+            { "parent": 1, "role": "Text", "value": "Container label" },
+            { "parent": 1, "role": "Group" },
+            { "parent": 3, "role": "Group", "classes": ["task-row"] },
+            { "parent": 4, "role": "Text", "value": "First child" },
+            { "parent": 3, "role": "Group", "classes": ["task-row"] },
+            { "parent": 6, "role": "Text", "value": "Second child" },
+            { "parent": 0, "role": "Group", "classes": ["task-row"] },
+            { "parent": 8, "role": "Text", "value": "Independent sibling" }
+        ]
+    })
+    .to_string();
+    let items = handled(&source, "family.task");
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.title.as_deref().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["First child", "Second child", "Independent sibling"]
+    );
+}
+
+#[test]
 fn mail_fixture_extracts_subject_sender_and_body() {
     let items = handled(
         include_str!("fixtures/families/gmail_thread.json"),

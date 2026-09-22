@@ -309,9 +309,8 @@ pub struct SCServer {
     /// instance here on start and clears on stop so `/vision/device/*` hits
     /// the manager that is actually capturing.
     pub vision_manager: Arc<ArcSwap<Option<Arc<crate::vision_manager::VisionManager>>>>,
-    /// When true, the timeline / rewind feature is disabled. The server skips
-    /// warming the hot frame cache from the DB at startup (the cache is only
-    /// read by the timeline streaming endpoint). Set before `start()`.
+    /// Skip background timeline cache warm-up, while retaining database access
+    /// to saved history. Set before `start()` when capture/cache work is off.
     pub timeline_disabled: bool,
     /// Advertise this instance over mDNS. Disabled for loopback-only binds
     /// because LAN clients cannot reach those addresses and Windows may show a
@@ -767,9 +766,10 @@ impl SCServer {
             .clone()
             .unwrap_or_else(|| Arc::new(HotFrameCache::new()));
         if self.timeline_disabled {
-            // Timeline disabled: the hot frame cache is only read by the timeline
-            // streaming endpoint, so skip the (potentially 40s+) DB warm-up.
-            tracing::info!("timeline disabled: skipping hot frame cache warm_from_db");
+            // Skip the potentially expensive warm-up but mark it resolved so
+            // requests for saved history immediately use database backfill.
+            hot_frame_cache.skip_warmup();
+            tracing::info!("timeline cache disabled: skipping hot frame cache warm_from_db");
         } else {
             let cache = hot_frame_cache.clone();
             let db = self.db.clone();

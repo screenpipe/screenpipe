@@ -2,7 +2,10 @@
 // https://screenpipe.com
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { WorkflowSharingControls } from "./workflow-sharing-controls";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useSettings } from "@/lib/hooks/use-settings";
+import { SHARING_NOTICE_VERSION } from "@/lib/trajectories/collector";
 import { Clock3, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -18,6 +21,11 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks }: {
 }) {
 
   const ui = useGT();
+  const { settings, updateSettings } = useSettings();
+  const current = useRef(settings);
+  current.current = settings;
+  const [step, setStep] = useState<"tasks" | "sharing">("tasks");
+  const title = useRef<HTMLHeadingElement>(null);
   const [open, setOpen] = useState(false);
   const [setup, setSetup] = useState<WorkflowTaskSetup | null>(null);
   const [error, setError] = useState("");
@@ -25,10 +33,25 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks }: {
   const [retry, setRetry] = useState(0);
   const enabling = useRef(false);
 
+  const close = useCallback(() => setOpen(false), []);
+  const finishSharing = useCallback(() => {
+    const account = current.current.user?.id;
+    if (account) void updateSettings({ workflowSharingPromptSeen: { ...current.current.workflowSharingPromptSeen, [account]: SHARING_NOTICE_VERSION } }).catch(() => {});
+    setOpen(false);
+  }, [updateSettings]);
+  function nextStep() {
+    const value = current.current;
+    if (value.user?.id && !value.workflowSharing && value.workflowSharingPromptSeen?.[value.user.id] !== SHARING_NOTICE_VERSION) {
+      setError(""); setStep("sharing");
+    } else setOpen(false);
+  }
+  useEffect(() => { if (open) title.current?.focus(); }, [step, open]);
+
   useEffect(() => {
     let cancelled = false;
     setOpen(false);
     setSetup(null);
+    setStep("tasks");
     setError("");
     let timer: ReturnType<typeof setTimeout> | undefined;
     let attempts = 0;
@@ -57,7 +80,7 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks }: {
     setError("");
     try {
       await tasks.enable();
-      setOpen(false);
+      nextStep();
     } catch {
       setError(ui("Could not enable all tasks. Please try again."));
     } finally {
@@ -67,24 +90,40 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks }: {
   }
 
   if (active && error && !setup) return <div role="status" className="mx-6 mt-4 flex items-center justify-between gap-3 rounded-lg border p-3 text-sm"><span>{error}</span><Button variant="outline" onClick={() => setRetry(value => value + 1)}>Try again</Button></div>;
-  return <Dialog open={active && open} onOpenChange={value => { if (!enabling.current) setOpen(value); }}>
-    <DialogContent style={{ background: "#fff", color: "#171815", fontFamily: "Inter, -apple-system, BlinkMacSystemFont, sans-serif" }} className="max-w-md" overlayClassName="bg-black/30" hideCloseButton={busy}>
-      <DialogHeader>
-        <DialogTitle style={{ fontFamily: "inherit", letterSpacing: 0 }} className="font-sans text-xl normal-case">Keep your workflows up to date?</DialogTitle>
-        <DialogDescription style={{ color: "#73766d" }}>Enable four agents to discover workflows, investigate evidence, review drafts, and maintain accuracy.</DialogDescription>
+  return <Dialog open={active && open} onOpenChange={value => {
+    if (enabling.current || busy) return;
+    if (!value && step === "sharing") finishSharing(); else setOpen(value);
+  }}>
+    <DialogContent onOpenAutoFocus={event => { event.preventDefault(); title.current?.focus(); }} style={{
+      "--foreground": "0 0% 9%", "--background": "0 0% 100%", "--muted-foreground": "80 4% 42%",
+      "--border": "70 10% 85%", "--primary": "0 0% 9%", "--primary-foreground": "0 0% 100%",
+      "--accent": "70 10% 95%", "--accent-foreground": "0 0% 9%",
+      colorScheme: "light", background: "#fff", color: "#171815", fontFamily: "Inter, -apple-system, BlinkMacSystemFont, sans-serif",
+    } as CSSProperties} className="max-w-md [&_button]:normal-case [&_button]:tracking-normal [&_button]:font-[inherit]" overlayClassName="bg-black/30" hideCloseButton={busy}>
+      <DialogHeader className="text-left">
+        <DialogTitle ref={title} tabIndex={-1} style={{ fontFamily: "inherit", letterSpacing: 0 }} className="text-xl normal-case outline-none">
+          {step === "tasks" ? "Keep your workflows up to date?" : "Help improve Workflows?"}
+        </DialogTitle>
+        <DialogDescription className="text-muted-foreground">
+          {step === "tasks" ? "Discover workflows and keep them accurate with daily updates." : "Share new Workflows chats to improve skills and evaluations."}
+        </DialogDescription>
       </DialogHeader>
-      {setup && <div style={{ borderColor: "#dedfd8" }} className="flex items-center gap-3 rounded-lg border border-border p-4">
-        <Clock3 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <div className="min-w-0"><p className="text-sm font-medium">{setup.title}</p><p className="text-xs text-muted-foreground">{setup.schedule}</p></div>
-      </div>}
-      <p style={{ color: "#73766d" }} className="text-sm text-muted-foreground">Uses your AI allowance and sends selected captured text and screenshots to Screenpipe’s AI provider. Recording exclusions apply; personal content may still be included.</p>
-      <p style={{ color: "#73766d" }} className="text-sm text-muted-foreground">Runs daily and resumes dependent work in both Chat and Workflows while Screenpipe is open. Turn it off anytime in <span style={{ color: "#171815" }} className="font-medium text-foreground">Chat → Scheduled tasks</span>.</p>
-      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      <DialogFooter className="gap-2 sm:gap-0">
-        <Button style={{ background: "#fff", borderColor: "#dedfd8", color: "#171815", fontFamily: "inherit", textTransform: "none", letterSpacing: 0 }} variant="outline" disabled={busy} onClick={() => setOpen(false)}>Not now</Button>
-        {setup ? <Button style={{ background: "#171815", color: "#fff", fontFamily: "inherit", textTransform: "none", letterSpacing: 0 }} disabled={busy} onClick={enable}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} {busy ? ui("Enabling…") : ui("Enable tasks")}</Button>
-          : <Button onClick={() => setRetry(value => value + 1)}>Try again</Button>}
-      </DialogFooter>
+      {step === "sharing" ? <WorkflowSharingControls compact onDone={finishSharing} onUnavailable={close} onBusyChange={setBusy} /> : <>
+        {setup && <div className="flex items-center gap-3 rounded-lg border p-4">
+          <Clock3 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <div className="min-w-0"><p className="text-sm font-medium">{setup.title}</p><p className="text-xs text-muted-foreground">{setup.schedule} · While Screenpipe is open</p></div>
+        </div>}
+        <p className="text-xs text-muted-foreground">Uses your AI allowance. Selected screen text and screenshots go to Screenpipe’s AI provider. Recording exclusions apply; personal content may be included.</p>
+        <details className="text-xs text-muted-foreground"><summary className="cursor-pointer rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground">How daily updates work</summary>
+          <p className="mt-2">Four agents discover workflows, investigate evidence, review drafts, and maintain accuracy. Dependent tasks resume in both Chat and Workflows.</p>
+          <p className="mt-2">Turn updates off in <span className="font-medium text-foreground">Chat → Scheduled tasks</span>.</p>
+        </details>
+        {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+        <DialogFooter className="gap-2 sm:gap-0">
+          <Button variant="outline" disabled={busy} onClick={nextStep}>Not now</Button>
+          <Button disabled={busy || !setup} onClick={enable}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />} {busy ? ui("Enabling…") : ui("Enable daily updates")}</Button>
+        </DialogFooter>
+      </>}
     </DialogContent>
   </Dialog>;
 }

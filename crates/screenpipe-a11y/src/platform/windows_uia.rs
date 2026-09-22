@@ -213,6 +213,10 @@ pub(crate) struct UiaContext {
     /// Uses Full mode so walked elements retain live COM references for navigation.
     walker_cache_request: IUIAutomationCacheRequest,
     tree_walker: IUIAutomationTreeWalker,
+    /// RawView is reserved for opt-in semantic capture. Chromium can omit
+    /// inert HTML containers (and therefore their classes/ids) from ControlView.
+    semantic_cache_request: IUIAutomationCacheRequest,
+    semantic_tree_walker: IUIAutomationTreeWalker,
 }
 
 impl UiaContext {
@@ -277,6 +281,9 @@ impl UiaContext {
             walker_cache_request.SetTreeScope(TreeScope_Element)?;
 
             let tree_walker = automation.ControlViewWalker()?;
+            let semantic_cache_request = walker_cache_request.Clone()?;
+            semantic_cache_request.SetTreeFilter(&automation.RawViewCondition()?)?;
+            let semantic_tree_walker = automation.RawViewWalker()?;
 
             Ok(Self {
                 automation,
@@ -284,6 +291,8 @@ impl UiaContext {
                 enrichment_cache_request,
                 walker_cache_request,
                 tree_walker,
+                semantic_cache_request,
+                semantic_tree_walker,
             })
         }
     }
@@ -399,15 +408,51 @@ impl UiaContext {
         hwnd: HWND,
         budget: &mut TreeBudget,
     ) -> Option<AccessibilityNode> {
+        self.capture_window_tree_walker_with(
+            hwnd,
+            budget,
+            &self.tree_walker,
+            &self.walker_cache_request,
+        )
+    }
+
+    /// Semantic browser capture needs inert HTML containers that Chromium can
+    /// omit from ControlView. RawView is still bounded by the production node
+    /// and wall-clock budgets and is never used by the historical capture path.
+    pub(crate) fn capture_window_tree_bounded_semantic(
+        &self,
+        hwnd: HWND,
+        max_elements: usize,
+        timeout: Duration,
+    ) -> Option<CapturedTree> {
+        let deadline = Instant::now() + timeout;
+        let mut budget = TreeBudget::new(max_elements, deadline);
+        self.capture_window_tree_walker_with(
+            hwnd,
+            &mut budget,
+            &self.semantic_tree_walker,
+            &self.semantic_cache_request,
+        )
+        .map(|root| CapturedTree {
+            root,
+            truncation: budget.truncation,
+        })
+    }
+
+    fn capture_window_tree_walker_with(
+        &self,
+        hwnd: HWND,
+        budget: &mut TreeBudget,
+        tree_walker: &IUIAutomationTreeWalker,
+        cache_request: &IUIAutomationCacheRequest,
+    ) -> Option<AccessibilityNode> {
         unsafe {
             // Get a live element (required for TreeWalker navigation)
             let live_element = self.automation.ElementFromHandle(hwnd).ok()?;
             // Cache properties on the root element
-            let cached_root = live_element
-                .BuildUpdatedCache(&self.walker_cache_request)
-                .ok()?;
+            let cached_root = live_element.BuildUpdatedCache(cache_request).ok()?;
 
-            Some(self.build_node_walker(&cached_root, budget))
+            Some(self.build_node_walker(&cached_root, budget, tree_walker, cache_request))
         }
     }
 
@@ -419,6 +464,8 @@ impl UiaContext {
         &self,
         element: &IUIAutomationElement,
         budget: &mut TreeBudget,
+        tree_walker: &IUIAutomationTreeWalker,
+        cache_request: &IUIAutomationCacheRequest,
     ) -> AccessibilityNode {
         budget.count += 1;
 
@@ -443,20 +490,26 @@ impl UiaContext {
         if !budget.exhausted() {
             unsafe {
                 // Navigate to first child via TreeWalker
-                if let Ok(child) = self
-                    .tree_walker
-                    .GetFirstChildElementBuildCache(element, &self.walker_cache_request)
+                if let Ok(child) =
+                    tree_walker.GetFirstChildElementBuildCache(element, cache_request)
                 {
-                    children.push(self.build_node_walker(&child, budget));
+                    children.push(self.build_node_walker(
+                        &child,
+                        budget,
+                        tree_walker,
+                        cache_request,
+                    ));
                     // Iterate siblings
                     let mut current = child;
                     while !budget.exhausted() {
-                        match self
-                            .tree_walker
-                            .GetNextSiblingElementBuildCache(&current, &self.walker_cache_request)
-                        {
+                        match tree_walker.GetNextSiblingElementBuildCache(&current, cache_request) {
                             Ok(next) => {
-                                children.push(self.build_node_walker(&next, budget));
+                                children.push(self.build_node_walker(
+                                    &next,
+                                    budget,
+                                    tree_walker,
+                                    cache_request,
+                                ));
                                 current = next;
                             }
                             Err(_) => break,

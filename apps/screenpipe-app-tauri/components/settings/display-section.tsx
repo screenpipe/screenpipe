@@ -10,24 +10,14 @@ import { commands } from "@/lib/utils/tauri";
 import { useTheme } from "@/components/theme-provider";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
-import { Moon, Sun, Monitor, Layers, MessageSquare, PanelLeft, Maximize2, EyeOff, MinusSquare, Type, CalendarClock } from "lucide-react";
+import { Moon, Sun, Monitor, Layers, MessageSquare, PanelLeft, Maximize2, EyeOff, MinusSquare, Type } from "lucide-react";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { useToast } from "@/components/ui/use-toast";
-import { Button } from "@/components/ui/button";
 import { Settings } from "@/lib/hooks/use-settings";
 import { FONT_SIZE_DEFAULT, FONT_SIZE_OPTIONS } from "@/lib/utils/font-size";
 import { open } from "@tauri-apps/plugin-shell";
 import type { SettingsField } from "./settings-search";
-import { ManagedSwitch } from "@/components/enterprise-locked-setting";
-import {
-  DEFAULT_SIDEBAR_NAV_LAYOUT,
-  SIDEBAR_NAV_ORDER,
-  isSidebarNavLayoutDefault,
-  normalizeSidebarNavLayout,
-  resolveVisibleSidebarNavIds,
-  setSidebarNavItemHidden,
-} from "@/lib/utils/sidebar-nav-layout";
 import { msg } from "gt-react";
 
 
@@ -37,11 +27,9 @@ export const searchIndex: SettingsField[] = [
   { label: msg("Font Size", {}) },
   { label: msg("Chat Always on Top", {}), keywords: ["pin", "window"] },
   { label: msg("Shortcut Reminder", {}), keywords: ["overlay", "pill", "pin", "drag", "position"] },
-  { label: msg("Timeline / rewind", {}), keywords: ["rewind", "timeline", "backend"] },
   { label: msg("Overlay Size", {}) },
   { label: msg("Hide from screen recordings", {}), keywords: ["capture", "obs", "screen share", "overlay"] },
   { label: msg("Sidebar translucency", {}), keywords: ["vibrancy", "translucent"] },
-  { label: msg("Meetings in Sidebar", {}), keywords: ["meeting", "meetings", "sidebar", "toolbar", "nav", "navigation", "icon", "reorder", "customize"] },
 ];
 
 export function DisplaySection() {
@@ -52,15 +40,6 @@ export function DisplaySection() {
   const { theme, setTheme } = useTheme();
   const { toast } = useToast();
   const { isMac, isWindows } = usePlatform();
-  // Guards the Disable-Timeline toggle against double-invoke (rapid toggle /
-  // re-render) so we never fire two overlapping screenpipe restarts.
-  const timelineRestartingRef = React.useRef(false);
-  const sidebarLayout = normalizeSidebarNavLayout(settings?.sidebarNavLayout);
-  const meetingsInSidebar = resolveVisibleSidebarNavIds(
-    sidebarLayout,
-    SIDEBAR_NAV_ORDER,
-  ).includes("meetings");
-
   const handleSettingsChange = (newSettings: Partial<Settings>) => {
     if (settings) {
       updateSettings(newSettings);
@@ -154,75 +133,6 @@ export function DisplaySection() {
                   );
                 })}
               </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Disable Timeline / rewind. Gates timeline-only backend work
-            (hot-cache warm-up + frame/audio buffering) and the native macOS
-            Live Text overlay. Lives in Display next to Timeline Mode, but
-            unlike the other display toggles it needs a full screenpipe restart
-            to take effect, so the handler restarts the server inline. */}
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <EyeOff className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div>
-                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                    Timeline / rewind
-                    <HelpTooltip text={gt("Turn off the timeline / rewind feature. Skips the in-memory hot frame cache (warm-up + per-frame/audio buffering) that only the timeline uses, and disables the native macOS Live Text overlay that can otherwise leak a selection layer over other windows (e.g. the chat input) and block typing. Restarts screenpipe to apply.")} />
-                  </h3>
-                  <p className="text-xs text-muted-foreground">Show rewind and keep its background cache work on</p>
-                </div>
-              </div>
-              <ManagedSwitch
-                settingKey="disableTimeline"
-                id="disableTimeline"
-                checked={!(settings?.disableTimeline ?? false)}
-                onCheckedChange={async (checked) => {
-                  const disabled = !checked;
-                  // Collapse double-invoke (rapid toggle / re-render) into one
-                  // restart — two overlapping stop/spawn cycles raced before.
-                  if (timelineRestartingRef.current) return;
-                  timelineRestartingRef.current = true;
-                  try {
-                    // Persist first (awaited) so the backend reads the new value
-                    // on restart and the shortcut-reminder guard sees it.
-                    await updateSettings({ disableTimeline: disabled });
-                    // The screenpipe shortcut only opens the timeline, so its
-                    // reminder overlay is meaningless once the timeline is off —
-                    // tear it down on disable, restore it on re-enable.
-                    try {
-                      if (disabled) {
-                        await commands.hideShortcutReminder();
-                      } else {
-                        await commands.showShortcutReminder(settings.showScreenpipeShortcut);
-                      }
-                    } catch {}
-                    // disableTimeline gates timeline-only backend work (hot-cache
-                    // warm-up + frame/audio buffering) wired at server startup, so
-                    // it needs a full screenpipe restart to take effect.
-                    try {
-                      await commands.stopScreenpipe();
-                      await new Promise((r) => setTimeout(r, 500));
-                      await commands.spawnScreenpipe(null);
-                      toast({
-                        title: disabled ? gt("Timeline disabled") : gt("Timeline enabled"),
-                        description: gt("Screenpipe restarted to apply the change."),
-                      });
-                    } catch (e) {
-                      toast({
-                        title: gt("Failed to restart screenpipe"),
-                        description: gt("Restart screenpipe manually to apply the change."),
-                        variant: "destructive",
-                      });
-                    }
-                  } finally {
-                    timelineRestartingRef.current = false;
-                  }
-                }}
-              />
             </div>
           </CardContent>
         </Card>
@@ -366,69 +276,6 @@ export function DisplaySection() {
                   }
                 }}
               />
-            </div>
-          </CardContent>
-        </Card>
-        {/* Home sidebar layout. Meetings ships as a sidebar row; hiding it is
-            what puts its compact icon in the top-left chrome strip — so this
-            switch and the right-click menu drive the same layout state rather
-            than two competing preferences. */}
-        <Card className="border-border bg-card">
-          <CardContent className="px-3 py-2.5">
-            <div className="space-y-2.5">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2.5">
-                  <CalendarClock className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <div>
-                    <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
-                      Meetings in Sidebar
-                      <HelpTooltip text={gt("Show Meetings as a labelled row in the Home sidebar. Off keeps it as the compact icon in the top-left strip next to search. The live-recording dot shows either way.")} />
-                    </h3>
-                    <p className="text-xs text-muted-foreground">
-                      {meetingsInSidebar
-                        ? gt("Labelled row in the sidebar")
-                        : gt("Compact icon next to search")}
-                    </p>
-                  </div>
-                </div>
-                <Switch
-                  id="meetingsInSidebar"
-                  data-testid="meetings-in-sidebar"
-                  checked={meetingsInSidebar}
-                  onCheckedChange={(checked) =>
-                    handleSettingsChange({
-                      sidebarNavLayout: setSidebarNavItemHidden(
-                        sidebarLayout,
-                        SIDEBAR_NAV_ORDER,
-                        "meetings",
-                        !checked,
-                      ),
-                    })
-                  }
-                />
-              </div>
-              <p className="ml-[26px] text-xs text-muted-foreground">
-                Drag sidebar rows to reorder them, or right-click one to move,
-                hide, or restore it.
-              </p>
-              {!isSidebarNavLayoutDefault(sidebarLayout) && (
-                <div className="ml-[26px]">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    data-testid="reset-sidebar-layout"
-                    onClick={() => {
-                      handleSettingsChange({
-                        sidebarNavLayout: { ...DEFAULT_SIDEBAR_NAV_LAYOUT },
-                      });
-                      toast({ title: gt("Sidebar layout reset") });
-                    }}
-                  >
-                    Reset sidebar layout
-                  </Button>
-                </div>
-              )}
             </div>
           </CardContent>
         </Card>

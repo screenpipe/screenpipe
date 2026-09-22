@@ -1,0 +1,94 @@
+{
+  "capture_platform": "macOS 15.7.9 arm64, AWS mac-m4pro.metal",
+  "browser": "Safari 26.6.1",
+  "before_commit": "d00a8e2deb98a3d5af2777b23eadd160279e5f1c",
+  "after_commit": "9f17d2a5f9d7b9c205b7db7ef98d19fc8b29a7eb",
+  "method": "Seven real production AX captures from the isolated AWS Mac, replayed at d00a8e2deb and final parser commit 9f17d2a5f9 on the local Mac. Native Mac capture code was unchanged by the Windows fixes. Raw content is private. These bounded checks are not a population-wide accuracy estimate; raw JSON counts measure representation size and include offscreen nodes.",
+  "results": [
+    {
+      "surface": "GitLab issue, top",
+      "before_outcome": "not_handled",
+      "after_outcome": "handled",
+      "items": 2,
+      "raw_json_tokens": 30024,
+      "context_tokens": 280,
+      "known_offscreen_nodes": 344,
+      "checks": 11,
+      "passed": 11,
+      "failures": []
+    },
+    {
+      "surface": "Wikipedia article, top",
+      "before_outcome": "not_handled",
+      "after_outcome": "handled",
+      "items": 1,
+      "raw_json_tokens": 94324,
+      "context_tokens": 355,
+      "known_offscreen_nodes": 1613,
+      "checks": 10,
+      "passed": 10,
+      "failures": []
+    },
+    {
+      "surface": "Wikipedia article, scrolled",
+      "before_outcome": "not_handled",
+      "after_outcome": "handled",
+      "items": 1,
+      "raw_json_tokens": 90816,
+      "context_tokens": 722,
+      "known_offscreen_nodes": 1564,
+      "checks": 10,
+      "passed": 10,
+      "failures": []
+    },
+    {
+      "surface": "GitHub pull-request conversation, top",
+      "before_outcome": "not_handled",
+      "after_outcome": "handled",
+      "items": 2,
+      "raw_json_tokens": 32103,
+      "context_tokens": 164,
+      "known_offscreen_nodes": 373,
+      "checks": 9,
+      "passed": 9,
+      "failures": []
+    },
+    {
+      "surface": "Hacker News discussion",
+      "before_outcome": "not_handled",
+      "after_outcome": "handled",
+      "items": 4,
+      "raw_json_tokens": 8394,
+      "context_tokens": 83,
+      "known_offscreen_nodes": 0,
+      "checks": 11,
+      "passed": 11,
+      "failures": []
+    },
+    {
+      "surface": "TextEdit synthetic document",
+      "before_outcome": "handled",
+      "after_outcome": "handled",
+      "items": 1,
+      "raw_json_tokens": 463,
+      "context_tokens": 85,
+      "known_offscreen_nodes": 0,
+      "checks": 10,
+      "passed": 10,
+      "failures": []
+    },
+    {
+      "surface": "Terminal synthetic output",
+      "before_outcome": "handled",
+      "after_outcome": "handled",
+      "items": 1,
+      "raw_json_tokens": 1170,
+      "context_tokens": 279,
+      "known_offscreen_nodes": 0,
+      "checks": 8,
+      "passed": 8,
+      "failures": []
+    }
+  ],
+  "capture_commit": "1ece5c01a6fee1114242464f9f16da7c466c491b"
+}

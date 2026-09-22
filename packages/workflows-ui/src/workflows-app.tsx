@@ -425,6 +425,13 @@ function AppShell({
   const [assistantMode, setAssistantMode] = useState<AssistantState["mode"] | null>(null);
   const assistantToggleLabel = assistantOpen ? "Collapse right sidebar" : "Open right sidebar";
   const [navigationCollapsed, setNavigationCollapsed] = useState(false);
+  // Compact navigation is transient; resizing must not leave it covering the editor.
+  useEffect(() => {
+    const compact = window.matchMedia("(max-width: 680px)");
+    const onResize = () => { if (compact.matches) setNavigationCollapsed(true); };
+    compact.addEventListener("change", onResize);
+    return () => compact.removeEventListener("change", onResize);
+  }, []);
   const navigationWidth = useNavigationWidth(!navigationCollapsed && !embedded, assistantDocked);
   const shortcuts = useSidebarShortcuts();
   const toggleNavigation = useCallback(() => {
@@ -436,7 +443,7 @@ function AppShell({
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem("workflows:navigation-collapsed");
-      setNavigationCollapsed(saved === null ? window.innerWidth <= 680 : saved === "true");
+      setNavigationCollapsed(window.innerWidth <= 680 || saved === "true");
     } catch { setNavigationCollapsed(window.innerWidth <= 680); }
   }, []);
   useEffect(() => {
@@ -482,7 +489,7 @@ function AppShell({
         </div>}
         <nav className={styles.nav} aria-label={ui("Primary navigation")}>
           {nav.map(([target, Icon, label]) => (
-            <button key={target} className={activeView === target ? styles.navActive : ""} onClick={() => navigate(target)}>
+            <button key={target} className={activeView === target ? styles.navActive : ""} onClick={() => { navigate(target); if (window.innerWidth <= 680) setNavigationCollapsed(true); }}>
               <Icon size={16} />{label}
               {target === "workflows" && <span>{workflowCount || "—"}</span>}
             </button>
@@ -525,7 +532,7 @@ function AppShell({
         </header>
         {embedded && <nav className={styles.embeddedNav} aria-label={ui("Workflows sections")}>
           {nav.map(([target, Icon, label]) => (
-            <button key={target} className={activeView === target ? styles.embeddedNavActive : ""} onClick={() => navigate(target)}><Icon size={14} />{label}</button>
+            <button key={target} className={activeView === target ? styles.embeddedNavActive : ""} onClick={() => { navigate(target); if (window.innerWidth <= 680) setNavigationCollapsed(true); }}><Icon size={14} />{label}</button>
           ))}
         </nav>}
         <main className={styles.main}>{children}</main>
@@ -741,24 +748,44 @@ function WorkflowsView({ workflows, knownWorkflowCount, activityPeriod, filters,
         </section>}
         {visible.length ? <div className={styles.workflowGrid}>{visible.map((workflow) => {
           const originalIndex = workflows.indexOf(workflow);
-          const actionableCount = workflow.bottlenecks.filter(isActionableBottleneck).length;
-          const constraintCount = workflow.bottlenecks.length - actionableCount;
           const timing = workflowTiming(workflow.timing);
           return (
             <article key={workflow.id || workflow.title} className={styles.workflowCard}>
-              <div className={styles.workflowCardTop}><span>{String(workflow.rank).padStart(2, "0")}</span><div><Pill>{workflow.catalogStatus === "not-reobserved" ? ui("Kept from earlier scan") : workflow.evidenceStatus === "supported-steps" ? ui("Steps have sources") : ui("Candidate · needs review")}</Pill>{actionableCount > 0 && <Pill tone="warm">{actionableCount} possible improvement{actionableCount === 1 ? "" : "s"}</Pill>}{constraintCount > 0 && <Pill>{ui("{count, plural, one {# constraint} other {# constraints}}", { count: constraintCount })}</Pill>}</div></div>
-              <h2>{workflow.title}</h2><p>{workflow.description}</p>
-              <div className={styles.cardPath}><span>{workflow.trigger}</span><ArrowRight size={12} /><span>{workflow.outcome}</span></div>
-              <div className={styles.cardMetrics}><div title={timing ? ui("Estimated elapsed time from source-backed start and finish moments. Includes pauses; not active work time. Open the map to inspect the runs.") : ui("Not enough evidence of complete workflow runs to estimate an average.")}><span>{timing?.sampleCount === 1 ? ui("Time for one run") : !timing && hasMeasuredDuration(workflow) ? ui("Meeting duration") : ui("Avg. time / run")}</span><strong>{timing ? formatEstimatedMinutes(timing.averageMinutes) : hasMeasuredDuration(workflow) ? formatMinutes(workflow.totalMinutes) : "—"}</strong>{timing && <small>{ui("{count, plural, one {# run} other {# runs}}", { count: timing.sampleCount })} · estimated</small>}</div><div><span>Stages</span><strong>{workflow.stages.length}</strong></div><div><span>Evidence</span><strong>{workflow.quality.evidenceCount}</strong></div><div><span>Screenshots</span><strong>{workflow.quality.screenshotCount}/{workflow.stages.length}</strong></div></div>
-              <div className={styles.cardFooter}><span>{workflow.frequency}</span><div className={styles.cardActions}>
-                <button type="button" className={styles.cardOpen} onClick={() => openWorkflow(originalIndex)}>Open map <ChevronRight size={14} /></button>
-              </div></div>
+              <h2>{workflow.title}</h2>
+              <p className={styles.cardDescription}>{workflow.description}</p>
+              <div className={styles.cardFooter}>
+                <div className={styles.cardSummary}>
+                  {workflow.stages.length} steps
+                  {timing && <><span aria-hidden="true">·</span>{`${formatEstimatedMinutes(timing.averageMinutes)} / run · estimated`}</>}
+                </div>
+                <div className={styles.cardActions}>
+                  <button type="button" className={styles.cardOpen} onClick={() => openWorkflow(originalIndex)}><span className={styles.cardOpenLabel}>{ui("Open map")}</span><ChevronRight size={14} /></button>
+                </div>
+              </div>
             </article>
           );
         })}</div> : <section className={styles.emptyState}><Search size={23} /><h2>No workflows match these filters</h2><p>Broaden the filters or clear the search to see the rest of your mapped work.</p><button className={styles.primaryButton} onClick={() => setFilters(defaultWorkflowFilters)}>Clear filters</button></section>}
       </>}
     </>
   );
+}
+
+function CatalogPlaceholder({ detail = false }: { detail?: boolean }) {
+  const ui = useGT();
+  const bar = (width: string, height = 10) => <span className={styles.skeletonBar} style={{ width, height }} />;
+  return <section aria-busy="true" aria-label={ui("Loading workflows")}>
+    <div className={`${styles.pageHeader} ${styles.catalogHeader}`}><h1>{detail ? ui("Workflow") : ui("Your workflows")}</h1><span role="status" className={styles.catalogLoadStatus}>{ui("Loading saved workflows…")}</span></div>
+    <div aria-hidden="true">
+      {!detail && <div className={styles.filterBar}><div>{bar("100px")}{bar("140px", 8)}</div>{bar("85px", 28)}</div>}
+      <div className={detail ? styles.skeletonDetail : styles.workflowGrid}>
+        {Array.from({ length: detail ? 3 : 4 }, (_, i) => <div key={i} className={`${styles.workflowCard} ${styles.skeletonCard}`}>
+          <div className={styles.skeletonTitle}>{bar("78%", 20)}</div>
+          <div className={styles.skeletonLines}>{bar("95%")}{bar("72%")}{detail && bar("64%")}</div>
+          <div className={styles.cardFooter}>{bar("140px", 10)}{bar("16px", 10)}</div>
+        </div>)}
+      </div>
+    </div>
+  </section>;
 }
 
 function readableSkillInstructions(value: string) {
@@ -964,7 +991,8 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
     else next.add(index);
     return next;
   });
-  const workflowActions = <div className={styles.workflowActions}>{platform.guides && <button className={styles.skillButton} type="button" onClick={() => setGuideOpen(true)}><BookOpen size={14}/>Create SOP</button>}{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? ui("Creating skill…") : skillSaved ? platform.skillInstallMode === "preview" ? ui("Skill preview") : ui("Skill installed") : skillDraft ? ui("Review skill") : ui("Create skill")}</button>}{workflowAgentActions?.(workflow)}{onShareWorkflow && <button className={styles.skillButton} type="button" onClick={() => onShareWorkflow(workflow)}><Share2 size={14} />Share with team</button>}{platform.assistant?.saveFeedback && <button className={styles.skillButton} type="button" onClick={() => window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: { key: `feedback:${workflow.id || workflow.title}`, title: workflow.title, workflow, purpose: "feedback" } }))}><MessageCircle size={14} />Feedback</button>}</div>;
+  const agentActions = workflowAgentActions?.(workflow);
+  const workflowActions = <div className={styles.workflowActions}>{agentActions}{platform.guides && <button className={styles.skillButton} type="button" onClick={() => setGuideOpen(true)}><BookOpen size={14}/>Create SOP</button>}{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? ui("Creating skill…") : skillSaved ? platform.skillInstallMode === "preview" ? ui("Skill preview") : ui("Skill installed") : skillDraft ? ui("Review skill") : ui("Create skill")}</button>}{onShareWorkflow && <button className={styles.skillButton} type="button" onClick={() => onShareWorkflow(workflow)}><Share2 size={14} />Share with team</button>}{platform.assistant?.saveFeedback && <button className={styles.skillButton} type="button" onClick={() => window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: { key: `feedback:${workflow.id || workflow.title}`, title: workflow.title, workflow, purpose: "feedback" } }))}><MessageCircle size={14} />Feedback</button>}</div>;
   return (
     <>
       <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
@@ -1274,6 +1302,9 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   const [runtime, setRuntime] = useState<WorkflowRuntime | null>(null);
   const [analysis, setAnalysis] = useState<WorkflowAnalysis | null>(() => initialAnalysis ? sanitizeWorkflowAnalysis(initialAnalysis) : null);
   const [catalogReady, setCatalogReady] = useState(!platform.loadCapturedWork);
+  const [catalogLoading, setCatalogLoading] = useState(Boolean(platform.loadCapturedWork));
+  const [catalogLoadError, setCatalogLoadError] = useState(false);
+  const [catalogLoadRevision, setCatalogLoadRevision] = useState(0);
   const [scopeId, setScopeId] = useState(initialScopeId ?? initialAnalysis?.scope?.id ?? "");
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisJob, setAnalysisJob] = useState<WorkflowAnalysisJob | null>(null);
@@ -1321,18 +1352,24 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
 
   const selectScope = useCallback((nextScopeId: string) => {
     setScopeId(nextScopeId);
+    setCatalogReady(false);
+    setCatalogLoading(true);
+    setCatalogLoadError(false);
     setAnalysis(null);
     setAnalysisError("");
     setSelectedWorkflow(0);
   }, []);
 
   const refreshRuntime = useCallback(() => {
+    setCatalogLoading(Boolean(platform.loadCapturedWork));
+    setCatalogLoadError(false);
     void platform.ensureRuntime()
       .then((nextRuntime) => {
         setRuntime(nextRuntime);
+        setCatalogLoadRevision(value => value + 1);
         setScopeId((current) => current || nextRuntime.availableScopes?.[0]?.id || "");
       })
-      .catch((error) => setAnalysisError(error instanceof Error ? error.message : String(error || "Could not prepare your work history.")));
+      .catch(() => { setCatalogLoading(false); setCatalogLoadError(true); });
   }, [platform]);
 
   useEffect(() => {
@@ -1359,20 +1396,28 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   useEffect(() => {
     if (!runtime || !platform.loadCapturedWork) return;
     setCatalogReady(false);
+    setCatalogLoading(true);
+    setCatalogLoadError(false);
     let cancelled = false;
-    void platform.loadCapturedWork(WORKFLOW_CATALOG_DAYS, { scope: activeScope ?? undefined })
-      .then((nextAnalysis) => {
-        if (!cancelled && nextAnalysis) {
-          setAnalysis(current => retainNewerWorkflowEdits(current, sanitizeWorkflowAnalysis(nextAnalysis)));
-          setCatalogReady(true);
-          setSelectedWorkflow(0);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) setAnalysisError(error instanceof Error ? error.message : "Could not load the workflow report.");
-      });
-    return () => { cancelled = true; };
-  }, [activeScope?.id, platform, Boolean(runtime)]);
+    let retryTimer: ReturnType<typeof setTimeout>;
+    const load = async (attempt = 0) => {
+      try {
+        const nextAnalysis = await platform.loadCapturedWork!(WORKFLOW_CATALOG_DAYS, { scope: activeScope ?? undefined });
+        if (cancelled) return;
+        if (nextAnalysis) setAnalysis(current => retainNewerWorkflowEdits(current, sanitizeWorkflowAnalysis(nextAnalysis)));
+        setCatalogReady(true);
+        setCatalogLoading(false);
+        setCatalogLoadError(false);
+      } catch {
+        if (cancelled) return;
+        // Brief backend restarts should not flash onboarding or discard saved cards.
+        if (attempt < 2) retryTimer = setTimeout(() => void load(attempt + 1), 1000 * (attempt + 1));
+        else { setCatalogLoading(false); setCatalogLoadError(true); }
+      }
+    };
+    void load();
+    return () => { cancelled = true; clearTimeout(retryTimer); };
+  }, [activeScope?.id, platform, Boolean(runtime), catalogLoadRevision]);
 
   useEffect(() => {
     const refined = (event: Event) => {
@@ -1628,6 +1673,16 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
     case "profile": content = workProfile ? <ProfileView contextDiscovery={platform.contextDiscovery} fillContext={platform.fillContext} profile={workProfile} workspaceView={workspaceProfile} saving={contextProfile.status === "saving"} saved={contextProfile.status === "saved"} error={contextProfile.error} update={contextProfile.update} retry={contextProfile.retry} /> : <div className={styles.contextPage}><h1>Context</h1>{contextProfile.error ? <p role="alert">{contextProfile.error} <button type="button" onClick={contextProfile.retry}>Retry</button></p> : <p role="status">Loading context…</p>}</div>; break;
     case "evidence": content = <EvidenceView workflows={workflows} openWorkflow={openWorkflow} runtime={runtime} />; break;
     case "privacy": content = <PrivacyView runtime={runtime} />; break;
+  }
+
+  const catalogView = view !== "profile" && view !== "privacy";
+  if (catalogView && !knownWorkflows.length && (catalogLoading || catalogLoadError)) {
+    content = catalogLoading ? <CatalogPlaceholder detail={view === "workflow"} /> : <>
+      <div className={`${styles.pageHeader} ${styles.catalogHeader}`}><h1>Your workflows</h1></div>
+      <section className={styles.catalogLoadError} role="alert"><AlertTriangle size={20} /><h2>Couldn’t load your workflows</h2><p>Screenpipe may still be starting or reconnecting. Try loading them again.</p><button className={styles.primaryButton} onClick={refreshRuntime}><RefreshCw size={14} />Retry loading</button></section>
+    </>;
+  } else if (catalogView && analysis && (catalogLoading || catalogLoadError)) {
+    content = <><div className={styles.catalogRefreshNotice} role={catalogLoadError ? "alert" : "status"}>{catalogLoadError ? <><span>Couldn’t refresh. Your last loaded workflows are still shown.</span><button onClick={refreshRuntime}>Retry loading</button></> : ui("Refreshing saved workflows…")}</div>{content}</>;
   }
 
   return <>

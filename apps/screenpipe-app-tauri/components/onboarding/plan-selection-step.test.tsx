@@ -21,6 +21,7 @@ import { buildLocalCheckoutReturnUrl } from "@/lib/onboarding-checkout-navigatio
 const mocks = vi.hoisted(() => ({
   loadUser: vi.fn(async () => undefined),
   capture: vi.fn(),
+  locale: "en",
   settings: {
     user: {
       token: "token-1",
@@ -48,6 +49,7 @@ vi.mock("@/lib/web-url", () => ({
   screenpipeWebUrl: (path: string) => `https://example.test${path}`,
 }));
 vi.mock("posthog-js", () => ({ default: { capture: mocks.capture } }));
+vi.mock("@/lib/i18n/provider", () => ({ useUiLocale: () => mocks.locale }));
 
 import PlanSelectionStep from "./plan-selection-step";
 
@@ -55,6 +57,7 @@ let submitSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.locale = "en";
   window.history.replaceState({}, "", "/onboarding");
   document.querySelectorAll("form").forEach((form) => form.remove());
   mocks.settings.user = {
@@ -92,7 +95,8 @@ describe("hosted onboarding checkout", () => {
     expect(form.target).toBe("_self");
     expect(
       Array.from(form.querySelectorAll("input"), (input) => input.name),
-    ).toEqual(["token", "return_to"]);
+    ).toEqual(["token", "return_to", "locale"]);
+    expect(form.querySelector<HTMLInputElement>('input[name="locale"]')?.value).toBe("en");
     expect(
       form.querySelector<HTMLInputElement>('input[name="token"]')?.value,
     ).toBe("token-1");
@@ -110,6 +114,14 @@ describe("hosted onboarding checkout", () => {
 
     view.rerender(<PlanSelectionStep handleNextSlide={vi.fn()} />);
     expect(submitSpy).toHaveBeenCalledOnce();
+  });
+
+  it("hands off the effective app language instead of the browser preference", async () => {
+    mocks.locale = "ja";
+    vi.spyOn(navigator, "language", "get").mockReturnValue("fr-FR");
+    render(<PlanSelectionStep handleNextSlide={vi.fn()} />);
+    await waitFor(() => expect(submitSpy).toHaveBeenCalledOnce());
+    expect(checkoutForm().querySelector<HTMLInputElement>('input[name="locale"]')?.value).toBe("ja");
   });
 
   it("allows only the app's exact local return origins", () => {

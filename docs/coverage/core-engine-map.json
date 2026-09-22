@@ -1375,7 +1375,8 @@
         "src/routes/workflow_edits.rs",
         "src/routes/workflow_pipeline.rs",
         "src/routes/workflows.rs",
-        "tests/workflow_catalog_contract_test.rs"
+        "tests/workflow_catalog_contract_test.rs",
+        "tests/workflow_timing_e2e.rs"
       ],
       "platforms": [
         "windows",

@@ -112,6 +112,25 @@ fn is_automation_structure_type(control_type: &str) -> bool {
     )
 }
 
+/// UIA containers that preserve the browser document hierarchy needed by the
+/// semantic parsers. Text-bearing controls are emitted by the normal path;
+/// this list only covers otherwise-discarded structural nodes.
+fn is_semantic_structure_type(control_type: &str) -> bool {
+    matches!(
+        control_type,
+        "Document" | "Group" | "Pane" | "Custom" | "List" | "Table" | "DataGrid"
+    )
+}
+
+fn is_semantic_raw_view_app(app_lower: &str) -> bool {
+    [
+        "edge", "chrome", "chromium", "brave", "firefox", "slack", "discord", "claude", "obsidian",
+        "code", "cursor", "windsurf", "notion",
+    ]
+    .iter()
+    .any(|name| app_lower.contains(name))
+}
+
 /// Lazily-initialized COM + UIA state. Wrapped in `UnsafeCell` because
 /// `TreeWalkerPlatform::walk_focused_window` takes `&self` but we need
 /// to mutate on first call (lazy init). The walker is single-threaded.
@@ -349,11 +368,16 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         // fallback (Chromium/Electron), which is serviced synchronously on the
         // target app's UI thread and freezes it for the duration of the walk.
         let remaining_budget = effective_timeout.saturating_sub(start.elapsed());
-        let captured =
-            match uia.capture_window_tree_bounded(hwnd, effective_max_nodes, remaining_budget) {
-                Some(captured) => captured,
-                None => return Ok(TreeWalkResult::NotFound),
-            };
+        let captured = match if self.config.capture_semantic_structure
+            && is_semantic_raw_view_app(&app_lower)
+        {
+            uia.capture_window_tree_bounded_semantic(hwnd, effective_max_nodes, remaining_budget)
+        } else {
+            uia.capture_window_tree_bounded(hwnd, effective_max_nodes, remaining_budget)
+        } {
+            Some(captured) => captured,
+            None => return Ok(TreeWalkResult::NotFound),
+        };
         let root = captured.root;
         let truncation_reason = captured.truncation;
 
@@ -367,6 +391,8 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         // Extract text from the tree (matching macOS text extraction behavior)
         let mut text_buffer = String::with_capacity(4096);
         let mut nodes = Vec::with_capacity(256);
+        let mut semantic_nodes = Vec::with_capacity(128);
+        let mut walk_index = 0u32;
         let mut browser_url: Option<String> = None;
         let mut hit_ignored_extension = false;
         extract_text_from_tree(
@@ -381,7 +407,11 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             ignored_patterns.as_ref(),
             &app_lower,
             &mut hit_ignored_extension,
+            self.config.capture_semantic_structure,
             self.config.capture_automation_structure,
+            false,
+            &mut semantic_nodes,
+            &mut walk_index,
         );
 
         if hit_ignored_extension {
@@ -465,7 +495,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             window_name,
             text_content: text_buffer,
             nodes,
-            semantic_nodes: Vec::new(),
+            semantic_nodes,
             browser_url,
             document_path,
             timestamp: Utc::now(),
@@ -665,6 +695,23 @@ fn normalize_bounds(
     })
 }
 
+/// Preserve trustworthy native visibility evidence even when normalized bounds
+/// are omitted because the element is wholly outside the monitor.
+fn semantic_offscreen(
+    bounds: Option<&crate::events::ElementBounds>,
+    on_screen: Option<bool>,
+) -> bool {
+    on_screen == Some(false)
+        && bounds.is_some_and(|bounds| {
+            bounds.x.is_finite()
+                && bounds.y.is_finite()
+                && bounds.width.is_finite()
+                && bounds.height.is_finite()
+                && bounds.width > 0.0
+                && bounds.height > 0.0
+        })
+}
+
 /// Build an AccessibilityTreeNode from a UIA AccessibilityNode, propagating automation properties.
 fn make_tree_node(
     uia_node: &AccessibilityNode,
@@ -673,6 +720,8 @@ fn make_tree_node(
     depth: usize,
     bounds: Option<NodeBounds>,
     on_screen: Option<bool>,
+    capture_semantic_dom: bool,
+    walk_index: u32,
 ) -> AccessibilityTreeNode {
     let mut n = AccessibilityTreeNode::new(
         role.to_string(),
@@ -681,6 +730,7 @@ fn make_tree_node(
         bounds,
     );
     n.on_screen = on_screen;
+    n.walk_index = walk_index;
     n.automation_id = uia_node.automation_id.clone();
     n.class_name = uia_node.class_name.clone();
     n.value = uia_node.value.clone();
@@ -694,6 +744,11 @@ fn make_tree_node(
     n.accelerator_key = uia_node.accelerator_key.clone();
     n.access_key = uia_node.access_key.clone();
     n.role_description = uia_node.localized_control_type.clone();
+    if capture_semantic_dom {
+        n.semantic_dom_identifier = uia_node.automation_id.clone();
+        n.semantic_dom_classes = uia_node.class_name.clone();
+        n.semantic_offscreen = semantic_offscreen(uia_node.bounds.as_ref(), on_screen);
+    }
     n
 }
 
@@ -712,13 +767,21 @@ fn extract_text_from_tree(
     ignored_patterns: &[WindowPattern],
     focused_app_lower: &str,
     hit_ignored_extension: &mut bool,
+    capture_semantic_structure: bool,
     capture_automation_structure: bool,
+    inside_document: bool,
+    semantic_nodes: &mut Vec<AccessibilityTreeNode>,
+    walk_index: &mut u32,
 ) {
     if depth > max_depth {
         return;
     }
 
     let ct = node.control_type.as_str();
+    let current_walk_index = *walk_index;
+    *walk_index = walk_index.saturating_add(1);
+    let in_document = inside_document || ct.eq_ignore_ascii_case("Document");
+    let capture_semantic_dom = capture_semantic_structure && in_document;
 
     // Skip decorative elements
     if SKIP_TYPES.iter().any(|&s| ct.eq_ignore_ascii_case(s))
@@ -750,8 +813,16 @@ fn extract_text_from_tree(
             // Never extract the value of password fields
             if node.is_password == Some(true) {
                 if capture_automation_structure {
-                    let mut tree_node =
-                        make_tree_node(node, ct, "", depth, norm_bounds.clone(), on_screen);
+                    let mut tree_node = make_tree_node(
+                        node,
+                        ct,
+                        "",
+                        depth,
+                        norm_bounds.clone(),
+                        on_screen,
+                        false,
+                        current_walk_index,
+                    );
                     // UIA Value can contain the secret even when IsPassword is
                     // set. Preserve targeting metadata, never the field value.
                     tree_node.value = None;
@@ -770,6 +841,8 @@ fn extract_text_from_tree(
                         depth,
                         norm_bounds.clone(),
                         on_screen,
+                        capture_semantic_dom,
+                        current_walk_index,
                     ));
                     // Don't recurse into text controls — their children are sub-elements of the same text
                     return;
@@ -832,6 +905,8 @@ fn extract_text_from_tree(
                             depth,
                             norm_bounds.clone(),
                             on_screen,
+                            capture_semantic_dom,
+                            current_walk_index,
                         ));
                     }
                 }
@@ -849,6 +924,8 @@ fn extract_text_from_tree(
                         depth,
                         norm_bounds.clone(),
                         on_screen,
+                        capture_semantic_dom,
+                        current_walk_index,
                     ));
                 }
             }
@@ -869,6 +946,8 @@ fn extract_text_from_tree(
                     depth,
                     norm_bounds.clone(),
                     on_screen,
+                    capture_semantic_dom,
+                    current_walk_index,
                 ));
             }
         } else if ct.eq_ignore_ascii_case("Custom") {
@@ -883,6 +962,8 @@ fn extract_text_from_tree(
                         depth,
                         norm_bounds.clone(),
                         on_screen,
+                        capture_semantic_dom,
+                        current_walk_index,
                     ));
                 }
             }
@@ -901,9 +982,45 @@ fn extract_text_from_tree(
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .unwrap_or("");
-        let mut tree_node = make_tree_node(node, ct, text, depth, norm_bounds.clone(), on_screen);
+        let mut tree_node = make_tree_node(
+            node,
+            ct,
+            text,
+            depth,
+            norm_bounds.clone(),
+            on_screen,
+            capture_semantic_dom,
+            current_walk_index,
+        );
         tree_node.automation_relevant = true;
         nodes.push(tree_node);
+    }
+
+    if capture_semantic_dom
+        && nodes.len() == nodes_before
+        && (is_semantic_structure_type(ct)
+            || node
+                .automation_id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty())
+            || node
+                .class_name
+                .as_deref()
+                .is_some_and(|class| !class.trim().is_empty()))
+    {
+        let text = node.name.as_deref().map(str::trim).unwrap_or("");
+        let mut tree_node = make_tree_node(
+            node,
+            ct,
+            text,
+            depth,
+            norm_bounds.clone(),
+            on_screen,
+            true,
+            current_walk_index,
+        );
+        tree_node.semantic_only = true;
+        semantic_nodes.push(tree_node);
     }
 
     // Recurse into children
@@ -920,7 +1037,11 @@ fn extract_text_from_tree(
             ignored_patterns,
             focused_app_lower,
             hit_ignored_extension,
+            capture_semantic_structure,
             capture_automation_structure,
+            in_document,
+            semantic_nodes,
+            walk_index,
         );
     }
 }
@@ -976,6 +1097,45 @@ fn append_text(buffer: &mut String, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[allow(clippy::too_many_arguments)]
+    fn extract_for_test(
+        node: &AccessibilityNode,
+        depth: usize,
+        max_depth: usize,
+        buffer: &mut String,
+        nodes: &mut Vec<AccessibilityTreeNode>,
+        browser_url: &mut Option<String>,
+        monitor_rect: &Option<MonitorRect>,
+        window_rect: &Option<WindowRect>,
+        ignored_patterns: &[WindowPattern],
+        focused_app_lower: &str,
+        hit_ignored_extension: &mut bool,
+        capture_semantic_structure: bool,
+        capture_automation_structure: bool,
+    ) -> Vec<AccessibilityTreeNode> {
+        let mut semantic_nodes = Vec::new();
+        let mut walk_index = 0;
+        extract_text_from_tree(
+            node,
+            depth,
+            max_depth,
+            buffer,
+            nodes,
+            browser_url,
+            monitor_rect,
+            window_rect,
+            ignored_patterns,
+            focused_app_lower,
+            hit_ignored_extension,
+            capture_semantic_structure,
+            capture_automation_structure,
+            false,
+            &mut semantic_nodes,
+            &mut walk_index,
+        );
+        semantic_nodes
+    }
 
     #[test]
     fn test_skip_types() {
@@ -1038,7 +1198,7 @@ mod tests {
         let mut buf = String::new();
         let mut nodes = Vec::new();
         let mut url = None;
-        extract_text_from_tree(
+        extract_for_test(
             &tree,
             0,
             10,
@@ -1050,6 +1210,7 @@ mod tests {
             &[],
             "",
             &mut false,
+            false,
             false,
         );
 
@@ -1098,7 +1259,7 @@ mod tests {
         let mut buf = String::new();
         let mut nodes = Vec::new();
         let mut url = None;
-        extract_text_from_tree(
+        extract_for_test(
             &tree,
             0,
             10,
@@ -1110,6 +1271,7 @@ mod tests {
             &[],
             "",
             &mut false,
+            false,
             true,
         );
 
@@ -1120,6 +1282,83 @@ mod tests {
         assert_eq!(nodes[1].is_password, Some(true));
         assert_eq!(nodes[1].value, None);
         assert!(!buf.contains("must-never-escape"));
+    }
+
+    #[test]
+    fn semantic_offscreen_requires_positive_finite_native_geometry() {
+        use crate::events::ElementBounds;
+
+        let positive = ElementBounds {
+            x: -500.0,
+            y: 20.0,
+            width: 120.0,
+            height: 30.0,
+        };
+        assert!(semantic_offscreen(Some(&positive), Some(false)));
+        assert!(!semantic_offscreen(Some(&positive), Some(true)));
+
+        for invalid in [
+            ElementBounds {
+                width: 0.0,
+                ..positive.clone()
+            },
+            ElementBounds {
+                height: 0.0,
+                ..positive.clone()
+            },
+            ElementBounds {
+                x: f64::NAN,
+                ..positive.clone()
+            },
+            ElementBounds {
+                width: f64::INFINITY,
+                ..positive.clone()
+            },
+        ] {
+            assert!(!semantic_offscreen(Some(&invalid), Some(false)));
+        }
+        assert!(!semantic_offscreen(None, Some(false)));
+    }
+
+    #[test]
+    fn combined_semantic_and_automation_capture_keeps_dom_evidence() {
+        let tree = AccessibilityNode {
+            control_type: "Document".into(),
+            children: vec![AccessibilityNode {
+                control_type: "Button".into(),
+                automation_id: Some("submit".into()),
+                class_name: Some("primary action".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut nodes = Vec::new();
+        let semantic = extract_for_test(
+            &tree,
+            0,
+            10,
+            &mut String::new(),
+            &mut nodes,
+            &mut None,
+            &None,
+            &None,
+            &[],
+            "",
+            &mut false,
+            true,
+            true,
+        );
+
+        assert!(
+            semantic.is_empty(),
+            "automation copy suppresses a duplicate"
+        );
+        let button = nodes.iter().find(|node| node.role == "Button").unwrap();
+        assert_eq!(button.semantic_dom_identifier.as_deref(), Some("submit"));
+        assert_eq!(
+            button.semantic_dom_classes.as_deref(),
+            Some("primary action")
+        );
     }
 
     #[test]
@@ -1159,7 +1398,7 @@ mod tests {
         let mut buf = String::new();
         let mut nodes = Vec::new();
         let mut url = None;
-        extract_text_from_tree(
+        extract_for_test(
             &tree,
             0,
             30,
@@ -1171,6 +1410,7 @@ mod tests {
             &[],
             "",
             &mut false,
+            false,
             false,
         );
 
@@ -1209,6 +1449,86 @@ mod tests {
             "Should capture at least 3 nodes from Document children, got {}",
             nodes.len()
         );
+    }
+
+    #[test]
+    fn test_semantic_capture_retains_native_browser_dom_evidence_only_when_enabled() {
+        let tree = AccessibilityNode {
+            control_type: "Window".into(),
+            children: vec![AccessibilityNode {
+                control_type: "Document".into(),
+                value: Some("https://example.com/item".into()),
+                children: vec![AccessibilityNode {
+                    control_type: "Group".into(),
+                    automation_id: Some("issue-42-permalink".into()),
+                    class_name: Some("js-comment timeline-comment".into()),
+                    children: vec![AccessibilityNode {
+                        control_type: "Text".into(),
+                        name: Some("Verified body".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let mut text = String::new();
+        let mut nodes = Vec::new();
+        let mut url = None;
+        let semantic_nodes = extract_for_test(
+            &tree,
+            0,
+            10,
+            &mut text,
+            &mut nodes,
+            &mut url,
+            &None,
+            &None,
+            &[],
+            "msedge",
+            &mut false,
+            true,
+            false,
+        );
+
+        let container = semantic_nodes
+            .iter()
+            .find(|node| node.semantic_dom_identifier.as_deref() == Some("issue-42-permalink"))
+            .expect("native UIA identifier should be retained for semantic parsing");
+        assert_eq!(
+            container.semantic_dom_classes.as_deref(),
+            Some("js-comment timeline-comment")
+        );
+        assert!(container.semantic_only);
+        assert_eq!(container.walk_index, 2);
+        assert!(nodes.iter().any(|node| node.text == "Verified body"));
+
+        let mut off_text = String::new();
+        let mut off_nodes = Vec::new();
+        let mut off_url = None;
+        let semantic_off = extract_for_test(
+            &tree,
+            0,
+            10,
+            &mut off_text,
+            &mut off_nodes,
+            &mut off_url,
+            &None,
+            &None,
+            &[],
+            "msedge",
+            &mut false,
+            false,
+            false,
+        );
+        assert!(semantic_off.is_empty());
+        assert!(off_nodes
+            .iter()
+            .all(|node| node.semantic_dom_identifier.is_none()
+                && node.semantic_dom_classes.is_none()));
+        assert_eq!(off_text, text);
     }
 
     #[test]
@@ -1253,7 +1573,7 @@ mod tests {
         let mut url = None;
         let mut hit = false;
 
-        extract_text_from_tree(
+        extract_for_test(
             &bitwarden_popup,
             0,
             10,
@@ -1265,6 +1585,7 @@ mod tests {
             &ignored,
             "",
             &mut hit,
+            false,
             false,
         );
 

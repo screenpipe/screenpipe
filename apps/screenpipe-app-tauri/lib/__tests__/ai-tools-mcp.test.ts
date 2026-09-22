@@ -12,7 +12,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const fsMock = vi.hoisted(() => ({
   files: new Map<string, string>(),
   unreadable: new Set<string>(),
+  forbiddenDirectories: new Set<string>(),
 }));
+
+const pathMock = vi.hoisted(() => ({ home: "/Users/test" }));
 
 const skillsMock = vi.hoisted(() => ({
   installExternalAgentSkills: vi.fn(async () => ["a", "b"]),
@@ -27,15 +30,24 @@ const tauriMock = vi.hoisted(() => ({
   setAiToolAutoConnectOptOut: vi.fn(async () => ({ status: "ok", data: null })),
 }));
 
-vi.mock("@tauri-apps/api/path", () => ({
-  homeDir: vi.fn(async () => "/Users/test"),
-  join: vi.fn(async (...parts: string[]) => parts.join("/")),
-  dirname: vi.fn(async (p: string) => p.split("/").slice(0, -1).join("/")),
-}));
+vi.mock("@tauri-apps/api/path", async () => {
+  const { posix, win32 } = await import("node:path");
+  const paths = () => pathMock.home.includes("\\") ? win32 : posix;
+  // Tauri simplifies verbatim Windows prefixes in join/dirname and strips
+  // trailing separators in join, unlike node:path.join.
+  const simplified = (path: string) => path.replace(/^\\\\\?\\/, "");
+  return {
+    homeDir: vi.fn(async () => pathMock.home),
+    join: vi.fn(async (...parts: string[]) => simplified(paths().join(...parts)).replace(/[\\/]+$/, "")),
+    dirname: vi.fn(async (path: string) => simplified(paths().dirname(path))),
+  };
+});
 
 vi.mock("@tauri-apps/plugin-fs", () => ({
   exists: vi.fn(async (path: string) => fsMock.files.has(path) || fsMock.unreadable.has(path)),
-  mkdir: vi.fn(async () => undefined),
+  mkdir: vi.fn(async (path: string) => {
+    if (fsMock.forbiddenDirectories.has(path)) throw new Error(`forbidden path: ${path}`);
+  }),
   readTextFile: vi.fn(async (path: string) => {
     if (fsMock.unreadable.has(path)) throw new Error("EACCES: permission denied");
     const text = fsMock.files.get(path);
@@ -120,16 +132,46 @@ const tmpsOf = (path: string) =>
   Array.from(fsMock.files.keys()).filter((p) => p.startsWith(`${path}.`) && p.endsWith(".tmp"));
 
 beforeEach(() => {
+  pathMock.home = "/Users/test";
   tauriMock.resolveAiToolConfigPath.mockReset();
   tauriMock.resolveAiToolConfigPath.mockImplementation(async (path) => ({ status: "ok", data: path }));
   fsMock.files.clear();
   fsMock.unreadable.clear();
+  fsMock.forbiddenDirectories.clear();
   skillsMock.installExternalAgentSkills.mockClear();
   skillsMock.removeExternalAgentSkills.mockClear();
   tauriMock.setAiToolAutoConnectOptOut.mockClear();
 });
 
 describe("safe config IO", () => {
+  it.each([
+    ["POSIX", "/Users/test/", "/Users/test/.claude.json", "/Users/test/.claude.json"],
+    ["Windows", "C:\\Users\\test\\", "C:\\Users\\test\\.claude.json", "C:\\Users\\test\\.claude.json"],
+    ["Windows canonical", "C:\\Users\\test\\", "C:\\Users\\test\\.claude.json", "\\\\?\\C:\\Users\\test\\.claude.json"],
+  ])("connects and disconnects Claude Code with a forbidden home directory on %s", async (_, home, configPath, target) => {
+    pathMock.home = home;
+    fsMock.forbiddenDirectories.add(home.slice(0, -1));
+    tauriMock.resolveAiToolConfigPath.mockImplementation(async (path) => ({
+      status: "ok", data: path === configPath ? target : path,
+    }));
+    const seeded = JSON.stringify({ theme: "dark", mcpServers: { other: { command: "other-tool" } } });
+    fsMock.files.set(target, seeded);
+
+    await connectAiTool("claude-code");
+    expect(JSON.parse(fsMock.files.get(target)!).mcpServers.screenpipe).toBeDefined();
+    expect(fsMock.files.get(backupsOf(target)[0])).toBe(seeded);
+    expect(tmpsOf(target)).toEqual([]);
+
+    await disconnectAiTool("claude-code");
+    expect(JSON.parse(fsMock.files.get(target)!)).toEqual(JSON.parse(seeded));
+    expect(tmpsOf(target)).toEqual([]);
+
+    // A first connection also works when the home-level config is absent.
+    fsMock.files.delete(target);
+    await connectAiTool("claude-code");
+    expect(JSON.parse(fsMock.files.get(target)!).mcpServers.screenpipe).toBeDefined();
+  });
+
   it.each([
     ["/Users/test/.codex/config.toml", 'model = "test"\n', installCodexMcp, uninstallCodexMcp],
     [CURSOR, '{"theme":"dark"}', installCursorMcp, uninstallCursorMcp],

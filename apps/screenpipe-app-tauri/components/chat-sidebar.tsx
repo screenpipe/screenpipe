@@ -2768,9 +2768,9 @@ function PipeGroupRow({
         aria-expanded={expanded}
       >
         <span className="truncate flex-1 text-xs">{item.title}</span>
-        <span className="relative inline-flex items-center justify-end shrink-0 w-6 h-4">
+        <span className="relative inline-flex items-center justify-end shrink-0 min-w-6 h-4">
           {lastRunAge && !expanded && (
-            <span className="absolute inset-0 flex items-center justify-end text-[10px] tabular-nums sidebar-text-tertiary opacity-100 group-hover/pipe:opacity-0 transition-opacity duration-150">
+            <span className="flex items-center justify-end whitespace-nowrap text-[10px] tabular-nums sidebar-text-tertiary opacity-100 group-hover/pipe:opacity-0 transition-opacity duration-150">
               {lastRunAge}
             </span>
           )}

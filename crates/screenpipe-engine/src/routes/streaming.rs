@@ -974,6 +974,15 @@ mod tests {
 
     #[tokio::test]
     async fn timeline_websocket_completes_empty_cached_and_database_ranges() {
+        assert_timeline_ranges_complete(true).await;
+    }
+
+    #[tokio::test]
+    async fn timeline_websocket_reads_saved_history_with_screenshots_off() {
+        assert_timeline_ranges_complete(false).await;
+    }
+
+    async fn assert_timeline_ranges_complete(warm_cache: bool) {
         let root = tempfile::tempdir().unwrap();
         let db = Arc::new(
             DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
@@ -989,11 +998,17 @@ mod tests {
         let mut tx = db.begin_immediate_with_retry().await.unwrap();
         sqlx::query("INSERT INTO frames(id,timestamp,full_text,snapshot_path,device_name) VALUES(1,?,'previous day','/tmp/synthetic-timeline.jpg','monitor')")
             .bind(previous).execute(&mut **tx.conn()).await.unwrap();
+        if !warm_cache {
+            sqlx::query("INSERT INTO frames(id,timestamp,full_text,snapshot_path,device_name) VALUES(2,?,'saved today','/tmp/synthetic-timeline.jpg','monitor')")
+                .bind(Utc::now()).execute(&mut **tx.conn()).await.unwrap();
+        }
         tx.commit().await.unwrap();
         db.seal_frame_payloads().await.unwrap();
         let cache = Arc::new(crate::hot_frame_cache::HotFrameCache::new());
-        cache.warm_from_db(&db, 24).await;
-        assert!(cache.earliest_coverage().await.unwrap() < today);
+        if warm_cache {
+            cache.warm_from_db(&db, 24).await;
+            assert!(cache.earliest_coverage().await.unwrap() < today);
+        }
         let audio = Arc::new(
             screenpipe_audio::audio_manager::AudioManagerBuilder::new()
                 .is_disabled(true)
@@ -1031,10 +1046,11 @@ mod tests {
             tokio_tungstenite::connect_async(format!("ws://{address}/stream/frames"))
                 .await
                 .unwrap();
-        // Today's cache covers the range but contains zero frames. Past days
-        // exercise the DB branch with both zero and one sealed frame.
+        // Warm variant: today's covered range is empty. Cold variant: today's
+        // saved frame must arrive from the DB without the 30-second warm wait.
+        // Past days exercise empty and populated DB ranges in both variants.
         for (day, expected) in [
-            (today, 0),
+            (today, if warm_cache { 0 } else { 1 }),
             (today - chrono::Duration::days(2), 0),
             (today - chrono::Duration::days(1), 1),
         ] {

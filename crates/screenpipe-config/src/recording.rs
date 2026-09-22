@@ -428,10 +428,9 @@ pub struct RecordingSettings {
     #[serde(rename = "semanticContextMode", default)]
     pub semantic_context_mode: SemanticContextMode,
 
-    /// Disable the timeline / rewind feature. When true, the engine skips
-    /// timeline-only work: warming the hot frame cache from the DB at startup
-    /// and buffering captured frames/audio into the in-memory hot cache that
-    /// only the timeline streaming endpoint reads.
+    /// Legacy timeline gate retained for managed deployments and compatibility.
+    /// Consumer installs migrate visibility to sidebarNavLayout. Screenshot
+    /// capture controls cache work through `timeline_cache_disabled`.
     #[serde(rename = "disableTimeline", default)]
     pub disable_timeline: bool,
 
@@ -861,6 +860,12 @@ pub struct RecordingSettings {
 }
 
 impl RecordingSettings {
+    /// Avoid background frame/audio buffering when screenshots are off. Saved
+    /// history remains available through the timeline's database fallback.
+    pub fn timeline_cache_disabled(&self) -> bool {
+        self.disable_timeline || self.disable_screenshots || self.disable_vision
+    }
+
     /// Returns the Deepgram API key if actually configured.
     /// Treats empty string and "default" as not configured (matching existing behavior).
     pub fn effective_deepgram_key(&self) -> Option<&str> {
@@ -1076,6 +1081,24 @@ fn default_hd_recording_interval_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn screenshot_capture_controls_timeline_cache() {
+        for (timeline, screenshots, vision, expected) in [
+            (false, false, false, false),
+            (false, true, false, true),
+            (false, false, true, true),
+            (true, false, false, true),
+        ] {
+            let settings = super::RecordingSettings {
+                disable_timeline: timeline,
+                disable_screenshots: screenshots,
+                disable_vision: vision,
+                ..Default::default()
+            };
+            assert_eq!(settings.timeline_cache_disabled(), expected);
+        }
+    }
+
     use super::*;
 
     #[test]
