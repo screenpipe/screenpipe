@@ -377,22 +377,34 @@ mod tests {
 
     #[tokio::test]
     async fn rotated_panic_survives_collection_limits_and_redaction_with_timestamp() {
-        let dir = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        let dir = root.path().join("first-launch");
+        assert!(!dir.exists());
+        // Exercise the desktop hook's writer before normal app setup has
+        // created its data directory, then the existing append/rotation path.
+        crate::app_panic::write_report(
+            &dir,
+            "main",
+            r"C:\build\tao-0.35.3\src\platform_impl\windows\event_loop.rs:709:5",
+            "assertion failed: subclass_result.as_bool()",
+            &"0: tauri::app::Builder::build",
+            false,
+        );
         screenpipe_engine::crash_log::write_panic_log(
-            dir.path(),
+            dir.as_path(),
             "[2026-09-18 19:19:44.000] PANIC on thread 'capture': encoder failed; recording stopped\nBacktrace:\n0: capture_frame\npassword=hunter2",
         );
         std::fs::OpenOptions::new()
             .write(true)
-            .open(dir.path().join("last-panic.log"))
+            .open(dir.as_path().join("last-panic.log"))
             .unwrap()
             .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1789759184))
             .unwrap();
-        screenpipe_engine::crash_log::rotate_panic_log(dir.path());
-        assert!(!dir.path().join("last-panic.log").exists());
+        screenpipe_engine::crash_log::rotate_panic_log(dir.as_path());
+        assert!(!dir.as_path().join("last-panic.log").exists());
         for day in 1..=MAX_FILES + 1 {
             tokio::fs::write(
-                dir.path()
+                dir.as_path()
                     .join(format!("screenpipe-app.2026-09-{day:02}.log")),
                 "recording resumed\n",
             )
@@ -400,10 +412,14 @@ mod tests {
             .unwrap();
         }
 
-        let files = crate::log_files::collect_log_files(&[dir.path().to_path_buf()]).await;
+        let files = crate::log_files::collect_log_files(&[dir.as_path().to_path_buf()]).await;
         let report = redact_files(&owned_log_files(files)).await.unwrap();
 
         assert!(report.contains("=== last-panic.log.prev ==="));
+        assert!(report.contains("assertion failed: subclass_result.as_bool()"));
+        assert!(report.contains("event_loop.rs:709:5"));
+        assert!(report.contains("Launch outcome: main thread panicked before app setup"));
+        assert!(report.contains("0: tauri::app::Builder::build"));
         assert!(report.contains("File modified at: 2026-09-18T19:19:44Z"));
         assert!(report.contains("[2026-09-18 19:19:44.000]"));
         assert!(report.contains("encoder failed; recording stopped"));
