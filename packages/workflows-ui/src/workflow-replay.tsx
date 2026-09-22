@@ -2,6 +2,7 @@
 // https://screenpipe.com
 
 "use client";
+import { verifiedStageScreenshots } from "./screenshots";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
 import type { WorkflowMap } from "./model";
@@ -94,9 +95,9 @@ export function WorkflowReplay({ workflow, loadRecording, releaseRecording, open
     return () => { active = false; release(objectUrl); };
   }, [moment, loadRecording, releaseRecording, retry]);
   if (!moments.length) return <section className={styles.replay}><p>No recorded moments linked yet</p></section>;
-  const screenshot = moment?.stage.screenshot;
-  const matchingImage = screenshot?.visualVerified && screenshot.app.toLowerCase() === moment.entry.app.toLowerCase()
-    && Date.parse(screenshot.timestamp) === Date.parse(moment.entry.timestamp) ? screenshot : null;
+  const matchingImage = verifiedStageScreenshots(moment.stage).find(image =>
+    image.app.toLowerCase() === moment.entry.app.toLowerCase()
+    && Date.parse(image.timestamp) === Date.parse(moment.entry.timestamp));
   return <section className={`${styles.replay} ph-no-capture ph-mask`} aria-label={ui("Workflow recording replay")}>
       <div className={styles.replayMedia}>
         {loading ? <p role="status">Loading local recording…</p> : media?.kind === "video" ? <RecordingVideo

@@ -243,7 +243,7 @@ mod tests {
     use super::*;
     fn original() -> Value {
         json!({"id":"wf-test","revision":3,"title":"Prepare a report","description":"Description","trigger":"Request","outcome":"Report","timing":{"averageMinutes":5},"stages":[
-            {"name":"Read","description":"Review sources","evidence":[{"detail":"Original source"}],"screenshot":{"dataUrl":"fixture-image"},"procedure":[{"kind":"action","text":"Read notes","quote":"Original quotation","app":"Notes","timestamp":"2026-09-01T10:00:00Z"}]},
+            {"name":"Read","description":"Review sources","evidence":[{"detail":"Original source"}],"screenshot":{"dataUrl":"fixture-image"},"screenshots":[{"frameId":1,"dataUrl":"fixture-one"},{"frameId":2,"dataUrl":"fixture-two"}],"procedure":[{"kind":"action","text":"Read notes","quote":"Original quotation","app":"Notes","timestamp":"2026-09-01T10:00:00Z"}]},
             {"name":"Write","description":"Draft report","evidence":[]}],"bottlenecks":[{"stage":"Read","label":"Wait"}]})
     }
     fn request() -> EditRequest {
@@ -279,6 +279,10 @@ mod tests {
         assert_eq!(
             saved["stages"][1]["screenshot"],
             prior["stages"][0]["screenshot"]
+        );
+        assert_eq!(
+            saved["stages"][1]["screenshots"],
+            prior["stages"][0]["screenshots"]
         );
         assert_eq!(
             saved["stages"][1]["procedure"][0]["quote"],

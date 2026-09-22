@@ -23,7 +23,7 @@ export function workflowIndex(workflow: any) {
   return {id:workflow.id,title:workflow.title,trigger:workflow.trigger,outcome:workflow.outcome,
     userCorrection:workflow.userCorrection,quality:workflow.quality,openQuestions:workflow.openQuestions,
     lastReviewedAt:workflow.lastReviewedAt,userEdits:workflow.userEdits,
-    evidenceCoverage:{stageCount:stages.length,stagesWithProcedure:stages.filter((s:any)=>s.procedure?.length).length,stagesWithVerifiedScreenshot:stages.filter((s:any)=>s.screenshot?.visualVerified).length},
+    evidenceCoverage:{stageCount:stages.length,stagesWithProcedure:stages.filter((s:any)=>s.procedure?.length).length,stagesWithVerifiedScreenshot:stages.filter((s:any)=>[...(s.screenshots ?? []), s.screenshot].some(image => image?.visualVerified)).length},
     timing:{runCount:runs.length},
     sourceRange:dates.length ? {first:dates[0],last:dates.at(-1)} : null};
 }

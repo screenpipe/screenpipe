@@ -1,5 +1,6 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
+import { stageScreenshots } from "./screenshots";
 import type { WorkflowMap } from "./model";
 
 export type WorkflowGuide = {
@@ -132,7 +133,7 @@ export function guideSourceImage(
   sourceStage: number | null,
 ) {
   const image =
-    sourceStage === null ? null : workflow.stages[sourceStage]?.screenshot;
+    sourceStage === null ? null : workflow.stages[sourceStage] ? stageScreenshots(workflow.stages[sourceStage])[0] : null;
   return image &&
     /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(image.dataUrl)
     ? image
