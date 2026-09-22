@@ -6,11 +6,11 @@ Actual React components in an isolated Chromium preview with synthetic account/s
 
 - `entry-before-*` and `settings-before-off`: recreated original baseline from `558ffda349ca3553c9dabf5cc0fbaaa5a92e2357`.
 - `before-combined`: previous combined-dialog implementation, unchanged visually through `cd6d691730549e5c2c0a3e6bee3c01e44e56e125`.
-- Remaining images: current two-step implementation in this commit, using actual `WorkflowTasksPrompt`, `WorkflowSharingControls`, `PrivacySection`, UI primitives and global styles.
+- Remaining images: refreshed from two-step implementation `4d13358c23e66acab950047e4bffd10b4d180097`, using actual `WorkflowTasksPrompt`, `WorkflowSharingControls`, `PrivacySection`, UI primitives and global styles.
 
 ## Capture conditions
 
-Desktop viewport 1100 × 1000 CSS pixels at device scale 1. Dialog images use the same 500 × 920 crop. Narrow dialog viewport 600 × 760. Settings excerpts preserve the same 786-pixel content width and show sharing through the existing cloud-redaction explanation; lower recording-category controls are outside the excerpt. Additional settings states show the sharing card.
+Desktop viewport 1100 × 1000 CSS pixels at device scale 1. Dialog crops retain 24 pixels of surrounding overlay, with the same content width and scale. Historical baseline images were cropped with the same padding; their content is unchanged. Narrow dialog viewport 600 × 760. Settings excerpts preserve the same 786-pixel content width and show sharing through the existing cloud-redaction explanation; lower recording-category controls are outside the excerpt. Additional settings states show the sharing card.
 
 The modal intentionally retains its white surface in both themes, with a light native color scheme for checkbox readability. Settings respect the app theme. All 30 PNGs were inspected. Temporary preview code and synthetic ports are outside the repository.
 
