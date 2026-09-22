@@ -9,7 +9,7 @@ This is an agent eval suite, not a unit-test suite. Every case contains:
 - saved prompt, transcript, candidate patch, grader output, runtime fingerprint, and result;
 - repeated-trial reporting with success rate, `pass@k`, and `pass^k`.
 
-The current app corpus contains 68 git-mined regressions. See
+The current app corpus contains 69 git-mined regressions. See
 [DESIGN.md](./DESIGN.md) for the Anthropic guidance, source contract, and
 history-mining workflow. The companion website manifest uses this same harness.
 
@@ -697,3 +697,17 @@ SDK and completion factory are fail-closed ports. Gateway authentication/rate
 limits, actual playback, live provider compatibility and full WAV container
 integrity are outside this signature-level contract. No real audio, native build,
 model call or dependency link is used; execution isolation remains unproven.
+
+`ai-gateway-paid-tts-dispatch` invokes the actual gateway dispatcher, authentication,
+paid-plan policy and voice handler with synthetic verifier, entitlement API,
+rate-limiter and provider ports. Seven outcomes cover anonymous, Free, unknown
+plan, Basic, Business, denied-standing and invalid-input behavior. Paid responses
+retain exact provider bytes and one original-text request. The oracle applies
+only the historical dispatcher fix.
+
+Run `bun test evals/coding-agent/calibrate-paid-tts.test.js` with gateway JavaScript
+dependencies installed. Grading links them only after the trajectory ends. This
+is not proof of agent isolation, live authentication/payment/provider operation,
+transcription policy, playback or model improvement. Separately selected current
+product route tests preserve transcription behavior; they are not hidden outcomes
+of this case.

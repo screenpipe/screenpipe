@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite": "screenpipe-app-coding-agent-regressions",
-  "dataset_version": "2026-09-22.4",
+  "dataset_version": "2026-09-22.5",
   "suite_type": "regression",
   "owner": "screenpipe engineering",
   "policy": {
@@ -2262,6 +2262,45 @@
           }
         ],
         "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/tts-wav.test.js"
+      }
+    },
+    {
+      "id": "ai-gateway-paid-tts-dispatch",
+      "name": "Enforce paid access before text-to-speech provider work",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "6301ad06342d4bad420598db86db9e44423b05b6"
+      },
+      "base_ref": "8d2fd0135dbfe71e64aa9db2c4300601648c2077",
+      "oracle_ref": "6301ad06342d4bad420598db86db9e44423b05b6",
+      "oracle_paths": [
+        "packages/ai-gateway/src/index.ts"
+      ],
+      "gate": "advisory",
+      "tags": [
+        "regression",
+        "billing",
+        "access",
+        "voice",
+        "provider-effects"
+      ],
+      "prompt": "The text-to-speech gateway route can send speech to the provider without a paid account. Repair the actual POST /v1/text-to-speech boundary. For a valid text body, an anonymous caller must receive 401, a verified Free caller 403, and a verified caller with missing plan truth 503, all as JSON errors before any speech-provider request. Preserve paid Basic and Business callers: one provider request carrying the original text must return the exact provider audio bytes with audio/wav. Paid accounts denied good standing must still receive 403 before provider work; paid requests with invalid empty text must still receive 400 with no provider work. All refusals must be JSON errors. Use synthetic identity-verifier, entitlement API, rate-limit and audio-provider ports only. Do not assume a helper name or particular implementation. This case does not test authentication cryptography, live payment or provider delivery, transcription, native playback, database concurrency, agent isolation or model capability.",
+      "agent_timeout_seconds": 900,
+      "grader_dependency_links": [
+        {
+          "source_path": "packages/ai-gateway/node_modules",
+          "destination_path": "packages/ai-gateway/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/paid-tts-dispatch.test.js",
+            "destination_path": "evals/coding-agent/graders/paid-tts-dispatch.test.js"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/paid-tts-dispatch.test.js"
       }
     }
   ]
