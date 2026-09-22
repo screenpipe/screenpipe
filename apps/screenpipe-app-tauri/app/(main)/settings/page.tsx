@@ -126,7 +126,7 @@ function SettingsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const fromSection = searchParams.get("from");
-  const { isSectionHidden, isManagedDeployment } = useManagedPolicy();
+  const { isSectionHidden } = useManagedPolicy();
   const { isTranslucent } = useSidebarContext();
   const { isMac, isLoading: isPlatformLoading } = usePlatform();
   // macOS TCC recovery only. Non-mac must not see the nav item, search hits,
@@ -221,13 +221,7 @@ function SettingsContent() {
       label: gt("Account"),
       items: [
         { id: "account" as const, label: gt("Account"), icon: <User className="h-4 w-4" /> },
-        // Hide "Team" on enterprise builds — those installs are already
-        // org-managed; the desktop has nothing to manage. Admins use the
-        // /enterprise dashboard on the web. On consumer builds we still
-        // surface Team as a marketing entry point to /team.
-        ...(isManagedDeployment
-          ? []
-          : [{ id: "team" as const, label: gt("Team"), icon: <Users className="h-4 w-4" /> }]),
+        { id: "team" as const, label: gt("Team"), icon: <Users className="h-4 w-4" /> },
         { id: "referral" as const, label: gt("Get free month"), icon: <Gift className="h-4 w-4" /> },
       ].filter((s) => !isSectionHidden(s.id)),
     },
