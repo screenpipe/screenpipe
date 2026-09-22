@@ -79,7 +79,7 @@ export function WorkflowSharingControls({ compact = false, onDone, onUnavailable
         "Stopped on this device. Account changes are unconfirmed; retry to stop other devices or delete shared chats.");
     } finally { if (mounted.current) setBusy(false); }
   }
-  const trainingLabel = <span>Help train Screenpipe’s own models<span className="mt-1 block text-xs font-normal text-muted-foreground">Optional. Never external providers’ models.</span></span>;
+  const trainingLabel = <span className="font-medium">Also train Screenpipe’s own models<span className="mt-1 block text-xs font-normal text-muted-foreground">Optional. Never external providers’ models.</span></span>;
   return <section id="workflow-sharing" className={compact ? "space-y-5 text-foreground" : "space-y-3 rounded-lg border p-4 text-foreground"}>
     {!compact && <div className="flex items-center justify-between gap-4">
       <div><label htmlFor="workflow-sharing-setting" className="text-sm font-medium">Help improve Workflows</label>
@@ -88,19 +88,19 @@ export function WorkflowSharingControls({ compact = false, onDone, onUnavailable
     </div>}
     {compact ? <div className="space-y-4">
       <div className="flex gap-3"><MessageSquare className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" /><div>
-        <p className="text-sm font-medium">Only Workflows chats</p>
-        <p className="mt-1 text-xs text-muted-foreground">No screen recordings, main Chat, or other apps’ chat history. Replies may quote private context.</p>
+        <p className="text-sm font-medium">Workflows chats only</p>
+        <p className="mt-1 text-xs text-muted-foreground">No recordings, main Chat, or other apps’ chats. Replies may quote private context.</p>
       </div></div>
       <div className="flex gap-3"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" /><div>
-        <p className="text-sm font-medium">Sensitive details redacted</p>
-        <p className="mt-1 text-xs text-muted-foreground">AI redacts in Tinfoil’s secure cloud before sharing. It can miss details.</p>
+        <p className="text-sm font-medium">Redacted before sharing</p>
+        <p className="mt-1 text-xs text-muted-foreground">AI removes sensitive details in Tinfoil’s secure cloud. It can miss details.</p>
       </div></div>
     </div> : <>
       <p className="text-xs text-muted-foreground">Only chats inside Workflows. No raw recordings, main Chat conversations, or other apps’ chat history.</p>
       <p className="text-xs text-muted-foreground">AI redacts sensitive information in Tinfoil’s secure cloud before sharing. Redaction can miss details.</p>
     </>}
-    <label className={`flex items-start gap-3 text-sm ${compact ? "rounded-lg border p-3" : ""}`}>
-      <input type="checkbox" className="mt-1 accent-foreground" checked={compact ? trainingChoice : enabled && status?.training === true} disabled={busy || (compact ? !available : !enabled)} onChange={event => compact ? setTrainingChoice(event.target.checked) : void change(true, event.target.checked)} />
+    <label className={`flex items-start gap-3 text-sm ${compact ? "rounded-lg border p-4 transition-colors focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 " + (trainingChoice ? "border-foreground/40 bg-foreground/[0.03]" : "border-border") : ""}`}>
+      <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-foreground" checked={compact ? trainingChoice : enabled && status?.training === true} disabled={busy || (compact ? !available : !enabled)} onChange={event => compact ? setTrainingChoice(event.target.checked) : void change(true, event.target.checked)} />
       {trainingLabel}
     </label>
     {enabled && !compact && <a href="#workflow-cloud-redaction" className="block text-xs underline">Cloud redaction is on. View settings</a>}
@@ -117,9 +117,9 @@ export function WorkflowSharingControls({ compact = false, onDone, onUnavailable
     </div>}
     {compact && <>
       {!status && !error && <p role="status" className="text-xs text-muted-foreground">Checking sharing availability…</p>}
-      <p className="text-xs text-muted-foreground">You can stop sharing and delete shared chats in Privacy settings.</p>
-      <div className="flex justify-end gap-2">
-        <Button variant="outline" disabled={busy} onClick={onDone}>Not now</Button>
+      <p className="text-xs text-muted-foreground">Stop sharing or delete shared chats in Privacy settings.</p>
+      <div className="grid grid-cols-2 gap-3">
+        <Button variant="outline" disabled={busy} onClick={onDone}>Don’t share</Button>
         <Button disabled={busy || !available} onClick={() => void change(true, trainingChoice)}>
           {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}{busy ? "Saving…" : "Share chats"}
         </Button>

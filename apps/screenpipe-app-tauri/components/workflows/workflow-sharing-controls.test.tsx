@@ -101,7 +101,7 @@ describe("sharing consent UI", () => {
   it("skips the sharing prompt without saving consent", async () => {
     const done = vi.fn();
     render(<WorkflowSharingControls compact onDone={done} />);
-    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    fireEvent.click(screen.getByRole("button", { name: "Don’t share" }));
     expect(done).toHaveBeenCalledOnce();
     expect(f.update).not.toHaveBeenCalled();
     expect(requests.every(r => r.method === "GET")).toBe(true);
