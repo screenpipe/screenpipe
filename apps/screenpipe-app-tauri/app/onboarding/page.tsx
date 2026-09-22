@@ -850,7 +850,9 @@ export default function OnboardingPage() {
     handleNextSlide,
   ]);
 
-  if (isLoading || !isSettingsLoaded || !isManagedDeploymentResolved) {
+  // Initial hydration needs the full-page loader. A step saving completion
+  // owns its busy UI and must stay mounted to retain choices and show retries.
+  if ((isLoading && !isTransitioning) || !isSettingsLoaded || !isManagedDeploymentResolved) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-background">
         <div className="w-6 h-6 border border-foreground border-t-transparent rounded-full animate-spin" />

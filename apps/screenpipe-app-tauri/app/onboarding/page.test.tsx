@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => ({
   showWindow: vi.fn(async () => undefined),
   applyEnterpriseUiVisibility: vi.fn(async () => false),
   completeOnboarding: vi.fn(async () => undefined),
+  nativeCompleteOnboarding: vi.fn(),
+  getOnboardingStatus: vi.fn(),
+  oauthStatus: vi.fn(),
   finalSetupFailure: vi.fn(),
   saveProductMode: vi.fn().mockResolvedValue(undefined),
   loadWorkProfile: vi.fn().mockResolvedValue(null),
@@ -29,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   routerReplace: vi.fn(),
   capture: vi.fn(),
   useRealLoginGate: false,
+  useRealSetupCompletion: false,
   trialActivationVariant: undefined as string | undefined,
   posthogDistinctId: "machine-1",
   featureFlagsReady: true,
@@ -47,6 +51,7 @@ const mocks = vi.hoisted(() => ({
   isSettingLocked: vi.fn((_key: string) => false),
   settings: {
     analyticsId: "machine-1",
+    aiPresets: [{ id: "local", model: "local-test", provider: "native-ollama", defaultPreset: true }],
     deviceTier: "low" as string | null | undefined,
     user: null as null | {
       cloud_subscribed?: boolean;
@@ -71,7 +76,7 @@ const onboardingData = {
   trialActivationFreshInstall: false,
 };
 
-vi.mock("@/lib/workflows/entry-preference", () => ({ saveProductMode: mocks.saveProductMode }));
+vi.mock("@/lib/workflows/entry-preference", () => ({ saveProductMode: mocks.saveProductMode, readProductMode: vi.fn().mockResolvedValue("screenpipe") }));
 vi.mock("@/lib/workflows/desktop-platform", () => ({ desktopWorkflowsPlatform: {
   loadWorkProfile: mocks.loadWorkProfile, saveWorkProfile: mocks.saveWorkProfile,
 } }));
@@ -83,13 +88,14 @@ vi.mock("next/navigation", () => {
   const router = { replace: mocks.routerReplace };
   return { useRouter: () => router };
 });
-vi.mock("@/lib/hooks/use-onboarding", () => {
-  const useOnboarding = () => ({
+vi.mock("@/lib/hooks/use-onboarding", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/hooks/use-onboarding")>();
+  const useOnboarding = () => mocks.useRealSetupCompletion ? actual.useOnboarding() : ({
     onboardingData,
     isLoading: false,
     completeOnboarding: mocks.completeOnboarding,
   });
-  useOnboarding.getState = () => ({
+  useOnboarding.getState = () => mocks.useRealSetupCompletion ? actual.useOnboarding.getState() : ({
     onboardingData,
     loadOnboardingStatus: vi.fn(async () => undefined),
   });
@@ -167,14 +173,15 @@ vi.mock("@/components/onboarding/plan-selection-step", () => ({
     </div>
   ),
 }));
-vi.mock("@/components/onboarding/final-setup-step", () => ({
-  default: ({ handleNextSlide }: { handleNextSlide: () => void | Promise<void> }) => (
+vi.mock("@/components/onboarding/final-setup-step", async (importOriginal) => {
+  const { default: FinalSetupStep } = await importOriginal<typeof import("@/components/onboarding/final-setup-step")>();
+  return { default: (props: { handleNextSlide: () => void | Promise<void>; userToken?: string | null }) => mocks.useRealSetupCompletion ? <FinalSetupStep {...props} /> : (
     <div>
       <span>recommended setup</span>
-      <button onClick={() => { void Promise.resolve(handleNextSlide()).catch(mocks.finalSetupFailure); }}>finish recommended setup</button>
+      <button onClick={() => { void Promise.resolve(props.handleNextSlide()).catch(mocks.finalSetupFailure); }}>finish recommended setup</button>
     </div>
-  ),
-}));
+  ) };
+});
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {
     setOnboardingStep: mocks.setOnboardingStep,
@@ -182,6 +189,9 @@ vi.mock("@/lib/utils/tauri", () => ({
     showWindow: mocks.showWindow,
     applyEnterpriseUiVisibility: mocks.applyEnterpriseUiVisibility,
     writeBrowserLogs: mocks.writeBrowserLogs,
+    completeOnboarding: mocks.nativeCompleteOnboarding,
+    getOnboardingStatus: mocks.getOnboardingStatus,
+    oauthStatus: mocks.oauthStatus,
   },
 }));
 vi.mock("posthog-js", () => ({
@@ -224,6 +234,7 @@ describe("enterprise onboarding authentication", () => {
     mocks.sdk = null;
     mocks.reloadFeatureFlags.mockImplementation(() => mocks.sdk?.reloadFeatureFlags());
     mocks.useRealLoginGate = false;
+    mocks.useRealSetupCompletion = false;
     mocks.trialActivationVariant = undefined;
     mocks.posthogDistinctId = "machine-1";
     mocks.featureFlagsReady = true;
@@ -804,6 +815,78 @@ describe("enterprise onboarding authentication", () => {
 
     fireEvent.click(finish);
     await waitFor(() => expect(mocks.completeOnboarding).toHaveBeenCalled());
+  });
+
+  it("keeps real setup selections and completed tasks through pending native completion, failure and retry", async () => {
+    mocks.useRealSetupCompletion = true;
+    mocks.enterprisePolicy.isManagedDeployment = false;
+    mocks.settings.user = { token: "qa-token", has_payment_method: false, entitlement_source: "none" };
+    window.sessionStorage.setItem(TRIAL_ACTIVATION_ASSIGNMENT_SESSION_KEY, "summary_first");
+    const { useOnboarding } = await vi.importActual<typeof import("@/lib/hooks/use-onboarding")>("@/lib/hooks/use-onboarding");
+    const data = { isCompleted: false, completedAt: null, currentStep: "recommended-setup", trialActivationFreshInstall: true };
+    useOnboarding.setState({ onboardingData: data, isLoading: true, error: null });
+    mocks.getOnboardingStatus.mockResolvedValue({ status: "ok", data });
+    mocks.oauthStatus.mockResolvedValue({ status: "ok", data: { connected: false } });
+    const gmail = vi.spyOn(await import("@/lib/composio"), "fetchComposioStatus").mockResolvedValue({ gmail: { connected: false } });
+    const originalClone = { enabled: true, agent: "pi", preset: ["my-existing-model"], custom: "keep this configuration" };
+    const tasks = new Map<string, Record<string, unknown>>([["digital-clone", originalClone]]);
+    const fetch = vi.spyOn(await import("@/lib/api"), "localFetch").mockImplementation(async (path, init) => {
+      if (path === "/health") return Response.json({ status: "ok" });
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      if (path === "/pipes/store/install" || path.includes("/bundled/")) {
+        const slug = body?.slug ?? path.split("/")[3];
+        tasks.set(slug, { enabled: false });
+        return Response.json({ name: slug });
+      }
+      const slug = path.split("/")[2];
+      if (init?.method === "POST") {
+        tasks.set(slug, { ...tasks.get(slug), ...body });
+        return Response.json({ success: true });
+      }
+      return Response.json(tasks.has(slug) ? { data: { config: tasks.get(slug) } } : { error: "pipe not found" });
+    });
+    let finishNative!: (result: { status: "error"; error: string }) => void;
+    mocks.nativeCompleteOnboarding.mockImplementationOnce(() => new Promise(resolve => { finishNative = resolve; }));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const closeWindow = vi.spyOn(window, "close").mockImplementation(() => {});
+    try {
+      render(<OnboardingPage />);
+      const form = await screen.findByTestId("onboarding-final-setup");
+      const learning = screen.getByRole("switch", { name: /Improve my skills/ });
+      fireEvent.click(learning);
+      await waitFor(() => expect(screen.getByRole("button", { name: "Start Screenpipe" })).toBeEnabled());
+      fireEvent.click(screen.getByRole("button", { name: "Start Screenpipe" }));
+      await waitFor(() => expect(mocks.nativeCompleteOnboarding).toHaveBeenCalledTimes(1));
+
+      expect(useOnboarding.getState().isLoading).toBe(true);
+      expect(screen.getByTestId("onboarding-final-setup")).toBe(form);
+      expect(learning).toHaveAttribute("data-state", "unchecked");
+      expect(learning).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Setting up" })).toBeDisabled();
+      expect(tasks.get("digital-clone")).toBe(originalClone);
+
+      await act(async () => finishNative({ status: "error", error: JSON.stringify({ stage: "persist", error_code: "permission_denied", attempt_id: "00000000-0000-4000-8000-000000000001" }) }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("Screenpipe couldn't open");
+      expect(screen.getByTestId("onboarding-final-setup")).toBe(form);
+      expect(learning).toHaveAttribute("data-state", "unchecked");
+      expect(learning).toBeEnabled();
+      expect(tasks.get("digital-clone")).toBe(originalClone);
+      expect(tasks.has("skill-learning")).toBe(false);
+      const completedWrites = fetch.mock.calls.filter(([, init]) => init?.method === "POST").length;
+
+      mocks.nativeCompleteOnboarding.mockResolvedValueOnce({ status: "ok", data: null });
+      fireEvent.click(screen.getByRole("button", { name: "Retry setup" }));
+      await waitFor(() => expect(useOnboarding.getState().onboardingData.isCompleted).toBe(true));
+      expect(mocks.nativeCompleteOnboarding).toHaveBeenCalledTimes(2);
+      expect(fetch.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(completedWrites);
+      expect(tasks.get("digital-clone")).toBe(originalClone);
+      expect(tasks.has("skill-learning")).toBe(false);
+    } finally {
+      fetch.mockRestore();
+      gmail.mockRestore();
+      consoleError.mockRestore();
+      closeWindow.mockRestore();
+    }
   });
 
   it("uses a paid account only as a fresh-install bypass", async () => {
