@@ -5383,7 +5383,8 @@ impl PipeManager {
         }) // end Box::pin(async move { ... })
     }
 
-    /// Enable or disable a pipe (writes back to pipe.md front-matter).
+    /// Enable or disable a pipe. Pausing an untouched bundled task only changes
+    /// its device-local override, preserving its bundled identity and quota slot.
     pub async fn enable_pipe(&self, name: &str, enabled: bool) -> Result<()> {
         validate_pipe_identifier(name)?;
         let pipe_md = self.pipes_dir.join(name).join("pipe.md");
@@ -5406,17 +5407,26 @@ impl PipeManager {
             validate_one_off_freshness(&config.schedule)?;
         }
         config.enabled = enabled;
-        let new_content = serialize_pipe(&config, &body)?;
-        self.ensure_pipe_write_allowed(name, Some(&new_content))?;
-        atomic_write(&pipe_md, &new_content)?;
+        let new_content = if !enabled && Self::is_bundled_builtin_pipe(name, &content) {
+            // A pause must work even when all user task slots are occupied.
+            // Do not rewrite the template: that would admit another counted
+            // task and could displace a previously completed setup task.
+            set_local_override(&self.pipes_dir, name, false)?;
+            content
+        } else {
+            let new_content = serialize_pipe(&config, &body)?;
+            self.ensure_pipe_write_allowed(name, Some(&new_content))?;
+            atomic_write(&pipe_md, &new_content)?;
 
-        // Persist to local overrides so reload_pipes() doesn't revert this
-        if let Err(e) = set_local_override(&self.pipes_dir, name, enabled) {
-            warn!(
-                "failed to save local enabled override for '{}': {}",
-                name, e
-            );
-        }
+            // Persist to local overrides so reload_pipes() doesn't revert this.
+            if let Err(e) = set_local_override(&self.pipes_dir, name, enabled) {
+                warn!(
+                    "failed to save local enabled override for '{}': {}",
+                    name, e
+                );
+            }
+            new_content
+        };
 
         // Update in-memory
         let mut pipes = self.pipes.lock().await;
@@ -5465,6 +5475,12 @@ impl PipeManager {
                 name,
                 fields.join(", ")
             ));
+        }
+
+        // Use the same durable pause path as the dedicated enable endpoint.
+        // Other edits still require admission before changing bundled content.
+        if updates.len() == 1 && updates.get("enabled").and_then(|v| v.as_bool()) == Some(false) {
+            return self.enable_pipe(name, false).await;
         }
 
         // If raw_content is provided, write the full file directly and re-parse
@@ -5883,14 +5899,9 @@ impl PipeManager {
 
         // Preserve user's enabled state, schedule, preset, effort, and connections from current config
         let current_path = dest_dir.join("pipe.md");
-        if let Ok(current_content) = std::fs::read_to_string(&current_path) {
-            // Backup existing pipe.md before overwriting
-            let backup_path = dest_dir.join("pipe.md.bak");
-            if let Err(e) = std::fs::copy(&current_path, &backup_path) {
-                warn!("failed to backup pipe.md for '{}': {}", name, e);
-            }
-
-            if let Ok((current_config, _)) = parse_frontmatter(&current_content) {
+        let current_content = std::fs::read_to_string(&current_path).ok();
+        if let Some(current_content) = current_content.as_ref() {
+            if let Ok((current_config, _)) = parse_frontmatter(current_content) {
                 config.enabled = current_config.enabled;
                 config.preset = current_config.preset.clone();
                 config.effort = current_config.effort;
@@ -5906,6 +5917,14 @@ impl PipeManager {
         config.source_hash = Some(simple_hash(&body));
 
         let content = serialize_pipe(&config, &body)?;
+        self.ensure_pipe_write_allowed(name, Some(&content))?;
+        // Rejected adoption must not create or overwrite a backup either.
+        if current_content.is_some() {
+            let backup_path = dest_dir.join("pipe.md.bak");
+            if let Err(e) = std::fs::copy(&current_path, &backup_path) {
+                warn!("failed to backup pipe.md for '{}': {}", name, e);
+            }
+        }
         atomic_write(&current_path, &content)?;
 
         self.load_pipes().await?;
@@ -10719,6 +10738,7 @@ mod tests {
                 "digital-clone/pipe.md",
                 "speaker-reconciliation/pipe.md",
                 "skill-learning/pipe.md",
+                "skill-learning/pipe.md.bak",
                 LOCAL_OVERRIDES_FILE,
                 LOCAL_RUN_DESTINATIONS_FILE,
             ]
@@ -10748,6 +10768,18 @@ mod tests {
         }
         let error = manager
             .enable_pipe("skill-learning", true)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().starts_with(PIPE_LIMIT_ERROR_CODE));
+        assert_eq!(snapshot(), before);
+
+        let error = manager
+            .update_pipe_from_store(
+                "skill-learning",
+                &pipe_source(false, "updated skill"),
+                "skill-learning",
+                2,
+            )
             .await
             .unwrap_err();
         assert!(error.to_string().starts_with(PIPE_LIMIT_ERROR_CODE));
@@ -10824,6 +10856,99 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(restarted.installed_user_pipe_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn bundled_admission_keeps_pause_durable_without_consuming_a_slot() {
+        for use_config in [false, true] {
+            let installed = tempfile::tempdir().unwrap();
+            let pipes_dir = installed.path().join("pipes");
+            let mut manager = PipeManager::new(pipes_dir.clone(), HashMap::new(), None, 0);
+            manager.set_max_non_template_pipes(Some(2));
+            manager.install_builtin_pipes().unwrap();
+            for name in ["digital-clone", "speaker-reconciliation"] {
+                manager
+                    .install_pipe_from_store(&pipe_source(false, "completed task"), name, 1)
+                    .await
+                    .unwrap();
+            }
+            let paths = ["digital-clone", "speaker-reconciliation", "meeting-summary"];
+            let snapshot =
+                || paths.map(|name| std::fs::read(pipes_dir.join(name).join("pipe.md")).unwrap());
+            let before = snapshot();
+            assert!(
+                manager
+                    .get_pipe("meeting-summary")
+                    .await
+                    .unwrap()
+                    .config
+                    .enabled
+            );
+
+            // A failed override write must not report a successful pause.
+            let override_tmp = pipes_dir.join(".local-overrides.json.tmp");
+            std::fs::create_dir(&override_tmp).unwrap();
+            assert!(manager.enable_pipe("meeting-summary", false).await.is_err());
+            assert!(
+                manager
+                    .get_pipe("meeting-summary")
+                    .await
+                    .unwrap()
+                    .config
+                    .enabled
+            );
+            assert_eq!(snapshot(), before);
+            std::fs::remove_dir(override_tmp).unwrap();
+
+            if use_config {
+                manager
+                    .update_config(
+                        "meeting-summary",
+                        HashMap::from([("enabled".into(), serde_json::json!(false))]),
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                manager.enable_pipe("meeting-summary", false).await.unwrap();
+            }
+            assert!(
+                !manager
+                    .get_pipe("meeting-summary")
+                    .await
+                    .unwrap()
+                    .config
+                    .enabled
+            );
+            assert_eq!(
+                load_local_overrides(&pipes_dir).get("meeting-summary"),
+                Some(&false)
+            );
+            manager.reload_pipes().await.unwrap();
+            assert!(
+                !manager
+                    .get_pipe("meeting-summary")
+                    .await
+                    .unwrap()
+                    .config
+                    .enabled
+            );
+            let mut restarted = PipeManager::new(pipes_dir.clone(), HashMap::new(), None, 0);
+            restarted.set_max_non_template_pipes(Some(2));
+            restarted.load_pipes().await.unwrap();
+            assert!(
+                !restarted
+                    .get_pipe("meeting-summary")
+                    .await
+                    .unwrap()
+                    .config
+                    .enabled
+            );
+            for name in ["digital-clone", "speaker-reconciliation"] {
+                assert!(restarted.get_pipe(name).await.unwrap().config.enabled);
+            }
+            assert_eq!(restarted.installed_user_pipe_count(), 2);
+            assert_eq!(snapshot(), before);
+        }
     }
 
     #[tokio::test]
