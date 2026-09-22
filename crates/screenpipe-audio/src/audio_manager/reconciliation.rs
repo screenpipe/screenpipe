@@ -2164,6 +2164,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pending_audio_and_transcript_survive_pool_closure_and_reopen() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path();
+        let db = temp_db(data_dir).await;
+        let historical = make_audio_file(data_dir, "historical.mp4");
+        let original_id = db.insert_audio_chunk(&historical, None).await.unwrap();
+        db.close().await;
+
+        let audio = make_audio_file(data_dir, "Mic (input)_2026-09-22_01-00-00.mp4");
+        let transcribed = make_audio_file(data_dir, "Mic (input)_2026-09-22_01-00-30.mp4");
+        assert!(matches!(
+            db.insert_audio_chunk(&audio, None).await,
+            Err(sqlx::Error::PoolClosed)
+        ));
+        let timestamp = Utc::now() - chrono::Duration::hours(1);
+        persist_orphaned_chunk(data_dir, audio.clone(), Some(timestamp)).await;
+        persist_transcribed_chunk(
+            data_dir,
+            transcribed.clone(),
+            Some(timestamp),
+            PendingChunkTranscription {
+                text: "original transcript retained through restart".into(),
+                engine: "test".into(),
+                device_name: "Mic".into(),
+                is_input: true,
+                speaker_id: None,
+                start_time: Some(0.0),
+                end_time: Some(1.0),
+            },
+        )
+        .await;
+        assert_eq!(retry_pending_chunks(&db, data_dir).await, 0);
+        assert_eq!(
+            std::fs::read_dir(pending_chunks_dir(data_dir))
+                .unwrap()
+                .count(),
+            2
+        );
+        drop(db);
+
+        let reopened = temp_db(data_dir).await;
+        assert_eq!(retry_pending_chunks(&reopened, data_dir).await, 2);
+        assert_eq!(retry_pending_chunks(&reopened, data_dir).await, 0);
+        assert_eq!(
+            reopened.find_audio_chunk_id(&historical).await.unwrap(),
+            Some(original_id)
+        );
+        assert!(reopened
+            .find_audio_chunk_id(&audio)
+            .await
+            .unwrap()
+            .is_some());
+        let chunk = reopened
+            .find_audio_chunk_id(&transcribed)
+            .await
+            .unwrap()
+            .unwrap();
+        let texts: Vec<String> = sqlx::query_scalar(
+            "SELECT transcription FROM audio_transcriptions WHERE audio_chunk_id = ?",
+        )
+        .bind(chunk)
+        .fetch_all(&reopened.pool)
+        .await
+        .unwrap();
+        assert_eq!(texts, vec!["original transcript retained through restart"]);
+        assert_eq!(
+            std::fs::read_dir(pending_chunks_dir(data_dir))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert!(Path::new(&audio).exists());
+        assert!(Path::new(&transcribed).exists());
+        reopened.close().await;
+    }
+
+    #[tokio::test]
     async fn recovery_is_graceful_when_db_is_unavailable() {
         // The exact failure mode this code lives in: the DB is unhappy. Recovery
         // must not panic, must recover nothing, and must PRESERVE the markers for

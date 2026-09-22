@@ -406,13 +406,6 @@ impl DatabaseManager {
         // writer; only confirmed physical damage requires separate-copy repair.
         let write_queue_health =
             crate::write_queue::WriteQueueHealth::for_database_path(database_path);
-        let write_pool_rebuilder = crate::write_queue::WritePoolRebuilder::new(
-            connect_options,
-            write_pool_max,
-            1,
-            Duration::from_secs(10),
-        )
-        .with_storage(storage.clone());
         let persistent_failure_hook = crate::write_queue::persistent_failure_slot(None);
         let close_token = tokio_util::sync::CancellationToken::new();
         let write_queue = crate::write_queue::spawn_write_drain_with(
@@ -420,7 +413,6 @@ impl DatabaseManager {
             Arc::clone(&write_semaphore),
             Arc::from(database_path),
             crate::write_queue::WriteDrainOpts {
-                rebuilder: Some(write_pool_rebuilder),
                 on_persistent_failure: persistent_failure_hook.clone(),
                 health: write_queue_health.clone(),
                 shutdown: close_token.clone(),
