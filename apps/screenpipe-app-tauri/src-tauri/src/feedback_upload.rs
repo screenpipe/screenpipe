@@ -1006,6 +1006,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn writer_pool_recovery_reaches_support_after_rotation_and_redaction() {
+        use tracing::instrument::WithSubscriber;
+        mod fixture {
+            include!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../../crates/screenpipe-db/tests/support/writer_recovery.rs"
+            ));
+        }
+        let logs = tempfile::tempdir().unwrap();
+        let current = logs.path().join("screenpipe-app.2026-09-22.log");
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(std::fs::File::create(&current).unwrap())
+            .finish();
+        fixture::writer_starvation_recovery(false)
+            .with_subscriber(subscriber)
+            .await;
+        std::fs::rename(
+            &current,
+            logs.path().join("screenpipe-app.2026-09-22.1.log"),
+        )
+        .unwrap();
+        std::fs::write(
+            &current,
+            "contact=private-person@example.com\npassword=hunter2\n",
+        )
+        .unwrap();
+        let files = crate::log_files::collect_log_files(&[logs.path().to_path_buf()]).await;
+        let raw = collect_log_text_from_files(files).await;
+        let redacted = crate::feedback_redact::redact_diagnostics_locally(raw)
+            .await
+            .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "signedUrl": format!("{}/upload/log", server.uri()), "path": "logs/report.log"
+            }})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"id": 42}})))
+            .mount(&server)
+            .await;
+        upload_report(
+            &Client::new(),
+            &server.uri(),
+            &request(),
+            redacted,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let upload = requests.iter().find(|r| r.method == "PUT").unwrap();
+        let report = String::from_utf8_lossy(&upload.body);
+        for expected in [
+            "write pool acquisition timed out while holding the SQLite write coordinator",
+            "pool_size=1",
+            "idle_connections=0",
+            "requesting owner-controlled restart; shared pools retained until shutdown",
+            "write path recovered after 5 consecutive fatal batch(es)",
+        ] {
+            assert!(report.contains(expected), "missing {expected}: {report}");
+        }
+        assert!(!report.contains("private-person@example.com"));
+        assert!(!report.contains("hunter2"));
+    }
+
+    #[tokio::test]
     async fn database_verification_failure_reaches_support_after_log_rotation() {
         let dir = tempfile::tempdir().unwrap();
         let database = dir.path().join("db.sqlite");

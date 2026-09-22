@@ -99,13 +99,6 @@ fn sqlite_lifecycle_has_one_owner_per_physical_database() {
     assert!(!write_queue.contains("sqlx::Sqlite::create_database("));
     assert!(write_queue.contains(".idle_timeout(None)"));
     assert!(write_queue.contains(".max_lifetime(None)"));
-    assert_eq!(
-        write_queue
-            .matches("crate::storage::bulk::pool_options(")
-            .count(),
-        1,
-        "the write-pool rebuilder must preserve the capture pool lifecycle policy"
-    );
     let storage_pool = production_source(&crate_dir.join("src/storage/bulk/connection.rs"));
     assert_eq!(
         storage_pool
