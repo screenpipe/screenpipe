@@ -99,6 +99,36 @@ const PORT_HOLDER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 const OPENAI_COMPATIBLE_FAILURE_POLL_INTERVAL: Duration = Duration::from_secs(15);
 const OPENAI_COMPATIBLE_FAILURE_NOTIFICATION_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
+/// Preserve the ownership decision before rolling app logs can lose it.
+async fn prepare_database_startup(
+    data_dir: &std::path::Path,
+) -> Result<screenpipe_engine::cli::db::DatabaseStartupGuard, String> {
+    let generation = screenpipe_engine::cli::db::database_generation_diagnostic(data_dir);
+    match screenpipe_engine::cli::db::prepare_database_startup(data_dir).await {
+        Ok(guard) => {
+            if let Some(owner) = guard.reclaimed_owner() {
+                let after = screenpipe_engine::cli::db::database_generation_diagnostic(data_dir);
+                crate::recording::recovery_log::append(
+                    data_dir,
+                    "database_lock_reclaimed",
+                    &format!("{owner}; before=[{generation}]; after=[{after}]; outcome=startup_guard_acquired"),
+                );
+            }
+            Ok(guard)
+        }
+        Err(error) => {
+            let message = format!("Failed to initialize database: {error:#}");
+            crate::health::set_boot_error(&message);
+            crate::recording::recovery_log::append(
+                data_dir,
+                "database_startup_failed",
+                &format!("{message}; {generation}; outcome=recording_blocked"),
+            );
+            Err(message)
+        }
+    }
+}
+
 async fn initialize_frame_privacy_policy(
     db: &DatabaseManager,
     data_dir: &std::path::Path,
@@ -368,13 +398,7 @@ impl ServerCore {
 
         // A crash during repair may leave the committed WAL archived separately
         // from the main file. Reconcile the swap before ordinary DB diagnosis.
-        let startup_guard = screenpipe_engine::cli::db::prepare_database_startup(&local_data_dir)
-            .await
-            .map_err(|error| {
-                let message = format!("Failed to initialize database: {error:#}");
-                crate::health::set_boot_error(&message);
-                message
-            })?;
+        let startup_guard = prepare_database_startup(&local_data_dir).await?;
         let db_path =
             screenpipe_db::storage::resolve_database_path(&local_data_dir.join("db.sqlite"))
                 .map_err(|e| e.to_string())?
@@ -1618,6 +1642,152 @@ mod tests {
         assert!(report.contains("privacy setup unavailable"));
         assert!(report.contains("database reopened after privacy setup retry"));
         assert!(!report.contains("private-person@example.com"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn recovery_lock_decision_survives_restart_and_support_redaction() {
+        const CHILD_ROOT: &str = "SCREENPIPE_TEST_FOREIGN_LOCK_RESTART";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let error = prepare_database_startup(std::path::Path::new(&root))
+                .await
+                .err()
+                .unwrap();
+            assert!(error.contains("liveness=unverified"));
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap();
+        db.insert_audio_chunk("before-owner-recovery.wav", None)
+            .await
+            .unwrap();
+        db.close().await;
+        let live =
+            screenpipe_db::storage::resolve_database_path(&root.path().join("db.sqlite")).unwrap();
+        let generation = screenpipe_db::sqlite_file_identity(&live).unwrap();
+        let old_bytes = std::fs::read(&live).unwrap();
+
+        let lock = root.path().join(".db_recovery.lock");
+        let guard = prepare_database_startup(root.path()).await.unwrap();
+        let mut payload: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&lock).unwrap()).unwrap();
+        let host_id = payload["host_id"]
+            .as_str()
+            .expect("native macOS owner identity")
+            .to_string();
+        drop(guard);
+        payload["host"] = "previous-host-name".into();
+        payload["op"] = "database startup contact=private-person@example.com".into();
+
+        // An old lock lacking native identity cannot be silently upgraded to
+        // proof that this is a renamed host.
+        payload.as_object_mut().unwrap().remove("host_id");
+        std::fs::write(&lock, serde_json::to_vec(&payload).unwrap()).unwrap();
+        assert!(prepare_database_startup(root.path())
+            .await
+            .err()
+            .unwrap()
+            .contains("host_identity=legacy"));
+        payload["host_id"] = host_id.clone().into();
+        std::fs::write(&lock, serde_json::to_vec(&payload).unwrap()).unwrap();
+        assert!(prepare_database_startup(root.path())
+            .await
+            .err()
+            .unwrap()
+            .contains("liveness=alive"));
+
+        // Restart while the owner is remote: never reinterpret a local PID
+        // as remote liveness, and leave the lock and database bytes intact.
+        payload["host_id"] = "remote-machine".into();
+        payload["pid"] = i32::MAX.into();
+        let remote_lock = serde_json::to_vec(&payload).unwrap();
+        std::fs::write(&lock, &remote_lock).unwrap();
+        for _ in 0..2 {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "server_core::tests::recovery_lock_decision_survives_restart_and_support_redaction", "--nocapture"])
+                .env(CHILD_ROOT, root.path())
+                .status().unwrap();
+            assert!(status.success());
+            assert_eq!(std::fs::read(&lock).unwrap(), remote_lock);
+            assert_eq!(std::fs::read(&live).unwrap(), old_bytes);
+        }
+
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "no_such_test"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        child.wait().unwrap();
+        payload["host_id"] = host_id.clone().into();
+        payload["pid"] = child.id().into();
+        std::fs::write(&lock, serde_json::to_vec(&payload).unwrap()).unwrap();
+        let guard = prepare_database_startup(root.path()).await.unwrap();
+        assert!(guard.reclaimed_owner().unwrap().contains("liveness=dead"));
+        assert_eq!(
+            screenpipe_db::sqlite_file_identity(&live).unwrap(),
+            generation
+        );
+        let reopened = DatabaseManager::new(
+            root.path().join("db.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        reopened
+            .insert_audio_chunk("after-owner-recovery.wav", None)
+            .await
+            .unwrap();
+        reopened.close().await;
+        drop(guard);
+        // Prove committed old/new captures after another close/reopen.
+        let _guard = prepare_database_startup(root.path()).await.unwrap();
+        let reopened = DatabaseManager::new(
+            root.path().join("db.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        for file in ["before-owner-recovery.wav", "after-owner-recovery.wav"] {
+            assert!(reopened.find_audio_chunk_id(file).await.unwrap().is_some());
+        }
+        reopened.close().await;
+        crate::recording::recovery_log::append(
+            root.path(),
+            "engine_started",
+            "database reopened after owner recovery",
+        );
+        for day in 1..=7 {
+            std::fs::write(
+                root.path()
+                    .join(format!("screenpipe-app.2026-09-{day:02}.log")),
+                "noisy rolling log\n".repeat(9000),
+            )
+            .unwrap();
+        }
+        let report =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[root.path().to_path_buf()])
+                .await
+                .unwrap();
+        for expected in [
+            "host_identity=legacy",
+            "host_identity=mismatch",
+            "liveness=unverified",
+            "liveness=alive",
+            "hostname_matches=false",
+            "liveness=dead",
+            "generation=",
+            "outcome=recording_blocked",
+            "outcome=startup_guard_acquired",
+            "database_lock_reclaimed",
+            "database reopened after owner recovery",
+        ] {
+            assert!(report.contains(expected), "missing {expected}: {report}");
+        }
+        assert!(!report.contains("private-person@example.com"));
+        assert!(!report.contains(&host_id));
+        assert!(!report.contains("previous-host-name"));
     }
 
     fn localhost(port: u16) -> SocketAddr {
