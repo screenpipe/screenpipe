@@ -32,7 +32,10 @@ async function harness(options: { steps?: number; enabled?: boolean; failSummary
   const settings = sdk.SettingsManager.inMemory({ compaction: { enabled: options.enabled ?? true }, retry: { enabled: false } });
   const loader = new sdk.DefaultResourceLoader({ cwd: root, agentDir: root, settingsManager: settings,
     noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
-    systemPrompt: "System context. ".repeat(4000) });
+    // systemPrompt probes its input with existsSync before treating it as text.
+    // This 64K fixture overflows Bun 1.2.2's Windows path buffer. Supply the
+    // same context directly so the eval stresses compaction, not path parsing.
+    systemPromptOverride: () => "System context. ".repeat(4000) });
   await loader.reload();
   const toolCalls: number[] = [];
   const { session } = await sdk.createAgentSession({ cwd: root, agentDir: root, modelRuntime: runtime,

@@ -16,7 +16,8 @@ import { TestRecorder } from './helpers/test-recorder.js';
 // WebdriverIO passes the current dispatcher explicitly into every WebDriver
 // fetch; that wrapper rejects the explicit `dispatcher` option with
 // UND_ERR_INVALID_ARG. E2E only talks to the local Tauri WebDriver server, so use
-// a plain Agent here.
+// a plain Agent here. Keep the direct undici dependency on WebDriver's major:
+// its v6 fetch sends a numeric Content-Length that a v8 Agent rejects.
 setGlobalDispatcher(new Agent());
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
