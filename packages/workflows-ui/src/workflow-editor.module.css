@@ -33,7 +33,7 @@
 .toolbar > div:first-child { flex: 0 1 auto; }
 .toolbar span { color: var(--muted); font-size: 11px; }
 .intro { margin: 0 0 16px; }
-.intro .title { font-size: 30px; font-weight: 600; line-height: 1.25; letter-spacing: -.03em; margin-bottom: 4px; }
+.intro .title { font-family: var(--heading-font); font-size: 30px; font-weight: 600; line-height: 1.25; letter-spacing: -.03em; margin-bottom: 4px; }
 .endpoint { display: block; color: var(--muted); font-size: 11px; padding: 6px 5px; }
 .endpoint textarea { margin-left: -5px; }
 .stepsHeading { margin: 18px 0 8px; padding: 0 5px; }
@@ -43,8 +43,8 @@
 .step::before { content: ""; position: absolute; left: -30px; top: 0; bottom: 0; width: 30px; }
 .step.drop { box-shadow: 0 -2px 0 var(--ink); }
 .stepTop { padding-right: 30px; position: relative; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: start; }
-.number { padding-top: 7px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.step .title { min-width: 0; font-size: 17px; font-weight: 550; line-height: 1.4; }
+.number { font-family: var(--evidence-font); padding-top: 7px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.step .title { font-family: var(--heading-font); min-width: 0; font-size: 17px; font-weight: 550; line-height: 1.4; }
 .step > textarea, .step > div[data-testid="procedure-markdown"] { width: calc(100% - 24px); margin-left: 24px; }
 .editor .grip { cursor: grab; color: var(--muted); }
 .editor .grip:active { cursor: grabbing; }
@@ -93,7 +93,7 @@
   .stepTop > .grip, .controls, .step > .add, .blockControls > .grip { transition: none; }
 }
 @container workflow-editor (max-width: 560px) {
-  .intro .title { font-size: 25px; }
+  .intro .title { font-family: var(--heading-font); font-size: 25px; }
   .steps { padding-left: 24px; }
   .stepTop { grid-template-columns: 20px minmax(0, 1fr) auto; }
   .step > textarea, .step > div[data-testid="procedure-markdown"] { width: calc(100% - 20px); margin-left: 20px; }

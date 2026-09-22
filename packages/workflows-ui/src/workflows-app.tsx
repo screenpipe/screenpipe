@@ -278,7 +278,7 @@ function withoutScreenshotCopies(analysis: WorkflowAnalysis): WorkflowAnalysis {
 }
 
 function BrandMark() {
-  return <span className={styles.brandMark} aria-hidden="true"><span /><span /><span /></span>;
+  return <span className={styles.brandMark} aria-hidden="true" />;
 }
 
 function Pill({ children, tone = "plain" }: { children: React.ReactNode; tone?: "plain" | "green" | "warm" }) {
