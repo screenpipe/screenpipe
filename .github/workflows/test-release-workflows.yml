@@ -154,3 +154,47 @@ jobs:
           Expand-Archive -LiteralPath $zip -DestinationPath $tool -Force
           "CODESIGNTOOL_PATH=$tool" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - uses: ./.github/actions/refresh-windows-signing-trust
+
+  windows-frontend-dependencies:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+      - name: Reproduce the persistent runner's removed updater package
+        shell: pwsh
+        working-directory: apps/screenpipe-app-tauri
+        run: |
+          $orphan = 'node_modules/@tauri-apps/plugin-updater'
+          New-Item -ItemType Directory -Force -Path $orphan | Out-Null
+          Set-Content -LiteralPath "$orphan/package.json" -Value '{"name":"@tauri-apps/plugin-updater","version":"2.10.0"}'
+      - uses: ./.github/actions/install-windows-frontend-dependencies
+      - name: Verify the installed tree matches the release dependencies
+        shell: pwsh
+        working-directory: apps/screenpipe-app-tauri
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Test-Path -LiteralPath 'node_modules/@tauri-apps/plugin-updater') {
+            throw 'removed updater package survived the release install'
+          }
+          if (-not (Test-Path -LiteralPath 'node_modules/@tauri-apps/cli/package.json')) {
+            throw 'Tauri CLI was not installed'
+          }
+          $source = '../../packages/workflows-ui/src'
+          $installed = 'node_modules/@screenpipe/workflows-ui/src'
+          foreach ($file in Get-ChildItem -LiteralPath $source -Recurse -File) {
+            $relative = [IO.Path]::GetRelativePath((Resolve-Path $source), $file.FullName)
+            $copy = Get-Item -LiteralPath (Join-Path $installed $relative)
+            if ($copy.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+              throw "local dependency uses a symlink: $relative"
+            }
+            if ((Get-FileHash $copy.FullName).Hash -ne (Get-FileHash $file.FullName).Hash) {
+              throw "local dependency differs from release source: $relative"
+            }
+          }
