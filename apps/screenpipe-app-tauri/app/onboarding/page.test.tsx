@@ -90,11 +90,14 @@ vi.mock("next/navigation", () => {
 });
 vi.mock("@/lib/hooks/use-onboarding", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/hooks/use-onboarding")>();
-  const useOnboarding = () => mocks.useRealSetupCompletion ? actual.useOnboarding() : ({
-    onboardingData,
-    isLoading: false,
-    completeOnboarding: mocks.completeOnboarding,
-  });
+  const useOnboarding = () => {
+    const state = actual.useOnboarding();
+    return mocks.useRealSetupCompletion ? state : {
+      onboardingData,
+      isLoading: false,
+      completeOnboarding: mocks.completeOnboarding,
+    };
+  };
   useOnboarding.getState = () => mocks.useRealSetupCompletion ? actual.useOnboarding.getState() : ({
     onboardingData,
     loadOnboardingStatus: vi.fn(async () => undefined),
