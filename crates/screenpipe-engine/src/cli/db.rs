@@ -10,7 +10,7 @@
 //! database again. The reliability story is built around **one PID lock file**
 //! that every mutating path acquires:
 //!
-//!   * `~/.screenpipe/.db_recovery.lock` — JSON `{pid, host, started_at, op}`
+//!   * `~/.screenpipe/.db_recovery.lock` — JSON owner and operation metadata.
 //!   * Created with `O_CREAT|O_EXCL` (atomic) so two CLI runs can't both win.
 //!   * Heartbeated every 30 s by a background thread so a long recovery
 //!     (multi-GB DB) doesn't look stale.
@@ -22,12 +22,11 @@
 //!
 //! ## When the lock is "stale"
 //!
-//! 1. Foreign host (lock written from another machine over a shared `$HOME`):
-//!    we **refuse to clear** automatically — print the path and tell the user.
-//! 2. Same host, PID gone: clear and proceed.
-//! 3. Same host, PID alive: refuse, point at `screenpipe db unlock`.
-//! 4. Same host, PID unknown, mtime > 1 h: clear (heartbeat would have kept it
-//!    fresh; older means the heartbeat thread is dead too).
+//! macOS locks include a domain-separated hash of the OS host UUID. A matching
+//! identity permits local PID checks even after a hostname change; a mismatch
+//! or unavailable identity never does. Legacy locks retain the hostname check.
+//! Only a confirmed dead local PID can be reclaimed. A foreign or unverifiable
+//! owner is never expired by age. Unparseable locks retain the one-hour grace.
 //!
 //! ## Recovery pre-flight
 //!
@@ -52,7 +51,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use sysinfo::{DiskExt, Pid, PidExt, System, SystemExt};
+use sysinfo::{DiskExt, System, SystemExt};
+#[cfg(not(unix))]
+use sysinfo::{Pid, PidExt};
 
 use super::DbCommand;
 
@@ -103,6 +104,10 @@ struct RecoveryManifest {
 struct LockPayload {
     pid: u32,
     host: String,
+    /// OS identity, never an ID stored in the possibly shared data directory.
+    /// Missing on legacy locks and platforms without a supported probe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    host_id: Option<String>,
     /// Unix-epoch seconds when the lock was acquired.
     started_at: u64,
     /// Free-form: "recover", "cleanup", "unlock". Useful in error messages.
@@ -114,6 +119,31 @@ fn current_host() -> String {
         .ok()
         .and_then(|h| h.into_string().ok())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// A hostname can change while a process is running. Read the native macOS
+/// identity with a bounded wait, and store only a lock-specific hash locally.
+#[cfg(target_os = "macos")]
+fn current_host_id() -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let mut id = [0u8; 16];
+    let timeout = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 50_000_000,
+    };
+    // SAFETY: gethostuuid writes exactly 16 bytes; both pointers are valid.
+    if unsafe { libc::gethostuuid(id.as_mut_ptr(), &timeout) } != 0 || id == [0; 16] {
+        return None;
+    }
+    let mut hash = Sha256::new();
+    hash.update(b"screenpipe-db-lock-host-v1\0");
+    hash.update(id);
+    Some(format!("macos-v1:{:x}", hash.finalize()))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn current_host_id() -> Option<String> {
+    None
 }
 
 fn now_unix() -> u64 {
@@ -129,20 +159,23 @@ struct DbLock {
     path: PathBuf,
     /// Set to true on Drop / signal — heartbeat thread observes and exits.
     stop: Arc<AtomicBool>,
+    reclaimed_owner: Option<String>,
 }
 
 #[derive(Debug)]
 enum LockState {
-    /// No lock file present — free to acquire.
     Free,
-    /// Lock is held by `pid` on the same host and that PID is alive.
-    HeldHere { pid: u32, op: String },
-    /// Lock is held by another machine — never auto-clear.
-    Foreign { host: String, pid: u32 },
-    /// Lock file exists but the holder is gone (dead PID and/or mtime past
-    /// STALE_AFTER). Safe to overwrite.
-    Stale,
-    /// Lock file exists but is unparseable — treat as stale after mtime check.
+    HeldHere {
+        pid: u32,
+        op: String,
+        evidence: String,
+    },
+    Foreign {
+        evidence: String,
+    },
+    Stale {
+        evidence: String,
+    },
     Unreadable,
 }
 
@@ -155,10 +188,13 @@ impl DbLock {
         let path = data_dir.join(LOCK_FILE);
         fs::create_dir_all(data_dir).ok();
 
+        let mut reclaimed_owner = None;
         match Self::inspect(&path) {
             LockState::Free => {}
-            LockState::Stale => {
-                let _ = fs::remove_file(&path);
+            LockState::Stale { evidence } => {
+                Self::remove_stale(&path)
+                    .with_context(|| format!("reclaiming orphaned database lock: {evidence}"))?;
+                reclaimed_owner = Some(evidence);
             }
             LockState::Unreadable => {
                 let mtime_ok = fs::metadata(&path)
@@ -174,19 +210,24 @@ if you're sure no `screenpipe db ...` is running, run `screenpipe db unlock --fo
                         path.display(),
                     );
                 }
-                let _ = fs::remove_file(&path);
+                Self::remove_stale(&path)?;
+                reclaimed_owner = Some("owner=unreadable expired=true".to_string());
             }
-            LockState::HeldHere { pid, op: other } => {
+            LockState::HeldHere {
+                pid,
+                op: other,
+                evidence,
+            } => {
                 bail!(
-                    "another db op is running: {} (pid {}). wait for it, or `screenpipe db unlock --force` if you're sure it's stuck.",
+                    "database owner is not confirmed dead: {} (pid {}). {evidence}. recording startup remains blocked to protect this generation.",
                     other,
                     pid,
                 );
             }
-            LockState::Foreign { host, pid } => {
+            LockState::Foreign { evidence } => {
                 bail!(
-                    "lock file at {} is held by host {host} (pid {pid}). this looks like a shared $HOME. \
-will not auto-clear cross-host locks. resolve manually if needed.",
+                    "database recovery lock at {} has a foreign or unverifiable owner; {evidence}. \
+will not auto-clear cross-host locks. recording startup remains blocked to protect this generation.",
                     path.display(),
                 );
             }
@@ -197,6 +238,7 @@ will not auto-clear cross-host locks. resolve manually if needed.",
         let payload = LockPayload {
             pid: std::process::id(),
             host: current_host(),
+            host_id: current_host_id(),
             started_at: now_unix(),
             op: op.to_string(),
         };
@@ -211,71 +253,119 @@ will not auto-clear cross-host locks. resolve manually if needed.",
                     path.display()
                 )
             })?;
+        let guard = Self {
+            path,
+            stop: Arc::new(AtomicBool::new(false)),
+            reclaimed_owner,
+        };
+        // An incomplete write/flush must not strand a lock owned by this live
+        // process: guard cleanup releases only the file we just created.
         file.write_all(body.as_bytes())
             .context("writing lock payload")?;
+        screenpipe_fs::sync_all(&file).context("persisting lock payload")?;
         drop(file);
-
-        let stop = Arc::new(AtomicBool::new(false));
-        Self::start_heartbeat(&path, stop.clone());
+        Self::start_heartbeat(&guard.path, guard.stop.clone());
         if install_signal_handlers {
-            Self::install_signal_handlers(&path, stop.clone());
+            Self::install_signal_handlers(&guard.path, guard.stop.clone());
         }
-
-        Ok(Self { path, stop })
+        Ok(guard)
     }
 
     fn inspect(path: &Path) -> LockState {
+        Self::inspect_for_host(path, &current_host(), current_host_id().as_deref())
+    }
+
+    fn inspect_for_host(path: &Path, host: &str, host_id: Option<&str>) -> LockState {
         let raw = match fs::read_to_string(path) {
             Ok(s) => s,
-            Err(_) => return LockState::Free,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return LockState::Free,
+            Err(error) => {
+                return LockState::Foreign {
+                    evidence: format!("owner=unreadable io_error={error}; liveness=unverified"),
+                }
+            }
         };
+        Self::inspect_contents(&raw, host, host_id)
+    }
+
+    fn inspect_contents(raw: &str, host: &str, host_id: Option<&str>) -> LockState {
         let payload: LockPayload = match serde_json::from_str(raw.trim()) {
             Ok(p) => p,
             Err(_) => return LockState::Unreadable,
         };
-        if payload.host != current_host() {
-            return LockState::Foreign {
-                host: payload.host,
-                pid: payload.pid,
-            };
-        }
-        if pid_alive(payload.pid) {
-            return LockState::HeldHere {
+        let hostname_matches = !host.is_empty() && host != "unknown" && payload.host == host;
+        let (local, identity) = match (payload.host_id.as_deref(), host_id) {
+            (Some(owner), Some(current)) if !owner.is_empty() && owner == current => {
+                (true, "match")
+            }
+            (Some(_), Some(_)) => (false, "mismatch"),
+            (Some(_), None) => (false, "unavailable"),
+            (None, _) => (hostname_matches, "legacy"),
+        };
+        // Never query a local PID as evidence about a remote owner's liveness.
+        let liveness = if local {
+            owner_liveness(payload.pid)
+        } else {
+            "unverified"
+        };
+        let evidence = format!(
+            "host_identity={identity} hostname_matches={hostname_matches} pid={} liveness={liveness} acquired_at={} op={}",
+            payload.pid, payload.started_at, payload.op.chars().take(80).collect::<String>().replace(['\r', '\n'], " ")
+        );
+        if !local {
+            LockState::Foreign { evidence }
+        } else if liveness == "dead" {
+            LockState::Stale { evidence }
+        } else {
+            LockState::HeldHere {
                 pid: payload.pid,
                 op: payload.op,
+                evidence,
+            }
+        }
+    }
+
+    fn remove_stale(path: &Path) -> Result<()> {
+        // Two reclaimers must not unlink each other's replacement. Serialize
+        // inspection/removal on the old inode, then recheck its identity and
+        // owner. A contender holding the unlinked inode cannot delete the new
+        // lock. Unsupported filesystem locking fails closed.
+        let identity = screenpipe_db::sqlite_file_identity(path)?;
+        let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+        file.try_lock()
+            .context("serializing orphaned database lock recovery")?;
+        if screenpipe_db::sqlite_file_identity(path)? != identity {
+            bail!("database recovery lock changed during owner verification; retry startup");
+        }
+        // Read through the locked handle: Windows byte locks exclude reads
+        // through a separately opened handle, even in the same process.
+        let mut raw = String::new();
+        file.read_to_string(&mut raw)?;
+        let stale =
+            match Self::inspect_contents(&raw, &current_host(), current_host_id().as_deref()) {
+                LockState::Stale { .. } => true,
+                LockState::Unreadable => file
+                    .metadata()?
+                    .modified()?
+                    .elapsed()
+                    .is_ok_and(|age| age > STALE_AFTER),
+                _ => false,
             };
+        if !stale {
+            bail!("database recovery lock owner changed during verification; retry startup");
         }
-        // PID dead — might still be a fresh-but-orphaned lock. Heartbeat keeps
-        // mtime current while a real op runs; if mtime > STALE_AFTER, treat as
-        // stale regardless.
-        let recently_touched = fs::metadata(path)
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.elapsed().ok())
-            .map(|e| e <= STALE_AFTER)
-            .unwrap_or(false);
-        if recently_touched {
-            // Edge case: PID died <1 h ago and heartbeat thread also died.
-            // Conservative: still treat as stale since the holder is gone.
-            // We err on the side of letting the user proceed; they can always
-            // re-acquire after.
-            LockState::Stale
-        } else {
-            LockState::Stale
-        }
+        fs::remove_file(path).context("removing verified orphaned database lock")
     }
 
     fn start_heartbeat(path: &Path, stop: Arc<AtomicBool>) {
         let path = path.to_path_buf();
         std::thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
-                // Touch the mtime by rewriting the same content.
-                if let Ok(content) = fs::read_to_string(&path) {
-                    let _ = OpenOptions::new()
-                        .write(true)
-                        .truncate(true)
-                        .open(&path)
-                        .and_then(|mut f| f.write_all(content.as_bytes()));
+                // Never truncate/rewrite ownership. A late heartbeat from a
+                // dropped guard may touch mtime but cannot corrupt a successor.
+                // Close before sleeping: Windows defers deletion while open.
+                if let Ok(file) = OpenOptions::new().write(true).open(&path) {
+                    let _ = file.set_modified(SystemTime::now());
                 }
                 std::thread::sleep(HEARTBEAT_INTERVAL);
             }
@@ -323,22 +413,34 @@ impl Drop for DbLock {
     }
 }
 
-fn pid_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
+fn owner_liveness(pid: u32) -> &'static str {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return "unverified";
     }
-    // This lock also protects desktop startup on Windows, where an external
-    // `kill` executable is not available. Check the owner on every platform.
-    let mut system = System::new();
-    let pid = Pid::from_u32(pid);
-    let found = system.refresh_process(pid);
-    // sysinfo 0.29's first Windows refresh only opens a process handle. An
-    // exited process can still be opened while another handle (e.g. Child) is
-    // alive. Refresh the existing entry to check GetExitCodeProcess as well.
-    #[cfg(windows)]
-    return found && system.refresh_process(pid);
-    #[cfg(not(windows))]
-    found
+    #[cfg(unix)]
+    {
+        // Signal zero does not signal or terminate the process. EPERM means
+        // alive; only ESRCH proves absence. Failed inspection is not death.
+        if unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
+            return "alive";
+        }
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::ESRCH) => "dead",
+            Some(libc::EPERM) => "alive",
+            _ => "unverified",
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // Preserve the existing Windows exited-handle check.
+        let mut system = System::new();
+        let pid = Pid::from_u32(pid);
+        if system.refresh_process(pid) && system.refresh_process(pid) {
+            "alive"
+        } else {
+            "dead"
+        }
+    }
 }
 
 // ── runtime checks ─────────────────────────────────────────────────────
@@ -831,6 +933,35 @@ fn newest_recovery_directories(data_dir: &Path) -> Result<Vec<PathBuf>> {
 /// Runtime maintenance still requires the caller to stop the recording process.
 pub struct DatabaseStartupGuard {
     _lock: DbLock,
+}
+
+impl DatabaseStartupGuard {
+    /// Bounded, identity-free explanation for the normal support report.
+    pub fn reclaimed_owner(&self) -> Option<&str> {
+        self._lock.reclaimed_owner.as_deref()
+    }
+}
+
+/// Metadata only: never opens SQLite or reads recorded content/settings.
+/// The support report can correlate the admitted generation across restarts.
+pub fn database_generation_diagnostic(data_dir: &Path) -> String {
+    let legacy = data_dir.join("db.sqlite");
+    let live = match screenpipe_db::storage::resolve_database_path(&legacy) {
+        Ok(path) => path,
+        Err(error) => return format!("generation_resolution_failed={error}"),
+    };
+    let identity = screenpipe_db::sqlite_file_identity(&live);
+    let source_identity = screenpipe_db::sqlite_file_identity(&legacy);
+    #[cfg(target_os = "macos")]
+    let network_volume = screenpipe_fs::is_network_volume(data_dir).ok();
+    #[cfg(not(target_os = "macos"))]
+    let network_volume: Option<bool> = None;
+    format!(
+        "storage={} generation={identity:?} legacy_generation={source_identity:?} network_volume={network_volume:?} wal_present={} shm_present={}",
+        if live == legacy { "legacy" } else { "hybrid" },
+        sqlite_sidecar(&live, "-wal").exists(),
+        sqlite_sidecar(&live, "-shm").exists()
+    )
 }
 
 /// Reconcile interrupted replacement before ordinary SQLite startup can create
@@ -1624,7 +1755,7 @@ fn unlock(data_dir: &Path, force: bool) -> Result<()> {
     let state = DbLock::inspect(&path);
     println!("lock file: {}", path.display());
     println!("state: {:?}", state);
-    let safe = matches!(state, LockState::Stale | LockState::Unreadable);
+    let safe = matches!(state, LockState::Stale { .. } | LockState::Unreadable);
     if !safe && !force {
         bail!(
             "lock looks live ({state:?}). pass --force to remove anyway. you should only do this if you're certain no `screenpipe db ...` is actually running."
@@ -2172,7 +2303,177 @@ mod recovery_tests {
 
     #[test]
     fn recovery_lock_recognizes_the_current_process_on_this_platform() {
-        assert!(pid_alive(std::process::id()));
+        assert_eq!(owner_liveness(std::process::id()), "alive");
+    }
+
+    fn exited_owner_pid() -> u32 {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "no_such_test"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        child.wait().unwrap();
+        assert_eq!(owner_liveness(child.id()), "dead");
+        child.id()
+    }
+
+    fn write_owner(dir: &Path, host: &str, host_id: Option<String>, pid: u32) {
+        fs::write(
+            dir.join(LOCK_FILE),
+            serde_json::to_vec(&LockPayload {
+                host: host.into(),
+                host_id,
+                pid,
+                started_at: 1,
+                op: "database startup".into(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn recovery_lock_requires_local_identity_before_probing_a_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(LOCK_FILE);
+        let dead = exited_owner_pid();
+        for (owner_host, owner_id, local_id) in [
+            ("renamed-host", None, Some("this-machine")),
+            ("this-host", Some("other-machine"), Some("this-machine")),
+            ("this-host", Some("this-machine"), None),
+        ] {
+            write_owner(dir.path(), owner_host, owner_id.map(str::to_string), dead);
+            let state = DbLock::inspect_for_host(&path, "this-host", local_id);
+            assert!(matches!(state, LockState::Foreign { .. }), "{state:?}");
+            assert!(format!("{state:?}").contains("liveness=unverified"));
+            assert!(path.exists());
+        }
+        // Neither a renamed local host with a live PID nor a PID we cannot
+        // inspect may be reclaimed. No age or heartbeat timeout overrides it.
+        for pid in [std::process::id(), 0, u32::MAX] {
+            write_owner(dir.path(), "old-name", Some("this-machine".into()), pid);
+            assert!(matches!(
+                DbLock::inspect_for_host(&path, "new-name", Some("this-machine")),
+                LockState::HeldHere { .. }
+            ));
+        }
+        // Same-host legacy locks retain their existing dead-owner recovery.
+        write_owner(dir.path(), "this-host", None, dead);
+        assert!(matches!(
+            DbLock::inspect_for_host(&path, "this-host", None),
+            LockState::Stale { .. }
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn renamed_mac_recovers_only_dead_local_owner_and_preserves_real_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("db.sqlite");
+        let db = Connection::open(&live).unwrap();
+        db.execute_batch(
+            "CREATE TABLE records(value TEXT); INSERT INTO records VALUES ('before restart');",
+        )
+        .unwrap();
+        drop(db);
+        let original = fs::read(&live).unwrap();
+        let generation = screenpipe_db::sqlite_file_identity(&live).unwrap();
+        let archived = dir.path().join("db-recovery-preserved");
+        fs::create_dir(&archived).unwrap();
+        fs::write(archived.join("original.sqlite"), &original).unwrap();
+        let host_id = current_host_id().expect("macOS host identity must be available");
+        assert_eq!(current_host_id().as_ref(), Some(&host_id));
+
+        write_owner(
+            dir.path(),
+            "name-before-rename",
+            Some(host_id.clone()),
+            std::process::id(),
+        );
+        assert!(prepare_database_startup(dir.path()).await.is_err());
+        assert_eq!(fs::read(&live).unwrap(), original);
+        // A same-name remote machine remains protected even with a dead local
+        // PID. Local absence says nothing about that machine's owner.
+        write_owner(
+            dir.path(),
+            &current_host(),
+            Some("different-machine".into()),
+            exited_owner_pid(),
+        );
+        let remote_lock = fs::read(dir.path().join(LOCK_FILE)).unwrap();
+        assert!(prepare_database_startup(dir.path()).await.is_err());
+        assert_eq!(fs::read(dir.path().join(LOCK_FILE)).unwrap(), remote_lock);
+
+        write_owner(
+            dir.path(),
+            "name-before-rename",
+            Some(host_id),
+            exited_owner_pid(),
+        );
+        let guard = prepare_database_startup(dir.path()).await.unwrap();
+        let evidence = guard.reclaimed_owner().unwrap();
+        assert!(evidence.contains("host_identity=match hostname_matches=false"));
+        assert!(evidence.contains("liveness=dead"));
+        assert_eq!(
+            screenpipe_db::sqlite_file_identity(&live).unwrap(),
+            generation
+        );
+        let db = Connection::open(&live).unwrap();
+        db.execute("INSERT INTO records VALUES ('after restart')", [])
+            .unwrap();
+        drop(db);
+        drop(guard);
+        let _reopened = prepare_database_startup(dir.path()).await.unwrap();
+        let db = Connection::open(&live).unwrap();
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM records", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            fs::read(archived.join("original.sqlite")).unwrap(),
+            original
+        );
+        assert_eq!(
+            db.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "ok"
+        );
+    }
+
+    #[test]
+    fn concurrent_orphan_reclaimers_cannot_remove_a_successors_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        write_owner(
+            dir.path(),
+            &current_host(),
+            current_host_id(),
+            exited_owner_pid(),
+        );
+        let start = Arc::new(std::sync::Barrier::new(8));
+        let finish = Arc::new(std::sync::Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let (start, finish, root) =
+                    (start.clone(), finish.clone(), dir.path().to_path_buf());
+                std::thread::spawn(move || {
+                    start.wait();
+                    let guard = DbLock::acquire_inner(&root, "competing startup", false);
+                    finish.wait();
+                    guard
+                })
+            })
+            .collect();
+        let guards: Vec<_> = workers
+            .into_iter()
+            .map(|w| w.join().unwrap())
+            .filter_map(Result::ok)
+            .collect();
+        assert_eq!(guards.len(), 1);
+        assert!(matches!(
+            DbLock::inspect(&dir.path().join(LOCK_FILE)),
+            LockState::HeldHere { .. }
+        ));
     }
 
     #[tokio::test]
@@ -2239,7 +2540,7 @@ mod recovery_tests {
         );
         // Retain Child's Windows handle: a terminated process object may still
         // exist, but it must not keep the startup lock owned by a live process.
-        assert!(!pid_alive(child.id()));
+        assert_eq!(owner_liveness(child.id()), "dead");
 
         let _guard = prepare_database_startup(dir.path()).await.unwrap();
         assert_eq!(fs::read(&live).unwrap(), b"database-bytes");
