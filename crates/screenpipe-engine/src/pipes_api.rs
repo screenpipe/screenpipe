@@ -29,24 +29,37 @@ pub type SharedPipeManager = Arc<Mutex<PipeManager>>;
 /// text for callers that display it locally.
 pub(crate) fn pipe_setup_failure(operation: &'static str, error: &anyhow::Error) -> Value {
     use std::io::ErrorKind;
-    let code = error.chain().find_map(|cause| cause.downcast_ref::<std::io::Error>())
+    let code = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<std::io::Error>())
         .map(|cause| match cause.kind() {
             ErrorKind::PermissionDenied => "permission_denied",
             ErrorKind::StorageFull => "disk_full",
             ErrorKind::NotFound => "pipe_not_found",
-            ErrorKind::InvalidData | ErrorKind::InvalidInput | ErrorKind::NotADirectory
-                | ErrorKind::IsADirectory | ErrorKind::UnexpectedEof => "invalid_state",
+            ErrorKind::InvalidData
+            | ErrorKind::InvalidInput
+            | ErrorKind::NotADirectory
+            | ErrorKind::IsADirectory
+            | ErrorKind::UnexpectedEof => "invalid_state",
             ErrorKind::TimedOut => "timeout",
             _ => "io_error",
         })
         .unwrap_or_else(|| {
-            if error.to_string().starts_with(screenpipe_core::pipes::PIPE_LIMIT_ERROR_CODE) {
+            if error
+                .to_string()
+                .starts_with(screenpipe_core::pipes::PIPE_LIMIT_ERROR_CODE)
+            {
                 "free_pipe_limit_reached"
             } else {
                 "operation_failed"
             }
         });
-    tracing::warn!(operation, error_code = code, outcome = "retry_available", "pipe_setup_failed");
+    tracing::warn!(
+        operation,
+        error_code = code,
+        outcome = "retry_available",
+        "pipe_setup_failed"
+    );
     json!({ "error": error.to_string(), "error_code": code })
 }
 
@@ -539,7 +552,9 @@ pub async fn install_bundled_pipe(
     };
     if let Err(error) = mgr.load_pipes().await {
         let mut failure = pipe_setup_failure("load", &error);
-        failure["error"] = json!(format!("bundled Pipe was copied but could not be loaded: {error}"));
+        failure["error"] = json!(format!(
+            "bundled Pipe was copied but could not be loaded: {error}"
+        ));
         return Json(failure);
     }
 
@@ -670,7 +685,10 @@ mod tests {
         ] {
             let error = anyhow::Error::new(std::io::Error::new(kind, "private path token=secret"))
                 .context("failed to save configuration");
-            assert_eq!(pipe_setup_failure("configure", &error)["error_code"], expected);
+            assert_eq!(
+                pipe_setup_failure("configure", &error)["error_code"],
+                expected
+            );
         }
     }
 
@@ -681,24 +699,35 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let pipes_dir = dir.path().join("pipes");
         let state = Arc::new(Mutex::new(PipeManager::new(
-            pipes_dir.clone(), HashMap::new(), None, 3030,
+            pipes_dir.clone(),
+            HashMap::new(),
+            None,
+            3030,
         )));
         let Json(installed) = install_bundled_pipe(
-            State(state.clone()), Path("speaker-reconciliation".to_string()),
-        ).await;
+            State(state.clone()),
+            Path("speaker-reconciliation".to_string()),
+        )
+        .await;
         assert_eq!(installed["success"], true);
 
         let pipe_dir = pipes_dir.join("speaker-reconciliation");
         let permissions = std::fs::metadata(&pipe_dir).unwrap().permissions();
         std::fs::set_permissions(&pipe_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
         let (status, Json(config_error)) = update_pipe_config(
-            State(state.clone()), Path("speaker-reconciliation".to_string()),
-            Json(ConfigUpdateRequest { config: HashMap::new() }),
-        ).await;
+            State(state.clone()),
+            Path("speaker-reconciliation".to_string()),
+            Json(ConfigUpdateRequest {
+                config: HashMap::new(),
+            }),
+        )
+        .await;
         let Json(enable_error) = enable_pipe(
-            State(state.clone()), Path("speaker-reconciliation".to_string()),
+            State(state.clone()),
+            Path("speaker-reconciliation".to_string()),
             Json(EnableRequest { enabled: true }),
-        ).await;
+        )
+        .await;
         std::fs::set_permissions(&pipe_dir, permissions).unwrap();
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(config_error["error_code"], "permission_denied");
@@ -710,28 +739,41 @@ mod tests {
         std::fs::create_dir_all(&fresh).unwrap();
         let permissions = std::fs::metadata(&fresh).unwrap().permissions();
         let fresh_state = Arc::new(Mutex::new(PipeManager::new(
-            fresh.clone(), HashMap::new(), None, 3030,
+            fresh.clone(),
+            HashMap::new(),
+            None,
+            3030,
         )));
         std::fs::set_permissions(&fresh, std::fs::Permissions::from_mode(0o555)).unwrap();
         let Json(install_error) = install_bundled_pipe(
-            State(fresh_state.clone()), Path("speaker-reconciliation".to_string()),
-        ).await;
+            State(fresh_state.clone()),
+            Path("speaker-reconciliation".to_string()),
+        )
+        .await;
         std::fs::set_permissions(&fresh, permissions).unwrap();
         assert_eq!(install_error["error_code"], "permission_denied");
 
         let Json(retry) = install_bundled_pipe(
-            State(fresh_state), Path("speaker-reconciliation".to_string()),
-        ).await;
+            State(fresh_state),
+            Path("speaker-reconciliation".to_string()),
+        )
+        .await;
         assert_eq!(retry["success"], true);
         let (status, _) = update_pipe_config(
-            State(state.clone()), Path("speaker-reconciliation".to_string()),
-            Json(ConfigUpdateRequest { config: HashMap::new() }),
-        ).await;
+            State(state.clone()),
+            Path("speaker-reconciliation".to_string()),
+            Json(ConfigUpdateRequest {
+                config: HashMap::new(),
+            }),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         let Json(retry) = enable_pipe(
-            State(state), Path("speaker-reconciliation".to_string()),
+            State(state),
+            Path("speaker-reconciliation".to_string()),
             Json(EnableRequest { enabled: true }),
-        ).await;
+        )
+        .await;
         assert_eq!(retry["success"], true);
     }
 
