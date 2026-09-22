@@ -24,6 +24,7 @@ export function WorkflowSharingControls({ compact = false, onDone, onUnavailable
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [reload, setReload] = useState(0);
   const [trainingChoice, setTrainingChoice] = useState(false);
+  useEffect(() => { setTrainingChoice(false); }, [settings.user?.id]);
   useEffect(() => { onBusyChange?.(busy); return () => onBusyChange?.(false); }, [busy, onBusyChange]);
   const current = useRef(settings);
   current.current = settings;

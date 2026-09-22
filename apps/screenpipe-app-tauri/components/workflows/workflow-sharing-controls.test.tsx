@@ -117,4 +117,15 @@ describe("sharing consent UI", () => {
     expect(f.update).not.toHaveBeenCalled();
   });
 
+  it("clears an unsubmitted training choice when the signed-in account changes", async () => {
+    const view = render(<WorkflowSharingControls compact />);
+    await waitFor(() => expect(screen.getByRole("checkbox")).toBeEnabled());
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(screen.getByRole("checkbox")).toBeChecked();
+    f.settings = { ...f.settings, user: { id: "different-account" } };
+    view.rerender(<WorkflowSharingControls compact />);
+    await waitFor(() => expect(screen.getByRole("checkbox")).not.toBeChecked());
+    expect(requests.every(r => r.method === "GET")).toBe(true);
+  });
+
 });
