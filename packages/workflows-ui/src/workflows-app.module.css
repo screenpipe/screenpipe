@@ -454,30 +454,22 @@
 .filterPanel select:focus { border-color: #a8b47e; box-shadow: 0 0 0 2px #e7edda; }
 .filterPanel > button { height: 32px; padding: 0 10px; border: 0; background: transparent; color: #73776e; font-size: 9px; cursor: pointer; }
 .filterPanel > button:disabled { opacity: .4; cursor: default; }
-.workflowCard { position: relative; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-content: start; padding: 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: inherit; text-align: left; transition: border-color .15s ease; }
+.workflowCard { position: relative; min-width: 0; display: flex; flex-direction: column; padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: inherit; text-align: left; cursor: pointer; transition: border-color .15s ease; }
 .workflowCard:hover { border-color: var(--muted); }
-.workflowCardTop { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.workflowCardTop > span { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
-.workflowCardTop > div { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 5px; min-width: 0; }
-.workflowCardTop .pill { white-space: normal; }
-.workflowCard h2 { grid-column: 1 / -1; margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -.035em; }
-.workflowCard > p { min-height: 42px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
-.cardPath { display: grid; grid-template-columns: minmax(0,1fr) 16px minmax(0,1fr); gap: 7px; align-items: center; margin: 18px 0; padding: 12px; border-radius: 7px; background: #f5f6f1; color: #696d63; font-size: 8px; line-height: 1.4; }
-.cardPath svg { color: #969990; }
-.cardMetrics { display: grid; grid-template-columns: repeat(4,1fr); border-top: 1px solid #e6e7e1; border-bottom: 1px solid #e6e7e1; }
-.cardMetrics > div { padding: 13px 8px 13px 0; }
-.cardMetrics span { display: block; color: #989b93; font-size: 7.5px; }
-.cardMetrics strong { display: block; margin-top: 5px; font-size: 11px; }
-.cardMetrics small { display: block; margin-top: 3px; color: #78786f; font-size: 9px; }
-.cardFooter { grid-column: 2; grid-row: 3; align-self: start; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-top: 0; padding-top: 0; }
-.cardFooter span { color: var(--muted); font-size: 11px; }
-.cardActions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-.cardActions button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--ink); font: inherit; font-size: 11px; font-weight: 550; white-space: nowrap; cursor: pointer; }
-.cardActions button:hover { background: var(--soft); }
-.cardActions button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-.cardOpen::after { content: ""; position: absolute; inset: 0; border-radius: 10px; }
+.workflowCard h2 { margin: 0 0 8px; font-size: 19px; line-height: 1.4; font-weight: 600; letter-spacing: -.035em; overflow-wrap: anywhere; }
+.cardDescription { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; min-height: 40px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.cardFooter { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: 18px; }
+.cardSummary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
+.cardSummary span { opacity: .5; }
+.cardActions { display: flex; align-items: center; margin-left: auto; }
+.cardOpen { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 28px; padding: 4px 0 4px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); font: inherit; font-size: 11px; font-weight: 550; white-space: nowrap; cursor: pointer; }
+.cardOpen::after { content: ""; position: absolute; inset: 0; border-radius: 8px; }
+.cardOpen:focus-visible { outline: none; }
 .cardOpen:focus-visible::after { outline: 2px solid var(--ink); outline-offset: 2px; }
-.workflowCard h2, .workflowCard > p, .cardPath { overflow-wrap: anywhere; }
+.cardOpenLabel { opacity: 0; transition: opacity 180ms ease; }
+.workflowCard:hover .cardOpenLabel, .workflowCard:focus-within .cardOpenLabel { opacity: 1; }
+@media (hover: none) { .cardOpenLabel { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .cardOpenLabel { transition: none; } }
 
 .detailHeader { display: grid; grid-template-columns: minmax(0,1fr) 245px; gap: 60px; align-items: end; margin-bottom: 29px; }
 .detailHeader h1 { margin: 16px 0 9px; font-size: clamp(32px,4vw,49px); letter-spacing: -.052em; }
@@ -964,7 +956,6 @@
 .procedureDetails blockquote { max-height: 160px; overflow-y: auto; }
 @media (max-width: 640px) { .refreshControls { flex-wrap: wrap; justify-content: flex-end; } }
 
-.cardMetrics { grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); }
 
 /* Catalog controls remain compact in both empty and populated states. */
 .catalogHeader { align-items: center; margin: 0 0 24px; gap: 20px; }
@@ -1034,11 +1025,10 @@
 /* Loading follows the catalog geometry without pretending the catalog is empty. */
 .skeletonBar { display: block; max-width: 100%; flex-shrink: 0; border-radius: 4px; background: var(--line); animation: catalogPulse 1.8s ease-in-out infinite; }
 .skeletonCard { pointer-events: none; cursor: default; }
-.skeletonTitle { grid-column: 1 / -1; margin: 0; }
-.skeletonLines { grid-column: 1 / -1; display: grid; gap: 7px; min-height: 42px; }
+.skeletonTitle { margin: 0 0 12px; }
+.skeletonLines { display: grid; align-content: start; gap: 7px; min-height: 40px; }
 .skeletonDetail { display: grid; gap: 16px; }
 .skeletonDetail .skeletonCard { display: flex; flex-direction: column; gap: 12px; }
-.skeletonCard .cardMetrics .skeletonBar + .skeletonBar { margin-top: 9px; }
 .catalogLoadStatus, .catalogRefreshNotice { color: var(--muted); font-size: 12px; }
 .catalogRefreshNotice { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
 .catalogRefreshNotice button { color: inherit; background: none; border: 0; text-decoration: underline; cursor: pointer; }
@@ -1049,20 +1039,6 @@
 .catalogLoadError button { margin: auto; }
 @keyframes catalogPulse { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .skeletonBar { animation: none; } }
-/* Details stay above the stretched open target and remain independently accessible. */
-.cardDetails { position: relative; z-index: 1; grid-column: 1 / -1; grid-row: 3; min-width: 0; pointer-events: none; }
-.cardDetails summary { width: fit-content; max-width: calc(100% - 100px); padding: 8px 0; cursor: pointer; color: var(--muted); font-size: 12px; pointer-events: auto; }
-.cardDetails summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
-.cardDetailContent { pointer-events: auto; margin-top: 12px; padding-top: 16px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
-.cardDetailContent > p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
-.cardStatus { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
-.cardDetails .cardPath { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 16px; margin: 16px 0; padding: 0; background: transparent; color: var(--ink); font-size: 12px; line-height: 1.5; }
-.cardPath > div > span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 11px; }
-.cardDetails .cardMetrics { grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 0; }
-.cardDetailContent .cardFrequency { margin-top: 12px; font-size: 11px; }
-.cardDetails .cardMetrics span { font-size: 10px; }
-.cardSummary { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin: 8px 0 14px; }
-.cardSummary span { opacity: .5; }
 .filterBar { border: 0; padding-left: 0; background: transparent; }
 .filterBar > div strong { font-size: 12px; font-weight: 500; }
 .filterBar > div span { font-size: 11px; }
@@ -1072,7 +1048,6 @@
 @media (max-width: 680px) {
   .workflowCard { padding: 18px; }
   .cardSummary { gap: 6px; }
-  .cardDetails .cardPath { grid-template-columns: 1fr; }
   .filterPanel { grid-template-columns: 1fr; }
 }
 

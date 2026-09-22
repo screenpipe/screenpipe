@@ -34,20 +34,13 @@ describe("workflow elapsed timing", () => {
     await act(async () => { render(<WorkflowsApp platform={platform} initialAnalysis={fixtureWorkflowAnalysis} storageKey={null} />); });
     const card = screen.getByRole("heading", { name: "Research synthesis" }).closest("article")!;
     expect(within(card).getByText(/~24m \/ run · estimated/)).toBeVisible();
-    expect(within(card).getByText(workflow.description)).not.toBeVisible();
-    expect(within(card).getByText("Avg. time / run")).not.toBeVisible();
-    fireEvent.click(within(card).getByText("Details"));
     expect(within(card).getByText(workflow.description)).toBeVisible();
-    for (const title of ["Partner meeting preparation", "Website release check"]) {
-      fireEvent.click(within(screen.getByRole("heading", { name: title }).closest("article")!).getByText("Details"));
-    }
-    expect(within(card).getByText("Avg. time / run")).toBeVisible();
-    expect(within(card).getByText("~24m")).toBeVisible();
-    expect(within(card).getByText("3 runs · estimated")).toBeVisible();
-    expect(within(screen.getByRole("heading", { name: "Partner meeting preparation" }).closest("article")!).getByText("Time for one run")).toBeVisible();
-    expect(within(screen.getByRole("heading", { name: "Website release check" }).closest("article")!).getByText("—")).toBeVisible();
-    fireEvent.click(within(card).getByText("Details"));
-    expect(within(card).getByText(workflow.description)).not.toBeVisible();
+    expect(card.querySelector("details")).toBeNull();
+    expect(within(card).getAllByRole("button")).toHaveLength(1);
+    const single = screen.getByRole("heading", { name: "Partner meeting preparation" }).closest("article")!;
+    expect(within(single).getByText(/~12m \/ run · estimated/)).toBeVisible();
+    const unknown = screen.getByRole("heading", { name: "Website release check" }).closest("article")!;
+    expect(within(unknown).queryByText(/\/ run/)).not.toBeInTheDocument();
     fireEvent.click(within(card).getByRole("button", { name: "Open map" }));
     expect(screen.queryByText("Correct this workflow")).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("Evidence and limitations"));
