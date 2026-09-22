@@ -294,9 +294,9 @@ async fn pipe_store_install_with_base(
         {
             Ok(name) => name,
             Err(e) => {
-                return Json(
-                    json!({ "error": format!("failed to install pipe: {}", e), "error_code": "installation_failed" }),
-                )
+                let mut failure = crate::pipes_api::pipe_setup_failure("install", &e);
+                failure["error"] = json!(format!("failed to install pipe: {e}"));
+                return Json(failure);
             }
         }
     };

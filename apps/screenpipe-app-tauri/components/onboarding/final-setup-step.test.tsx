@@ -80,10 +80,10 @@ describe("default onboarding setup", () => {
   });
   it("does not enable after model failure; retry preserves completed setup", async () => {
     let fail = true;
-    mocks.fetch.mockImplementation((path, init) => path === "/pipes/speaker-reconciliation/config" && fail ? Promise.resolve(Response.json({ error: "failed" }, { status: 500 })) : normalFetch(path, init));
+    mocks.fetch.mockImplementation((path, init) => path === "/pipes/speaker-reconciliation/config" && fail ? Promise.resolve(Response.json({ error: "permission denied: /private/token=secret", error_code: "permission_denied" }, { status: 400 })) : normalFetch(path, init));
     const next = vi.fn(); render(<FinalSetupStep handleNextSlide={next} />); start(); await screen.findByRole("alert");
     expect(mocks.capture).toHaveBeenCalledWith("onboarding_default_setup_failed", expect.objectContaining({
-      step: "speaker-reconciliation", operation: "configure", error_code: "http_error", http_status: 500, attempt_id: expect.any(String),
+      step: "speaker-reconciliation", operation: "configure", error_code: "permission_denied", http_status: 400, attempt_id: expect.any(String),
     }), { send_instantly: true });
     expect(mocks.capture).toHaveBeenCalledWith(supportEvents[0].event, expect.objectContaining(supportEvents[0].properties), { send_instantly: true });
     expect(writeBrowserLogNow).toHaveBeenCalledWith("warn", expect.stringContaining('"completed_steps":["digital-clone"]'));

@@ -2791,7 +2791,8 @@ fn mark_onboarding_completed(onboarding: &mut OnboardingStore) -> serde_json::Va
 
 fn onboarding_completion_failure(stage: &str, attempt_id: &str, error: &str) -> String {
     let lower = error.to_lowercase();
-    let code = if lower.contains("permission denied") || lower.contains("access is denied") {
+    let code = if lower.contains("permission denied") || lower.contains("access is denied")
+        || lower.contains("operation not permitted") {
         "permission_denied"
     } else if lower.contains("no space left") || lower.contains("disk full") {
         "disk_full"
@@ -2860,7 +2861,7 @@ mod onboarding_receipt_tests {
             let error = onboarding_completion_failure(
                 "persist",
                 attempt_id,
-                "Permission denied: /private/person@example.com/token=secret",
+                "Operation not permitted: /private/person@example.com/token=secret",
             );
             assert!(!error.contains("secret"));
             assert!(!error.contains("person@example.com"));
@@ -2883,7 +2884,7 @@ mod onboarding_receipt_tests {
             "onboarding_default_setup_failed",
             "speaker-reconciliation",
             "configure",
-            "http_error",
+            "permission_denied",
             "digital-clone",
             "onboarding_connection_cta_failed",
             "authorization_denied",

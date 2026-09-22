@@ -58,4 +58,18 @@ describe("bounded onboarding setup requests", () => {
     mocks.fetch.mockResolvedValueOnce(Response.json({ error: "private backend text", error_code: "token=private", http_status: "private" }));
     expect(await setupRequest("/pipes/store/install", signal(), {}).catch(setupFailureProperties)).toMatchObject({ error_code: "backend_error", http_status: 200 });
   });
+  it("preserves a safe filesystem cause from a non-success configuration response", async () => {
+    mocks.fetch.mockResolvedValueOnce(Response.json({ error: "permission denied at /private/token=secret", error_code: "permission_denied" }, { status: 400 }));
+    const error = await setupRequest("/pipes/speaker-reconciliation/config", signal(), {}).catch(error => error);
+    expect(setupFailureProperties(error)).toMatchObject({ operation: "configure", error_code: "permission_denied", http_status: 400 });
+    expect(JSON.stringify(error)).not.toMatch(/private|secret/);
+    mocks.fetch.mockResolvedValueOnce(new Response("<html>private error</html>", { status: 503 }));
+    expect(await setupRequest("/pipes/x/config", signal(), {}).catch(setupFailureProperties)).toMatchObject({ error_code: "http_error", http_status: 503 });
+  });
+  it("bounds decoding a stalled error response", async () => {
+    mocks.fetch.mockResolvedValue({ ok: false, status: 400, json: () => new Promise(() => {}) });
+    const error = setupRequest("/pipes/x/config", signal(), {}).catch(setupFailureProperties);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(await error).toMatchObject({ operation: "configure", error_code: "timeout" });
+  });
 });
