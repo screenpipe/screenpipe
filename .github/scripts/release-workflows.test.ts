@@ -167,3 +167,22 @@ test("production packaging enables localization without changing development def
     expect(config(flavor).build.beforeDevCommand).toBe("bun run dev");
   }
 });
+
+test("consumer and enterprise signing refresh trust before any Windows signing", () => {
+  const actionPath = ".github/actions/refresh-windows-signing-trust";
+  for (const job of [app.jobs["publish-tauri"], enterprise.jobs["release-enterprise-windows"]]) {
+    const checkout = job.steps.find((step: any) => step.with?.["sparse-checkout"]?.includes(actionPath));
+    expect(checkout.with.ref).toBe("${{ github.workflow_sha }}");
+    expect(checkout.with.path).toBe(".release-workflow");
+    const refresh = job.steps.findIndex((step: any) => step.uses === `./.release-workflow/${actionPath}`);
+    const install = job.steps.findIndex((step: any) => step.run?.includes("CodeSignTool-v1.3.2-windows.zip"));
+    const sign = job.steps.findIndex((step: any) => step.env?.ESIGNER_PASSWORD);
+    expect(refresh).toBeGreaterThan(install);
+    expect(sign).toBeGreaterThan(refresh);
+    expect(job.steps[refresh]["continue-on-error"]).toBeUndefined();
+  }
+  const appRefresh = app.jobs["publish-tauri"].steps.find((step: any) => step.uses === `./.release-workflow/${actionPath}`);
+  expect(appRefresh.if).toBe("matrix.os_type == 'windows'");
+  const contracts = readYaml(".github/workflows/test-release-workflows.yml");
+  expect(contracts.jobs["windows-signing-trust"].strategy.matrix.os).toEqual(["windows-latest", "windows-11-arm"]);
+});

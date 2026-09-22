@@ -298,6 +298,7 @@ jobs:
           sparse-checkout: |
             .github/actions/setup-persistent-windows-cache
             .github/actions/install-windows-frontend-dependencies
+            .github/actions/refresh-windows-signing-trust
             .github/scripts
 
       - name: Attach persistent Azure Windows cache
@@ -1096,6 +1097,10 @@ jobs:
               exit 1
             }
           }
+
+      - name: Refresh Windows signing trust
+        if: matrix.os_type == 'windows'
+        uses: ./.release-workflow/.github/actions/refresh-windows-signing-trust
 
       # Tauri's bundler fetches the NSIS toolchain from github.com at bundle
       # time, with no retry. Those two unauthenticated requests get their TLS
