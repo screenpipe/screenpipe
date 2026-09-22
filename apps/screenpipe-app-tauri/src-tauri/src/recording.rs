@@ -579,16 +579,23 @@ async fn remember_active_meeting_for_capture_restart(state: &RecordingState) {
     let Some(server) = server_guard.as_ref() else {
         return;
     };
+    remember_active_meeting_from_server(state, server).await;
+}
 
+/// Also used after DB recovery takes the server out of the shared slot, before
+/// stopping the watcher closes its meeting and disconnects live transcription.
+async fn remember_active_meeting_from_server(state: &RecordingState, server: &ServerCore) {
     let manual_id = *server.manual_meeting.read().await;
     let meeting = match manual_id {
-        Some(id) => server.db.get_active_meeting_by_id(id).await.ok().flatten(),
-        None => server
-            .db
-            .get_most_recent_active_meeting()
-            .await
-            .ok()
-            .flatten(),
+        Some(id) => server.db.get_active_meeting_by_id(id).await,
+        None => server.db.get_most_recent_active_meeting().await,
+    };
+    let meeting = match meeting {
+        Ok(meeting) => meeting,
+        Err(error) => {
+            warn!(%error, "could not preserve active meeting for live transcription across recording recovery");
+            None
+        }
     };
 
     let Some(meeting) = meeting else {

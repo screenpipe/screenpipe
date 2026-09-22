@@ -840,6 +840,14 @@ async fn inject_db_transient_fault(
 }
 
 #[command]
+async fn recover_meeting_from_db_wedge(
+    app: tauri::AppHandle,
+    state: State<'_, RecordingState>,
+) -> Result<serde_json::Value, String> {
+    super::seeds::recover_meeting_from_db_wedge(app, state).await
+}
+
+#[command]
 async fn db_retry_write_probe(
     state: State<'_, RecordingState>,
 ) -> Result<serde_json::Value, String> {
@@ -975,6 +983,7 @@ pub(super) fn plugin() -> TauriPlugin<Wry> {
             owned_browser_tab_snapshot,
             inject_db_hard_fault,
             inject_db_transient_fault,
+            recover_meeting_from_db_wedge,
             db_retry_write_probe,
             db_hard_fault_state,
             seed_flags,

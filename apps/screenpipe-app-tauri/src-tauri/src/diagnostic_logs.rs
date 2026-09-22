@@ -221,6 +221,56 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[cfg(feature = "e2e")]
+    async fn abandoned_read_recovery_survives_support_rotation_and_redaction() {
+        use tracing::instrument::WithSubscriber;
+        let root = tempfile::tempdir().unwrap();
+        let logs = root.path().join("logs");
+        std::fs::create_dir(&logs).unwrap();
+        let current = logs.join("screenpipe-app.2026-09-22.log");
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(std::fs::File::create(&current).unwrap())
+            .finish();
+        async {
+            let db = screenpipe_db::DatabaseManager::new(
+                root.path().join("db.sqlite").to_str().unwrap(),
+                Default::default(),
+            )
+            .await
+            .unwrap();
+            let mut read = db
+                .acquire_cancellable_read(
+                    std::time::Instant::now() + Duration::from_secs(30),
+                    Default::default(),
+                )
+                .await
+                .unwrap();
+            // Simulate the actual failure boundary: raw BEGIN has executed,
+            // but the owner disappears without rolling its transaction back.
+            sqlx::query("BEGIN").execute(&mut *read).await.unwrap();
+            sqlx::query("SELECT COUNT(*) FROM meetings")
+                .fetch_one(&mut *read)
+                .await
+                .unwrap();
+            drop(read);
+            db.close().await;
+        }
+        .with_subscriber(subscriber)
+        .await;
+        std::fs::rename(&current, logs.join("screenpipe-app.2026-09-22.1.log")).unwrap();
+        std::fs::write(
+            &current,
+            "recorder restarted\ncontact=private-person@example.com\n",
+        )
+        .unwrap();
+        let report = collect_redacted_from_dirs(&[logs]).await.unwrap();
+        assert!(report.contains("abandoned SQLite read transaction rolled back before pool reuse"));
+        assert!(report.contains("released WAL snapshot without stopping recording"));
+        assert!(!report.contains("private-person@example.com"));
+    }
+
+    #[tokio::test]
     async fn capture_pause_cause_and_resume_survive_support_collection() {
         // The native focus-warm-pause E2E also asserts these actual messages.
         let dir = tempfile::tempdir().unwrap();

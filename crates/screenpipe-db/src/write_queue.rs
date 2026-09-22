@@ -480,19 +480,10 @@ impl WriteQueueHealth {
 }
 
 /// Why the database layer needs the owning process to rebuild every live pool.
-///
-/// A WAL backlog is intentionally handled at the same lifecycle boundary as a
-/// write wedge: only the owner can stop capture, drain readers, close every
-/// connection, and reopen SQLite against a fresh WAL-index generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DatabaseRestartReason {
     PersistentWriteFailure,
     SqliteHardFault,
-    WalBacklog {
-        pending_pages: i32,
-        log_pages: i32,
-        checkpointed_pages: i32,
-    },
 }
 
 /// Hook used by the database layer to ask its owner for a full lifecycle
@@ -509,7 +500,6 @@ pub type PersistentFailureHook = Arc<dyn Fn() + Send + Sync>;
 pub(crate) struct PersistentFailureState {
     hook: std::sync::Mutex<Option<DatabaseRestartHook>>,
     hard_fault_signaled: AtomicBool,
-    wal_backlog_signaled: AtomicBool,
 }
 
 pub(crate) type PersistentFailureSlot = Arc<PersistentFailureState>;
@@ -533,33 +523,12 @@ impl PersistentFailureState {
             .ok()
             .map(|_| hook)
     }
-
-    /// Deliver at most one WAL-backlog restart request for this manager.
-    /// Leave the gate open until a hook is installed so embedders that wire the
-    /// lifecycle after construction can still receive the request on a later
-    /// maintenance pass.
-    pub(crate) fn signal_wal_backlog_restart(&self, reason: DatabaseRestartReason) -> bool {
-        debug_assert!(matches!(reason, DatabaseRestartReason::WalBacklog { .. }));
-        let Some(hook) = self.hook() else {
-            return false;
-        };
-        if self
-            .wal_backlog_signaled
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            return true;
-        }
-        hook(reason);
-        true
-    }
 }
 
 pub(crate) fn persistent_failure_slot(hook: Option<DatabaseRestartHook>) -> PersistentFailureSlot {
     Arc::new(PersistentFailureState {
         hook: std::sync::Mutex::new(hook),
         hard_fault_signaled: AtomicBool::new(false),
-        wal_backlog_signaled: AtomicBool::new(false),
     })
 }
 

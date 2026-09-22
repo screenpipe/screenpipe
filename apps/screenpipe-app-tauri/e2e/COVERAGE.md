@@ -11,8 +11,8 @@ and layer declared in the manifest, weighted by confidence and criticality.
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
 - Mapped specs: 141
-- Declared test blocks: 405
-- Weighted coverage points: 325.5
+- Declared test blocks: 406
+- Weighted coverage points: 326.5
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -23,9 +23,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 107 | 342 | 285.1 | 15 | 122 | 85% |
-| macos | 137 | 367 | 295.3 | 17 | 132 | 88% |
-| linux | 95 | 300 | 254.5 | 14 | 119 | 80% |
+| windows | 107 | 343 | 286.1 | 15 | 122 | 85% |
+| macos | 137 | 368 | 296.3 | 17 | 132 | 88% |
+| linux | 95 | 301 | 255.5 | 14 | 119 | 80% |
 
 ## Runtime Results
 
@@ -43,13 +43,13 @@ pass/fail/skip counts.
 | capture-ocr | 2 specs / 16 tests / 6.4 pts | 10 specs / 14 tests / 6.2 pts | 1 specs / 3 tests / 1.2 pts |
 | chat-ai | 37 specs / 87 tests / 71.3 pts | 51 specs / 116 tests / 90.8 pts | 35 specs / 86 tests / 70.8 pts |
 | entitlement | - | 1 specs / 1 tests / 1.0 pts | - |
-| local-api | 29 specs / 120 tests / 101.0 pts | 40 specs / 118 tests / 100.9 pts | 24 specs / 88 tests / 79.2 pts |
+| local-api | 29 specs / 121 tests / 102.0 pts | 40 specs / 119 tests / 101.9 pts | 24 specs / 89 tests / 80.2 pts |
 | notifications | 4 specs / 26 tests / 17.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
 | onboarding | 9 specs / 39 tests / 34.8 pts | 11 specs / 43 tests / 38.2 pts | 9 specs / 39 tests / 34.8 pts |
 | os-integration | 7 specs / 32 tests / 26.9 pts | 16 specs / 31 tests / 18.8 pts | 2 specs / 15 tests / 10.8 pts |
 | performance | 3 specs / 45 tests / 45.0 pts | 5 specs / 36 tests / 31.8 pts | 2 specs / 30 tests / 30.0 pts |
 | pipes | 6 specs / 20 tests / 20.0 pts | 8 specs / 26 tests / 26.0 pts | 6 specs / 20 tests / 20.0 pts |
-| real-ui-e2e | 80 specs / 240 tests / 203.9 pts | 98 specs / 259 tests / 219.3 pts | 74 specs / 216 tests / 189.9 pts |
+| real-ui-e2e | 80 specs / 241 tests / 204.9 pts | 98 specs / 260 tests / 220.3 pts | 74 specs / 217 tests / 190.9 pts |
 | settings | 15 specs / 42 tests / 39.0 pts | 17 specs / 36 tests / 31.7 pts | 14 specs / 33 tests / 30.0 pts |
 | storage-privacy | 10 specs / 44 tests / 35.3 pts | 10 specs / 29 tests / 28.1 pts | 7 specs / 22 tests / 21.1 pts |
 | tauri-command | 23 specs / 64 tests / 50.9 pts | 35 specs / 87 tests / 69.3 pts | 22 specs / 65 tests / 51.8 pts |
@@ -76,7 +76,7 @@ pass/fail/skip counts.
 | Meetings-only audio device ownership | audio-device, local-api, real-ui-e2e | weak (conditional; meetings-only-audio-lifecycle) | weak (conditional; meetings-only-audio-lifecycle) | - |
 | Window lifecycle, focus, and dedupe | window-lifecycle | covered (strong; windows-system-integration, window-lifecycle) | covered (strong; renderer-recovery, window-lifecycle) | covered (strong; window-lifecycle, chat-window) |
 | macOS frozen WebKit renderer recovery | window-lifecycle, tauri-command, real-ui-e2e, local-api | - | covered (strong; renderer-recovery) | - |
-| Meeting note creation and editing | real-ui-e2e | covered (strong; windows-user-journey, meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click, meeting-chat-panel) | covered (strong; meeting-note-bottom-click, meeting-replay-player) |
+| Meeting note creation and editing | real-ui-e2e | covered (strong; windows-user-journey, meeting-note-bottom-click) | covered (strong; meeting-note-bottom-click, meeting-chat-panel) | covered (strong; meeting-note-bottom-click, meeting-restart-live-transcription) |
 | Pipes discover, install, and play | pipes | covered (strong; pipes, brain-overview) | covered (strong; pipes, brain-overview) | covered (strong; pipes, brain-overview) |
 | Chat window, composer, and streaming state | chat-ai | covered (strong; acp-backend, chat-tool-activity) | covered (strong; acp-backend, chat-tool-activity) | covered (strong; acp-backend, chat-tool-activity) |
 | Conversation-owned coding worktrees | chat-ai | gap | gap | gap |
@@ -195,7 +195,7 @@ pass/fail/skip counts.
 | meeting-overlay-pin.spec.ts | macos | real-ui-e2e, local-api, tauri-command, os-integration | meeting-notes, meeting-overlay-stream, shortcut-overlay | medium | partial | real-user-flow | 1 | Pins the native macOS live-transcript card against a real started meeting: it opens on hover, stays visible after the pointer leaves, and the authoritative stop edge hides it and clears the pin, asserted on the AppKit panel's observed visibility. Hover and the pin toggle are driven through the controller entry points the tracking area and pin button use, because AppKit delivers no synthetic hover to a nonactivating panel. The Windows/Linux reminder webview renders the sign-in gate under E2E seeds, so that surface is covered by component tests instead. |
 | meeting-overlay-stream.spec.ts | windows, macos, linux | local-api, tauri-command | meeting-notes, meeting-overlay-stream | high | strong | mixed | 1 | Starts a real isolated meeting, verifies bounded snapshot plus deterministic delta/final transcript frames, and proves the stream clears on the authoritative stop edge. |
 | meeting-replay-player.spec.ts | windows, macos, linux | real-ui-e2e, local-api | meeting-notes, meeting-replay | high | strong | real-user-flow | 1 | Seeds four stored frames, wraps their exact timestamps in an ended meeting, reopens it from the previous-meetings list, and verifies deduped silent playback, pause stability, unobscured frame layout, and a review screenshot. |
-| meeting-restart-live-transcription.spec.ts | windows, macos, linux | real-ui-e2e, local-api | meeting-notes | high | strong | command | 1 | Opens an auto-detected meeting, runs the full stop_screenpipe/spawn_screenpipe restart the health overlay's RESTART button uses, and asserts the meeting is still open afterwards so live transcription has something to reattach to. |
+| meeting-restart-live-transcription.spec.ts | windows, macos, linux | real-ui-e2e, local-api | meeting-notes | high | strong | command | 2 | Opens an auto-detected meeting, runs the full stop_screenpipe/spawn_screenpipe restart the health overlay's RESTART button uses, and asserts the meeting is still open afterwards so live transcription has something to reattach to. |
 | meeting-summary-recovery.spec.ts | windows, macos, linux | real-ui-e2e, local-api | meeting-notes, meeting-summary-recovery | high | strong | real-user-flow | 1 | Runs an ended meeting through real Stop -> Resume -> Stop transitions in the isolated desktop, holds both mutations to prove their pending receipts, reconciles a delayed stale started event, and captures saved-finalizing, transcript, resumed-live, the anchored Notes receipt, the Summary draft surface, ready, and failed states without launching hosted AI. |
 | meeting-workspace-tabs.spec.ts | windows, macos, linux | real-ui-e2e, local-api | meeting-notes | high | strong | real-user-flow | 1 | Seeds a live meeting with notes and summary, proves the saved summary is the preferred outcome view, switches persistent tabs, resizes to 640x560, checks footer separation and horizontal overflow, captures a review screenshot, then stops from the transcript and verifies the Summary tab opens. |
 | meetings-only-audio-lifecycle.spec.ts | windows, macos | audio-device, local-api, real-ui-e2e | meetings-only-audio-lifecycle, audio-device-health | high | conditional | real-user-flow | 1 | Opt-in real-audio lifecycle lane: configured devices stay closed outside meetings and open only across a manual meeting edge. |

@@ -764,6 +764,35 @@ pub(super) async fn inject_db_transient_fault(
     }))
 }
 
+/// Trigger the real write-wedge lifecycle, observing the same reattach event
+/// the live transcription coordinator consumes. Never available outside E2E.
+pub(super) async fn recover_meeting_from_db_wedge(
+    app: AppHandle,
+    state: State<'_, RecordingState>,
+) -> Result<serde_json::Value, String> {
+    use futures::StreamExt;
+    require_isolated_db_hard_fault_seed()?;
+    let health = state
+        .server
+        .lock()
+        .await
+        .as_ref()
+        .ok_or("embedded server is not running")?
+        .db
+        .write_queue_health();
+    let mut reattach = screenpipe_events::subscribe_to_event::<serde_json::Value>(
+        screenpipe_audio::meeting_streaming::MEETING_STREAMING_REATTACH_EVENT,
+    );
+    let hook =
+        crate::recording::make_database_restart_hook(app, state.db_wedge_breaker.clone(), health);
+    hook(screenpipe_db::DatabaseRestartReason::PersistentWriteFailure);
+    timeout(TokioDuration::from_secs(90), reattach.next())
+        .await
+        .map_err(|_| "database recovery never reattached the live meeting".to_string())?
+        .map(|event| event.data)
+        .ok_or_else(|| "meeting reattach subscription ended".to_string())
+}
+
 /// A new production queue write after retry must be visible from a freshly
 /// opened query-only SQLite connection, alongside the pre-fault sentinel.
 pub(super) async fn db_retry_write_probe(
