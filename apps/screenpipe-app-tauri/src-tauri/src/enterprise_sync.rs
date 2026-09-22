@@ -890,7 +890,7 @@ mod imp {
             .unwrap_or_else(default_heartbeat_url);
         (policy_url, heartbeat_url)
     }
-    const HIDDEN_UI_POLICY_POLL_INTERVAL: std::time::Duration =
+    const NATIVE_POLICY_POLL_INTERVAL: std::time::Duration =
         std::time::Duration::from_secs(5 * 60);
     const NATIVE_POLICY_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
     const NATIVE_POLICY_STARTUP_DELAY: std::time::Duration = std::time::Duration::from_secs(15);
@@ -993,7 +993,7 @@ mod imp {
     }
 
     #[derive(Deserialize)]
-    struct HiddenUiPolicyResponse {
+    struct NativePolicyResponse {
         #[serde(rename = "hiddenSections", default)]
         hidden_sections: Vec<String>,
         #[serde(rename = "lockedSettings", default)]
@@ -1009,6 +1009,7 @@ mod imp {
     #[derive(Debug, PartialEq, Eq)]
     struct NativeEnterprisePolicy {
         hidden_sections: Vec<String>,
+        locked_settings: HashMap<String, serde_json::Value>,
         enforce_auto_start: bool,
         require_account_login: bool,
         recording_allowed: bool,
@@ -1019,7 +1020,7 @@ mod imp {
         matches!(value, Some(serde_json::Value::String(value)) if value == "true")
     }
 
-    impl HiddenUiPolicyResponse {
+    impl NativePolicyResponse {
         fn into_native_policy(mut self) -> NativeEnterprisePolicy {
             let enforce_auto_start =
                 locked_setting_enforces_auto_start(self.locked_settings.get("autoStartEnabled"));
@@ -1027,11 +1028,12 @@ mod imp {
             // hide their corresponding settings surface. `referral` is always
             // hidden in enterprise builds but is irrelevant to UI dormancy.
             self.hidden_sections
-                .extend(self.locked_settings.into_keys());
+                .extend(self.locked_settings.keys().cloned());
             self.hidden_sections.sort();
             self.hidden_sections.dedup();
             NativeEnterprisePolicy {
                 hidden_sections: self.hidden_sections,
+                locked_settings: self.locked_settings,
                 enforce_auto_start,
                 require_account_login: self.require_account_login,
                 recording_allowed: self.recording_allowed,
@@ -1146,11 +1148,11 @@ mod imp {
         if matches!(result, NativeAuthorizationResult::Unavailable(_)) {
             NATIVE_POLICY_RETRY_INTERVAL
         } else {
-            HIDDEN_UI_POLICY_POLL_INTERVAL
+            NATIVE_POLICY_POLL_INTERVAL
         }
     }
 
-    async fn fetch_hidden_ui_policy(
+    async fn fetch_native_policy(
         http: &reqwest::Client,
         policy_url: &str,
         device_id: &str,
@@ -1176,9 +1178,9 @@ mod imp {
             ));
         }
         response
-            .json::<HiddenUiPolicyResponse>()
+            .json::<NativePolicyResponse>()
             .await
-            .map(HiddenUiPolicyResponse::into_native_policy)
+            .map(NativePolicyResponse::into_native_policy)
             .map_err(|error| NativePolicyFetchError::Unavailable(error.to_string()))
     }
 
@@ -1238,7 +1240,7 @@ mod imp {
         let mut account_required = false;
 
         for credential in credentials {
-            match fetch_hidden_ui_policy(http, policy_url, device_id, &credential).await {
+            match fetch_native_policy(http, policy_url, device_id, &credential).await {
                 Ok(policy) if !policy.recording_allowed => {
                     return NativeAuthorizationResult::RecordingDisabled;
                 }
@@ -1317,7 +1319,7 @@ mod imp {
     /// the main Tokio runtime, so the network check owns a small worker runtime
     /// instead of nesting `block_on` on the setup thread.
     pub(crate) fn authorize_startup(app: &tauri::AppHandle) -> bool {
-        let app = app.clone();
+        let worker_app = app.clone();
         let worker = std::thread::Builder::new()
             .name("enterprise-startup-auth".to_string())
             .spawn(move || {
@@ -1333,7 +1335,7 @@ mod imp {
                         .build()
                         .map_err(|error| format!("enterprise startup auth client: {error}"))?;
                     let device_id =
-                        settings_device_id(&app).unwrap_or_else(|| "unknown".to_string());
+                        settings_device_id(&worker_app).unwrap_or_else(|| "unknown".to_string());
                     tokio::time::timeout(
                         std::time::Duration::from_secs(12),
                         resolve_native_authorization(
@@ -1368,6 +1370,11 @@ mod imp {
 
         match result {
             NativeAuthorizationResult::Authorized(policy) => {
+                if crate::enterprise::managed_settings::persist(app, &policy.locked_settings, true)
+                    .is_err()
+                {
+                    return false;
+                }
                 policy.sync_streams.apply();
                 crate::enterprise_policy::set_enterprise_policy(
                     policy.hidden_sections,
@@ -1435,7 +1442,7 @@ mod imp {
             .map_err(|error| format!("enterprise policy client: {error}"))?;
         let device_id = settings_device_id(app).unwrap_or_else(|| "unknown".to_string());
 
-        match fetch_hidden_ui_policy(&http, &policy_url, &device_id, &credential).await {
+        match fetch_native_policy(&http, &policy_url, &device_id, &credential).await {
             Ok(policy)
                 if credential_authorizes_policy(
                     credential.kind(),
@@ -1446,7 +1453,15 @@ mod imp {
                     .await
                 {
                     Ok(()) => {
+                        // Save native settings before the UI can start capture;
+                        // completing a restart must not hold authentication IPC.
+                        crate::enterprise::managed_settings::prepare(app, &policy.locked_settings)
+                            .await?;
                         crate::enterprise_policy::update_recording_authorized(true);
+                        let apply_app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = crate::enterprise::managed_settings::apply(&apply_app).await;
+                        });
                         crate::enterprise_policy::set_enterprise_policy(
                             policy.hidden_sections,
                             policy.enforce_auto_start,
@@ -1510,10 +1525,9 @@ mod imp {
         }
     }
 
-    /// The normal enterprise policy poll lives in the Home webview, but login
-    /// autostart and hidden-UI deployments may have no webview at all. Keep one
-    /// native credential/policy watcher alive so both key and account modes can
-    /// authorize recording, observe revocation, and surface recovery UI.
+    /// Own credential and recording-policy refresh for every Enterprise build,
+    /// independent of whether a webview exists. Both key and account modes
+    /// apply recording settings, observe revocation, and surface recovery UI.
     fn spawn_native_policy_watcher(app: &tauri::AppHandle) {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
@@ -1541,11 +1555,30 @@ mod imp {
                 let authorization =
                     resolve_native_authorization(&http, &policy_url, &heartbeat_url, &device_id)
                         .await;
-                let next_poll = native_policy_poll_interval(&authorization);
+                let mut next_poll = native_policy_poll_interval(&authorization);
                 match authorization {
                     NativeAuthorizationResult::Authorized(policy) => {
                         let was_authorized = crate::enterprise_policy::recording_authorized();
-                        crate::enterprise_policy::update_recording_authorized(true);
+                        // Save before granting access so a concurrent app
+                        // start cannot capture with the previous policy.
+                        let settings_applied = if crate::enterprise::managed_settings::prepare(
+                            &app,
+                            &policy.locked_settings,
+                        )
+                        .await
+                        .is_ok()
+                        {
+                            crate::enterprise_policy::update_recording_authorized(true);
+                            crate::enterprise::managed_settings::apply(&app)
+                                .await
+                                .is_ok()
+                        } else {
+                            false
+                        };
+                        if !settings_applied {
+                            next_poll = NATIVE_POLICY_RETRY_INTERVAL;
+                            crate::enterprise_policy::update_recording_authorized(was_authorized);
+                        }
                         // Managed-background deployments may never create the
                         // Home webview, so the native watcher must apply the
                         // complete upload policy it just authenticated. This
@@ -1565,7 +1598,7 @@ mod imp {
 
                         // Autostart and hidden-UI launches can have no webview,
                         // so AppEntitlementGate cannot perform the usual resume.
-                        if !was_authorized {
+                        if !was_authorized && settings_applied {
                             let state = app.state::<crate::recording::RecordingState>();
                             if let Err(error) =
                                 crate::recording::spawn_screenpipe(state, app.clone(), None).await
@@ -1902,8 +1935,8 @@ mod imp {
             enterprise_license_hash, exact_frame_url, explicitly_rejects_authorization,
             image_uploads_allowed, locked_setting_enforces_auto_start, native_policy_poll_interval,
             native_policy_startup_delay, sibling_heartbeat_url, EnterprisePolicyCredentialKind,
-            HiddenUiPolicyResponse, NativeAuthorizationResult, NativePolicyFetchError,
-            NativeSyncStreams, HIDDEN_UI_POLICY_POLL_INTERVAL, NATIVE_POLICY_RETRY_INTERVAL,
+            NativeAuthorizationResult, NativePolicyFetchError, NativePolicyResponse,
+            NativeSyncStreams, NATIVE_POLICY_POLL_INTERVAL, NATIVE_POLICY_RETRY_INTERVAL,
             NATIVE_POLICY_STARTUP_DELAY, RECORDING_DISABLED_BY_ADMIN_CODE,
         };
         use std::collections::HashMap;
@@ -1937,7 +1970,7 @@ mod imp {
             );
             assert_eq!(
                 native_policy_poll_interval(&NativeAuthorizationResult::Rejected),
-                HIDDEN_UI_POLICY_POLL_INTERVAL
+                NATIVE_POLICY_POLL_INTERVAL
             );
         }
 
@@ -1987,7 +2020,7 @@ mod imp {
 
         #[test]
         fn hidden_ui_policy_matches_frontend_section_normalization() {
-            let response = HiddenUiPolicyResponse {
+            let response = NativePolicyResponse {
                 hidden_sections: vec!["app_ui".to_string(), "app_ui".to_string()],
                 locked_settings: HashMap::from([
                     ("recording".to_string(), serde_json::Value::Bool(true)),
@@ -2021,6 +2054,8 @@ mod imp {
                 ]
             );
             assert!(policy.enforce_auto_start);
+            assert_eq!(policy.locked_settings["autoStartEnabled"], "true");
+            assert_eq!(policy.locked_settings["recording"], true);
             assert!(policy.require_account_login);
             assert!(!policy.recording_allowed);
             assert!(policy.sync_streams.parsed);
@@ -2032,7 +2067,7 @@ mod imp {
 
         #[test]
         fn recording_control_defaults_on_for_older_control_planes() {
-            let response: HiddenUiPolicyResponse = serde_json::from_value(serde_json::json!({
+            let response: NativePolicyResponse = serde_json::from_value(serde_json::json!({
                 "hiddenSections": [],
                 "lockedSettings": {},
                 "requireAccountLogin": false
@@ -2044,7 +2079,7 @@ mod imp {
 
         #[test]
         fn native_policy_defaults_match_visible_frontend_for_older_control_planes() {
-            let response: HiddenUiPolicyResponse = serde_json::from_value(serde_json::json!({
+            let response: NativePolicyResponse = serde_json::from_value(serde_json::json!({
                 "hiddenSections": [],
                 "lockedSettings": {}
             }))
