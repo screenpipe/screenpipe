@@ -23,6 +23,7 @@ import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt"
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
 import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
+import { writeBrowserLogNow } from "@/lib/logging/browser-log";
 import type { AppUser } from "@/lib/app-entitlement";
 import {
   isTrialActivationEligible,
@@ -137,6 +138,8 @@ function TrialActivationFlagAssignment({
   useEffect(() => {
     let settled = false;
     let matchingIdentityResponses = 0;
+    const startedAt = Date.now();
+    const attemptId = crypto.randomUUID();
     let timeout: number | undefined;
     const settle = (assignment: TrialActivationAssignment) => {
       if (settled) return;
@@ -149,9 +152,30 @@ function TrialActivationFlagAssignment({
       reason: "missing_distinct_id" | "load_error" | "timeout",
     ) => {
       if (settled) return;
+      const diagnostic = {
+        reason,
+        stage: posthog.get_distinct_id() !== expectedDistinctId
+          ? "waiting_for_identity"
+          : matchingIdentityResponses === 0
+            ? "waiting_for_response"
+            : "waiting_for_fresh_response",
+        attempt_id: attemptId,
+        response_count: matchingIdentityResponses,
+        elapsed_ms: Date.now() - startedAt,
+        identity_matches: posthog.get_distinct_id() === expectedDistinctId,
+        fallback_variant: "control",
+        outcome: "continue_setup",
+      };
+      // Support receives this through the existing redacted browser-log bundle,
+      // including when analytics delivery is unavailable. Never log identifiers,
+      // flag payloads or the SDK's raw network error.
+      writeBrowserLogNow("warn", JSON.stringify({
+        event: "trial_activation_assignment_failed",
+        ...diagnostic,
+      }), { route: "/onboarding" });
       posthog.capture(
         "trial_activation_assignment_failed",
-        { reason, fallback_variant: "control" },
+        diagnostic,
         { send_instantly: true },
       );
       settle({ variant: "control", source: "fallback" });
@@ -168,18 +192,22 @@ function TrialActivationFlagAssignment({
     );
     const unsubscribe = posthog.onFeatureFlags((_flags, _variants, context) => {
       if (settled || posthog.get_distinct_id() !== expectedDistinctId) return;
-      if (context?.errorsLoading) {
-        fallBackToControl("load_error");
+      // The installed SDK omits errorsLoading for its synchronous cached
+      // notification and local overrides. Only remote completions carry a
+      // boolean; neither cached values nor an override can prove freshness.
+      if (typeof context?.errorsLoading !== "boolean") return;
+
+      // PostHog serializes remote requests, so at most one request from before
+      // identify can still be in flight. Drain that first completion (including
+      // errors), then request under the expected identity. Counting a cached
+      // callback as well forced cold starts through three network round trips.
+      matchingIdentityResponses += 1;
+      if (matchingIdentityResponses === 1) {
+        posthog.reloadFeatureFlags();
         return;
       }
-
-      // An immediate cached callback and one older request can both arrive
-      // after identify has changed the visible distinct id. Requiring the next
-      // two reload cycles exhausts both stale sources; the third matching
-      // response was requested under the final identity.
-      matchingIdentityResponses += 1;
-      if (matchingIdentityResponses < 3) {
-        posthog.reloadFeatureFlags();
+      if (context.errorsLoading) {
+        fallBackToControl("load_error");
         return;
       }
 
@@ -212,6 +240,7 @@ function TrialActivationFlagAssignment({
 
     posthog.reloadFeatureFlags();
     return () => {
+      settled = true;
       window.clearTimeout(timeout);
       unsubscribe();
     };
