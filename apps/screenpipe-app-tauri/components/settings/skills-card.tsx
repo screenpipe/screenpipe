@@ -26,6 +26,9 @@ import {
 import { StarterSkillsCard } from "./starter-skills-card";
 import { SkillsBrowser } from "./skills-browser";
 import { ProviderSkillCatalog } from "./provider-skill-catalog";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 const DESTINATION_LABELS: Record<string, string> = {
   screenpipe: "screenpipe",
@@ -43,6 +46,9 @@ const DESTINATION_LABELS: Record<string, string> = {
  * store and loaded by the agent in chat and every pipe.
  */
 export function SkillsCard({ onChanged }: { onChanged?: () => void }) {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
   const [imported, setImported] = useState<ImportedSkill[]>([]);
   const [device, setDevice] = useState<DeviceSkill[]>([]);
   const [managed, setManaged] = useState<ManagedTeamSkillLocal[]>([]);
@@ -98,11 +104,11 @@ export function SkillsCard({ onChanged }: { onChanged?: () => void }) {
     const selected = await openDialog({
       directory: true,
       multiple: false,
-      title: "Choose a skill folder (must contain SKILL.md)",
+      title: ui("Choose a skill folder (must contain SKILL.md)"),
     });
     if (typeof selected !== "string") return;
     await doImport(selected, selected);
-  }, [doImport]);
+  }, [doImport, uiLanguage]);
 
   const remove = useCallback(
     async (name: string) => {
@@ -201,15 +207,15 @@ export function SkillsCard({ onChanged }: { onChanged?: () => void }) {
                     )}
                   </div>
                   <span className="shrink-0 border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                    release v{skill.release_version} · policy r{skill.version}
+                    Release v{skill.release_version} · policy r{skill.version}
                   </span>
                 </div>
                 <div className="mt-1 text-[10px] text-muted-foreground">
-                  {skill.file_count} files · discovery {skill.discovery_chars} chars · activated {skill.activation_chars} chars · scripts {skill.has_scripts ? "yes" : "no"}
+                  {skill.file_count} files · discovery {skill.discovery_chars} chars · activated {skill.activation_chars} chars · scripts {skill.has_scripts ? ui("yes") : ui("no")}
                 </div>
                 {skill.digest && (
                   <div className="mt-1 truncate font-mono text-[9px] text-muted-foreground/70" title={skill.digest}>
-                    sha256 {skill.digest}
+                    Sha256 {skill.digest}
                   </div>
                 )}
                 <div className="mt-2 flex flex-wrap gap-1">
@@ -240,7 +246,7 @@ export function SkillsCard({ onChanged }: { onChanged?: () => void }) {
             className="h-6 px-2 text-xs text-muted-foreground"
             onClick={refresh}
             disabled={!loaded}
-            aria-label="Rescan"
+            aria-label={ui("Rescan")}
           >
             <RefreshCw className="h-3 w-3" />
           </Button>
@@ -267,7 +273,7 @@ export function SkillsCard({ onChanged }: { onChanged?: () => void }) {
                   onClick={() => remove(s.name)}
                   disabled={busyKey === s.name}
                   className="h-6 px-2 text-muted-foreground hover:text-destructive shrink-0"
-                  aria-label={`Remove ${s.name}`}
+                  aria-label={ui("Remove {value1}", { value1: s.name })}
                 >
                   {busyKey === s.name ? (
                     <Loader2 className="h-3 w-3 animate-spin" />
@@ -284,7 +290,7 @@ export function SkillsCard({ onChanged }: { onChanged?: () => void }) {
           </div>
         ) : (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" /> loading…
+            <Loader2 className="h-3 w-3 animate-spin" /> Loading…
           </div>
         )}
       </div>
@@ -334,7 +340,7 @@ export function SkillsCard({ onChanged }: { onChanged?: () => void }) {
             <FolderPlus className="h-4 w-4 text-muted-foreground" />
             <span className="text-xs font-medium">Add from folder…</span>
             <span className="text-[10px] text-muted-foreground">
-              any folder with a SKILL.md
+              Any folder with a SKILL.md
             </span>
           </button>
         </div>

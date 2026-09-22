@@ -19,6 +19,7 @@ default = []
 e2e = []
 
 [dependencies]
+screenpipe-fs = { path = "../screenpipe-fs" }
 screenpipe-a11y = { path = "../screenpipe-a11y" }
 serde_json = { workspace = true }
 chrono = { workspace = true }

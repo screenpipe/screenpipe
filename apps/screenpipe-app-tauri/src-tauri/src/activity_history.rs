@@ -529,7 +529,7 @@ fn settings_restrict_activity_history(settings: &SettingsStore, is_enterprise_bu
     !is_enterprise_build && settings.is_free_or_unattributed_user()
 }
 
-fn provider_config(
+pub(crate) fn provider_config(
     settings: &SettingsStore,
     selected_preset_key: Option<&str>,
     task_system_prompt: &str,
@@ -1067,6 +1067,30 @@ pub(crate) async fn run_background_pi(
 ) -> Result<String, String> {
     let settings = SettingsStore::get(app)?.ok_or("Settings are not available")?;
     let (config, token) = provider_config(&settings, selected_preset_key, task_system_prompt)?;
+    run_background_pi_with_config(
+        app,
+        session_prefix,
+        project_directory_name,
+        prompt,
+        timeout,
+        config,
+        token,
+    )
+    .await
+}
+
+/// Run a private, headless turn through the same Pi/ACP harness, command queue,
+/// and completion events used by Chat. Callers with a fixed product-owned
+/// model can supply that configuration without writing a fake user preset.
+pub(crate) async fn run_background_pi_with_config(
+    app: &AppHandle,
+    session_prefix: &str,
+    project_directory_name: &str,
+    prompt: String,
+    timeout: Option<std::time::Duration>,
+    config: PiProviderConfig,
+    token: Option<String>,
+) -> Result<String, String> {
     let is_agent = config.backend.is_some();
     let session_id = format!("__title:{session_prefix}-{}", uuid::Uuid::new_v4());
     let project_dir = screenpipe_core::paths::default_screenpipe_data_dir()
@@ -1621,16 +1645,11 @@ async fn generate_inner(
             format!("Activity history was saved but its update event failed: {error}")
         })?;
     if should_notify_completion(source) {
-        crate::notifications::client::send_typed_with_actions_and_priority(
-            "activities updated",
-            if updated.activity_count == 1 {
+        crate::notifications::client::send_typed_with_actions_and_priority(crate::localization::ui_text("activities updated"), if updated.activity_count == 1 {
                 "1 new activity is ready."
             } else {
                 "Your latest activities are ready."
-            },
-            "activity_history",
-            Some(20_000),
-            vec![json!({
+            }, "activity_history", Some(20_000), vec![json!({
                 "id": "open-activity-history",
                 "action": "open-activity-history",
                 "label": "view activities",
@@ -1638,9 +1657,7 @@ async fn generate_inner(
                 "url": "screenpipe://activity",
                 "primary": true,
                 "sourceUrl": "screenpipe://activity",
-            })],
-            crate::notifications::store::NotificationPriority::High,
-        );
+            })], crate::notifications::store::NotificationPriority::High);
     }
     Ok(ActivityGenerationResult {
         history: result,

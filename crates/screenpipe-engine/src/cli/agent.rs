@@ -2144,6 +2144,16 @@ mod tests {
             "http://localhost:3030",
         )
         .unwrap();
+        assert!(!is_agent_setup_in("codex", home));
+        for (name, markdown) in screenpipe_core::starter_skills::STARTER_SKILLS {
+            write_skill(
+                &home.join(".codex/skills"),
+                name,
+                markdown,
+                "http://localhost:3030",
+            )
+            .unwrap();
+        }
         assert!(is_agent_setup_in("codex", home));
     }
 

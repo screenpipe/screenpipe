@@ -48,6 +48,8 @@ import {
   mimeFromName,
   type VideoExt,
 } from "@/lib/utils/feedback-attachments";
+import { useGT } from "gt-react";
+
 
 // Read an image File and return a compressed JPEG data URL (max 1920px wide).
 // Shared by the file-picker, clipboard paste, and drag-drop entry points.
@@ -158,6 +160,8 @@ export const ShareLogsButton = ({
   onBackgroundStart?: () => void;
   prefillText?: string;
 }) => {
+
+  const ui = useGT();
   const { toast } = useToast();
   const { settings } = useSettings();
   const [machineId, setMachineId] = useState("");
@@ -201,12 +205,13 @@ export const ShareLogsButton = ({
     listen<FeedbackUploadCompleted>(
       FEEDBACK_UPLOAD_COMPLETED_EVENT,
       ({ payload }) => {
+
         if (payload.jobId !== activeJobIdRef.current) return;
         activeJobIdRef.current = null;
         if (payload.status === "failed") {
           setPhase("idle");
           toast({
-            title: "sharing failed",
+            title: ui("Sharing failed"),
             description: payload.message,
             variant: "destructive",
           });
@@ -214,7 +219,7 @@ export const ShareLogsButton = ({
         }
 
         toast({
-          title: "feedback sent",
+          title: ui("Feedback sent"),
           description: payload.message,
         });
         setPhase("sent");
@@ -298,10 +303,10 @@ export const ShareLogsButton = ({
       // Distinguish "nothing was recorded" (recording off / video disabled)
       // from a transient failure — the former isn't fixed by retrying.
       toast({
-        title: "couldn't capture recording",
+        title: ui("Couldn't capture recording"),
         description: String(err).includes("no recent screen frames")
-          ? "no screen recording found for the last 5 minutes — check that video recording is on."
-          : "could not record the last 5 minutes — try again.",
+          ? ui("No screen recording found for the last 5 minutes — check that video recording is on.")
+          : ui("Could not record the last 5 minutes — try again."),
         variant: "destructive",
       });
     }
@@ -320,12 +325,12 @@ export const ShareLogsButton = ({
       toast({
         title:
           classified.reason === "too-large"
-            ? "file too large"
-            : "unsupported file",
+            ? ui("File too large")
+            : ui("Unsupported file"),
         description:
           classified.reason === "too-large"
-            ? `file is ${formatBytes(file.size)} — the 50 mb limit was exceeded.`
-            : "accepts png, jpg, mov, mp4.",
+            ? ui("File is {value1} — the 50 mb limit was exceeded.", { value1: formatBytes(file.size) })
+            : ui("Accepts png, jpg, mov, mp4."),
         variant: "destructive",
       });
       return;
@@ -352,8 +357,8 @@ export const ShareLogsButton = ({
       console.error("failed to attach screenshot:", err);
       setImage(null);
       toast({
-        title: "couldn't attach screenshot",
-        description: "that image couldn't be read — try a different file.",
+        title: ui("Couldn't attach screenshot"),
+        description: ui("That image couldn't be read — try a different file."),
         variant: "destructive",
       });
     }
@@ -371,8 +376,8 @@ export const ShareLogsButton = ({
     const classified = classifyAttachmentMeta(name, "", 0);
     if (classified.kind === "error") {
       toast({
-        title: "unsupported file",
-        description: "accepts png, jpg, mov, mp4.",
+        title: ui("Unsupported file"),
+        description: ui("Accepts png, jpg, mov, mp4."),
         variant: "destructive",
       });
       return;
@@ -386,8 +391,8 @@ export const ShareLogsButton = ({
     } catch (err) {
       console.error("failed to read dropped file:", err);
       toast({
-        title: "couldn't attach",
-        description: "that file couldn't be read — try a different one.",
+        title: ui("Couldn't attach"),
+        description: ui("That file couldn't be read — try a different one."),
         variant: "destructive",
       });
     }
@@ -583,11 +588,11 @@ export const ShareLogsButton = ({
 
       if (onBackgroundStart) {
         toast({
-          title: "thanks — sending in background",
+          title: ui("Thanks — sending in background"),
           description:
             video?.status === "ready"
-              ? "you can keep using screenpipe. keep the app running while the video uploads; we'll notify you when it's sent."
-              : "you can keep using screenpipe. please keep the app running for the next minute; we'll notify you when it's sent.",
+              ? ui("You can keep using screenpipe. keep the app running while the video uploads; we'll notify you when it's sent.")
+              : ui("You can keep using screenpipe. please keep the app running for the next minute; we'll notify you when it's sent."),
         });
         onBackgroundStart();
       }
@@ -596,7 +601,7 @@ export const ShareLogsButton = ({
       activeJobIdRef.current = null;
       setPhase("idle");
       toast({
-        title: "sharing failed",
+        title: ui("Sharing failed"),
         description: String(err),
         variant: "destructive",
       });
@@ -679,7 +684,7 @@ export const ShareLogsButton = ({
           type="button"
           className="text-muted-foreground hover:text-foreground p-0.5 leading-none"
           onClick={a.onRemove}
-          aria-label={`remove ${a.testId === "image-attachment" ? "screenshot" : "video"}`}
+          aria-label={ui("Remove {value1}", { value1: a.testId === "image-attachment" ? "screenshot" : "video" })}
         >
           <X className="h-3.5 w-3.5" />
         </button>
@@ -700,7 +705,7 @@ export const ShareLogsButton = ({
         onDragLeave={handleDragLeave}
       >
         <Textarea
-          placeholder="describe your feedback or issue..."
+          placeholder={ui("Describe your feedback or issue...")}
           value={feedbackText}
           onChange={(e) => setFeedbackText(e.target.value)}
           onPaste={handlePaste}
@@ -715,7 +720,7 @@ export const ShareLogsButton = ({
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={image.dataUrl}
-                alt="screenshot preview"
+                alt={ui("Screenshot preview")}
                 className="w-full h-full object-cover"
               />
             ) : (
@@ -764,7 +769,7 @@ export const ShareLogsButton = ({
             onClick={handleFilePicker}
           >
             <Plus className="h-3 w-3" />
-            <span>add files</span>
+            <span>Add files</span>
           </Button>
           <Tooltip delayDuration={200}>
             <TooltipTrigger asChild>
@@ -781,11 +786,11 @@ export const ShareLogsButton = ({
                 }
               >
                 <Clock className="h-3 w-3" />
-                <span>last 5 min</span>
+                <span>Last 5 min</span>
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-xs">
-              attach last 5 minutes of screen recording
+              Attach last 5 minutes of screen recording
             </TooltipContent>
           </Tooltip>
         </div>
@@ -807,7 +812,7 @@ export const ShareLogsButton = ({
         </p>
 
         <p className="text-[10px] text-muted-foreground leading-tight">
-          logs, settings, and pi chat history are included to help us debug. api
+          Logs, settings, and pi chat history are included to help us debug. API
           keys, secrets, and personal info are automatically removed.
         </p>
 
@@ -831,17 +836,17 @@ export const ShareLogsButton = ({
           {sending ? (
             <>
               <Loader className="h-3 w-3 animate-spin" />
-              <span>sending…</span>
+              <span>Sending…</span>
             </>
           ) : phase === "sent" ? (
             <>
               <Check className="h-3 w-3" />
-              <span>sent</span>
+              <span>Sent</span>
             </>
           ) : (
             <>
               <Upload className="h-3 w-3" />
-              <span>send logs & feedback</span>
+              <span>Send logs & feedback</span>
             </>
           )}
         </Button>
@@ -851,9 +856,9 @@ export const ShareLogsButton = ({
             data-testid="drop-overlay"
             className="absolute inset-0 z-10 pointer-events-none border-2 border-dashed border-foreground bg-background/95 flex flex-col items-center justify-center gap-1"
           >
-            <span className="text-xs font-medium">release to attach</span>
+            <span className="text-xs font-medium">Release to attach</span>
             <span className="text-[10px] text-muted-foreground">
-              png, jpg, mov, mp4 · 50 mb max
+              Png, jpg, mov, mp4 · 50 mb max
             </span>
           </div>
         )}

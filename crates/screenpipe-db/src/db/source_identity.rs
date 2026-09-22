@@ -68,10 +68,10 @@ impl DatabaseManager {
                             let temporary = journal.with_extension("tmp");
                             let mut file = std::fs::File::create(&temporary)?;
                             file.write_all(&serde_json::to_vec(&saved).expect("serializable journal"))?;
-                            file.sync_all()?;
+                            screenpipe_fs::sync_all(&file)?;
                             std::fs::rename(&temporary, journal)?;
                             #[cfg(unix)]
-                            if let Some(parent) = journal.parent() { std::fs::File::open(parent)?.sync_all()?; }
+                            if let Some(parent) = journal.parent() { screenpipe_fs::sync_all(&std::fs::File::open(parent)?)?; }
                             saved
                         }
                         Err(error) => return Err(error.into()),

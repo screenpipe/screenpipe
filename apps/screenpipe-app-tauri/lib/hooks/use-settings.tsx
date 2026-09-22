@@ -295,6 +295,9 @@ export interface ChatHistoryStore {
 
 // Extend SettingsStore with fields added before Rust types are regenerated
 export type Settings = SettingsStore & {
+	/** Explicit consent on this device. Content is never stored in this field. */
+	workflowSharingPromptSeen?: Record<string, string>;
+	workflowSharing?: { accountId: string; epoch: string; enabledAt: number; priorBackend: "local" | "tinfoil" } | null;
 	/** Enable account data sync for this device. Default false. */
 	dataSyncEnabled?: boolean;
 	/** Friendly name used to partition this device's synced data. */
@@ -711,6 +714,10 @@ const applyProCloudAudioDefaults = (settings: Settings): Settings => {
 };
 
 let DEFAULT_SETTINGS: Settings = {
+            uiLocale: "system",
+            uiLocalizationEnabled: process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock"
+              && typeof window !== "undefined"
+              && new URLSearchParams(window.location.search).get("mockLocalization") === "true",
 			dataSyncEnabled: false,
 			activitiesEnabled: false,
 			activitiesIntervalMinutes: 15,
@@ -754,7 +761,7 @@ let DEFAULT_SETTINGS: Settings = {
 			teamFilters: { ignoredWindows: [], includedWindows: [], ignoredUrls: [] },
 
 			analyticsEnabled: true,
-			remoteLogCollectionEnabled: false,
+			remoteLogCollectionEnabled: true,
 			remoteLogCollectionUserId: null,
 			audioChunkDuration: 30,
 			useChineseMirror: false,
@@ -802,7 +809,7 @@ let DEFAULT_SETTINGS: Settings = {
 			lockVaultShortcut: "Super+Shift+L",
 			disableVision: false,
 			disableScreenshots: false,
-			enableSemanticContext: false,
+			enableSemanticContext: true,
 			remoteControlPreferences: {
 				...NEW_INSTALL_REMOTE_CONTROL_PREFERENCES,
 			},
@@ -1430,6 +1437,9 @@ function createSettingsStore() {
 			const store = await getStore();
 			const current = await get();
 			const managedValues = await activeManagedValues(current);
+			if (current.workflowSharing && value.workflowSharing !== null && value.piiBackend !== undefined && value.piiBackend !== "tinfoil") {
+				throw new Error("Turn off Workflows sharing before changing cloud redaction.");
+			}
 			let newSettings = { ...current, ...value } as Settings;
 			if ("user" in value) {
 				// On logout / Pro→non-Pro transition, clear the V2 marker so a future
@@ -1859,6 +1869,10 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 	}, [settings.fontSize]);
 
 	const updateSettings = async (updates: Partial<Settings>) => {
+		if (settingsRef.current.workflowSharing && updates.workflowSharing !== null &&
+			updates.piiBackend !== undefined && updates.piiBackend !== "tinfoil") {
+			throw new Error("Turn off Workflows sharing before changing cloud redaction.");
+		}
 		assertValidAiPresetUpdate(updates);
 		const updateGeneration = ++settingsUpdateGenerationRef.current;
 		const settingsBeforeUpdate = settingsRef.current;

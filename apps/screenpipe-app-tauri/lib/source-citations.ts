@@ -301,7 +301,7 @@ function bashCitations(command: string, resultText: string): SourceCitation[] {
       id: stableId(["web", link.url]),
       kind: "web",
       title: hostname(link.url) || "Web source",
-      subtitle: "command request",
+      subtitle: "Command request",
       href: link.url,
     });
   }
@@ -312,7 +312,7 @@ function bashCitations(command: string, resultText: string): SourceCitation[] {
       id: stableId(["web-result", link.url]),
       kind: "web",
       title: link.title || hostname(link.url) || "Web source",
-      subtitle: "tool result",
+      subtitle: "Tool result",
       href: link.url,
     });
   }

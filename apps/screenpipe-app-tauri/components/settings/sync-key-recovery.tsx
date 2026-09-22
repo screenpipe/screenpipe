@@ -20,6 +20,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/components/ui/use-toast";
+import { useGT } from "gt-react";
+
 
 const RESET_CONFIRMATION = "delete remote sync data";
 
@@ -40,6 +42,8 @@ export function SyncKeyRecovery({
   visible,
   onRecovered,
 }: SyncKeyRecoveryProps) {
+
+  const ui = useGT();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
 
@@ -54,14 +58,14 @@ export function SyncKeyRecovery({
         body: JSON.stringify({ confirmation: RESET_CONFIRMATION }),
       });
       toast({
-        title: "sync is ready on this device",
+        title: ui("Sync is ready on this device"),
         description:
-          "remote sync was restarted with a new account key. your local recordings and database were not changed.",
+          ui("Remote sync was restarted with a new account key. Your local recordings and database were not changed."),
       });
       onRecovered?.();
     } catch (error) {
       toast({
-        title: "could not restart sync",
+        title: ui("Could not restart sync"),
         description: error instanceof Error ? error.message : String(error),
         variant: "destructive",
       });
@@ -81,7 +85,7 @@ export function SyncKeyRecovery({
           <div className="space-y-3">
             <div>
               <p className="text-sm font-medium">
-                this device cannot open your older sync key
+                This device cannot open your older sync key
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
                 Your existing remote sync state was encrypted with a key from
@@ -101,7 +105,7 @@ export function SyncKeyRecovery({
               size="sm"
               onClick={() => setDialogOpen(true)}
             >
-              start fresh with remote sync
+              Start fresh with remote sync
             </Button>
           </div>
         </div>
@@ -111,7 +115,7 @@ export function SyncKeyRecovery({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              delete remote sync content and start fresh?
+              Delete remote sync content and start fresh?
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2">
@@ -128,15 +132,15 @@ export function SyncKeyRecovery({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={resetting}>cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={resetting}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               disabled={resetting}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={resetRemoteSync}
             >
               {resetting
-                ? "starting fresh..."
-                : "delete remote sync and start fresh"}
+                ? ui("Starting fresh...")
+                : ui("Delete remote sync and start fresh")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

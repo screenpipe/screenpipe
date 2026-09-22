@@ -194,6 +194,10 @@ pub struct AccessibilityTreeNode {
     /// Space-delimited parser-only DOM classes.
     #[serde(skip)]
     pub semantic_dom_classes: Option<String>,
+    /// Positive-sized native geometry lies outside the window, even when
+    /// screenshot-normalized bounds were discarded. Parser-only evidence.
+    #[serde(skip)]
+    pub semantic_offscreen: bool,
 }
 
 impl AccessibilityTreeNode {
@@ -228,6 +232,7 @@ impl AccessibilityTreeNode {
             semantic_description: None,
             semantic_dom_identifier: None,
             semantic_dom_classes: None,
+            semantic_offscreen: false,
         }
     }
 }
@@ -1062,6 +1067,7 @@ mod tests {
         node.semantic_description = Some("parser description".into());
         node.semantic_dom_identifier = Some("message-list".into());
         node.semantic_dom_classes = Some("message selected".into());
+        node.semantic_offscreen = true;
 
         let json = serde_json::to_string(&node).expect("serialize persisted node");
         assert!(!json.contains("walk_index"));
@@ -1069,6 +1075,7 @@ mod tests {
         assert!(!json.contains("parser description"));
         assert!(!json.contains("message-list"));
         assert!(!json.contains("message selected"));
+        assert!(!json.contains("semantic_offscreen"));
     }
 
     #[test]

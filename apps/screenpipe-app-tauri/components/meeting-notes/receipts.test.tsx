@@ -81,7 +81,7 @@ describe("Receipts", () => {
     expect(mocks.showChatWithPrefill).toHaveBeenCalledWith(
       expect.objectContaining({
         autoSend: true,
-        displayLabel: "Ask about arc · Customer onboarding notes",
+        displayLabel: "Ask about Arc · Customer onboarding notes",
         source: "meeting-receipt-chat",
       }),
     );
@@ -119,8 +119,8 @@ describe("Receipts", () => {
 
     await waitFor(() =>
       expect(mocks.toast).toHaveBeenCalledWith({
-        title: "couldn't open chat",
-        description: "try again in a moment.",
+        title: "Couldn't open chat",
+        description: "Try again in a moment.",
         variant: "destructive",
       }),
     );

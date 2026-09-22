@@ -90,7 +90,7 @@ describe("CloudAgentRunner", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "review shared context" }),
+      screen.getByRole("button", { name: "Review shared context" }),
     );
     expect(
       await screen.findByText(/screenshots, audio files, local paths/i),
@@ -98,7 +98,7 @@ describe("CloudAgentRunner", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
     fireEvent.click(screen.getByTestId("cloud-agent-memory-select"));
-    fireEvent.click(await screen.findByText("share relevant context"));
+    fireEvent.click(await screen.findByText("Share relevant context"));
 
     await waitFor(() => {
       const saveCall = fetchMock.mock.calls.find(([url]) =>
@@ -119,10 +119,10 @@ describe("CloudAgentRunner", () => {
         name: "Cursor settings",
       }),
     );
-    fireEvent.change(await screen.findByPlaceholderText("paste API key"), {
+    fireEvent.change(await screen.findByPlaceholderText("Paste API key"), {
       target: { value: "cursor-user-key" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "save key" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save key" }));
 
     await waitFor(() => {
       const keyCall = fetchMock.mock.calls.find(([url]) =>
@@ -143,11 +143,11 @@ describe("CloudAgentRunner", () => {
   it("uses one plain-language choice for where a task runs", async () => {
     renderRunner(null);
 
-    expect(screen.getByText("runs with")).toBeInTheDocument();
+    expect(screen.getByText("Runs with")).toBeInTheDocument();
     await waitFor(() =>
       expect(
         screen.getByTestId("cloud-agent-provider-select"),
-      ).toHaveTextContent("screenpipe on this device"),
+      ).toHaveTextContent("Screenpipe on this device"),
     );
     expect(screen.queryByText("run in")).not.toBeInTheDocument();
   });
@@ -317,7 +317,7 @@ describe("CloudAgentRunner", () => {
 
     const codebase = screen.getByTestId("cloud-agent-codebase-select");
     fireEvent.click(
-      await screen.findByRole("button", { name: "choose codebase" }),
+      await screen.findByRole("button", { name: "Choose codebase" }),
     );
     expect(codebase).toHaveFocus();
     await waitFor(() =>
@@ -454,7 +454,7 @@ describe("CloudAgentRunner", () => {
 
     renderRunner({ environment_id: "env_screenpipe" });
     fireEvent.click(screen.getByTestId("cloud-agent-memory-select"));
-    fireEvent.click(await screen.findByText("share relevant context"));
+    fireEvent.click(await screen.findByText("Share relevant context"));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "could not write pipe config",

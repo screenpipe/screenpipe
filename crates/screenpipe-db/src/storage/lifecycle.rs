@@ -16,6 +16,151 @@ use std::path::{Path, PathBuf};
 mod tests {
     use super::*;
 
+    // Frozen pre-optimization receipt reader/codec: an independent oracle for
+    // old journals and the paired benchmark, never used by production.
+    async fn legacy_receipt(db: &DatabaseManager, table: &str) -> TableParity {
+        let mut columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info(?) ORDER BY cid")
+                .bind(table)
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        columns.retain(|column| !column.starts_with("_archive_"));
+        let mut hash = Sha256::new();
+        let mut count = 0;
+        let mut last = i64::MIN;
+        let mut first = true;
+        loop {
+            let sql = format!(
+                "SELECT rowid,{} FROM {} WHERE rowid{}? AND rowid<=? ORDER BY rowid LIMIT 128",
+                columns
+                    .iter()
+                    .map(|c| quote(c))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                quote(table),
+                if first { ">=" } else { ">" }
+            );
+            super::super::diagnostics::batch(table, Some(last), None, Some(count), None);
+            super::super::diagnostics::stage("reading_parity_rows");
+            let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+                .bind(last)
+                .bind(i64::MAX)
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+            if rows.is_empty() {
+                break;
+            }
+            first = false;
+            super::super::diagnostics::stage("hashing_parity_rows");
+            for row in rows {
+                last = row.get(0);
+                for index in 0..columns.len() {
+                    legacy_hash_value(&mut hash, &row, index + 1, None).unwrap();
+                }
+                hash.update(b"E");
+                count += 1;
+            }
+        }
+        TableParity {
+            table: table.into(),
+            rows: count,
+            sha256: format!("{:x}", hash.finalize()),
+        }
+    }
+
+    fn legacy_hash_value(
+        hash: &mut Sha256,
+        row: &sqlx::sqlite::SqliteRow,
+        index: usize,
+        replacement: Option<&Option<String>>,
+    ) -> Result<(), sqlx::Error> {
+        if let Some(value) = replacement {
+            if let Some(value) = value {
+                hash.update(b"T");
+                hash.update((value.len() as u64).to_le_bytes());
+                hash.update(value.as_bytes());
+            } else {
+                hash.update(b"N");
+            }
+            return Ok(());
+        }
+        let raw = row.try_get_raw(index)?;
+        if raw.is_null() {
+            hash.update(b"N");
+            return Ok(());
+        }
+        match raw.type_info().name() {
+            "INTEGER" => {
+                hash.update(b"I");
+                hash.update(row.try_get::<i64, _>(index)?.to_le_bytes());
+            }
+            "REAL" => {
+                hash.update(b"R");
+                hash.update(row.try_get::<f64, _>(index)?.to_bits().to_le_bytes());
+            }
+            "TEXT" => {
+                let bytes: Vec<u8> = row.try_get(index)?;
+                hash.update(b"T");
+                hash.update((bytes.len() as u64).to_le_bytes());
+                hash.update(bytes);
+            }
+            _ => {
+                let bytes: Vec<u8> = row.try_get(index)?;
+                hash.update(b"B");
+                hash.update((bytes.len() as u64).to_le_bytes());
+                hash.update(bytes);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "paired migration verification throughput benchmark on an isolated million-row history"]
+    async fn parity_throughput() {
+        let root = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new(
+            root.path().join("db.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        // Use the actual legacy element column layout, without capture/FTS
+        // triggers in fixture setup. Both implementations hash the same cells.
+        db.execute_raw_sql_write("CREATE TABLE parity_benchmark AS SELECT * FROM elements WHERE 0; CREATE UNIQUE INDEX parity_benchmark_id ON parity_benchmark(id);").await.unwrap();
+        let rows = 1_000_000_i64;
+        let mut tx = db.begin_immediate_with_retry().await.unwrap();
+        sqlx::query("WITH RECURSIVE n(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM n WHERE id<?) INSERT INTO parity_benchmark(id,frame_id,source,role,text,properties) SELECT id,id/100,'accessibility','AXText','searchable historical element '||id,'{\"label\":\"東京 history\",\"enabled\":true}' FROM n")
+            .bind(rows).execute(&mut **tx.conn()).await.unwrap();
+        tx.commit().await.unwrap();
+        let tables = [TableParity {
+            table: "parity_benchmark".into(),
+            rows: 0,
+            sha256: String::new(),
+        }];
+        for run in 1..=3 {
+            let mut receipts = Vec::new();
+            for legacy in if run % 2 == 1 {
+                [true, false]
+            } else {
+                [false, true]
+            } {
+                let started = std::time::Instant::now();
+                let receipt = if legacy {
+                    legacy_receipt(&db, "parity_benchmark").await
+                } else {
+                    table_receipts(&db, Some(&tables)).await.unwrap().remove(0)
+                };
+                assert_eq!(receipt.rows, rows as u64);
+                eprintln!("parity benchmark: run={run} legacy={legacy} rows={rows} elapsed_ms={:.3} sha256={}", started.elapsed().as_secs_f64()*1000.0, receipt.sha256);
+                receipts.push(receipt);
+            }
+            assert_eq!(receipts[0], receipts[1]);
+        }
+        db.close().await;
+    }
+
     #[tokio::test]
     async fn parity_includes_domain_payload_columns_and_minimum_rowids() {
         let root = tempfile::tempdir().unwrap();
@@ -42,6 +187,43 @@ mod tests {
                 .sha256
         );
         db.close().await;
+    }
+
+    #[tokio::test]
+    async fn streaming_parity_matches_existing_receipts_for_every_storage_class() {
+        for encoding in ["UTF-8", "UTF-16le"] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("db.sqlite");
+            {
+                let db = rusqlite::Connection::open(&path).unwrap();
+                db.execute_batch(&format!(
+                    "PRAGMA encoding='{encoding}'; CREATE TABLE encoding_probe(n INTEGER);"
+                ))
+                .unwrap();
+            }
+            let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+                .await
+                .unwrap();
+            let table = "receipt \"probe";
+            db.execute_raw_sql_write(&format!("CREATE TABLE {}(id INTEGER PRIMARY KEY,untyped,\"text value\" TEXT,bytes BLOB,number REAL,flag BOOLEAN,_archive_ignored TEXT); CREATE TABLE empty_receipt(id INTEGER PRIMARY KEY,payload TEXT);",quote(table))).await.unwrap();
+            db.execute_raw_sql_write(&format!("INSERT INTO {} VALUES(-9223372036854775808,NULL,'',X'',NULL,0,'ignored'),(-2,1,'東京'||char(0)||'tail',X'0001FF',1.25,1,'ignored'),(7,'1',CAST(X'80FF' AS TEXT),NULL,-1e200,NULL,'ignored'),(9223372036854775807,X'31',NULL,X'00',0.0,1,'ignored');",quote(table))).await.unwrap();
+            let mut tx = db.begin_immediate_with_retry().await.unwrap();
+            sqlx::query(sqlx::AssertSqlSafe(format!("WITH RECURSIVE n(id) AS (VALUES(10) UNION ALL SELECT id+1 FROM n WHERE id<9000) INSERT INTO {}(id,untyped,\"text value\",bytes) SELECT id,id,'retained history '||id,zeroblob(128) FROM n", quote(table))))
+                .execute(&mut **tx.conn()).await.unwrap();
+            tx.commit().await.unwrap();
+            for table in [table, "empty_receipt"] {
+                let expected = legacy_receipt(&db, table).await;
+                let actual = table_receipts(&db, Some(std::slice::from_ref(&expected)))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    actual,
+                    vec![expected],
+                    "{encoding}: old journals must remain usable"
+                );
+            }
+            db.close().await;
+        }
     }
 }
 
@@ -153,6 +335,153 @@ fn read_journal(root: &Path) -> Result<Journal, sqlx::Error> {
     Ok(journal)
 }
 
+/// Inspect the journal's actual files before opening a manager, which may create
+/// a missing SQLite file. Never infer the source from descriptor publication:
+/// recovery can stop between its durable paused journal and storage.json.
+async fn reconcile_migration_source(root: &Path, journal: &mut Journal) -> Result<(), sqlx::Error> {
+    super::diagnostics::stage("validating_migration_source");
+    let source = source_identity(root)?;
+    let index = checked_path(root, &journal.descriptor.index)?;
+    let active = StorageDescriptor::read(root)?;
+    super::diagnostics::source_state(super::diagnostics::SourceState {
+        journal_phase: serde_json::to_value(&journal.phase)
+            .map_err(storage_error)?
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        source_exists: source.is_some(),
+        index_exists: index.exists(),
+        active_descriptor_present: active.is_some(),
+        active_descriptor_matches: active.as_ref() == Some(&journal.descriptor),
+        expected_source_bytes: journal.snapshot.as_ref().map(|s| s.bytes),
+        actual_source_bytes: source.as_ref().map(|s| s.bytes),
+        source_modified_matches: source
+            .as_ref()
+            .zip(journal.snapshot.as_ref())
+            .map(|(a, b)| a.modified == b.modified),
+        source_file_id_matches: source
+            .as_ref()
+            .and_then(|s| s.file_id)
+            .zip(journal.snapshot.as_ref().and_then(|s| s.file_id))
+            .map(|(a, b)| a == b),
+    });
+    if active.as_ref().is_some_and(|d| d != &journal.descriptor) {
+        return Err(storage_error(
+            "active descriptor differs from migration index; both files have been kept",
+        ));
+    }
+    if !index.is_file() {
+        if active.is_some() || source.is_none() {
+            return Err(storage_error(
+                "migration index is missing; source files have been kept",
+            ));
+        }
+        return Ok(());
+    }
+    if source.is_none() {
+        return Ok(());
+    }
+
+    // Older retries/credential writers could recreate the legacy database while
+    // the real history was in this journal's index. Retire only an empty or
+    // credentials-only source, preserving its file and any credentials first.
+    crate::db::register_sqlite_extensions()?;
+    let _index_owner = screenpipe_sqlite_coordinator::acquire_sqlite_manager_lease(&index)
+        .map_err(storage_error)?;
+    let mut conn = sqlx::SqliteConnection::connect_with(
+        &sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&index)
+            .read_only(true)
+            .create_if_missing(false),
+    )
+    .await?;
+    let stored = sqlx::query_scalar::<_, String>(
+        "SELECT descriptor FROM storage_metadata WHERE singleton=1",
+    )
+    .fetch_one(&mut conn)
+    .await;
+    if let Err(error) = &stored {
+        super::diagnostics::failure(error);
+    }
+    conn.close().await?;
+    let stored: StorageDescriptor = serde_json::from_str(&stored?).map_err(storage_error)?;
+    if stored != journal.descriptor {
+        return Err(storage_error(
+            "migration index identity differs from journal; both files have been kept",
+        ));
+    }
+
+    let source_path = root.join("db.sqlite");
+    let _source_owner = screenpipe_sqlite_coordinator::acquire_sqlite_manager_lease(&source_path)
+        .map_err(storage_error)?;
+    let mut conn = sqlx::SqliteConnection::connect_with(
+        &sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&source_path)
+            .create_if_missing(false)
+            .pragma("locking_mode", "EXCLUSIVE")
+            .busy_timeout(std::time::Duration::from_secs(5)),
+    )
+    .await?;
+    let recoverable = async {
+        sqlx::query("BEGIN EXCLUSIVE").execute(&mut conn).await?;
+        // Shadow tables belong to their virtual table. Query every logical
+        // table, including unknown extensions, rather than just frames/audio.
+        // SQLite statistics/sequences and SQLx's ledger contain no history.
+        // Credentials are handled separately only after all tables are checked.
+        let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_list WHERE schema='main' AND type!='shadow' AND name NOT GLOB 'sqlite_*' AND name!='_sqlx_migrations'")
+            .fetch_all(&mut conn).await?;
+        let mut has_secrets = false;
+        for table in tables {
+            let populated: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)", quote(&table))))
+                .fetch_one(&mut conn).await?;
+            if populated {
+                if table == "secrets" {
+                    has_secrets = true;
+                    continue;
+                }
+                super::diagnostics::batch(&table, None, None, None, None);
+                return Err(storage_error(format!("migration source conflicts with existing index: source contains recorded history in {table}; both files have been kept")));
+            }
+        }
+        if has_secrets {
+            super::diagnostics::stage("recovering_migration_secrets");
+            super::diagnostics::batch("secrets", None, None, None, None);
+            screenpipe_secrets::SecretStore::recover_legacy_source(root, &mut conn)
+                .await
+                .map_err(|error| storage_error(format!("credential recovery failed: {error:#}; both files have been kept")))?;
+            super::faults::checkpoint("migration_source_secrets_copied");
+        }
+        super::diagnostics::stage("retaining_migration_source");
+        sqlx::query("COMMIT").execute(&mut conn).await?;
+        // Checkpoint before moving the closed file; never orphan a WAL.
+        let mode: String = sqlx::query_scalar("PRAGMA journal_mode=DELETE").fetch_one(&mut conn).await?;
+        if mode != "delete" {
+            return Err(storage_error("migration source is still in use; both files have been kept"));
+        }
+        Ok::<_, sqlx::Error>(has_secrets)
+    }.await;
+    if let Err(error) = &recoverable {
+        super::diagnostics::failure(error);
+    }
+    conn.close().await?;
+    let has_secrets = recoverable?;
+    // The old retry may have overwritten receipts with the empty DB's counts.
+    // Persist the need to refresh them before moving anything, so interruption
+    // after the rename cannot make a later retry trust those stale receipts.
+    journal.phase = Phase::Paused;
+    durable_json(&root.join("storage-migration.json"), journal)?;
+    let retained = index.parent().unwrap().join(format!(
+        "recovered-{}-source-{}.sqlite",
+        if has_secrets { "secrets" } else { "empty" },
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::rename(&source_path, &retained)?;
+    sync_directory(index.parent().unwrap())?;
+    sync_directory(root)?;
+    super::faults::checkpoint("migration_source_retired");
+    Ok(())
+}
+
 pub(super) fn migration_is_paused(root: &Path) -> Result<bool, sqlx::Error> {
     let journal = read_journal(root)?;
     Ok(journal.phase == Phase::Paused && checked_path(root, Path::new("db.sqlite"))?.is_file())
@@ -189,6 +518,18 @@ pub async fn recover_interrupted_migration(
     root: &Path,
     config: DbConfig,
 ) -> Result<(), sqlx::Error> {
+    recover_interrupted_migration_with_progress(root, config, |_| {}).await
+}
+
+/// The desktop owns recovery for the whole startup, including its visible
+/// progress. Recovery still leaves archival paused until an explicit retry.
+pub async fn recover_interrupted_migration_with_progress(
+    root: &Path,
+    config: DbConfig,
+    progress: impl Fn(MigrationProgress) + Send + Sync,
+) -> Result<(), sqlx::Error> {
+    // Ordinary startups must not create a diagnostic attempt that displaces
+    // the preceding conversion failure from the bounded feedback history.
     if !root.join("storage-migration.json").exists() {
         return Ok(());
     }
@@ -198,6 +539,20 @@ pub async fn recover_interrupted_migration(
     if migration_recording_ready(root)? {
         return Ok(());
     }
+    super::diagnostics::observe(
+        root,
+        "recovery",
+        |_, _| {},
+        recover_observed(root, config, progress),
+    )
+    .await
+}
+
+async fn recover_observed(
+    root: &Path,
+    config: DbConfig,
+    progress: impl Fn(MigrationProgress) + Send + Sync,
+) -> Result<(), sqlx::Error> {
     let root = root.canonicalize()?;
     let lock = std::fs::OpenOptions::new()
         .read(true)
@@ -208,6 +563,7 @@ pub async fn recover_interrupted_migration(
     fs2::FileExt::try_lock_exclusive(&lock)
         .map_err(|_| storage_error("storage lifecycle is already owned"))?;
     let mut journal = read_journal(&root)?;
+    reconcile_migration_source(&root, &mut journal).await?;
     let index = checked_path(&root, &journal.descriptor.index)?;
     if root.join("db.sqlite").is_file() {
         if index.exists() || StorageDescriptor::read(&root)?.is_some() {
@@ -230,7 +586,8 @@ pub async fn recover_interrupted_migration(
         ));
     }
     let storage = HybridStorage::new(root.clone(), journal.descriptor.clone())?;
-    super::in_place::recover_recording(storage.clone()).await?;
+    super::in_place::recover_recording(storage.clone(), &progress).await?;
+    progress(MigrationProgress::phase("opening recovered history"));
     let db = DatabaseManager::new_with_storage(
         index.to_str().unwrap(),
         config,
@@ -315,7 +672,7 @@ pub struct MigrationProgress {
 }
 
 impl MigrationProgress {
-    fn phase(message: &'static str) -> Self {
+    pub(super) fn phase(message: &'static str) -> Self {
         Self {
             message,
             completed_records: None,
@@ -327,6 +684,21 @@ impl MigrationProgress {
 }
 
 pub async fn migrate_with_progress(
+    root: &Path,
+    config: DbConfig,
+    options: MigrationOptions,
+    progress: impl Fn(MigrationProgress) + Send + Sync,
+) -> Result<MigrationReport, sqlx::Error> {
+    super::diagnostics::observe(
+        root,
+        "conversion",
+        |_, _| {},
+        migrate_observed(root, config, options, progress),
+    )
+    .await
+}
+
+async fn migrate_observed(
     root: &Path,
     config: DbConfig,
     options: MigrationOptions,
@@ -371,6 +743,7 @@ pub async fn migrate_with_progress(
             ));
         }
         super::reclaim::probe(&root)?;
+        super::diagnostics::stage("opening_source");
         let source = DatabaseManager::new_with_storage(
             source_path
                 .to_str()
@@ -384,10 +757,6 @@ pub async fn migrate_with_progress(
         let original = async {
             let frozen = source.begin_immediate_with_retry().await?;
             verify_integrity(&source.pool).await?;
-            let pages: i64 = sqlx::query_scalar("PRAGMA page_count").fetch_one(&source.pool).await?;
-            if (pages as usize).div_ceil(8) > options.budget.decode_bytes / 2 {
-                return Err(storage_error("freelist map exceeds migration memory budget; database unchanged"));
-            }
             let receipts = table_receipts(&source, None).await?;
             let terms: Vec<String> = sqlx::query_scalar("SELECT full_text FROM frames WHERE full_text IS NOT NULL AND id IN ((SELECT min(id) FROM frames),(SELECT max(id) FROM frames))").fetch_all(&source.pool).await?;
             let mut searches = Vec::new();
@@ -401,6 +770,10 @@ pub async fn migrate_with_progress(
             frozen.rollback().await?;
             Ok::<_,sqlx::Error>((receipts,searches))
         }.await;
+        if let Err(error) = &original {
+            super::diagnostics::failure(error);
+        }
+        super::diagnostics::stage("closing_source");
         source.close().await;
         drop(source);
         let (receipts, searches) = original?;
@@ -449,18 +822,39 @@ pub async fn migrate_with_progress(
         super::faults::checkpoint("migration_before_rename");
         journal
     };
+    super::diagnostics::tables(&journal.source);
+    reconcile_migration_source(&root, &mut journal).await?;
+    let index = checked_path(&root, &journal.descriptor.index)?;
+    let recheck_unrenamed_source = source_path.is_file()
+        && !index.exists()
+        && journal.phase == Phase::Building
+        && source_identity(&root)? != journal.snapshot;
+    if recheck_unrenamed_source {
+        // A timestamp/checkpoint change alone must not strand valid history.
+        // Verify its saved logical receipts before accepting a new identity.
+        journal.phase = Phase::Paused;
+    }
     if journal.phase == Phase::Paused {
+        progress(MigrationProgress::phase("checking history before retry"));
+        if index.is_file() {
+            super::in_place::recover_recording(
+                HybridStorage::new(root.clone(), journal.descriptor.clone())?,
+                &progress,
+            )
+            .await?;
+        }
+        super::diagnostics::stage("opening_retry_history");
         // Recording may have appended, edited, or retained history since the
         // failure. The explicit retry verifies that current logical dataset,
         // keeping all already committed archive files and their generations.
-        let active = StorageDescriptor::read(&root)?;
-        let path = if active.is_some() {
-            root.join(&journal.descriptor.index)
+        let path = if index.is_file() {
+            index.clone()
         } else {
             source_path.clone()
         };
-        let storage = active
-            .map(|d| HybridStorage::new(root.clone(), d))
+        let storage = index
+            .is_file()
+            .then(|| HybridStorage::new(root.clone(), journal.descriptor.clone()))
             .transpose()?;
         let db = DatabaseManager::new_with_storage(
             path.to_str().unwrap(),
@@ -471,7 +865,14 @@ pub async fn migrate_with_progress(
         )
         .await?;
         let refreshed = async {
+            super::diagnostics::stage("retry_parity");
+            verify_integrity(&db.pool).await?;
             let receipts = table_receipts(&db, Some(&journal.source)).await?;
+            if recheck_unrenamed_source && receipts != journal.source {
+                return Err(storage_error(
+                    "migration source content changed before rename; source has been kept",
+                ));
+            }
             let mut searches = Vec::new();
             for (term, _) in &journal.search_receipts {
                 let ids = sqlx::query_scalar(MIGRATION_SEARCH)
@@ -483,9 +884,14 @@ pub async fn migrate_with_progress(
             Ok::<_, sqlx::Error>((receipts, searches))
         }
         .await;
+        if let Err(error) = &refreshed {
+            super::diagnostics::failure(error);
+        }
+        super::diagnostics::stage("closing_retry_history");
         db.close().await;
         let (receipts, searches) = refreshed?;
         journal.source = receipts;
+        super::diagnostics::tables(&journal.source);
         journal.search_receipts = searches;
         journal.snapshot = source_identity(&root)?;
         journal.report = None;
@@ -499,7 +905,7 @@ pub async fn migrate_with_progress(
             ));
         }
     }
-    let index = checked_path(&root, &journal.descriptor.index)?;
+    super::diagnostics::stage("validating_source_before_rename");
     if source_path.exists() {
         if index.exists() || source_identity(&root)? != journal.snapshot {
             return Err(storage_error(
@@ -545,6 +951,7 @@ pub async fn migrate_with_progress(
     }
     if journal.phase == Phase::Ready {
         progress(MigrationProgress::phase("checking storage and search"));
+        super::diagnostics::stage("opening_verification_history");
         let db = DatabaseManager::new_with_storage(
             index.to_str().unwrap(),
             config.clone(),
@@ -558,12 +965,14 @@ pub async fn migrate_with_progress(
         .await?;
         let verification = async {
             verify_integrity(&db.pool).await?;
+            super::diagnostics::stage("verifying_archives");
             db.verify_storage().await?;
             if table_receipts(&db, Some(&journal.source)).await? != journal.source {
                 return Err(storage_error(
                     "migration logical data differs; converted data has been kept for diagnosis",
                 ));
             }
+            super::diagnostics::stage("verifying_search");
             for (term, expected) in &journal.search_receipts {
                 let actual: Vec<i64> = sqlx::query_scalar(MIGRATION_SEARCH)
                     .bind(term)
@@ -576,6 +985,10 @@ pub async fn migrate_with_progress(
             Ok::<_, sqlx::Error>(())
         }
         .await;
+        if let Err(error) = &verification {
+            super::diagnostics::failure(error);
+        }
+        super::diagnostics::stage("closing_verification_history");
         db.close().await;
         verification?;
         journal.report = Some(MigrationReport {
@@ -596,11 +1009,13 @@ pub async fn migrate_with_progress(
         });
         durable_json(&journal_path, &journal)?;
         super::faults::checkpoint("migration_ready");
+        super::diagnostics::stage("activating_storage");
         durable_json(&root.join("storage.json"), &journal.descriptor)?;
         super::faults::checkpoint("migration_activated");
         journal.phase = Phase::Active;
         durable_json(&journal_path, &journal)?;
     }
+    super::diagnostics::stage("reopening_migrated_storage");
     let reopened = DatabaseManager::new_with_storage(
         index.to_str().unwrap(),
         config,
@@ -615,11 +1030,13 @@ pub async fn migrate_with_progress(
     let check = sqlx::query("SELECT id FROM frames LIMIT 1")
         .fetch_optional(&reopened.pool)
         .await;
+    super::diagnostics::stage("closing_reopen_probe");
     reopened.close().await;
     check?;
     let report = journal
         .report
         .ok_or_else(|| storage_error("migration report is missing"))?;
+    super::diagnostics::stage("saving_completion_receipt");
     durable_json(&root.join("storage-migration-complete.json"), &report)?;
     super::faults::checkpoint("migration_completed");
     std::fs::remove_file(journal_path)?;
@@ -877,19 +1294,17 @@ pub async fn cancel_migration(root: &Path, config: DbConfig) -> Result<(), sqlx:
 }
 
 pub(super) async fn verify_integrity(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    super::diagnostics::stage("sqlite_integrity_check");
     let checks: Vec<String> = sqlx::query_scalar("PRAGMA integrity_check")
         .fetch_all(pool)
         .await?;
     if checks != ["ok"] {
         return Err(storage_error("SQLite integrity verification failed"));
     }
-    if !sqlx::query("PRAGMA foreign_key_check")
-        .fetch_all(pool)
-        .await?
-        .is_empty()
-    {
-        return Err(storage_error("SQLite foreign-key verification failed"));
-    }
+    // Usable legacy histories can contain dangling foreign keys. Preserve
+    // those rows: migration verifies logical receipts and archive contents,
+    // rather than requiring old data to satisfy today's relationship rules.
+    // Ordinary writes still enforce their foreign-key constraints.
     Ok(())
 }
 
@@ -961,49 +1376,81 @@ pub(super) fn hash_value(
     index: usize,
     replacement: Option<&Option<String>>,
 ) -> Result<(), sqlx::Error> {
-    if let Some(value) = replacement {
-        if let Some(value) = value {
-            hash.update(b"T");
-            hash.update((value.len() as u64).to_le_bytes());
-            hash.update(value.as_bytes());
+    use rusqlite::types::ValueRef as Cell;
+    let value = if let Some(value) = replacement {
+        value
+            .as_ref()
+            .map_or(Cell::Null, |text| Cell::Text(text.as_bytes()))
+    } else {
+        let raw = row.try_get_raw(index)?;
+        if raw.is_null() {
+            Cell::Null
         } else {
-            hash.update(b"N");
+            match raw.type_info().name() {
+                "INTEGER" => Cell::Integer(row.try_get(index)?),
+                "REAL" => Cell::Real(row.try_get(index)?),
+                "TEXT" => Cell::Text(row.try_get(index)?),
+                _ => Cell::Blob(row.try_get(index)?),
+            }
         }
-        return Ok(());
-    }
-    let raw = row.try_get_raw(index)?;
-    if raw.is_null() {
-        hash.update(b"N");
-        return Ok(());
-    }
-    match raw.type_info().name() {
-        "INTEGER" => {
-            hash.update(b"I");
-            hash.update(row.try_get::<i64, _>(index)?.to_le_bytes());
-        }
-        "REAL" => {
-            hash.update(b"R");
-            hash.update(row.try_get::<f64, _>(index)?.to_bits().to_le_bytes());
-        }
-        "TEXT" => {
-            let bytes: Vec<u8> = row.try_get(index)?;
-            hash.update(b"T");
-            hash.update((bytes.len() as u64).to_le_bytes());
-            hash.update(bytes);
-        }
-        _ => {
-            let bytes: Vec<u8> = row.try_get(index)?;
-            hash.update(b"B");
-            hash.update((bytes.len() as u64).to_le_bytes());
-            hash.update(bytes);
-        }
-    }
+    };
+    super::parity::hash_cell(hash, value);
     Ok(())
 }
 
 pub(super) async fn logical_tables(db: &DatabaseManager) -> Result<Vec<String>, sqlx::Error> {
     sqlx::query_scalar("SELECT m.name FROM sqlite_master m WHERE m.type='table' AND (m.name NOT LIKE 'sqlite_%' OR m.name='sqlite_sequence') AND m.name NOT LIKE '%_fts%' AND m.name NOT LIKE '%_fts5%' AND (m.sql NOT LIKE 'CREATE VIRTUAL TABLE%' OR m.name='elements') ORDER BY m.name")
         .fetch_all(&db.pool).await
+}
+
+// Verification consumes history incrementally; the public response limit must
+// never decide whether that history can migrate. Resident frames are hashed
+// from SQLite, and only sealed frames need hydration through the payload reader.
+async fn verification_frame_batch(
+    db: &DatabaseManager,
+    after: Option<i64>,
+) -> Result<Option<(i64, Vec<i64>)>, sqlx::Error> {
+    let comparison = if after.is_some() { ">" } else { ">=" };
+    let (size, state, join, limit) = if let Some(storage) = &db.storage {
+        (
+            "p.bytes".to_owned(),
+            "p.state='sealed'",
+            "LEFT JOIN frame_payloads p ON p.frame_id=f.id",
+            storage
+                .descriptor
+                .budget
+                .file_bytes
+                .min(storage.descriptor.budget.response_bytes),
+        )
+    } else {
+        (
+            super::schema::BYTES.replace("NEW.", "f."),
+            "0",
+            "",
+            StorageBudget::default().file_bytes,
+        )
+    };
+    let rows: Vec<(i64, i64, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT f.id,{size},{state} FROM frames f {join} WHERE f.id{comparison}? ORDER BY f.id LIMIT 128"
+    )))
+    .bind(after.unwrap_or(i64::MIN))
+    .fetch_all(&db.pool)
+    .await?;
+    let mut last = None;
+    let mut ids = Vec::new();
+    let mut bytes = 0usize;
+    for (id, size, sealed) in rows {
+        let size = usize::try_from(size).map_err(storage_error)?;
+        if last.is_some() && bytes.saturating_add(size) > limit {
+            break;
+        }
+        last = Some(id);
+        bytes = bytes.saturating_add(size);
+        if sealed {
+            ids.push(id);
+        }
+    }
+    Ok(last.map(|last| (last, ids)))
 }
 
 pub(super) async fn table_receipts(
@@ -1017,6 +1464,8 @@ pub(super) async fn table_receipts(
     };
     let mut result = Vec::new();
     for table in tables {
+        super::diagnostics::batch(&table, None, None, None, None);
+        super::diagnostics::stage("reading_parity_schema");
         let mut columns: Vec<String> =
             sqlx::query_scalar("SELECT name FROM pragma_table_info(?) ORDER BY cid")
                 .bind(&table)
@@ -1042,13 +1491,38 @@ pub(super) async fn table_receipts(
         } else {
             "rowid"
         };
+        if table != "frames" || db.storage.is_none() {
+            let sql = format!(
+                "SELECT {key},{} FROM {} ORDER BY {key}",
+                columns
+                    .iter()
+                    .map(|column| quote(column))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                quote(&table),
+            );
+            let receipt = super::parity::scan(db.pool.clone(), table.clone(), sql).await?;
+            tracing::info!(table=%table, rows=receipt.rows, "storage parity receipt complete");
+            result.push(receipt);
+            continue;
+        }
+        // Hybrid frames still hydrate sealed payloads in byte-bounded batches.
         let mut hash = Sha256::new();
         let mut count = 0;
         let mut last = i64::MIN;
         let mut first = true;
         loop {
+            let (through, sealed) = if table == "frames" {
+                let Some(batch) = verification_frame_batch(db, (!first).then_some(last)).await?
+                else {
+                    break;
+                };
+                batch
+            } else {
+                (i64::MAX, Vec::new())
+            };
             let sql = format!(
-                "SELECT {key} AS __storage_rowid,{} FROM {} WHERE {key}{}? ORDER BY {key} LIMIT 128",
+                "SELECT {key} AS __storage_rowid,{} FROM {} WHERE {key}{}? AND {key}<=? ORDER BY {key} LIMIT 128",
                 columns
                     .iter()
                     .map(|c| quote(c))
@@ -1057,17 +1531,20 @@ pub(super) async fn table_receipts(
                 quote(&table),
                 if first {">="} else {">"}
             );
+            super::diagnostics::batch(&table, Some(last), None, Some(count), None);
+            super::diagnostics::stage("reading_parity_rows");
             let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
                 .bind(last)
+                .bind(through)
                 .fetch_all(&db.pool)
                 .await?;
             if rows.is_empty() {
                 break;
             }
             first = false;
-            let payloads = if table == "frames" && db.storage.is_some() {
-                let ids: Vec<i64> = rows.iter().map(|r| r.get("id")).collect();
-                db.frame_payloads(&ids, Projection::All).await?
+            super::diagnostics::stage("hashing_parity_rows");
+            let payloads = if !sealed.is_empty() {
+                db.frame_payloads(&sealed, Projection::All).await?
             } else {
                 Default::default()
             };
@@ -1199,17 +1676,9 @@ impl DatabaseManager {
         if let Some(storage) = &self.storage {
             storage.verify_catalog(&self.pool).await?;
             storage.verify_bulk(&self.pool).await?;
-            let mut after = i64::MIN;
-            loop {
-                let ids: Vec<i64> =
-                    sqlx::query_scalar("SELECT id FROM frames WHERE id>? ORDER BY id LIMIT 128")
-                        .bind(after)
-                        .fetch_all(&self.pool)
-                        .await?;
-                let Some(last) = ids.last() else {
-                    break;
-                };
-                after = *last;
+            let mut after = None;
+            while let Some((last, ids)) = verification_frame_batch(self, after).await? {
+                after = Some(last);
                 self.frame_payloads(&ids, Projection::All).await?;
             }
         }

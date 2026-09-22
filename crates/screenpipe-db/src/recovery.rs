@@ -21,9 +21,15 @@ pub struct RecoveryVerification {
     pub foreign_key_violations: usize,
 }
 
-pub use screenpipe_sqlite_coordinator::{
-    inspect_database_health, DatabaseHealthError, QuarantineHealthProbe,
-};
+pub use screenpipe_sqlite_coordinator::{DatabaseHealthError, QuarantineHealthProbe};
+
+/// Standalone recovery probes may run before any DatabaseManager exists.
+pub async fn inspect_database_health(
+    path: impl AsRef<Path>,
+) -> Result<QuarantineHealthProbe, DatabaseHealthError> {
+    crate::db::register_sqlite_extensions().map_err(DatabaseHealthError::Unavailable)?;
+    screenpipe_sqlite_coordinator::inspect_database_health(path).await
+}
 
 type LifecycleLocks = HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>;
 static LIFECYCLES: OnceLock<Mutex<LifecycleLocks>> = OnceLock::new();
@@ -136,6 +142,7 @@ fn sqlite_sidecar(database_path: &Path, suffix: &str) -> PathBuf {
 }
 
 async fn open_offline_candidate(path: &Path) -> Result<SqliteConnection> {
+    crate::db::register_sqlite_extensions()?;
     let options = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(false)

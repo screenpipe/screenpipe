@@ -84,8 +84,8 @@ fn room_change_offer_actions(offer: &MeetingRoomChangeOffer) -> Vec<serde_json::
         })
     };
     vec![
-        action("keep-meeting-note", "keep together", "keep", false),
-        action("start-new-meeting-note", "start new note", "switch", true),
+        action("keep-meeting-note", &crate::localization::ui_text("keep together"), "keep", false),
+        action("start-new-meeting-note", &crate::localization::ui_text("start new note"), "switch", true),
     ]
 }
 
@@ -212,16 +212,7 @@ pub fn start(app: AppHandle) {
             } else {
                 platform
             };
-            client::send_typed_with_actions_and_priority(
-                "new meeting detected",
-                format!(
-                    "{platform} may have switched rooms. Keep one recording or start a new note?"
-                ),
-                "meeting",
-                Some(30_000),
-                room_change_offer_actions(&offer),
-                NotificationPriority::High,
-            );
+            client::send_typed_with_actions_and_priority(crate::localization::ui_text("new meeting detected"), crate::localization::ui_format("{value1} may have switched rooms. Keep one recording or start a new note?", &[("value1", (platform).to_string())]), "meeting", Some(30_000), room_change_offer_actions(&offer), NotificationPriority::High);
         }
     });
 
@@ -264,7 +255,7 @@ pub fn start(app: AppHandle) {
             }
             let data = event.data;
             let title = if data.title.trim().is_empty() {
-                "meeting".to_string()
+                crate::localization::ui_text("meeting")
             } else {
                 data.title.clone()
             };
@@ -282,7 +273,7 @@ pub fn start(app: AppHandle) {
                 actions.push(json!({
                     "id": "join-meeting",
                     "action": "join-meeting",
-                    "label": "join and take notes",
+                    "label": crate::localization::ui_text("join and take notes"),
                     "type": "meeting_join",
                     "url": url,
                     "primary": true,
@@ -297,18 +288,11 @@ pub fn start(app: AppHandle) {
 
             let minutes = ((data.seconds_until_start as f64) / 60.0).ceil() as i64;
             let header = if minutes <= 1 {
-                "meeting starting in 1 min".to_string()
+                crate::localization::ui_text("meeting starting in 1 min")
             } else {
-                format!("meeting starting in {minutes} min")
+                crate::localization::ui_format("meeting starting in {minutes} min", &[("minutes", minutes.to_string())])
             };
-            client::send_typed_with_actions_and_priority(
-                &header,
-                format!("screenpipe is ready to transcribe: {title}"),
-                "meeting",
-                Some(30_000),
-                actions,
-                NotificationPriority::High,
-            );
+            client::send_typed_with_actions_and_priority(&header, crate::localization::ui_format("screenpipe is ready to transcribe: {value1}", &[("value1", (title).to_string())]), "meeting", Some(30_000), actions, NotificationPriority::High);
         }
     });
 
@@ -389,7 +373,7 @@ pub fn start(app: AppHandle) {
             let mut actions = vec![json!({
                 "id": "open-live-notes",
                 "action": "open-live-notes",
-                "label": "open note",
+                "label": crate::localization::ui_text("open note"),
                 "type": "deeplink",
                 "url": url.clone(),
                 "primary": true,
@@ -400,14 +384,7 @@ pub fn start(app: AppHandle) {
                 actions.push(hd);
             }
 
-            client::send_typed_with_actions_and_priority(
-                "meeting detected",
-                format!("screenpipe is saving this meeting for transcription: {title}"),
-                "meeting",
-                Some(30_000),
-                actions,
-                NotificationPriority::High,
-            );
+            client::send_typed_with_actions_and_priority(crate::localization::ui_text("meeting detected"), crate::localization::ui_format("screenpipe is saving this meeting for transcription: {value1}", &[("value1", (title).to_string())]), "meeting", Some(30_000), actions, NotificationPriority::High);
         }
     });
 }
@@ -554,7 +531,7 @@ fn build_hd_action(
     let mut action = json!({
         "id": "record-hd",
         "action": "record-hd",
-        "label": "+ HD",
+        "label": crate::localization::ui_text("+ HD"),
         "type": "api",
         "url": "/capture/hd/start",
         "method": "POST",

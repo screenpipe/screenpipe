@@ -16,7 +16,14 @@ import {
 } from "@/components/markdown";
 import localforage from "localforage";
 import { localFetch } from "@/lib/api";
-import { Bell, Check, Copy, ExternalLink } from "lucide-react";
+import {
+  Bell,
+  Check,
+  Copy,
+  ExternalLink,
+  MoreHorizontal,
+  MessageSquare,
+} from "lucide-react";
 import {
   executeNotificationAction,
   type NotificationAction,
@@ -27,7 +34,10 @@ import {
 } from "@/lib/notification-analytics";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { NotificationActionButton } from "@/components/notification-action-button";
+import { isNotificationFeedbackEligible } from "@/lib/ai-feedback";
 import { NotificationFeedback } from "@/components/notification-feedback";
+import { useGT } from "gt-react";
+
 
 interface NotificationPayload {
   id: string;
@@ -43,11 +53,7 @@ interface NotificationPayload {
 }
 
 type NotificationDismissReason =
-  | "auto"
-  | "explicit"
-  | "action"
-  | "source"
-  | "manage";
+  "auto" | "explicit" | "action" | "source" | "manage";
 
 function windowForDeeplink(url: string) {
   return url.startsWith("screenpipe://meeting/") ||
@@ -86,7 +92,13 @@ function notificationClipboardText(payload: NotificationPayload): string {
 }
 
 export default function NotificationPanelPage() {
+
+  const ui = useGT();
   const [payload, setPayload] = useState<NotificationPayload | null>(null);
+  const [optionsExpanded, setOptionsExpanded] = useState(false);
+  const [feedbackExpanded, setFeedbackExpanded] = useState(false);
+  const interactingRef = useRef(false);
+  interactingRef.current = optionsExpanded || feedbackExpanded;
   const [visible, setVisible] = useState(false);
   const [progress, setProgress] = useState(100);
   // Incremented on each new notification so the auto-dismiss timer restarts
@@ -133,9 +145,7 @@ export default function NotificationPanelPage() {
       const actionObj = typeof actionOrObj === "object" ? actionOrObj : null;
 
       posthog.capture("notification_action", {
-        ...notificationActionAnalyticsProperties(
-          actionObj?.type ?? actionStr,
-        ),
+        ...notificationActionAnalyticsProperties(actionObj?.type ?? actionStr),
         ...notificationAnalyticsProperties(payload, "toast"),
       });
 
@@ -317,6 +327,8 @@ export default function NotificationPanelPage() {
       try {
         const data: NotificationPayload = JSON.parse(event.payload);
         setPayload(data);
+        setOptionsExpanded(false);
+        setFeedbackExpanded(false);
         setVisible(true);
         setProgress(100);
         setRestartState("idle");
@@ -379,7 +391,7 @@ export default function NotificationPanelPage() {
     };
 
     intervalRef.current = setInterval(() => {
-      if (hoveredRef.current) {
+      if (hoveredRef.current || interactingRef.current) {
         if (!wasHovered) {
           // Just entered hover — snapshot elapsed time
           elapsedBeforePause += Date.now() - resumedAt;
@@ -405,7 +417,7 @@ export default function NotificationPanelPage() {
     // Windows where unfocused webview timers can be throttled to ~1s.
     // This ensures the notification always dismisses even if setInterval stalls.
     const safetyTimeout = setTimeout(() => {
-      if (!hoveredRef.current) {
+      if (!hoveredRef.current && !interactingRef.current) {
         doHide();
       }
     }, totalMs + 2000);
@@ -424,6 +436,10 @@ export default function NotificationPanelPage() {
     return null;
   }
 
+  const visibleActions = payload.actions.filter(
+    (action) => (action.type || action.action) !== "dismiss",
+  );
+
   return (
     <div
       className="group/notif"
@@ -437,61 +453,24 @@ export default function NotificationPanelPage() {
     >
       <div
         style={{
-          background: "rgba(255, 255, 255, 0.92)",
+          background: "hsl(var(--background) / 0.96)",
+          borderRadius: "8px",
           backdropFilter: "blur(20px)",
           WebkitBackdropFilter: "blur(20px)",
-          border: "1px solid rgba(0, 0, 0, 0.08)",
+          border: "1px solid hsl(var(--foreground) / 0.08)",
           width: "100%",
           height: "100%",
           display: "flex",
           flexDirection: "column",
           fontFamily: '"IBM Plex Mono", monospace',
-          color: "rgba(0, 0, 0, 0.8)",
+          color: "hsl(var(--foreground) / 0.8)",
           overflow: "hidden",
           position: "relative",
-          animation: "slideIn 0.3s ease-out",
-          boxShadow: "0 8px 32px rgba(0, 0, 0, 0.12)",
+          animation: "slideIn 0.15s ease-out",
+          boxShadow: "0 4px 16px hsl(var(--foreground) / 0.12)",
         }}
       >
-        <style>{`
-          @keyframes slideIn {
-            from {
-              opacity: 0;
-              transform: translateX(20px);
-            }
-            to {
-              opacity: 1;
-              transform: translateX(0);
-            }
-          }
-          .notif-md p { margin: 0 0 4px 0; }
-          .notif-md p:last-child { margin: 0; }
-          .notif-md strong { color: rgba(0, 0, 0, 0.9); }
-          .notif-md a { color: rgba(0, 0, 0, 0.7); text-decoration: underline; }
-          .notif-md code {
-            background: rgba(0, 0, 0, 0.06);
-            padding: 1px 4px;
-            font-size: 10px;
-          }
-          .notif-md ul, .notif-md ol {
-            margin: 2px 0;
-            padding-left: 16px;
-          }
-          .notif-md li { margin: 1px 0; }
-          .notif-body::-webkit-scrollbar {
-            width: 4px;
-          }
-          .notif-body::-webkit-scrollbar-track {
-            background: transparent;
-          }
-          .notif-body::-webkit-scrollbar-thumb {
-            background: rgba(0, 0, 0, 0.15);
-            border-radius: 2px;
-          }
-          .notif-body::-webkit-scrollbar-thumb:hover {
-            background: rgba(0, 0, 0, 0.3);
-          }
-        `}</style>
+        <style>{"\n          [class~=\"group/notif\"] button:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }\n          @media (prefers-reduced-motion: reduce) { [class~=\"group/notif\"] > div { animation: none !important; } }\n          @keyframes slideIn {\n            from {\n              opacity: 0;\n              transform: translateX(20px);\n            }\n            to {\n              opacity: 1;\n              transform: translateX(0);\n            }\n          }\n          .notif-md p { margin: 0 0 4px 0; }\n          .notif-md p:last-child { margin: 0; }\n          .notif-md strong { color: hsl(var(--foreground) / 0.9); }\n          .notif-md a { color: hsl(var(--foreground) / 0.7); text-decoration: underline; }\n          .notif-md code {\n            background: hsl(var(--foreground) / 0.06);\n            padding: 1px 4px;\n            font-size: 10px;\n          }\n          .notif-md ul, .notif-md ol {\n            margin: 2px 0;\n            padding-left: 16px;\n          }\n          .notif-md li { margin: 1px 0; }\n          .notif-body::-webkit-scrollbar {\n            width: 4px;\n          }\n          .notif-body::-webkit-scrollbar-track {\n            background: transparent;\n          }\n          .notif-body::-webkit-scrollbar-thumb {\n            background: hsl(var(--foreground) / 0.15);\n            border-radius: 2px;\n          }\n          .notif-body::-webkit-scrollbar-thumb:hover {\n            background: hsl(var(--foreground) / 0.3);\n          }\n        "}</style>
 
         {/* Header */}
         <div
@@ -510,8 +489,8 @@ export default function NotificationPanelPage() {
               fontSize: "10px",
               fontWeight: 500,
               letterSpacing: "0.05em",
-              color: "rgba(0, 0, 0, 0.4)",
-              textTransform: "lowercase",
+              color: "hsl(var(--foreground) / 0.4)",
+              textTransform: "none",
             }}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -524,27 +503,53 @@ export default function NotificationPanelPage() {
             />
             screenpipe
           </span>
-          <button
-            onClick={() => hide("explicit")}
-            style={{
-              background: "none",
-              border: "none",
-              color: "rgba(0, 0, 0, 0.35)",
-              cursor: "pointer",
-              padding: "2px",
-              fontSize: "14px",
-              lineHeight: 1,
-              fontFamily: '"IBM Plex Mono", monospace',
-            }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.color = "rgba(0, 0, 0, 0.7)")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.color = "rgba(0, 0, 0, 0.35)")
-            }
-          >
-            ✕
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+            <button
+              type="button"
+              aria-label={ui("Notification options")}
+              aria-expanded={optionsExpanded}
+              onClick={() => setOptionsExpanded((expanded) => !expanded)}
+              style={{
+                display: "grid",
+                placeItems: "center",
+                width: "24px",
+                height: "24px",
+                border: "none",
+                borderRadius: "4px",
+                background: optionsExpanded
+                  ? "hsl(var(--foreground) / 0.08)"
+                  : "none",
+                color: "hsl(var(--muted-foreground))",
+                cursor: "pointer",
+              }}
+            >
+              <MoreHorizontal size={14} />
+            </button>
+            <button
+              aria-label={ui("Dismiss notification")}
+              onClick={() => hide("explicit")}
+              style={{
+                background: "none",
+                border: "none",
+                color: "hsl(var(--foreground) / 0.35)",
+                cursor: "pointer",
+                width: "24px",
+                height: "24px",
+                borderRadius: "4px",
+                fontSize: "14px",
+                lineHeight: 1,
+                fontFamily: '"IBM Plex Mono", monospace',
+              }}
+              onMouseEnter={(e) =>
+                (e.currentTarget.style.color = "hsl(var(--foreground) / 0.7)")
+              }
+              onMouseLeave={(e) =>
+                (e.currentTarget.style.color = "hsl(var(--foreground) / 0.35)")
+              }
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         {/* Body */}
@@ -559,12 +564,12 @@ export default function NotificationPanelPage() {
         >
           <div
             onClick={payload.source_url ? openSource : undefined}
-            title={payload.source_url ? "open source chat" : undefined}
+            title={payload.source_url ? ui("Open source chat") : undefined}
             style={{
               fontSize: "12px",
               fontWeight: 500,
               marginBottom: "4px",
-              color: "rgba(0, 0, 0, 0.9)",
+              color: "hsl(var(--foreground) / 0.9)",
               cursor: payload.source_url ? "pointer" : "default",
             }}
           >
@@ -575,7 +580,7 @@ export default function NotificationPanelPage() {
             style={{
               fontSize: "11px",
               lineHeight: "1.4",
-              color: "rgba(0, 0, 0, 0.5)",
+              color: "hsl(var(--foreground) / 0.5)",
               userSelect: "text",
             }}
           >
@@ -605,7 +610,7 @@ export default function NotificationPanelPage() {
                           }
                         }}
                         style={{
-                          color: "rgba(0, 0, 0, 0.7)",
+                          color: "hsl(var(--foreground) / 0.7)",
                           textDecoration: "underline",
                           cursor: "pointer",
                         }}
@@ -627,19 +632,21 @@ export default function NotificationPanelPage() {
                             }
                           }}
                           onMouseEnter={(e) => {
-                            e.currentTarget.style.color = "rgba(0, 0, 0, 0.85)";
+                            e.currentTarget.style.color =
+                              "hsl(var(--foreground) / 0.85)";
                           }}
                           onMouseLeave={(e) => {
-                            e.currentTarget.style.color = "rgba(0, 0, 0, 0.35)";
+                            e.currentTarget.style.color =
+                              "hsl(var(--foreground) / 0.35)";
                           }}
-                          title="open in default app"
-                          aria-label="open in default app"
+                          title={ui("Open in default app")}
+                          aria-label={ui("Open in default app")}
                           style={{
                             marginLeft: "3px",
                             padding: "0 3px",
                             background: "transparent",
                             border: "none",
-                            color: "rgba(0, 0, 0, 0.35)",
+                            color: "hsl(var(--foreground) / 0.35)",
                             fontSize: "10px",
                             lineHeight: "1",
                             cursor: "pointer",
@@ -661,7 +668,7 @@ export default function NotificationPanelPage() {
         </div>
 
         {/* Actions */}
-        {payload.actions.length > 0 && (
+        {visibleActions.length > 0 && (
           <div
             style={{
               display: "flex",
@@ -676,37 +683,37 @@ export default function NotificationPanelPage() {
               <span
                 style={{
                   fontSize: "10px",
-                  color: "rgba(0, 0, 0, 0.5)",
+                  color: "hsl(var(--foreground) / 0.5)",
                   fontFamily: '"IBM Plex Mono", monospace',
                   fontWeight: 500,
                 }}
               >
-                restarting...
+                Restarting...
               </span>
             ) : restartState === "success" ? (
               <span
                 style={{
                   fontSize: "10px",
-                  color: "rgba(0, 0, 0, 0.7)",
+                  color: "hsl(var(--foreground) / 0.7)",
                   fontFamily: '"IBM Plex Mono", monospace',
                   fontWeight: 500,
                 }}
               >
-                restarted successfully
+                Restarted successfully
               </span>
             ) : restartState === "error" ? (
               <span
                 style={{
                   fontSize: "10px",
-                  color: "rgba(0, 0, 0, 0.7)",
+                  color: "hsl(var(--foreground) / 0.7)",
                   fontFamily: '"IBM Plex Mono", monospace',
                   fontWeight: 500,
                 }}
               >
-                restart failed{restartError ? `: ${restartError}` : ""}
+                Restart failed{restartError ? `: ${restartError}` : ""}
               </span>
             ) : (
-              payload.actions.map((action, index) => {
+              visibleActions.map((action, index) => {
                 const actionLabel =
                   action.label ||
                   (action.type === "copy"
@@ -717,7 +724,7 @@ export default function NotificationPanelPage() {
                   (action.type === "source" ? "source" : undefined) ||
                   action.action ||
                   action.type ||
-                  "action";
+                  "Action";
                 return (
                   <NotificationActionButton
                     key={action.id || action.action || action.type || index}
@@ -726,7 +733,7 @@ export default function NotificationPanelPage() {
                     }
                     label={actionLabel}
                     primary={action.primary}
-                    shareAvailableWidth={payload.actions.length > 1}
+                    shareAvailableWidth={visibleActions.length > 1}
                   />
                 );
               })
@@ -734,115 +741,145 @@ export default function NotificationPanelPage() {
           </div>
         )}
 
-        <NotificationFeedback key={payload.id} notification={payload} />
+        {feedbackExpanded && (
+          <NotificationFeedback
+            key={payload.id}
+            notification={payload}
+            revealOnHover={false}
+          />
+        )}
 
-        {/* Popup utility footer */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            padding: "4px 14px 8px 14px",
-            gap: "12px",
-            borderTop: "1px solid rgba(0, 0, 0, 0.06)",
-          }}
-        >
-          <button
-            onClick={copyNotification}
-            title="copy notification"
+        {/* Utilities appear on request, without changing the layout on hover. */}
+        {optionsExpanded && (
+          <div
             style={{
-              display: "inline-flex",
+              display: "flex",
               alignItems: "center",
-              gap: "4px",
-              padding: "8px 16px",
-              border: "none",
-              background: "none",
-              flexShrink: 0,
-              fontSize: "9px",
-              lineHeight: 1,
-              color: "rgba(0, 0, 0, 0.3)",
-              cursor: "pointer",
-              fontFamily: '"IBM Plex Mono", monospace',
-              whiteSpace: "nowrap",
+              padding: "4px 14px 8px 14px",
+              gap: "8px",
+              borderTop: "1px solid hsl(var(--foreground) / 0.06)",
             }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.color = "rgba(0, 0, 0, 0.6)")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.color = "rgba(0, 0, 0, 0.3)")
-            }
           >
-            {copied ? (
-              <Check size={12} strokeWidth={1.8} />
-            ) : (
-              <Copy size={12} strokeWidth={1.8} />
-            )}
-          </button>
-          {payload.source_url && (
             <button
-              onClick={openSource}
-              title="open source chat"
+              onClick={copyNotification}
+              title={ui("Copy notification")}
+              aria-label={copied ? ui("Copied notification") : ui("Copy notification")}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
                 gap: "4px",
-                padding: "8px 16px",
+                padding: "4px",
                 border: "none",
                 background: "none",
                 flexShrink: 0,
                 fontSize: "9px",
                 lineHeight: 1,
-                color: "rgba(0, 0, 0, 0.3)",
+                color: "hsl(var(--foreground) / 0.3)",
                 cursor: "pointer",
                 fontFamily: '"IBM Plex Mono", monospace',
                 whiteSpace: "nowrap",
               }}
               onMouseEnter={(e) =>
-                (e.currentTarget.style.color = "rgba(0, 0, 0, 0.6)")
+                (e.currentTarget.style.color = "hsl(var(--foreground) / 0.6)")
               }
               onMouseLeave={(e) =>
-                (e.currentTarget.style.color = "rgba(0, 0, 0, 0.3)")
+                (e.currentTarget.style.color = "hsl(var(--foreground) / 0.3)")
               }
             >
-              <ExternalLink size={12} strokeWidth={1.8} />
-              source
+              {copied ? (
+                <Check size={12} strokeWidth={1.8} />
+              ) : (
+                <Copy size={12} strokeWidth={1.8} />
+              )}
+              {copied ? ui("copied") : ui("copy")}
             </button>
-          )}
-          <button
-            onClick={async () => {
-              await hide("manage");
-              await emit("navigate", { url: "/home?section=notifications" });
-              try {
-                await commands.showWindow({ Home: { page: null } });
-              } catch {}
-            }}
-            title="manage notification settings"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "4px",
-              marginLeft: "auto",
-              padding: "8px 16px",
-              border: "none",
-              background: "none",
-              flexShrink: 0,
-              fontSize: "9px",
-              lineHeight: 1,
-              color: "rgba(0, 0, 0, 0.3)",
-              cursor: "pointer",
-              fontFamily: '"IBM Plex Mono", monospace',
-              whiteSpace: "nowrap",
-            }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.color = "rgba(0, 0, 0, 0.6)")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.color = "rgba(0, 0, 0, 0.3)")
-            }
-          >
-            <Bell size={12} strokeWidth={1.8} />
-            manage
-          </button>
-        </div>
+            {payload.source_url && (
+              <button
+                onClick={openSource}
+                title={ui("Open source chat")}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  padding: "4px",
+                  border: "none",
+                  background: "none",
+                  flexShrink: 0,
+                  fontSize: "9px",
+                  lineHeight: 1,
+                  color: "hsl(var(--foreground) / 0.3)",
+                  cursor: "pointer",
+                  fontFamily: '"IBM Plex Mono", monospace',
+                  whiteSpace: "nowrap",
+                }}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.color = "hsl(var(--foreground) / 0.6)")
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.color = "hsl(var(--foreground) / 0.3)")
+                }
+              >
+                <ExternalLink size={12} strokeWidth={1.8} />
+                Source
+              </button>
+            )}
+            {isNotificationFeedbackEligible(payload) && (
+              <button
+                type="button"
+                aria-expanded={feedbackExpanded}
+                onClick={() => setFeedbackExpanded((expanded) => !expanded)}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  padding: "4px",
+                  border: "none",
+                  background: "none",
+                  color: "hsl(var(--muted-foreground))",
+                  cursor: "pointer",
+                  fontSize: "9px",
+                }}
+              >
+                <MessageSquare size={12} /> Feedback
+              </button>
+            )}
+            <button
+              onClick={async () => {
+                await hide("manage");
+                await emit("navigate", { url: "/home?section=notifications" });
+                try {
+                  await commands.showWindow({ Home: { page: null } });
+                } catch {}
+              }}
+              title={ui("Manage notification settings")}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "4px",
+                marginLeft: "auto",
+                padding: "4px",
+                border: "none",
+                background: "none",
+                flexShrink: 0,
+                fontSize: "9px",
+                lineHeight: 1,
+                color: "hsl(var(--foreground) / 0.3)",
+                cursor: "pointer",
+                fontFamily: '"IBM Plex Mono", monospace',
+                whiteSpace: "nowrap",
+              }}
+              onMouseEnter={(e) =>
+                (e.currentTarget.style.color = "hsl(var(--foreground) / 0.6)")
+              }
+              onMouseLeave={(e) =>
+                (e.currentTarget.style.color = "hsl(var(--foreground) / 0.3)")
+              }
+            >
+              <Bell size={12} strokeWidth={1.8} />
+              Manage
+            </button>
+          </div>
+        )}
 
         {/* Progress bar */}
         <div
@@ -852,14 +889,14 @@ export default function NotificationPanelPage() {
             left: 0,
             right: 0,
             height: "2px",
-            background: "rgba(0, 0, 0, 0.05)",
+            background: "hsl(var(--foreground) / 0.05)",
           }}
         >
           <div
             style={{
               height: "100%",
               width: `${progress}%`,
-              background: "rgba(0, 0, 0, 0.2)",
+              background: "hsl(var(--foreground) / 0.2)",
               transition: "width 50ms linear",
             }}
           />

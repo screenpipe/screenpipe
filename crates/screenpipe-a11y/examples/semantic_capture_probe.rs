@@ -18,21 +18,19 @@
 //!
 //! Usage:
 //!   cargo run -p screenpipe-a11y --example semantic_capture_probe -- \
-//!       [--delay-secs 5] [--samples 1] [--interval-ms 1500]
+//!       [--delay-secs 5] [--samples 1] [--interval-ms 1500] [--semantic-off]
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn main() {
     probe::run();
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn main() {
-    // The walker itself is cross-platform, but the probe's foreground-focus
-    // driver is Windows-only today.
-    eprintln!("semantic_capture_probe currently targets Windows");
+    eprintln!("semantic_capture_probe currently targets Windows and macOS");
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 mod probe {
     use screenpipe_a11y::tree::{
         create_tree_walker, AccessibilityTreeNode, TreeSnapshot, TreeWalkResult, TreeWalkerConfig,
@@ -51,12 +49,13 @@ mod probe {
         let delay_secs = opt("--delay-secs").unwrap_or(5);
         let samples = opt("--samples").unwrap_or(1).max(1);
         let interval_ms = opt("--interval-ms").unwrap_or(1500);
+        let capture_semantic_structure = !args.iter().any(|arg| arg == "--semantic-off");
 
         std::thread::sleep(Duration::from_secs(delay_secs));
 
         let walker = create_tree_walker(TreeWalkerConfig {
             capture_app_identity: true,
-            capture_semantic_structure: true,
+            capture_semantic_structure,
             ..Default::default()
         });
 
@@ -80,8 +79,14 @@ mod probe {
                 .map(|since| since.as_millis() as i64)
                 .unwrap_or_default(),
             "content_hash": snapshot.content_hash,
+            "capture": {
+                "truncated": snapshot.truncated,
+                "truncation_reason": format!("{:?}", snapshot.truncation_reason),
+                "node_count": snapshot.node_count,
+                "walk_duration_ms": snapshot.walk_duration.as_millis(),
+            },
             "app": {
-                "platform": "windows",
+                "platform": std::env::consts::OS,
                 "app_id": snapshot.app_id,
                 "executable": snapshot.executable,
                 "display_name": snapshot.app_name,
@@ -116,6 +121,9 @@ mod probe {
             node.bounds.as_ref().map(|b| json!(b)),
         );
         insert_some(&mut object, "on_screen", node.on_screen.map(Value::from));
+        if node.semantic_offscreen {
+            object.insert("offscreen_geometry".into(), Value::Bool(true));
+        }
         insert_some(
             &mut object,
             "automation_id",

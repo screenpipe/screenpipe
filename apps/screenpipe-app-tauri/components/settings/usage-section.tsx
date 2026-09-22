@@ -9,7 +9,7 @@ import type { SettingsField } from "./settings-search";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Usage stats", keywords: ["stats", "activity", "analytics", "metrics", "ai", "allowance", "quota", "percent"] },
+  { label: msg("Usage stats", {}), keywords: ["stats", "activity", "analytics", "metrics", "ai", "allowance", "quota", "percent"] },
 ];
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -25,6 +25,10 @@ import {
   type UsageStatusQuery,
   useUsageStatusQuery,
 } from "@/lib/hooks/use-usage-status";
+import { useGT } from "gt-react";
+import { msg } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 type TimeRange = "day" | "week" | "month" | "all";
 
@@ -146,6 +150,8 @@ function getTimeSince(range: TimeRange): number | undefined {
 }
 
 export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
+
+  const ui = useGT();
   const hosted = query.usage?.hosted_ai;
   const allowances = hosted?.allowances;
 
@@ -166,13 +172,13 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
       <Card>
         <CardContent className="flex items-center justify-between gap-4 pt-6">
           <div>
-            <h2 className="text-sm font-medium lowercase">usage unavailable</h2>
+            <h2 className="text-sm font-medium normal-case">Usage unavailable</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              no balance was assumed. try refreshing.
+              No balance was assumed. Try refreshing.
             </p>
           </div>
           <Button type="button" variant="outline" size="sm" onClick={query.refresh}>
-            refresh
+            Refresh
           </Button>
         </CardContent>
       </Card>
@@ -188,16 +194,16 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
       <Card data-testid="hosted-usage-limits">
         <CardContent className="flex items-center justify-between gap-4 pt-6">
           <div>
-            <h2 className="text-sm font-medium lowercase">usage unavailable</h2>
+            <h2 className="text-sm font-medium normal-case">Usage unavailable</h2>
             <p className="mt-1 text-xs text-muted-foreground">
               {hosted.plan === "unknown"
-                ? "sign in to view your usage limits."
-                : "no balance was assumed. try refreshing."}
+                ? ui("Sign in to view your usage limits.")
+                : ui("No balance was assumed. Try refreshing.")}
             </p>
           </div>
           {hosted.plan !== "unknown" && (
             <Button type="button" variant="outline" size="sm" onClick={query.refresh}>
-              refresh
+              Refresh
             </Button>
           )}
         </CardContent>
@@ -218,9 +224,9 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
       <CardContent className="space-y-5 pt-6">
         <div className="flex items-baseline justify-between gap-4 border-b border-border pb-4">
           <div>
-            <h2 className="text-base font-medium lowercase">your usage limits</h2>
+            <h2 className="text-base font-medium normal-case">Your usage limits</h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              each listed allowance applies independently.
+              Each listed allowance applies independently.
             </p>
           </div>
           {plan && (
@@ -241,13 +247,13 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
 
         <div className="flex items-center justify-between border-t border-border pt-4 text-[11px] text-muted-foreground">
           <span className="font-mono">
-            {updatedAt ? `last updated ${updatedAt}` : "last updated unavailable"}
+            {updatedAt ? ui("Last updated {value1}", { value1: updatedAt }) : ui("Last updated unavailable")}
           </span>
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            className="h-7 gap-1.5 rounded-none px-2 text-xs"
+            className="h-7 gap-1.5 rounded-md px-2 text-xs"
             disabled={query.isRefreshing}
             onClick={query.refresh}
           >
@@ -255,7 +261,7 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
               className={`h-3.5 w-3.5 ${query.isRefreshing ? "animate-spin" : ""}`}
               aria-hidden
             />
-            refresh
+            Refresh
           </Button>
         </div>
 
@@ -266,7 +272,7 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
             rel="noopener noreferrer"
             className="inline-block text-xs underline underline-offset-4 hover:text-foreground"
           >
-            upgrade to {quotaPlanLabel(hosted.upgrade.requiredPlan) ?? "a higher plan"}
+            Upgrade to {quotaPlanLabel(hosted.upgrade.requiredPlan) ?? ui("a higher plan")}
           </a>
         )}
       </CardContent>
@@ -275,6 +281,8 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
 }
 
 export function UsageSection() {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
   const hostedUsageQuery = useUsageStatusQuery();
   const [entries, setEntries] = useState<UsageEntry[]>([]);
   const [totalChats, setTotalChats] = useState(0);
@@ -440,11 +448,11 @@ export function UsageSection() {
     const d = new Date(ts);
     const now = new Date();
     const diff = now.getTime() - d.getTime();
-    if (diff < 60000) return "just now";
+    if (diff < 60000) return "Just now";
     if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
     if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
     if (diff < 604800000) return `${Math.floor(diff / 86400000)}d ago`;
-    return d.toLocaleDateString();
+    return d.toLocaleDateString(uiLocale);
   };
 
   const providerLabel = (p: string) => {
@@ -479,7 +487,7 @@ export function UsageSection() {
     { value: "day", label: "24h" },
     { value: "week", label: "7d" },
     { value: "month", label: "30d" },
-    { value: "all", label: "all" },
+    { value: "all", label: ui("All") },
   ];
 
   if (loading) {
@@ -525,9 +533,9 @@ export function UsageSection() {
       <HostedUsageLimits query={hostedUsageQuery} />
 
       <div className="border-t border-border pt-6">
-        <h2 className="text-base font-medium lowercase">activity</h2>
+        <h2 className="text-base font-medium normal-case">Activity</h2>
         <p className="mt-1 text-xs text-muted-foreground">
-          local conversations and scheduled runs. these do not determine your allowance.
+          Local conversations and scheduled runs. These do not determine your allowance.
         </p>
       </div>
 
@@ -574,8 +582,8 @@ export function UsageSection() {
         <div className="rounded-lg border border-dashed p-6 text-center">
           <p className="text-sm text-muted-foreground">
             {timeRange === "all"
-              ? "No model data yet — tracking starts from your next conversation"
-              : `No usage in the last ${timeRange === "day" ? "24 hours" : timeRange === "week" ? "7 days" : "30 days"}`}
+              ? ui("No model data yet — tracking starts from your next conversation")
+              : ui("No usage in the last {value1}", { value1: timeRange === "day" ? "24 hours" : timeRange === "week" ? "7 days" : "30 days" })}
           </p>
           {timeRange === "all" && untrackedMessages > 0 && (
             <p className="text-xs text-muted-foreground mt-2">

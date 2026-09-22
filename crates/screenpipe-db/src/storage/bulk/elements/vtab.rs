@@ -111,9 +111,16 @@ struct RowSql {
 static ROW_SQL: LazyLock<RowSql> = LazyLock::new(|| {
     let columns = names();
     let projection = format!("id,_archive_generation,{columns},_archive_deleted");
+    // Preserve the tombstone's generation when an ID is deleted and reused.
+    // An encoder holding the old generation must never accept the new row.
+    let updates = format!("_archive_deleted,_archive_file,{columns}")
+        .split(',')
+        .map(|column| format!("{column}=excluded.{column}"))
+        .collect::<Vec<_>>()
+        .join(",");
     RowSql {
         lookup: format!("SELECT {projection} FROM _bulk_element_rows WHERE id=?"),
-        upsert: format!("INSERT OR REPLACE INTO _bulk_element_rows(id,_archive_generation,_archive_deleted,_archive_file,{columns}) VALUES({})", vec!["?";TABLE.columns.len()+4].join(",")),
+        upsert: format!("INSERT INTO _bulk_element_rows(id,_archive_generation,_archive_deleted,_archive_file,{columns}) VALUES({}) ON CONFLICT(id) DO UPDATE SET _archive_generation=max(_bulk_element_rows._archive_generation+1,excluded._archive_generation),{updates}", vec!["?";TABLE.columns.len()+4].join(",")),
         resident: format!("SELECT COALESCE((SELECT {} FROM _bulk_element_rows WHERE id=?),0)", TABLE.all_bytes("")),
         projection,
     }
@@ -255,6 +262,7 @@ unsafe impl<'v> VTab<'v> for Elements {
             pending: VecDeque::new(),
             pending_sql: String::new(),
             pending_args: Vec::new(),
+            pending_seek_args: Vec::new(),
             pending_after: None,
             pending_done: false,
             descending: false,
@@ -322,9 +330,6 @@ impl Elements {
                 if new.values[index] == Value::Null {
                     return Err(constraint("required element column is NULL"));
                 }
-            }
-            if new.bytes() > self.storage.descriptor.budget.record_bytes {
-                return Err(constraint("element record budget exceeded"));
             }
             let Value::Integer(frame) = new.values[0] else {
                 return Err(constraint("invalid element frame"));
@@ -536,6 +541,7 @@ struct Cursor {
     pending: VecDeque<(Record, bool)>,
     pending_sql: String,
     pending_args: Vec<SqlValue>,
+    pending_seek_args: Vec<usize>,
     pending_after: Option<i64>,
     pending_done: bool,
     descending: bool,
@@ -563,6 +569,13 @@ impl Cursor {
         });
         let mut args = self.pending_args.clone();
         if let Some(id) = self.pending_after {
+            // This row already satisfied every bound in the scan direction.
+            // Advance those bounds too: SQLite may seek using an original
+            // >=/<= parameter instead of the appended strict cursor predicate,
+            // otherwise rescanning the growing prefix on every 128-row page.
+            for &index in &self.pending_seek_args {
+                args[index] = SqlValue::Integer(id);
+            }
             args.push(SqlValue::Integer(id));
         }
         let sql = format!(
@@ -712,6 +725,7 @@ unsafe impl VTabCursor for Cursor {
         self.pending.clear();
         self.pending_after = None;
         self.pending_done = false;
+        self.pending_seek_args.clear();
         self.files_after = None;
         self.files_done = false;
         self.archive = None;
@@ -764,6 +778,12 @@ unsafe impl VTabCursor for Cursor {
                 range_args.push(value.clone());
             } else if matches!(op, ">" | ">=") {
                 range_args.extend([value.clone(), value.clone()]);
+            }
+            if matches!(
+                (self.descending, op),
+                (false, ">" | ">=") | (true, "<" | "<=")
+            ) {
+                self.pending_seek_args.push(pending_args.len());
             }
             pending.push(format!("id{op}?"));
             pending_args.push(value);
@@ -825,10 +845,17 @@ unsafe impl VTabCursor for Cursor {
                     _ => (),
                 }
                 let (path, hash) = self.archive_location.as_ref().unwrap();
-                full = self
-                    .storage
-                    .bulk_frame_records(path, hash, row.frame, archive)
-                    .map_err(|_| failure("element archive unavailable"))?;
+                // A history scan visits many frames in the same file. Decode
+                // that bounded file once instead of decompressing its pages
+                // again for each frame. Point/frame reads keep their selective
+                // projection; metadata-only scans still use the index above.
+                full = if self.frame.is_some() || self.lower == self.upper {
+                    self.storage
+                        .bulk_frame_records(path, hash, row.frame, archive)
+                } else {
+                    self.storage.bulk_records(path, hash, 0)
+                }
+                .map_err(|_| failure("element archive unavailable"))?;
                 let position = full
                     .binary_search_by_key(&row.id, |r| r.id)
                     .map_err(|_| failure("element row is absent"))?;

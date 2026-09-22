@@ -15,6 +15,17 @@ import {
 // is the privacy-critical one — same bug class as the audio fix (#4586).
 
 describe("computeManagedSettingUpdates", () => {
+  it("ignores the retired structured context toggle in managed settings", () => {
+    const current = { enableSemanticContext: true };
+    const managed = { enableSemanticContext: "false" };
+    expect(computeManagedSettingUpdates(managed, current).engineUpdates)
+      .not.toHaveProperty("enableSemanticContext");
+    expect(applyManagedOverrides(current, managed).enableSemanticContext).toBe(true);
+    expect(applyManagedOverrides(
+      { enableSemanticContext: false }, { enableSemanticContext: true },
+    ).enableSemanticContext).toBe(false);
+  });
+
   it("enforces disableVision (Screen recording: Always off) and flags an engine restart", () => {
     const r = computeManagedSettingUpdates({ disableVision: "true" }, { disableVision: false });
     expect(r.engineUpdates.disableVision).toBe(true);

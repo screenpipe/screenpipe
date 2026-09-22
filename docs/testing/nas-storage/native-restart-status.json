@@ -1,0 +1,42 @@
+[
+  {
+    "bytes_saved": null,
+    "total_records": null,
+    "elapsed_seconds": 0,
+    "root": null,
+    "recovering": false,
+    "completed_records": null,
+    "message": "",
+    "busy": false,
+    "available_bytes": null,
+    "error": null,
+    "completed": false
+  },
+  {
+    "can_cancel": false,
+    "message": "",
+    "generation": "d9ae4f35-2564-4f49-a825-0a7fdeb20bfc",
+    "can_delete_source": false,
+    "busy": false,
+    "error": null,
+    "completed": true,
+    "using_new_storage": true,
+    "in_place": true,
+    "pending": false,
+    "app_session_id": "46996774-24c4-4ae9-9d89-448f43eb5850",
+    "source_bytes": 0,
+    "blocked_reason": null,
+    "root": "/Volumes/ScreenpipeApp/Mac Mini",
+    "available_bytes": 31886065664,
+    "bytes_saved": 0,
+    "can_migrate": false,
+    "migrated_bytes": 6944768
+  },
+  {
+    "phase": "ready",
+    "message": null,
+    "sinceEpochSecs": 1789713173,
+    "error": null,
+    "cpuCompatMode": false
+  }
+]

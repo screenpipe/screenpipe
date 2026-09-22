@@ -70,7 +70,10 @@ vi.mock("@/components/rewind/timeline/daily-summary", () => ({
 }));
 
 vi.mock("@/lib/chat-utils", () => ({ showChatWithPrefill: vi.fn() }));
-vi.mock("@/components/ui/use-toast", () => ({ toast: vi.fn() }));
+vi.mock("@/components/ui/use-toast", () => ({
+  toast: vi.fn(),
+  useToast: () => ({ toast: vi.fn() }),
+}));
 
 import { NativeTimeline, NativeTimelineBridge } from "./native-timeline";
 import { StorageMigrationGate } from "../storage-migration-gate";

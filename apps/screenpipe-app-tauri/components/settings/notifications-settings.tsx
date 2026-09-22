@@ -26,11 +26,15 @@ import {
 } from "./notification-registry";
 import { NotificationPipeControls } from "./notification-pipe-controls";
 import { NotificationPauseControl } from "./notification-pause-control";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 const PRESETS: { kind: CategoryPreset; label: string }[] = [
-  { kind: "recommended", label: "recommended" },
-  { kind: "all", label: "everything" },
-  { kind: "none", label: "nothing" },
+  { kind: "recommended", label: msg("Recommended", {}) },
+  { kind: "all", label: msg("Everything", {}) },
+  { kind: "none", label: msg("Nothing", {}) },
 ];
 
 /**
@@ -40,15 +44,15 @@ const PRESETS: { kind: CategoryPreset; label: string }[] = [
  */
 export const searchIndex: SettingsField[] = [
   {
-    label: "Notifications",
+    label: msg("Notifications", {}),
     keywords: ["mute all", "do not disturb", "dnd", "silence", "pause", "snooze"],
   },
   {
-    label: "Quiet hours",
+    label: msg("Quiet hours", {}),
     keywords: ["schedule", "night", "sleep", "focus", "dnd", "do not disturb"],
   },
   {
-    label: "Reset to defaults",
+    label: msg("Reset to defaults", {}),
     keywords: ["presets", "recommended", "everything", "nothing", "reset"],
   },
   ...NOTIFICATION_CATEGORIES.map((c) => ({
@@ -56,7 +60,7 @@ export const searchIndex: SettingsField[] = [
     keywords: c.keywords,
   })),
   {
-    label: "Per-task notifications",
+    label: msg("Per-task notifications", {}),
     keywords: ["pipe", "mute pipe", "per pipe", "individual pipe"],
     conditional: true,
   },
@@ -77,6 +81,9 @@ function matchesQuery(category: NotificationCategory, q: string): boolean {
 }
 
 export function NotificationsSettings() {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const { settings, updateSettings } = useSettings();
   const [query, setQuery] = React.useState("");
   const [pipesExpanded, setPipesExpanded] = React.useState(false);
@@ -133,9 +140,9 @@ export function NotificationsSettings() {
   const q = query.trim().toLowerCase();
 
   // Groups that still have at least one matching category under the active filter.
-  const visibleGroups = NOTIFICATION_GROUPS.map((group) => ({
+  const visibleGroups = localizeDefinitions(NOTIFICATION_GROUPS, uiMessages).map((group) => ({
     group,
-    categories: categoriesForGroup(group.id).filter((c) => matchesQuery(c, q)),
+    categories: localizeDefinitions(categoriesForGroup(group.id), uiMessages).filter((c) => matchesQuery(c, q)),
   })).filter((g) => g.categories.length > 0);
 
   return (
@@ -168,8 +175,8 @@ export function NotificationsSettings() {
 
       {/* Quick presets + reset, then the in-section filter */}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[11px] text-muted-foreground">quick set:</span>
-        {PRESETS.map((p) => (
+        <span className="text-[11px] text-muted-foreground">Quick set:</span>
+        {localizeDefinitions(PRESETS, uiMessages).map((p) => (
           <button
             key={p.kind}
             type="button"
@@ -186,7 +193,7 @@ export function NotificationsSettings() {
           onClick={resetToDefaults}
           className="ml-auto text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
         >
-          reset to defaults
+          Reset to defaults
         </button>
       </div>
 
@@ -196,8 +203,8 @@ export function NotificationsSettings() {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="search notifications"
-          aria-label="search notifications"
+          placeholder={ui("Search notifications")}
+          aria-label={ui("Search notifications")}
           data-testid="notification-search"
           className="w-full border border-border bg-transparent py-2 pl-8 pr-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-foreground/30"
         />
@@ -211,14 +218,14 @@ export function NotificationsSettings() {
           return (
           <div key={group.id} className="space-y-1">
             <div className="mb-1 flex items-center justify-between gap-3">
-              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              <p className="text-[11px] font-medium normal-case tracking-wider text-muted-foreground">
                 {group.label}
               </p>
               {/* Bulk toggle only makes sense for the full (unfiltered) group */}
               {!q && (
                 <Switch
                   data-testid={`notification-group-${group.id}`}
-                  aria-label={`toggle all ${group.label}`}
+                  aria-label={ui("Toggle all {value1}", { value1: group.label })}
                   checked={gstate === "all"}
                   onCheckedChange={(v) =>
                     writeCategoryPatch(
@@ -263,7 +270,7 @@ export function NotificationsSettings() {
                           pipesExpanded && "rotate-90"
                         )}
                       />
-                      customize per task
+                      Customize per task
                       {mutedPipes.length > 0 && (
                         <span className="ml-1 text-muted-foreground/70">
                           ({mutedPipes.length} muted)
@@ -293,7 +300,7 @@ export function NotificationsSettings() {
 
         {visibleGroups.length === 0 && (
           <p className="py-6 text-center text-xs text-muted-foreground">
-            no notifications match &quot;{query}&quot;
+            No notifications match &quot;{query}&quot;
           </p>
         )}
       </div>
@@ -328,7 +335,7 @@ function CategoryRow({
             {category.label}
             {category.experimental && (
               <span className="ml-1.5 text-[10px] font-normal text-muted-foreground/70">
-                experimental
+                Experimental
               </span>
             )}
           </p>

@@ -85,7 +85,7 @@ public func notifSetActionCallback(_ cb: @escaping ActionCallback) {
 
 // MARK: - Brand constants
 // screenpipe brand: black & white geometric minimalism
-// 0px border radius, no shadows, 1px borders, IBM Plex Mono
+// Rounded floating surfaces, quiet borders, IBM Plex Mono
 
 private enum Brand {
     // Try to load IBM Plex Mono, fall back to system monospaced
@@ -130,9 +130,10 @@ private enum Brand {
 
 // MARK: - SwiftUI Views
 
-/// Button with brand-compliant hover: color inversion, sharp corners, 1px border
+/// Compact action with restrained neutral hover and rounded control geometry.
 @available(macOS 13.0, *)
 struct BrandButton: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let label: String
     let isPrimary: Bool
     let fillsAvailableWidth: Bool
@@ -173,20 +174,20 @@ struct BrandButton: View {
                     }
                 )
                 .padding(.horizontal, 10)
-                .padding(.vertical, 4)
+                .padding(.vertical, 6)
         }
         .buttonStyle(.plain)
         .frame(maxWidth: fillsAvailableWidth ? .infinity : nil)
-        .foregroundColor(isHovered ? Color(nsColor: .windowBackgroundColor) : .primary.opacity(0.75))
+        .foregroundColor(isPrimary ? Color(nsColor: .windowBackgroundColor) : .primary.opacity(0.8))
         .background(
-            Rectangle()
-                .fill(isHovered ? Color.primary : (isPrimary ? Color.primary.opacity(0.06) : Color.clear))
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isPrimary ? Color.primary.opacity(isHovered ? 0.75 : 0.88) : Color.primary.opacity(isHovered ? 0.08 : 0.04))
         )
         .overlay(
-            Rectangle()
+            RoundedRectangle(cornerRadius: 6)
                 .stroke(Color.primary.opacity(0.12), lineWidth: 1)
         )
-        .contentShape(Rectangle())
+        .contentShape(RoundedRectangle(cornerRadius: 6))
         .accessibilityLabel(Text(label))
         .onChange(of: availableLabelWidth) { _ in
             onTruncatedHoverChange(isHovered && isLabelTruncated)
@@ -205,6 +206,7 @@ struct BrandButton: View {
 /// non-activating NSPanel windows.
 @available(macOS 13.0, *)
 private struct ActionLabelTooltip: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let label: String
 
     var body: some View {
@@ -233,6 +235,7 @@ private struct ActionLabelTooltip: View {
 /// Subtle text link with brand hover (color inversion on text)
 @available(macOS 13.0, *)
 struct BrandTextButton: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let label: String
     let fontSize: CGFloat
     let action: () -> Void
@@ -256,6 +259,7 @@ struct BrandTextButton: View {
 
 @available(macOS 13.0, *)
 struct BrandIconTextButton: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let systemName: String
     let label: String
     let help: String
@@ -270,14 +274,15 @@ struct BrandIconTextButton: View {
                 Text(label)
                     .font(Brand.swiftUIMonoFont(size: 9, weight: .regular))
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .foregroundColor(isHovered ? .primary.opacity(0.75) : .primary.opacity(0.34))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 4)
+            .foregroundColor(isHovered ? .primary.opacity(0.75) : .primary.opacity(0.6))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
         .help(help)
+        .accessibilityLabel(help)
         .onHover { hovering in
             withAnimation(.linear(duration: Brand.animDuration)) {
                 isHovered = hovering
@@ -303,10 +308,14 @@ enum NotificationFeedbackSaveState {
 @available(macOS 13.0, *)
 final class NotificationFeedbackModel: ObservableObject {
     @Published var rating: NotificationFeedbackRating?
+    @Published var optionsExpanded = false
+    @Published var feedbackExpanded = false
     @Published var correction = ""
     @Published var saveState: NotificationFeedbackSaveState = .idle
 
     func reset() {
+        optionsExpanded = false
+        feedbackExpanded = false
         rating = nil
         correction = ""
         saveState = .idle
@@ -315,6 +324,7 @@ final class NotificationFeedbackModel: ObservableObject {
 
 @available(macOS 13.0, *)
 private struct NativeNotificationFeedbackView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: NotificationFeedbackModel
     let onSubmit: (String, String?) -> Void
     let onLayoutChange: () -> Void
@@ -326,7 +336,7 @@ private struct NativeNotificationFeedbackView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if model.saveState == .submitted {
-                Text("feedback sent")
+                Text(uiText("feedback sent"))
                     .font(Brand.swiftUIMonoFont(size: 9))
                     .foregroundColor(.primary.opacity(0.4))
             } else {
@@ -350,13 +360,13 @@ private struct NativeNotificationFeedbackView: View {
 
                 if model.rating == .down {
                     HStack(spacing: 6) {
-                        TextField("what should improve?", text: $model.correction)
+                        TextField(uiText("what should improve?"), text: $model.correction)
                             .textFieldStyle(.plain)
                             .font(Brand.swiftUIMonoFont(size: 10))
                             .padding(.horizontal, 8)
                             .frame(height: 28)
                             .background(Color(nsColor: .windowBackgroundColor).opacity(0.45))
-                            .overlay(Rectangle().stroke(Color.primary.opacity(0.16), lineWidth: 1))
+                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.primary.opacity(0.16), lineWidth: 1))
                             .onSubmit(sendCorrection)
                             .onChange(of: model.correction) { value in
                                 if value.count > 500 {
@@ -369,13 +379,13 @@ private struct NativeNotificationFeedbackView: View {
                                 .font(.system(size: 11, weight: .regular))
                                 .frame(width: 28, height: 28)
                                 .foregroundColor(correctionReady ? Color(nsColor: .windowBackgroundColor) : .primary.opacity(0.22))
-                                .background(Rectangle().fill(correctionReady ? Color.primary.opacity(0.82) : Color.clear))
-                                .overlay(Rectangle().stroke(Color.primary.opacity(0.16), lineWidth: 1))
+                                .background(RoundedRectangle(cornerRadius: 4).fill(correctionReady ? Color.primary.opacity(0.82) : Color.clear))
+                                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.primary.opacity(0.16), lineWidth: 1))
                         }
                         .buttonStyle(.plain)
                         .disabled(!correctionReady)
-                        .help("send feedback")
-                        .accessibilityLabel("send feedback")
+                        .help(uiText("send feedback"))
+                        .accessibilityLabel(uiText("send feedback"))
                     }
                 }
             }
@@ -393,11 +403,11 @@ private struct NativeNotificationFeedbackView: View {
                 .font(.system(size: 9, weight: .regular))
                 .frame(width: 20, height: 20)
                 .foregroundColor(selected ? Color(nsColor: .windowBackgroundColor) : .primary.opacity(0.42))
-                .background(Rectangle().fill(selected ? Color.primary.opacity(0.82) : Color.clear))
-                .overlay(Rectangle().stroke(Color.primary.opacity(0.12), lineWidth: 1))
+                .background(RoundedRectangle(cornerRadius: 4).fill(selected ? Color.primary.opacity(0.82) : Color.clear))
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.primary.opacity(0.12), lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(rating == .up ? "useful notification" : "not useful notification")
+        .accessibilityLabel(rating == .up ? uiText("useful notification") : uiText("not useful notification"))
     }
 
     private func sendCorrection() {
@@ -416,9 +426,9 @@ private struct NativeNotificationFeedbackView: View {
 
 @available(macOS 13.0, *)
 struct NotificationContentView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let payload: NotificationPayload
     let progress: Double
-    let isHovered: Bool
     let onDismiss: () -> Void
     let onAction: (NotificationAction) -> Void
     let onOpenSource: () -> Void
@@ -428,6 +438,14 @@ struct NotificationContentView: View {
     @State private var closeHovered = false
     @State private var copied = false
     @State private var hoveredActionLabel: String?
+
+    private var visibleActions: [NotificationAction] {
+        payload.actions.filter { ($0.type ?? $0.action) != "dismiss" }
+    }
+
+    private var feedbackEligible: Bool {
+        payload.type == "pipe" || payload.pipe_name != nil || payload.source_session_id != nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -443,14 +461,31 @@ struct NotificationContentView: View {
                     .font(Brand.swiftUIMonoFont(size: 10, weight: .medium))
                     .foregroundColor(.primary.opacity(0.4))
                 Spacer()
+                Button {
+                    feedback.optionsExpanded.toggle()
+                    DispatchQueue.main.async(execute: onFeedbackLayoutChange)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.primary.opacity(0.6))
+                        .frame(width: 24, height: 24)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(
+                            Color.primary.opacity(feedback.optionsExpanded ? 0.08 : 0)
+                        ))
+                }
+                .buttonStyle(.plain)
+                .help(uiText("notification options"))
+                .accessibilityLabel(uiText("notification options"))
+                .accessibilityValue(feedback.optionsExpanded ? uiText("expanded") : uiText("collapsed"))
                 Button(action: onDismiss) {
                     Text("✕")
                         .font(Brand.swiftUIMonoFont(size: 12))
                         .foregroundColor(closeHovered ? .primary.opacity(0.9) : .primary.opacity(0.35))
-                        .frame(width: 20, height: 20)
+                        .frame(width: 24, height: 24)
                 }
                 .buttonStyle(.plain)
                 .contentShape(Rectangle())
+                .accessibilityLabel(uiText("dismiss notification"))
                 .onHover { h in
                     withAnimation(.linear(duration: Brand.animDuration)) { closeHovered = h }
                 }
@@ -471,7 +506,7 @@ struct NotificationContentView: View {
                 .contentShape(Rectangle())
                 .padding(.horizontal, 14)
                 .padding(.top, 8)
-                .help("open source chat")
+                .help(uiText("open source chat"))
             } else {
                 Text(payload.title)
                     .font(Brand.swiftUIMonoFont(size: 12, weight: .medium))
@@ -491,14 +526,14 @@ struct NotificationContentView: View {
             .frame(maxHeight: 200)
 
             // Action buttons
-            if !payload.actions.isEmpty {
+            if !visibleActions.isEmpty {
                 HStack(spacing: 8) {
-                    ForEach(Array(payload.actions.enumerated()), id: \.offset) { _, action in
+                    ForEach(Array(visibleActions.enumerated()), id: \.offset) { _, action in
                         let label = actionLabel(action)
                         BrandButton(
                             label: label,
                             isPrimary: action.primary == true,
-                            fillsAvailableWidth: payload.actions.count > 1,
+                            fillsAvailableWidth: visibleActions.count > 1,
                             action: {
                                 if action.type == "copy" {
                                     var copyAction = action
@@ -527,9 +562,6 @@ struct NotificationContentView: View {
                         )
                     }
                     Spacer()
-                    BrandTextButton(label: "DISMISS →", fontSize: 10) {
-                        onDismiss()
-                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, 6)
@@ -543,7 +575,7 @@ struct NotificationContentView: View {
                 .zIndex(1)
             }
 
-            if isHovered && (payload.type == "pipe" || payload.pipe_name != nil || payload.source_session_id != nil) {
+            if feedback.feedbackExpanded && feedbackEligible {
                 NativeNotificationFeedbackView(
                     model: feedback,
                     onSubmit: submitFeedback,
@@ -553,43 +585,46 @@ struct NotificationContentView: View {
                 .padding(.bottom, 8)
             }
 
-            // Footer: compact notification actions
-            HStack(spacing: 12) {
-                BrandIconTextButton(
-                    systemName: copied ? "checkmark" : "doc.on.doc",
-                    label: copied ? "copied" : "copy",
-                    help: "copy notification"
-                ) {
-                    copyNotificationText()
-                    sendActionPayload(["type": "copy", "value": notificationClipboardText()])
-                    copied = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
-                        copied = false
+            // Utilities appear only when explicitly requested, never on hover.
+            if feedback.optionsExpanded {
+                HStack(spacing: 8) {
+                    BrandIconTextButton(
+                        systemName: copied ? "checkmark" : "doc.on.doc",
+                        label: copied ? uiText("copied") : uiText("copy"),
+                        help: uiText("copy notification")
+                    ) {
+                        copyNotificationText()
+                        sendActionPayload(["type": "copy", "value": notificationClipboardText()])
+                        copied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+                            copied = false
+                        }
+                    }
+
+                    if payload.source_url != nil {
+                        BrandIconTextButton(systemName: "arrow.up.right.square", label: uiText("source"), help: uiText("open source chat")) {
+                            onOpenSource()
+                        }
+                    }
+
+                    if feedbackEligible {
+                        BrandIconTextButton(systemName: "bubble.left", label: uiText("feedback"), help: uiText("give feedback")) {
+                            feedback.feedbackExpanded.toggle()
+                            DispatchQueue.main.async(execute: onFeedbackLayoutChange)
+                        }
+                    }
+                    Spacer(minLength: 0)
+
+                    BrandIconTextButton(systemName: "bell", label: uiText("manage"), help: uiText("manage notification settings")) {
+                        onDismiss()
+                        // Small delay so the panel hides before the window appears
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            sendActionJson("{\"type\":\"manage\"}")
+                        }
                     }
                 }
-
-                if payload.source_url != nil {
-                    BrandIconTextButton(systemName: "arrow.up.right.square", label: "source", help: "open source chat") {
-                        onOpenSource()
-                    }
-                }
-
-                Spacer(minLength: 0)
-
-                BrandIconTextButton(systemName: "bell", label: "manage", help: "manage notification settings") {
-                    onDismiss()
-                    // Small delay so the panel hides before the window appears
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        sendActionJson("{\"type\":\"manage\"}")
-                    }
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .overlay(alignment: .top) {
-                Rectangle()
-                    .fill(Color.primary.opacity(0.06))
-                    .frame(height: 1)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
             }
 
             // Progress bar — 2px, sharp, no radius
@@ -607,7 +642,9 @@ struct NotificationContentView: View {
         .background(
             VisualEffectView()
         )
-        .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 4)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.1), lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: 16, x: 0, y: 4)
         .shadow(color: .black.opacity(0.06), radius: 3, x: 0, y: 1)
         // Override link handling — SwiftUI's default openURL doesn't work
         // in non-activating panels. screenpipe:// URLs go through the
@@ -687,15 +724,15 @@ struct NotificationContentView: View {
         }
         switch action.type {
         case "copy":
-            return copied ? "copied" : "copy"
+            return copied ? uiText("copied") : uiText("copy")
         case "source":
-            return "source"
+            return uiText("source")
         case "deeplink":
-            return "open"
+            return uiText("open")
         case "dismiss":
-            return "dismiss"
+            return uiText("dismiss")
         default:
-            return action.action ?? action.type ?? "action"
+            return action.action ?? action.type ?? uiText("action")
         }
     }
 
@@ -733,6 +770,7 @@ struct NotificationContentView: View {
 
 @available(macOS 13.0, *)
 struct MarkdownText: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let raw: String
 
     init(_ text: String) {
@@ -856,7 +894,7 @@ struct MarkdownText: View {
             // Plain character
             var attr = AttributedString(String(remaining[remaining.startIndex]))
             attr.font = Brand.swiftUIMonoFont(size: 11)
-            attr.foregroundColor = .primary.opacity(0.5)
+            attr.foregroundColor = .primary.opacity(0.7)
             textRun.append(attr)
             remaining = remaining[remaining.index(after: remaining.startIndex)...]
         }
@@ -914,6 +952,7 @@ struct MarkdownText: View {
 /// in-app viewer (e.g. Obsidian for `.md`, Preview for `.json`).
 @available(macOS 13.0, *)
 private struct ViewerOverrideButton: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let path: String
     @State private var isHovered = false
 
@@ -937,7 +976,7 @@ private struct ViewerOverrideButton: View {
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
-        .help("open in default app")
+        .help(uiText("open in default app"))
         .onHover { h in
             withAnimation(.linear(duration: Brand.animDuration)) { isHovered = h }
         }
@@ -966,6 +1005,7 @@ private func openLinkUrl(_ url: URL) {
 /// which non-activating panels don't provide. Button works without activation.
 @available(macOS 13.0, *)
 private struct LinkButton: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let label: String
     let url: URL
     @State private var isHovered = false
@@ -1056,6 +1096,7 @@ class NotificationPanelController: NSObject {
     private var autoDismissMs: Double = 20000
     private var elapsedBeforePause: Double = 0
     private var resumedAt: Date = Date()
+    private var wasTimerPaused = false
     private var isHovered: Bool = false
     private let feedbackModel = NotificationFeedbackModel()
     /// Incremented per notification so rapid-fire notifications each restart the timer
@@ -1114,28 +1155,10 @@ class NotificationPanelController: NSObject {
 
     func handleMouseEntered() {
         isHovered = true
-        // Snapshot elapsed time
-        elapsedBeforePause += Date().timeIntervalSince(resumedAt) * 1000
-        if currentPayloadUsesHoverFeedback {
-            updateContent()
-        }
     }
 
     func handleMouseExited() {
         isHovered = false
-        resumedAt = Date()
-        if currentPayloadUsesHoverFeedback {
-            updateContent()
-        }
-    }
-
-    /// Only feedback-enabled notifications change content on panel hover.
-    /// Replacing an NSHostingView root while macOS performs accessibility hit
-    /// testing can trap inside SwiftUI; ordinary action notifications must keep
-    /// a stable view tree from presentation through click handling.
-    private var currentPayloadUsesHoverFeedback: Bool {
-        guard let payload = currentPayload else { return false }
-        return payload.type == "pipe" || payload.pipe_name != nil || payload.source_session_id != nil
     }
 
     private func createPanel() {
@@ -1190,12 +1213,10 @@ class NotificationPanelController: NSObject {
     private func updateContent() {
         guard let payload = currentPayload, let panel = panel else { return }
         let prog = self.progress
-        let hovered = self.isHovered
 
         let innerView = NotificationContentView(
             payload: payload,
             progress: prog,
-            isHovered: hovered,
             onDismiss: { [weak self] in
                 self?.hide()
                 self?.sendAction("{\"type\":\"dismiss\"}")
@@ -1248,6 +1269,7 @@ class NotificationPanelController: NSObject {
 
     private func startTimer() {
         timer?.invalidate()
+        wasTimerPaused = false
         // autoDismissMs == 0 means "don't auto-dismiss" (e.g. port-conflict
         // notifications that need the user to act).
         guard autoDismissMs > 0 else { return }
@@ -1260,7 +1282,18 @@ class NotificationPanelController: NSObject {
                 self.timer = nil
                 return
             }
-            if self.isHovered { return }
+            let paused = self.isHovered || self.feedbackModel.optionsExpanded || self.feedbackModel.feedbackExpanded
+            if paused {
+                if !self.wasTimerPaused {
+                    self.elapsedBeforePause += Date().timeIntervalSince(self.resumedAt) * 1000
+                    self.wasTimerPaused = true
+                }
+                return
+            }
+            if self.wasTimerPaused {
+                self.resumedAt = Date()
+                self.wasTimerPaused = false
+            }
             let elapsed = self.elapsedBeforePause + Date().timeIntervalSince(self.resumedAt) * 1000
             let remaining = max(0, 1.0 - elapsed / self.autoDismissMs)
             // Only re-render when progress changes visibly (>0.5% delta)
@@ -1444,17 +1477,12 @@ fileprivate func inboxTimeAgo(_ ts: String?) -> String {
         date = iso.date(from: ts)
     }
     guard let d = date else { return "" }
-    let diff = Date().timeIntervalSince(d)
-    if diff < 60 { return "just now" }
-    if diff < 3600 { return "\(Int(diff / 60))m ago" }
-    if diff < 86400 { return "\(Int(diff / 3600))h ago" }
-    let df = DateFormatter()
-    df.dateStyle = .short
-    return df.string(from: d)
+    return UILocalization.shared.relativeDate(d)
 }
 
 @available(macOS 13.0, *)
 private struct InboxRowView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let entry: InboxEntry
     let isExpanded: Bool
     let onToggleExpand: () -> Void
@@ -1484,7 +1512,7 @@ private struct InboxRowView: View {
                                     .foregroundColor(.primary)
                                     .lineLimit(1)
                                 if inboxIsHighPriority(entry) {
-                                    Text("high")
+                                    Text(uiText("high"))
                                         .font(Brand.swiftUIMonoFont(size: 7, weight: .medium))
                                         .foregroundColor(.primary.opacity(0.7))
                                         .padding(.horizontal, 5)
@@ -1539,11 +1567,11 @@ private struct InboxRowView: View {
                     }
                     HStack(spacing: 6) {
                         ForEach(Array(inboxRowActions(entry).enumerated()), id: \.offset) { _, action in
-                            BrandTextButton(label: action.label ?? "action", fontSize: 9) {
+                            BrandTextButton(label: action.label ?? uiText("action"), fontSize: 9) {
                                 onRunAction(action)
                             }
                         }
-                        BrandTextButton(label: copied ? "copied" : "copy", fontSize: 9) {
+                        BrandTextButton(label: copied ? uiText("copied") : uiText("copy"), fontSize: 9) {
                             let pb = NSPasteboard.general
                             pb.clearContents()
                             pb.setString("\(entry.title)\n\n\(entry.body)", forType: .string)
@@ -1575,6 +1603,7 @@ private struct InboxRowView: View {
 
 @available(macOS 13.0, *)
 private struct InboxListView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let entries: [InboxEntry]
     let viewMode: InboxViewMode
     let expandedId: String?
@@ -1618,19 +1647,19 @@ private struct InboxListView: View {
         VStack(spacing: 0) {
             VStack(spacing: 7) {
                 HStack {
-                    Text("inbox")
+                    Text(uiText("inbox"))
                         .font(Brand.swiftUIMonoFont(size: 11, weight: .medium))
                         .foregroundColor(.primary)
                     Spacer()
                     // Clears both tabs, so it stays reachable from either one —
                     // switching to All just to empty the inbox was busywork.
                     if !entries.isEmpty {
-                        BrandTextButton(label: "clear all", fontSize: 9, action: onClearAll)
+                        BrandTextButton(label: uiText("clear all"), fontSize: 9, action: onClearAll)
                     }
                 }
                 HStack(spacing: 2) {
                     Button(action: { onViewModeChange(.priority) }) {
-                        Text("priority  \(priorityEntries.count)")
+                        Text(uiText("priority  {value1}", ["value1": String(describing: priorityEntries.count)]))
                             .font(Brand.swiftUIMonoFont(size: 9, weight: .medium))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 5)
@@ -1639,7 +1668,7 @@ private struct InboxListView: View {
                     }
                     .buttonStyle(.plain)
                     Button(action: { onViewModeChange(.all) }) {
-                        Text("all  \(entries.count)")
+                        Text(uiText("all  {value1}", ["value1": String(describing: entries.count)]))
                             .font(Brand.swiftUIMonoFont(size: 9, weight: .medium))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 5)
@@ -1658,12 +1687,12 @@ private struct InboxListView: View {
             if entries.isEmpty || (viewMode == .priority && priorityEntries.isEmpty) {
                 Spacer()
                 VStack(spacing: 4) {
-                    Text(entries.isEmpty ? "no notifications yet" : "you’re caught up")
+                    Text(entries.isEmpty ? uiText("no notifications yet") : uiText("you’re caught up"))
                         .font(Brand.swiftUIMonoFont(size: 10, weight: .medium))
                         .foregroundColor(.primary.opacity(0.8))
                     if !entries.isEmpty {
                         Button(action: { onViewModeChange(.all) }) {
-                            Text("\(entries.count) other \(entries.count == 1 ? "update" : "updates") in all")
+                            Text(entries.count == 1 ? uiText("1 other update in all") : uiText("{count} other updates in all", ["count": uiNumber(entries.count)]))
                                 .font(Brand.swiftUIMonoFont(size: 9))
                                 .foregroundColor(.secondary)
                         }
@@ -1675,13 +1704,13 @@ private struct InboxListView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         if !priorityEntries.isEmpty {
-                            sectionLabel(viewMode == .priority ? "needs your attention" : "high priority")
+                            sectionLabel(viewMode == .priority ? uiText("needs your attention") : uiText("high priority"))
                             ForEach(priorityEntries) { entry in
                                 row(entry)
                             }
                         }
                         if viewMode == .all && !otherEntries.isEmpty {
-                            sectionLabel("other updates")
+                            sectionLabel(uiText("other updates"))
                             ForEach(otherEntries) { entry in
                                 row(entry)
                             }
@@ -1993,4 +2022,9 @@ public func inboxHide() {
     if #available(macOS 13.0, *) {
         InboxPanelController.shared.hide()
     }
+}
+
+@_cdecl("notif_set_ui_locale")
+public func notif_set_ui_locale(_ json: UnsafePointer<CChar>?) {
+    UILocalization.shared.update(json)
 }

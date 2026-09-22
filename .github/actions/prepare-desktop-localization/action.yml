@@ -1,0 +1,83 @@
+# screenpipe — AI that knows everything you've seen, said, or heard
+# https://screenpipe.com
+
+name: Prepare desktop localization
+description: Finalize one offline snapshot before any platform packaging starts.
+outputs:
+  enabled:
+    description: Whether the selected source revision supports localization
+    value: ${{ steps.source.outputs.enabled }}
+inputs:
+  release-sha:
+    required: true
+    description: Exact source revision being packaged
+  source-run-id:
+    default: ""
+    description: Consumer run whose immutable snapshot the enterprise handoff reuses
+  token:
+    required: true
+    description: Actions read token for a cross-workflow artifact download
+  gt-project-id:
+    default: ""
+    description: General Translation project identifier
+  gt-api-key:
+    default: ""
+    description: General Translation build credential
+runs:
+  using: composite
+  steps:
+    - id: source
+      shell: bash
+      run: |
+        if [[ -f apps/screenpipe-app-tauri/gt.config.json ]]; then
+          echo 'enabled=true' >> "$GITHUB_OUTPUT"
+        else
+          echo 'enabled=false' >> "$GITHUB_OUTPUT"
+          echo '::notice::This historical release revision predates desktop localization.'
+        fi
+    - uses: oven-sh/setup-bun@v2
+      if: steps.source.outputs.enabled == 'true'
+      with:
+        bun-version: "1.3.10"
+    - shell: bash
+      if: steps.source.outputs.enabled == 'true'
+      working-directory: apps/screenpipe-app-tauri
+      run: bun install --frozen-lockfile
+    - name: Restore validated translations
+      if: steps.source.outputs.enabled == 'true' && inputs.source-run-id == ''
+      uses: actions/cache@v4
+      with:
+        path: |
+          apps/screenpipe-app-tauri/.localization
+          apps/screenpipe-app-tauri/gt-lock.json
+        key: desktop-i18n-v1-${{ hashFiles('apps/screenpipe-app-tauri/gt.config.json', 'apps/screenpipe-app-tauri/scripts/i18n/config.mjs') }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          desktop-i18n-v1-${{ hashFiles('apps/screenpipe-app-tauri/gt.config.json', 'apps/screenpipe-app-tauri/scripts/i18n/config.mjs') }}-
+    - name: Download consumer snapshot
+      if: steps.source.outputs.enabled == 'true' && inputs.source-run-id != ''
+      uses: actions/download-artifact@v4
+      with:
+        name: desktop-localization-${{ inputs.release-sha }}
+        path: .release-localization
+        run-id: ${{ inputs.source-run-id }}
+        github-token: ${{ inputs.token }}
+    - name: Finalize and validate translations
+      if: steps.source.outputs.enabled == 'true'
+      shell: bash
+      working-directory: apps/screenpipe-app-tauri
+      env:
+        SCREENPIPE_I18N_MODE: ${{ inputs.source-run-id != '' && 'cached' || 'generate' }}
+        SCREENPIPE_I18N_SNAPSHOT: ${{ inputs.source-run-id != '' && format('{0}/.release-localization/snapshot.json', github.workspace) || '' }}
+        GT_PROJECT_ID: ${{ inputs.gt-project-id }}
+        GT_API_KEY: ${{ inputs.gt-api-key }}
+      run: bun scripts/i18n/release-snapshot.mjs
+    - name: Share finalized snapshot and coverage
+      if: steps.source.outputs.enabled == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: desktop-localization-${{ inputs.release-sha }}
+        path: .release-localization/
+        if-no-files-found: error
+        retention-days: 90
+        include-hidden-files: true
+        overwrite: true

@@ -33,7 +33,7 @@ describe("ComingUp empty state", () => {
   it("stays neutral when no upcoming events are returned", () => {
     renderEmptyState("not-connected");
 
-    expect(screen.getByText("no upcoming meetings")).toBeInTheDocument();
+    expect(screen.getByText("No upcoming meetings")).toBeInTheDocument();
     expect(screen.getByText("Nothing in the next 8h.")).toBeInTheDocument();
     expect(
       screen.queryByText(/No calendar events found/i),
@@ -42,7 +42,7 @@ describe("ComingUp empty state", () => {
       screen.queryByRole("button", { name: "Google Calendar" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "calendars" }),
+      screen.getByRole("button", { name: "Calendars" }),
     ).toBeInTheDocument();
   });
 

@@ -5,6 +5,8 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { LanguageSelector } from "@/components/language-selector";
+import { useLocalizationEnabled } from "@/lib/i18n/provider";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/use-toast";
 import OnboardingLogin from "@/components/onboarding/login-gate";
@@ -37,6 +39,11 @@ import { readOnboardingCheckoutStatus } from "@/lib/onboarding-checkout-navigati
 import { StartupAuthenticationContext } from "@/components/app-entitlement-gate";
 import { shouldRestoreOnboardingLogin } from "@/lib/onboarding-auth-restore";
 
+import { useWorkflowsRolloutEnabled } from "@/lib/workflows/rollout";
+import { FirstTaskChoice } from "@/components/workflows/first-task-choice";
+import { saveProductMode } from "@/lib/workflows/entry-preference";
+import { desktopWorkflowsPlatform } from "@/lib/workflows/desktop-platform";
+
 type SlideKey =
   | "login"
   | "acquisition"
@@ -44,7 +51,8 @@ type SlideKey =
   | "timeline"
   | "engine"
   | "plan"
-  | "recommended-setup";
+  | "recommended-setup"
+  | "first-task";
 
 // One size for the whole flow. Per-slide sizes made the window jump on every
 // step, worst on "plan", which widened to 760 even though the content column is
@@ -211,7 +219,7 @@ function TrialActivationFlagAssignment({
   return null;
 }
 
-// When shown, the timeline choice sits before "engine" so disableTimeline is
+// When shown, the screenshot choice sits before "engine" so disableScreenshots is
 // persisted before the engine spawns and reads it — no restart needed.
 const SLIDE_ORDER: SlideKey[] = [
   "login",
@@ -221,6 +229,7 @@ const SLIDE_ORDER: SlideKey[] = [
   "engine",
   "plan",
   "recommended-setup",
+  "first-task",
 ];
 
 // endowed progress: the bar first renders on permissions with login already
@@ -290,6 +299,7 @@ const applyOnboardingWindowSize = async () => {
 };
 
 export default function OnboardingPage() {
+  const localizationEnabled = useLocalizationEnabled();
   const router = useRouter();
   const { toast } = useToast();
   const [checkoutReturnStatus] = useState(() =>
@@ -363,11 +373,11 @@ export default function OnboardingPage() {
   // mistaken for hardware evidence.
   const isConfidentLowEndDevice = settings.deviceTier === "low";
 
-  // The timeline slide writes disableTimeline AND disableScreenshots, so a
-  // policy owning either one already decides the outcome — showing the choice
-  // would let it contradict what the user picked.
+  // This choice controls capture only. Timeline visibility is a sidebar
+  // preference; policies controlling screen capture still own this decision.
   const timelineChoiceLocked =
-    isSettingLocked("disableTimeline") || isSettingLocked("disableScreenshots");
+    isSettingLocked("disableScreenshots") || isSettingLocked("disableVision") ||
+    isSettingLocked("screen_recording");
   const timelineChoiceVisible =
     isConfidentLowEndDevice && !timelineChoiceLocked;
   const deviceTierForAnalytics =
@@ -437,6 +447,7 @@ export default function OnboardingPage() {
   // excludes it from progress and saved-step restoration as well.
   const canAdvanceIntoPlanSelection =
     shouldShowPlanSelection && Boolean(user?.token);
+  const workflowsRolloutEnabled = useWorkflowsRolloutEnabled();
   const visibleOrder = useMemo(
     () =>
       SLIDE_ORDER.filter(
@@ -451,9 +462,10 @@ export default function OnboardingPage() {
           (s !== "plan" || shouldShowPlanSelection) &&
           // Managed deployments may authenticate with only a license key, so
           // consumer Gmail/Calendar authorization is not available there.
-          (s !== "recommended-setup" || !isManagedDeployment),
+          (s !== "recommended-setup" || !isManagedDeployment) &&
+          (s !== "first-task" || (workflowsRolloutEnabled && !isManagedDeployment && !usesSummaryFirstTrial)),
       ),
-    [isManagedDeployment, shouldShowPlanSelection, timelineChoiceVisible],
+    [isManagedDeployment, shouldShowPlanSelection, timelineChoiceVisible, usesSummaryFirstTrial, workflowsRolloutEnabled],
   );
   // Read by the hydration-gated restore effect below. Assigned during render,
   // per the ref-mirror rule in CLAUDE.md.
@@ -506,6 +518,7 @@ export default function OnboardingPage() {
           engine: "engine",
           plan: "plan",
           "recommended-setup": "recommended-setup",
+          "first-task": "first-task",
           // Native Rust now connects detected AI tools in the background, and
           // the goal/dashboard slide is gone: setup no longer asks the user to
           // declare intent before anything has been observed. Saved installs
@@ -829,7 +842,7 @@ export default function OnboardingPage() {
         >
           <div className="h-6 w-6 animate-spin rounded-full border border-foreground border-t-transparent" />
           <p className="font-mono text-[11px] text-muted-foreground">
-            preparing your setup
+            Preparing your setup
           </p>
         </div>
       </div>
@@ -840,6 +853,7 @@ export default function OnboardingPage() {
     <div className="flex flex-col w-full h-screen overflow-hidden bg-background">
       {/* Drag region */}
       <div className="w-full bg-background p-3" data-tauri-drag-region />
+      {localizationEnabled && <div className="mx-auto w-full max-w-lg px-6 pb-2"><LanguageSelector /></div>}
 
       {/* Keep short steps centered, but let content taller than the available
           display grow naturally and scroll from its top instead of clipping. */}
@@ -864,10 +878,10 @@ export default function OnboardingPage() {
               authenticationState === "license_key" ? (
                 <div className="mx-auto w-full max-w-sm">
                   <h2 className="mb-1 text-lg font-semibold">
-                    activate this device
+                    Activate this device
                   </h2>
                   <p className="mb-4 text-sm text-muted-foreground">
-                    enter the enterprise key provided by your administrator
+                    Enter the enterprise key provided by your administrator
                   </p>
                   <EnterpriseLicensePrompt
                     embedded
@@ -893,7 +907,7 @@ export default function OnboardingPage() {
                       onClick={() => selectAuthenticationMethod("license_key")}
                       className="mt-3 font-mono text-xs text-muted-foreground/70 underline underline-offset-4 decoration-muted-foreground/40 transition-colors hover:text-foreground hover:decoration-foreground"
                     >
-                      use enterprise key
+                      Use enterprise key
                     </button>
                   )}
                 </div>
@@ -923,6 +937,21 @@ export default function OnboardingPage() {
           {currentSlide === "plan" && (
             <PlanSelectionStep handleNextSlide={handleNextSlide} />
           )}
+          {currentSlide === "first-task" && workflowsRolloutEnabled && <FirstTaskChoice onComplete={async (mode, goal) => {
+            if (mode === "workflows" && goal) {
+              const existing = await desktopWorkflowsPlatform.loadWorkProfile?.();
+              await desktopWorkflowsPlatform.saveWorkProfile?.({
+                scope: "personal", summary: "", kpis: [], hourlyValue: null,
+                vocabulary: "", guidance: "", visibility: "device-only", ...existing,
+                priorities: existing?.priorities
+                  ? existing.priorities.split("\n").some(line => line.trim() === goal)
+                    ? existing.priorities : `${existing.priorities}\n${goal}`
+                  : goal,
+              });
+            }
+            await saveProductMode(mode);
+            await handleNextSlide();
+          }} />}
           {currentSlide === "recommended-setup" && (
             <FinalSetupStep
               userToken={user?.token}

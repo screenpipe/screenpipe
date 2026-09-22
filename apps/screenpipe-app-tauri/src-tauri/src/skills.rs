@@ -270,7 +270,12 @@ async fn connect_detected_ai_tools_in(
 
 /// Baseline skills screenpipe writes itself on every session. Importing a skill
 /// under one of these names would clobber them, so we reject it.
-const RESERVED_SKILL_NAMES: [&str; 3] = ["screenpipe-api", "screenpipe-cli", "screenpipe-team"];
+const RESERVED_SKILL_NAMES: [&str; 4] = [
+    "screenpipe-api",
+    "screenpipe-cli",
+    "screenpipe-team",
+    "screenpipe-workflow-maintenance",
+];
 const MANAGED_TEAM_SKILL_PREFIX: &str = "screenpipe-team-";
 const MANAGED_TEAM_SKILL_MARKER: &str = "<!-- screenpipe-managed-team-skill";
 const MANAGED_TEAM_SKILL_MARKER_FILE: &str = ".screenpipe-managed.json";

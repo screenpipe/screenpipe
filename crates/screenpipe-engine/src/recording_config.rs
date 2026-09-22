@@ -39,9 +39,9 @@ pub struct RecordingConfig {
     pub enable_semantic_context: bool,
     /// Which bounded AI projection to expose from the shared capture stream.
     pub semantic_context_mode: SemanticContextMode,
-    /// Disable the timeline / rewind feature. Skips timeline-only backend work
-    /// (hot frame cache warm-up + per-frame/audio buffering into the hot cache
-    /// that only the timeline streaming endpoint consumes).
+    /// Skip timeline cache warm-up and per-frame/audio buffering when capture
+    /// is off or the legacy timeline gate is set. The streaming endpoint can
+    /// still read saved history directly from the database.
     pub disable_timeline: bool,
     pub use_pii_removal: bool,
     /// Async text PII redaction: runs the background reconciliation
@@ -297,7 +297,7 @@ impl RecordingConfig {
             disable_screenshots: settings.disable_screenshots,
             enable_semantic_context: settings.enable_semantic_context,
             semantic_context_mode: settings.semantic_context_mode,
-            disable_timeline: settings.disable_timeline,
+            disable_timeline: settings.timeline_cache_disabled(),
             use_pii_removal: settings.use_pii_removal,
             async_pii_redaction: settings.async_pii_redaction,
             redact_agent_session_secrets: settings.redact_agent_session_secrets,

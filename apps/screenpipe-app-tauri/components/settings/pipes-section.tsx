@@ -161,6 +161,10 @@ import { useDeviceMonitor } from "@/lib/hooks/use-device-monitor";
 import { Monitor, Wifi, WifiOff, ScanSearch, Lock } from "lucide-react";
 import { requestPipeStop } from "@/lib/pipe-stop";
 import { PipeChatDestinationPicker } from "./pipe-chat-destination-picker";
+import { formatUiRelativeTime } from "@/lib/i18n/format";
+import { useMessages, useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 const PIPE_EXECUTIONS_PAGE_LIMIT = 10;
 
@@ -195,6 +199,7 @@ export function ScheduledTasksRefreshButton({
   refreshing: boolean;
   onRefresh: () => void;
 }) {
+  const ui = useGT();
   return (
     <Button
       variant="outline"
@@ -208,7 +213,7 @@ export function ScheduledTasksRefreshButton({
       disabled={refreshing}
       aria-busy={refreshing}
       aria-label={
-        refreshing ? "refreshing scheduled tasks" : "refresh scheduled tasks"
+        refreshing ? ui("Refreshing scheduled tasks") : ui("Refresh scheduled tasks")
       }
     >
       {refreshing ? (
@@ -535,7 +540,7 @@ function pipeConnectionDisplayName(
 ): string {
   if (instanceName) return `${connection?.name || pipeConnectionLookupKey(connectionId)} (${instanceName})`;
   if (connection) return connection.name;
-  if (isMcpConnectionKey(connectionId)) return "deleted MCP server";
+  if (isMcpConnectionKey(connectionId)) return "Deleted MCP server";
   return connectionId;
 }
 
@@ -599,6 +604,8 @@ function PipeConnectionPicker({
   onAdd: (connectionKey: string) => void;
   onOpenConnections: () => void;
 }) {
+
+  const ui = useGT();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
 
@@ -649,18 +656,18 @@ function PipeConnectionPicker({
         <Button
           variant="outline"
           size="sm"
-          className="h-8 text-xs font-mono uppercase tracking-wider px-3 gap-1.5"
+          className="h-8 text-xs font-mono normal-case tracking-wider px-3 gap-1.5"
           aria-expanded={open}
           data-testid="pipe-connection-add"
         >
           <Plus className="h-3 w-3" />
-          add
+          Add
           <ChevronDown className="h-3 w-3 text-muted-foreground" />
         </Button>
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="w-[360px] max-w-[calc(100vw-2rem)] rounded-none border-border p-0 shadow-none"
+        className="w-[360px] max-w-[calc(100vw-2rem)] rounded-lg border-border p-0 shadow-none"
         onOpenAutoFocus={(event) => event.preventDefault()}
       >
         <div className="border-b border-border p-2">
@@ -670,8 +677,8 @@ function PipeConnectionPicker({
               autoFocus
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="search connections..."
-              className="h-8 rounded-none pl-8 text-xs"
+              placeholder={ui("Search connections...")}
+              className="h-8 rounded-md pl-8 text-xs"
               spellCheck={false}
             />
           </div>
@@ -696,20 +703,20 @@ function PipeConnectionPicker({
                   </span>
                   <span className="block truncate text-[11px] text-muted-foreground">
                     {option.kind === "mcp"
-                      ? "mcp server"
+                      ? ui("MCP server")
                       : option.instanceName
                         ? option.connectionName
-                        : "connection"}
+                        : ui("Connection")}
                   </span>
                 </span>
-                <span className="ml-2 flex shrink-0 items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                <span className="ml-2 flex shrink-0 items-center gap-1.5 text-[10px] normal-case tracking-wider text-muted-foreground">
                   <span
                     className={cn(
                       "h-1.5 w-1.5",
                       option.connected ? "bg-foreground" : "bg-muted-foreground/30"
                     )}
                   />
-                  {option.connected ? "ready" : "setup"}
+                  {option.connected ? ui("ready") : ui("setup")}
                 </span>
               </button>
             ))
@@ -727,7 +734,7 @@ function PipeConnectionPicker({
             className="flex w-full items-center gap-2 px-2 py-2 text-left text-xs text-muted-foreground transition-colors duration-150 hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
           >
             <ExternalLink className="h-3.5 w-3.5" />
-            manage connections
+            Manage connections
           </button>
         </div>
       </PopoverContent>
@@ -788,7 +795,7 @@ interface PipeExecution {
 function relativeTime(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
   const secs = Math.floor(diff / 1000);
-  if (secs < 60) return "just now";
+  if (secs < 60) return "Just now";
   const mins = Math.floor(secs / 60);
   if (mins < 60) return `${mins}m ago`;
   const hrs = Math.floor(mins / 60);
@@ -1001,6 +1008,7 @@ function pipeExecutionDisplayStatus(exec: PipeExecutionStatusFields): string {
 }
 
 function ElapsedTimer({ startedAt }: { startedAt: string }) {
+
   const [elapsed, setElapsed] = useState("");
   useEffect(() => {
     const start = new Date(startedAt).getTime();
@@ -1070,6 +1078,7 @@ function PipePresetSelector({
   pendingConfigSaves: React.MutableRefObject<Record<string, Promise<void>>>;
   apiBase: string;
 }) {
+
   const savePresets = (presetValue: string | string[] | null) => {
     const pipeName = pipe.config.name;
 
@@ -1105,12 +1114,15 @@ function PipePresetSelector({
 }
 
 /** Compact label for a pipe's current schedule (structured config preferred). */
-function pipeScheduleLabel(config: PipeConfig): string {
-  return describeSchedule(config.schedule_config ?? null, config.schedule);
+function pipeScheduleLabel(config: PipeConfig, ui: ReturnType<typeof useMessages>): string {
+  return describeSchedule(config.schedule_config ?? null, config.schedule, ui);
 }
 
 
 export function PipesSection() {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
+  const uiMessages = useMessages();
   // Device selector: null = local machine, string = remote address
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
   const { devices, discoverDevices, discovering } = useDeviceMonitor();
@@ -1296,7 +1308,7 @@ export function PipesSection() {
   const starredEmptyTitle = React.useMemo(() => {
     if (!pipeFavorites.showOnly) return null;
 
-    return "no starred scheduled tasks";
+    return "No starred scheduled tasks";
   }, [pipeFavorites.showOnly]);
 
   const sharePipePublic = async (pipe: PipeStatus) => {
@@ -1316,9 +1328,9 @@ export function PipesSection() {
       if (data.error) throw new Error(data.error);
       await commands.copyTextToClipboard(data.url);
       posthog.capture("pipe_shared_public", { pipe_name: pipe.config.name, pipe_id: data.id });
-      toast({ title: "link copied!", description: data.url });
+      toast({ title: ui("Link copied!"), description: data.url });
     } catch (err: any) {
-      toast({ title: "failed to share scheduled task", description: err.message, variant: "destructive" });
+      toast({ title: ui("Failed to share scheduled task"), description: err.message, variant: "destructive" });
     } finally {
       setSharingPublic(null);
     }
@@ -1448,10 +1460,10 @@ export function PipesSection() {
       });
       if (!res.ok) {
         const err = await res.json();
-        toast({ title: "update failed", description: err.error || "unknown error", variant: "destructive" });
+        toast({ title: ui("Update failed"), description: err.error || ui("Unknown error"), variant: "destructive" });
         return;
       }
-      toast({ title: "scheduled task updated", description: `${pipeName} updated successfully` });
+      toast({ title: ui("Scheduled task updated"), description: ui("{value1} updated successfully", { value1: pipeName }) });
       // Remove from updates map and refresh
       setAvailableUpdates(prev => {
         const next = { ...prev };
@@ -1460,7 +1472,7 @@ export function PipesSection() {
       });
       await fetchPipes();
     } catch (e) {
-      toast({ title: "update failed", description: String(e), variant: "destructive" });
+      toast({ title: ui("Update failed"), description: String(e), variant: "destructive" });
     } finally {
       setUpdatingPipe(null);
     }
@@ -1688,7 +1700,7 @@ export function PipesSection() {
       const message = error instanceof Error ? error.message : "could not clear context";
       setHistoryResetStatus((previous) => ({ ...previous, [pipeName]: "error" }));
       toast({
-        title: "could not clear remembered context",
+        title: ui("Could not clear remembered context"),
         description: message,
         variant: "destructive",
       });
@@ -1736,14 +1748,14 @@ export function PipesSection() {
         { pipe: name, version }
       );
       toast({
-        title: existing ? `update pushed (v${version})` : "shared with team",
+        title: existing ? ui("Update pushed (v{value1})", { value1: version }) : ui("Shared with team"),
         description: existing
-          ? "teammates' copies will update automatically"
-          : "teammates can turn it on from their Automations page",
+          ? ui("Teammates' copies will update automatically")
+          : ui("Teammates can turn it on from their Automations page"),
       });
     } catch (err: any) {
       toast({
-        title: "failed to share",
+        title: ui("Failed to share"),
         description: err?.message,
         variant: "destructive",
       });
@@ -1759,12 +1771,12 @@ export function PipesSection() {
       await team.deleteConfig(id);
       posthog.capture("team_pipe_unshared", { pipe: name });
       toast({
-        title: "unshared from team",
-        description: "teammates' copies will be disabled",
+        title: ui("Unshared from team"),
+        description: ui("Teammates' copies will be disabled"),
       });
     } catch (err: any) {
       toast({
-        title: "failed to unshare",
+        title: ui("Failed to unshare"),
         description: err?.message,
         variant: "destructive",
       });
@@ -1796,13 +1808,13 @@ export function PipesSection() {
         fork: forkName,
       });
       toast({
-        title: `forked to "${forkName}"`,
-        description: "your editable copy — off by default",
+        title: ui("Forked to \"{value1}\"", { value1: forkName }),
+        description: ui("Your editable copy — off by default"),
       });
       fetchPipes();
     } catch (err: any) {
       toast({
-        title: "failed to fork",
+        title: ui("Failed to fork"),
         description: err?.message,
         variant: "destructive",
       });
@@ -1874,7 +1886,7 @@ export function PipesSection() {
       if (updatedPipes.length > 0) {
         posthog.capture("team_pipe_auto_updated", { pipes: updatedPipes });
         toast({
-          title: "team scheduled tasks updated",
+          title: ui("Team scheduled tasks updated"),
           description: updatedPipes.join(", "),
         });
       }
@@ -1915,8 +1927,8 @@ export function PipesSection() {
             if (updated.length > 0) {
               for (const u of updated) {
                 toast({
-                  title: `${u.pipe_name} auto-updated`,
-                  description: `v${u.from_version} → v${u.to_version}`,
+                  title: ui("{value1} auto-updated", { value1: u.pipe_name }),
+                  description: ui("v{value1} → v{value2}", { value1: u.from_version, value2: u.to_version }),
                 });
               }
               // Refresh updates map and pipes list
@@ -2108,8 +2120,8 @@ export function PipesSection() {
   const togglePipe = async (name: string, enabled: boolean) => {
     if (isEnterpriseManagedName(name)) {
       toast({
-        title: "managed by your organization",
-        description: "an organization admin controls when this task runs and whether it is enabled",
+        title: ui("Managed by your organization"),
+        description: ui("An organization admin controls when this task runs and whether it is enabled"),
       });
       return;
     }
@@ -2150,8 +2162,8 @@ export function PipesSection() {
         )
       );
       toast({
-        title: "scheduled task toggle failed",
-        description: `could not ${enabled ? "enable" : "disable"} "${name}"`,
+        title: ui("Scheduled task toggle failed"),
+        description: ui("Could not {value1} \"{value2}\"", { value1: enabled ? "enable" : "disable", value2: name }),
         variant: "destructive",
       });
     }
@@ -2213,9 +2225,9 @@ export function PipesSection() {
       }
     } catch (error) {
       toast({
-        title: "scheduled task stop failed",
+        title: ui("Scheduled task stop failed"),
         description:
-          error instanceof Error ? error.message : `could not stop "${name}"`,
+          error instanceof Error ? error.message : ui("Could not stop \"{value1}\"", { value1: name }),
         variant: "destructive",
       });
     } finally {
@@ -2276,8 +2288,8 @@ export function PipesSection() {
       const failed = results.filter((r) => r.status === "rejected").length;
       if (failed > 0) {
         toast({
-          title: "some scheduled tasks failed to delete",
-          description: `${failed} of ${selectedPipes.size} scheduled tasks could not be deleted`,
+          title: ui("Some scheduled tasks failed to delete"),
+          description: ui("{value1} of {value2} scheduled tasks could not be deleted", { value1: failed, value2: selectedPipes.size }),
           variant: "destructive",
         });
       }
@@ -2485,9 +2497,9 @@ export function PipesSection() {
       <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted-foreground">
         <Monitor className="h-8 w-8 opacity-40" />
         <p className="text-sm font-medium">{selectedDeviceInfo.label} is offline</p>
-        <p className="text-xs opacity-70">check that screenpipe is running on the remote device</p>
+        <p className="text-xs opacity-70">Check that screenpipe is running on the remote device</p>
         <Button variant="outline" size="sm" onClick={() => setSelectedDevice(null)}>
-          back to this device
+          Back to this device
         </Button>
       </div>
     );
@@ -2521,7 +2533,7 @@ export function PipesSection() {
             onClick={() => setBulkDeleteConfirm(true)}
           >
             {bulkDeleting ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Trash2 className="h-3 w-3 mr-1" />}
-            delete
+            Delete
           </Button>
           <Button
             variant="ghost"
@@ -2537,7 +2549,7 @@ export function PipesSection() {
           <div className="relative flex-1">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <Input
-              placeholder="search scheduled tasks..."
+              placeholder={ui("Search scheduled tasks...")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-8 h-8 text-sm"
@@ -2549,7 +2561,7 @@ export function PipesSection() {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm" className="gap-1.5 h-8 text-xs capitalize">
-                  {pipeTypeFilter === "cloud" ? "cloud" : `${pipeTypeFilter} (${tabCounts.local})`}
+                  {pipeTypeFilter === "cloud" ? ui("Cloud") : `${pipeTypeFilter} (${tabCounts.local})`}
                   <ChevronDown className="h-3 w-3 opacity-50" />
                 </Button>
               </DropdownMenuTrigger>
@@ -2575,7 +2587,7 @@ export function PipesSection() {
             size="icon"
             className="h-8 w-8"
             onClick={() => pipeFavorites.setShowOnly(!pipeFavorites.showOnly)}
-            title={pipeFavorites.showOnly ? "show all scheduled tasks" : "show only starred scheduled tasks"}
+            title={pipeFavorites.showOnly ? ui("Show all scheduled tasks") : ui("Show only starred scheduled tasks")}
           >
             <Star
               className={cn(
@@ -2622,7 +2634,7 @@ export function PipesSection() {
 
       {pipeTypeFilter === "local" && !selectMode && (
         <div className="flex items-baseline gap-2 px-1 pt-1">
-          <h3 className="text-sm font-medium">scheduled tasks</h3>
+          <h3 className="text-sm font-medium">Scheduled tasks</h3>
           <span className="text-xs tabular-nums text-muted-foreground">
             {filteredPipes.length} total
           </span>
@@ -2668,17 +2680,17 @@ export function PipesSection() {
               <AlertCircle className="h-7 w-7 mx-auto text-muted-foreground/70" />
               <div>
                 <p className="text-foreground font-medium text-base">
-                  {isRemote ? "couldn't load scheduled tasks from this device" : "screenpipe backend is unavailable"}
+                  {isRemote ? ui("Couldn't load scheduled tasks from this device") : ui("Screenpipe backend is unavailable")}
                 </p>
                 <p className="text-sm mt-1">
                   {isRemote
-                    ? `the remote API at ${apiBase} did not answer. check that screenpipe is running on that device.`
-                    : `your scheduled task files may still be installed, but the local API at ${apiBase} did not answer.`}
+                    ? ui("The remote API at {value1} did not answer. check that screenpipe is running on that device.", { value1: apiBase })
+                    : ui("Your scheduled task files may still be installed, but the local API at {value1} did not answer.", { value1: apiBase })}
                 </p>
                 <p className="text-xs mt-2 font-mono text-muted-foreground/80">{loadError}</p>
               </div>
               <Button variant="outline" size="sm" onClick={() => void fetchPipes()}>
-                retry
+                Retry
               </Button>
             </div>
           </CardContent>
@@ -2687,7 +2699,7 @@ export function PipesSection() {
         <Card>
           <CardContent className="py-8 text-center text-muted-foreground">
             {searchQuery ? (
-              <p>no scheduled tasks match your search</p>
+              <p>No scheduled tasks match your search</p>
             ) : pipeFavorites.showOnly && tabCounts[pipeTypeFilter] > 0 ? (
               <div className="space-y-4">
                 <div>
@@ -2696,8 +2708,8 @@ export function PipesSection() {
                   </p>
                   <p className="text-sm mt-1">
                     {pipeFavorites.favorites.size === 0
-                      ? "star any scheduled task to keep your favorites here"
-                      : "none of your starred scheduled tasks match this filter right now"}
+                      ? ui("Star any scheduled task to keep your favorites here")
+                      : ui("None of your starred scheduled tasks match this filter right now")}
                   </p>
                 </div>
                 <div>
@@ -2706,21 +2718,21 @@ export function PipesSection() {
                     size="sm"
                     onClick={() => pipeFavorites.setShowOnly(false)}
                   >
-                    show all scheduled tasks
+                    Show all scheduled tasks
                   </Button>
                 </div>
               </div>
             ) : (
               <div className="space-y-4">
                 <div>
-                  <p className="text-foreground font-medium text-base">no scheduled tasks yet</p>
+                  <p className="text-foreground font-medium text-base">No scheduled tasks yet</p>
                   <p className="text-sm mt-1">
-                    scheduled tasks run locally over your screen data — they can summarize your day, track your time, sync your notes, and more.
+                    Scheduled tasks run locally over your screen data — they can summarize your day, track your time, sync your notes, and more.
                   </p>
                 </div>
                 <div className="space-y-2 max-w-md mx-auto text-left">
                   <p className="text-xs text-muted-foreground">
-                    create one in seconds — pick an example to build it, or describe your own below.
+                    Create one in seconds — pick an example to build it, or describe your own below.
                   </p>
                   <div className="flex flex-wrap gap-2">
                     {PIPE_EXAMPLES.map((ex) => (
@@ -2742,7 +2754,7 @@ export function PipesSection() {
                   }}
                   className="inline-flex items-center gap-2 px-4 py-2 border border-border text-sm font-medium hover:bg-muted transition-colors"
                 >
-                  or browse the Store →
+                  Or browse the Store →
                 </button>
               </div>
             )}
@@ -2794,12 +2806,10 @@ export function PipesSection() {
                 (pipe.config.trigger?.custom?.length || 0);
               const scheduleSummary =
                 triggerCount > 0
-                  ? `${triggerCount} trigger${triggerCount > 1 ? "s" : ""}${
-                      pipeHasSchedule(pipe.config) ? ` + ${pipeScheduleLabel(pipe.config)}` : ""
-                    }`
+                  ? ui("{value1, plural, one {# trigger} other {# triggers}}{value3}", { value1: triggerCount, value3: pipeHasSchedule(pipe.config) ? ` + ${pipeScheduleLabel(pipe.config, uiMessages)}` : "" })
                   : pipeHasSchedule(pipe.config)
-                    ? pipeScheduleLabel(pipe.config)
-                    : "manual";
+                    ? pipeScheduleLabel(pipe.config, uiMessages)
+                    : ui("manual");
               // What actually happened last, spelled out rather than left to
               // colour alone. The detail pane shows this as-is — it has an
               // explicit auto-run control right below, so it doesn't need the
@@ -2807,15 +2817,15 @@ export function PipesSection() {
               const lastRunFact =
                 lastStatus === "error"
                   ? lastExec?.started_at
-                    ? `failed ${relativeTime(lastExec.started_at)}`
-                    : "failed"
+                    ? ui("failed {when}", { when: formatUiRelativeTime(lastExec.started_at, uiLocale) })
+                    : ui("failed")
                   : lastExec?.started_at
-                    ? `ran ${relativeTime(lastExec.started_at)}`
-                    : "never run";
+                    ? ui("ran {when}", { when: formatUiRelativeTime(lastExec.started_at, uiLocale) })
+                    : ui("never run");
               // Forward-looking, and only while auto-run is on — a countdown
               // beside a paused task would promise a run that isn't coming.
               const nextRunLabel = pipe.config.enabled
-                ? formatNextRun(pipe.next_run)
+                ? formatNextRun(pipe.next_run, undefined, uiMessages)
                 : null;
               // The row gets exactly one status token, in priority order —
               // never stacked. "paused" outranks the last run because the
@@ -2827,13 +2837,13 @@ export function PipesSection() {
               // are the thing users actually get burned by. Healthy pipes get
               // the forward-looking answer to "when does this run again?".
               const lastRunSummary = isRunning
-                ? `running ${runningLabel ?? "now"}`
+                ? ui("running {elapsed}", { elapsed: runningLabel ?? ui("now") })
                 : !pipe.config.enabled
-                  ? "paused"
+                  ? ui("paused")
                   : lastStatus === "error"
                     ? lastRunFact
                     : nextRunLabel
-                      ? `next run ${nextRunLabel}`
+                      ? ui("next run {when}", { when: nextRunLabel })
                       : lastRunFact;
               const description =
                 typeof pipe.config.description === "string" &&
@@ -2912,22 +2922,22 @@ export function PipesSection() {
                       {enterpriseManaged && (
                         <Lock
                           className="h-3 w-3 shrink-0 text-muted-foreground"
-                          aria-label="managed by your organization"
+                          aria-label={ui("Managed by your organization")}
                         />
                       )}
                       <span className="truncate text-sm font-medium">{pipe.config.name}</span>
                       {hasMissingConnections && (
                         <span
                           className="shrink-0 font-mono text-[10px] text-destructive"
-                          title="required connections are not configured"
+                          title={ui("Required connections are not configured")}
                         >
-                          setup
+                          Setup
                         </span>
                       )}
                       {availableUpdates[pipe.config.name] && (
                         <ArrowUpCircle
                           className="h-3 w-3 shrink-0 text-muted-foreground"
-                          aria-label="update available"
+                          aria-label={ui("Update available")}
                         />
                       )}
                     </div>
@@ -2948,7 +2958,7 @@ export function PipesSection() {
                         ? "text-foreground"
                         : "text-muted-foreground/50 opacity-0 hover:text-muted-foreground focus:opacity-100 group-hover:opacity-100",
                     )}
-                    title={isFavorite ? "unstar" : "star this scheduled task"}
+                    title={isFavorite ? ui("Unstar") : ui("Star this scheduled task")}
                     aria-pressed={isFavorite}
                   >
                     <Star className={cn("h-3.5 w-3.5", isFavorite && "fill-foreground")} />
@@ -2979,15 +2989,15 @@ export function PipesSection() {
                         <PipeActivityIndicator
                           kind="running"
                           label={runningLabel}
-                          ariaLabel={`running ${runningLabel ?? "now"}`}
+                          ariaLabel={ui("running {value1}", { value1: runningLabel ?? "now" })}
                         />
                       ) : lastStatus === "error" ? (
                         <PipeActivityIndicator
                           kind="error"
                           label={
-                            lastExec?.started_at ? relativeTime(lastExec.started_at) : "failed"
+                            lastExec?.started_at ? relativeTime(lastExec.started_at) : ui("Failed")
                           }
-                          ariaLabel="last run failed"
+                          ariaLabel={ui("last run failed")}
                         />
                       ) : (
                         <span className="font-mono text-xs text-muted-foreground">
@@ -3007,50 +3017,48 @@ export function PipesSection() {
                         <Badge
                           variant="outline"
                           className="h-5 shrink-0 gap-1 rounded-none text-[10px]"
-                          title={`organization managed v${parseEnterpriseManagedVersion(pipe.raw_content)} — configuration is enforced by your administrator`}
+                          title={ui("Organization managed v{value1} — configuration is enforced by your administrator", { value1: parseEnterpriseManagedVersion(pipe.raw_content) })}
                         >
-                          <Lock className="h-2.5 w-2.5" /> managed
+                          <Lock className="h-2.5 w-2.5" /> Managed
                         </Badge>
                       )}
                       {sharedByMe.has(pipe.config.name) && (
                         <Badge
                           variant="outline"
                           className="text-[10px] h-5 shrink-0 gap-1"
-                          title={`shared with your team (v${
-                            (sharedByMe.get(pipe.config.name)?.value as Partial<TeamPipePayload>)
-                              ?.version ?? "?"
-                          })`}
+                          title={ui("Shared with your team (v{value1})", { value1: (sharedByMe.get(pipe.config.name)?.value as Partial<TeamPipePayload>)
+                              ?.version ?? "?" })}
                         >
-                          <Share2 className="h-2.5 w-2.5" /> shared
+                          <Share2 className="h-2.5 w-2.5" /> Shared
                         </Badge>
                       )}
                       {isReceivedTeamPipe(pipe) && !isUnsharedLeftover(pipe) && (
                         <Badge
                           variant="secondary"
                           className="text-[10px] h-5 shrink-0"
-                          title={`team scheduled task v${parseTeamVersion(pipe.raw_content)} — read-only, updates automatically when the author re-shares`}
+                          title={ui("Team scheduled task v{value1} — read-only, updates automatically when the author re-shares", { value1: parseTeamVersion(pipe.raw_content) })}
                         >
                           {sharerNameForPipe(pipe.config.name)
-                            ? `team v${parseTeamVersion(pipe.raw_content)} · ${sharerNameForPipe(pipe.config.name)}`
-                            : `team v${parseTeamVersion(pipe.raw_content)}`}
+                            ? ui("Team v{value1} · {value2}", { value1: parseTeamVersion(pipe.raw_content), value2: sharerNameForPipe(pipe.config.name) })
+                            : ui("Team v{value1}", { value1: parseTeamVersion(pipe.raw_content) })}
                         </Badge>
                       )}
                       {isUnsharedLeftover(pipe) && (
                         <Badge
                           variant="outline"
                           className="text-[10px] h-5 shrink-0 text-muted-foreground"
-                          title="no longer shared with the team — auto-run was disabled; fork to keep it or delete it"
+                          title={ui("No longer shared with the team — auto-run was disabled; fork to keep it or delete it")}
                         >
-                          no longer shared
+                          No longer shared
                         </Badge>
                       )}
                       {pipe.config.history && (
                         <Badge
                           variant="outline"
                           className="h-5 shrink-0 rounded-none text-[10px] text-muted-foreground"
-                          title="future runs remember prior context and update one chat"
+                          title={ui("Future runs remember prior context and update one chat")}
                         >
-                          one chat
+                          One chat
                         </Badge>
                       )}
 
@@ -3087,14 +3095,14 @@ export function PipesSection() {
                       {/* Missing connections badge */}
                       {hasMissingConnections && (
                         <button
-                          className="text-[10px] text-destructive border border-destructive/40 px-1.5 py-0.5 shrink-0 hover:bg-destructive/10 transition-colors font-mono"
+                          className="text-[10px] text-destructive border border-destructive/40 rounded-sm px-1.5 py-0.5 shrink-0 hover:bg-destructive/10 transition-colors font-mono"
                           onClick={(e) => {
                             e.stopPropagation();
                             setConnectionModal({ pipeName: pipe.config.name, connections: pipe.config.connections ?? [] });
                           }}
-                          title="required connections are not configured"
+                          title={ui("Required connections are not configured")}
                         >
-                          setup
+                          Setup
                         </button>
                       )}
                     </div>
@@ -3111,25 +3119,25 @@ export function PipesSection() {
                           <Button
                             variant="outline"
                             size="sm"
-                            className="h-9 gap-2 rounded-none px-3 font-mono text-xs uppercase"
+                            className="h-9 gap-2 rounded-md px-3 font-mono text-xs normal-case"
                             onClick={() => stopPipe(pipe.config.name)}
                             disabled={stoppingPipe === pipe.config.name}
-                            title="stop scheduled task"
-                            aria-label="stop scheduled task"
+                            title={ui("Stop scheduled task")}
+                            aria-label={ui("Stop scheduled task")}
                           >
                             {stoppingPipe === pipe.config.name ? (
                               <Loader2 className="h-5 w-5 animate-spin" />
                             ) : (
                               <Square className="h-4 w-4" />
                             )}
-                            stop
+                            Stop
                           </Button>
                         ) : (
                           <Button
                             variant={hasMissingConnections ? "outline" : "default"}
                             size="sm"
                             className={cn(
-                              "h-9 gap-2 rounded-none px-3 font-mono text-xs uppercase",
+                              "h-9 gap-2 rounded-md px-3 font-mono text-xs normal-case",
                               hasMissingConnections && "text-destructive",
                             )}
                             onClick={() => {
@@ -3140,13 +3148,13 @@ export function PipesSection() {
                               }
                             }}
                             disabled={runningPipe === pipe.config.name}
-                            title={hasMissingConnections ? "configure required connections first" : "run scheduled task"}
-                            aria-label={hasMissingConnections ? "configure required connections first" : "run scheduled task"}
+                            title={hasMissingConnections ? ui("Configure required connections first") : ui("Run scheduled task")}
+                            aria-label={hasMissingConnections ? ui("Configure required connections first") : ui("Run scheduled task")}
                           >
                             {hasMissingConnections
                               ? <AlertCircle className="h-4 w-4" />
                               : <Play className="h-4 w-4 fill-current" />}
-                            run now
+                            Run now
                           </Button>
                         )}
                       </div>
@@ -3169,10 +3177,10 @@ export function PipesSection() {
                               autoSend: true,
                             });
                           }}
-                          title="optimize this scheduled task with ai — reads recent runs and improves the prompt"
+                          title={ui("Optimize this scheduled task with AI — reads recent runs and improves the prompt")}
                         >
                           <Sparkles className="h-3.5 w-3.5" />
-                          optimize
+                          Optimize
                         </Button>
                       </>
                     )}
@@ -3204,7 +3212,7 @@ export function PipesSection() {
                               }}
                             >
                               <GitFork className="h-3.5 w-3.5 mr-2" />
-                              fork into a new task
+                              Fork into a new task
                             </DropdownMenuItem>
                           )}
 
@@ -3224,7 +3232,7 @@ export function PipesSection() {
                                     ) : (
                                       <ArrowUpCircle className="h-3.5 w-3.5 mr-2" />
                                     )}
-                                    push update to team (v
+                                    Push update to team (v
                                     {nextShareVersion(sharedByMe.get(pipe.config.name)?.value)})
                                   </DropdownMenuItem>
                                 )}
@@ -3232,7 +3240,7 @@ export function PipesSection() {
                                   onClick={() => unsharePipeFromTeam(pipe.config.name)}
                                 >
                                   <Share2 className="h-3.5 w-3.5 mr-2" />
-                                  unshare from team
+                                  Unshare from team
                                 </DropdownMenuItem>
                               </>
                             ) : (
@@ -3245,21 +3253,21 @@ export function PipesSection() {
                                 ) : (
                                   <Share2 className="h-3.5 w-3.5 mr-2" />
                                 )}
-                                share with team
+                                Share with team
                               </DropdownMenuItem>
                             )
                           )}
                           {isReceivedTeamPipe(pipe) && (
                             <DropdownMenuItem onClick={() => forkTeamPipe(pipe)}>
                               <Copy className="h-3.5 w-3.5 mr-2" />
-                              fork to edit
+                              Fork to edit
                             </DropdownMenuItem>
                           )}
 
                           {enterpriseManaged && (
                             <DropdownMenuItem disabled>
                               <Lock className="h-3.5 w-3.5 mr-2" />
-                              managed by organization
+                              Managed by organization
                             </DropdownMenuItem>
                           )}
 
@@ -3273,18 +3281,18 @@ export function PipesSection() {
                               ) : (
                                 <Link className="h-3.5 w-3.5 mr-2" />
                               )}
-                              copy share link
+                              Copy share link
                             </DropdownMenuItem>
                           )}
                           {(pipe.source_slug || (pipe.config as any).config?.source_slug) && (
                             <DropdownMenuItem
                               onClick={() => {
                                 checkForUpdates();
-                                toast({ title: "checking for updates..." });
+                                toast({ title: ui("Checking for updates...") });
                               }}
                             >
                               <RefreshCw className="h-3.5 w-3.5 mr-2" />
-                              check for updates
+                              Check for updates
                             </DropdownMenuItem>
                           )}
                           {!isReadOnlyPipe(pipe) && (
@@ -3292,7 +3300,7 @@ export function PipesSection() {
                               onClick={() => setPublishPipeName(pipe.config.name)}
                             >
                               <Upload className="h-3.5 w-3.5 mr-2" />
-                              publish to store
+                              Publish to store
                             </DropdownMenuItem>
                           )}
                           {!enterpriseManaged && <DropdownMenuSeparator />}
@@ -3311,7 +3319,7 @@ export function PipesSection() {
                             }}
                           >
                             <CheckSquare className="h-3.5 w-3.5 mr-2" />
-                            {selectedPipes.has(pipe.config.name) ? "deselect" : "select"}
+                            {selectedPipes.has(pipe.config.name) ? ui("Deselect") : ui("Select")}
                           </DropdownMenuItem>}
                           {/* Delete is hidden while a team share is active (the
                               sync would reinstall it) but allowed once unshared. */}
@@ -3321,7 +3329,7 @@ export function PipesSection() {
                               onClick={() => deletePipe(pipe.config.name)}
                             >
                               <Trash2 className="h-3.5 w-3.5 mr-2" />
-                              delete
+                              Delete
                             </DropdownMenuItem>
                           )}
                         </DropdownMenuContent>
@@ -3335,18 +3343,18 @@ export function PipesSection() {
                       className="ml-auto flex items-center gap-2"
                       title={
                         enterpriseManaged
-                          ? "managed by your organization"
+                          ? ui("Managed by your organization")
                           : hasMissingConnections && !pipe.config.enabled
-                          ? "configure required connections before enabling auto-run"
+                          ? ui("Configure required connections before enabling auto-run")
                           : pipe.config.enabled
-                            ? "auto-running on schedule — click to disable"
-                            : "auto-run disabled — you can still run this task manually"
+                            ? ui("Auto-running on schedule — click to disable")
+                            : ui("Auto-run disabled — you can still run this task manually")
                       }
                     >
                       {/* A naked switch doesn't say what it controls. Name the
                           state so it reads without hovering. */}
                       <span className="font-mono text-xs text-muted-foreground">
-                        {pipe.config.enabled ? "auto-run on" : "auto-run off"}
+                        {pipe.config.enabled ? ui("Auto-run on") : ui("Auto-run off")}
                       </span>
                       <Switch
                         checked={pipe.config.enabled}
@@ -3374,20 +3382,20 @@ export function PipesSection() {
                   <div className="px-5 pt-4 pb-6">
                     <Tabs defaultValue="config" className="w-full">
                       <TabsList className="mb-2 h-9 w-full items-stretch justify-start gap-4 rounded-none border-b bg-transparent p-0">
-                        <TabsTrigger value="config" className="-mb-px rounded-none border-b-2 border-transparent px-3 text-xs uppercase tracking-wider data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none">
-                          config
+                        <TabsTrigger value="config" className="-mb-px rounded-none border-b-2 border-transparent px-3 text-xs normal-case tracking-wider data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none">
+                          Config
                         </TabsTrigger>
-                        <TabsTrigger value="runs" className="-mb-px rounded-none border-b-2 border-transparent px-3 text-xs uppercase tracking-wider data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none">
-                          runs{(pipe.execution_count ?? executions.length) > 0
+                        <TabsTrigger value="runs" className="-mb-px rounded-none border-b-2 border-transparent px-3 text-xs normal-case tracking-wider data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none">
+                          Runs{(pipe.execution_count ?? executions.length) > 0
                             ? ` (${pipe.execution_count ?? executions.length})`
                             : ""}
                         </TabsTrigger>
                         <TabsTrigger
                           value="advanced"
                           data-testid={`pipe-advanced-tab-${pipe.config.name}`}
-                          className="-mb-px rounded-none border-b-2 border-transparent px-3 text-xs uppercase tracking-wider data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+                          className="-mb-px rounded-none border-b-2 border-transparent px-3 text-xs normal-case tracking-wider data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none"
                         >
-                          advanced
+                          Advanced
                         </TabsTrigger>
                       </TabsList>
 
@@ -3398,19 +3406,19 @@ export function PipesSection() {
                           <div className="border border-border p-4">
                             <div className="flex items-center gap-2">
                               <Lock className="h-4 w-4" />
-                              <p className="text-sm font-medium">managed by your organization</p>
+                              <p className="text-sm font-medium">Managed by your organization</p>
                             </div>
                             <p className="mt-2 text-xs text-muted-foreground">
-                              schedule, prompt, AI preset, connections, and enabled state are restored from organization policy automatically.
+                              Schedule, prompt, AI preset, connections, and enabled state are restored from organization policy automatically.
                             </p>
                             <dl className="mt-4 grid gap-2 font-mono text-xs sm:grid-cols-2">
                               <div>
-                                <dt className="text-muted-foreground">schedule</dt>
-                                <dd>{pipeScheduleLabel(pipe.config)}</dd>
+                                <dt className="text-muted-foreground">Schedule</dt>
+                                <dd>{pipeScheduleLabel(pipe.config, uiMessages)}</dd>
                               </div>
                               <div>
                                 <dt className="text-muted-foreground">AI preset</dt>
-                                <dd>{Array.isArray(pipe.config.preset) ? pipe.config.preset[0] : pipe.config.preset || "organization default"}</dd>
+                                <dd>{Array.isArray(pipe.config.preset) ? pipe.config.preset[0] : pipe.config.preset || ui("Organization default")}</dd>
                               </div>
                             </dl>
                           </div>
@@ -3479,7 +3487,7 @@ export function PipesSection() {
 
                         {/* Connections */}
                         <div className="p-4">
-                          <Label className="text-xs mb-2 block cursor-help" title="give the agent access to your apps (Slack, Obsidian, CRM, etc.) — credentials are fetched at runtime">connections</Label>
+                          <Label className="text-xs mb-2 block cursor-help" title={ui("Give the agent access to your apps (Slack, Obsidian, CRM, etc.) — credentials are fetched at runtime")}>Connections</Label>
                           <div className="flex flex-wrap items-center gap-2">
                             {(pipe.config.connections || []).map((connId) => {
                               const baseId = pipeConnectionLookupKey(connId);
@@ -3610,7 +3618,7 @@ export function PipesSection() {
                             </div>
                           ) : executions.length === 0 && displayedLogs.length === 0 ? (
                             <p className="text-xs text-muted-foreground py-4 text-center">
-                              no runs yet — click ▶ to run manually
+                              No runs yet — click ▶ to run manually
                             </p>
                           ) : executions.length > 0 ? (
                             <>
@@ -3625,7 +3633,7 @@ export function PipesSection() {
                               <div key={exec.id} className="border p-2 space-y-1" style={{ contain: "layout paint" }}>
                                 <div className="flex items-center gap-2 text-xs font-mono flex-wrap">
                                   <span className="text-muted-foreground">
-                                    {exec.started_at ? new Date(exec.started_at).toLocaleString() : "queued"}
+                                    {exec.started_at ? new Date(exec.started_at).toLocaleString(uiLocale) : ui("Queued")}
                                   </span>
                                   <Badge variant={statusBadgeVariant(pipeExecutionDisplayStatus(exec))} className="text-[10px] h-5">{pipeExecutionDisplayStatus(exec)}</Badge>
                                   {!pipeExecutionCompletedBeforeContinueError(exec) && errorTypeBadge(exec.error_type)}
@@ -3634,20 +3642,20 @@ export function PipesSection() {
                                   {exec.model && <span className="text-muted-foreground/60 truncate max-w-[100px]">{exec.model}</span>}
                                   {pipeExecutionDisplayStatus(exec) === "completed" && exec.stdout && cleanPipeStdout(exec.stdout) && (
                                     <div className="ml-auto flex items-center gap-1">
-                                      <button className="text-muted-foreground hover:text-foreground p-0.5" title="copy" onClick={() => {
+                                      <button className="text-muted-foreground hover:text-foreground p-0.5" title={ui("Copy")} onClick={() => {
                                         commands.copyTextToClipboard(cleanPipeStdout(exec.stdout));
                                         setCopiedExecId(exec.id);
                                         setTimeout(() => setCopiedExecId((prev) => prev === exec.id ? null : prev), 1500);
                                       }}>
                                         {copiedExecId === exec.id ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
                                       </button>
-                                      <button className="text-muted-foreground hover:text-foreground p-0.5" title="open in chat" onClick={async () => {
+                                      <button className="text-muted-foreground hover:text-foreground p-0.5" title={ui("Open in chat")} onClick={async () => {
                                         const recorderSid = exec.conversation_id || `pipe:${exec.pipe_name}:${exec.id}`;
                                         const existing = await loadConversationFile(recorderSid);
                                         if (pipeExecutionUsesExistingChat(exec) && !existing) {
                                           toast({
-                                            title: "chat unavailable",
-                                            description: "this run's destination was deleted or cannot be read",
+                                            title: ui("Chat unavailable"),
+                                            description: ui("This run's destination was deleted or cannot be read"),
                                             variant: "destructive",
                                           });
                                           return;
@@ -3707,7 +3715,7 @@ export function PipesSection() {
                                   ) : (
                                     <ChevronDown className="h-3.5 w-3.5 mr-2" />
                                   )}
-                                  load older runs
+                                  Load older runs
                                 </Button>
                               )}
                             </>
@@ -3716,7 +3724,7 @@ export function PipesSection() {
                               // see contain: layout paint comment above
                               <div key={i} className="border p-2 space-y-1" style={{ contain: "layout paint" }}>
                                 <div className="flex items-center gap-2 text-xs font-mono">
-                                  <span className="text-muted-foreground">{new Date(log.started_at).toLocaleString()}</span>
+                                  <span className="text-muted-foreground">{new Date(log.started_at).toLocaleString(uiLocale)}</span>
                                   <span>{log.success ? "✓" : "✗"}</span>
                                   <span className="text-muted-foreground">{Math.round((new Date(log.finished_at).getTime() - new Date(log.started_at).getTime()) / 1000)}s</span>
                                 </div>
@@ -3729,7 +3737,7 @@ export function PipesSection() {
                                         setCopiedExecId(-(i + 1));
                                         setTimeout(() => setCopiedExecId((prev) => prev === -(i + 1) ? null : prev), 1500);
                                       }}
-                                      title="copy"
+                                      title={ui("Copy")}
                                     >
                                       {copiedExecId === -(i + 1) ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
                                     </button>
@@ -3756,15 +3764,15 @@ export function PipesSection() {
                         <>
                       <section className="order-2 divide-y divide-border border border-border">
                       <div className="px-4 py-3">
-                        <p className="text-sm font-medium">runtime</p>
+                        <p className="text-sm font-medium">Runtime</p>
                         <p className="mt-0.5 text-[11px] text-muted-foreground">
-                          control reasoning, external notifications, and execution limits.
+                          Control reasoning, external notifications, and execution limits.
                         </p>
                       </div>
                       {/* Notification API permission */}
                       <div className="flex items-center justify-between gap-3 px-4 py-3">
                         <div className="min-w-0">
-                          <span className="text-xs font-medium cursor-help" title="allows this scheduled task to call POST /notify">Allow notification API</span>
+                          <span className="text-xs font-medium cursor-help" title={ui("Allows this scheduled task to call POST /notify")}>Allow notification API</span>
                           <p className="mt-0.5 text-[11px] text-muted-foreground">
                             Blocks hardcoded POST /notify calls when turned off.
                           </p>
@@ -3778,9 +3786,9 @@ export function PipesSection() {
                       {/* Reasoning effort */}
                       <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_11rem] sm:items-center">
                         <div>
-                          <Label className="text-xs font-medium">reasoning effort</Label>
+                          <Label className="text-xs font-medium">Reasoning effort</Label>
                           <p className="mt-0.5 text-[11px] text-muted-foreground">
-                            low uses fewer reasoning tokens. raise it only for tasks that need deeper analysis; unsupported models may ignore it.
+                            Low uses fewer reasoning tokens. Raise it only for tasks that need deeper analysis; unsupported models may ignore it.
                           </p>
                         </div>
                         <Select
@@ -3816,9 +3824,9 @@ export function PipesSection() {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="low">low (recommended)</SelectItem>
-                            <SelectItem value="medium">medium</SelectItem>
-                            <SelectItem value="high">high</SelectItem>
+                            <SelectItem value="low">Low (recommended)</SelectItem>
+                            <SelectItem value="medium">Medium</SelectItem>
+                            <SelectItem value="high">High</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -3826,9 +3834,9 @@ export function PipesSection() {
                       {/* Timeout */}
                       <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_11rem] sm:items-center">
                         <div>
-                          <Label className="cursor-help text-xs font-medium" title="max execution time before the scheduled task is stopped — increase for slow LLMs or complex tasks">timeout</Label>
+                          <Label className="cursor-help text-xs font-medium" title={ui("Max execution time before the scheduled task is stopped — increase for slow LLMs or complex tasks")}>Timeout</Label>
                           <p className="mt-0.5 text-[11px] text-muted-foreground">
-                            stop a run if it exceeds this limit.
+                            Stop a run if it exceeds this limit.
                           </p>
                         </div>
                         <Select
@@ -3888,14 +3896,14 @@ export function PipesSection() {
                           <section className="order-1 overflow-hidden rounded-lg border border-border">
                             <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_16rem] sm:items-center">
                               <div>
-                                <Label className="text-xs font-medium">runs in</Label>
+                                <Label className="text-xs font-medium">Runs in</Label>
                                 <p
                                   id={`pipe-run-destination-description-${pipe.config.name}`}
                                   className="mt-0.5 text-[11px] text-muted-foreground"
                                 >
-                                  {mode === "per_run" && "a new chat with fresh context for every run."}
-                                  {mode === "task_chat" && "this task's own chat, shared across runs and your replies."}
-                                  {mode === "existing_chat" && "the selected chat on this device, using that chat's AI settings and approval prompts."}
+                                  {mode === "per_run" && ui("A new chat with fresh context for every run.")}
+                                  {mode === "task_chat" && ui("this task's own chat, shared across runs and your replies.")}
+                                  {mode === "existing_chat" && ui("the selected chat on this device, using that chat's AI settings and approval prompts.")}
                                 </p>
                               </div>
                               <Select
@@ -3930,10 +3938,10 @@ export function PipesSection() {
                                   <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
-                                  <SelectItem value="per_run">new chat each run</SelectItem>
-                                  <SelectItem value="task_chat">this task&apos;s chat</SelectItem>
+                                  <SelectItem value="per_run">New chat each run</SelectItem>
+                                  <SelectItem value="task_chat">This task&apos;s chat</SelectItem>
                                   <SelectItem value="existing_chat" disabled={Boolean(selectedDevice)}>
-                                    existing chat{selectedDevice ? " (choose on that device)" : ""}
+                                    Existing chat{selectedDevice ? ui(" (choose on that device)") : ""}
                                   </SelectItem>
                                 </SelectContent>
                               </Select>
@@ -3942,11 +3950,11 @@ export function PipesSection() {
                             {mode === "existing_chat" && (
                               <div className="grid gap-3 border-t border-border p-4 sm:grid-cols-[minmax(0,1fr)_16rem] sm:items-center">
                                 <div>
-                                  <Label className="text-xs font-medium">chat</Label>
+                                  <Label className="text-xs font-medium">Chat</Label>
                                   <p className="mt-0.5 text-[11px] text-muted-foreground">
                                     {selectedDevice
-                                      ? "open this task on that device to view or change its chat."
-                                      : "renaming or unpinning is safe. deleting this chat makes future runs fail until you choose another."}
+                                      ? ui("Open this task on that device to view or change its chat.")
+                                      : ui("Renaming or unpinning is safe. Deleting this chat makes future runs fail until you choose another.")}
                                   </p>
                                 </div>
                                 {selectedDevice ? (
@@ -3956,7 +3964,7 @@ export function PipesSection() {
                                     disabled
                                     className="h-8 justify-start rounded-md text-xs font-normal"
                                   >
-                                    configured on selected device
+                                    Configured on selected device
                                   </Button>
                                 ) : (
                                   <PipeChatDestinationPicker
@@ -3989,12 +3997,12 @@ export function PipesSection() {
                             <div className="border-t border-border px-4 py-2.5">
                               {historySaveStatus[pipe.config.name] === "saving" && (
                                 <div className="flex items-center gap-1 text-[11px] text-muted-foreground" role="status">
-                                  <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" /> saving destination
+                                  <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" /> Saving destination
                                 </div>
                               )}
                               {historySaveStatus[pipe.config.name] === "saved" && (
                                 <div className="flex items-center gap-1 text-[11px] text-muted-foreground" role="status">
-                                  <Check className="h-3 w-3" /> destination saved on {selectedDevice ? "selected device" : "this device"}
+                                  <Check className="h-3 w-3" /> Destination saved on {selectedDevice ? ui("selected device") : ui("this device")}
                                 </div>
                               )}
                               {historySaveStatus[pipe.config.name] === "error" && (
@@ -4003,7 +4011,7 @@ export function PipesSection() {
                                   role="alert"
                                   data-testid={`pipe-history-error-${pipe.config.name}`}
                                 >
-                                  save failed — previous destination restored
+                                  Save failed — previous destination restored
                                   {historySaveErrors[pipe.config.name]
                                     ? `: ${historySaveErrors[pipe.config.name]}`
                                     : ""}
@@ -4026,18 +4034,18 @@ export function PipesSection() {
                                         onClick={() => setHistoryResetPipe(pipe)}
                                       >
                                         {mode === "task_chat"
-                                          ? "start next run fresh"
-                                          : "clear saved task-chat context"}
+                                          ? ui("Start next run fresh")
+                                          : ui("Clear saved task-chat context")}
                                       </Button>
                                     )}
                                     {isRunning && (
-                                      <span className="text-[11px] text-muted-foreground">available after this run</span>
+                                      <span className="text-[11px] text-muted-foreground">Available after this run</span>
                                     )}
                                     {historyResetStatus[pipe.config.name] === "cleared" && (
-                                      <span className="text-[11px] text-muted-foreground" role="status">context cleared</span>
+                                      <span className="text-[11px] text-muted-foreground" role="status">Context cleared</span>
                                     )}
                                     {historyResetStatus[pipe.config.name] === "error" && (
-                                      <span className="text-[11px] text-destructive" role="alert">context was not cleared</span>
+                                      <span className="text-[11px] text-destructive" role="alert">Context was not cleared</span>
                                     )}
                                   </div>
                                 )}
@@ -4045,7 +4053,7 @@ export function PipesSection() {
                                 !historyResetStatus[pipe.config.name] &&
                                 !historySaveStatus[pipe.config.name] && (
                                   <p className="text-[11px] text-muted-foreground">
-                                    destination changes apply to the next run and never delete a chat.
+                                    Destination changes apply to the next run and never delete a chat.
                                   </p>
                                 )}
                             </div>
@@ -4057,34 +4065,34 @@ export function PipesSection() {
 
                       <section className="order-3 border border-border">
                       <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-                        <Label className="text-sm font-medium">task definition</Label>
-                        <span className="text-[11px] text-muted-foreground">task configuration</span>
+                        <Label className="text-sm font-medium">Task definition</Label>
+                        <span className="text-[11px] text-muted-foreground">Task configuration</span>
                         <div className="ml-auto flex items-center gap-2">
                         {saveStatus[pipe.config.name] === "saving" && (
                           <span className="text-[11px] text-muted-foreground flex items-center gap-1">
-                            <Loader2 className="h-3 w-3 animate-spin" /> saving...
+                            <Loader2 className="h-3 w-3 animate-spin" /> Saving...
                           </span>
                         )}
                         {saveStatus[pipe.config.name] === "saved" && (
                           <span className="text-[11px] text-muted-foreground flex items-center gap-1">
-                            <Check className="h-3 w-3" /> saved
+                            <Check className="h-3 w-3" /> Saved
                           </span>
                         )}
                         {saveStatus[pipe.config.name] === "error" && (
                           <span className="text-[11px] text-destructive" title={saveErrors[pipe.config.name]}>
-                            save failed: {saveErrors[pipe.config.name] || "unknown error"}
+                            Save failed: {saveErrors[pipe.config.name] || ui("unknown error")}
                           </span>
                         )}
                         {promptDrafts[pipe.config.name] !== undefined && !saveStatus[pipe.config.name] && (
-                          <span className="text-[11px] text-muted-foreground">unsaved</span>
+                          <span className="text-[11px] text-muted-foreground">Unsaved</span>
                         )}
                         </div>
                       </div>
                       {isReadOnlyPipe(pipe) && (
                         <p className="px-4 pt-3 text-[11px] text-muted-foreground">
                           {isEnterpriseManagedPipe(pipe)
-                            ? "managed by your organization (read-only, restored automatically)"
-                            : "shared by your team (read-only, updates automatically) — fork it to make an editable copy"}
+                            ? ui("Managed by your organization (read-only, restored automatically)")
+                            : ui("Shared by your team (read-only, updates automatically) — fork it to make an editable copy")}
                         </p>
                       )}
                       <Textarea
@@ -4109,7 +4117,7 @@ export function PipesSection() {
                       <div className="mt-1 space-y-2 max-h-64 overflow-y-auto">
                         {executions.length === 0 && displayedLogs.length === 0 ? (
                           <p className="text-xs text-muted-foreground">
-                            no runs yet
+                            No runs yet
                           </p>
                         ) : executions.length > 0 ? (
                           executions.map((exec) => (
@@ -4120,8 +4128,8 @@ export function PipesSection() {
                               <div className="flex items-center gap-2 text-xs font-mono flex-wrap">
                                 <span className="text-muted-foreground">
                                   {exec.started_at
-                                    ? new Date(exec.started_at).toLocaleString()
-                                    : "queued"}
+                                    ? new Date(exec.started_at).toLocaleString(uiLocale)
+                                    : ui("Queued")}
                                 </span>
                                 <Badge variant={statusBadgeVariant(pipeExecutionDisplayStatus(exec))} className="text-[10px] h-5">
                                   {pipeExecutionDisplayStatus(exec)}
@@ -4143,7 +4151,7 @@ export function PipesSection() {
                                 {exec.stdout && (
                                   <button
                                     className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
-                                    title="view in chat"
+                                    title={ui("view in chat")}
                                     onClick={async (e) => {
                                       e.stopPropagation();
                                       const conversationId =
@@ -4151,8 +4159,8 @@ export function PipesSection() {
                                       const existing = await loadConversationFile(conversationId);
                                       if (pipeExecutionUsesExistingChat(exec) && !existing) {
                                         toast({
-                                          title: "chat unavailable",
-                                          description: "this run's destination was deleted or cannot be read",
+                                          title: ui("Chat unavailable"),
+                                          description: ui("This run's destination was deleted or cannot be read"),
                                           variant: "destructive",
                                         });
                                         return;
@@ -4222,7 +4230,7 @@ export function PipesSection() {
                               >
                                 <div className="flex items-center gap-2 text-xs font-mono">
                                   <span className="text-muted-foreground">
-                                    {new Date(log.started_at).toLocaleString()}
+                                    {new Date(log.started_at).toLocaleString(uiLocale)}
                                   </span>
                                   <span>
                                     {log.success ? "✓" : "✗"}
@@ -4267,9 +4275,9 @@ export function PipesSection() {
                     <div className="px-5 pb-6 pt-4" data-testid="pipe-create-pane">
                       <div className="flex items-start gap-2">
                         <div className="min-w-0 flex-1">
-                          <h3 className="text-base font-medium">new scheduled task</h3>
+                          <h3 className="text-base font-medium">New scheduled task</h3>
                           <p className="mt-1 text-xs text-muted-foreground">
-                            describe what you want in plain english — screenpipe builds,
+                            Describe what you want in plain english — screenpipe builds,
                             installs, and schedules it for you.
                           </p>
                         </div>
@@ -4278,8 +4286,8 @@ export function PipesSection() {
                           size="icon"
                           className="h-7 w-7 shrink-0"
                           onClick={() => setCreating(false)}
-                          title="close"
-                          aria-label="close"
+                          title={ui("Close")}
+                          aria-label={ui("Close")}
                         >
                           <X className="h-3.5 w-3.5" />
                         </Button>
@@ -4301,12 +4309,12 @@ export function PipesSection() {
                         <div className="flex items-center gap-2">
                           <Input
                             autoFocus
-                            placeholder="e.g. every morning, list the people i still need to reply to"
+                            placeholder={ui("E.g. every morning, list the people I still need to reply to")}
                             className="font-mono text-sm"
                           />
                           <button
                             type="submit"
-                            aria-label="create scheduled task"
+                            aria-label={ui("Create scheduled task")}
                             className="inline-flex h-9 w-9 shrink-0 items-center justify-center border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                           >
                             <ArrowRight className="h-4 w-4" />
@@ -4314,7 +4322,7 @@ export function PipesSection() {
                         </div>
                       </form>
 
-                      <p className="mt-5 text-xs text-muted-foreground">or start from an example</p>
+                      <p className="mt-5 text-xs text-muted-foreground">Or start from an example</p>
                       <div className="mt-2 flex flex-wrap gap-2">
                         {PIPE_EXAMPLES.map((ex) => (
                           <button
@@ -4334,9 +4342,9 @@ export function PipesSection() {
                     detail ?? (
                       <div className="flex h-full min-h-[28rem] items-center justify-center px-8 text-center">
                         <div className="max-w-xs space-y-1">
-                          <p className="text-sm text-foreground">select a scheduled task</p>
+                          <p className="text-sm text-foreground">Select a scheduled task</p>
                           <p className="text-xs text-muted-foreground">
-                            its schedule, prompt, runs and logs open here.
+                            Its schedule, prompt, runs and logs open here.
                           </p>
                         </div>
                       </div>
@@ -4427,14 +4435,14 @@ export function PipesSection() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>
-              clear saved context for {historyResetPipe?.config.name}?
+              Clear saved context for {historyResetPipe?.config.name}?
             </DialogTitle>
             <DialogDescription>
-              clears the remembered ai context and removes the shared chat from your
-              sidebar. completed execution records stay in Runs. this cannot be undone.
+              Clears the remembered AI context and removes the shared chat from your
+              sidebar. Completed execution records stay in Runs. This cannot be undone.
               {historyResetPipe?.config.history
-                ? " the next run starts a new shared chat."
-                : " future runs stay separate unless you turn one-chat memory back on."}
+                ? ui(" the next run starts a new shared chat.")
+                : ui(" future runs stay separate unless you turn one-chat memory back on.")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 sm:gap-0">
@@ -4446,7 +4454,7 @@ export function PipesSection() {
               }
               onClick={() => setHistoryResetPipe(null)}
             >
-              cancel
+              Cancel
             </Button>
             <Button
               variant="destructive"
@@ -4464,7 +4472,7 @@ export function PipesSection() {
               historyResetStatus[historyResetPipe.config.name] === "clearing" ? (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
               ) : null}
-              clear saved context
+              Clear saved context
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -4473,7 +4481,7 @@ export function PipesSection() {
       <Dialog open={!!updateDialog} onOpenChange={(open) => !open && setUpdateDialog(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>update {updateDialog?.pipeName}?</DialogTitle>
+            <DialogTitle>Update {updateDialog?.pipeName}?</DialogTitle>
             <DialogDescription>
               <span className="inline-flex items-center gap-2 mt-2">
                 <Badge variant="outline">v{updateDialog?.installedVersion}</Badge>
@@ -4485,14 +4493,14 @@ export function PipesSection() {
           <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/10 border border-destructive/20">
             <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
             <p className="text-sm text-muted-foreground">
-              you have local edits to this scheduled task. updating will overwrite your prompt changes.
-              a local backup will be saved before updating.
-              your schedule, model, and enabled state will be preserved.
+              You have local edits to this scheduled task. Updating will overwrite your prompt changes.
+              A local backup will be saved before updating.
+              Your schedule, model, and enabled state will be preserved.
             </p>
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="ghost" onClick={() => setUpdateDialog(null)}>
-              skip
+              Skip
             </Button>
             <Button
               variant="destructive"
@@ -4503,7 +4511,7 @@ export function PipesSection() {
                 }
               }}
             >
-              update & discard my edits
+              Update & discard my edits
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -4512,14 +4520,14 @@ export function PipesSection() {
       <Dialog open={bulkDeleteConfirm} onOpenChange={(open) => { if (!open && !bulkDeleting) setBulkDeleteConfirm(false); }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>delete {selectedPipes.size} scheduled task{selectedPipes.size !== 1 ? "s" : ""}?</DialogTitle>
+            <DialogTitle>{ui("Delete {count, plural, one {# scheduled task} other {# scheduled tasks}}?", { count: selectedPipes.size })}</DialogTitle>
             <DialogDescription>
-              this will permanently remove the selected scheduled tasks and their configurations. this action cannot be undone.
+              This will permanently remove the selected scheduled tasks and their configurations. This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="ghost" disabled={bulkDeleting} onClick={() => setBulkDeleteConfirm(false)}>
-              cancel
+              Cancel
             </Button>
             <Button
               variant="destructive"
@@ -4530,7 +4538,7 @@ export function PipesSection() {
               }}
             >
               {bulkDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <Trash2 className="h-3.5 w-3.5 mr-1.5" />}
-              delete
+              Delete
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -105,15 +105,62 @@ pub async fn inspect_database_health(
 }
 
 async fn inspect_connection(path: &Path) -> Result<usize, DatabaseHealthError> {
+    #[cfg(target_os = "macos")]
+    let network_volume = screenpipe_fs::is_network_volume(path)
+        .map_err(|e| DatabaseHealthError::Unavailable(e.into()))?;
+    #[cfg(not(target_os = "macos"))]
+    let network_volume = false;
+    let network_wal = if network_volume {
+        use std::io::Read;
+        let mut header = [0_u8; 20];
+        let read = std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut header));
+        match read {
+            Ok(()) => &header[..16] == b"SQLite format 3\0" && header[18..20] == [2, 2],
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => false,
+            Err(error) => return Err(DatabaseHealthError::Unavailable(error.into())),
+        }
+    } else {
+        false
+    };
+    // The macOS network VFS cannot open a WAL through a physically read-only
+    // handle. All owners are closed here; use its private exclusive WAL index
+    // with a SQL write barrier and no checkpoint on close. This lets us verify
+    // existing NAS histories without rewriting their database or WAL files.
     let options = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(false)
-        .read_only(true)
+        .read_only(!network_wal)
+        .pragma("query_only", "ON")
+        .pragma(
+            "locking_mode",
+            if network_wal { "EXCLUSIVE" } else { "NORMAL" },
+        )
         .busy_timeout(Duration::from_secs(5))
         .disable_statement_logging();
     let mut connection = SqliteConnection::connect_with(&options)
         .await
         .map_err(classify_verification_error)?;
+    if network_wal {
+        let mut handle = connection
+            .lock_handle()
+            .await
+            .map_err(classify_verification_error)?;
+        // SAFETY: SQLx lends its live, exclusively locked sqlite3 connection;
+        // this documented boolean db_config takes an optional result pointer.
+        let result = unsafe {
+            libsqlite3_sys::sqlite3_db_config(
+                handle.as_raw_handle().as_ptr(),
+                libsqlite3_sys::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                1_i32,
+                std::ptr::null_mut::<i32>(),
+            )
+        };
+        if result != libsqlite3_sys::SQLITE_OK {
+            return Err(DatabaseHealthError::Unavailable(sqlx::Error::Protocol(
+                format!("cannot disable verification checkpoint: {result}"),
+            )));
+        }
+    }
     let result = sqlx::query_scalar::<_, String>("PRAGMA integrity_check")
         .fetch_all(&mut connection)
         .await;

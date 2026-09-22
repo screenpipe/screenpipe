@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Check, Circle, ExternalLink, Loader2, RefreshCw, X } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import { platform } from "@tauri-apps/plugin-os";
+import { useGT } from "gt-react";
+
 
 interface BrowserStatus {
   name: string;
@@ -22,6 +24,8 @@ interface BrowserUrlCardProps {
 }
 
 export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
+
+  const ui = useGT();
   const [browsers, setBrowsers] = useState<BrowserStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingError, setLoadingError] = useState(false);
@@ -95,7 +99,7 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
           <div className="flex-shrink-0">
             <img
               src="/images/browser-url.svg"
-              alt="Browser URL"
+              alt={ui("Browser URL")}
               className="w-10 h-10 rounded-lg"
             />
           </div>
@@ -106,17 +110,17 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
                 Browser URL Capture
               </h3>
               <span className="px-2 py-0.5 text-xs font-medium bg-muted text-muted-foreground rounded-full">
-                macOS
+                MacOS
               </span>
               {allGranted && (
                 <span className="px-2 py-0.5 text-xs font-medium bg-green-500/10 text-green-600 rounded-full">
-                  all enabled
+                  All enabled
                 </span>
               )}
             </div>
 
             <p className="text-xs text-muted-foreground mb-3 leading-relaxed">
-              screenpipe needs Automation permission to capture URLs from
+              Screenpipe needs Automation permission to capture URLs from
               Chromium-based browsers. Safari works via Accessibility (already
               enabled).
             </p>
@@ -124,7 +128,7 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
             {loading ? (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                checking browser permissions...
+                Checking browser permissions...
               </div>
             ) : browsers.length > 0 ? (
               <div className="space-y-3">
@@ -143,8 +147,8 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
                         <Check className="h-3 w-3" />
                       )}
                       {hasPromptableBrowser
-                        ? "request automation permission"
-                        : "open automation settings"}
+                        ? ui("Request automation permission")
+                        : ui("Open automation settings")}
                     </Button>
                   </div>
                 )}
@@ -172,7 +176,7 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
                       </div>
 
                       {b.status === "granted" ? (
-                        <span className="text-[10px] text-green-600">enabled</span>
+                        <span className="text-[10px] text-green-600">Enabled</span>
                       ) : b.status === "denied" ? (
                         <Button
                           variant="ghost"
@@ -183,7 +187,7 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
                           }
                         >
                           <ExternalLink className="h-3 w-3 mr-1" />
-                          open settings
+                          Open settings
                         </Button>
                       ) : b.running ? (
                         <Button
@@ -192,11 +196,11 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
                           className="h-6 text-[10px] px-2"
                           onClick={() => handleEnable(b.name)}
                         >
-                          enable
+                          Enable
                         </Button>
                       ) : (
                         <span className="text-[10px] text-muted-foreground">
-                          open browser first
+                          Open browser first
                         </span>
                       )}
                     </div>
@@ -207,8 +211,8 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
               <div className="space-y-2 rounded-lg border border-dashed border-border p-3">
                 <p className="text-xs text-muted-foreground">
                   {loadingError
-                    ? "couldn't read browser automation status. try requesting permission, then refresh."
-                    : "no supported Chromium browser was detected. open Chrome, Arc, Brave, Edge, or another Chromium browser, then refresh."}
+                    ? ui("Couldn't read browser automation status. Try requesting permission, then refresh.")
+                    : ui("No supported Chromium browser was detected. Open Chrome, Arc, Brave, Edge, or another Chromium browser, then refresh.")}
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <Button
@@ -223,7 +227,7 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
                     ) : (
                       <Check className="h-3 w-3" />
                     )}
-                    request automation permission
+                    Request automation permission
                   </Button>
                   <Button
                     variant="ghost"
@@ -232,7 +236,7 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
                     onClick={() => commands.openPermissionSettings("automation")}
                   >
                     <ExternalLink className="h-3 w-3" />
-                    open settings
+                    Open settings
                   </Button>
                 </div>
               </div>
@@ -243,7 +247,7 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
               className="flex items-center gap-1 mt-2 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
             >
               <RefreshCw className="h-3 w-3" />
-              refresh status
+              Refresh status
             </button>
           </div>
         </div>
@@ -251,7 +255,7 @@ export function BrowserUrlCard({ onStatusChange }: BrowserUrlCardProps) {
 
         <div className="px-4 py-2 bg-muted/50 border-t border-border">
           <p className="text-xs text-muted-foreground">
-            if a browser was denied, toggle it on manually in System Settings →
+            If a browser was denied, toggle it on manually in System Settings →
             Privacy &amp; Security → Automation → screenpipe
           </p>
         </div>

@@ -21,6 +21,8 @@ import {
   type BusinessUpgradeOffer,
 } from "@/lib/business-upgrade-offer";
 import type { BusinessUpgradeSelection } from "@/lib/upgrade-flow";
+import { useGT } from "gt-react";
+
 
 const OFFER_URL = screenpipeWebUrl(
   "/api/subscription/offer",
@@ -44,6 +46,8 @@ export function BusinessUpgradeCard({
   busy,
   onContinue,
 }: BusinessUpgradeCardProps) {
+
+  const ui = useGT();
   const { settings } = useSettings();
   const [offer, setOffer] = useState<BusinessUpgradeOffer>(
     DEFAULT_BUSINESS_UPGRADE_OFFER,
@@ -161,7 +165,7 @@ export function BusinessUpgradeCard({
       data-testid="business-upgrade-card"
     >
       <div className="border-b border-border px-6 py-5">
-        <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+        <p className="font-mono text-[11px] normal-case tracking-[0.18em] text-muted-foreground">
           Business
         </p>
         <div className="mt-3 max-w-xl">
@@ -187,8 +191,8 @@ export function BusinessUpgradeCard({
               : "hover:bg-muted/40"
           }`}
         >
-          <span className="font-mono text-xs uppercase tracking-wide">
-            monthly
+          <span className="font-mono text-xs normal-case tracking-wide">
+            Monthly
           </span>
           <div className="mt-4 flex items-baseline gap-1">
             <span className="text-3xl font-semibold">
@@ -197,11 +201,11 @@ export function BusinessUpgradeCard({
             <span className="text-sm text-muted-foreground">/ month</span>
           </div>
           <p className="mt-3 text-xs font-medium">
-            charged today:{" "}
+            Charged today:{" "}
             {formatOfferAmount(month.totalAmount, month.currency)}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            renews monthly · cancel any time
+            Renews monthly · cancel any time
           </p>
         </button>
 
@@ -218,10 +222,10 @@ export function BusinessUpgradeCard({
           }`}
         >
           <div className="flex items-center justify-between gap-3">
-            <span className="font-mono text-xs uppercase tracking-wide">
-              annual
+            <span className="font-mono text-xs normal-case tracking-wide">
+              Annual
             </span>
-            <span className="border border-foreground px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide">
+            <span className="border border-foreground px-2 py-0.5 font-mono text-[10px] normal-case tracking-wide">
               {offer.copy.annualBadge}
             </span>
           </div>
@@ -232,7 +236,7 @@ export function BusinessUpgradeCard({
             <span className="text-sm text-muted-foreground">/ year</span>
           </div>
           <p className="mt-3 text-xs font-medium">
-            charged today: {formatOfferAmount(year.totalAmount, year.currency)}
+            Charged today: {formatOfferAmount(year.totalAmount, year.currency)}
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             {annualEquivalent}/month effective · save {savings}/year
@@ -253,11 +257,11 @@ export function BusinessUpgradeCard({
         <div className="self-end">
           <div className="mb-3 border-l border-border pl-3 text-xs leading-relaxed text-muted-foreground">
             {existingSubscription
-              ? "your current subscription stays in place until you review and confirm the prorated upgrade"
-              : `${selectedCharge} is charged today in Stripe checkout, then renews ${interval === "year" ? "yearly" : "monthly"}`}
+              ? ui("Your current subscription stays in place until you review and confirm the prorated upgrade")
+              : ui("{value1} is charged today in Stripe checkout, then renews {value2}", { value1: selectedCharge, value2: interval === "year" ? "yearly" : "monthly" })}
           </div>
           <Button
-            className="h-11 w-full rounded-none bg-foreground font-mono text-xs uppercase tracking-wide text-background hover:bg-background hover:text-foreground"
+            className="h-11 w-full rounded-md bg-foreground font-mono text-xs normal-case tracking-wide text-background hover:bg-background hover:text-foreground"
             data-testid="account-upgrade-business-button"
             disabled={busy || !selectedAvailable}
             onClick={() =>
@@ -276,15 +280,15 @@ export function BusinessUpgradeCard({
               <ExternalLinkIcon className="mr-2 h-4 w-4" />
             )}
             {busy
-              ? "opening checkout"
+              ? ui("Opening checkout")
               : selectedAvailable
                 ? ctaLabel
-                : "billing option unavailable"}
+                : ui("Billing option unavailable")}
           </Button>
           <p className="mt-2 text-center text-[11px] text-muted-foreground">
             {selectedAvailable
-              ? "payment details stay in Stripe's secure checkout"
-              : "choose another billing interval or try again later"}
+              ? ui("Payment details stay in Stripe's secure checkout")
+              : ui("Choose another billing interval or try again later")}
           </p>
         </div>
       </div>

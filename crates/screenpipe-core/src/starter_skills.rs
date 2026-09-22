@@ -109,7 +109,7 @@ pub fn install_one(root: &Path, name: &str, content: &str) -> io::Result<PathBuf
             .open(&staged)?;
         use io::Write;
         file.write_all(content.as_bytes())?;
-        file.sync_all()?;
+        screenpipe_fs::sync_all(&file)?;
         drop(file);
         fs::rename(&staged, &path)?;
         fs::write(&marker, content)?;
@@ -120,7 +120,7 @@ pub fn install_one(root: &Path, name: &str, content: &str) -> io::Result<PathBuf
             .create_new(true)
             .open(&path)?;
         file.write_all(content.as_bytes())?;
-        file.sync_all()?;
+        screenpipe_fs::sync_all(&file)?;
         fs::write(&marker, content)?;
     }
     Ok(path)
@@ -161,7 +161,7 @@ pub fn install_store(root: &Path) -> io::Result<Vec<PathBuf>> {
         .create_new(true)
         .open(&staged)?;
     file.write_all(seen.as_bytes())?;
-    file.sync_all()?;
+    screenpipe_fs::sync_all(&file)?;
     drop(file);
     fs::rename(staged, index)?;
     Ok(installed)

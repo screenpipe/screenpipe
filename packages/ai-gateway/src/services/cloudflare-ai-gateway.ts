@@ -10,7 +10,7 @@ export type HostedChatPlan = 'free' | 'basic' | 'business' | 'business_max' | 'b
 export type HostedChatLane = 'auto' | 'explicit' | 'frontier';
 export type HostedChatRequestLane = Exclude<HostedChatLane, 'frontier'>;
 export type HostedChatWorkload = 'interactive' | 'background';
-export type CloudflareGatewayProvider = 'openai' | 'anthropic' | 'custom-tinfoil';
+export type CloudflareGatewayProvider = 'openai' | 'anthropic' | 'custom-tinfoil' | 'elevenlabs';
 export type HostedChatLimitScope = 'combined' | 'frontier' | 'unknown';
 
 const SUPER_ADMIN_ACTOR_ID = 'f0d67846f15d207818a4016c5f12edac415d35adf8084792fec508554def5906';

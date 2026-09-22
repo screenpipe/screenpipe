@@ -4,6 +4,8 @@
 "use client";
 
 import React from "react";
+import { ChatMarkdown } from "@screenpipe/workflows-ui/chat";
+export { stableStreamingMarkdownPrefix } from "@screenpipe/workflows-ui/chat";
 import { emit } from "@tauri-apps/api/event";
 import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
@@ -24,6 +26,8 @@ import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { cn } from "@/lib/utils";
 import { sanitizeToolCallXml } from "@/lib/utils/sanitize-tool-call-xml";
 import { LinkPreviewAnchor } from "@/components/chat/link-preview-anchor";
+import { useGT } from "gt-react";
+
 
 // The transport snapshots text every 80 ms. Parse only complete blocks
 // (blank-line / closed-fence boundaries) and commit each one on the same
@@ -59,69 +63,6 @@ interface MarkdownBlockProps extends MarkdownBlockOptions {
   ) => React.ReactNode | null;
 }
 
-function scanStreamingMarkdown(text: string): {
-  prefix: string;
-  blocks: string[];
-} {
-  let fenceCharacter: "`" | "~" | null = null;
-  let fenceLength = 0;
-  let lastBoundary = 0;
-  let blockStart = 0;
-  let lineStart = 0;
-  const blocks: string[] = [];
-
-  while (lineStart < text.length) {
-    const newlineIndex = text.indexOf("\n", lineStart);
-    const lineEnd = newlineIndex === -1 ? text.length : newlineIndex;
-    const line = text.slice(lineStart, lineEnd).replace(/\r$/, "");
-    const nextLineStart = newlineIndex === -1 ? text.length : newlineIndex + 1;
-    const fenceMatch = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
-
-    if (fenceMatch) {
-      const marker = fenceMatch[1];
-      const character = marker[0] as "`" | "~";
-      if (!fenceCharacter) {
-        fenceCharacter = character;
-        fenceLength = marker.length;
-      } else if (
-        character === fenceCharacter &&
-        marker.length >= fenceLength &&
-        fenceMatch[2].trim() === ""
-      ) {
-        fenceCharacter = null;
-        fenceLength = 0;
-      }
-    } else if (!fenceCharacter && line.trim() === "") {
-      lastBoundary = nextLineStart;
-      const block = text.slice(blockStart, lastBoundary);
-      if (block.trim() !== "") {
-        blocks.push(block);
-      }
-      blockStart = lastBoundary;
-    }
-
-    lineStart = nextLineStart;
-  }
-
-  return { prefix: text.slice(0, lastBoundary), blocks };
-}
-
-export function stableStreamingMarkdownPrefix(text: string): string {
-  return scanStreamingMarkdown(text).prefix;
-}
-
-function streamingMarkdownParts(text: string, streaming: boolean) {
-  if (!streaming) {
-    return { blocks: text ? [text] : [], tailText: "" };
-  }
-
-  const { prefix, blocks } = scanStreamingMarkdown(text);
-  return {
-    blocks,
-    tailText: text.slice(prefix.length),
-  };
-}
-
 export function MarkdownBlock({
   text,
   isUser,
@@ -134,10 +75,11 @@ export function MarkdownBlock({
   suppressImages = false,
   className,
 }: MarkdownBlockProps) {
+
+  const ui = useGT();
   const renderText = rewriteLocalMarkdownLinksForChat(
     isUser ? text : sanitizeToolCallXml(text),
   );
-  const { blocks, tailText } = streamingMarkdownParts(renderText, streaming);
   const markdownClassName = cn(
     "prose prose-sm max-w-full break-words overflow-hidden [word-break:break-word] flex flex-col items-start",
     isUser ? "text-foreground dark:prose-invert" : "dark:prose-invert",
@@ -155,7 +97,7 @@ export function MarkdownBlock({
             <div
               className="scrollbar-minimal my-4 w-full max-w-full overflow-x-auto overscroll-x-contain rounded-md border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               role="region"
-              aria-label="Scrollable table"
+              aria-label={ui("Scrollable table")}
               tabIndex={0}
             >
               <table
@@ -304,34 +246,25 @@ export function MarkdownBlock({
         // sidebar, and stays readable in light and dark mode.
         ...createCodeMarkdownComponents({ renderSpecialCodeBlock }),
   };
-  const markdown = blocks.map((block, index) => (
-    <MemoizedReactMarkdown
-      key={index}
-      className={markdownClassName}
-      remarkPlugins={remarkPlugins}
-      urlTransform={resolvedUrlTransform}
-      rehypePlugins={[rehypeRaw]}
-      components={markdownComponents}
-    >
-      {block}
-    </MemoizedReactMarkdown>
-  ));
-
   return (
-    <>
-      {markdown}
-      {tailText ? (
-        <div
-          className={cn(
-            "max-w-full whitespace-pre-wrap break-words [word-break:break-word] leading-relaxed",
-            blocks.length > 0 && "mt-2",
-            className,
-          )}
-          data-testid="streaming-markdown-tail"
+    <ChatMarkdown
+      text={renderText}
+      streaming={streaming}
+      tailClassName={cn(
+        "max-w-full whitespace-pre-wrap break-words [word-break:break-word] leading-relaxed",
+        className,
+      )}
+      renderBlock={(block) => (
+        <MemoizedReactMarkdown
+          className={markdownClassName}
+          remarkPlugins={remarkPlugins}
+          urlTransform={resolvedUrlTransform}
+          rehypePlugins={[rehypeRaw]}
+          components={markdownComponents}
         >
-          {tailText}
-        </div>
-      ) : null}
-    </>
+          {block}
+        </MemoizedReactMarkdown>
+      )}
+    />
   );
 }

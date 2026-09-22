@@ -2139,6 +2139,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "diffy"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b545b8c50194bdd008283985ab0b31dba153cfd5b3066a92770634fbc0d7d291"
+dependencies = [
+ "nu-ansi-term",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7046,6 +7055,7 @@ dependencies = [
  "russh-sftp",
  "rustls-native-certs",
  "screenpipe-core",
+ "screenpipe-fs",
  "screenpipe-secrets",
  "screenpipe-vault",
  "serde",
@@ -7075,6 +7085,7 @@ dependencies = [
  "core-foundation",
  "core-graphics 0.24.0",
  "cron",
+ "diffy",
  "dirs 6.0.0",
  "ffmpeg-sidecar",
  "futures",
@@ -7089,6 +7100,7 @@ dependencies = [
  "reqwest",
  "screenpipe-cpu-features",
  "screenpipe-events",
+ "screenpipe-fs",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -7125,6 +7137,9 @@ dependencies = [
  "regex",
  "rusqlite",
  "screenpipe-config",
+ "screenpipe-fs",
+ "screenpipe-resource",
+ "screenpipe-secrets",
  "screenpipe-semantic",
  "screenpipe-sqlite-coordinator",
  "serde",
@@ -7159,6 +7174,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-fs"
+version = "0.4.50"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "screenpipe-recorder"
 version = "0.4.3"
 dependencies = [
@@ -7176,6 +7198,15 @@ dependencies = [
  "serde",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "screenpipe-resource"
+version = "0.4.50"
+dependencies = [
+ "serde",
+ "sysinfo",
+ "tokio",
 ]
 
 [[package]]
@@ -7205,6 +7236,7 @@ dependencies = [
  "screenpipe-connect",
  "screenpipe-core",
  "screenpipe-db",
+ "screenpipe-fs",
  "serde",
  "serde_json",
  "tokio",
@@ -7251,6 +7283,7 @@ version = "0.4.50"
 dependencies = [
  "fs2",
  "libsqlite3-sys",
+ "screenpipe-fs",
  "serde",
  "serde_json",
  "sqlx",

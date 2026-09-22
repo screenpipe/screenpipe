@@ -127,6 +127,7 @@ mod server_core;
 #[allow(deprecated)]
 mod space_monitor;
 mod store;
+mod localization;
 mod suggestions;
 mod sync;
 mod tray;
@@ -134,9 +135,12 @@ mod tray;
 mod staged_update;
 mod stale_tier;
 mod startup_auth;
+mod update_restart;
 mod updates;
 mod voice_training;
 mod window;
+mod workflows_runtime;
+mod workflows_media;
 mod windows_ca_bundle;
 #[cfg(target_os = "windows")]
 mod windows_crash_dump;
@@ -472,9 +476,9 @@ async fn main() {
 
     // Point debug builds at their own data dir and ports so `bun tauri dev`
     // can't hand off to (or kill) an installed production app. Must run before
-    // the DB-recovery-lock check, the /focus single-instance handoff and the
-    // telemetry store read below — all of which resolve the data directory or
-    // the focus port. No-op in release builds. See `dev_isolation`.
+    // the /focus single-instance handoff and telemetry store read below, which
+    // resolve the data directory or focus port. No-op in release builds.
+    // See `dev_isolation`.
     dev_isolation::apply();
 
     #[cfg(target_os = "linux")]
@@ -493,45 +497,6 @@ async fn main() {
 
     #[cfg(target_os = "windows")]
     windows_webview_env::install_user_data_dir();
-
-    // Refuse to launch while a `screenpipe db recover|cleanup` operation is in
-    // progress. The CLI writes ~/.screenpipe/.db_recovery.lock before doing
-    // anything destructive; if the user double-clicks the app icon mid-recovery,
-    // we'd otherwise race the swap and corrupt the DB again. The CLI heartbeats
-    // the lock every 30 s, so a fresh mtime means the op is genuinely live.
-    //
-    // Escape hatches (in order of preference):
-    //   1. `screenpipe db unlock` — friendly path
-    //   2. SCREENPIPE_IGNORE_DB_LOCK=1 env var — bypass on this launch only
-    //   3. `rm ~/.screenpipe/.db_recovery.lock` — manual
-    //
-    // See `crates/screenpipe-engine/src/cli/db.rs`.
-    if std::env::var("SCREENPIPE_IGNORE_DB_LOCK").ok().as_deref() != Some("1") {
-        let lock_path =
-            screenpipe_core::paths::default_screenpipe_data_dir().join(".db_recovery.lock");
-        if let Ok(metadata) = std::fs::metadata(&lock_path) {
-            let stale = metadata
-                .modified()
-                .ok()
-                .and_then(|m| m.elapsed().ok())
-                .map(|d| d.as_secs() > 3600)
-                .unwrap_or(false);
-            if stale {
-                let _ = std::fs::remove_file(&lock_path);
-            } else {
-                let body = std::fs::read_to_string(&lock_path).unwrap_or_default();
-                eprintln!(
-                    "screenpipe: a `screenpipe db ...` operation is in progress.\n\
-                     lock: {}\n\
-                     content: {}\n\
-                     options:\n  • wait for the op to finish, then re-open the app\n  • run `screenpipe db unlock` if you're sure it's stuck\n  • set SCREENPIPE_IGNORE_DB_LOCK=1 and retry to bypass this check",
-                    lock_path.display(),
-                    body.trim(),
-                );
-                std::process::exit(2);
-            }
-        }
-    }
 
     // Export the Windows root/CA cert stores to a PEM file and set
     // NODE_EXTRA_CA_CERTS before any bun/node subprocess can spawn. Fixes
@@ -941,6 +906,7 @@ async fn main() {
     let recording_state = RecordingState {
         server_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
         server: Arc::new(tokio::sync::Mutex::new(None)),
+        server_shutdown: Default::default(),
         capture: Arc::new(tokio::sync::Mutex::new(None)),
         is_starting: Arc::new(AtomicBool::new(false)),
         is_starting_capture: Arc::new(AtomicBool::new(false)),
@@ -1225,37 +1191,39 @@ async fn main() {
                 let app_ui_hidden = crate::enterprise_policy::is_app_ui_hidden();
 
                 let mut app_submenu_builder = SubmenuBuilder::new(app, "screenpipe")
-                    .item(&PredefinedMenuItem::about(app, Some("About screenpipe"), None)?)
+                    .item(&PredefinedMenuItem::about(app, Some(&localization::ui_text("About screenpipe")), None)?)
                     .separator();
                 if !crate::updates::is_enterprise_build(&app_handle) {
                     app_submenu_builder = app_submenu_builder
-                        .item(&MenuItemBuilder::with_id("check_for_updates", "Check for Updates...")
+                        .item(&MenuItemBuilder::with_id("check_for_updates", localization::ui_text("Check for Updates..."))
                             .build(app)?)
                         .separator();
                 }
                 if !app_ui_hidden {
                     app_submenu_builder = app_submenu_builder
-                        .item(&MenuItemBuilder::with_id("settings", "Settings...")
+                        // Tauri menu listeners are global, including tray menus.
+                        // Keep this id distinct so Settings opens exactly once.
+                        .item(&MenuItemBuilder::with_id("app_settings", localization::ui_text("Settings..."))
                             .accelerator("CmdOrCtrl+,")
                             .build(app)?)
                         .separator();
                 }
                 let app_submenu = app_submenu_builder
                     .item(
-                        &MenuItemBuilder::with_id("quit_app", "Quit screenpipe")
+                        &MenuItemBuilder::with_id("quit_app", localization::ui_text("Quit screenpipe"))
                             .accelerator("CmdOrCtrl+Q")
                             .build(app)?,
                     )
                     .build()?;
 
-                let edit_submenu = SubmenuBuilder::new(app, "Edit")
-                    .item(&PredefinedMenuItem::undo(app, None)?)
-                    .item(&PredefinedMenuItem::redo(app, None)?)
+                let edit_submenu = SubmenuBuilder::new(app, localization::ui_text("Edit"))
+                    .item(&PredefinedMenuItem::undo(app, Some(&localization::ui_text("Undo")))?)
+                    .item(&PredefinedMenuItem::redo(app, Some(&localization::ui_text("Redo")))?)
                     .separator()
-                    .item(&PredefinedMenuItem::cut(app, None)?)
-                    .item(&PredefinedMenuItem::copy(app, None)?)
-                    .item(&PredefinedMenuItem::paste(app, None)?)
-                    .item(&PredefinedMenuItem::select_all(app, None)?)
+                    .item(&PredefinedMenuItem::cut(app, Some(&localization::ui_text("Cut")))?)
+                    .item(&PredefinedMenuItem::copy(app, Some(&localization::ui_text("Copy")))?)
+                    .item(&PredefinedMenuItem::paste(app, Some(&localization::ui_text("Paste")))?)
+                    .item(&PredefinedMenuItem::select_all(app, Some(&localization::ui_text("Select All")))?)
                     .build()?;
 
                 // Custom Close (not PredefinedMenuItem::close_window) so Cmd-W
@@ -1263,12 +1231,12 @@ async fn main() {
                 // menu-close-window and hides the window only when no tab
                 // consumed the chord. Traffic-light close is unchanged.
                 // Cmd-M still needs a menu key equivalent or AppKit swallows it.
-                let window_submenu = SubmenuBuilder::new(app, "Window")
-                    .item(&PredefinedMenuItem::minimize(app, None)?)
-                    .item(&PredefinedMenuItem::maximize(app, None)?)
+                let window_submenu = SubmenuBuilder::new(app, localization::ui_text("Window"))
+                    .item(&PredefinedMenuItem::minimize(app, Some(&localization::ui_text("Minimize")))?)
+                    .item(&PredefinedMenuItem::maximize(app, Some(&localization::ui_text("Zoom")))?)
                     .separator()
                     .item(
-                        &MenuItemBuilder::with_id("close_window", "Close")
+                        &MenuItemBuilder::with_id("close_window", localization::ui_text("Close"))
                             .accelerator("CmdOrCtrl+W")
                             .build(app)?,
                     )
@@ -1280,10 +1248,11 @@ async fn main() {
                     .item(&window_submenu)
                     .build()?;
 
+                localization::register_app_menu(&menu)?;
                 app.set_menu(menu)?;
                 app.on_menu_event(|app_handle, event| {
                     match event.id().as_ref() {
-                        "settings" => {
+                        "app_settings" => {
                             // Defer off event stack (same as tray: runs from tao::send_event).
                             let app_for_closure = app_handle.clone();
                             let _ = app_handle.run_on_main_thread(move || {
@@ -1443,6 +1412,7 @@ async fn main() {
             // `NotRequired` without invoking either checker.
             startup_auth::bootstrap(&app_handle, &mut store);
             app.manage(store.clone());
+            localization::initialize(app.handle(), &store.ui_locale, store.ui_localization_enabled);
 
             crate::recording::refresh_history_access_policy(
                 &app.state::<RecordingState>().history_access,
@@ -2093,6 +2063,7 @@ async fn main() {
                             );
 
                             // Phase 1: Start server core
+                            let (runtime_lifetime, runtime_finished) = tokio::sync::oneshot::channel();
                             let server = match server_core::ServerCore::start(
                                 &config,
                                 on_pipe_output,
@@ -2100,6 +2071,8 @@ async fn main() {
                                 Some(owned_browser),
                                 cloud_token_arc.clone(),
                                 history_access.clone(),
+                                app_for_owned.path().app_local_data_dir().ok().map(|dir| dir.join("workflows")),
+                                runtime_lifetime,
                             )
                             .await
                             {
@@ -2186,15 +2159,10 @@ async fn main() {
                                 .store(false, std::sync::atomic::Ordering::SeqCst);
                             drop(lifecycle_guard);
 
-                            // Keep runtime alive as long as server exists
-                            loop {
-                                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                                let guard = server_arc.lock().await;
-                                if guard.is_none() {
-                                    info!("Server removed from state, shutting down server thread");
-                                    break;
-                                }
-                            }
+                            // The core owns the sender until shutdown drops it,
+                            // independently of the shared server slot.
+                            let _ = runtime_finished.await;
+                            info!("Server core released, shutting down server thread");
                         });
                     });
                 if let Err(error) = server_thread {
@@ -2444,7 +2412,7 @@ async fn main() {
             // Enterprise accounts out while allowing Screenpipe's own org.
             data_sync::spawn(&app_handle);
 
-            // Standard builds: account-bound, explicit opt-in support logs.
+            // Standard builds: authenticated, default-enabled support logs.
             // Enterprise builds compile this as a no-op because their managed
             // license-authenticated collector above is mandatory.
             remote_support_logs::spawn(&app_handle);

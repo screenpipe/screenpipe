@@ -11,23 +11,18 @@ use sqlx::{Row, SqlitePool, ValueRef};
 use std::{path::Path, sync::Arc};
 
 impl HybridStorage {
-    pub(crate) async fn seal_bulk(
+    pub(in crate::storage) async fn seal_bulk_table(
         self: &Arc<Self>,
         pool: &SqlitePool,
         writer: &SqliteWritePool,
+        table: &'static Table,
     ) -> Result<usize, sqlx::Error> {
-        if !self.has_bulk() {
-            return Ok(0);
+        if table.name == "elements" {
+            return super::elements::seal(self, pool, writer).await;
         }
-        let elements = super::elements::seal(self, pool, writer).await?;
-        if elements != 0 {
-            return Ok(elements);
-        }
-        for table in TABLES.iter().filter(|t| t.name != "elements") {
-            let rows = self.select_bulk(pool, table, None).await?;
-            if !rows.is_empty() {
-                return self.publish_bulk(pool, writer, table, rows, None).await;
-            }
+        let rows = self.select_bulk(pool, table, None, None).await?;
+        if !rows.is_empty() {
+            return self.publish_bulk(pool, writer, table, rows, None).await;
         }
         Ok(0)
     }
@@ -37,32 +32,37 @@ impl HybridStorage {
         pool: &SqlitePool,
         table: &Table,
         file: Option<i64>,
+        after: Option<i64>,
     ) -> Result<Vec<Record>, sqlx::Error> {
+        crate::storage::diagnostics::batch(
+            table.name,
+            after.and_then(|id| id.checked_add(1)),
+            None,
+            None,
+            None,
+        );
+        crate::storage::diagnostics::stage("selecting_bulk_records");
         let _token = self.read_token(pool).await?;
-        let condition = if let Some(file) = file {
+        let mut condition = if let Some(file) = file {
             format!("pending._archive_file={file}")
         } else {
             "pending._archive_mask!=0".into()
         };
+        if let Some(after) = after {
+            condition.push_str(&format!(" AND pending.id>{after}"));
+        }
         // Keep the pending index as the outer loop so LIMIT bounds work before
         // materializing IDs from a large history.
-        let candidates=sqlx::query(sqlx::AssertSqlSafe(format!("SELECT v.id,({bytes}) AS bytes FROM main.{t} pending CROSS JOIN (SELECT * FROM {view} WHERE {eligible}) v ON v.id=pending.id WHERE {condition} ORDER BY pending.id LIMIT {FILE_ROWS}",bytes=table.all_bytes("v."),view=table.view(),t=table.name,eligible=table.eligible))).fetch_all(pool).await?;
+        let candidates=sqlx::query(sqlx::AssertSqlSafe(format!("SELECT v.id,({bytes}) AS bytes FROM main.{t} pending CROSS JOIN (SELECT * FROM {view} WHERE {eligible}) v ON v.id=pending.id WHERE {condition} AND ({bytes})<=? ORDER BY pending.id LIMIT {FILE_ROWS}",bytes=table.all_bytes("v."),view=table.view(),t=table.name,eligible=table.eligible))).bind(self.descriptor.budget.record_bytes as i64).fetch_all(pool).await?;
         let mut ids = Vec::new();
         let mut bytes = 0;
         for candidate in candidates {
             let size = candidate.try_get::<i64, _>("bytes")? as usize;
-            if size > self.descriptor.budget.record_bytes {
-                return Err(storage_error("bulk record exceeds sealing budget"));
-            }
-            if file.is_none() && !ids.is_empty() && bytes + size > self.descriptor.budget.file_bytes
-            {
+            if !ids.is_empty() && bytes + size > self.descriptor.budget.file_bytes {
                 break;
             }
             ids.push(candidate.try_get::<i64, _>("id")?);
             bytes += size;
-            if bytes > self.descriptor.budget.decode_bytes / 2 {
-                return Err(storage_error("bulk batch exceeds sealing budget"));
-            }
         }
         if ids.is_empty() {
             return Ok(Vec::new());
@@ -73,6 +73,14 @@ impl HybridStorage {
             .map(|c| format!("v.{}", c.name))
             .collect::<Vec<_>>()
             .join(",");
+        crate::storage::diagnostics::batch(
+            table.name,
+            ids.first().copied(),
+            ids.last().copied(),
+            Some(ids.len() as u64),
+            Some(bytes as u64),
+        );
+        crate::storage::diagnostics::stage("reading_bulk_records");
         let rows=sqlx::query(sqlx::AssertSqlSafe(format!("SELECT v.id,e._archive_generation,{columns} FROM {view} v JOIN main.{t} e ON e.id=v.id WHERE v.id IN (SELECT value FROM json_each(?)) ORDER BY v.id",view=table.view(),t=table.name)))
             .bind(serde_json::to_string(&ids).map_err(storage_error)?).fetch_all(pool).await?;
         rows.iter()
@@ -132,6 +140,7 @@ impl HybridStorage {
             .join(format!("{}.parquet", uuid::Uuid::new_v4()));
         let file = self.payload_path(&relative)?;
         std::fs::create_dir_all(file.parent().unwrap())?;
+        crate::storage::diagnostics::stage("reserving_bulk_archive");
         let file_id = {
             let permit = writer.lock().await?;
             sqlx::query(
@@ -148,11 +157,13 @@ impl HybridStorage {
         let copy = rows.clone();
         let budget = self.descriptor.budget.clone();
         let file_for_job = file.clone();
+        crate::storage::diagnostics::stage("waiting_for_bulk_encoder");
         let decoder = Arc::clone(&self.decoder)
             .acquire_owned()
             .await
             .map_err(|_| sqlx::Error::PoolClosed)?;
         let lease = Arc::clone(&self.leases).read_owned().await;
+        crate::storage::diagnostics::stage("encoding_and_verifying_bulk");
         let hash = tokio::task::spawn_blocking(move || {
             let (_decoder, _lease) = (decoder, lease);
             let hash = codec::write(&file_for_job, table, &copy)?;
@@ -163,6 +174,7 @@ impl HybridStorage {
         })
         .await
         .map_err(storage_error)??;
+        crate::storage::diagnostics::stage("syncing_bulk_archive");
         let mut directory = file.parent().unwrap();
         loop {
             sync_directory(directory)?;
@@ -174,6 +186,7 @@ impl HybridStorage {
                 .ok_or_else(|| storage_error("bulk parent missing"))?;
         }
         crate::storage::faults::checkpoint("bulk_files_synced");
+        crate::storage::diagnostics::stage("publishing_bulk_archive");
         let permit = writer.lock().await?;
         let mut tx = permit.pool().begin().await?;
         let current: (String, i64) =
@@ -247,6 +260,7 @@ impl HybridStorage {
             .execute(&mut *tx)
             .await?;
         crate::storage::faults::checkpoint("bulk_before_commit");
+        crate::storage::diagnostics::stage("committing_bulk_archive");
         tx.commit().await?;
         crate::storage::faults::checkpoint("bulk_committed");
         Ok(rows.len())
@@ -271,7 +285,7 @@ impl HybridStorage {
                 .iter()
                 .find(|t| t.name == name)
                 .ok_or_else(|| storage_error("unknown bulk table"))?;
-            let rows = self.select_bulk(pool, table, Some(id)).await?;
+            let rows = self.select_bulk(pool, table, Some(id), None).await?;
             if !rows.is_empty() {
                 self.publish_bulk(pool, writer, table, rows, Some(id))
                     .await?;

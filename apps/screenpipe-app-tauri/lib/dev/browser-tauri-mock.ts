@@ -27,6 +27,7 @@ type StoreChange = {
 };
 
 export interface BrowserIpcMockOptions {
+  systemLocale?: string;
   mode: BrowserDevMode;
   scenario?: BrowserDevScenario;
   apiPort: number;
@@ -653,6 +654,14 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
     }
 
     switch (command) {
+      case "get_env":
+        return options.mode === "mock" && input.name === "SCREENPIPE_STARTUP_AUTHENTICATION_STATUS" ? "authenticated" : "";
+      case "get_onboarding_status":
+        return {
+          isCompleted: true, completedAt: "2026-09-01T12:00:00Z",
+          currentStep: "completed", firstRunSummaryPhase: "idle",
+          firstRunSummaryStartedAt: null, firstRunSummaryChatId: null,
+        };
       case "get_storage_migration_status":
         return { ...storageMigration };
       case "get_storage_migration_activity":
@@ -775,7 +784,7 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
       case "plugin:app|supports_multiple_windows":
         return false;
       case "plugin:os|locale":
-        return "en-US";
+        return options.systemLocale ?? "en-US";
       case "plugin:os|hostname":
         return "browser-dev";
       case "plugin:updater|check":

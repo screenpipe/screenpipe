@@ -10,6 +10,8 @@ import { authorizeComposioToolkit, fetchComposioStatus, registerComposioMcpServe
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
 import { commands } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+
 
 type Connection = "gmail" | "google-calendar";
 
@@ -32,6 +34,8 @@ export function SetupConnections({ userToken, disabled, onGmailChange, onBusyCha
   onGmailChange: (connected: boolean) => void;
   onBusyChange: (busy: boolean) => void;
 }) {
+
+  const ui = useGT();
   const [connected, setConnected] = useState({ gmail: false, "google-calendar": false });
   const [busy, setBusy] = useState<Connection | null>(null);
   const [error, setError] = useState("");
@@ -90,7 +94,7 @@ export function SetupConnections({ userToken, disabled, onGmailChange, onBusyCha
     } catch {
       if (!controller.signal.aborted) {
         if (id === "gmail") onGmailChange(false);
-        setError(id === "gmail" && !userToken ? "Sign in to connect Gmail." : `${id === "gmail" ? "Gmail" : "Calendar"} wasn't connected. Try again or connect later.`);
+        setError(id === "gmail" && !userToken ? ui("Sign in to connect Gmail.") : ui("{value1} wasn't connected. Try again or connect later.", { value1: id === "gmail" ? "Gmail" : "Calendar" }));
         posthog.capture("onboarding_connection_cta_failed", { ...properties, failure_stage: "connection" });
       }
     } finally {
@@ -103,7 +107,7 @@ export function SetupConnections({ userToken, disabled, onGmailChange, onBusyCha
     <div className="flex gap-2">
       {(["gmail", "google-calendar"] as const).map(id => <Button key={id} variant="outline" size="sm" className="h-8 flex-1 gap-2 text-[10px] normal-case" disabled={disabled || busy !== null || connected[id]} onClick={() => void connect(id)} aria-busy={busy === id}>
         <img src={id === "gmail" ? "/images/gmail.svg" : "/google-calendar-icon.svg"} alt="" className="h-3.5 w-3.5" />
-        {busy === id ? "Connecting" : connected[id] ? `${id === "gmail" ? "Gmail" : "Calendar"} connected` : `Connect ${id === "gmail" ? "Gmail" : "Calendar"}`}
+        {busy === id ? ui("Connecting") : connected[id] ? ui("{service} connected", { service: id === "gmail" ? "Gmail" : "Calendar" }) : ui("Connect {value1}", { value1: id === "gmail" ? "Gmail" : "Calendar" })}
       </Button>)}
     </div>
     {error && <p role="alert" className="mt-2 text-xs text-destructive">{error}</p>}

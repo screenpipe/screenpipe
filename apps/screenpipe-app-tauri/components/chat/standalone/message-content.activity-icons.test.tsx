@@ -86,7 +86,7 @@ describe("MessageContent — semantic activity widget", () => {
     expect(runningIcon).toHaveClass("bg-foreground", "text-background");
     expect(runningIcon).not.toHaveClass("bg-phosphor");
     expect(screen.getByText("Loaded PDF skill")).toBeTruthy();
-    expect(screen.getByText("failed")).toBeTruthy();
+    expect(screen.getByText("Failed")).toBeTruthy();
   });
 
   it("keeps a running git commit activity monochrome", () => {
@@ -131,7 +131,7 @@ describe("MessageContent — semantic activity widget", () => {
     const widget = screen.getByTestId("tool-activity-widget");
     expect(widget).toHaveAttribute("data-activity-state", "error");
     fireEvent.click(screen.getByTestId("tool-activity-summary"));
-    expect(screen.getByTestId("tool-activity-list")).toHaveTextContent("failed");
+    expect(screen.getByTestId("tool-activity-list")).toHaveTextContent("Failed");
   });
 
   it("uses the approval icon and waiting state while approval blocks the turn", () => {

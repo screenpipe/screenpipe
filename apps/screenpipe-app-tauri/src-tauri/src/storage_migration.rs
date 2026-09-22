@@ -6,7 +6,7 @@ use screenpipe_db::storage::{migration_report, MigrationProgress, StorageDescrip
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
-    sync::{LazyLock, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     time::Instant,
 };
 use tauri::{Emitter, Manager, State};
@@ -54,6 +54,7 @@ fn clear_migration_error(root: &Path) -> Result<(), String> {
 struct Operation {
     root: Option<PathBuf>,
     busy: bool,
+    recovering: bool,
     message: String,
     error: Option<String>,
     started_at: Option<Instant>,
@@ -71,6 +72,7 @@ impl Operation {
         StorageMigrationActivity {
             root: self.root.as_ref().map(|root| root.display().to_string()),
             busy: self.busy,
+            recovering: self.recovering,
             message: self.message.clone(),
             error: self.error.clone(),
             elapsed_seconds: self
@@ -93,6 +95,7 @@ pub struct StorageMigrationState(Mutex<Operation>);
 pub struct StorageMigrationActivity {
     pub root: Option<String>,
     pub busy: bool,
+    pub recovering: bool,
     pub message: String,
     pub error: Option<String>,
     pub elapsed_seconds: u64,
@@ -226,6 +229,7 @@ fn progress(app: &tauri::AppHandle, update: MigrationProgress) {
 
 pub(crate) struct StartupMigration {
     root: PathBuf,
+    recovering: bool,
     _awake: screenpipe_engine::power::KeepAwakeGuard,
 }
 
@@ -305,9 +309,43 @@ pub(crate) async fn resume_before_startup(
         if let Err(save_error) = save_migration_error(&root, &error) {
             tracing::error!(%save_error, "failed to save migration retry block");
         }
-        // ServerCore restores a writable resident schema without encoding
-        // another payload batch, then resumes the saved recording preference.
-        return Ok(None);
+        // Own recovery before ServerCore opens the database. It can rebuild a
+        // large index: expose that work and keep retry unavailable until the
+        // server and saved capture preference have actually been restored.
+        let awake =
+            screenpipe_engine::power::KeepAwakeGuard::acquire().map_err(|e| e.to_string())?;
+        update_operation(app, |operation| {
+            *operation = Operation {
+                root: Some(root.clone()),
+                busy: true,
+                message: "restoring recording after an interrupted migration".into(),
+                recovering: true,
+                started_at: Some(Instant::now()),
+                ..Default::default()
+            };
+        });
+        let result = screenpipe_db::storage::recover_interrupted_migration_with_progress(
+            &root,
+            settings.to_recording_config(root.clone()).db_config,
+            |update| {
+                crate::health::set_boot_phase("migrating_database", Some(update.message));
+                progress(app, update);
+            },
+        )
+        .await
+        .map_err(|e| e.to_string());
+        if result.is_err() {
+            finish_recovery_operation(app, &root, &result);
+            result?;
+        }
+        update_operation(app, |operation| {
+            operation.message = "starting recording on recovered storage".into();
+        });
+        return Ok(Some(StartupMigration {
+            root,
+            recovering: true,
+            _awake: awake,
+        }));
     }
     if migration_report(&root)
         .map_err(|e| e.to_string())?
@@ -341,22 +379,32 @@ pub(crate) async fn resume_before_startup(
     );
     Ok(Some(StartupMigration {
         root,
+        recovering: false,
         _awake: awake,
     }))
 }
 
 async fn verify_running(app: &tauri::AppHandle, root: &Path) -> Result<(), String> {
-    let recording = app.state::<RecordingState>();
     let descriptor = StorageDescriptor::read(root)
         .map_err(|e| e.to_string())?
         .ok_or("The migrated storage is not active. Saved progress has been kept.")?;
+    verify_recording_ready(app, root, Some(&descriptor)).await
+}
+
+async fn verify_recording_ready(
+    app: &tauri::AppHandle,
+    root: &Path,
+    descriptor: Option<&StorageDescriptor>,
+) -> Result<(), String> {
+    require_selected_root(app, &root.display().to_string())?;
+    let recording = app.state::<RecordingState>();
     {
         let server = recording.server.lock().await;
         let server = server
             .as_ref()
             .ok_or("Screenpipe has not restarted. Try again to finish migration.")?;
         if server.data_dir.canonicalize().map_err(|e| e.to_string())? != root
-            || server.db.storage_descriptor() != Some(&descriptor)
+            || descriptor.is_some_and(|expected| server.db.storage_descriptor() != Some(expected))
         {
             return Err(
                 "Screenpipe has not opened the migrated storage. Try again to finish restarting."
@@ -370,7 +418,10 @@ async fn verify_running(app: &tauri::AppHandle, root: &Path) -> Result<(), Strin
             .map_err(|e| e.to_string())?;
     }
     if recording.capture_intended() && recording.capture.lock().await.is_none() {
-        return Err("Your history was migrated, but recording could not resume. Try again to finish restarting.".into());
+        return Err(
+            "Storage opened, but recording could not resume. Try again to finish restarting."
+                .into(),
+        );
     }
     // Keep the preference through storage activation and process restarts. Only
     // the successful application reopen acknowledges it, including a paused user.
@@ -411,11 +462,44 @@ pub(crate) async fn finish_startup(
     result: Result<(), String>,
 ) -> Result<(), String> {
     let result = match result {
+        Ok(()) if migration.recovering => verify_recording_ready(app, &migration.root, None).await,
         Ok(()) => verify_running(app, &migration.root).await,
         error => error,
     };
-    finish_operation(app, &migration.root, &result);
+    if migration.recovering {
+        finish_recovery_operation(app, &migration.root, &result);
+    } else {
+        finish_operation(app, &migration.root, &result);
+    }
     result
+}
+
+fn finish_recovery_operation(app: &tauri::AppHandle, root: &Path, result: &Result<(), String>) {
+    if let Err(error) = result {
+        report_migration_failure(app, root, error);
+        if let Err(save_error) = save_migration_error(root, error) {
+            tracing::error!(%save_error, "failed to save recording recovery error");
+        }
+    }
+    update_operation(app, |operation| {
+        operation.elapsed_seconds = operation.activity().elapsed_seconds;
+        operation.started_at = None;
+        operation.busy = false;
+        // Recovery restores recording; it must never claim archival completed
+        // or clear the durable requirement for an explicit conversion retry.
+        operation.completed = false;
+        operation.error = result
+            .as_ref()
+            .err()
+            .cloned()
+            .or_else(|| saved_migration_error(root));
+        operation.message = if result.is_ok() {
+            "Storage is ready for recording. Migration remains paused."
+        } else {
+            "Recording recovery needs attention. Saved progress has been kept."
+        }
+        .into();
+    });
 }
 
 fn track_completed_migration(app: &tauri::AppHandle, root: &Path) {
@@ -456,13 +540,28 @@ fn track_completed_migration(app: &tauri::AppHandle, root: &Path) {
     });
 }
 
+fn needs_storage_activation(using_new_storage: Option<bool>, error: Option<&str>) -> bool {
+    // No open server is normal during startup. Only an observed mismatch or
+    // an actual migration failure makes a completed migration retryable.
+    using_new_storage == Some(false) || error.is_some()
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn get_storage_migration_status(
     app: tauri::AppHandle,
     recording: State<'_, RecordingState>,
 ) -> Result<StorageMigrationStatus, String> {
-    let root = selected_root(&app)?;
+    let lifecycle = recording.server_lifecycle.try_lock();
+    storage_migration_status(&app, &recording, lifecycle.is_err()).await
+}
+
+async fn storage_migration_status(
+    app: &tauri::AppHandle,
+    recording: &RecordingState,
+    lifecycle_busy: bool,
+) -> Result<StorageMigrationStatus, String> {
+    let root = selected_root(app)?;
     let operation = app
         .state::<StorageMigrationState>()
         .0
@@ -486,8 +585,10 @@ pub async fn get_storage_migration_status(
     let source_bytes = std::fs::metadata(root.join("db.sqlite"))
         .map(|m| m.len())
         .unwrap_or(0);
-    let mut blocked_reason = None;
-    let mut using_new_storage = false;
+    let mut blocked_reason = lifecycle_busy.then(|| {
+        "Screenpipe is restarting or restoring recording. Wait for startup to finish.".into()
+    });
+    let mut using_new_storage = None;
     let mut can_delete_source = false;
     {
         let server = recording.server.try_lock();
@@ -501,13 +602,19 @@ pub async fn get_storage_migration_status(
                         "Apply the data directory change and restart before migrating.".into(),
                     );
                 } else {
-                    using_new_storage = descriptor.is_some()
-                        && server.db.storage_descriptor() == descriptor.as_ref()
-                        && !server.db.pool.is_closed();
-                    if completed && using_new_storage {
+                    using_new_storage = (!server.db.pool.is_closed()).then(|| {
+                        descriptor.is_some()
+                            && server.db.storage_descriptor() == descriptor.as_ref()
+                    });
+                    if completed && using_new_storage == Some(true) {
                         match server.db.retained_migration_source_bytes() {
                             Ok(bytes) => can_delete_source = bytes.is_some(),
-                            Err(error) => blocked_reason = Some(error.to_string()),
+                            // This guard only decides whether the old copy can be
+                            // deleted. It cannot invalidate a completed migration.
+                            Err(error) => tracing::debug!(
+                                %error,
+                                "original database cleanup unavailable; migrated storage remains active"
+                            ),
                         }
                     }
                 }
@@ -530,7 +637,7 @@ pub async fn get_storage_migration_status(
         && blocked_reason.is_none()
         && (pending
             || (!completed && descriptor.is_none() && source_bytes > 0)
-            || (completed && (!using_new_storage || error.is_some())));
+            || (completed && needs_storage_activation(using_new_storage, error.as_deref())));
     Ok(StorageMigrationStatus {
         root: root.display().to_string(),
         app_session_id: APP_SESSION_ID.clone(),
@@ -544,7 +651,7 @@ pub async fn get_storage_migration_status(
         pending,
         in_place,
         completed,
-        using_new_storage,
+        using_new_storage: using_new_storage.unwrap_or(false),
         generation: descriptor.map(|d| d.generation),
         source_bytes,
         migrated_bytes: report.as_ref().map(|r| {
@@ -583,21 +690,38 @@ pub async fn start_storage_migration(
     start_storage_migration_inner(app, recording, root, false).await
 }
 
+async fn acquire_migration_lifecycle(
+    lifecycle: Arc<tokio::sync::Mutex<()>>,
+    background: bool,
+) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+    if background {
+        // Policy checks must not queue automatic work behind a restart or an
+        // explicit migration. A later check will inspect the resulting state.
+        lifecycle.try_lock_owned().ok()
+    } else {
+        // The user's retry remains requested while startup/recovery owns the
+        // database. Take exclusive ownership when it finishes, without polling
+        // or interrupting the current writer.
+        Some(lifecycle.lock_owned().await)
+    }
+}
+
 async fn start_storage_migration_inner(
     app: tauri::AppHandle,
     recording: State<'_, RecordingState>,
     root: String,
     background: bool,
 ) -> Result<(), String> {
+    require_selected_root(&app, &root)?;
+    let Some(lifecycle) =
+        acquire_migration_lifecycle(recording.server_lifecycle.clone(), background).await
+    else {
+        return Ok(());
+    };
+    // Settings and storage may have changed while the request waited. Never
+    // migrate a different directory using the earlier confirmation.
     let root = require_selected_root(&app, &root)?;
-    let lifecycle = recording
-        .server_lifecycle
-        .clone()
-        .try_lock_owned()
-        .map_err(|_| {
-            "Screenpipe is already restarting or changing storage. Try again when it finishes."
-        })?;
-    let status = get_storage_migration_status(app.clone(), recording).await?;
+    let status = storage_migration_status(&app, &recording, false).await?;
     if background {
         if let Some(error) = &status.error {
             report_migration_failure(&app, &root, error);
@@ -623,6 +747,15 @@ async fn start_storage_migration_inner(
             return Ok(());
         }
     } else if !status.can_migrate {
+        if status.completed
+            && status.using_new_storage
+            && !status.pending
+            && status.error.is_none()
+            && status.blocked_reason.is_none()
+        {
+            // Another migration may have completed while this click waited.
+            return Ok(());
+        }
         return Err(status
             .blocked_reason
             .unwrap_or_else(|| "Migration is unavailable in the current storage state.".into()));
@@ -663,11 +796,16 @@ async fn start_storage_migration_inner(
     tauri::async_runtime::spawn(async move {
         let _lifecycle = lifecycle;
         let _awake = awake;
-        let mut result = async {
+        let telemetry_app = app.clone();
+        let migration = async {
+            screenpipe_db::storage::diagnostics::app_version(
+                app.package_info().version.to_string(),
+            );
             let recording = app.state::<RecordingState>();
             // A completed legacy migration may retain its original source.
             // Verify and clean it up without pausing capture.
             if !background || !status.can_delete_source {
+                screenpipe_db::storage::diagnostics::stage("pausing_recording");
                 crate::recording::stop_screenpipe_inner(&recording).await?;
                 if !status.completed || status.pending {
                     screenpipe_db::storage::migrate_with_progress(
@@ -690,9 +828,11 @@ async fn start_storage_migration_inner(
                         available_bytes: None,
                     },
                 );
+                screenpipe_db::storage::diagnostics::stage("starting_migrated_engine");
                 crate::recording::spawn_screenpipe_inner(&recording, app.clone()).await?;
             }
             require_selected_root(&app, &root.display().to_string())?;
+            screenpipe_db::storage::diagnostics::stage("verifying_running_storage");
             verify_running(&app, &root).await?;
             let descriptor = StorageDescriptor::read(&root)
                 .map_err(|e| e.to_string())?
@@ -727,7 +867,13 @@ async fn start_storage_migration_inner(
             }
             clear_migration_error(&root)?;
             Ok::<_, String>(())
-        }
+        };
+        let mut result = screenpipe_db::storage::diagnostics::observe(
+            &root,
+            "conversion",
+            move |event, snapshot| track_migration_diagnostic(&telemetry_app, event, snapshot),
+            migration,
+        )
         .await;
         if let Err(error) = &result {
             report_migration_failure(&app, &root, error);
@@ -745,6 +891,43 @@ async fn start_storage_migration_inner(
         finish_operation(&app, &root, &result);
     });
     Ok(())
+}
+
+fn track_migration_diagnostic(
+    app: &tauri::AppHandle,
+    event: &str,
+    snapshot: &screenpipe_db::storage::diagnostics::Snapshot,
+) {
+    let event = match event {
+        "started" => "storage_migration_started",
+        "stalled" => "storage_migration_stalled",
+        "failed" | "interrupted" => "storage_migration_failed",
+        // Completion continues to require the existing verified receipt event.
+        _ => return,
+    };
+    let Some(analytics) = app.try_state::<Arc<crate::analytics::AnalyticsManager>>() else {
+        return;
+    };
+    let mut properties = serde_json::to_value(snapshot).unwrap_or_default();
+    let analytics = Arc::clone(&analytics);
+    tauri::async_runtime::spawn(async move {
+        redact_migration_diagnostic_error(&mut properties);
+        if let Err(error) = analytics.send_event(event, Some(properties)).await {
+            tracing::warn!(%error, event, "migration diagnostic telemetry failed");
+        }
+    });
+}
+
+fn redact_migration_diagnostic_error(properties: &mut serde_json::Value) {
+    if let Some(error) = properties.get_mut("error") {
+        if let Some(message) = error.as_str() {
+            // Keep diagnostic context while scrubbing recognizable secrets/PII
+            // locally. The snapshot already bounds the error to 512 characters.
+            *error = screenpipe_redact::adapters::regex::redact_one(message)
+                .redacted
+                .into();
+        }
+    }
 }
 
 fn report_migration_failure(app: &tauri::AppHandle, root: &Path, error: &str) {
@@ -834,7 +1017,7 @@ pub async fn cancel_storage_migration(
     if is_running(&app) {
         return Err("Migration is still running.".into());
     }
-    let status = get_storage_migration_status(app.clone(), app.state::<RecordingState>()).await?;
+    let status = storage_migration_status(&app, &recording, false).await?;
     if !status.can_cancel {
         return Err("Only an unfinished migration can be cancelled.".into());
     }
@@ -867,7 +1050,7 @@ pub async fn delete_original_storage_database(
         .server_lifecycle
         .try_lock()
         .map_err(|_| "Storage is still switching. The original database has been kept.")?;
-    let status = get_storage_migration_status(app.clone(), app.state::<RecordingState>()).await?;
+    let status = storage_migration_status(&app, &recording, false).await?;
     if !status.can_delete_source {
         return Err("Complete migration and switch to the new storage before deleting the original database.".into());
     }
@@ -888,6 +1071,102 @@ pub async fn delete_original_storage_database(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migration_diagnostics_keep_useful_errors_and_scrub_sensitive_values() {
+        let mut properties = serde_json::json!({
+            "attempt_id": "attempt-42",
+            "stage": "selecting_element_batch",
+            "first_id": 1_400_786,
+            "last_id": 158_475_583,
+            "completed_records": 1_400_785,
+            "error": "SQLite error (code: 5): database is locked; account=operator@example.com api_key=deadbeef",
+        });
+        let original = properties.clone();
+        redact_migration_diagnostic_error(&mut properties);
+        let error = properties["error"]
+            .as_str()
+            .expect("error must be reported");
+        assert!(error.contains("SQLite error (code: 5): database is locked"));
+        assert!(!error.contains("operator@example.com"));
+        assert!(!error.contains("deadbeef"));
+        properties["error"] = original["error"].clone();
+        assert_eq!(properties, original, "diagnostic context must be preserved");
+
+        // A stalled query need not have returned an error yet.
+        properties["error"] = serde_json::Value::Null;
+        redact_migration_diagnostic_error(&mut properties);
+        assert!(properties["error"].is_null());
+    }
+
+    #[tokio::test]
+    async fn explicit_retry_waits_for_restart_then_owns_storage_before_later_restarts() {
+        let lifecycle = Arc::new(tokio::sync::Mutex::new(()));
+        let restart = lifecycle.lock().await;
+        let retry = acquire_migration_lifecycle(lifecycle.clone(), false);
+        tokio::pin!(retry);
+        // Poll once to enqueue the click while startup/recovery still owns DB.
+        tokio::select! {
+            biased;
+            _ = &mut retry => panic!("retry must wait for the current restart"),
+            _ = std::future::ready(()) => {}
+        }
+        let later_restart = lifecycle.lock();
+        tokio::pin!(later_restart);
+        tokio::select! {
+            biased;
+            _ = &mut later_restart => panic!("restart must not overlap storage work"),
+            _ = std::future::ready(()) => {}
+        }
+        drop(restart);
+        let migration = tokio::time::timeout(std::time::Duration::from_secs(1), retry)
+            .await
+            .expect("one click must proceed when startup finishes")
+            .unwrap();
+        assert!(lifecycle.try_lock().is_err());
+        drop(migration);
+        let _restart = tokio::time::timeout(std::time::Duration::from_secs(1), later_restart)
+            .await
+            .expect("later restarts must proceed after migration releases storage");
+    }
+
+    #[tokio::test]
+    async fn background_migration_skips_busy_storage_without_queueing_a_retry() {
+        let lifecycle = Arc::new(tokio::sync::Mutex::new(()));
+        let restart = lifecycle.lock().await;
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            acquire_migration_lifecycle(lifecycle.clone(), true),
+        )
+        .await
+        .expect("background checks must not wait for startup")
+        .is_none());
+        drop(restart);
+        assert!(
+            lifecycle.try_lock().is_ok(),
+            "no automatic retry was queued"
+        );
+        assert!(acquire_migration_lifecycle(lifecycle, true).await.is_some());
+    }
+
+    #[test]
+    fn completed_migration_does_not_prompt_during_server_startup_or_restart() {
+        // The receipt already matches, but startup has not installed the
+        // server yet. Opening the migrated DB must not require user action.
+        assert!(!needs_storage_activation(None, None));
+        assert!(!needs_storage_activation(Some(true), None));
+    }
+
+    #[test]
+    fn completed_migration_keeps_actual_activation_failures_retryable() {
+        assert!(needs_storage_activation(Some(false), None));
+        for using_new_storage in [None, Some(false), Some(true)] {
+            assert!(needs_storage_activation(
+                using_new_storage,
+                Some("Your history was migrated, but recording could not resume.")
+            ));
+        }
+    }
 
     fn legacy_status() -> StorageMigrationStatus {
         StorageMigrationStatus {

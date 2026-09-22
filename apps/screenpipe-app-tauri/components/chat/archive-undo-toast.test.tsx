@@ -36,7 +36,7 @@ describe("showChatArchiveUndoToast", () => {
     expect(mocks.toast).toHaveBeenCalledTimes(1);
     const options = mocks.toast.mock.calls[0][0];
     expect(options).toMatchObject({
-      title: "chat archived",
+      title: "Chat archived",
       duration: 6_000,
     });
     expect(options.className).toContain("p-2.5");

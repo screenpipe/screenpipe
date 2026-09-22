@@ -95,7 +95,7 @@ pub fn write(
         }
         group.close().map_err(storage_error)?;
     }
-    writer.into_inner().map_err(storage_error)?.sync_all()?;
+    screenpipe_fs::sync_all(&writer.into_inner().map_err(storage_error)?)?;
     checksum(path)
 }
 

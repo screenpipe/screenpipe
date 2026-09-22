@@ -67,10 +67,12 @@ export function submitHostedCheckoutStart({
   hostedCheckoutUrl,
   token,
   currentHref,
+  locale,
 }: {
   hostedCheckoutUrl: string;
   token: string;
   currentHref: string;
+  locale: string;
 }): void {
   if (!token.trim()) throw new Error("sign in to continue");
 
@@ -83,6 +85,7 @@ export function submitHostedCheckoutStart({
   form.append(
     hiddenField("token", token),
     hiddenField("return_to", buildLocalCheckoutReturnUrl(currentHref)),
+    hiddenField("locale", locale),
   );
   document.body.appendChild(form);
   form.submit();

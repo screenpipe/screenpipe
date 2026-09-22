@@ -50,22 +50,31 @@ pub(super) fn footprint(root: &Path) -> Result<u64, sqlx::Error> {
 
 /// Probe an owned scratch file on the exact destination volume, before touching
 /// the database. A successful syscall alone does not prove blocks were freed.
-pub(super) fn probe(root: &Path) -> Result<(), sqlx::Error> {
+pub(super) fn probe(root: &Path) -> Result<bool, sqlx::Error> {
+    probe_with(root, punch)
+}
+
+fn probe_with(
+    root: &Path,
+    punch: impl FnOnce(&File, u64, u64) -> Result<(), sqlx::Error>,
+) -> Result<bool, sqlx::Error> {
     let mut file = tempfile::NamedTempFile::new_in(root)?;
     let bytes = vec![0x5a; 1024 * 1024];
     file.write_all(&bytes)?;
-    file.as_file().sync_all()?;
+    screenpipe_fs::sync_all(file.as_file())?;
     let before = allocated(file.path())?;
-    punch(file.as_file(), 0, bytes.len() as u64).map_err(|e| {
-        storage_error(format!(
-            "filesystem reclamation unavailable; migration has not started: {e}"
-        ))
-    })?;
-    file.as_file().sync_all()?;
+    match punch(file.as_file(), 0, bytes.len() as u64) {
+        Ok(()) => {}
+        Err(sqlx::Error::Io(error)) if unsupported(&error) => {
+            tracing::info!("filesystem does not support sparse reclamation; keeping reusable SQLite free pages and enforcing migration disk reserve");
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    }
+    screenpipe_fs::sync_all(file.as_file())?;
     if allocated(file.path())? >= before {
-        return Err(storage_error(
-            "this filesystem does not release sparse file blocks; migration has not started",
-        ));
+        tracing::info!("filesystem does not report sparse space savings; keeping reusable SQLite free pages and enforcing migration disk reserve");
+        return Ok(false);
     }
     file.seek(SeekFrom::Start(0))?;
     let mut actual = vec![1; bytes.len()];
@@ -73,7 +82,20 @@ pub(super) fn probe(root: &Path) -> Result<(), sqlx::Error> {
     if actual.iter().any(|b| *b != 0) {
         return Err(storage_error("filesystem reclamation probe failed"));
     }
-    Ok(())
+    Ok(true)
+}
+
+fn unsupported(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::Unsupported {
+        return true;
+    }
+    // Darwin ENOTSUP is Uncategorized in Rust, unlike Linux EOPNOTSUPP.
+    #[cfg(unix)]
+    return error.raw_os_error().is_some_and(|code| {
+        code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::ENOSYS
+    });
+    #[cfg(windows)]
+    return matches!(error.raw_os_error(), Some(1 | 50)); // INVALID_FUNCTION / NOT_SUPPORTED
 }
 
 #[cfg(target_os = "macos")]
@@ -181,10 +203,18 @@ pub(super) async fn free_leaves(
         return Ok(());
     }
     let bitmap_bytes = (pages as usize).div_ceil(8);
-    if pages <= 0 || bitmap_bytes > memory_limit / 2 {
-        return Err(storage_error(
-            "freelist map exceeds migration memory budget",
-        ));
+    if pages <= 0 {
+        return Err(storage_error("invalid SQLite page count"));
+    }
+    if bitmap_bytes > memory_limit / 2 {
+        // Reclamation is an optimization. Keep these valid free pages in
+        // SQLite when its validation map would exceed the working budget.
+        tracing::debug!(
+            bitmap_bytes,
+            memory_limit,
+            "deferring SQLite space reclamation"
+        );
+        return Ok(());
     }
     let mut header = [0_u8; 100];
     file.seek(SeekFrom::Start(0))?;
@@ -202,6 +232,7 @@ pub(super) async fn free_leaves(
             "checkpointed SQLite freelist header is invalid",
         ));
     }
+    super::diagnostics::stage("scanning_free_pages");
     let mut leaves = vec![0_u8; bitmap_bytes];
     let mut seen = vec![0_u8; bitmap_bytes];
     let mut count = 0;
@@ -236,6 +267,7 @@ pub(super) async fn free_leaves(
     }
     // 64 KiB also covers NTFS sparse deallocation units. Only wholly free
     // aligned extents are touched, including on databases with smaller pages.
+    super::diagnostics::stage("reclaiming_disk_extents");
     let alignment = 65536_u64;
     let mut first = None;
     for index in 0..=pages as usize {
@@ -251,14 +283,202 @@ pub(super) async fn free_leaves(
             }
         }
     }
-    file.sync_all()?;
+    super::diagnostics::stage("syncing_reclaimed_database");
+    screenpipe_fs::sync_all(file)?;
     Ok(())
+}
+
+/// Scanning the growing freelist after every batch makes conversion quadratic.
+/// With spare disk, scan at geometrically increasing free-page totals. The
+/// offline caller forces a scan at startup and completion. Disk pressure always
+/// triggers a scan before the next batch's reserve check.
+/// This is only a scheduling hint: every scan still validates the current map,
+/// and every skipped scan still checkpoints the batch's WAL.
+#[derive(Default)]
+pub(super) struct Reclaimer {
+    next_free_pages: i64,
+    disabled: bool,
+}
+
+impl Reclaimer {
+    pub(super) fn new(root: &Path) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            disabled: !probe(root)?,
+            ..Self::default()
+        })
+    }
+
+    pub(super) async fn run(
+        &mut self,
+        conn: &mut SqliteConnection,
+        file: &mut File,
+        root: &Path,
+        budget: &super::StorageBudget,
+        force: bool,
+    ) -> Result<bool, sqlx::Error> {
+        // Check space after flushing: checkpointing can reallocate holes that
+        // SQLite reused, even when the free-page total did not change.
+        super::schema::construction_checkpoint(conn).await?;
+        if self.disabled {
+            return Ok(false);
+        }
+        let free: i64 = sqlx::query_scalar("PRAGMA freelist_count")
+            .fetch_one(&mut *conn)
+            .await?;
+        // Keep the original per-batch reclamation cadence on tight volumes.
+        // The next-batch minimum alone leaves too little allocation headroom
+        // for filesystem metadata and SQLite's staging/checkpoint writes.
+        // Defer only with room for the configured staging window plus reserve.
+        let headroom = super::in_place::working_space(budget).max(
+            budget
+                .disk_reserve_bytes
+                .saturating_add(budget.staging_bytes),
+        );
+        let needs_space = fs2::available_space(root)? < headroom;
+        if force || needs_space || free >= self.next_free_pages {
+            free_leaves(conn, file, budget.decode_bytes).await?;
+            self.next_free_pages = free.max(1).saturating_mul(2);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use sqlx::Connection;
+
+    #[test]
+    fn unsupported_reclamation_is_optional_but_io_errors_are_not() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(!probe_with(root.path(), |_, _, _| {
+            Err(std::io::Error::from(std::io::ErrorKind::Unsupported).into())
+        })
+        .unwrap());
+        assert!(probe_with(root.path(), |_, _, _| {
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied).into())
+        })
+        .is_err());
+        assert!(!probe_with(root.path(), |_, _, _| Ok(())).unwrap());
+        #[cfg(unix)]
+        {
+            assert!(!probe_with(root.path(), |_, _, _| {
+                Err(std::io::Error::from_raw_os_error(libc::ENOTSUP).into())
+            })
+            .unwrap());
+            assert!(!unsupported(&std::io::Error::from_raw_os_error(libc::EIO)));
+        }
+    }
+
+    async fn reclamation_workload(
+        batches: i64,
+        payload_bytes: i64,
+        scheduled: bool,
+    ) -> (usize, f64) {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("index.sqlite");
+        let mut file = File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let mut conn = SqliteConnection::connect_with(
+            &sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&path)
+                .pragma("journal_mode", "WAL")
+                .pragma("locking_mode", "EXCLUSIVE")
+                .pragma("secure_delete", "OFF"),
+        )
+        .await
+        .unwrap();
+        sqlx::query("CREATE TABLE cells(id INTEGER PRIMARY KEY,payload BLOB)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("WITH RECURSIVE n(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM n WHERE id<?) INSERT INTO cells SELECT id,zeroblob(?) FROM n")
+            .bind(batches + 1).bind(payload_bytes).execute(&mut conn).await.unwrap();
+        super::super::schema::construction_checkpoint(&mut conn)
+            .await
+            .unwrap();
+        let before = allocated(&path).unwrap();
+        let mut reclaimer = Reclaimer::default();
+        let budget = super::super::StorageBudget::default();
+        let mut scans = 0;
+        let mut seconds = 0.0;
+        for id in 1..=batches {
+            sqlx::query("DELETE FROM cells WHERE id=?")
+                .bind(id)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            let start = std::time::Instant::now();
+            if scheduled {
+                scans += usize::from(
+                    reclaimer
+                        .run(&mut conn, &mut file, root.path(), &budget, false)
+                        .await
+                        .unwrap(),
+                );
+            } else {
+                free_leaves(&mut conn, &mut file, 128 * 1024 * 1024)
+                    .await
+                    .unwrap();
+                scans += 1;
+            }
+            seconds += start.elapsed().as_secs_f64();
+        }
+        // Disk pressure must reclaim accumulated pages below the next scan
+        // threshold. An impossible reserve exercises that path without filling
+        // the host volume; the unscheduled comparison forces its final sweep.
+        let mut final_budget = budget.clone();
+        if scheduled {
+            final_budget.disk_reserve_bytes = u64::MAX;
+        }
+        let start = std::time::Instant::now();
+        assert!(reclaimer
+            .run(&mut conn, &mut file, root.path(), &final_budget, !scheduled)
+            .await
+            .unwrap());
+        seconds += start.elapsed().as_secs_f64();
+        assert!(allocated(&path).unwrap() < before / 2);
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("PRAGMA integrity_check")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap(),
+            "ok"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT length(payload) FROM cells")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap(),
+            payload_bytes
+        );
+        conn.close().await.unwrap();
+        drop(file);
+        (scans, seconds)
+    }
+
+    #[tokio::test]
+    async fn reclamation_scans_grow_geometrically_and_pressure_releases_remaining_pages() {
+        let (scans, _) = reclamation_workload(64, 128 * 1024, true).await;
+        assert!(
+            scans <= 7,
+            "64 batches should need at most seven growing freelist scans, got {scans}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "compares repeated and scheduled reclamation on an isolated 256 MiB database"]
+    async fn reclamation_throughput() {
+        let (before_scans, before) = reclamation_workload(256, 1024 * 1024, false).await;
+        let (after_scans, after) = reclamation_workload(256, 1024 * 1024, true).await;
+        eprintln!("reclamation benchmark: before={before:.3}s ({before_scans} scans), after={after:.3}s ({after_scans} scans), speedup={:.2}x", before / after);
+    }
 
     #[tokio::test]
     async fn fragmented_freelist_preserves_live_rows_and_file_length() {
@@ -290,11 +510,11 @@ mod tests {
             .unwrap();
         let length = file.metadata().unwrap().len();
         let before = allocated(&path).unwrap();
-        assert!(free_leaves(&mut conn, &mut file, 0).await.is_err());
+        free_leaves(&mut conn, &mut file, 0).await.unwrap();
         assert_eq!(
             allocated(&path).unwrap(),
             before,
-            "rejected scan must not punch anything"
+            "deferred scan must not punch anything"
         );
         free_leaves(&mut conn, &mut file, 1024 * 1024)
             .await

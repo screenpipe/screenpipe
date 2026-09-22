@@ -47,6 +47,8 @@ import {
   matchesInAppShortcut,
   type ShortcutHintSettings,
 } from "@/lib/shortcuts";
+import { useGT } from "gt-react";
+
 
 export { globalShortcutHint } from "@/lib/shortcuts";
 
@@ -118,7 +120,7 @@ export function buildPaletteEntries(
   const entries: PaletteEntry[] = [
     {
       id: "open_search",
-      label: "search everything you've seen",
+      label: "Search everything you've seen",
       keywords: "find history recall rewind",
       group: "actions",
       hint: globalShortcutHint(settings, "searchShortcut", isMac),
@@ -130,7 +132,7 @@ export function buildPaletteEntries(
       : [
           {
             id: "open_timeline_overlay" as const,
-            label: "open timeline overlay",
+            label: "Open timeline overlay",
             keywords: "rewind replay screen",
             group: "actions" as const,
             hint: globalShortcutHint(settings, "showScreenpipeShortcut", isMac),
@@ -140,7 +142,7 @@ export function buildPaletteEntries(
         ]),
     {
       id: "new_chat",
-      label: "new chat",
+      label: "New chat",
       keywords: "compose ask ai conversation",
       group: "actions",
       hint: inAppShortcutLabel("new_chat", isMac),
@@ -149,7 +151,7 @@ export function buildPaletteEntries(
     },
     {
       id: "pause_recording",
-      label: "pause recording",
+      label: "Pause recording",
       keywords: "stop capture privacy",
       group: "actions",
       hint: globalShortcutHint(settings, "stopRecordingShortcut", isMac),
@@ -158,7 +160,7 @@ export function buildPaletteEntries(
     },
     {
       id: "resume_recording",
-      label: "resume recording",
+      label: "Resume recording",
       keywords: "start capture record",
       group: "actions",
       hint: globalShortcutHint(settings, "startRecordingShortcut", isMac),
@@ -169,7 +171,7 @@ export function buildPaletteEntries(
       ? [
           {
             id: "next_recent_chat" as const,
-            label: "next chat tab",
+            label: "Next chat tab",
             keywords: "conversation previous recent mru cycle tab worktree",
             group: "navigation" as const,
             hint: inAppShortcutLabel("next_recent_chat", isMac),
@@ -178,7 +180,7 @@ export function buildPaletteEntries(
           },
           {
             id: "previous_recent_chat" as const,
-            label: "previous chat tab",
+            label: "Previous chat tab",
             keywords: "conversation previous recent mru reverse tab worktree",
             group: "navigation" as const,
             hint: inAppShortcutLabel("previous_recent_chat", isMac),
@@ -198,7 +200,7 @@ export function buildPaletteEntries(
     })),
     {
       id: "toggle_sidebar",
-      label: "toggle sidebar",
+      label: "Toggle sidebar",
       keywords: "collapse expand panel",
       group: "settings",
       hint: inAppShortcutLabel("toggle_sidebar", isMac),
@@ -207,7 +209,7 @@ export function buildPaletteEntries(
     },
     {
       id: "open_settings",
-      label: "open settings",
+      label: "Open settings",
       keywords: "preferences configuration",
       group: "settings",
       hint: "",
@@ -219,7 +221,7 @@ export function buildPaletteEntries(
       ? [
           {
             id: "open_shortcut_guide" as const,
-            label: "keyboard shortcut guide",
+            label: "Keyboard shortcut guide",
             keywords: "hotkeys keybindings reference help",
             group: "settings" as const,
             hint: inAppShortcutLabel("shortcut_guide", isMac),
@@ -230,7 +232,7 @@ export function buildPaletteEntries(
       : []),
     {
       id: "open_shortcut_settings",
-      label: "edit global shortcuts",
+      label: "Edit global shortcuts",
       keywords: "hotkeys keybindings rebind settings",
       group: "settings",
       hint: "",
@@ -261,6 +263,8 @@ export function CommandPalette({
   onOpenChange,
   experimentalFeaturesEnabled = false,
 }: CommandPaletteProps) {
+
+  const ui = useGT();
   const [internalOpen, setInternalOpen] = useState(false);
   const open = controlledOpen ?? internalOpen;
   const setOpen = onOpenChange ?? setInternalOpen;
@@ -299,12 +303,12 @@ export function CommandPalette({
   return (
     <CommandDialog open={open} onOpenChange={setOpen}>
       <CommandInput
-        placeholder="type a command..."
+        placeholder={ui("Type a command...")}
         className="ph-no-capture"
         data-testid="command-palette-input"
       />
       <CommandList data-testid="command-palette-list">
-        <CommandEmpty>no matching commands</CommandEmpty>
+        <CommandEmpty>No matching commands</CommandEmpty>
         {GROUP_ORDER.map((group, groupIndex) => {
           const items = entries.filter((entry) => entry.group === group);
           if (items.length === 0) return null;

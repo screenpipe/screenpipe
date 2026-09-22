@@ -52,14 +52,14 @@ describe("PastMeetings", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "copy full meeting" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy full meeting" }));
 
     await waitFor(() => {
       expect(mocks.copyMeetingToClipboard).toHaveBeenCalledWith(meeting);
     });
     expect(onSelect).not.toHaveBeenCalled();
     expect(
-      screen.getByRole("button", { name: "copy full meeting" }),
+      screen.getByRole("button", { name: "Copy full meeting" }),
     ).toBeInTheDocument();
   });
 });

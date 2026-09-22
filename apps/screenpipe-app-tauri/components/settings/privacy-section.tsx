@@ -1,4 +1,5 @@
 "use client";
+import { WorkflowSharingControls } from "@/components/workflows/workflow-sharing-controls";
 
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
@@ -10,23 +11,24 @@ import type { SettingsField } from "./settings-search";
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
   {
-    label: "Content filters",
+    label: msg("Content filters", {}),
     keywords: ["ignore", "exclude", "block", "blocklist", "allowlist", "apps", "windows"],
   },
   {
-    label: "Excluded websites",
+    label: msg("Excluded websites", {}),
     keywords: ["url", "domain", "site", "browser", "ignore", "exclude"],
   },
   {
-    label: "Ignore incognito windows",
+    label: msg("Ignore incognito windows", {}),
     keywords: ["private", "browser", "enhanced", "automation"],
   },
-  { label: "PII masking", keywords: ["mask", "redact", "columns", "url", "fields"] },
+  { label: msg("Help improve Workflows", {}), keywords: ["sharing", "training", "consent", "delete shared chats"] },
+  { label: msg("PII masking", {}), keywords: ["mask", "redact", "columns", "url", "fields"] },
   {
-    label: "Remote support logs",
+    label: msg("Remote support logs", {}),
     keywords: ["support", "diagnostic", "troubleshooting", "remote", "logs"],
   },
-  { label: "Telemetry" },
+  { label: msg("Telemetry", {}) },
 ];
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
@@ -77,6 +79,10 @@ import {
   debounce,
   FieldValidationResult,
 } from "@/lib/utils/validation";
+import { useGT } from "gt-react";
+import { msg } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 function EncryptDataCard({
   encryptStore,
@@ -85,6 +91,8 @@ function EncryptDataCard({
   encryptStore: boolean;
   onEncryptStoreChange: (checked: boolean) => void;
 }) {
+
+  const ui = useGT();
   const [keychainState, setKeychainState] = useState<string>("loading");
   const [toggling, setToggling] = useState(false);
   const { toast } = useToast();
@@ -112,9 +120,9 @@ function EncryptDataCard({
       if (res.status === "ok" && res.data.state === "enabled") {
         setKeychainState("enabled");
         onEncryptStoreChange(true);
-        toast({ title: "Encryption enabled", description: "Credentials and settings are now encrypted at rest." });
+        toast({ title: ui("Encryption enabled"), description: ui("Credentials and settings are now encrypted at rest.") });
       } else {
-        toast({ title: "Keychain access denied", description: "Could not enable encryption. Try again later.", variant: "destructive" });
+        toast({ title: ui("Keychain access denied"), description: ui("Could not enable encryption. Try again later."), variant: "destructive" });
       }
     } else {
       // Disable: decrypt credentials first, then turn off store.bin encryption.
@@ -123,13 +131,13 @@ function EncryptDataCard({
         setKeychainState("disabled");
         onEncryptStoreChange(false);
         toast({
-          title: "Encryption disabled",
-          description: "Credentials and settings are now stored without keychain encryption.",
+          title: ui("Encryption disabled"),
+          description: ui("Credentials and settings are now stored without keychain encryption."),
         });
       } else {
         toast({
-          title: "Could not disable encryption",
-          description: "Encrypted credentials could not be decrypted. Check keychain access and try again.",
+          title: ui("Could not disable encryption"),
+          description: ui("Encrypted credentials could not be decrypted. Check keychain access and try again."),
           variant: "destructive",
         });
       }
@@ -152,8 +160,8 @@ function EncryptDataCard({
               </h3>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {keychainState === "unavailable"
-                  ? "OS keychain not available on this system."
-                  : "Encrypt credentials and settings with your OS keychain."}
+                  ? ui("OS keychain not available on this system.")
+                  : ui("Encrypt credentials and settings with your OS keychain.")}
               </p>
             </div>
           </div>
@@ -191,10 +199,11 @@ const REDACTION_PREVIEW_PARTS: (
 ];
 
 function RedactionExamplePreview({ labels }: { labels: string[] }) {
+
   const isOn = (cat: string) => cat === "secret" || labels.includes(cat);
   return (
     <div className="rounded-md border border-border bg-muted/40 px-2.5 py-2">
-      <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+      <p className="text-[10px] normal-case tracking-wider text-muted-foreground mb-1">
         Preview
       </p>
       <p className="text-xs leading-relaxed text-foreground">
@@ -239,6 +248,7 @@ function RedactionWherePreview({
   selected: string[];
   onToggle: (value: string, checked: boolean) => void;
 }) {
+
   const [hovered, setHovered] = useState<string | null>(null);
   const on = (v: string) => selected.includes(v);
 
@@ -299,7 +309,7 @@ function RedactionWherePreview({
             {region(
               "browser_url",
               <span className="block truncate rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
-                app.example.com/account
+                App.example.com/account
               </span>,
               true,
             )}
@@ -309,16 +319,16 @@ function RedactionWherePreview({
           <div className="flex gap-3">
             {region(
               "ui_element_name",
-              <span className="font-medium text-foreground">dashboard</span>,
+              <span className="font-medium text-foreground">Dashboard</span>,
             )}
             {region(
               "ui_element_name",
-              <span className="text-muted-foreground">settings</span>,
+              <span className="text-muted-foreground">Settings</span>,
             )}
           </div>
 
           <div>
-            <div className="mb-0.5 text-[10px] text-muted-foreground">email</div>
+            <div className="mb-0.5 text-[10px] text-muted-foreground">Email</div>
             <div className="rounded border border-border px-1.5 py-1">
               {region("element_properties", "jordan@example.com")}
             </div>
@@ -326,7 +336,7 @@ function RedactionWherePreview({
               {region(
                 "ui_element_description",
                 <span className="text-muted-foreground">
-                  we&apos;ll never share your email
+                  We&apos;ll never share your email
                 </span>,
               )}
             </div>
@@ -334,7 +344,7 @@ function RedactionWherePreview({
 
           <div>
             <div className="mb-0.5 text-[10px] text-muted-foreground">
-              password
+              Password
             </div>
             <div className="rounded border border-border px-1.5 py-1 font-mono">
               {region("element_properties", "hunter2-s3cret", true)}
@@ -344,7 +354,7 @@ function RedactionWherePreview({
           <div className="text-[10px]">
             {region(
               "a11y_url_field",
-              <span className="text-foreground underline">reset password</span>,
+              <span className="text-foreground underline">Reset password</span>,
             )}
           </div>
 
@@ -352,7 +362,7 @@ function RedactionWherePreview({
             <div className="h-1.5 w-full rounded bg-foreground" />
             <div className="h-1.5 w-4/5 rounded bg-foreground" />
             <div className="text-[9px] text-muted-foreground">
-              typed text, transcripts &amp; on-screen text — always hidden
+              Typed text, transcripts &amp; on-screen text — always hidden
             </div>
           </div>
         </div>
@@ -362,6 +372,8 @@ function RedactionWherePreview({
 }
 
 export function PrivacySection() {
+
+  const ui = useGT();
   const { settings, updateSettings } = useSettings();
   // Input Monitoring is a macOS-only TCC permission; the grant card only
   // renders there (alongside the keyboard/click capture toggles it gates).
@@ -372,6 +384,7 @@ export function PrivacySection() {
   // The managed policy runtime reapplies PII policy on every policy poll.
   const { getManagedValue, isManagedDeployment } = useManagedPolicy();
   const managedPiiBackend = getManagedValue("piiBackend");
+  const sharingRequiresCloud = !!settings.workflowSharing;
   // Same idea for input capture: the admin can force keyboard/click rows on
   // or off org-wide (applied by the managed policy runtime).
   // These settings are inverted ("disable…"), so ManagedSwitch — which assumes
@@ -442,8 +455,8 @@ export function PrivacySection() {
   const handleUpdate = async () => {
     if (Object.keys(validationErrors).length > 0) {
       toast({
-        title: "Validation errors",
-        description: "Please fix all validation errors before applying changes",
+        title: ui("Validation errors"),
+        description: ui("Please fix all validation errors before applying changes"),
         variant: "destructive",
       });
       return;
@@ -453,8 +466,8 @@ export function PrivacySection() {
     setHasUnsavedChanges(false);
 
     toast({
-      title: "Updating privacy settings",
-      description: "This may take a few moments...",
+      title: ui("Updating privacy settings"),
+      description: ui("This may take a few moments..."),
     });
 
     try {
@@ -494,14 +507,14 @@ export function PrivacySection() {
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
       toast({
-        title: "Settings updated successfully",
-        description: "Screenpipe has been restarted with new settings",
+        title: ui("Settings updated successfully"),
+        description: ui("Screenpipe has been restarted with new settings"),
       });
     } catch (error) {
       console.error("Failed to update settings:", error);
       toast({
-        title: "Error updating settings",
-        description: "Please try again or check the logs for more information",
+        title: ui("Error updating settings"),
+        description: ui("Please try again or check the logs for more information"),
         variant: "destructive",
       });
       setHasUnsavedChanges(true);
@@ -581,6 +594,7 @@ export function PrivacySection() {
   // Where the AI workers run — one switch covers both modalities.
   const piiBackend = (settings.piiBackend as "local" | "tinfoil" | undefined) ?? "local";
   const handlePiiBackendChange = (next: "local" | "tinfoil") => {
+    if (sharingRequiresCloud) return;
     handleSettingsChange({ piiBackend: next } as any, true);
   };
 
@@ -596,15 +610,15 @@ export function PrivacySection() {
     desc: string;
     always?: boolean;
   }[] = [
-    { value: "secret", label: "Passwords & keys", desc: "passwords, API keys, tokens", always: true },
-    { value: "id", label: "ID numbers", desc: "SSNs, credit cards, account & license numbers" },
-    { value: "person", label: "Names", desc: "people's names" },
-    { value: "email", label: "Email addresses", desc: "email addresses" },
-    { value: "phone", label: "Phone numbers", desc: "phone numbers" },
-    { value: "address", label: "Mailing addresses", desc: "postal addresses" },
-    { value: "url", label: "Links with tokens", desc: "links carrying tokens or session IDs" },
-    { value: "date", label: "Dates", desc: "dates of birth, timestamps" },
-    { value: "sensitive", label: "Health & financial details", desc: "health, financial, identity context" },
+    { value: "secret", label: ui("Passwords & keys"), desc: "passwords, API keys, tokens", always: true },
+    { value: "id", label: ui("ID numbers"), desc: "SSNs, credit cards, account & license numbers" },
+    { value: "person", label: ui("Names"), desc: "people's names" },
+    { value: "email", label: ui("Email addresses"), desc: "email addresses" },
+    { value: "phone", label: ui("Phone numbers"), desc: "phone numbers" },
+    { value: "address", label: ui("Mailing addresses"), desc: "postal addresses" },
+    { value: "url", label: ui("Links with tokens"), desc: "links carrying tokens or session IDs" },
+    { value: "date", label: ui("Dates"), desc: "dates of birth, timestamps" },
+    { value: "sensitive", label: ui("Health & financial details"), desc: "health, financial, identity context" },
   ];
 
   const piiRedactionLabels = useMemo<string[]>(() => {
@@ -685,28 +699,28 @@ export function PrivacySection() {
   }[] = [
     {
       value: "element_properties",
-      label: "Form field values",
+      label: ui("Form field values"),
       desc: "what you type into forms — catches passwords and field contents that on-screen text misses",
       recommended: true,
     },
     {
       value: "browser_url",
-      label: "Web addresses",
+      label: ui("Web addresses"),
       desc: "the address bar — usually not private, and hiding them breaks links",
     },
     {
       value: "ui_element_name",
-      label: "Button & menu labels",
+      label: ui("Button & menu labels"),
       desc: "names like “Submit” or “Search” — rarely private",
     },
     {
       value: "ui_element_description",
-      label: "Help text on controls",
+      label: ui("Help text on controls"),
       desc: "the longer description some buttons and menus expose",
     },
     {
       value: "a11y_url_field",
-      label: "Links inside app data",
+      label: ui("Links inside app data"),
       desc: "URLs embedded in an app’s underlying structure",
     },
   ];
@@ -781,16 +795,16 @@ export function PrivacySection() {
 
       if (permissionPlan.kind === "arc-only") {
         toast({
-          title: "basic detection is enough",
-          description: "Arc private windows are already detected without extra access",
+          title: ui("Basic detection is enough"),
+          description: ui("Arc private windows are already detected without extra access"),
         });
         return;
       }
 
       if (permissionPlan.kind === "open-browser") {
         toast({
-          title: "open a supported browser first",
-          description: "open Chrome, Edge, Brave, or another Chromium browser, then try again",
+          title: ui("Open a supported browser first"),
+          description: ui("Open Chrome, Edge, Brave, or another Chromium browser, then try again"),
         });
         return;
       }
@@ -801,8 +815,8 @@ export function PrivacySection() {
       ) {
         await commands.openPermissionSettings("automation");
         toast({
-          title: "browser access needed",
-          description: "allow screenpipe to control your browser in macOS Automation settings",
+          title: ui("Browser access needed"),
+          description: ui("Allow screenpipe to control your browser in macOS Automation settings"),
           variant: "destructive",
         });
         return;
@@ -810,14 +824,14 @@ export function PrivacySection() {
 
       handleSettingsChange({ enhancedIncognitoDetection: true }, true);
       toast({
-        title: "enhanced detection ready",
-        description: "apply changes to use browser-native incognito detection",
+        title: ui("Enhanced detection ready"),
+        description: ui("Apply changes to use browser-native incognito detection"),
       });
     } catch (error) {
       console.error("Failed to enable enhanced incognito detection:", error);
       toast({
-        title: "couldn't enable enhanced detection",
-        description: "check macOS Automation settings and try again",
+        title: ui("Couldn't enable enhanced detection"),
+        description: ui("Check macOS Automation settings and try again"),
         variant: "destructive",
       });
     } finally {
@@ -921,7 +935,7 @@ export function PrivacySection() {
 
       {/* Security */}
       <div className="space-y-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+        <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
           Security
         </h2>
         <LockedSetting settingKey="api_auth">
@@ -950,7 +964,7 @@ export function PrivacySection() {
             {hasUnsavedChanges && (
               <p className="text-xs text-amber-600 dark:text-amber-400 mt-2 flex items-center gap-1">
                 <RefreshCw className="h-3 w-3 shrink-0" />
-                click &quot;Apply &amp; Restart&quot; above for auth changes to take effect; existing browser connections keep using the old key until then
+                Click &quot;Apply &amp; Restart&quot; above for auth changes to take effect; existing browser connections keep using the old key until then
               </p>
             )}
             <LockedSetting settingKey="api_key">
@@ -959,7 +973,7 @@ export function PrivacySection() {
                 <Input
                   type="text"
                   readOnly={!revealApiKey}
-                  placeholder="e.g. sp-abc12345"
+                  placeholder={ui("E.g. sp-abc12345")}
                   data-testid="privacy-api-key-input"
                   value={
                     liveApiKey
@@ -992,7 +1006,7 @@ export function PrivacySection() {
                   variant="outline"
                   size="sm"
                   className="h-8 px-2 shrink-0"
-                  title={revealApiKey ? "Hide key" : "Reveal key"}
+                  title={revealApiKey ? ui("Hide key") : ui("Reveal key")}
                   onClick={() => setRevealApiKey((v) => !v)}
                   disabled={!liveApiKey}
                   data-testid="privacy-api-key-reveal"
@@ -1003,17 +1017,17 @@ export function PrivacySection() {
                   variant="outline"
                   size="sm"
                   className="h-8 px-2 shrink-0"
-                  title="Copy key"
+                  title={ui("Copy key")}
                   disabled={!liveApiKey}
                   data-testid="privacy-api-key-copy"
                   onClick={async () => {
                     if (!liveApiKey) return;
                     try {
                       await commands.copyTextToClipboard(liveApiKey);
-                      toast({ title: "API key copied to clipboard" });
+                      toast({ title: ui("API key copied to clipboard") });
                     } catch (error) {
                       toast({
-                        title: "couldn't copy API key",
+                        title: ui("Couldn't copy API key"),
                         description: error instanceof Error ? error.message : String(error),
                         variant: "destructive",
                       });
@@ -1026,14 +1040,14 @@ export function PrivacySection() {
                   variant="outline"
                   size="sm"
                   className="h-8 px-2 shrink-0"
-                  title="Regenerate key"
+                  title={ui("Regenerate key")}
                   disabled={regeneratingKey}
                   data-testid="privacy-api-key-regenerate"
                   onClick={async () => {
                     const { confirm } = await import("@tauri-apps/plugin-dialog");
                     const confirmed = await confirm(
-                      "Regenerate API key? Existing browser extensions stay connected until you Apply & Restart, then they must reconnect with the new key.",
-                      { title: "screenpipe", kind: "info" },
+                      ui("Regenerate API key? Existing browser extensions stay connected until you Apply & Restart, then they must reconnect with the new key."),
+                      { title: ui("Screenpipe"), kind: "info" },
                     );
                     if (!confirmed) return;
                     setRegeneratingKey(true);
@@ -1045,12 +1059,12 @@ export function PrivacySection() {
                       setRevealApiKey(true);
                       setHasUnsavedChanges(true);
                       toast({
-                        title: "API key regenerated",
-                        description: "Click Apply & Restart. Browser extensions will need to reconnect after restart.",
+                        title: ui("API key regenerated"),
+                        description: ui("Click Apply & Restart. Browser extensions will need to reconnect after restart."),
                       });
                     } catch (e: any) {
                       toast({
-                        title: "Failed to regenerate API key",
+                        title: ui("Failed to regenerate API key"),
                         description: String(e?.message ?? e),
                         variant: "destructive",
                       });
@@ -1118,7 +1132,7 @@ export function PrivacySection() {
 
       {/* Capture Rules */}
       <div className="space-y-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+        <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
           Capture rules
         </h2>
 
@@ -1131,7 +1145,7 @@ export function PrivacySection() {
               <div>
                 <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                   Ignore Incognito Windows
-                  <HelpTooltip text="automatically detects and skips private/incognito browser windows in 20+ languages without extra access. on macOS, enhance enables browser-native detection for supported Chromium browsers." />
+                  <HelpTooltip text={ui("automatically detects and skips private/incognito browser windows in 20+ languages without extra access. on macOS, enhance enables browser-native detection for supported Chromium browsers.")} />
                 </h3>
                 <p className="text-xs text-muted-foreground">
                   Skip private browsing sessions
@@ -1144,18 +1158,18 @@ export function PrivacySection() {
                   type="button"
                   variant={enhancedIncognitoDetection ? "outline" : "ghost"}
                   size="sm"
-                  className="h-7 px-2 text-[10px] uppercase tracking-wide"
+                  className="h-7 px-2 text-[10px] normal-case tracking-wide"
                   onClick={handleEnhancedIncognitoDetection}
                   disabled={isEnhancingIncognito}
                   aria-pressed={enhancedIncognitoDetection}
-                  title="use browser-native detection; requires macOS Automation access"
+                  title={ui("Use browser-native detection; requires macOS Automation access")}
                 >
                   {isEnhancingIncognito ? (
                     <Loader2 className="mr-1 h-3 w-3 animate-spin" />
                   ) : (
                     <Shield className="mr-1 h-3 w-3" />
                   )}
-                  {enhancedIncognitoDetection ? "enhanced" : "enhance"}
+                  {enhancedIncognitoDetection ? ui("Enhanced") : ui("Enhance")}
                 </Button>
               )}
               <Switch
@@ -1178,7 +1192,7 @@ export function PrivacySection() {
               <div>
                 <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                   Pause for DRM & Remote Desktop
-                  <HelpTooltip text="pauses all screen capture when a DRM-protected streaming app (netflix, disney+, hulu, prime video, apple tv, etc.) or a remote-desktop client (Omnissa/VMware Horizon) is focused. these apps blank their windows when any app is recording the screen — pausing capture while they're focused keeps them usable. capture resumes automatically when you switch away." />
+                  <HelpTooltip text={ui("pauses all screen capture when a DRM-protected streaming app (netflix, disney+, hulu, prime video, apple tv, etc.) or a remote-desktop client (Omnissa/VMware Horizon) is focused. these apps blank their windows when any app is recording the screen — pausing capture while they're focused keeps them usable. capture resumes automatically when you switch away.")} />
                 </h3>
                 <p className="text-xs text-muted-foreground">
                   Avoid DRM black screens (Netflix, Disney+) and gray Horizon windows.
@@ -1203,7 +1217,7 @@ export function PrivacySection() {
               <div>
                 <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                   Capture clipboard
-                  <HelpTooltip text="when on, screenpipe records clipboard copy/paste events and contents. turn off if you ship ~/.screenpipe to a remote LLM or share it — passwords, API keys, and private keys frequently pass through the clipboard." />
+                  <HelpTooltip text={ui("when on, screenpipe records clipboard copy/paste events and contents. turn off if you ship ~/.screenpipe to a remote LLM or share it — passwords, API keys, and private keys frequently pass through the clipboard.")} />
                 </h3>
                 <p className="text-xs text-muted-foreground">
                   Skip if your data leaves the machine (passwords, keys often
@@ -1229,12 +1243,12 @@ export function PrivacySection() {
               <div>
                 <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                   Capture keyboard
-                  <HelpTooltip text="when on, screenpipe records what you type (your keystrokes). off by default. the accessibility tree and OCR still capture on-screen text either way, so Rewind and Ask keep working — this only controls the raw keystroke stream, where passwords, API keys, and secrets you type would otherwise be logged." />
+                  <HelpTooltip text={ui("when on, screenpipe records what you type (your keystrokes). off by default. the accessibility tree and OCR still capture on-screen text either way, so Rewind and Ask keep working — this only controls the raw keystroke stream, where passwords, API keys, and secrets you type would otherwise be logged.")} />
                 </h3>
                 <p className="text-xs text-muted-foreground">
                   {managedKeyboardCapture !== undefined
-                    ? "Managed by your organization."
-                    : "Off by default. Records the raw keystroke stream (secrets often get typed). On-screen text is still captured."}
+                    ? ui("Managed by your organization.")
+                    : ui("Off by default. Records the raw keystroke stream (secrets often get typed). On-screen text is still captured.")}
                 </p>
               </div>
             </div>
@@ -1261,12 +1275,12 @@ export function PrivacySection() {
               <div>
                 <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                   Capture clicks
-                  <HelpTooltip text="when on, screenpipe records mouse click events (where and what you clicked). on by default — clicks carry no text payload and power workflow analysis and task mining. turning this off only skips the click rows; clicks still trigger screen captures." />
+                  <HelpTooltip text={ui("when on, screenpipe records mouse click events (where and what you clicked). on by default — clicks carry no text payload and power workflow analysis and task mining. turning this off only skips the click rows; clicks still trigger screen captures.")} />
                 </h3>
                 <p className="text-xs text-muted-foreground">
                   {managedClickCapture !== undefined
-                    ? "Managed by your organization."
-                    : "On by default. Click events power workflow analysis; no text is recorded."}
+                    ? ui("Managed by your organization.")
+                    : ui("On by default. Click events power workflow analysis; no text is recorded.")}
                 </p>
               </div>
             </div>
@@ -1294,7 +1308,7 @@ export function PrivacySection() {
               <Keyboard className="h-4 w-4 text-muted-foreground shrink-0" />
               <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                 Input Monitoring permission
-                <HelpTooltip text="macOS permission that lets screenpipe capture keystrokes and mouse clicks. without it, capture runs in reduced mode — clipboard and app/window switches still work, but keyboard and click recording is dropped." />
+                <HelpTooltip text={ui("macOS permission that lets screenpipe capture keystrokes and mouse clicks. without it, capture runs in reduced mode — clipboard and app/window switches still work, but keyboard and click recording is dropped.")} />
               </h3>
             </div>
             <div className="mt-2 ml-[26px]">
@@ -1313,7 +1327,7 @@ export function PrivacySection() {
               <div>
                 <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                   Record Audio While Locked
-                  <HelpTooltip text="when enabled, audio recording continues even when your screen is locked. by default, audio recording pauses when the screen is locked to save resources and protect privacy." />
+                  <HelpTooltip text={ui("when enabled, audio recording continues even when your screen is locked. by default, audio recording pauses when the screen is locked to save resources and protect privacy.")} />
                 </h3>
                 <p className="text-xs text-muted-foreground">
                   Continue audio capture when screen is locked
@@ -1340,9 +1354,10 @@ export function PrivacySection() {
       </div>
 
       {/* Data Protection */}
+      <WorkflowSharingControls />
       <LockedSetting settingKey="pii_removal">
       <div className="space-y-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+        <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
           Data protection
         </h2>
         {/* One PII Removal section with two modes — Basic (regex on the
@@ -1358,14 +1373,14 @@ export function PrivacySection() {
                 <div>
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     PII Removal
-                    <HelpTooltip text="Redacts emails, phones, secrets, and more from captures. Smart mode adds names, addresses, and image redaction." />
+                    <HelpTooltip text={ui("Redacts emails, phones, secrets, and more from captures. Smart mode adds names, addresses, and image redaction.")} />
                   </h3>
                   <p className="text-xs text-muted-foreground">
                     {piiMode === "off"
-                      ? "Off — captures store raw text and pixels."
+                      ? ui("Off — captures store raw text and pixels.")
                       : piiMode === "basic"
-                      ? "Basic — regex on capture. Emails, phones, SSNs, cards, API keys."
-                      : "Smart — AI background worker. Adds names, addresses, image redaction."}
+                      ? ui("Basic — regex on capture. Emails, phones, SSNs, cards, API keys.")
+                      : ui("Smart — AI background worker. Adds names, addresses, image redaction.")}
                   </p>
                 </div>
               </div>
@@ -1409,7 +1424,7 @@ export function PrivacySection() {
                     />
                     <span>
                       <span className="font-medium text-foreground">Smart</span>
-                      <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted px-1.5 py-0.5 rounded ml-1">
+                      <span className="text-[10px] font-medium normal-case tracking-wider text-muted-foreground bg-muted px-1.5 py-0.5 rounded ml-1">
                         Experimental
                       </span>
                       <span className="text-muted-foreground">
@@ -1469,8 +1484,8 @@ export function PrivacySection() {
                 </div>
               </div>
             )}
-            {aiPiiRemovalEnabled && (
-              <div className="mt-3 ml-6 space-y-2 border-l-2 border-border pl-3">
+            {(aiPiiRemovalEnabled || sharingRequiresCloud) && (
+              <div id="workflow-cloud-redaction" className="mt-3 ml-6 space-y-2 border-l-2 border-border pl-3">
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
                   <span className="font-medium text-foreground">Where it runs</span>
                   <label className={`flex items-center gap-1.5 ${managedPiiBackend ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
@@ -1478,7 +1493,7 @@ export function PrivacySection() {
                       type="radio"
                       name="piiBackend"
                       checked={piiBackend === "local"}
-                      disabled={!!managedPiiBackend}
+                      disabled={!!managedPiiBackend || sharingRequiresCloud}
                       onChange={() => handlePiiBackendChange("local")}
                     />
                     <span className="text-foreground">Local</span>
@@ -1488,13 +1503,14 @@ export function PrivacySection() {
                       type="radio"
                       name="piiBackend"
                       checked={piiBackend === "tinfoil"}
-                      disabled={!!managedPiiBackend}
+                      disabled={!!managedPiiBackend || sharingRequiresCloud}
                       onChange={() => handlePiiBackendChange("tinfoil")}
                     />
                     <span className="text-foreground">Cloud (enclave)</span>
                   </label>
                 </div>
                 <p className="text-[11px] text-muted-foreground">
+                  {sharingRequiresCloud && <span className="block font-medium">Required while Workflows sharing is on. Turn off sharing above to change it. Shared chats always redact all sensitive categories; the choices below apply to recordings.</span>}
                   Local stays on-device — strongest privacy, slower on weak
                   hardware. Cloud uses screenpipe&apos;s attested
                   confidential-compute enclave — fast everywhere; your device
@@ -1610,7 +1626,7 @@ export function PrivacySection() {
       </LockedSetting>
 
       <div className="space-y-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+        <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
           Agent logs
         </h2>
 
@@ -1642,7 +1658,7 @@ export function PrivacySection() {
       </div>
 
       <div className="space-y-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+        <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
           Content filters
         </h2>
 
@@ -1681,7 +1697,7 @@ export function PrivacySection() {
 
       {/* Telemetry */}
       <div className="space-y-2">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+        <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
           Telemetry
         </h2>
         <LockedSetting settingKey="telemetry">
@@ -1693,7 +1709,7 @@ export function PrivacySection() {
                 <div>
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     Analytics
-                    <HelpTooltip text="Product usage events only — features used, errors, performance. Never your screen recordings, audio, transcripts, or OCR text. Signed out, events carry only a random device ID. Signed in, they are linked to your account, including your email." />
+                    <HelpTooltip text={ui("Product usage events only — features used, errors, performance. Never your screen recordings, audio, transcripts, or OCR text. Signed out, events carry only a random device ID. Signed in, they are linked to your account, including your email.")} />
                   </h3>
                   <p className="text-xs text-muted-foreground">
                     Usage data, linked to your account when signed in
@@ -1757,6 +1773,9 @@ export function PrivacySection() {
  * UX mirrors the local API key card above (Input + Eye reveal + Copy).
  */
 function AdminTeamTokenCard() {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
   const { toast } = useToast();
   const [liveToken, setLiveToken] = useState<string | null>(null);
   const [revealToken, setRevealToken] = useState(false);
@@ -1779,13 +1798,13 @@ function AdminTeamTokenCard() {
   const handleSave = useCallback(async () => {
     const trimmed = (pendingToken ?? "").trim();
     if (!trimmed) {
-      toast({ title: "paste a token first" });
+      toast({ title: ui("Paste a token first") });
       return;
     }
     if (!trimmed.startsWith("sk_ent_")) {
       toast({
-        title: "that doesn't look like an admin token",
-        description: "expected format: sk_ent_…",
+        title: ui("That doesn't look like an admin token"),
+        description: ui("Expected format: sk_ent_…"),
       });
       return;
     }
@@ -1796,19 +1815,19 @@ function AdminTeamTokenCard() {
       setLiveToken(trimmed);
       setPendingToken(null);
       toast({
-        title: "admin token saved",
-        description: "open a new pi chat to use it — no app restart needed",
+        title: ui("Admin token saved"),
+        description: ui("Open a new pi chat to use it — no app restart needed"),
       });
     } catch (e) {
       toast({
-        title: "failed to save",
+        title: ui("Failed to save"),
         description: e instanceof Error ? e.message : String(e),
         variant: "destructive",
       });
     } finally {
       setSaving(false);
     }
-  }, [pendingToken, toast]);
+  }, [pendingToken, toast, uiLanguage]);
 
   const handleClear = useCallback(async () => {
     setSaving(true);
@@ -1818,17 +1837,17 @@ function AdminTeamTokenCard() {
       setLiveToken(null);
       setPendingToken(null);
       setRevealToken(false);
-      toast({ title: "admin token cleared" });
+      toast({ title: ui("Admin token cleared") });
     } catch (e) {
       toast({
-        title: "failed to clear",
+        title: ui("Failed to clear"),
         description: e instanceof Error ? e.message : String(e),
         variant: "destructive",
       });
     } finally {
       setSaving(false);
     }
-  }, [toast]);
+  }, [toast, uiLanguage]);
 
   const displayValue =
     pendingToken !== null
@@ -1859,7 +1878,7 @@ function AdminTeamTokenCard() {
                     openUrl(screenpipeWebUrl("/enterprise?tab=tokens", "https://screenpipe.com"))
                   }
                 >
-                  screenpipe.com/enterprise → api tokens
+                  Screenpipe.com/enterprise → API tokens
                 </button>
                 .
               </p>
@@ -1873,7 +1892,7 @@ function AdminTeamTokenCard() {
             // to type a fresh token in. Only lock the input when we're displaying
             // an EXISTING token in masked form; clicking the eye unlocks edit mode.
             readOnly={Boolean(liveToken) && !revealToken && pendingToken === null}
-            placeholder="sk_ent_…"
+            placeholder={ui("Sk_ent_…")}
             data-testid="privacy-admin-token-input"
             value={displayValue}
             onChange={(e) => {
@@ -1891,7 +1910,7 @@ function AdminTeamTokenCard() {
             variant="outline"
             size="sm"
             className="h-8 px-2 shrink-0"
-            title={revealToken ? "Hide token" : "Reveal token"}
+            title={revealToken ? ui("Hide token") : ui("Reveal token")}
             onClick={() => {
               setRevealToken((v) => !v);
               if (pendingToken === null && liveToken) setPendingToken(liveToken);
@@ -1907,17 +1926,17 @@ function AdminTeamTokenCard() {
             variant="outline"
             size="sm"
             className="h-8 px-2 shrink-0"
-            title="Copy token"
+            title={ui("Copy token")}
             disabled={!liveToken}
             data-testid="privacy-admin-token-copy"
             onClick={async () => {
               if (!liveToken) return;
               try {
                 await commands.copyTextToClipboard(liveToken);
-                toast({ title: "admin token copied to clipboard" });
+                toast({ title: ui("Admin token copied to clipboard") });
               } catch (error) {
                 toast({
-                  title: "couldn't copy admin token",
+                  title: ui("Couldn't copy admin token"),
                   description: error instanceof Error ? error.message : String(error),
                   variant: "destructive",
                 });
@@ -1934,7 +1953,7 @@ function AdminTeamTokenCard() {
               onClick={handleSave}
               data-testid="privacy-admin-token-save"
             >
-              save
+              Save
             </Button>
           )}
           {!hasPending && liveToken && (
@@ -1946,7 +1965,7 @@ function AdminTeamTokenCard() {
               onClick={handleClear}
               data-testid="privacy-admin-token-clear"
             >
-              clear
+              Clear
             </Button>
           )}
         </div>

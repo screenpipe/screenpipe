@@ -189,7 +189,7 @@ fn get_or_create_api_auth_recovery(data_dir: &Path, candidate: &str) -> Result<S
             if let Err(error) = file
                 .write_all(&payload)
                 .and_then(|_| file.write_all(b"\n"))
-                .and_then(|_| file.sync_all())
+                .and_then(|_| screenpipe_fs::sync_all(&file))
             {
                 drop(file);
                 let _ = std::fs::remove_file(&path);

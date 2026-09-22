@@ -7,8 +7,7 @@
             "exceptionDomain": "screenpipe.com",
             "provisioningProfile": null,
             "files": {
-                "MacOS/mlx.metallib": "mlx.metallib",
-                "MacOS/libonnxruntime.dylib": "libonnxruntime.dylib"
+                "Resources": "../.localization/macos-resources"
             },
             "dmg": {
                 "background": "assets/dmg-background.png"
@@ -17,7 +16,8 @@
         "externalBin": [
             "bun",
             "ffmpeg",
-            "ffprobe"
+            "ffprobe",
+            "mlx.metallib"
         ]
     }
 }

@@ -130,12 +130,15 @@ pub async fn note_respawn_failure(app: &tauri::AppHandle, err: &str) {
         DB_BOOT_FAILURES.store(0, Ordering::SeqCst);
         return;
     }
-    crate::health::set_boot_error(
-        "database unavailable; recording interrupted — retrying automatically",
-    );
+    crate::health::set_boot_error(&format!(
+        "database unavailable; recording interrupted — retrying automatically: {err}",
+    ));
     let n = DB_BOOT_FAILURES
         .fetch_add(1, Ordering::SeqCst)
         .saturating_add(1);
+    if n == 1 {
+        crate::recording::recovery_log::append(&active_data_dir(), "database_reopen_failed", err);
+    }
     warn!(
         "engine respawn failed at DB init ({}/{} before availability notification): {}",
         n, DB_BOOT_FAILURES_BEFORE_NOTICE, err

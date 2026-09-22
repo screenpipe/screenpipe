@@ -1,0 +1,54 @@
+---
+title: "Find out why screen history or transcripts are missing"
+sidebarTitle: "Missing recordings"
+description: "A missing answer can come from capture, transcription, search scope, sync, or report generation."
+icon: "search"
+---
+
+A missing answer can come from capture, transcription, search scope, sync, or report generation. Check those stages in order. An empty AI response does not establish that the underlying recording is absent.
+
+## Start here
+
+Choose a recent five-minute interval with a known harmless phrase. Record the device, timezone, app version, expected app or audio input, and whether you are checking the recording device or a remote view.
+
+## Copy this prompt
+
+Use this in Screenpipe chat or an assistant with the required connections. Replace the brackets with your details. If the assistant lacks access, provide a reviewed excerpt; a prompt alone does not connect it to your history.
+
+```text
+Diagnose missing history for [device, date, interval, timezone].
+Expected evidence: [phrase, app, or audio input]. Check available recording
+health, direct search, transcript availability, and then the report.
+Separate local findings from remote or team-view findings.
+Report each stage as present, absent, failed, or not checked, with evidence.
+Do not restart services, delete data, change permissions, or invent a transcript.
+```
+
+## Check the result
+
+After a targeted correction, repeat the same harmless test and open the resulting source. Record what changed. Avoid stacking several changes before retesting because that hides which one helped.
+
+<AccordionGroup>
+<Accordion title="See a worked example" id="worked-example">
+
+| Finding | Next check |
+| --- | --- |
+| No fresh local history | Recording state, OS permission, selected input, exclusions. |
+| Screen exists, transcript missing | Audio device, capture state, transcription status. |
+| Local evidence exists, remote view empty | Correct account/device, sync status, remote coverage. |
+| Search works, report empty | Task time range, model error, output destination. |
+| Older history missing | Retention, archive availability, timezone and query filters. |
+
+</Accordion>
+<Accordion title="Go deeper: setup choices and edge cases" id="details">
+
+For support, provide the version, platform, exact time range and timezone, which input failed, and a small redacted example. Share logs through the support route only after reviewing their contents.
+
+A meeting can have metadata before its transcript is ready. A summary can exist even when some audio was missed. Distinguish transcript coverage from summary quality, and check a source passage before relying on an action item.
+
+</Accordion>
+</AccordionGroup>
+
+## Continue
+
+[Troubleshooting](/troubleshooting) · [meeting transcription](/meeting-transcription) · [scheduled task debugging](/task-troubleshooting)

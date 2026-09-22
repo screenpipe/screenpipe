@@ -23,11 +23,11 @@ describe("ModelPicker", () => {
       />,
     );
 
-    expect(screen.getByRole("combobox", { name: "model" })).toHaveTextContent(
-      "loading models...",
+    expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent(
+      "Loading models...",
     );
     expect(screen.getByRole("status")).toHaveTextContent(
-      "discovering models...",
+      "Discovering models...",
     );
   });
 
@@ -44,11 +44,11 @@ describe("ModelPicker", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "couldn't load live models — showing known models",
     );
-    fireEvent.click(screen.getByRole("combobox", { name: "model" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Model" }));
 
     expect(screen.getByRole("option", { name: "gpt-5" })).toBeInTheDocument();
     expect(
-      screen.getByRole("combobox", { name: "search models" }),
+      screen.getByRole("combobox", { name: "Search models" }),
     ).toBeInTheDocument();
   });
 
@@ -78,12 +78,12 @@ describe("ModelPicker", () => {
       />,
     );
 
-    const trigger = screen.getByRole("combobox", { name: "model" });
+    const trigger = screen.getByRole("combobox", { name: "Model" });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(trigger);
     expect(trigger).toHaveAttribute("aria-expanded", "true");
 
-    const search = screen.getByRole("combobox", { name: "search models" });
+    const search = screen.getByRole("combobox", { name: "Search models" });
     fireEvent.change(search, { target: { value: "private-model" } });
     fireEvent.keyDown(search, { key: "ArrowDown" });
     fireEvent.keyDown(search, { key: "Enter" });

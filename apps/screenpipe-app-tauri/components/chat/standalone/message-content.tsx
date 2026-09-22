@@ -62,6 +62,9 @@ import {
   parseChatRichResults,
   type ChatRichResult,
 } from "@/lib/chat/rich-results";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 const MermaidDiagram = React.lazy(() =>
   import("@/components/rewind/mermaid-diagram").then((mod) => ({
@@ -74,7 +77,7 @@ function MermaidDiagramBlock({ chart }: { chart: string }) {
     <React.Suspense
       fallback={
         <div className="my-4 text-xs text-muted-foreground">
-          rendering diagram...
+          Rendering diagram...
         </div>
       }
     >
@@ -139,8 +142,8 @@ function bashToolDetailsPresentation(toolCall: ToolCall): BashToolDetailsPresent
   if (!localUrl) {
     const target = firstExternalWebTarget(command, "fetch");
     if (!target || !classified) return null;
-    fields.push({ label: "domain", value: target.domain });
-    fields.push({ label: "method", value: method });
+    fields.push({ label: "Domain", value: target.domain });
+    fields.push({ label: "Method", value: method });
     return {
       title: classified.label,
       eyebrow: "Web request",
@@ -152,8 +155,8 @@ function bashToolDetailsPresentation(toolCall: ToolCall): BashToolDetailsPresent
   }
 
   const path = localUrl.pathname.replace(/\/$/, "") || "/";
-  fields.push({ label: "endpoint", value: path });
-  fields.push({ label: "method", value: method });
+  fields.push({ label: "Endpoint", value: path });
+  fields.push({ label: "Method", value: method });
 
   const sp = localUrl.searchParams;
   const addParam = (label: string, key: string) => {
@@ -170,12 +173,12 @@ function bashToolDetailsPresentation(toolCall: ToolCall): BashToolDetailsPresent
   const body = curlBodyJson(command);
   if (path === "/raw_sql" && body && typeof body.query === "string") {
     const tables = sqlTables(body.query);
-    if (tables.length > 0) fields.push({ label: "tables", value: tables.join(", ") });
+    if (tables.length > 0) fields.push({ label: "Tables", value: tables.join(", ") });
   }
 
   if (path.startsWith("/connections/")) {
     const connection = path.split("/")[2];
-    if (connection) fields.push({ label: "connection", value: connection });
+    if (connection) fields.push({ label: "Connection", value: connection });
   }
 
   return {
@@ -189,6 +192,8 @@ function bashToolDetailsPresentation(toolCall: ToolCall): BashToolDetailsPresent
 }
 
 function BashToolDetails({ toolCall }: { toolCall: ToolCall }) {
+
+  const ui = useGT();
   const details = bashToolDetailsPresentation(toolCall);
   if (!details) {
     return (
@@ -204,7 +209,7 @@ function BashToolDetails({ toolCall }: { toolCall: ToolCall }) {
     <div className="py-1.5 space-y-2">
       <div className="rounded-md border border-border/50 bg-muted/20 px-2.5 py-2">
         <div className="mb-1 flex min-w-0 items-center gap-1.5">
-          <span className="shrink-0 rounded border border-border/50 px-1.5 py-0.5 text-[10px] font-mono uppercase leading-none text-muted-foreground">
+          <span className="shrink-0 rounded border border-border/50 px-1.5 py-0.5 text-[10px] font-mono normal-case leading-none text-muted-foreground">
             {details.eyebrow}
           </span>
           {details.resultSummary && (
@@ -230,12 +235,12 @@ function BashToolDetails({ toolCall }: { toolCall: ToolCall }) {
       </div>
 
       <details className="group rounded-md border border-border/30 bg-background/40 px-2 py-1.5">
-        <summary className="cursor-pointer select-none text-[10px] font-mono uppercase tracking-wide text-muted-foreground/70 transition-colors hover:text-foreground/70">
-          technical details
+        <summary className="cursor-pointer select-none text-[10px] font-mono normal-case tracking-wide text-muted-foreground/70 transition-colors hover:text-foreground/70">
+          Technical details
         </summary>
         <div className="mt-2 space-y-2">
-          <ToolCodeBlock label="command" code={sanitizeCommand(details.rawCommand)} language="shell" />
-          {formattedResult && <ToolCodeBlock label="response" code={formattedResult} language="json" />}
+          <ToolCodeBlock label={ui("Command")} code={sanitizeCommand(details.rawCommand)} language="shell" />
+          {formattedResult && <ToolCodeBlock label={ui("Response")} code={formattedResult} language="json" />}
         </div>
       </details>
     </div>
@@ -253,7 +258,7 @@ function ToolCodeBlock({
 }) {
   return (
     <div className="min-w-0">
-      {label && <div className="mb-1 text-[10px] font-mono uppercase text-muted-foreground/50">{label}</div>}
+      {label && <div className="mb-1 text-[10px] font-mono normal-case text-muted-foreground/50">{label}</div>}
       <pre className="max-h-[220px] max-w-full overflow-auto rounded border border-border/30 bg-muted/20 p-2 text-xs leading-relaxed">
         <code className="font-mono">
           {language === "json" ? <HighlightedJson code={code} /> : <HighlightedShell code={code} />}
@@ -264,6 +269,7 @@ function ToolCodeBlock({
 }
 
 function HighlightedShell({ code }: { code: string }) {
+
   const parts = code.split(/(\s+|https?:\/\/[^\s"']+|-[A-Za-z-]+|\$[A-Z0-9_]+)/g).filter(Boolean);
   return (
     <>
@@ -284,6 +290,7 @@ function HighlightedShell({ code }: { code: string }) {
 }
 
 function HighlightedJson({ code }: { code: string }) {
+
   const parts = code.split(/("(?:\\.|[^"\\])*"\s*:|"(?:\\.|[^"\\])*"|true|false|null|-?\d+(?:\.\d+)?)/g).filter(Boolean);
   return (
     <>
@@ -303,6 +310,7 @@ function HighlightedJson({ code }: { code: string }) {
 
 // Render friendly expanded details instead of raw JSON
 function FriendlyToolDetails({ toolCall }: { toolCall: ToolCall }) {
+
   if (toolCall.toolName === "edit" && toolCall.args.old_string && toolCall.args.new_string) {
     return (
       <div className="py-1.5 text-xs font-mono space-y-0">
@@ -344,6 +352,7 @@ function formatElapsedSeconds(totalSeconds: number): string {
 /** One-line live status for a running tool: subagent type, elapsed time,
  *  retry hints, and the tail of streamed output. Quiet for quick tools. */
 function RunningToolStatus({ toolCall }: { toolCall: ToolCall }) {
+
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     if (!toolCall.isRunning) return;
@@ -501,6 +510,8 @@ function ToolCallRailItem({
   waitingForUser?: boolean;
   onAskUserReply?: (reply: string, displayLabel: string) => void | Promise<void>;
 }) {
+
+  const ui = useGT();
   const [expanded, setExpanded] = useState(false);
   const reduceMotion = useReducedMotion();
   const compactedCalls = groupedToolCalls && groupedToolCalls.length > 1
@@ -574,10 +585,10 @@ function ToolCallRailItem({
               {label}
             </span>
             {showError && (
-              <span className="shrink-0 border border-destructive/40 px-1 font-mono text-[9px] uppercase tracking-wide text-destructive">
+              <span className="shrink-0 border border-destructive/40 px-1 font-mono text-[9px] normal-case tracking-wide text-destructive">
                 {compactedCalls
                   ? `${compactedCalls.filter((call) => call.isError).length} failed`
-                  : "failed"}
+                  : ui("Failed")}
               </span>
             )}
             {compactedCalls && !expanded ? (
@@ -586,7 +597,7 @@ function ToolCallRailItem({
               </span>
             ) : hasChildren && !expanded ? (
               <span className="flex-shrink-0 text-[11px] text-foreground/30">
-                {childToolCalls!.length} {childToolCalls!.length === 1 ? "step" : "steps"}
+                {childToolCalls!.length} {childToolCalls!.length === 1 ? ui("step") : ui("steps")}
               </span>
             ) : null}
             {expanded ? (
@@ -762,6 +773,7 @@ function AppIcon({
   sizeClass = "w-5 h-5",
   letterClass = "text-[10px]",
 }: { name: string; sizeClass?: string; letterClass?: string }) {
+
   const color = nameToColor(name);
   const [iconFailed, setIconFailed] = React.useState(false);
   const staticPath = STATIC_APP_ICONS[normalizeAppKey(name)];
@@ -793,6 +805,7 @@ function WebTargetIcon({
   sizeClass = "w-5 h-5",
   letterClass = "text-[10px]",
 }: { target: WebTargetPresentation; sizeClass?: string; letterClass?: string }) {
+
   const color = nameToColor(target.domain);
   const [iconFailed, setIconFailed] = React.useState(false);
   return (
@@ -821,16 +834,17 @@ function WebTargetIcon({
 }
 
 export function ConnectionToolIcon({ name }: { name: string }) {
+  const ui = useGT();
   const key = normalizeAppKey(name);
   if (key === "connections") {
-    return <Plug className="w-3.5 h-3.5 text-foreground/70" aria-label="connections" />;
+    return <Plug className="w-3.5 h-3.5 text-foreground/70" aria-label={ui("Connections")} />;
   }
   if (key === "windows-calendar") {
-    return <Calendar className="w-3.5 h-3.5 text-muted-foreground" aria-label="Windows Calendar" />;
+    return <Calendar className="w-3.5 h-3.5 text-muted-foreground" aria-label={ui("Windows Calendar")} />;
   }
   if (key === "microsoft365" || key === "microsoft-365" || key === "office365" || key === "outlook") {
     return (
-      <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" aria-label="Microsoft 365">
+      <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" aria-label={ui("Microsoft 365")}>
         <path fill="#F25022" d="M1 1h10v10H1z"/>
         <path fill="#7FBA00" d="M13 1h10v10H13z"/>
         <path fill="#00A4EF" d="M1 13h10v10H1z"/>
@@ -840,7 +854,7 @@ export function ConnectionToolIcon({ name }: { name: string }) {
   }
   if (key === "calcom" || key === "cal.com") {
     return (
-      <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 text-foreground" fill="currentColor" aria-label="Cal.com">
+      <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 text-foreground" fill="currentColor" aria-label={ui("Cal.com")}>
         <path d="M2.408 14.488C1.035 14.488 0 13.4 0 12.058c0-1.346.982-2.443 2.408-2.443.758 0 1.282.233 1.691.765l-.66.55a1.343 1.343 0 0 0-1.03-.442c-.93 0-1.44.711-1.44 1.57 0 .86.559 1.557 1.44 1.557.413 0 .765-.147 1.043-.443l.651.573c-.391.51-.929.743-1.695.743zM6.948 10.913h.89v3.49h-.89v-.51c-.185.362-.493.604-1.083.604-.943 0-1.695-.82-1.695-1.826 0-1.007.752-1.825 1.695-1.825.585 0 .898.241 1.083.604zm.026 1.758c0-.546-.374-.998-.964-.998-.568 0-.938.457-.938.998 0 .528.37.998.938.998.586 0 .964-.456.964-.998zM8.467 9.503h.89v4.895h-.89zM9.752 13.937a.53.53 0 0 1 .542-.528c.313 0 .533.242.533.528a.527.527 0 0 1-.533.537.534.534 0 0 1-.542-.537zM14.23 13.839c-.33.403-.832.658-1.426.658a1.806 1.806 0 0 1-1.84-1.826c0-1.007.778-1.825 1.84-1.825.572 0 1.07.241 1.4.622l-.687.577c-.172-.215-.396-.376-.713-.376-.568 0-.938.456-.938.998 0 .541.37.997.938.997.343 0 .58-.179.757-.42zM14.305 12.671c0-1.007.78-1.825 1.84-1.825 1.061 0 1.84.818 1.84 1.825 0 1.007-.779 1.826-1.84 1.826-1.06-.005-1.84-.82-1.84-1.826zm2.778 0c0-.546-.37-.998-.938-.998-.568-.004-.937.452-.937.998 0 .542.37.998.937.998.568 0 .938-.456.938-.998zM24 12.269v2.13h-.89v-1.911c0-.604-.281-.864-.704-.864-.396 0-.678.197-.678.864v1.91h-.89v-1.91c0-.604-.285-.864-.704-.864-.396 0-.744.197-.744.864v1.91h-.89v-3.49h.89v.484c.185-.376.52-.564 1.035-.564.489 0 .898.241 1.123.649.224-.417.554-.65 1.153-.65.731.005 1.299.56 1.299 1.442z"/>
       </svg>
     );
@@ -850,6 +864,7 @@ export function ConnectionToolIcon({ name }: { name: string }) {
 }
 
 function AppStatsBlock({ content }: { content: string }) {
+
   const items = content
     .trim()
     .split("\n")
@@ -1012,6 +1027,7 @@ function InlineConnectionActionCard({
   onContinue?: (prompt: string, label?: string) => void | Promise<void>;
   onDismiss: () => void;
 }) {
+  const ui = useGT();
   const [connectState, setConnectState] = useState<"idle" | "waiting" | "error">("idle");
   const [locallyConnected, setLocallyConnected] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -1024,7 +1040,7 @@ function InlineConnectionActionCard({
 
   const handleConnect = async () => {
     setConnectState("waiting");
-    setStatusMessage("opening authorization in your browser...");
+    setStatusMessage(ui("opening authorization in your browser..."));
     try {
       const result = await onConnect();
       if (result?.status === "error") {
@@ -1039,7 +1055,7 @@ function InlineConnectionActionCard({
       }
       if (result?.status === "connected") {
         setLocallyConnected(true);
-        setStatusMessage("connected");
+        setStatusMessage(ui("connected"));
       }
     } finally {
       setTimeout(() => {
@@ -1068,27 +1084,27 @@ function InlineConnectionActionCard({
             {connectLabel}
           </div>
           <div className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
-            {statusMessage ?? block.extensionReason ?? "token stays in the local secret store and is never shown to the model."}
+            {statusMessage ?? block.extensionReason ?? ui("Token stays in the local secret store and is never shown to the model.")}
           </div>
           {effectiveConnected && isPiGate ? (
-            <div className="mt-3 text-xs uppercase tracking-wide text-muted-foreground">
-              continuing...
+            <div className="mt-3 text-xs normal-case tracking-wide text-muted-foreground">
+              Continuing...
             </div>
           ) : effectiveConnected ? (
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => onContinue?.(continuePrompt, continueLabel)}
-                className="border border-foreground bg-foreground px-2.5 py-1.5 text-xs uppercase tracking-wide text-background transition-colors duration-150"
+                className="border border-foreground bg-foreground px-2.5 py-1.5 text-xs normal-case tracking-wide text-background transition-colors duration-150"
               >
                 {continueLabel}
               </button>
               <button
                 type="button"
                 onClick={onDismiss}
-                className="border border-border px-2.5 py-1.5 text-xs uppercase tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background"
+                className="border border-border px-2.5 py-1.5 text-xs normal-case tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background"
               >
-                dismiss
+                Dismiss
               </button>
             </div>
           ) : (
@@ -1097,16 +1113,16 @@ function InlineConnectionActionCard({
                 type="button"
                 onClick={handleConnect}
                 disabled={connectState === "waiting"}
-                className="border border-foreground bg-foreground px-2.5 py-1.5 text-xs uppercase tracking-wide text-background transition-opacity duration-150 disabled:opacity-60"
+                className="border border-foreground bg-foreground px-2.5 py-1.5 text-xs normal-case tracking-wide text-background transition-opacity duration-150 disabled:opacity-60"
               >
-                {connectState === "waiting" ? "waiting" : connectState === "error" ? "retry" : "connect"}
+                {connectState === "waiting" ? ui("Waiting") : connectState === "error" ? ui("Retry") : ui("Connect")}
               </button>
               <button
                 type="button"
                 onClick={onDismiss}
-                className="border border-border px-2.5 py-1.5 text-xs uppercase tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background"
+                className="border border-border px-2.5 py-1.5 text-xs normal-case tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background"
               >
-                not now
+                Not now
               </button>
             </div>
           )}
@@ -1121,13 +1137,13 @@ function InlineConnectionActionCard({
 function permissionOptionLabel(kind: string | undefined): string | null {
   switch (kind) {
     case "allow_once":
-      return "allow once";
+      return "Allow once";
     case "allow_always":
-      return "always allow";
+      return "Always allow";
     case "reject_once":
       return "reject";
     case "reject_always":
-      return "never allow";
+      return "Never allow";
     default:
       return null;
   }
@@ -1140,6 +1156,8 @@ export function InlineAgentActionCard({
   block: Extract<ContentBlock, { type: "agent_action" }>;
   onRespond: (selectedOptionId?: string) => Promise<boolean> | boolean;
 }) {
+
+  const ui = useGT();
   const [responseState, setResponseState] = useState<"idle" | "waiting" | "error">("idle");
   const titleId = React.useId();
   const isAuth = block.actionKind === "auth";
@@ -1173,7 +1191,7 @@ export function InlineAgentActionCard({
         <div className="flex items-center gap-3">
           <Loader2 className="h-4 w-4 shrink-0 animate-spin text-foreground" aria-hidden />
           <div className="text-sm leading-5 text-foreground">
-            {isAuth ? "signing you in…" : "waiting for the agent…"}
+            {isAuth ? ui("Signing you in…") : ui("Waiting for the agent…")}
           </div>
         </div>
       </div>
@@ -1203,10 +1221,10 @@ export function InlineAgentActionCard({
           </div>
           <div className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
             {responseState === "error"
-              ? "that did not work. please try again."
+              ? ui("That did not work. Please try again.")
               : block.message ?? (isAuth
-                ? "choose how you want to connect this agent."
-                : "the agent needs your approval before it can continue.")}
+                ? ui("Choose how you want to connect this agent.")
+                : ui("The agent needs your approval before it can continue."))}
           </div>
           {block.detail && (
             <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all border border-border bg-muted/40 px-2 py-1.5 text-xs leading-5 text-foreground/80">
@@ -1237,7 +1255,7 @@ export function InlineAgentActionCard({
                   onClick={() => void respond(option.optionId)}
                   title={option.name}
                   className={cn(
-                    "border px-2.5 py-1.5 text-xs uppercase tracking-wide transition-opacity duration-150 disabled:opacity-60",
+                    "border px-2.5 py-1.5 text-xs normal-case tracking-wide transition-opacity duration-150 disabled:opacity-60",
                     isPrimary
                       ? "border-foreground bg-foreground text-background"
                       : "border-border text-foreground hover:bg-muted/50",
@@ -1250,9 +1268,9 @@ export function InlineAgentActionCard({
             <button
               type="button"
               onClick={() => void respond()}
-              className="border border-border px-2.5 py-1.5 text-xs uppercase tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background disabled:opacity-60"
+              className="border border-border px-2.5 py-1.5 text-xs normal-case tracking-wide text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background disabled:opacity-60"
             >
-              not now
+              Not now
             </button>
           </div>
         </div>
@@ -1291,7 +1309,7 @@ function completedWorkSummaryFromRunning(runningSummary: string): string {
   const separator = " · ";
   const separatorIndex = runningSummary.lastIndexOf(separator);
   if (separatorIndex >= 0) {
-    return `done in ${runningSummary.slice(separatorIndex + separator.length)}`;
+    return `Done in ${runningSummary.slice(separatorIndex + separator.length)}`;
   }
   return "done";
 }
@@ -1300,7 +1318,7 @@ function friendlyCompletedSummary(summary?: string): string | undefined {
   if (!summary) return undefined;
   if (summary === "Worked") return "done";
   if (summary.startsWith("Worked for ")) {
-    return `done in ${summary.slice("Worked for ".length)}`;
+    return `Done in ${summary.slice("Worked for ".length)}`;
   }
   return summary;
 }
@@ -1314,6 +1332,7 @@ function WorkSummaryText({
   text: string;
   animateRunningDuration: boolean;
 }) {
+
   const prefix = "Working";
 
   if (!animateRunningDuration || !text.startsWith(prefix)) {
@@ -1370,6 +1389,7 @@ function ToolActivityGroup({
   recoveredWithAnswer = false,
   onAskUserReply,
 }: ToolCallGroupProps) {
+
   const [manualExpand, setManualExpand] = useState<boolean | null>(null);
   const [runningSummary, setRunningSummary] = useState("Working");
   const [completedLiveSummary, setCompletedLiveSummary] = useState<string | null>(null);
@@ -1613,6 +1633,7 @@ function ToolActivityGroup({
 }
 
 function ToolCallGroup(props: ToolCallGroupProps) {
+
   // ACP emits one synthetic startup call per configured MCP server on every
   // turn. They describe connection health, not work performed for this answer,
   // so Connections owns their presentation instead of the chat transcript.
@@ -1635,6 +1656,7 @@ export function MessageContent({
   connectionItems = [],
   onImageClick,
   onRetry,
+  retryDisabled = false,
   onOpenViewerPath,
   onOpenRichResult,
   onOpenConnectionSetup,
@@ -1654,7 +1676,8 @@ export function MessageContent({
   forceCollapseTools?: boolean;
   connectionItems?: ConnectionListItem[];
   onImageClick?: (images: string[], index: number) => void;
-  onRetry?: (prompt: string) => void;
+  onRetry?: (prompt: string) => void | Promise<void>;
+  retryDisabled?: boolean;
   onOpenViewerPath?: (path: string) => void;
   onOpenRichResult?: (result: ChatRichResult) => void | Promise<void>;
   onOpenConnectionSetup?: (connectionId: string) => void | Promise<void>;
@@ -1667,6 +1690,8 @@ export function MessageContent({
   /** Bounded renderer extensions for embedded Chat surfaces such as meetings. */
   markdownOptions?: MarkdownBlockOptions;
 }) {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
   const isUser = message.role === "user";
   const chartPromptSender = !isUser && !isGenerating ? onSendPrompt : undefined;
   const sourceCitations = isUser ? [] : sourceCitationsFromMessage(message);
@@ -1688,30 +1713,31 @@ export function MessageContent({
     <div className="mt-3 pt-3 border-t border-border/40 flex items-center gap-3 flex-wrap">
       <button
         type="button"
+        disabled={retryDisabled}
         onClick={() => onRetry?.(message.retryPrompt!)}
-        className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-foreground text-background hover:bg-foreground/80 transition-colors"
+        className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-foreground text-background hover:bg-foreground/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <RefreshCw className="h-3 w-3" />
         Try again
       </button>
-      <span className="text-xs text-muted-foreground">or edit your message above</span>
+      <span className="text-xs text-muted-foreground">Or edit your message above</span>
       <button
         type="button"
         onClick={() => openFeedback(`AI error in chat: ${message.content.slice(0, 300)}`)}
         className="ml-auto flex items-center gap-1 text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors"
       >
-        report issue
+        Report issue
       </button>
     </div>
   ) : isErrorMessage ? (
     <div className="mt-2 flex items-center gap-1.5">
-      <span className="text-xs text-destructive/60">still happening?</span>
+      <span className="text-xs text-destructive/60">Still happening?</span>
       <button
         type="button"
         onClick={() => openFeedback(`AI error in chat: ${message.content.slice(0, 300)}`)}
         className="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
       >
-        report issue
+        Report issue
       </button>
     </div>
   ) : null;
@@ -1727,7 +1753,7 @@ export function MessageContent({
         return (
           <div
             key={`doc-${doc.name}-${i}`}
-            title={`${doc.name} — ${doc.charCount.toLocaleString()} chars${doc.truncated ? " (truncated)" : ""}`}
+            title={ui("{value1} — {value2} chars{value3}", { value1: doc.name, value2: doc.charCount.toLocaleString(uiLocale), value3: doc.truncated ? " (truncated)" : "" })}
             className="flex items-center gap-2.5 h-20 max-w-[260px] rounded-lg border border-border/50 bg-muted/40 px-3 shadow-sm"
           >
             <div className={`shrink-0 w-11 h-11 rounded-lg flex items-center justify-center text-[10px] font-semibold tracking-tight ${badge.tint}`}>
@@ -1736,7 +1762,7 @@ export function MessageContent({
             <div className="min-w-0 flex-1">
               <div className="truncate text-xs font-medium text-foreground">{doc.name}</div>
               <div className="truncate text-[10px] text-muted-foreground">
-                {doc.charCount.toLocaleString()} chars{doc.truncated ? " • truncated" : ""}
+                {doc.charCount.toLocaleString(uiLocale)} chars{doc.truncated ? ui(" • truncated") : ""}
               </div>
             </div>
           </div>
@@ -1752,7 +1778,7 @@ export function MessageContent({
           className="rounded-lg border border-border/50 shadow-sm overflow-hidden p-0 block text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={img} alt={`Attached ${i + 1}`} className="h-20 w-20 min-h-20 min-w-20 object-cover cursor-pointer" />
+          <img src={img} alt={ui("Attached {value1}", { value1: i + 1 })} className="h-20 w-20 min-h-20 min-w-20 object-cover cursor-pointer" />
         </button>
       ))}
     </div>
@@ -1846,8 +1872,13 @@ export function MessageContent({
     const interruptedSummary = message.interruptedByQuit && hasToolWorkGroup
       ? "interrupted — app closed mid-task"
       : undefined;
-    const workSummaryOverride = stoppedSummary || interruptedSummary;
-    const recoveredWithAnswer = !isGenerating && displayGroups.some(
+    const failedSummary = !isGenerating && isErrorMessage ? "Failed" : undefined;
+    const workSummaryOverride = stoppedSummary || interruptedSummary || failedSummary;
+    const errorText = isErrorMessage ? message.content.replace(/^Error:\s*/, "") : "";
+    const hasVisibleError = displayGroups.some(
+      (group) => group.type === "text" && group.text.replace(/^Error:\s*/, "") === errorText,
+    );
+    const recoveredWithAnswer = !isGenerating && !isErrorMessage && displayGroups.some(
       (group) => group.type === "text" && group.phase === "final_answer",
     );
     return (
@@ -1872,7 +1903,7 @@ export function MessageContent({
                 key={`text-${group.key}`}
                 data-message-phase={group.phase}
                 data-testid={!isUser && group.phase === "commentary" ? "assistant-commentary" : undefined}
-                aria-label={!isUser && group.phase === "commentary" ? "Assistant progress update" : undefined}
+                aria-label={!isUser && group.phase === "commentary" ? ui("Assistant progress update") : undefined}
                 className={!isUser && group.phase === "commentary" ? "text-foreground/75" : undefined}
               >
                 <MarkdownBlock
@@ -1977,6 +2008,11 @@ export function MessageContent({
         })}
         <RichResultCards results={richResults} onOpen={onOpenRichResult} />
         {sourceFooter}
+        {errorText && !hasVisibleError && (
+          <div role="alert">
+            <MarkdownBlock {...markdownOptions} text={errorText} isUser={false} />
+          </div>
+        )}
         {retryCta}
       </div>
     );
@@ -2049,8 +2085,9 @@ export function attachmentBadge(ext: string): { label: string; tint: string } {
 }
 
 
-
 function CollapsibleUserMessage({ label, fullContent }: { label: string; fullContent: string }) {
+
+  const ui = useGT();
   const [expanded, setExpanded] = useState(false);
   const prevLabelRef = useRef(label);
   if (prevLabelRef.current !== label) {
@@ -2068,7 +2105,7 @@ function CollapsibleUserMessage({ label, fullContent }: { label: string; fullCon
           }}
           onMouseUp={(e) => e.stopPropagation()}
           className="shrink-0 p-0.5 rounded hover:bg-muted-foreground/10 text-muted-foreground hover:text-foreground transition-colors"
-          title={expanded ? "Collapse prompt" : "Show full prompt"}
+          title={expanded ? ui("Collapse prompt") : ui("Show full prompt")}
         >
           {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
         </button>

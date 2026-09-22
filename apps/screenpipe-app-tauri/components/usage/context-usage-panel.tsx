@@ -11,6 +11,8 @@ import {
 } from "@/lib/chat/context-usage";
 import { UsageMeter } from "@/components/usage/usage-meter";
 import type { UsageAllowanceState } from "@/lib/hooks/use-usage-status";
+import { useGT } from "gt-react";
+
 
 export function contextUsagePercent(
   snapshot: ContextUsageSnapshot | null,
@@ -31,15 +33,17 @@ export function ContextUsagePanel({
 }: {
   snapshot: ContextUsageSnapshot | null;
 }) {
+
+  const ui = useGT();
   const percent = contextUsagePercent(snapshot);
   if (!snapshot || percent === null) {
     return (
       <section data-testid="context-usage-panel">
-        <div className="text-xs font-medium lowercase text-foreground">
-          context
+        <div className="text-xs font-medium normal-case text-foreground">
+          Context
         </div>
         <p className="mt-1.5 text-xs text-muted-foreground">
-          usage appears after this agent reports its context window.
+          Usage appears after this agent reports its context window.
         </p>
       </section>
     );
@@ -59,7 +63,7 @@ export function ContextUsagePanel({
     <section className="space-y-2.5" data-testid="context-usage-panel">
       <div>
         <div className="flex items-baseline justify-between gap-3 text-xs">
-          <span className="font-medium lowercase text-foreground">context</span>
+          <span className="font-medium normal-case text-foreground">Context</span>
           <span className="font-mono text-muted-foreground">
             {roundedPercent}% · ~
             {compactContextTokenCount(snapshot.totalUsedTokens)} /{" "}
@@ -71,7 +75,7 @@ export function ContextUsagePanel({
           <div
             className="mt-2 flex h-1.5 w-full gap-px overflow-hidden rounded-full bg-muted"
             role="progressbar"
-            aria-label="Context window usage"
+            aria-label={ui("Context window usage")}
             aria-valuemin={0}
             aria-valuemax={snapshot.maxTokens}
             aria-valuenow={snapshot.totalUsedTokens}
@@ -79,7 +83,7 @@ export function ContextUsagePanel({
             {visibleCategories.map((category) => (
               <div
                 key={category.id}
-                title={`${CONTEXT_CATEGORY_META[category.id].label}: ${category.estimatedTokens} tokens`}
+                title={ui("{value1}: {value2} tokens", { value1: CONTEXT_CATEGORY_META[category.id].label, value2: category.estimatedTokens })}
                 style={{
                   backgroundColor: CONTEXT_CATEGORY_META[category.id].color,
                   flexGrow: category.estimatedTokens,
@@ -94,7 +98,7 @@ export function ContextUsagePanel({
             <UsageMeter
               percent={percent}
               state={contextUsageState(percent)}
-              label="Context window usage"
+              label={ui("Context window usage")}
               valueText={`${roundedPercent}% full`}
             />
           </div>
@@ -104,7 +108,7 @@ export function ContextUsagePanel({
       {detailed && (
         <details className="group border-t border-border/70 pt-2">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs text-muted-foreground hover:text-foreground">
-            <span>breakdown</span>
+            <span>Breakdown</span>
             <ChevronDown
               className="h-3.5 w-3.5 transition-transform group-open:rotate-180"
               aria-hidden
@@ -144,8 +148,8 @@ export function ContextUsagePanel({
         )}
         <div>
           {detailed
-            ? "Total is reported by the model; breakdown values are estimated."
-            : "This harness reports context totals without a category breakdown."}
+            ? ui("Total is reported by the model; breakdown values are estimated.")
+            : ui("This harness reports context totals without a category breakdown.")}
         </div>
       </div>
     </section>

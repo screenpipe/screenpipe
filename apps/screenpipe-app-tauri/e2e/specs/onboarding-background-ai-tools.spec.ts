@@ -332,7 +332,7 @@ async function callActivitySummaryThroughMcp(
 
       // The contract: a saved `connect-apps` install must not get stuck on the
       // removed slide. It resumes at the engine, advances to the new optional
-      // recommended-setup step, and finishes when the user continues. Sample
+      // recommended-setup step, and finishes when the user starts. Sample
       // the body while the window is alive so we can prove the removed slides
       // never rendered.
       //
@@ -385,13 +385,35 @@ async function callActivitySummaryThroughMcp(
       );
 
       await browser.switchToWindow("onboarding");
-      const continueButton = await $("button=continue");
-      await continueButton.waitForClickable({ timeout: t(10_000) });
-      await continueButton.click();
+      // This lane proves native MCP setup and saved-step recovery. Opt out of
+      // scheduled AI tasks through their real controls, so finishing setup
+      // needs neither hosted model credentials nor an external task install.
+      const defaults = await $$('[data-testid="onboarding-final-setup"] [role="switch"]');
+      expect(defaults.length).toBe(4);
+      for (const control of defaults) {
+        expect(await control.getAttribute("aria-checked")).toBe("true");
+        await control.scrollIntoView();
+        await control.click();
+        expect(await control.getAttribute("aria-checked")).toBe("false");
+      }
+      const startButton = await $("button=Start Screenpipe");
+      await startButton.scrollIntoView();
+      await startButton.waitForClickable({ timeout: t(10_000) });
+      await startButton.click();
 
       await browser.switchToWindow("home");
       await browser.waitUntil(
         async () => {
+          // The optional Workflows rollout adds a final choice. Complete its
+          // normal Screenpipe path if present; never bypass persisted completion.
+          if ((await browser.getWindowHandles()).includes("onboarding")) {
+            await browser.switchToWindow("onboarding");
+            const findSomething = await $("button*=Find something");
+            if (await findSomething.isExisting() && await findSomething.isDisplayed()) {
+              await findSomething.click();
+            }
+          }
+          await browser.switchToWindow("home");
           const status = await invokeOrThrow<{ isCompleted: boolean }>(
             "get_onboarding_status",
           );

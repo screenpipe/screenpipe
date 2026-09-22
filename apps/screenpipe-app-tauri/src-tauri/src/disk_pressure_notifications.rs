@@ -268,18 +268,11 @@ pub(crate) async fn handle(app: &AppHandle, event: DiskSpaceLowEvent) -> DiskPre
     let storage_available = !crate::enterprise_policy::is_app_ui_hidden()
         && !crate::enterprise_policy::is_tray_item_hidden("storage");
     let actions = low_disk_actions(storage_available);
-    let delivery = client::send_typed_with_actions_and_priority_confirmed(
-        "recording stopped — disk almost full",
-        low_disk_body(
+    let delivery = client::send_typed_with_actions_and_priority_confirmed(crate::localization::ui_text("recording stopped — disk almost full"), low_disk_body(
             event.available_bytes,
             event.threshold_bytes,
             storage_available,
-        ),
-        crate::notifications::gate::DISK_PRESSURE_NOTIFICATION_TYPE,
-        None,
-        actions,
-        NotificationPriority::High,
-    )
+        ), crate::notifications::gate::DISK_PRESSURE_NOTIFICATION_TYPE, None, actions, NotificationPriority::High)
     .await;
 
     match delivery {
@@ -301,7 +294,7 @@ fn review_storage_action() -> serde_json::Value {
     json!({
         "id": "review-storage",
         "action": "review-storage",
-        "label": "review storage",
+        "label": crate::localization::ui_text("review storage"),
         "type": "deeplink",
         "url": STORAGE_SETTINGS_DEEPLINK,
         "primary": true,
@@ -321,15 +314,11 @@ fn low_disk_body(
 ) -> String {
     let available = readable_gib(available_bytes);
     let threshold = readable_gib(threshold_bytes);
-    let next_step = if storage_available {
-        "review storage to preview cleanup and see the retention options available on this device"
+    if storage_available {
+        crate::localization::ui_format("screenpipe stopped capture because only {available} is free (safety threshold: {threshold}). review storage to preview cleanup and see the retention options available on this device. search and existing data remain available.", &[("available", available), ("threshold", threshold)])
     } else {
-        "free disk space before restarting; storage settings are managed by your organization"
-    };
-    format!(
-        "screenpipe stopped capture because only {available} is free (safety threshold: \
-         {threshold}). {next_step}. search and existing data remain available."
-    )
+        crate::localization::ui_format("screenpipe stopped capture because only {available} is free (safety threshold: {threshold}). free disk space before restarting; storage settings are managed by your organization. search and existing data remain available.", &[("available", available), ("threshold", threshold)])
+    }
 }
 
 fn guard_enabled(app: &AppHandle) -> bool {

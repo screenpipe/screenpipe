@@ -4,7 +4,7 @@
 
 "use client";
 
-import { useRef, useState } from "react";
+import { useId, useRef, useState, type CSSProperties } from "react";
 import { Check, Clipboard, Loader2, X } from "lucide-react";
 import posthog from "posthog-js";
 
@@ -25,6 +25,9 @@ import { entryCardForHomeTemplate } from "@/lib/chat/response-feedback";
 import { type ChatEntryCard } from "@/lib/chat/types";
 import { openExternalUrl } from "@/lib/open-external-url";
 import { commands } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+import styles from "./home-card-agent-actions.module.css";
+
 
 type HomeCardAgentId = "claude" | "cursor" | "codex";
 type LaunchState = "opening" | "opened" | "copied" | "unavailable";
@@ -93,34 +96,43 @@ function AgentLogo({ id }: { id: HomeCardAgentId }) {
   );
 }
 
-function statusLabel(state: LaunchState | null): string {
-  if (state === "opening") return "opening";
-  if (state === "opened") return "opened";
-  if (state === "copied") return "copied";
-  if (state === "unavailable") return "unavailable";
-  return "run in";
-}
-
-function resultDescription(state: LaunchState, label: string): string {
-  if (state === "opened") return `Opened in ${label}. The prompt is also copied.`;
-  if (state === "copied") return `${label} could not open. Paste the copied prompt there.`;
-  if (state === "unavailable") return `Could not open ${label} or copy the prompt.`;
-  return `Opening ${label}.`;
-}
-
 export function HomeCardAgentActions({
   pipe,
   entryCard,
   placement = "card",
+  stacked = false,
 }: {
   pipe: HomeCardAgentTask;
   entryCard?: ChatEntryCard;
-  placement?: "card" | "chip";
+  placement?: "card" | "chip" | "toolbar";
+  stacked?: boolean;
 }) {
+
+  const ui = useGT();
+function statusLabel(state: LaunchState | null): string {
+  if (state === "opening") return ui("Opening");
+  if (state === "opened") return ui("Opened");
+  if (state === "copied") return ui("Copied");
+  if (state === "unavailable") return ui("Unavailable");
+  return ui("Run in");
+}
+
+function resultDescription(state: LaunchState, label: string): string {
+  if (state === "opened") return ui("Opened in {agent}. The prompt is also copied.", { agent: label });
+  if (state === "copied") return ui("{agent} could not open. Paste the copied prompt there.", { agent: label });
+  if (state === "unavailable") return ui("Could not open {agent} or copy the prompt.", { agent: label });
+  return ui("Opening {agent}.", { agent: label });
+}
+
+
   const [state, setState] = useState<LaunchState | null>(null);
   const [activeAgent, setActiveAgent] = useState<HomeCardAgentId | null>(null);
   const viewedAgents = useRef(new Set<HomeCardAgentId>());
   const pending = state === "opening";
+  const [expanded, setExpanded] = useState(false);
+  const stackTrigger = useRef<HTMLButtonElement>(null);
+  const choicesId = useId();
+  const stackOpen = expanded || pending;
   const card = entryCard ?? entryCardForHomeTemplate(pipe.name);
 
   const trackAgentViewed = (
@@ -171,10 +183,10 @@ export function HomeCardAgentActions({
     toast({
       title:
         nextState === "opened"
-          ? `opened in ${label}`
+          ? ui("Opened in {value1}", { value1: label })
           : nextState === "copied"
-            ? "prompt copied"
-            : "agent handoff unavailable",
+            ? ui("Prompt copied")
+            : ui("Agent handoff unavailable"),
       description: resultDescription(nextState, label),
       ...(nextState === "unavailable" ? { variant: "destructive" as const } : {}),
     });
@@ -197,12 +209,29 @@ export function HomeCardAgentActions({
       data-state={state ?? "idle"}
       data-agent={activeAgent ?? undefined}
       data-placement={placement}
+      data-stacked={stacked || undefined}
+      data-expanded={stacked ? stackOpen : undefined}
+      onPointerEnter={event => { if (stacked && event.pointerType !== "touch") setExpanded(true); }}
+      onPointerLeave={event => { if (stacked && !event.currentTarget.contains(document.activeElement)) setExpanded(false); }}
+      onBlur={event => { if (stacked && !event.currentTarget.contains(event.relatedTarget)) setExpanded(false); }}
+      onKeyDown={event => {
+        if (stacked && event.key === "Escape" && !pending) {
+          event.preventDefault();
+          event.stopPropagation();
+          stackTrigger.current?.focus();
+          setExpanded(false);
+        }
+      }}
       role="group"
-      aria-label={`Run ${pipe.title} in another agent`}
-      className={`absolute top-1/2 z-20 flex -translate-y-1/2 items-center gap-0.5 rounded-md border border-border bg-background p-0.5 text-foreground transition-opacity duration-150 motion-reduce:transition-none ${
-        placement === "chip" ? "left-1/2 -translate-x-1/2" : "right-3"
+      aria-label={ui("Run {value1} in another agent", { value1: pipe.title })}
+      className={`${stacked ? styles.stack : ""} flex items-center gap-0.5 text-foreground transition-opacity duration-150 motion-reduce:transition-none ${
+        stacked && placement !== "toolbar"
+          ? styles.cardStack
+          : placement === "toolbar"
+          ? "shrink-0"
+          : `absolute z-20 rounded-md border border-border bg-background p-0.5 top-1/2 -translate-y-1/2 ${placement === "chip" ? "left-1/2 -translate-x-1/2" : "right-3"}`
       } ${
-        state
+        stacked || placement === "toolbar" || state
           ? "pointer-events-auto opacity-100"
           : "pointer-events-none opacity-0 group-hover/home-card:pointer-events-auto group-hover/home-card:opacity-100 group-focus-within/home-card:pointer-events-auto group-focus-within/home-card:opacity-100"
       }`}
@@ -214,10 +243,16 @@ export function HomeCardAgentActions({
       >
         {statusLabel(state)}
       </span>
+      {stacked && <button ref={stackTrigger} type="button" className={styles.stackTrigger}
+        aria-label={ui("Choose an AI agent")} aria-expanded={stackOpen} aria-controls={choicesId}
+        tabIndex={stackOpen ? -1 : 0} onFocus={() => setExpanded(true)} onClick={() => setExpanded(true)}>
+        <span aria-hidden="true" className={styles.stackLogos}>{HOME_CARD_AGENT_TARGETS.map(target => <span key={target.id}><AgentLogo id={target.id} /></span>)}</span>
+      </button>}
+      <div id={choicesId} className={stacked ? styles.choices : "contents"}>
       <TooltipProvider delayDuration={120}>
-        {HOME_CARD_AGENT_TARGETS.map((target) => {
+        {HOME_CARD_AGENT_TARGETS.map((target, index) => {
           const label = AGENT_LABELS[target.id];
-          const actionLabel = `Run in ${label}`;
+          const actionLabel = ui("Run in {agent}", { agent: label });
           const isOpening = pending && activeAgent === target.id;
           const isResult = !pending && state && activeAgent === target.id;
           return (
@@ -228,6 +263,9 @@ export function HomeCardAgentActions({
                   data-testid={`home-card-agent-${pipe.name}-${target.id}`}
                   aria-label={actionLabel}
                   disabled={pending}
+                  tabIndex={stacked && !stackOpen ? -1 : undefined}
+                  aria-hidden={stacked && !stackOpen ? true : undefined}
+                  style={stacked ? { "--agent-index": index } as CSSProperties : undefined}
                   onPointerEnter={() => trackAgentViewed(target.id, "hover")}
                   onFocus={() => trackAgentViewed(target.id, "keyboard")}
                   onClick={() => void launch(target)}
@@ -247,7 +285,7 @@ export function HomeCardAgentActions({
                 </button>
               </TooltipTrigger>
               <TooltipContent
-                side={placement === "chip" ? "bottom" : "right"}
+                side={placement === "card" ? "right" : "bottom"}
                 sideOffset={6}
                 className="rounded-md px-2.5 py-1.5 text-[11px] font-normal"
               >
@@ -257,6 +295,7 @@ export function HomeCardAgentActions({
           );
         })}
       </TooltipProvider>
+      </div>
     </div>
   );
 }

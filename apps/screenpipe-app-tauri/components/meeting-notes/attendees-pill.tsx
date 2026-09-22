@@ -16,6 +16,8 @@ import {
   parseAttendees,
   serializeAttendees,
 } from "@/lib/utils/meeting-format";
+import { useGT } from "gt-react";
+
 
 interface Speaker {
   id: number;
@@ -31,6 +33,7 @@ interface AttendeesPillProps {
 
 /** A small square initial badge, used on chips and suggestion rows. */
 function Initial({ name }: { name: string }) {
+
   const ch = name.trim().charAt(0).toUpperCase() || "?";
   return (
     <span className="flex h-5 w-5 shrink-0 items-center justify-center border border-border bg-foreground/[0.04] text-[10px] font-medium">
@@ -48,6 +51,8 @@ function Initial({ name }: { name: string }) {
  * endpoint — a named speaker is effectively an attendee — plus free-form "add".
  */
 export function AttendeesPill({ value, count, onChange }: AttendeesPillProps) {
+
+  const ui = useGT();
   const [open, setOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [speakers, setSpeakers] = useState<Speaker[]>([]);
@@ -197,12 +202,12 @@ export function AttendeesPill({ value, count, onChange }: AttendeesPillProps) {
         >
           <Users className="h-3.5 w-3.5" />
           {count === 0
-            ? "add attendees"
+            ? ui("Add attendees")
             : `${count} ${count === 1 ? "attendee" : "attendees"}`}
         </button>
       </PopoverTrigger>
       <PopoverContent
-        className="w-80 p-0 z-[9999] border border-border rounded-none shadow-none"
+        className="w-80 p-0 z-[9999] border border-border rounded-lg shadow-none"
         align="start"
       >
         {/* Pinned search / add input */}
@@ -211,7 +216,7 @@ export function AttendeesPill({ value, count, onChange }: AttendeesPillProps) {
           <input
             ref={inputRef}
             value={searchTerm}
-            placeholder="search or add attendee…"
+            placeholder={ui("Search or add attendee…")}
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
@@ -282,9 +287,9 @@ export function AttendeesPill({ value, count, onChange }: AttendeesPillProps) {
         {/* Current attendees — scrollable chip cloud, bounded height */}
         {attendees.length > 0 ? (
           <>
-            <div className="px-2.5 pt-2 text-[11px] lowercase text-muted-foreground">
+            <div className="px-2.5 pt-2 text-[11px] normal-case text-muted-foreground">
               {attendees.length}{" "}
-              {attendees.length === 1 ? "attendee" : "attendees"}
+              {attendees.length === 1 ? ui("attendee") : ui("attendees")}
             </div>
             <div className="flex max-h-[140px] flex-wrap gap-1.5 overflow-y-auto p-2.5">
               {attendees.map((name) => (
@@ -297,7 +302,7 @@ export function AttendeesPill({ value, count, onChange }: AttendeesPillProps) {
                   <span className="max-w-[140px] truncate">{name}</span>
                   <button
                     type="button"
-                    aria-label={`Remove ${name}`}
+                    aria-label={ui("Remove {value1}", { value1: name })}
                     onClick={() => removeAttendee(name)}
                     className="flex h-4 w-4 items-center justify-center text-muted-foreground hover:text-foreground"
                   >
@@ -310,7 +315,7 @@ export function AttendeesPill({ value, count, onChange }: AttendeesPillProps) {
         ) : (
           !searchTerm.trim() && (
             <div className="px-2.5 py-3 text-xs text-muted-foreground">
-              no attendees yet — type a name to add
+              No attendees yet — type a name to add
             </div>
           )
         )}

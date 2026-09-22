@@ -248,7 +248,12 @@ async function backupConfigIfExists(configPath: string): Promise<void> {
  * a torn config the next read would refuse or misparse.
  */
 async function writeConfigAtomic(configPath: string, text: string): Promise<void> {
-  await mkdir(await dirname(configPath), { recursive: true });
+  const dir = await dirname(configPath);
+  // Home already exists. Its children are in the filesystem scope, but the
+  // directory itself is not (Claude Code stores its config at ~/.claude.json).
+  if (dir !== await join(await homeDir())) {
+    await mkdir(dir, { recursive: true });
+  }
   const tmpPath = `${configPath}.${Date.now()}.${Math.random().toString(36).slice(2, 10)}.tmp`;
   await writeFile(tmpPath, new TextEncoder().encode(text));
   try {

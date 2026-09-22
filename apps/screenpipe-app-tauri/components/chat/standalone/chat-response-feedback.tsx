@@ -19,6 +19,8 @@ import {
 import type { ChatTelemetryContext } from "@/lib/chat/response-feedback";
 import type { Message } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 interface ChatResponseFeedbackProps {
   message: Message;
@@ -33,6 +35,8 @@ export function ChatResponseFeedback({
   telemetryContext,
   submitFeedback = submitChatResponseFeedback,
 }: ChatResponseFeedbackProps) {
+
+  const ui = useGT();
   const [rating, setRating] = useState<ChatResponseFeedbackRating | null>(null);
   const [reason, setReason] = useState<ChatResponseFeedbackReason | null>(null);
   const [reasonOpen, setReasonOpen] = useState(false);
@@ -107,8 +111,8 @@ export function ChatResponseFeedback({
         onClick={() => selectRating("positive")}
         disabled={saveState === "saving"}
         className={buttonClass("positive")}
-        title="Good response"
-        aria-label="Good response"
+        title={ui("Good response")}
+        aria-label={ui("Good response")}
         aria-pressed={rating === "positive"}
       >
         <ThumbsUp className="h-3 w-3" />
@@ -120,19 +124,19 @@ export function ChatResponseFeedback({
             onClick={() => selectRating("negative")}
             disabled={saveState === "saving"}
             className={buttonClass("negative")}
-            title="Bad response"
-            aria-label="Bad response"
+            title={ui("Bad response")}
+            aria-label={ui("Bad response")}
             aria-pressed={rating === "negative"}
           >
             <ThumbsDown className="h-3 w-3" />
           </button>
         </PopoverTrigger>
         <PopoverContent
-          className="ph-no-capture w-64 rounded-none p-3"
+          className="ph-no-capture w-64 rounded-lg p-3"
           align="end"
           side="top"
         >
-          <p className="mb-2 text-xs font-medium">what went wrong?</p>
+          <p className="mb-2 text-xs font-medium">What went wrong?</p>
           <div className="grid grid-cols-2 gap-1.5">
             {CHAT_RESPONSE_FEEDBACK_REASONS.map((option) => (
               <button
@@ -154,11 +158,11 @@ export function ChatResponseFeedback({
             className="mt-2 min-h-4 text-[10px] text-muted-foreground"
             role={saveState === "error" ? "alert" : "status"}
           >
-            {saveState === "saving" && "saving locally…"}
+            {saveState === "saving" && ui("Saving locally…")}
             {(saveState === "idle" || saveState === "saved") &&
-              "local by default · no chat text shared"}
+              ui("local by default · no chat text shared")}
             {saveState === "error" &&
-              "local save failed · choose a reason to retry"}
+              ui("local save failed · choose a reason to retry")}
           </p>
         </PopoverContent>
       </Popover>

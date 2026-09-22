@@ -6,6 +6,8 @@
 import React from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Check, FileText, Loader2, Play, Sparkles } from "lucide-react";
+import { useGT } from "gt-react";
+
 
 export type MeetingSummaryTransitionPhase = "finalizing" | "writing" | null;
 
@@ -29,8 +31,9 @@ export function MeetingSummaryTransition({
   onResume,
   onOpenSummary,
 }: MeetingSummaryTransitionProps) {
+  const ui = useGT();
   const reduceMotion = useReducedMotion();
-  const label = phase === "finalizing" ? "meeting saved" : "writing summary";
+  const label = phase === "finalizing" ? "Meeting saved" : "Writing summary";
   const detail =
     phase === "finalizing"
       ? "Your notes are saved. Finishing the transcript before the summary starts."
@@ -57,7 +60,7 @@ export function MeetingSummaryTransition({
       >
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+            <div className="flex items-center gap-2 font-mono text-[10px] normal-case tracking-[0.14em] text-muted-foreground">
               {phase === "finalizing" ? (
                 <Check className="h-3 w-3" aria-hidden="true" />
               ) : (
@@ -78,30 +81,30 @@ export function MeetingSummaryTransition({
               <button
                 type="button"
                 onClick={onResume}
-                className="inline-flex h-8 shrink-0 items-center gap-2 border border-foreground bg-foreground px-3 font-mono text-[10px] uppercase tracking-[0.12em] text-background transition-colors duration-150 hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                className="inline-flex h-8 shrink-0 items-center gap-2 border border-foreground bg-foreground px-3 font-mono text-[10px] normal-case tracking-[0.12em] text-background transition-colors duration-150 hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               >
                 <Play className="h-3 w-3" aria-hidden="true" />
-                resume recording
+                Resume recording
               </button>
             ) : null}
             {phase === "writing" && onOpenSummary ? (
               <button
                 type="button"
                 onClick={onOpenSummary}
-                className="inline-flex h-8 shrink-0 items-center gap-2 border border-foreground bg-foreground px-3 font-mono text-[10px] uppercase tracking-[0.12em] text-background transition-colors duration-150 hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                className="inline-flex h-8 shrink-0 items-center gap-2 border border-foreground bg-foreground px-3 font-mono text-[10px] normal-case tracking-[0.12em] text-background transition-colors duration-150 hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               >
                 <Sparkles className="h-3 w-3" aria-hidden="true" />
-                view summary
+                View summary
               </button>
             ) : null}
             <button
               type="button"
               onClick={onTranscriptToggle}
               aria-pressed={transcriptOpen}
-              className="inline-flex h-8 shrink-0 items-center gap-2 border border-border bg-background px-3 font-mono text-[10px] uppercase tracking-[0.12em] text-foreground transition-colors duration-150 hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              className="inline-flex h-8 shrink-0 items-center gap-2 border border-border bg-background px-3 font-mono text-[10px] normal-case tracking-[0.12em] text-foreground transition-colors duration-150 hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
               <FileText className="h-3 w-3" aria-hidden="true" />
-              {transcriptOpen ? "hide transcript" : "show transcript"}
+              {transcriptOpen ? ui("Hide transcript") : ui("Show transcript")}
             </button>
           </div>
         </div>

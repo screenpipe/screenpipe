@@ -72,6 +72,11 @@ import {
 } from "@/lib/pipe-publisher";
 import { PipeStoreSubmissionDialog } from "@/components/pipe-store-submission";
 import { buildPipeStoreSubmissionMailto } from "@/lib/pipe-store-submission";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
+
 // --- Types ---
 
 interface StorePipe {
@@ -138,18 +143,18 @@ interface LocalPipe {
 
 // Categories are derived dynamically from pipe metadata — no hardcoded taxonomy.
 const SORT_OPTIONS = [
-  { value: "popular", label: "Popular" },
-  { value: "newest", label: "Newest" },
+  { value: "popular", label: msg("Popular", {}) },
+  { value: "newest", label: msg("Newest", {}) },
 ];
 
 const PERMISSION_LABELS: { key: string; label: string; icon: React.ReactNode }[] = [
-  { key: "ocr", label: "Screen text (OCR)", icon: <Eye className="h-3.5 w-3.5" /> },
-  { key: "audio", label: "Audio transcripts", icon: <Mic className="h-3.5 w-3.5" /> },
-  { key: "input", label: "Keyboard input", icon: <Keyboard className="h-3.5 w-3.5" /> },
-  { key: "raw_sql", label: "Raw SQL", icon: <Database className="h-3.5 w-3.5" /> },
-  { key: "frames", label: "Screenshots", icon: <Image className="h-3.5 w-3.5" /> },
-  { key: "connections", label: "Connections", icon: <Plug className="h-3.5 w-3.5" /> },
-  { key: "accessibility", label: "Accessibility", icon: <Accessibility className="h-3.5 w-3.5" /> },
+  { key: "ocr", label: msg("Screen text (OCR)", {}), icon: <Eye className="h-3.5 w-3.5" /> },
+  { key: "audio", label: msg("Audio transcripts", {}), icon: <Mic className="h-3.5 w-3.5" /> },
+  { key: "input", label: msg("Keyboard input", {}), icon: <Keyboard className="h-3.5 w-3.5" /> },
+  { key: "raw_sql", label: msg("Raw SQL", {}), icon: <Database className="h-3.5 w-3.5" /> },
+  { key: "frames", label: msg("Screenshots", {}), icon: <Image className="h-3.5 w-3.5" /> },
+  { key: "connections", label: msg("Connections", {}), icon: <Plug className="h-3.5 w-3.5" /> },
+  { key: "accessibility", label: msg("Accessibility", {}), icon: <Accessibility className="h-3.5 w-3.5" /> },
 ];
 
 function getPermissionStatus(perms: PipePermissions | undefined, key: string): "allowed" | "denied" | "unset" {
@@ -293,7 +298,7 @@ function normalizePipe(raw: any): any {
 
   return {
     ...raw,
-    title: raw.title || raw.slug || "untitled scheduled task",
+    title: raw.title || raw.slug || "Untitled scheduled task",
     author: publisher.name,
     author_id: raw.author_id || null,
     author_verified: publisher.verified,
@@ -330,6 +335,8 @@ function getPipeStoreList(data: unknown): any[] {
 }
 
 export function PipeStoreView() {
+
+  const ui = useGT();
   // Track installed pipe count to auto-switch to Discover for new users
   const [installedCount, setInstalledCount] = useState<number | null>(null);
 
@@ -371,16 +378,16 @@ export function PipeStoreView() {
   }, [installedCount]);
 
   const tabs = [
-    { key: "my-pipes" as const, label: "My tasks" },
-    { key: "discover" as const, label: "Discover" },
+    { key: "my-pipes" as const, label: ui("My tasks") },
+    { key: "discover" as const, label: ui("Discover") },
   ];
 
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         {activeTab === "discover"
-          ? "browse, install, and review community automations"
-          : "Run tasks on a schedule, after meetings, or when events happen."}
+          ? ui("Browse, install, and review community automations")
+          : ui("Run tasks on a schedule, after meetings, or when events happen.")}
       </p>
 
       {/* Tab bar */}
@@ -420,6 +427,9 @@ export function PipeStoreView() {
 // --- Discover View ---
 
 function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const { settings } = useSettings();
   const { toast } = useToast();
   const openFeedback = useFeedbackStore((s) => s.openFeedback);
@@ -617,7 +627,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     } catch (err) {
       console.error("failed to fetch pipe detail:", err);
       toast({
-        title: "failed to load scheduled task details",
+        title: ui("Failed to load scheduled task details"),
         variant: "destructive",
       });
       setShowDetail(false);
@@ -675,10 +685,10 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
         return next;
       });
       apiCache.invalidate("pipes/installed");
-      toast({ title: `"${pipeName}" updated` });
+      toast({ title: ui("\"{value1}\" updated", { value1: pipeName }) });
     } catch (err: any) {
       toast({
-        title: "failed to update scheduled task",
+        title: ui("Failed to update scheduled task"),
         description: err.message,
         variant: "destructive",
       });
@@ -742,8 +752,8 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       }
 
       toast({
-        title: `"${pipeName}" installed`,
-        description: "open My tasks to configure and run it",
+        title: ui("\"{value1}\" installed", { value1: pipeName }),
+        description: ui("Open My tasks to configure and run it"),
       });
       // Invalidate cache and update installed names
       apiCache.invalidate("pipes/installed");
@@ -758,7 +768,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       onInstalled?.();
     } catch (err: any) {
       toast({
-        title: "failed to install scheduled task",
+        title: ui("Failed to install scheduled task"),
         description: (
           <span>
             {err.message}{" "}
@@ -767,7 +777,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
               className="underline underline-offset-2 text-inherit opacity-80 hover:opacity-100"
               onClick={() => openFeedback(`Scheduled task install failed (${slug}): ${err.message}`)}
             >
-              report issue
+              Report issue
             </button>
           </span>
         ),
@@ -797,12 +807,12 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `HTTP ${res.status}`);
       }
-      toast({ title: "review submitted" });
+      toast({ title: ui("Review submitted") });
       openDetail(selectedPipe.slug);
       setReviewExpanded(false);
     } catch (err: any) {
       toast({
-        title: "failed to submit review",
+        title: ui("Failed to submit review"),
         description: err.message,
         variant: "destructive",
       });
@@ -824,14 +834,14 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
       posthog.capture("pipe_unpublished_from_store", { slug });
-      toast({ title: `"${slug}" unpublished from store` });
+      toast({ title: ui("\"{value1}\" unpublished from store", { value1: slug }) });
       setShowDetail(false);
       setSelectedPipe(null);
       apiCache.invalidatePrefix("pipes/store");
       fetchPipes();
     } catch (err: any) {
       toast({
-        title: "failed to unpublish scheduled task",
+        title: ui("Failed to unpublish scheduled task"),
         description: err.message,
         variant: "destructive",
       });
@@ -852,7 +862,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
   const installGateDialog = (
     <Dialog open={!!pendingInstall} onOpenChange={(open) => !open && closeInstallGate()}>
       <DialogContent className="max-w-lg pt-8">
-        <DialogTitle className="sr-only">review scheduled task access</DialogTitle>
+        <DialogTitle className="sr-only">Review scheduled task access</DialogTitle>
 
         {pendingInstall ? (
           <InstallRiskSummary
@@ -866,7 +876,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
 
         <DialogFooter className="gap-2 sm:gap-0">
           <Button variant="ghost" onClick={closeInstallGate}>
-            not now
+            Not now
           </Button>
           <Button
             data-testid="pipe-risk-install-confirm"
@@ -879,10 +889,10 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
               {pendingInstall && installing === pendingInstall.slug ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-                  installing...
+                  Installing...
                 </>
               ) : (
-                "install scheduled task"
+                ui("Install scheduled task")
               )}
             </Button>
           </DialogFooter>
@@ -902,7 +912,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
           className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
-          back to discover
+          Back to discover
         </button>
 
         {detailLoading ? (
@@ -938,15 +948,15 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
           <button
             onClick={dismissWelcome}
             className="absolute top-2 right-2 text-muted-foreground hover:text-foreground text-sm px-1.5"
-            aria-label="dismiss"
+            aria-label={ui("Dismiss")}
           >
             ✕
           </button>
           <p className="text-sm font-medium text-foreground">
-            scheduled tasks are AI automations that run on your screen data
+            Scheduled tasks are AI automations that run on your screen data
           </p>
           <p className="text-sm text-muted-foreground mt-1">
-            they can summarize your day, track your time, build a digital memory, sync notes to obsidian, auto-update your CRM, and more. install one below to get started — click GET, then enable it in My tasks.
+            They can summarize your day, track your time, build a digital memory, sync notes to obsidian, auto-update your CRM, and more. Install one below to get started — click GET, then enable it in My tasks.
           </p>
         </div>
       )}
@@ -957,7 +967,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="search community tasks..."
+              placeholder={ui("Search community tasks...")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9 h-9"
@@ -968,7 +978,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {SORT_OPTIONS.map((s) => (
+              {localizeDefinitions(SORT_OPTIONS, uiMessages).map((s) => (
                 <SelectItem key={s.value} value={s.value}>
                   {s.label}
                 </SelectItem>
@@ -993,7 +1003,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
               key={c}
               onClick={() => setCategory(c)}
               className={cn(
-                "px-3 py-1.5 rounded-none text-xs font-medium transition-colors duration-150 whitespace-nowrap",
+                "px-3 py-1.5 rounded-md text-xs font-medium transition-colors duration-150 whitespace-nowrap",
                 category === c
                   ? "bg-foreground text-background"
                   : "bg-muted text-muted-foreground hover:text-foreground"
@@ -1012,7 +1022,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
             <Card key={i} className="overflow-hidden">
               <CardContent className="p-5 space-y-3">
                 <div className="flex items-center gap-3">
-                  <Skeleton className="h-10 w-10 rounded-none" />
+                  <Skeleton className="h-10 w-10 rounded-lg" />
                   <div className="space-y-1.5 flex-1">
                     <Skeleton className="h-4 w-2/3" />
                     <Skeleton className="h-3 w-1/3" />
@@ -1028,8 +1038,8 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
             <AlertTriangle className="mx-auto mb-3 h-5 w-5" />
-            <p className="text-sm text-foreground">couldn&apos;t load scheduled tasks</p>
-            <p className="mt-1.5 text-xs">the task catalog is temporarily unavailable</p>
+            <p className="text-sm text-foreground">Couldn&apos;t load scheduled tasks</p>
+            <p className="mt-1.5 text-xs">The task catalog is temporarily unavailable</p>
             <Button
               variant="outline"
               size="sm"
@@ -1048,7 +1058,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
           <CardContent className="py-12 text-center text-muted-foreground">
             <p className="text-sm">No scheduled tasks found</p>
             {debouncedQuery && (
-              <p className="text-xs mt-1.5">try a different search term</p>
+              <p className="text-xs mt-1.5">Try a different search term</p>
             )}
           </CardContent>
         </Card>
@@ -1080,26 +1090,26 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       <Dialog open={!!updateConfirm} onOpenChange={(open) => !open && setUpdateConfirm(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>update {updateConfirm?.pipeName}?</DialogTitle>
+            <DialogTitle>Update {updateConfirm?.pipeName}?</DialogTitle>
             <DialogDescription>
               <span className="inline-flex items-center gap-2 mt-2">
-                <Badge variant="outline">v{updateConfirm?.installedVersion}</Badge>
+                <Badge variant="outline">V{updateConfirm?.installedVersion}</Badge>
                 <span>→</span>
-                <Badge variant="outline">v{updateConfirm?.latestVersion}</Badge>
+                <Badge variant="outline">V{updateConfirm?.latestVersion}</Badge>
               </span>
             </DialogDescription>
           </DialogHeader>
-          <div className="flex items-start gap-2 p-3 rounded-none bg-muted border border-border">
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-muted border border-border">
             <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
             <p className="text-sm text-muted-foreground">
-              you have local edits to this scheduled task. updating overwrites your prompt changes.
-              a backup is saved as <code className="text-xs">pipe.md.bak</code>, and your
+              You have local edits to this scheduled task. Updating overwrites your prompt changes.
+              A backup is saved as <code className="text-xs">pipe.md.bak</code>, and your
               schedule, model, and enabled state are preserved.
             </p>
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
             <Button variant="ghost" onClick={() => setUpdateConfirm(null)}>
-              skip
+              Skip
             </Button>
             <Button
               onClick={() => {
@@ -1109,7 +1119,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
                 }
               }}
             >
-              update &amp; discard my edits
+              Update &amp; discard my edits
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1136,12 +1146,15 @@ function PipeCard({
   installing: boolean;
   onClick: () => void;
 }) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const publisher = getPipePublisherIdentity({
     id: pipe.author_id,
     name: pipe.author,
     verified: pipe.author_verified,
   });
-  const permissionPills = PERMISSION_LABELS.filter((p) => {
+  const permissionPills = localizeDefinitions(PERMISSION_LABELS, uiMessages).filter((p) => {
     const status = getPermissionStatus(pipe.permissions, p.key);
     return status === "allowed";
   });
@@ -1150,11 +1163,11 @@ function PipeCard({
     <div
       data-testid={`pipe-card-${pipe.slug}`}
       onClick={onClick}
-      className="border border-border bg-card hover:bg-accent/50 transition-colors duration-150 rounded-none p-5 cursor-pointer group flex flex-col"
+      className="border border-border bg-card hover:bg-accent/50 transition-colors duration-150 rounded-lg p-5 cursor-pointer group flex flex-col"
     >
       {/* Header: icon + action */}
       <div className="flex items-start justify-between gap-3">
-        <div className="text-xl bg-muted rounded-none h-10 w-10 flex items-center justify-center flex-shrink-0">
+        <div className="text-xl bg-muted rounded-lg h-10 w-10 flex items-center justify-center flex-shrink-0">
           {pipe.icon || "🔧"}
         </div>
         <Button
@@ -1162,7 +1175,7 @@ function PipeCard({
           data-testid="pipe-install-btn"
           variant={isInstalled && !hasUpdate ? "outline" : "default"}
           className={cn(
-            "h-7 px-3 text-xs font-semibold rounded-none uppercase tracking-wide flex-shrink-0",
+            "h-7 px-3 text-xs font-semibold rounded-md normal-case tracking-wide flex-shrink-0",
             isInstalled && !hasUpdate && "pointer-events-none"
           )}
           disabled={installing || (isInstalled && !hasUpdate)}
@@ -1179,9 +1192,9 @@ function PipeCard({
               UPDATE
             </>
           ) : isInstalled ? (
-            "INSTALLED"
+            ui("INSTALLED")
           ) : (
-            "GET"
+            ui("GET")
           )}
         </Button>
       </div>
@@ -1215,13 +1228,15 @@ function PublisherIdentity({
   className?: string;
   compact?: boolean;
 }) {
+
+  const ui = useGT();
   const avatarClass = compact ? "h-4 w-4" : "h-5 w-5";
 
   return (
     <div
       data-testid="pipe-publisher-identity"
-      aria-label={publisher.isScreenpipeTeam ? "official Screenpipe publisher" : undefined}
-      title={compact && publisher.isScreenpipeTeam ? "built by screenpipe team" : undefined}
+      aria-label={publisher.isScreenpipeTeam ? ui("Official Screenpipe publisher") : undefined}
+      title={compact && publisher.isScreenpipeTeam ? ui("Built by screenpipe team") : undefined}
       className={cn(
         "flex min-w-0 items-center",
         compact ? "gap-1.5" : "gap-2",
@@ -1239,7 +1254,7 @@ function PublisherIdentity({
           aria-hidden="true"
           className={cn(
             avatarClass,
-            "flex flex-shrink-0 items-center justify-center border border-border bg-muted font-semibold uppercase text-muted-foreground",
+            "flex flex-shrink-0 items-center justify-center border border-border bg-muted font-semibold normal-case text-muted-foreground",
             compact ? "text-[8px]" : "text-[9px]",
           )}
         >
@@ -1256,14 +1271,14 @@ function PublisherIdentity({
           <span className="font-medium">{publisher.name}</span>
         ) : (
           <>
-            {publisher.isScreenpipeTeam ? "built by " : "by "}
+            {publisher.isScreenpipeTeam ? ui("Built by ") : ui("By ")}
             <span className="font-medium text-foreground">{publisher.name}</span>
           </>
         )}
       </span>
       {publisher.verified && !publisher.isScreenpipeTeam && (
         <BadgeCheck
-          aria-label="verified publisher"
+          aria-label={ui("Verified publisher")}
           className={cn(
             "flex-shrink-0 text-foreground",
             compact ? "h-3 w-3" : "h-3.5 w-3.5",
@@ -1300,6 +1315,9 @@ function PipeDetailPanel({
   unpublishing?: boolean;
   onRefresh?: () => void;
 }) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const unrestricted = isUnrestricted(pipe.permissions);
   const isOwner = !!(currentUserId && pipe.author_id && currentUserId === pipe.author_id);
   const publisher = getPipePublisherIdentity({
@@ -1323,25 +1341,25 @@ function PipeDetailPanel({
     <div className="space-y-8">
       {/* Hero header */}
       <div className="flex items-start gap-4">
-        <div className="text-4xl bg-muted rounded-none h-16 w-16 flex items-center justify-center flex-shrink-0">
+        <div className="text-4xl bg-muted rounded-lg h-16 w-16 flex items-center justify-center flex-shrink-0">
           {pipe.icon || "🔧"}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-xl font-semibold tracking-tight">{pipe.title || pipe.slug || "untitled scheduled task"}</h2>
+              <h2 className="text-xl font-semibold tracking-tight">{pipe.title || pipe.slug || ui("Untitled scheduled task")}</h2>
               <div className="flex items-center gap-2 mt-1 flex-wrap">
                 <PublisherIdentity publisher={publisher} />
                 {pipe.version ? (
                   <>
                     <span className="text-xs text-muted-foreground/50">·</span>
-                    <span className="text-xs text-muted-foreground">v{pipe.version}</span>
+                    <span className="text-xs text-muted-foreground">V{pipe.version}</span>
                   </>
                 ) : null}
                 {pipe.category ? (
                   <>
                     <span className="text-xs text-muted-foreground/50">·</span>
-                    <Badge variant="secondary" className="text-[10px] px-2 py-0.5 font-normal rounded-none">
+                    <Badge variant="secondary" className="text-[10px] px-2 py-0.5 font-normal rounded-sm">
                       {pipe.category}
                     </Badge>
                   </>
@@ -1353,7 +1371,7 @@ function PipeDetailPanel({
                   {formatCount(pipe.install_count ?? 0)} installs
                 </span>
                 <span className="text-xs">
-                  updated {relativeDate(pipe.updated_at)}
+                  Updated {relativeDate(pipe.updated_at)}
                 </span>
               </div>
             </div>
@@ -1363,7 +1381,7 @@ function PipeDetailPanel({
               <Button
                 size="sm"
                 variant="outline"
-                className="h-9 px-4 text-sm font-semibold rounded-none uppercase tracking-wide"
+                className="h-9 px-4 text-sm font-semibold rounded-md normal-case tracking-wide"
                 onClick={() => {
                   const pipeSource = pipe.source || "";
                   navigateHomeAndPrefill({
@@ -1393,7 +1411,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-9 px-4 text-sm font-semibold rounded-none uppercase tracking-wide"
+                  className="h-9 px-4 text-sm font-semibold rounded-md normal-case tracking-wide"
                   onClick={() => void openUrl(updateContactHref)}
                 >
                   <ExternalLink className="h-4 w-4 mr-1.5" />
@@ -1404,7 +1422,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
                 <Button
                   size="sm"
                   variant="destructive"
-                  className="h-9 px-4 text-sm font-semibold rounded-none uppercase tracking-wide"
+                  className="h-9 px-4 text-sm font-semibold rounded-md normal-case tracking-wide"
                   disabled={unpublishing}
                   onClick={() => onUnpublish(pipe.slug)}
                 >
@@ -1414,7 +1432,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
                       UNPUBLISHING...
                     </>
                   ) : (
-                    "UNPUBLISH"
+                    ui("UNPUBLISH")
                   )}
                 </Button>
               )}
@@ -1422,7 +1440,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
                 size="sm"
                 variant={isInstalled && !hasUpdate ? "outline" : "default"}
                 className={cn(
-                  "h-9 px-5 text-sm font-semibold rounded-none uppercase tracking-wide flex-shrink-0",
+                  "h-9 px-5 text-sm font-semibold rounded-md normal-case tracking-wide flex-shrink-0",
                   isInstalled && !hasUpdate && "pointer-events-none"
                 )}
                 disabled={
@@ -1433,7 +1451,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
                 {installing === pipe.slug ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
-                    {hasUpdate ? "UPDATING..." : "INSTALLING..."}
+                    {hasUpdate ? ui("UPDATING...") : ui("INSTALLING...")}
                   </>
                 ) : hasUpdate ? (
                   <>
@@ -1441,7 +1459,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
                     UPDATE
                   </>
                 ) : isInstalled ? (
-                  "INSTALLED"
+                  ui("INSTALLED")
                 ) : (
                   <>
                     <Download className="h-4 w-4 mr-1.5" />
@@ -1456,10 +1474,10 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
 
       {/* README section */}
       <div className="space-y-3">
-        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
+        <h4 className="text-xs font-medium text-muted-foreground normal-case tracking-widest">
           README
         </h4>
-        <div className="border border-border rounded-none p-6">
+        <div className="border border-border rounded-lg p-6">
           {readmeContent ? (
             <MemoizedReactMarkdown
               remarkPlugins={[remarkGfm]}
@@ -1480,19 +1498,19 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
               {readmeContent}
             </MemoizedReactMarkdown>
           ) : (
-            <p className="text-sm text-muted-foreground">no description available</p>
+            <p className="text-sm text-muted-foreground">No description available</p>
           )}
         </div>
       </div>
 
       {/* Permissions */}
       <div className="space-y-3">
-        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
+        <h4 className="text-xs font-medium text-muted-foreground normal-case tracking-widest">
           Permissions
         </h4>
-        <div className="border border-border rounded-none p-5 space-y-3">
+        <div className="border border-border rounded-lg p-5 space-y-3">
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-            {PERMISSION_LABELS.map((perm) => {
+            {localizeDefinitions(PERMISSION_LABELS, uiMessages).map((perm) => {
               const status = getPermissionStatus(pipe.permissions, perm.key);
               return (
                 <div
@@ -1517,32 +1535,32 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
           {pipe.permissions?.time_range && (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground pt-2 border-t border-border">
               <Clock className="h-3.5 w-3.5" />
-              time range: {pipe.permissions?.time_range}
+              Time range: {pipe.permissions?.time_range}
             </div>
           )}
           {pipe.permissions?.day_restrictions &&
             pipe.permissions.day_restrictions.length > 0 && (
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Clock className="h-3.5 w-3.5" />
-                days: {pipe.permissions?.day_restrictions?.join(", ")}
+                Days: {pipe.permissions?.day_restrictions?.join(", ")}
               </div>
             )}
         </div>
 
         {/* Unrestricted warning */}
         {unrestricted && (
-          <div className="border border-foreground bg-muted/50 rounded-none p-4 space-y-2">
+          <div className="border border-foreground bg-muted/50 rounded-lg p-4 space-y-2">
             <div className="flex items-center gap-2 text-sm font-medium text-foreground">
               <AlertTriangle className="h-4 w-4" />
-              unrestricted data access
+              Unrestricted data access
             </div>
             <p className="text-xs text-muted-foreground leading-relaxed">
-              this scheduled task has no data access restrictions. it can access all your
+              This scheduled task has no data access restrictions. It can access all your
               screen text, audio, keyboard input, and raw database queries.
             </p>
             {!pipe.author_verified && (
               <p className="text-xs text-muted-foreground leading-relaxed">
-                this publisher is not verified. use the source section below if you want to inspect the scheduled task before installing.
+                This publisher is not verified. Use the source section below if you want to inspect the scheduled task before installing.
               </p>
             )}
           </div>
@@ -1553,7 +1571,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
       <div className="space-y-3">
         <button
           onClick={onToggleSource}
-          className="flex items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-widest hover:text-foreground transition-colors"
+          className="flex items-center gap-2 text-xs font-medium text-muted-foreground normal-case tracking-widest hover:text-foreground transition-colors"
         >
           {sourceExpanded ? (
             <ChevronDown className="h-3.5 w-3.5" />
@@ -1563,7 +1581,7 @@ if the pipe's final user-facing file lives outside the pipe's own \`./output/\` 
           Source (pipe.md)
         </button>
         {sourceExpanded && pipe.source ? (
-          <div className="border border-border rounded-none overflow-hidden">
+          <div className="border border-border rounded-lg overflow-hidden">
             <pre className="p-4 text-xs leading-relaxed whitespace-pre-wrap font-mono max-h-80 overflow-y-auto bg-muted/50">
               {pipe.source}
             </pre>
@@ -1583,17 +1601,19 @@ export function PermissionsReview({
   permissions?: PipePermissions;
   authorVerified: boolean;
 }) {
+
+  const uiMessages = useMessages();
   const unrestricted = isUnrestricted(permissions);
 
   return (
     <div className="space-y-3">
-      <div className="border border-border rounded-none p-4 space-y-2">
+      <div className="border border-border rounded-lg p-4 space-y-2">
         <div className="flex items-center gap-1.5 text-sm font-medium">
           <Shield className="h-4 w-4" />
-          data access
+          Data access
         </div>
         <div className="grid grid-cols-2 gap-1.5">
-          {PERMISSION_LABELS.map((perm) => {
+          {localizeDefinitions(PERMISSION_LABELS, uiMessages).map((perm) => {
             const status = getPermissionStatus(permissions, perm.key);
             return (
               <div
@@ -1618,10 +1638,10 @@ export function PermissionsReview({
       </div>
 
       {unrestricted && (
-        <div className="border border-foreground bg-muted/50 rounded-none p-4">
+        <div className="border border-foreground bg-muted/50 rounded-lg p-4">
           <div className="flex items-center gap-2 text-xs font-medium text-foreground">
             <AlertTriangle className="h-3.5 w-3.5" />
-            unrestricted data access — this scheduled task can read all your data
+            Unrestricted data access — this scheduled task can read all your data
           </div>
         </div>
       )}
@@ -1642,6 +1662,8 @@ export function InstallRiskSummary({
   permissions?: PipePermissions;
   onReviewSource?: () => void;
 }) {
+
+  const ui = useGT();
   const risk = getPipeInstallRisk({
     permissions,
     author_verified: authorVerified,
@@ -1659,11 +1681,11 @@ export function InstallRiskSummary({
             ) : (
               <Shield className="h-4 w-4" />
             )}
-            {unrestricted ? "Can access all your screen data" : "Requested access"}
+            {unrestricted ? ui("Can access all your screen data") : ui("Requested access")}
           </div>
           <p className="text-xs text-muted-foreground leading-relaxed">
             {unrestricted
-              ? "screen text, audio, keyboard input, screenshots, and raw queries."
+              ? ui("Screen text, audio, keyboard input, screenshots, and raw queries.")
               : getPipeAccessSummary(permissions)}{" "}
             {onReviewSource ? (
               <button
@@ -1671,7 +1693,7 @@ export function InstallRiskSummary({
                 onClick={onReviewSource}
                 className="underline underline-offset-2 hover:text-foreground transition-colors"
               >
-                review source
+                Review source
               </button>
             ) : null}
           </p>
@@ -1680,7 +1702,7 @@ export function InstallRiskSummary({
         {accessLabels.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {accessLabels.map((label) => (
-              <Badge key={label} variant="secondary" className="rounded-none text-[10px] lowercase">
+              <Badge key={label} variant="secondary" className="rounded-sm text-[10px] normal-case">
                 {label}
               </Badge>
             ))}

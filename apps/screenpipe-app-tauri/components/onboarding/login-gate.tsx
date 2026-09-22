@@ -4,6 +4,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
+import { msg, useGT, useMessages } from "gt-react";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import { motion, AnimatePresence } from "framer-motion";
@@ -12,9 +13,10 @@ import { isDevLoginSkipEnabled } from "@/lib/app-entitlement";
 import { ArrowRight } from "lucide-react";
 import { LOCALITY_DETAIL } from "./trust-disclosure";
 
+
 const FAILURE_COPY: Record<string, string> = {
-  cancelled: "sign in was cancelled in your browser.",
-  timeout: "that sign-in link expired.",
+  cancelled: msg("sign in was cancelled in your browser.", {}),
+  timeout: msg("that sign-in link expired.", {}),
 };
 
 interface OnboardingLoginProps {
@@ -28,6 +30,7 @@ function useBackgroundCanvas(
   w: number,
   h: number,
 ) {
+
   const anim = useRef(0);
   const frame = useRef(0);
 
@@ -119,6 +122,7 @@ function useButtonCanvas(
   h: number,
   hovered: boolean,
 ) {
+
   const anim = useRef(0);
   const frame = useRef(0);
   const intensity = useRef(0);
@@ -237,6 +241,9 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
   handleNextSlide,
   suppressAutoAdvance = false,
 }) => {
+
+  const gt = useGT();
+  const m = useMessages();
   const { settings, isSettingsLoaded } = useSettings();
   const hasAdvanced = useRef(false);
   const [showSkip, setShowSkip] = useState(false);
@@ -329,18 +336,18 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
           transition={{ duration: 0.5, delay: 0.3 }}
         >
           <span className="text-foreground/30 font-light">[</span>
-          screenpipe
+          Screenpipe
           <span className="text-foreground/30 font-light">]</span>
         </motion.h1>
 
         {/* Tagline */}
         <motion.p
-          className="font-mono text-[10px] tracking-[0.3em] uppercase text-muted-foreground/50 mb-10"
+          className="font-mono text-[10px] tracking-[0.3em] normal-case text-muted-foreground/50 mb-10"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.5, delay: 0.5 }}
         >
-          ai finally knows what you&apos;re doing
+          AI finally knows what you&apos;re doing
         </motion.p>
 
         {isLoggedIn ? (
@@ -350,7 +357,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
             animate={{ opacity: 1, scale: 1 }}
           >
             <span className="font-mono text-xs text-foreground/80">
-              ✓ signed in as {settings.user?.email || "user"}
+              ✓ signed in as {settings.user?.email || gt("user")}
             </span>
           </motion.div>
         ) : awaitingBrowser ? (
@@ -362,11 +369,11 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.35 }}
           >
-            <span className="font-mono text-sm tracking-[0.18em] uppercase text-foreground/80">
-              waiting for your browser
+            <span className="font-mono text-sm tracking-[0.18em] normal-case text-foreground/80">
+              Waiting for your browser
             </span>
             <p className="font-mono text-[10px] text-muted-foreground/50 tracking-wide max-w-[280px] text-center leading-relaxed">
-              finish signing in there, then come back. this window updates on
+              Finish signing in there, then come back. This window updates on
               its own.
             </p>
             <div className="flex flex-col items-center gap-2 mt-2">
@@ -374,14 +381,14 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
                 onClick={handleLogin}
                 className="font-mono text-[10px] text-muted-foreground/70 hover:text-foreground underline underline-offset-4 transition-colors tracking-wide"
               >
-                open browser again
+                Open browser again
               </button>
               <button
                 data-testid="login-webview-fallback"
                 onClick={handleUseAppWindow}
                 className="font-mono text-[10px] text-muted-foreground/50 hover:text-foreground underline underline-offset-4 transition-colors tracking-wide"
               >
-                sign in inside screenpipe instead
+                Sign in inside screenpipe instead
               </button>
             </div>
           </motion.div>
@@ -394,7 +401,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
               >
-                {FAILURE_COPY[browserFailure] ?? "sign in did not finish."}{" "}
+                {FAILURE_COPY[browserFailure] ? m(FAILURE_COPY[browserFailure]) : gt("Sign in did not finish.")}{" "}
                 try again.
               </motion.p>
             ) : null}
@@ -424,7 +431,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
 
               {/* Text */}
               <span
-                className={`relative z-10 flex items-center justify-center gap-2 font-mono text-sm tracking-[0.25em] uppercase font-medium transition-colors duration-150 ${
+                className={`relative z-10 flex items-center justify-center gap-2 font-mono text-sm tracking-[0.25em] normal-case font-medium transition-colors duration-150 ${
                   suppressAutoAdvance
                     ? "text-foreground group-hover:text-background"
                     : "text-primary-foreground group-hover:text-primary"
@@ -436,10 +443,10 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
                     and "sign in" reads as an instruction for people who
                     already have one. */}
                 {suppressAutoAdvance ? (
-                  "sign in"
+                  gt("Sign in")
                 ) : (
                   <>
-                    get started
+                    Get started
                     <ArrowRight
                       data-testid="login-cta-icon"
                       className="h-4 w-4"
@@ -464,8 +471,8 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
               transition={{ duration: 0.5, delay: 1.0 }}
             >
               {suppressAutoAdvance
-                ? "sign in with your enterprise account"
-                : "sign in or create a free account"}
+                ? gt("Sign in with your enterprise account")
+                : gt("Sign in or create a free account")}
             </motion.p>
 
             {/* Locality promise. This slide is the only one every platform
@@ -486,7 +493,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
               animate={{ opacity: 1 }}
               transition={{ duration: 0.5, delay: 1.15 }}
             >
-              {LOCALITY_DETAIL} · pause anytime
+              {m(LOCALITY_DETAIL)} · pause anytime
             </motion.p>
           </>
         )}
@@ -500,7 +507,7 @@ const OnboardingLogin: React.FC<OnboardingLoginProps> = ({
               onClick={handleSkip}
               className="font-mono text-xs text-muted-foreground/70 hover:text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground transition-colors mt-8 tracking-wide"
             >
-              skip for dev, continue without an account
+              Skip for dev, continue without an account
             </motion.button>
           )}
         </AnimatePresence>

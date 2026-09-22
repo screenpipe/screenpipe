@@ -395,23 +395,15 @@ async fn ensure_notification(app: &AppHandle, onboarding: &OnboardingStore) -> R
     {
         return Ok(());
     }
-    crate::notifications::client::send_typed_with_actions_priority_and_id_confirmed(
-        &notification_id,
-        "your first summary is ready",
-        "See what screenpipe picked up while you worked.",
-        "firstRunSummary",
-        Some(0),
-        vec![json!({
+    crate::notifications::client::send_typed_with_actions_priority_and_id_confirmed(&notification_id, crate::localization::ui_text("your first summary is ready"), crate::localization::ui_text("See what screenpipe picked up while you worked."), "firstRunSummary", Some(0), vec![json!({
             "id": "open-first-run-summary",
             "action": "open-first-run-summary",
-            "label": "view summary",
+            "label": crate::localization::ui_text("view summary"),
             "type": "deeplink",
             "url": "screenpipe://first-run-summary",
             "primary": true,
             "sourceUrl": "screenpipe://first-run-summary",
-        })],
-        crate::notifications::store::NotificationPriority::Normal,
-    )
+        })], crate::notifications::store::NotificationPriority::Normal)
     .await?;
     OnboardingStore::update(app, |state| {
         state.first_run_summary_notification_sent_at = Some(Utc::now().to_rfc3339());

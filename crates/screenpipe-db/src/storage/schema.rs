@@ -37,6 +37,7 @@ pub(super) async fn construction_checkpoint(
     }
     // Let finishing cursors drain within the connection's busy timeout. FULL
     // copies committed frames without requesting a WAL restart under the pools.
+    super::diagnostics::stage("checkpointing_wal");
     let row = sqlx::query("PRAGMA wal_checkpoint(FULL)")
         .fetch_one(&mut *conn)
         .await?;
@@ -117,7 +118,8 @@ pub(super) async fn bootstrap_in_place(
         construction_checkpoint(conn).await?;
         super::faults::checkpoint("migration_schema_step");
     }
-    super::bulk::bootstrap_in_place(conn).await
+    super::bulk::bootstrap_in_place(conn).await?;
+    upgrade_resident_frames(conn).await
 }
 
 pub(super) async fn stage_frames(
@@ -146,7 +148,7 @@ pub(super) async fn stage_frames(
         .bind(first).bind(last).execute(&mut *conn).await?;
     sqlx::query("INSERT INTO frames_fts(rowid,full_text,app_name,window_name,browser_url) SELECT id,full_text,COALESCE(app_name,''),COALESCE(window_name,''),COALESCE(browser_url,'') FROM frames WHERE id BETWEEN ? AND ? AND full_text IS NOT NULL AND full_text!=''")
         .bind(first).bind(last).execute(&mut *conn).await?;
-    sqlx::query("UPDATE storage_metadata SET maintenance=0,staging_bytes=staging_bytes+COALESCE((SELECT sum(bytes) FROM frame_payloads WHERE frame_id BETWEEN ? AND ?),0)").bind(first).bind(last).execute(conn).await?;
+    sqlx::query("UPDATE storage_metadata SET maintenance=0,staging_bytes=staging_bytes+COALESCE((SELECT sum(bytes) FROM frame_payloads WHERE frame_id BETWEEN ? AND ? AND bytes<=record_limit),0)").bind(first).bind(last).execute(conn).await?;
     Ok(())
 }
 
@@ -232,22 +234,64 @@ UPDATE frames SET payload_full_text_length=length(COALESCE(full_text,'')),
     payload_detail_present=accessibility_tree_json IS NOT NULL OR text_json IS NOT NULL;
 "#;
 
-const BYTES: &str = "COALESCE(length(CAST(NEW.full_text AS BLOB)),0)+COALESCE(length(CAST(NEW.accessibility_text AS BLOB)),0)+COALESCE(length(CAST(NEW.accessibility_tree_json AS BLOB)),0)+COALESCE(length(CAST(NEW.text_json AS BLOB)),0)";
+pub(super) const BYTES: &str = "COALESCE(length(CAST(NEW.full_text AS BLOB)),0)+COALESCE(length(CAST(NEW.accessibility_text AS BLOB)),0)+COALESCE(length(CAST(NEW.accessibility_tree_json AS BLOB)),0)+COALESCE(length(CAST(NEW.text_json AS BLOB)),0)";
 const EMPTY_SURFACES: &str = "(CASE WHEN COALESCE(NEW.full_text,'')='' THEN 1 ELSE 0 END | CASE WHEN COALESCE(NEW.accessibility_text,'')='' THEN 2 ELSE 0 END | CASE WHEN COALESCE(NEW.accessibility_tree_json,'')='' THEN 4 ELSE 0 END | CASE WHEN COALESCE(NEW.text_json,'')='' THEN 8 ELSE 0 END | CASE WHEN COALESCE(NEW.window_name,'')='' THEN 16 ELSE 0 END | CASE WHEN COALESCE(NEW.browser_url,'')='' THEN 32 ELSE 0 END)";
 
 fn triggers() -> String {
+    // Version 1's checksum is part of existing generation identities.
+    frame_triggers(false, false)
+}
+
+// Keep the v1/v4 SQL byte-for-byte stable for installed schema checksums.
+fn frame_triggers(retain_oversized: bool, recording: bool) -> String {
+    let charge = |bytes: &str| {
+        if retain_oversized {
+            format!("CASE WHEN ({bytes}) <= (SELECT record_limit FROM storage_metadata) THEN ({bytes}) ELSE 0 END")
+        } else {
+            bytes.to_owned()
+        }
+    };
+    let new_staging_bytes = charge(BYTES);
+    let prior_staging_bytes = charge("bytes");
+    let growth_guard = if retain_oversized {
+        format!(" AND ({BYTES}) > ({})", BYTES.replace("NEW.", "OLD."))
+    } else {
+        String::new()
+    };
+    let insert_admission = if recording {
+        String::new()
+    } else {
+        format!(
+            r#"
+    SELECT CASE WHEN ({BYTES}) > (SELECT record_limit FROM storage_metadata)
+        THEN RAISE(ABORT,'frame storage: record budget exceeded') END;
+    SELECT CASE WHEN (SELECT staging_bytes+({BYTES})>staging_limit FROM storage_metadata)
+        THEN RAISE(ABORT,'frame storage: staging budget reached; capture admission paused') END;"#
+        )
+    };
+    let update_admission = if recording {
+        String::new()
+    } else {
+        format!(
+            r#"
+    SELECT CASE WHEN ({BYTES}) > (SELECT record_limit FROM storage_metadata){growth_guard}
+        THEN RAISE(ABORT,'frame storage: record budget exceeded') END;"#
+        )
+    };
+    let staging_admission = if recording {
+        ""
+    } else {
+        "\n    SELECT CASE WHEN (SELECT staging_bytes>staging_limit FROM storage_metadata)\n        THEN RAISE(ABORT,'frame storage: staging budget reached; capture admission paused') END;"
+    };
+    let inserted_bytes = if recording { &new_staging_bytes } else { BYTES };
     format!(
         r#"
 CREATE TRIGGER hybrid_frame_insert AFTER INSERT ON frames
 WHEN (SELECT maintenance=0 FROM storage_metadata WHERE singleton=1)
-BEGIN
-    SELECT CASE WHEN ({BYTES}) > (SELECT record_limit FROM storage_metadata)
-        THEN RAISE(ABORT,'frame storage: record budget exceeded') END;
-    SELECT CASE WHEN (SELECT staging_bytes+({BYTES})>staging_limit FROM storage_metadata)
-        THEN RAISE(ABORT,'frame storage: staging budget reached; capture admission paused') END;
+BEGIN{insert_admission}
     INSERT INTO frame_payloads(frame_id,generation,state,bytes,policy,completed_surfaces,capture_version)
     SELECT NEW.id,1,'staged',({BYTES}),policy,{EMPTY_SURFACES},writer_version FROM storage_metadata;
-    UPDATE storage_metadata SET staging_bytes=staging_bytes+({BYTES}),revision=revision+1;
+    UPDATE storage_metadata SET staging_bytes=staging_bytes+({inserted_bytes}),revision=revision+1;
     UPDATE frames SET payload_full_text_length=length(COALESCE(NEW.full_text,'')),
         payload_accessibility_length=length(COALESCE(NEW.accessibility_text,'')),
         payload_full_text_present=NEW.full_text IS NOT NULL,
@@ -264,13 +308,9 @@ WHEN (SELECT maintenance=0 FROM storage_metadata) AND
 BEGIN SELECT RAISE(ABORT,'frame storage: sealed frame requires coordinated payload replacement'); END;
 CREATE TRIGGER hybrid_frame_update AFTER UPDATE OF full_text,accessibility_text,accessibility_tree_json,text_json,app_name,window_name,browser_url ON frames
 WHEN (SELECT maintenance=0 FROM storage_metadata)
-BEGIN
-    SELECT CASE WHEN ({BYTES}) > (SELECT record_limit FROM storage_metadata)
-        THEN RAISE(ABORT,'frame storage: record budget exceeded') END;
+BEGIN{update_admission}
     UPDATE storage_metadata SET revision=revision+1,
-        staging_bytes=staging_bytes+({BYTES})-(SELECT bytes FROM frame_payloads WHERE frame_id=NEW.id);
-    SELECT CASE WHEN (SELECT staging_bytes>staging_limit FROM storage_metadata)
-        THEN RAISE(ABORT,'frame storage: staging budget reached; capture admission paused') END;
+        staging_bytes=staging_bytes+({new_staging_bytes})-(SELECT {prior_staging_bytes} FROM frame_payloads WHERE frame_id=NEW.id);{staging_admission}
     UPDATE frame_payloads SET generation=generation+1,bytes=({BYTES}),
         policy=(SELECT policy FROM storage_metadata),completed_surfaces={EMPTY_SURFACES},attempts=0,retry_at=NULL,last_error=NULL
     WHERE frame_id=NEW.id;
@@ -293,11 +333,96 @@ BEGIN
     DELETE FROM frames_fts WHERE rowid=OLD.id;
     UPDATE payload_files SET state='dirty' WHERE id=(SELECT file_id FROM frame_payloads WHERE frame_id=OLD.id);
     UPDATE storage_metadata SET revision=revision+1,staging_bytes=staging_bytes-
-        COALESCE((SELECT bytes FROM frame_payloads WHERE frame_id=OLD.id AND state='staged'),0);
+        COALESCE((SELECT {prior_staging_bytes} FROM frame_payloads WHERE frame_id=OLD.id AND state='staged'),0);
     DELETE FROM frame_payloads WHERE frame_id=OLD.id;
 END;
 "#
     )
+}
+
+/// Keep legacy frames above the encoder budget resident without consuming the
+/// capture backlog. Runs under the existing startup/offline writer, including
+/// for generations left midway through migration by an older app.
+pub(crate) async fn upgrade_resident_frames(
+    conn: &mut SqliteConnection,
+) -> Result<(), sqlx::Error> {
+    let sql = frame_triggers(true, false);
+    let checksum = format!("{:x}", Sha256::digest(format!("{sql}:resident-frames-v1")));
+    let installed: Option<String> =
+        sqlx::query_scalar("SELECT checksum FROM _hybrid_migrations WHERE version=4")
+            .fetch_optional(&mut *conn)
+            .await?;
+    if let Some(installed) = installed {
+        return if installed == checksum {
+            Ok(())
+        } else {
+            Err(storage_error("resident frame schema checksum mismatch"))
+        };
+    }
+    let mut tx = conn.begin().await?;
+    sqlx::query("UPDATE storage_metadata SET staging_bytes=staging_bytes-COALESCE((SELECT sum(bytes) FROM frame_payloads WHERE state='staged' AND bytes>record_limit),0)")
+        .execute(&mut *tx).await?;
+    for name in [
+        "hybrid_frame_insert",
+        "hybrid_frame_update",
+        "hybrid_frame_delete",
+        "hybrid_frame_sealed_guard",
+        "hybrid_frame_metadata",
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP TRIGGER {name}")))
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO _hybrid_migrations VALUES(4,?)")
+        .bind(checksum)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Archival budgets never reject recording. Replace the v1/v4/v5 write guards
+/// atomically without changing their recorded identities or resident bytes.
+pub(crate) async fn upgrade_recording(
+    conn: &mut SqliteConnection,
+    has_bulk: bool,
+) -> Result<bool, sqlx::Error> {
+    let sql = frame_triggers(true, true);
+    let checksum = format!("{:x}", Sha256::digest(format!("{sql}:recording-v6")));
+    let installed: Option<String> =
+        sqlx::query_scalar("SELECT checksum FROM _hybrid_migrations WHERE version=6")
+            .fetch_optional(&mut *conn)
+            .await?;
+    if let Some(installed) = installed {
+        return if installed == checksum {
+            Ok(false)
+        } else {
+            Err(storage_error("recording schema checksum mismatch"))
+        };
+    }
+    let mut tx = conn.begin().await?;
+    for name in ["insert", "update", "delete", "sealed_guard", "metadata"] {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "DROP TRIGGER hybrid_frame_{name}"
+        )))
+        .execute(&mut *tx)
+        .await?;
+    }
+    sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+        .execute(&mut *tx)
+        .await?;
+    if has_bulk {
+        super::bulk::upgrade_recording(&mut tx).await?;
+    }
+    sqlx::query("INSERT INTO _hybrid_migrations VALUES(6,?)")
+        .bind(checksum)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 pub(crate) async fn bootstrap(
@@ -394,6 +519,275 @@ mod checkpoint_tests {
     use super::*;
     use sqlx::Connection;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn recording_upgrade_replaces_existing_guards_once() {
+        use crate::storage::{MigrationOptions, PrivacyPolicy};
+        use crate::DatabaseManager;
+
+        for had_v5 in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let options = MigrationOptions {
+                privacy: PrivacyPolicy {
+                    identity: "private".into(),
+                    required_surfaces: 1,
+                },
+                ..Default::default()
+            };
+            let db = DatabaseManager::new_hybrid(root.path(), Default::default(), options)
+                .await
+                .unwrap();
+            db.execute_raw_sql_write("INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-09-17','original'); INSERT INTO ui_events(id,timestamp,event_type,text_content) VALUES(1,'2026-09-17','text','original'); UPDATE storage_metadata SET staging_limit=1;").await.unwrap();
+            let identities: Vec<(i64, String)> = sqlx::query_as(
+                "SELECT version,checksum FROM _hybrid_migrations WHERE version<5 ORDER BY version",
+            )
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+            let mut tx = db.begin_immediate_with_retry().await.unwrap();
+            let mut legacy = frame_triggers(true, false);
+            if had_v5 {
+                let charge = |bytes: &str| {
+                    format!("CASE WHEN ({bytes}) <= (SELECT record_limit FROM storage_metadata) THEN ({bytes}) ELSE 0 END")
+                };
+                let guard =
+                    "SELECT CASE WHEN (SELECT staging_bytes>staging_limit FROM storage_metadata)";
+                legacy = legacy.replace(guard, &format!("SELECT CASE WHEN ({})>({}) AND (SELECT staging_bytes>staging_limit FROM storage_metadata)", charge(BYTES), charge(&BYTES.replace("NEW.", "OLD."))));
+                sqlx::query("INSERT INTO _hybrid_migrations VALUES(5,?)")
+                    .bind(format!("{:x}", Sha256::digest("staging-drain-v1")))
+                    .execute(&mut **tx.conn())
+                    .await
+                    .unwrap();
+            }
+            for name in ["insert", "update", "delete", "sealed_guard", "metadata"] {
+                sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                    "DROP TRIGGER hybrid_frame_{name}"
+                )))
+                .execute(&mut **tx.conn())
+                .await
+                .unwrap();
+            }
+            sqlx::raw_sql(sqlx::AssertSqlSafe(legacy))
+                .execute(&mut **tx.conn())
+                .await
+                .unwrap();
+            // Restore the earlier bulk admission checks on existing tables.
+            for (name, growth) in [
+                ("hybrid_bulk_ui_events_text_content", "COALESCE(length(CAST(NEW.text_content AS BLOB)),0)>CASE WHEN (OLD._archive_mask & 1)!=0 THEN COALESCE(length(CAST(OLD.text_content AS BLOB)),0) ELSE 0 END AND "),
+                ("hybrid_bulk_pipe_executions_insert", "COALESCE(length(CAST(NEW.stdout AS BLOB)),0)>0 AND "),
+            ] {
+                let sql: String = sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE name=?").bind(name).fetch_one(&mut **tx.conn()).await.unwrap();
+                let guard = format!("BEGIN SELECT CASE WHEN {}(SELECT staging_bytes>staging_limit FROM storage_metadata) THEN RAISE(ABORT,'storage staging budget reached') END;", if had_v5 { growth } else { "" });
+                let sql = sql.replacen("BEGIN", &guard, 1);
+                sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP TRIGGER {name}; {sql}"))).execute(&mut **tx.conn()).await.unwrap();
+            }
+            sqlx::query("DELETE FROM _hybrid_migrations WHERE version=6")
+                .execute(&mut **tx.conn())
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            assert!(db
+                .execute_raw_sql_write(
+                    "INSERT INTO frames(id,timestamp,full_text) VALUES(2,'2026-09-17','capture')"
+                )
+                .await
+                .is_err());
+            assert!(db
+                .execute_raw_sql_write(
+                    "UPDATE ui_events SET text_content='growing capture payload' WHERE id=1"
+                )
+                .await
+                .is_err());
+            let mut expected_bytes: i64 =
+                sqlx::query_scalar("SELECT staging_bytes FROM storage_metadata")
+                    .fetch_one(&db.pool)
+                    .await
+                    .unwrap();
+            db.close().await;
+            for iteration in 0..2 {
+                let db = DatabaseManager::new(
+                    root.path().join("db.sqlite").to_str().unwrap(),
+                    Default::default(),
+                )
+                .await
+                .unwrap();
+                // No warm-up SQL on a writer: the first application write must work.
+                let mut tx = db.begin_immediate_with_retry().await.unwrap();
+                sqlx::query(
+                    "INSERT INTO frames(timestamp,full_text) VALUES('2026-09-17','capture')",
+                )
+                .execute(&mut **tx.conn())
+                .await
+                .unwrap();
+                tx.commit().await.unwrap();
+                expected_bytes += "capture".len() as i64;
+                assert_eq!(
+                    sqlx::query_scalar::<_, i64>("SELECT staging_bytes FROM storage_metadata")
+                        .fetch_one(&db.pool)
+                        .await
+                        .unwrap(),
+                    expected_bytes
+                );
+                db.execute_raw_sql_write("UPDATE ui_events SET text_content='growing capture payload' WHERE id=1; INSERT INTO pipe_executions(pipe_name,status,stdout) VALUES('test','running','new payload')").await.unwrap();
+                assert_eq!(sqlx::query_as::<_,(i64,String)>("SELECT version,checksum FROM _hybrid_migrations WHERE version<5 ORDER BY version").fetch_all(&db.pool).await.unwrap(), identities);
+                assert_eq!(
+                    sqlx::query_scalar::<_, i64>(
+                        "SELECT count(*) FROM _hybrid_migrations WHERE version=6"
+                    )
+                    .fetch_one(&db.pool)
+                    .await
+                    .unwrap(),
+                    1
+                );
+                if had_v5 {
+                    assert_eq!(
+                        sqlx::query_scalar::<_, String>(
+                            "SELECT checksum FROM _hybrid_migrations WHERE version=5"
+                        )
+                        .fetch_one(&db.pool)
+                        .await
+                        .unwrap(),
+                        format!("{:x}", Sha256::digest("staging-drain-v1"))
+                    );
+                }
+                expected_bytes = sqlx::query_scalar("SELECT staging_bytes FROM storage_metadata")
+                    .fetch_one(&db.pool)
+                    .await
+                    .unwrap();
+                assert!(expected_bytes > 1, "iteration {iteration}");
+                db.verify_storage().await.unwrap();
+                db.close().await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "manual old/new capture write throughput comparison"]
+    async fn recording_write_cost() {
+        let root = tempfile::tempdir().unwrap();
+        let db =
+            crate::DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+                .await
+                .unwrap();
+        let payload = "x".repeat(4096);
+        for round in 0..6 {
+            let recording = round % 2 != 0;
+            let mut tx = db.begin_immediate_with_retry().await.unwrap();
+            for name in ["insert", "update", "delete", "sealed_guard", "metadata"] {
+                sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                    "DROP TRIGGER hybrid_frame_{name}"
+                )))
+                .execute(&mut **tx.conn())
+                .await
+                .unwrap();
+            }
+            sqlx::raw_sql(sqlx::AssertSqlSafe(frame_triggers(true, recording)))
+                .execute(&mut **tx.conn())
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            let start = std::time::Instant::now();
+            for batch in 0..20 {
+                let mut tx = db.begin_immediate_with_retry().await.unwrap();
+                sqlx::query("SELECT name FROM main.sqlite_schema LIMIT 1")
+                    .fetch_optional(&mut **tx.conn())
+                    .await
+                    .unwrap();
+                for row in 0..50 {
+                    sqlx::query(
+                        "INSERT INTO frames(id,timestamp,full_text) VALUES(?,'2026-09-17',?)",
+                    )
+                    .bind(batch * 50 + row + 1)
+                    .bind(&payload)
+                    .execute(&mut **tx.conn())
+                    .await
+                    .unwrap();
+                }
+                tx.commit().await.unwrap();
+            }
+            eprintln!(
+                "{}: 1000 4-KiB captures / 20 commits in {:?}",
+                if recording { "new" } else { "old" },
+                start.elapsed()
+            );
+            db.execute_raw_sql_write("DELETE FROM frames")
+                .await
+                .unwrap();
+        }
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn upgrades_existing_oversized_frame_accounting_once_without_changing_v1_identity() {
+        use crate::storage::{MigrationOptions, Projection, StorageBudget};
+        use crate::DatabaseManager;
+
+        // Check against the shipped schema, not a checksum generated by this test.
+        assert_eq!(
+            format!("{:x}", Sha256::digest(format!("{CATALOG}{}", triggers()))),
+            "f6e17a76ded55aeb312b6c7a15fb6498289f38881f3f860629931790802ed81d"
+        );
+        let root = tempfile::tempdir().unwrap();
+        let options = MigrationOptions {
+            budget: StorageBudget {
+                record_bytes: 1024 * 1024,
+                staging_bytes: 1024 * 1024,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db = DatabaseManager::new_hybrid(root.path(), Default::default(), options)
+            .await
+            .unwrap();
+        let mut tx = db.begin_immediate_with_retry().await.unwrap();
+        for name in ["insert", "update", "delete", "sealed_guard", "metadata"] {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DROP TRIGGER hybrid_frame_{name}"
+            )))
+            .execute(&mut **tx.conn())
+            .await
+            .unwrap();
+        }
+        sqlx::raw_sql(sqlx::AssertSqlSafe(triggers()))
+            .execute(&mut **tx.conn())
+            .await
+            .unwrap();
+        sqlx::raw_sql("DELETE FROM _hybrid_migrations WHERE version>=4; UPDATE storage_metadata SET maintenance=1; INSERT INTO frames(id,timestamp,full_text,accessibility_tree_json) VALUES(1,'2026-09-14T12:00:00Z','legacy history',printf('%.*c',2097152,'x')),(2,'2026-09-14T12:00:01Z','pending capture',NULL);")
+            .execute(&mut **tx.conn()).await.unwrap();
+        stage_frames(tx.conn(), 1, 2).await.unwrap();
+        sqlx::query(
+            "UPDATE storage_metadata SET staging_bytes=(SELECT sum(bytes) FROM frame_payloads)",
+        )
+        .execute(&mut **tx.conn())
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        db.close().await;
+
+        for _ in 0..2 {
+            let db = DatabaseManager::new(
+                root.path().join("db.sqlite").to_str().unwrap(),
+                Default::default(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("SELECT staging_bytes FROM storage_metadata")
+                    .fetch_one(&db.pool)
+                    .await
+                    .unwrap(),
+                "pending capture".len() as i64
+            );
+            assert_eq!(
+                db.frame_payloads(&[1], Projection::All).await.unwrap()[&1]
+                    .accessibility_tree_json
+                    .as_deref(),
+                Some("x".repeat(2097152).as_str())
+            );
+            db.execute_raw_sql_write("INSERT INTO frames(id,timestamp,full_text) VALUES(3,'2026-09-14T12:01:00Z','new capture'); DELETE FROM frames WHERE id=3;").await.unwrap();
+            db.close().await;
+        }
+    }
 
     #[tokio::test]
     async fn construction_waits_for_finishing_readers_and_rejects_pinned_snapshots() {

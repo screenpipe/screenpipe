@@ -5,6 +5,8 @@
 
 import React from "react";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 // Inline "show, don't tell" previews for otherwise-abstract settings. Each is
 // pure presentational (props in, no data fetching), grayscale per DESIGN.md,
@@ -16,6 +18,8 @@ import { cn } from "@/lib/utils";
 // A filmstrip whose density tracks the chosen interval, plus an honest
 // floor readout. `seconds === 0` means "auto / follow the power profile".
 export function CaptureFrequencyPreview({ seconds }: { seconds: number }) {
+
+  const ui = useGT();
   const auto = seconds === 0;
   // More frames in a fixed window = denser strip. Honest *floor*: this is the
   // guaranteed minimum cadence on a still screen, not total capture volume.
@@ -36,10 +40,10 @@ export function CaptureFrequencyPreview({ seconds }: { seconds: number }) {
       </div>
       <p className="mt-1.5 text-[11px] text-muted-foreground">
         {auto ? (
-          "follows your power profile — roughly one frame every 30s when the screen is idle"
+          ui("Follows your power profile — roughly one frame every 30s when the screen is idle")
         ) : (
           <>
-            at least one frame every{" "}
+            At least one frame every{" "}
             <span className="font-mono text-foreground">{seconds}s</span> — about{" "}
             <span className="font-mono text-foreground">
               {perHour?.toLocaleString()}
@@ -64,11 +68,12 @@ function DayStripRow({
   active: boolean;
   children: React.ReactNode;
 }) {
+  const ui = useGT();
   return (
     <div className={cn("flex items-center gap-2", !active && "opacity-40")}>
       <span className="w-16 shrink-0 text-[10px] text-muted-foreground">
         {label}
-        {active && " · now"}
+        {active && ui(" · now")}
       </span>
       <span className="min-w-0 flex-1">{children}</span>
     </div>
@@ -76,13 +81,14 @@ function DayStripRow({
 }
 
 export function AudioCaptureModePreview({ mode }: { mode: string }) {
+  const ui = useGT();
   const meetings = mode === "meetings-only";
   return (
     <div className="mt-2.5 space-y-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-2">
-      <DayStripRow label="always" active={!meetings}>
+      <DayStripRow label={ui("Always")} active={!meetings}>
         <span className="block h-2.5 rounded-[2px] bg-foreground" />
       </DayStripRow>
-      <DayStripRow label="meetings" active={meetings}>
+      <DayStripRow label={ui("Meetings")} active={meetings}>
         <span className="relative block h-2.5 rounded-[2px] bg-foreground/15">
           <span className="absolute inset-y-0 left-[16%] w-[12%] rounded-[2px] bg-foreground" />
           <span className="absolute inset-y-0 left-[46%] w-[8%] rounded-[2px] bg-foreground" />
@@ -91,8 +97,8 @@ export function AudioCaptureModePreview({ mode }: { mode: string }) {
       </DayStripRow>
       <p className="text-[10px] text-muted-foreground">
         {meetings
-          ? "records only during detected meetings — saves battery, disk & transcription cost"
-          : "records continuously, 24/7"}
+          ? ui("Records only during detected meetings — saves battery, disk & transcription cost")
+          : ui("Records continuously, 24/7")}
       </p>
     </div>
   );
@@ -118,11 +124,12 @@ export function RetentionModePreview({
 }: {
   mode: "media" | "lean" | "all";
 }) {
+
   const kept = RETENTION_KEPT[mode];
   return (
     <div className="mt-2.5 ml-6 rounded-md border border-border bg-muted/40 px-2.5 py-2">
-      <p className="mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-        a past entry, after cleanup
+      <p className="mb-1.5 text-[10px] normal-case tracking-wider text-muted-foreground">
+        A past entry, after cleanup
       </p>
       <div className="flex flex-wrap gap-1.5">
         {RETENTION_CHIPS.map((chip, i) => (
@@ -149,6 +156,7 @@ export function RetentionModePreview({
 // ── shared: a 5-segment geometric meter ──────────────────────────────
 // Filled segments = level (0–5). Black-on-grey, sharp — brand house style.
 function SegMeter({ label, level }: { label: string; level: number }) {
+
   return (
     <div className="flex items-center gap-2">
       <span className="w-[5.5rem] shrink-0 text-[10px] text-muted-foreground">
@@ -195,12 +203,13 @@ export function PowerModePreview({
 }: {
   mode: "auto" | "performance" | "battery_saver";
 }) {
+  const ui = useGT();
   const p = POWER_PROFILE[mode] ?? POWER_PROFILE.auto;
   return (
     <div className="mt-3 space-y-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-2">
-      <SegMeter label="capture cadence" level={p.meters[0]} />
-      <SegMeter label="capture quality" level={p.meters[1]} />
-      <SegMeter label="battery life" level={p.meters[2]} />
+      <SegMeter label={ui("Capture cadence")} level={p.meters[0]} />
+      <SegMeter label={ui("Capture quality")} level={p.meters[1]} />
+      <SegMeter label={ui("Battery life")} level={p.meters[2]} />
       <p className="pt-0.5 text-[10px] text-muted-foreground">{p.caption}</p>
     </div>
   );
@@ -238,7 +247,7 @@ function SourceTile({
       <span className="flex h-7 w-10 items-center justify-center rounded-[2px] border border-border bg-background">
         {children}
       </span>
-      <span className="text-[9px] uppercase tracking-wider text-muted-foreground">
+      <span className="text-[9px] normal-case tracking-wider text-muted-foreground">
         {label}
       </span>
     </span>
@@ -252,7 +261,7 @@ function ResultLine({ text, tag }: { text: string; tag: string }) {
       <FlowTrack />
       <span className="min-w-0">
         <span className="block truncate text-[11px] text-foreground">{text}</span>
-        <span className="text-[9px] uppercase tracking-wider text-muted-foreground">
+        <span className="text-[9px] normal-case tracking-wider text-muted-foreground">
           {tag}
         </span>
       </span>
@@ -261,6 +270,8 @@ function ResultLine({ text, tag }: { text: string; tag: string }) {
 }
 
 export function CloudMediaAnalysisPreview() {
+
+  const ui = useGT();
   // Waveform sticks: each gets its own duration + negative delay so the wave
   // never synchronizes (same trick as the meeting "listening" bars).
   const bars = [0.5, 0.9, 0.35, 0.8, 0.55, 1, 0.45];
@@ -272,7 +283,7 @@ export function CloudMediaAnalysisPreview() {
       <div className="grid grid-cols-[auto_auto_1fr] items-center gap-x-1 gap-y-2.5">
         {/* lane 1 — audio → transcript */}
         <span className="flex items-center">
-          <SourceTile label="audio">
+          <SourceTile label={ui("Audio")}>
             <span className="flex h-4 items-end gap-[2px]">
               {bars.map((h, i) => (
                 <span
@@ -299,8 +310,8 @@ export function CloudMediaAnalysisPreview() {
             </span>
             <span className="absolute inset-0 animate-pulse rounded-[3px] border border-foreground/30" />
           </span>
-          <span className="text-[9px] uppercase tracking-wider text-muted-foreground">
-            enclave
+          <span className="text-[9px] normal-case tracking-wider text-muted-foreground">
+            Enclave
           </span>
         </span>
 
@@ -308,7 +319,7 @@ export function CloudMediaAnalysisPreview() {
 
         {/* lane 2 — video & images → description */}
         <span className="flex items-center">
-          <SourceTile label="video · images">
+          <SourceTile label={ui("Video · images")}>
             <span className="grid grid-cols-3 gap-[2px]">
               {[0.9, 0.4, 0.7, 0.5, 0.85, 0.35].map((o, i) => (
                 <span
@@ -326,7 +337,7 @@ export function CloudMediaAnalysisPreview() {
       </div>
 
       <p className="mt-2 text-[10px] text-muted-foreground">
-        speech becomes searchable text and video &amp; images become
+        Speech becomes searchable text and video &amp; images become
         descriptions — processed in a confidential enclave, then available to
         Pi &amp; Claude Code.
       </p>
@@ -339,8 +350,8 @@ export function CloudMediaAnalysisPreview() {
 export function NotificationSamplePreview() {
   return (
     <div className="mb-4 rounded-lg border border-border bg-card px-3 py-2.5">
-      <p className="mb-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-        what these look like
+      <p className="mb-2 text-[10px] normal-case tracking-wider text-muted-foreground">
+        What these look like
       </p>
       <div className="flex items-start gap-2.5 rounded-md border border-border bg-background px-2.5 py-2">
         <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] bg-foreground">
@@ -348,8 +359,8 @@ export function NotificationSamplePreview() {
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-medium text-foreground">screenpipe</span>
-            <span className="text-[10px] text-muted-foreground">now</span>
+            <span className="text-xs font-medium text-foreground">Screenpipe</span>
+            <span className="text-[10px] text-muted-foreground">Now</span>
           </div>
           <p className="truncate text-xs text-muted-foreground">
             Audio capture recovered — recording is healthy again.

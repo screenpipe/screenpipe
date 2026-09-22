@@ -522,6 +522,63 @@ paths:
         "501": { $ref: "#/components/responses/NotServedByGateway" }
         "500": { $ref: "#/components/responses/ServerError" }
 
+  /api/enterprise/v1/context:
+    get:
+      operationId: getCompanyContext
+      summary: Read the workspace's company context and revision
+      description: >-
+        HOSTED ONLY control-plane data, including for write-only archives.
+        The bearer token selects the workspace. Returns only company context,
+        never other policy settings or employee recordings. Responses are not cached.
+      x-scope: read:context
+      x-targets: [hosted]
+      responses:
+        "200":
+          description: Current context and content revision
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompanyContextSnapshot" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
+    put:
+      operationId: updateCompanyContext
+      summary: Update company context using a previously read revision
+      description: >-
+        HOSTED ONLY. Require write:context and the revision from GET. Only supplied
+        fields change; empty strings or an empty KPI array deliberately clear fields.
+        A concurrent context change returns 409. Read again and reconcile before retrying.
+        Requests are limited to 128 KB. The token selects the workspace; a license_id
+        in the body is rejected. Tokens can be revoked in the workspace API tokens page.
+      x-scope: write:context
+      x-targets: [hosted]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompanyContextUpdate" }
+      responses:
+        "200":
+          description: Saved context and new revision
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompanyContextSnapshot" }
+        "409":
+          description: Context was changed by another writer
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompanyContextError" }
+        "413":
+          description: Request exceeds 128 KB
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompanyContextError" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
   /api/enterprise/v1/pipes:
     post:
       operationId: pushPipe
@@ -742,6 +799,66 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
+    CompanyContextSnapshot:
+      type: object
+      additionalProperties: false
+      required: [license_id, context, revision]
+      properties:
+        license_id: { type: string }
+        revision: { type: string, pattern: "^[a-f0-9]{64}$" }
+        context:
+          type: object
+          additionalProperties: false
+          required: [organization_profile, business_priorities, kpis, vocabulary_and_responsibilities, analysis_guidance]
+          properties:
+            organization_profile: { type: string, maxLength: 2000 }
+            business_priorities: { type: string, maxLength: 1000 }
+            kpis:
+              type: array
+              maxItems: 12
+              items: { $ref: "#/components/schemas/CompanyContextKpi" }
+            vocabulary_and_responsibilities: { type: string, maxLength: 1000 }
+            analysis_guidance: { type: string, maxLength: 1000 }
+
+    CompanyContextUpdate:
+      type: object
+      additionalProperties: false
+      required: [revision, context]
+      properties:
+        revision: { type: string, pattern: "^[a-f0-9]{64}$" }
+        context:
+          type: object
+          additionalProperties: false
+          minProperties: 1
+          properties:
+            organization_profile: { type: string, maxLength: 2000 }
+            business_priorities: { type: string, maxLength: 1000 }
+            kpis:
+              type: array
+              maxItems: 12
+              items: { $ref: "#/components/schemas/CompanyContextKpi" }
+            vocabulary_and_responsibilities: { type: string, maxLength: 1000 }
+            analysis_guidance: { type: string, maxLength: 1000 }
+
+    CompanyContextKpi:
+      type: object
+      additionalProperties: false
+      required: [name, definition, target, cadence, owner]
+      properties:
+        name: { type: string, maxLength: 100 }
+        definition: { type: string, maxLength: 300 }
+        target: { type: string, maxLength: 120 }
+        cadence: { type: string, maxLength: 80 }
+        owner: { type: string, maxLength: 120 }
+
+    CompanyContextError:
+      type: object
+      additionalProperties: false
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string, enum: [context_revision_conflict, context_body_too_large] }
+
     Error:
       type: object
       additionalProperties: false

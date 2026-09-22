@@ -10,6 +10,8 @@ import {
   insertComposerTranscript,
   transcribeComposerAudio,
 } from "@/lib/chat/composer-dictation";
+import { useGT } from "gt-react";
+
 
 export type ComposerDictationStatus =
   | "idle"
@@ -68,6 +70,7 @@ export function useComposerDictation({
   disabled,
   sessionId,
 }: UseComposerDictationOptions) {
+  const ui = useGT();
   const { settings } = useSettings();
   const [status, setStatus] = React.useState<ComposerDictationStatus>("idle");
   const [error, setError] = React.useState<string | null>(null);
@@ -239,7 +242,7 @@ export function useComposerDictation({
       !navigator.mediaDevices?.getUserMedia ||
       typeof MediaRecorder === "undefined"
     ) {
-      setError("Microphone dictation isn't available on this device.");
+      setError(ui("Microphone dictation isn't available on this device."));
       updateStatus("error");
       return;
     }
@@ -276,7 +279,7 @@ export function useComposerDictation({
         ++generationRef.current;
         recorderStoppingRef.current = false;
         stopStream();
-        setError("The microphone stopped unexpectedly. Try again.");
+        setError(ui("The microphone stopped unexpectedly. Try again."));
         updateStatus("error");
       };
       recorder.onstop = () => {
@@ -296,7 +299,7 @@ export function useComposerDictation({
         });
         chunksRef.current = [];
         if (audio.size === 0) {
-          setError("No audio was captured. Try again.");
+          setError(ui("No audio was captured. Try again."));
           updateStatus("error");
           return;
         }

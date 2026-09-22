@@ -196,6 +196,7 @@ export interface ComposerJumpToLatestProps {
 }
 
 export interface ChatComposerProps {
+  dictationEnabled?: boolean;
   prefill: PrefillComposerProps;
   suggestions: ComposerSuggestionsProps;
   attachments: ComposerAttachmentsProps;

@@ -4,6 +4,7 @@
 "use client";
 
 import { X } from "lucide-react";
+import { ComposerTextArea } from "@screenpipe/workflows-ui/chat";
 import { IntegrationIcon } from "@/components/settings/connections-section";
 import { MentionDropdown } from "@/components/chat/standalone/mention-dropdown";
 import type {
@@ -11,6 +12,8 @@ import type {
   ComposerMentionsProps,
 } from "./composer-types";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 export function ComposerInputBox({
   input,
@@ -19,6 +22,7 @@ export function ComposerInputBox({
   input: ComposerInputProps;
   mentions: ComposerMentionsProps;
 }) {
+  const ui = useGT();
   return (
     <div
       className={cn(
@@ -48,7 +52,7 @@ export function ComposerInputBox({
             </div>
             <button
               type="button"
-              aria-label="Remove connection context"
+              aria-label={ui("Remove connection context")}
               onClick={input.onClearConnectionChip}
               className="absolute right-2.5 top-2 z-10 text-muted-foreground/60 hover:text-foreground transition-colors shrink-0"
             >
@@ -56,7 +60,8 @@ export function ComposerInputBox({
             </button>
           </>
         )}
-        <textarea
+        <ComposerTextArea
+          autoGrow={false}
           ref={input.inputRef}
           value={input.value}
           onChange={input.onChange}
@@ -67,7 +72,7 @@ export function ComposerInputBox({
           placeholder={
             input.disabledReason
               ? input.disabledReason
-              : input.placeholder ?? "Ask a question or describe a task"
+              : input.placeholder ?? ui("Ask a question or describe a task")
           }
           disabled={!input.canChat}
           spellCheck={false}

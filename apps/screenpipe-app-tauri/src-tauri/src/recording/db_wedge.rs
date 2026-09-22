@@ -138,8 +138,8 @@ pub fn make_database_restart_hook(
         let health = health.clone();
         let recovery_epoch = matches!(reason, DatabaseRestartReason::PersistentWriteFailure)
             .then(|| health.fatal_run_recovery_epoch());
-        // The hook fires on the dedicated *server* runtime. Recovery removes
-        // that server from state, which intentionally lets its runtime exit;
+        // The hook fires on the dedicated *server* runtime. Recovery shuts
+        // that server down, which intentionally lets its runtime exit;
         // running this task there would cancel it halfway through respawn.
         // Dispatch onto Tauri's process-lifetime runtime instead.
         tauri::async_runtime::spawn(async move {
@@ -225,6 +225,9 @@ async fn recover_from_db_wedge(
         let server = server_guard
             .take()
             .expect("restart decision requires a current server generation");
+        // The core now keeps its own runtime alive through shutdown. Readers
+        // must be able to observe the empty slot and release their DB handles.
+        drop(server_guard);
 
         warn!(
             ?reason,
@@ -235,10 +238,14 @@ async fn recover_from_db_wedge(
         if let Some(session) = capture {
             session.stop().await;
         }
-        let shutdown_outcome = bounded_teardown(DB_WEDGE_SERVER_SHUTDOWN_TIMEOUT, async {
-            server.shutdown().await;
-            Ok(())
-        })
+        let shutdown_outcome = bounded_teardown(
+            DB_WEDGE_SERVER_SHUTDOWN_TIMEOUT,
+            recording_state.server_shutdown.finish(
+                Some(server),
+                &crate::db_relaunch::active_data_dir(),
+                super::ServerCore::shutdown,
+            ),
+        )
         .await;
         match db_wedge_shutdown_action(shutdown_outcome, hard_faulted) {
             DbWedgeShutdownAction::RespawnInProcess => {}
@@ -250,7 +257,6 @@ async fn recover_from_db_wedge(
                 "db wedge recovery: server shutdown exceeded {:?}; waiting before relaunch to release SQLite owners",
                 DB_WEDGE_SERVER_SHUTDOWN_TIMEOUT
             );
-                drop(server_guard);
                 drop(capture_guard);
                 // Keep the lifecycle guard until relaunch so another start cannot
                 // overlap owners whose shutdown was not proven complete.
@@ -274,11 +280,6 @@ async fn recover_from_db_wedge(
                 return;
             }
         }
-        // Keep the state guards until shutdown completes. The dedicated server
-        // runtime exits when it can lock `server` and observe None; releasing the
-        // guard earlier can drop that runtime mid-shutdown and cancel the pool/task
-        // cleanup this recovery depends on.
-        drop(server_guard);
         drop(capture_guard);
         recording_state.is_starting.store(false, Ordering::SeqCst);
         recording_state.last_spawn_epoch.store(0, Ordering::SeqCst);

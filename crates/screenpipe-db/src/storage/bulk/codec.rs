@@ -141,7 +141,7 @@ pub(super) fn write(path: &Path, table: &Table, rows: &[Record]) -> Result<Strin
         }
         group.close().map_err(storage_error)?;
     }
-    writer.into_inner().map_err(storage_error)?.sync_all()?;
+    screenpipe_fs::sync_all(&writer.into_inner().map_err(storage_error)?)?;
     checksum(path)
 }
 

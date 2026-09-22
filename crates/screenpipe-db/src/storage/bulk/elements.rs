@@ -10,8 +10,8 @@ mod vtab;
 use super::{integer, real, text, Column, Kind, Table};
 use sqlx::{Row, SqliteConnection};
 
-pub(crate) use lifecycle::seal;
 pub(super) use lifecycle::{export, reclaim, verify};
+pub(crate) use lifecycle::{seal, seal_after};
 pub(crate) use vtab::register;
 
 pub(super) const TABLE: Table = Table {
@@ -67,14 +67,15 @@ pub(crate) async fn import_batch(
     last: i64,
 ) -> Result<(), sqlx::Error> {
     let range = "id BETWEEN ?1 AND ?2";
-    for statement in [
-        format!("INSERT OR IGNORE INTO _bulk_element_kinds(source,role) SELECT DISTINCT source,role FROM _bulk_element_rows WHERE {range}"),
-        format!("INSERT OR REPLACE INTO _bulk_element_lookup SELECT e.id,e.frame_id,e.sort_order,k.id,e.on_screen FROM _bulk_element_rows e JOIN _bulk_element_kinds k ON k.source=e.source AND k.role=e.role WHERE e.{range} AND e._archive_deleted=0"),
-        format!("INSERT INTO _bulk_element_groups SELECT e.frame_id,k.id,COALESCE(e.on_screen,0),e.on_screen IS NULL,count(*) FROM _bulk_element_rows e JOIN _bulk_element_kinds k ON k.source=e.source AND k.role=e.role WHERE e.{range} GROUP BY e.frame_id,k.id,COALESCE(e.on_screen,0),e.on_screen IS NULL ON CONFLICT(frame_id,kind_id,visibility,is_null) DO UPDATE SET rows=rows+excluded.rows"),
-        format!("INSERT INTO _bulk_element_parent_refs SELECT parent_id,count(*) FROM _bulk_element_rows WHERE {range} AND parent_id IS NOT NULL GROUP BY parent_id ON CONFLICT(parent_id) DO UPDATE SET rows=rows+excluded.rows"),
-        format!("INSERT INTO elements_fts(rowid,text,role,frame_id) SELECT id,text,role,frame_id FROM _bulk_element_rows WHERE {range} AND text IS NOT NULL AND text!=''"),
-        format!("UPDATE storage_metadata SET staging_bytes=staging_bytes+COALESCE((SELECT SUM({}) FROM _bulk_element_rows WHERE {range}),0),revision=revision+1", TABLE.all_bytes("")),
+    for (stage, statement) in [
+        ("indexing_element_kinds", format!("INSERT OR IGNORE INTO _bulk_element_kinds(source,role) SELECT DISTINCT source,role FROM _bulk_element_rows WHERE {range}")),
+        ("indexing_element_lookups", format!("INSERT OR REPLACE INTO _bulk_element_lookup SELECT e.id,e.frame_id,e.sort_order,k.id,e.on_screen FROM _bulk_element_rows e JOIN _bulk_element_kinds k ON k.source=e.source AND k.role=e.role WHERE e.{range} AND e._archive_deleted=0")),
+        ("indexing_element_groups", format!("INSERT INTO _bulk_element_groups SELECT e.frame_id,k.id,COALESCE(e.on_screen,0),e.on_screen IS NULL,count(*) FROM _bulk_element_rows e JOIN _bulk_element_kinds k ON k.source=e.source AND k.role=e.role WHERE e.{range} GROUP BY e.frame_id,k.id,COALESCE(e.on_screen,0),e.on_screen IS NULL ON CONFLICT(frame_id,kind_id,visibility,is_null) DO UPDATE SET rows=rows+excluded.rows")),
+        ("indexing_element_parents", format!("INSERT INTO _bulk_element_parent_refs SELECT parent_id,count(*) FROM _bulk_element_rows WHERE {range} AND parent_id IS NOT NULL GROUP BY parent_id ON CONFLICT(parent_id) DO UPDATE SET rows=rows+excluded.rows")),
+        ("indexing_element_search", format!("INSERT INTO elements_fts(rowid,text,role,frame_id) SELECT id,text,role,frame_id FROM _bulk_element_rows WHERE {range} AND text IS NOT NULL AND text!=''")),
+        ("accounting_element_staging", format!("UPDATE storage_metadata SET staging_bytes=staging_bytes+COALESCE((SELECT SUM({}) FROM _bulk_element_rows WHERE {range}),0),revision=revision+1", TABLE.all_bytes(""))),
     ] {
+        crate::storage::diagnostics::stage(stage);
         sqlx::query(sqlx::AssertSqlSafe(statement)).bind(first).bind(last)
             .execute(&mut *conn).await?;
     }
@@ -144,8 +145,8 @@ pub(super) async fn bootstrap_mode(
         "INSERT INTO _bulk_element_rows(id,{columns},_archive_generation) SELECT id,{columns},1 FROM _bulk_elements_source"), "_bulk_elements_source", super::FILE_ROWS).await?;
         crate::storage::faults::checkpoint("migration_elements_copied");
         // The unpublished staged copy owns every record. Removing its temporary
-        // predecessor bypasses per-row self-FK deletion scans; complete relationship
-        // verification checks the constructed candidate before activation.
+        // predecessor bypasses per-row self-FK deletion scans; logical receipts
+        // verify that the candidate preserves the original relationships.
         crate::storage::schema::construction_sql(
             conn,
             "PRAGMA foreign_keys=OFF; DROP TABLE _bulk_elements_source; PRAGMA foreign_keys=ON;",

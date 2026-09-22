@@ -71,7 +71,7 @@ describe("SkillsCard organization skills", () => {
     expect(
       screen.getByText("Verified on this device · managed by your organization"),
     ).toBeInTheDocument();
-    expect(screen.getByText("release v1 · policy r3")).toBeInTheDocument();
+    expect(screen.getByText("Release v1 · policy r3")).toBeInTheDocument();
     expect(
       screen.getByText("3 files · discovery 84 chars · activated 640 chars · scripts yes"),
     ).toBeInTheDocument();

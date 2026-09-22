@@ -8,7 +8,7 @@
 
 use screenpipe_core::agents::pi::{
     apply_custom_provider_compat, screenpipe_cloud_models, PI_AI_PACKAGE, PI_NAMESPACE_DIR,
-    PI_PACKAGE, SCREENPIPE_API_URL,
+    PI_PACKAGE, SCREENPIPE_API_URL, TINFOIL_SDK_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -255,13 +255,16 @@ static REQUIRED_PI_PACKAGE_INSTALL_LOCK: std::sync::OnceLock<Mutex<()>> =
 static PI_EXTENSION_SAFE_MODE_PROJECTS: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
     std::sync::OnceLock::new();
 
-const MANAGED_PI_EXTENSION_FILES: [&str; 6] = [
+const MANAGED_PI_EXTENSION_FILES: [&str; 9] = [
     "web-search.ts",
     "mcp-bridge.ts",
     "save-artifact.ts",
     "live-views.ts",
     "connection-gate.ts",
     "context-pruning.ts",
+    "tinfoil.ts",
+    "work-context.ts",
+    "workflow-feedback.ts",
 ];
 
 fn extension_safe_mode_projects() -> &'static std::sync::Mutex<HashSet<String>> {
@@ -1221,6 +1224,7 @@ fn seed_pi_package_json(install_dir: &std::path::Path) {
     // main app exits with code 255. macOS Enterprise v2.4.244 hit this on
     // every upgrade from 243.
     let expected_sdk = json!("^0.91.1");
+    let expected_tinfoil = json!(TINFOIL_SDK_VERSION);
     let expected_pi_version = json!(PI_PACKAGE.rsplit('@').next().unwrap_or(""));
     let expected_pi_ai_version = json!(PI_AI_PACKAGE.rsplit('@').next().unwrap_or(""));
     let expected_cross_spawn = json!("^7.0.6");
@@ -1275,6 +1279,10 @@ fn seed_pi_package_json(install_dir: &std::path::Path) {
                             );
                             changed = true;
                         }
+                        if deps_obj.get("tinfoil") != Some(&expected_tinfoil) {
+                            deps_obj.insert("tinfoil".to_string(), expected_tinfoil.clone());
+                            changed = true;
+                        }
                         if deps_obj.get("cross-spawn") != Some(&expected_cross_spawn) {
                             deps_obj
                                 .insert("cross-spawn".to_string(), expected_cross_spawn.clone());
@@ -1316,6 +1324,7 @@ fn seed_pi_package_json(install_dir: &std::path::Path) {
     let pkg_json = json!({
         "dependencies": {
             "@anthropic-ai/sdk": expected_sdk,
+            "tinfoil": expected_tinfoil,
             "@earendil-works/pi-coding-agent": expected_pi_version,
             "@earendil-works/pi-ai": expected_pi_ai_version,
             "cross-spawn": expected_cross_spawn,
@@ -1409,6 +1418,16 @@ fn local_pi_install_integrity_error(install_dir: &Path) -> Option<String> {
         return Some(format!("Pi package version is not {}", PI_PACKAGE));
     }
 
+    let tinfoil_dir = node_module_package_dir(install_dir, "tinfoil");
+    let tinfoil_version = std::fs::read_to_string(tinfoil_dir.join("package.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v["version"].as_str().map(str::to_owned));
+    if tinfoil_version.as_deref() != Some(TINFOIL_SDK_VERSION)
+        || !tinfoil_dir.join("dist/index.js").is_file()
+    {
+        return Some("missing or outdated Tinfoil SDK".to_string());
+    }
     let resolve_start = pi_dir.join("dist");
     for package_name in ["@earendil-works/pi-ai", "@anthropic-ai/sdk", "cross-spawn"] {
         if resolve_node_module_package_from(&resolve_start, install_dir, package_name).is_none() {
@@ -1523,7 +1542,9 @@ fn verify_pi_package_install(install_dir: &Path) -> Result<(), String> {
             "Pi install completed but dependency verification failed: {}",
             error
         )),
-        None => Ok(()),
+        None => screenpipe_core::agents::pi_compaction::ensure(install_dir).map_err(|error| {
+            format!("Pi install completed but dependency verification failed: compaction: {error}")
+        }),
     }
 }
 
@@ -1811,6 +1832,8 @@ fn ensure_shared_pi_extensions(project_dir: &str) -> Result<(), String> {
     ensure_chat_control_extension(project_dir)?;
     ensure_context_usage_extension(project_dir)?;
     ensure_context_pruning_extension(project_dir)?;
+    screenpipe_core::agents::pi::PiExecutor::ensure_tinfoil_extension(Path::new(project_dir))
+        .map_err(|e| e.to_string())?;
     // MCP bridge: lets the agent reach user-registered MCP servers.
     ensure_mcp_bridge_extension(project_dir)?;
     // Save artifact: lets the agent register deliverables in the Artifacts library.
@@ -1832,11 +1855,28 @@ const SHARED_PI_EXTENSION_FILES: &[&str] = &[
     "chat-control.ts",
     "context-usage.ts",
     "context-pruning.ts",
+    "tinfoil.ts",
     "mcp-bridge.ts",
     "save-artifact.ts",
     "live-views.ts",
     "connection-gate.ts",
 ];
+
+fn ensure_workflow_feedback_extension(project_dir: &str) -> Result<(), String> {
+    let ext_dir = std::path::Path::new(project_dir).join(".pi").join("extensions");
+    std::fs::create_dir_all(&ext_dir).map_err(|e| e.to_string())?;
+    std::fs::write(ext_dir.join("workflow-feedback.ts"),
+        include_str!("../../../../packages/workflows-ui/src/feedback-tool.ts"))
+        .map_err(|e| format!("Failed to install feedback tool: {}", e))
+}
+
+fn ensure_work_context_extension(project_dir: &str) -> Result<(), String> {
+    let ext_dir = std::path::Path::new(project_dir).join(".pi").join("extensions");
+    std::fs::create_dir_all(&ext_dir).map_err(|e| e.to_string())?;
+    std::fs::write(ext_dir.join("work-context.ts"),
+        include_str!("../../../../packages/workflows-ui/src/context-tool.ts"))
+        .map_err(|e| format!("Failed to install context tool: {}", e))
+}
 
 /// Stage the Enterprise-only team skill outside Pi's auto-discovery tree.
 /// Consumer builds return `None` without touching this path; the Enterprise
@@ -2842,6 +2882,13 @@ pub async fn pi_start_inner(
     coding_workspace: Option<crate::coding_workspace::CodingWorkspaceLaunch>,
 ) -> Result<PiInfo, String> {
     info!("pi_start stage=requested session='{}'", session_id);
+    let assistant_context = if session_id.starts_with("__title:workflow-assistant-") {
+        Some(crate::workflows_runtime::assistant_agent_context(&app).await?)
+    } else { None };
+    let user_token = assistant_context.as_ref().map(|(_, token)| token.clone()).or(user_token);
+    let workflow_api = if session_id.starts_with("__title:workflows-") {
+        Some(crate::workflows_runtime::workflow_recorder_context(&app).await?)
+    } else { None };
     let project_dir = project_dir.trim().to_string();
     if project_dir.is_empty() {
         return Err("Project directory is required".to_string());
@@ -2928,6 +2975,15 @@ pub async fn pi_start_inner(
             == Some("pi-acp");
 
     if !use_acp || is_pi_acp {
+        if provider_config.as_ref().and_then(|config| config.allowed_tools.as_ref())
+            .is_some_and(|tools| tools.iter().any(|tool| tool == "refine_workflow")) {
+            ensure_workflow_feedback_extension(&project_dir)?;
+        }
+        // The form tool has a receiver only in explicitly scoped Context runs.
+        if provider_config.as_ref().and_then(|config| config.allowed_tools.as_ref())
+            .is_some_and(|tools| tools.iter().any(|tool| tool == "fill_work_context")) {
+            ensure_work_context_extension(&project_dir)?;
+        }
         screenpipe_core::agents::pi::PiExecutor::ensure_context_pruning_extension(
             std::path::Path::new(&project_dir),
         )
@@ -3139,6 +3195,8 @@ pub async fn pi_start_inner(
         }
     };
 
+    screenpipe_core::agents::pi_compaction::ensure_for_entrypoint(Path::new(&pi_path))
+        .map_err(|error| format!("Failed to prepare Pi compaction: {error}"))?;
     let bun_path = find_bun_executable().unwrap_or_else(|| "NOT FOUND".to_string());
     info!(
         "Starting {} from {} in dir: {} with provider: {} model: {} bun: {}",
@@ -3547,7 +3605,8 @@ pub async fn pi_start_inner(
     // Pass local API config so the Pi agent can authenticate to the runtime local API.
     {
         use crate::recording::local_api_context_from_app;
-        let api = local_api_context_from_app(&app);
+        let api = assistant_context.as_ref().map(|(api, _)| api.clone()).or(workflow_api)
+            .unwrap_or_else(|| local_api_context_from_app(&app));
         apply_local_api_context(&mut cmd, &api);
     }
 
@@ -6002,6 +6061,14 @@ pub fn ensure_pi_installed_background() {
                 !pkg_contents.is_empty() && !pkg_contents.contains("@anthropic-ai/sdk");
             let needs_upgrade = !is_local_pi_version_current(&install_dir);
 
+            if !needs_upgrade {
+                if let Err(error) = screenpipe_core::agents::pi_compaction::ensure(&install_dir) {
+                    set_pi_install_error(format!("Failed to prepare Pi compaction: {error}"));
+                    PI_INSTALL_DONE.store(true, Ordering::SeqCst);
+                    return;
+                }
+            }
+
             if needs_lru_fix || needs_anthropic_sdk || needs_upgrade {
                 if needs_lru_fix {
                     info!("Pi installed but missing lru-cache overrides — patching");
@@ -6913,6 +6980,10 @@ printf '%s\n' '{"type":"agent_end"}'
     }
 
     fn write_pi_package(install_dir: &std::path::Path) {
+        let tinfoil_dir = super::node_module_package_dir(install_dir, "tinfoil");
+        write_package_json(&tinfoil_dir, "tinfoil", super::TINFOIL_SDK_VERSION);
+        std::fs::create_dir_all(tinfoil_dir.join("dist")).unwrap();
+        std::fs::write(tinfoil_dir.join("dist/index.js"), "// fixture").unwrap();
         let pi_dir = super::pi_package_dir(install_dir);
         write_package_json(
             &pi_dir,
@@ -7110,6 +7181,18 @@ printf '%s\n' '{"type":"agent_end"}'
         );
 
         assert_eq!(super::local_pi_install_integrity_error(install_dir), None);
+        let tinfoil_dir = super::node_module_package_dir(install_dir, "tinfoil");
+        write_package_json(&tinfoil_dir, "tinfoil", "0.0.0");
+        assert_eq!(
+            super::local_pi_install_integrity_error(install_dir).as_deref(),
+            Some("missing or outdated Tinfoil SDK")
+        );
+        write_package_json(&tinfoil_dir, "tinfoil", super::TINFOIL_SDK_VERSION);
+        std::fs::remove_file(tinfoil_dir.join("dist/index.js")).unwrap();
+        assert_eq!(
+            super::local_pi_install_integrity_error(install_dir).as_deref(),
+            Some("missing or outdated Tinfoil SDK")
+        );
     }
 
     #[test]
@@ -7816,6 +7899,7 @@ error: InstallFailed extracting tarball"#;
         let temp = tempfile::tempdir().unwrap();
         let extension_dir = temp.path().join(".pi").join("extensions");
         std::fs::create_dir_all(&extension_dir).unwrap();
+        super::ensure_workflow_feedback_extension(temp.path().to_str().unwrap()).unwrap();
         let header = "// screenpipe — AI that knows everything you've seen, said, or heard\n";
         std::fs::write(extension_dir.join("mcp-bridge.ts"), header).unwrap();
         std::fs::write(extension_dir.join("live-views.ts"), header).unwrap();
@@ -7830,10 +7914,11 @@ error: InstallFailed extracting tarball"#;
             .collect::<Vec<_>>();
 
         assert_eq!(args[0], "--no-extensions");
-        assert_eq!(args.iter().filter(|arg| *arg == "--extension").count(), 3);
+        assert_eq!(args.iter().filter(|arg| *arg == "--extension").count(), 4);
         assert!(args.iter().any(|arg| arg.ends_with("mcp-bridge.ts")));
         assert!(args.iter().any(|arg| arg.ends_with("live-views.ts")));
         assert!(args.iter().any(|arg| arg.ends_with("context-pruning.ts")));
+        assert!(args.iter().any(|arg| arg.ends_with("workflow-feedback.ts")));
         assert!(!args.iter().any(|arg| arg.ends_with("third-party.ts")));
     }
 
@@ -8295,15 +8380,23 @@ error: InstallFailed extracting tarball"#;
         let project = tempfile::tempdir().expect("project dir");
         let project_dir = project.path().to_str().expect("utf8 path");
 
-        super::ensure_shared_pi_extensions(project_dir).expect("seed shared extensions");
-
         let ext_dir = project.path().join(".pi").join("extensions");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+        std::fs::write(ext_dir.join("workflow-memory.ts"), "legacy override").unwrap();
+        super::ensure_shared_pi_extensions(project_dir).expect("seed shared extensions");
+        assert!(!ext_dir.join("workflow-memory.ts").exists());
         for file in super::SHARED_PI_EXTENSION_FILES {
             assert!(
                 ext_dir.join(file).is_file(),
                 "{file} must be seeded for every Pi harness, native and pi-acp"
             );
         }
+        let transport = std::fs::read_to_string(ext_dir.join("tinfoil.ts"))
+            .expect("read seeded Tinfoil extension");
+        assert!(!transport.contains("__SCREENPIPE_PI_PACKAGE_JSON__"));
+        assert!(transport.contains("package.json"));
+        assert!(ext_dir.join("lib/tinfoil-transport.ts").is_file());
+        assert!(ext_dir.join("lib/glm-protocol.ts").is_file());
         assert!(
             super::SHARED_PI_EXTENSION_FILES.contains(&"context-usage.ts"),
             "context-usage must stay in the shared set so pi-acp keeps the breakdown"
@@ -8315,6 +8408,6 @@ error: InstallFailed extracting tarball"#;
         let pruning = std::fs::read_to_string(ext_dir.join("context-pruning.ts"))
             .expect("read seeded context-pruning extension");
         assert!(pruning.contains("normalizeContextOverflowError"));
-        assert!(pruning.contains("PROACTIVE_COMPACTION_PERCENT = 70"));
+        assert!(!pruning.contains("ctx.compact("));
     }
 }

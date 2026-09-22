@@ -1,0 +1,30 @@
+{
+  "chunks_processed": 5,
+  "transcriptions": [
+    {
+      "old_text": null,
+      "audio_chunk_id": 1,
+      "new_text": ""
+    },
+    {
+      "audio_chunk_id": 2,
+      "new_text": " audio device and stored on the network drive. The history remains searchable after restarting the application. Network storage validation. The recording continues after the migration. Both the old screen history and this new audio should still be available when the application starts again.",
+      "old_text": null
+    },
+    {
+      "audio_chunk_id": 3,
+      "new_text": "",
+      "old_text": null
+    },
+    {
+      "old_text": null,
+      "audio_chunk_id": 4,
+      "new_text": ""
+    },
+    {
+      "audio_chunk_id": 5,
+      "old_text": null,
+      "new_text": ""
+    }
+  ]
+}

@@ -3378,6 +3378,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "diffy"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b545b8c50194bdd008283985ab0b31dba153cfd5b3066a92770634fbc0d7d291"
+dependencies = [
+ "nu-ansi-term",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10387,6 +10396,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
+name = "release-router-contract"
+version = "0.1.0"
+dependencies = [
+ "axum 0.7.9",
+ "screenpipe-audio",
+ "screenpipe-db",
+ "screenpipe-engine",
+ "tempfile",
+ "tokio",
+ "tower 0.4.13",
+]
+
+[[package]]
 name = "reqwest"
 version = "0.12.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11188,7 +11210,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.7.34"
+version = "2.7.63"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11252,6 +11274,7 @@ dependencies = [
  "screenpipe-db",
  "screenpipe-engine",
  "screenpipe-events",
+ "screenpipe-fs",
  "screenpipe-overlay-win",
  "screenpipe-redact",
  "screenpipe-screen",
@@ -11271,6 +11294,7 @@ dependencies = [
  "specta",
  "specta-typescript",
  "sqlx",
+ "sys-locale",
  "sysinfo",
  "tauri",
  "tauri-build",
@@ -11362,6 +11386,7 @@ dependencies = [
  "screenpipe-core",
  "screenpipe-db",
  "screenpipe-events",
+ "screenpipe-fs",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -11444,6 +11469,7 @@ dependencies = [
  "russh-sftp",
  "rustls-native-certs",
  "screenpipe-core",
+ "screenpipe-fs",
  "screenpipe-secrets",
  "screenpipe-vault",
  "serde",
@@ -11478,6 +11504,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
  "cron",
+ "diffy",
  "dirs 6.0.0",
  "ffmpeg-sidecar",
  "futures",
@@ -11494,6 +11521,7 @@ dependencies = [
  "reqwest 0.13.4",
  "screenpipe-cpu-features",
  "screenpipe-events",
+ "screenpipe-fs",
  "screenpipe-secrets",
  "screenpipe-sync",
  "screenpipe-vault",
@@ -11535,6 +11563,9 @@ dependencies = [
  "regex",
  "rusqlite",
  "screenpipe-config",
+ "screenpipe-fs",
+ "screenpipe-resource",
+ "screenpipe-secrets",
  "screenpipe-semantic",
  "screenpipe-sqlite-coordinator",
  "serde",
@@ -11594,6 +11625,7 @@ dependencies = [
  "screenpipe-core",
  "screenpipe-db",
  "screenpipe-events",
+ "screenpipe-fs",
  "screenpipe-redact",
  "screenpipe-resource",
  "screenpipe-screen",
@@ -11643,6 +11675,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-fs"
+version = "0.4.50"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "screenpipe-overlay-win"
 version = "0.4.50"
 dependencies = [
@@ -11689,6 +11728,7 @@ dependencies = [
  "regex",
  "reqwest 0.13.4",
  "screenpipe-db",
+ "screenpipe-fs",
  "screenpipe-resource",
  "screenpipe-rfdetr-mlx",
  "screenpipe-sqlite-coordinator",
@@ -11752,6 +11792,7 @@ dependencies = [
  "screenpipe-connect",
  "screenpipe-core",
  "screenpipe-db",
+ "screenpipe-fs",
  "serde",
  "serde_json",
  "tokio",
@@ -11798,6 +11839,7 @@ version = "0.4.50"
 dependencies = [
  "fs2",
  "libsqlite3-sys",
+ "screenpipe-fs",
  "serde",
  "serde_json",
  "sqlx",

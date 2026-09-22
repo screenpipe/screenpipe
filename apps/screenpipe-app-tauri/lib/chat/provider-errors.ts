@@ -154,8 +154,14 @@ function parseContextTokenCounts(errorStr: string): {
   return { requested: parse(requested), available: parse(available) };
 }
 
-export function buildContextOverflowMessage(errorStr = ""): string {
+export function buildContextOverflowMessage(errorStr = "", preset?: ProviderLike | null): string {
   const { requested, available } = parseContextTokenCounts(errorStr);
+  if (isHostedScreenpipeProvider(preset?.provider)) {
+    const detail = requested && available
+      ? `This model accepts ${tokenFormatter.format(available)} context tokens, but the request used ${tokenFormatter.format(requested)}.`
+      : "This chat is too long for the selected model.";
+    return `${detail} Start a new chat or choose a model with a larger context window, then retry.`;
+  }
   if (requested && available) {
     if (available < MIN_AGENT_CONTEXT_TOKENS) {
       return `This provider exposes ${tokenFormatter.format(available)} context tokens, but Screenpipe's agent request already needs ${tokenFormatter.format(requested)}. Increase the provider's context window (for example, Ollama num_ctx) to at least ${tokenFormatter.format(MIN_AGENT_CONTEXT_TOKENS)}, or choose a larger-context model, then retry in a new chat.`;
@@ -265,7 +271,7 @@ function buildGenericProviderErrorMessage(
   const normalized = errorStr.toLowerCase();
 
   if (isContextOverflowError(errorStr)) {
-    return buildContextOverflowMessage(errorStr);
+    return buildContextOverflowMessage(errorStr, preset);
   }
 
   // ChatGPT OAuth tokens from Enterprise/Business workspaces can lack the

@@ -225,7 +225,7 @@ fn create_new_key_file(path: &Path, key: &[u8; KEY_LEN]) -> std::io::Result<()> 
     }
     let mut f = opts.open(path)?;
     f.write_all(key)?;
-    f.sync_all()?;
+    screenpipe_fs::sync_all(&f)?;
     Ok(())
 }
 

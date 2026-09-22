@@ -60,6 +60,7 @@ final class ThumbnailLoader: ObservableObject {
 /// What the webview showed when you hovered a bar: a thumbnail, the app or
 /// site, the exact time, and whether audio was recorded there.
 struct TimelineHoverPreview: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let frame: StreamTimeSeriesResponse
     let carriedURL: String?
     let carriedAppName: String?
@@ -83,7 +84,7 @@ struct TimelineHoverPreview: View {
             if TimelineFrames.hasAudio(frame) {
                 HStack(spacing: 4) {
                     Image(systemName: "mic").font(.system(size: 9))
-                    Text("audio recorded").font(.system(size: 10))
+                    Text(uiText("audio recorded")).font(.system(size: 10))
                 }
                 .foregroundStyle(TimelineTheme.trace)
             }
@@ -157,6 +158,7 @@ struct TimelineHoverPreview: View {
 
 /// Speech near the playhead, or the whole call when the playhead is inside one.
 struct TimelineTranscriptPanel: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: TimelineViewModel
     @State private var origin = CGSize(width: 0, height: 0)
     @State private var dragOrigin = CGSize(width: 0, height: 0)
@@ -199,7 +201,7 @@ struct TimelineTranscriptPanel: View {
                 Image(systemName: "doc.on.doc").font(.system(size: 11))
             }
             .buttonStyle(TimelinePlainButtonStyle())
-            .help("copy transcript")
+            .help(uiText("copy transcript"))
             Button {
                 model.emitAction("summarize_transcript")
             } label: {
@@ -207,12 +209,12 @@ struct TimelineTranscriptPanel: View {
             }
             .buttonStyle(TimelinePlainButtonStyle())
             .disabled(entries.isEmpty)
-            .help(entries.isEmpty ? "no transcription to summarize" : "summarize")
+            .help(entries.isEmpty ? uiText("no transcription to summarize") : uiText("summarize"))
             Button { model.showAudioTranscript = false } label: {
                 Image(systemName: "xmark").font(.system(size: 11))
             }
             .buttonStyle(TimelinePlainButtonStyle())
-            .help("close")
+            .help(uiText("close"))
         }
         .foregroundStyle(TimelineTheme.foreground)
         .padding(.horizontal, 10)
@@ -226,7 +228,7 @@ struct TimelineTranscriptPanel: View {
                 Image(systemName: "waveform.slash")
                     .font(.system(size: 18))
                     .foregroundStyle(TimelineTheme.trace)
-                Text("no speech near this moment")
+                Text(uiText("no speech near this moment"))
                     .font(TimelineTheme.captionFont)
                     .foregroundStyle(TimelineTheme.trace)
             }
@@ -275,9 +277,9 @@ struct TimelineTranscriptPanel: View {
 
     private var headerTitle: String {
         if let meeting = activeMeeting {
-            return "meeting · \(meeting.entryCount) seg"
+            return uiText("meeting · {value1} seg", ["value1": String(describing: meeting.entryCount)])
         }
-        return "audio"
+        return uiText("audio")
     }
 
     /// The playhead sitting inside a detected call switches this to the whole
@@ -320,7 +322,7 @@ struct TimelineTranscriptPanel: View {
                 if let name = audio.speakerName, !name.isEmpty {
                     speaker = name
                 } else {
-                    speaker = audio.isInput ? "You" : "Speaker"
+                    speaker = audio.isInput ? uiText("You") : uiText("Speaker")
                 }
                 out.append(TranscriptEntry(
                     id: "\(audio.audioChunkId)",
@@ -341,6 +343,7 @@ struct TimelineTranscriptPanel: View {
 
 /// What a segment was: how long, which windows, which sites.
 struct TimelineAppContextPopover: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: TimelineViewModel
     let group: TimelineAppGroup
 
@@ -364,7 +367,7 @@ struct TimelineAppContextPopover: View {
 
             row("clock", timeSummary)
             if !windows.isEmpty {
-                row("macwindow", "\(windows.count) windows")
+                row("macwindow", uiText("{value1} windows", ["value1": String(describing: windows.count)]))
                 ForEach(windows.prefix(5), id: \.self) { name in
                     Text(name)
                         .font(.system(size: 10))
@@ -374,7 +377,7 @@ struct TimelineAppContextPopover: View {
                 }
             }
             if !group.topDomains.isEmpty {
-                row("globe", "top sites")
+                row("globe", uiText("top sites"))
                 ForEach(group.topDomains, id: \.self) { domain in
                     Text(domain)
                         .font(.system(size: 10))
@@ -383,7 +386,7 @@ struct TimelineAppContextPopover: View {
                 }
             }
             if transcriptCount > 0 {
-                row("mic", "\(transcriptCount) transcripts")
+                row("mic", uiText("{value1} transcripts", ["value1": String(describing: transcriptCount)]))
             }
         }
         .foregroundStyle(TimelineTheme.foreground)
@@ -408,8 +411,8 @@ struct TimelineAppContextPopover: View {
             guard model.frames.indices.contains(index) else { return nil }
             return TimelineFrames.date(of: model.frames[index])
         }
-        guard let first = dates.max(), let last = dates.min() else { return "~\(minutes) min" }
-        return "~\(minutes) min · \(TimelineTheme.clockFormatter.string(from: last))–\(TimelineTheme.clockFormatter.string(from: first))"
+        guard let first = dates.max(), let last = dates.min() else { return uiText("~{value1} min", ["value1": String(describing: minutes)]) }
+        return uiText("~{value1} min · {value2}–{value3}", ["value1": String(describing: minutes), "value2": String(describing: TimelineTheme.clockFormatter.string(from: last)), "value3": String(describing: TimelineTheme.clockFormatter.string(from: first))])
     }
 
     private var windows: [String] {

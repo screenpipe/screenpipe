@@ -15,10 +15,13 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { AgentActionOption } from "@/lib/chat/types";
+import { useGT } from "gt-react";
+
 
 // Render text with any https URLs as clickable links (opened in the system
 // browser), so a URL in an agent's auth error is actionable inline.
 function LinkifiedText({ text }: { text: string }) {
+
   const parts = text.split(/(https?:\/\/[^\s)]+)/g);
   return (
     <>
@@ -88,6 +91,8 @@ export function AcpSignInDialog({
   onSelectMethod: (optionId?: string) => Promise<boolean> | boolean;
   onDismiss: () => void;
 }) {
+
+  const ui = useGT();
   const [state, setState] = useState<"idle" | "waiting" | "error">("idle");
   // Which row's action is in flight, so only that button shows a spinner.
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -133,13 +138,13 @@ export function AcpSignInDialog({
 
   const isCli = request?.kind === "cli";
   const hasCommand = isCli && Boolean(request.command?.trim());
-  const title = `sign in to ${agentName}`;
+  const title = `Sign in to ${agentName}`;
   const description = isCli
     ? hasCommand
       ? `${agentName} opens its secure login in your browser and keeps the credential.`
       : `${agentName} needs to be set up to continue.`
     : request?.kind === "methods"
-      ? "choose how to sign in."
+      ? "Choose how to sign in."
       : "";
 
   const respond = async (optionId?: string, id?: string) => {
@@ -184,7 +189,7 @@ export function AcpSignInDialog({
             <DialogTitle className="min-w-0 break-words leading-tight">{title}</DialogTitle>
           </div>
           <DialogDescription className="pt-0.5">
-            {state === "error" ? "that didn't work. please try again." : description}
+            {state === "error" ? ui("That didn't work. Please try again.") : description}
           </DialogDescription>
         </DialogHeader>
 
@@ -228,7 +233,7 @@ export function AcpSignInDialog({
                 ) : (
                   <LogIn className="mr-1.5 h-3.5 w-3.5 shrink-0" aria-hidden />
                 )}
-                {busy ? "signing in…" : `sign in with ${agentName}`}
+                {busy ? ui("Signing in…") : ui("Sign in with {value1}", { value1: agentName })}
               </Button>
               <Button
                 variant="outline"
@@ -237,7 +242,7 @@ export function AcpSignInDialog({
                 onClick={onSwitchToDefault}
                 className="h-auto min-h-8 w-full whitespace-normal py-1.5 leading-tight"
               >
-                switch to {defaultPresetLabel}
+                Switch to {defaultPresetLabel}
               </Button>
             </>
           ) : request?.kind === "methods" ? (
@@ -270,7 +275,7 @@ export function AcpSignInDialog({
                     )}
                     <span className="min-w-0 flex-1">
                       <span className="block text-xs font-semibold">
-                        {isPending ? "signing in…" : method.title}
+                        {isPending ? ui("Signing in…") : method.title}
                       </span>
                       {method.sub && !isPending && (
                         <span
@@ -292,7 +297,7 @@ export function AcpSignInDialog({
                 onClick={onDismiss}
                 className="h-auto min-h-8 w-full py-1.5"
               >
-                {state === "waiting" ? "cancel" : "not now"}
+                {state === "waiting" ? ui("Cancel") : ui("Not now")}
               </Button>
             </>
           ) : null}

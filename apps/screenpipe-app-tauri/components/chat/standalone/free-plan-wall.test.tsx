@@ -115,7 +115,7 @@ describe("FreeUpgradeSheet", () => {
     for (const scene of ["pipes", "meeting", "timeline", "models"]) {
       expect(screen.getByTestId(`vignette-${scene}`)).toBeTruthy();
     }
-    fireEvent.click(screen.getByRole("button", { name: "not now" }));
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
     expect(screen.queryByTestId("free-upgrade-sheet")).toBeNull();
     unmount();
 

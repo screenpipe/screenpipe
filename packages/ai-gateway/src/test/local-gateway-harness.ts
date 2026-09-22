@@ -5,12 +5,13 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Miniflare } from 'miniflare';
+import { Miniflare, type MiniflareOptions, type Request as MiniflareRequest, type WorkerOptions } from 'miniflare';
 import { privateCostControls, TEST_PRIVATE_COST_CONTROLS } from './fixtures/private-cost-controls';
 
 const GATEWAY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+type LocalRuntimeOptions = MiniflareOptions & WorkerOptions;
 const MIGRATIONS_DIR = join(GATEWAY_ROOT, 'migrations');
 
 export const LOCAL_GATEWAY_SERVICE_TOKEN = 'screenpipe-local-e2e-service-token';
@@ -23,6 +24,11 @@ export interface LocalGatewayHarnessOptions {
 	privateCostControls?: Partial<Record<PrivateControlName, string | undefined>>;
 	providerReply?: string;
 	cloudflareSpendRules?: boolean;
+	ttsStatus?: number;
+	routerMode?: 'off' | 'heuristic' | 'embedding';
+	workerEntrypoint?: string;
+	captureBodies?: boolean;
+	outboundResponse?: (request: MiniflareRequest, body: any) => Promise<Response | undefined>;
 }
 
 export interface LocalGatewayOutboundRequest {
@@ -60,10 +66,10 @@ function migrationNames(): string[] {
 	return names;
 }
 
-function bundleWorker(outputDirectory: string): string {
+function bundleWorker(outputDirectory: string, entrypoint?: string): string {
 	const result = spawnSync(
 		'bun',
-		['x', 'wrangler', 'deploy', '--dry-run', '--upload-source-maps=false', '--outdir', outputDirectory, '--config', 'wrangler.toml'],
+		['x', 'wrangler', 'deploy', ...(entrypoint ? [entrypoint] : []), '--dry-run', '--upload-source-maps=false', '--outdir', outputDirectory, '--config', 'wrangler.toml'],
 		{
 			cwd: GATEWAY_ROOT,
 			encoding: 'utf8',
@@ -74,7 +80,7 @@ function bundleWorker(outputDirectory: string): string {
 		const details = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim();
 		throw new Error(`failed to bundle local AI gateway:\n${details.slice(-4_000)}`);
 	}
-	return readFileSync(join(outputDirectory, 'index.js'), 'utf8');
+	return readFileSync(join(outputDirectory, entrypoint ? `${basename(entrypoint, '.ts')}.js` : 'index.js'), 'utf8');
 }
 
 function providerResponse(reply: string, stream: boolean): Response {
@@ -161,7 +167,7 @@ export class LocalGatewayHarness {
 	private _baseUrl = '';
 	readonly outboundRequests: LocalGatewayOutboundRequest[] = [];
 
-	private constructor(tempDirectory: string, runtime: Miniflare) {
+	private constructor(tempDirectory: string, runtime: Miniflare, private runtimeOptions: LocalRuntimeOptions) {
 		this.tempDirectory = tempDirectory;
 		this.runtime = runtime;
 	}
@@ -170,14 +176,14 @@ export class LocalGatewayHarness {
 		const tempDirectory = mkdtempSync(join(tmpdir(), 'screenpipe-ai-gateway-e2e-'));
 		let runtime: Miniflare | null = null;
 		try {
-			const script = bundleWorker(tempDirectory);
+			const script = bundleWorker(tempDirectory, options.workerEntrypoint);
 			let harness: LocalGatewayHarness;
 			const providerReply = options.providerReply ?? 'local gateway ok';
 			const cloudflareSpendRules = options.cloudflareSpendRules === true;
 			const cloudflareAccountId = '00000000000000000000000000000000';
 			const cloudflareGatewayId = 'screenpipe-local-e2e';
 			const cloudflareGatewayRoot = `https://gateway.ai.cloudflare.com/v1/${cloudflareAccountId}/${cloudflareGatewayId}`;
-			runtime = new Miniflare({
+			const runtimeOptions: LocalRuntimeOptions = {
 				modules: true,
 				script,
 				compatibilityDate: '2024-10-11',
@@ -186,11 +192,12 @@ export class LocalGatewayHarness {
 				port: options.port ?? 0,
 				bindings: {
 					...jsonBindings(options.privateCostControls),
+					...(options.ttsStatus !== undefined ? { TTS_ENABLED: 'true', ELEVENLABS_VOICE_ID: 'fictionalVoice123', ELEVENLABS_USD_PER_CHARACTER: '0.0001' } : {}),
 					OPENAI_API_KEY: 'screenpipe-local-e2e-only',
 					AI_GATEWAY_SERVICE_TOKEN: LOCAL_GATEWAY_SERVICE_TOKEN,
 					MODEL_GATING_ENABLED: 'true',
 					PIPE_FRONTIER_POLICY: 'reject',
-					ROUTER_MODE: 'off',
+					ROUTER_MODE: options.routerMode ?? 'off',
 					CLOUDFLARE_AI_GATEWAY_ID: cloudflareGatewayId,
 					CLOUDFLARE_AI_GATEWAY_BASE_URL: `${cloudflareGatewayRoot}/compat/chat/completions`,
 					CLOUDFLARE_AI_GATEWAY_TOKEN: 'screenpipe-local-e2e-gateway-token',
@@ -200,7 +207,9 @@ export class LocalGatewayHarness {
 					} : {}),
 				},
 				d1Databases: { DB: `screenpipe-ai-gateway-e2e-${crypto.randomUUID()}` },
+				d1Persist: join(tempDirectory, 'd1'),
 				durableObjects: { RATE_LIMITER: 'RateLimiter' },
+				durableObjectsPersist: join(tempDirectory, 'durable-objects'),
 				outboundService: async (request) => {
 					let body: unknown = null;
 					try {
@@ -219,17 +228,21 @@ export class LocalGatewayHarness {
 					const gatewayAnalytics = cloudflareSpendRules &&
 						request.method === 'POST' &&
 						request.url === 'https://api.cloudflare.com/client/v4/graphql';
-					const expected = gatewayProvider || gatewaySettings || gatewayAnalytics;
+					const narration = options.ttsStatus !== undefined && request.method === 'POST' && request.url === `${cloudflareGatewayRoot}/elevenlabs/v1/text-to-speech/fictionalVoice123?output_format=mp3_44100_128`;
+					const override = await options.outboundResponse?.(request, body);
+					const expected = override !== undefined || narration || gatewayProvider || gatewaySettings || gatewayAnalytics;
 					harness.outboundRequests.push({
 						url: request.url,
 						method: request.method,
-						body,
+						body: options.captureBodies === false ? null : body,
 						headers: Object.fromEntries(request.headers),
 						expected,
 					});
 					if (!expected) {
 						return new Response('unexpected local E2E outbound request', { status: 599 });
 					}
+					if (override) return override;
+					if (narration) return new Response(options.ttsStatus === 200 ? 'synthetic audio' : 'private provider error', { status: options.ttsStatus, headers: { 'content-type': options.ttsStatus === 200 ? 'audio/mpeg' : 'application/json' } });
 					if (gatewaySettings) {
 						const baseRule = {
 							enabled: true,
@@ -289,8 +302,9 @@ export class LocalGatewayHarness {
 					const stream = typeof body === 'object' && body !== null && (body as { stream?: unknown }).stream === true;
 					return providerResponse(providerReply, stream);
 				},
-			});
-			harness = new LocalGatewayHarness(tempDirectory, runtime);
+			};
+			runtime = new Miniflare(runtimeOptions);
+			harness = new LocalGatewayHarness(tempDirectory, runtime, runtimeOptions);
 			await harness.initialize();
 			return harness;
 		} catch (error) {
@@ -396,6 +410,19 @@ export class LocalGatewayHarness {
 					.join(', ')}`,
 			);
 		}
+	}
+
+	async rateLimiterObject(name: string) {
+		const namespace = await this.runtime.getDurableObjectNamespace('RATE_LIMITER');
+		return namespace.get(namespace.idFromName(name));
+	}
+
+	/** Restart workerd while preserving only its on-disk D1/DO state. */
+	async restart(): Promise<void> {
+		this.runtimeOptions = { ...this.runtimeOptions, bindings: { ...this.runtimeOptions.bindings, TEST_GENERATION: crypto.randomUUID() } };
+		await this.runtime.setOptions(this.runtimeOptions);
+		this.database = await this.runtime.getD1Database('DB');
+		this._baseUrl = new URL('/v1', await this.runtime.ready).toString().replace(/\/$/, '');
 	}
 
 	async dispose(): Promise<void> {

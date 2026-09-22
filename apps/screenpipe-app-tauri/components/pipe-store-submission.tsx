@@ -20,6 +20,8 @@ import {
   PIPE_STORE_SUBMISSION_EMAIL,
   buildPipeStoreSubmissionMailto,
 } from "@/lib/pipe-store-submission";
+import { useGT } from "gt-react";
+
 
 export function PipeStoreSubmissionDialog({
   open,
@@ -30,13 +32,14 @@ export function PipeStoreSubmissionDialog({
   onOpenChange: (open: boolean) => void;
   defaultPipe?: string;
 }) {
+  const ui = useGT();
   const contactHref = buildPipeStoreSubmissionMailto({ pipeName: defaultPipe });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>submit your scheduled task</DialogTitle>
+          <DialogTitle>Submit your scheduled task</DialogTitle>
           <DialogDescription>
             Store publishing is curated
           </DialogDescription>
@@ -46,7 +49,7 @@ export function PipeStoreSubmissionDialog({
           <div className="border border-border bg-muted/30 p-4 space-y-2">
             <div className="flex items-center gap-2 text-sm font-medium">
               <Mail className="h-4 w-4" />
-              email {PIPE_STORE_SUBMISSION_EMAIL}
+              Email {PIPE_STORE_SUBMISSION_EMAIL}
             </div>
             <p className="text-xs leading-relaxed text-muted-foreground">
               We review every scheduled task before it appears in the Store. Send a
@@ -57,7 +60,7 @@ export function PipeStoreSubmissionDialog({
 
           {defaultPipe ? (
             <div className="text-xs text-muted-foreground">
-              selected scheduled task: <span className="font-medium text-foreground">{defaultPipe}</span>
+              Selected scheduled task: <span className="font-medium text-foreground">{defaultPipe}</span>
             </div>
           ) : null}
 
@@ -79,7 +82,7 @@ export function PipeStoreSubmissionDialog({
           <Button
             size="sm"
             className="text-xs"
-            aria-label={`Email ${PIPE_STORE_SUBMISSION_EMAIL} about a Screenpipe Store submission`}
+            aria-label={ui("Email {value1} about a Screenpipe Store submission", { value1: PIPE_STORE_SUBMISSION_EMAIL })}
             onClick={() => void openUrl(contactHref)}
           >
             <Mail className="h-3.5 w-3.5 mr-1.5" />

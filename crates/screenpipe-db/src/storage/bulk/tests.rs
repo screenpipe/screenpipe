@@ -32,6 +32,164 @@ impl Drop for Pause {
     }
 }
 
+#[tokio::test]
+async fn offline_selection_seeks_past_retained_history() {
+    use std::sync::atomic::AtomicU64;
+    unsafe extern "C" fn count_steps(context: *mut std::ffi::c_void) -> i32 {
+        let steps = unsafe { &*context.cast::<AtomicU64>() };
+        // Abort a regressed scan instead of letting large fixtures hang CI.
+        i32::from(steps.fetch_add(1000, Ordering::Relaxed) > 100_000)
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let mut options = crate::storage::MigrationOptions::default();
+    options.privacy.identity = "migration-cursor-test".into();
+    options.privacy.required_surfaces = 1;
+    let db = DatabaseManager::new_hybrid(root.path(), Default::default(), options)
+        .await
+        .unwrap();
+    db.execute_raw_sql_write(
+        "INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-09-19','private frame')",
+    )
+    .await
+    .unwrap();
+    let count = 200_000_i64;
+    let mut tx = db.begin_immediate_with_retry().await.unwrap();
+    // Keep a large privacy-pending prefix. This models an interrupted migration
+    // after recording recovery has restored all elements to the resident table.
+    sqlx::query("WITH RECURSIVE n(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM n WHERE id<?) INSERT INTO _bulk_element_rows(id,frame_id,source,role,text,_archive_generation) SELECT id,1,'accessibility','AXText','private',1 FROM n")
+        .bind(count).execute(&mut **tx.conn()).await.unwrap();
+    sqlx::query("WITH RECURSIVE n(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM n WHERE id<?) INSERT INTO ui_events(id,timestamp,event_type,text_content) SELECT id,'2026-09-19','text','private' FROM n")
+        .bind(count).execute(&mut **tx.conn()).await.unwrap();
+    // In-place migration deliberately postpones these indexes until completion.
+    sqlx::query("DROP INDEX _bulk_ui_events_pending")
+        .execute(&mut **tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    db.execute_raw_sql_write("INSERT INTO elements(id,frame_id,source,role,text,redacted_at) VALUES(200001,1,'accessibility','AXText','eligible',1); INSERT INTO ui_events(id,timestamp,event_type,text_content,redacted_at) VALUES(200001,'2026-09-19','text','eligible',1)").await.unwrap();
+
+    let storage = db.storage.as_ref().unwrap();
+    let index = storage.root.join(&storage.descriptor.index);
+    let pool = pool_options(Some(storage.clone()), false)
+        .max_connections(1)
+        .connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(&index))
+        .await
+        .unwrap();
+    let writer = screenpipe_sqlite_coordinator::SqliteWritePool::new(
+        pool.clone(),
+        screenpipe_sqlite_coordinator::sqlite_write_lock(&index),
+    );
+    let steps = Box::new(AtomicU64::new(0));
+    {
+        let mut conn = pool.acquire().await.unwrap();
+        let mut handle = conn.lock_handle().await.unwrap();
+        // Context remains alive until the callback is removed below.
+        unsafe {
+            libsqlite3_sys::sqlite3_progress_handler(
+                handle.as_raw_handle().as_ptr(),
+                1000,
+                Some(count_steps),
+                (&*steps as *const AtomicU64).cast_mut().cast(),
+            );
+        }
+    }
+    let bulk = storage
+        .select_bulk(&pool, &TABLES[2], None, Some(count))
+        .await;
+    let elements = elements::seal_after(storage, &pool, &writer, Some(count)).await;
+    let work = steps.load(Ordering::Relaxed);
+    {
+        let mut conn = pool.acquire().await.unwrap();
+        let mut handle = conn.lock_handle().await.unwrap();
+        unsafe {
+            libsqlite3_sys::sqlite3_progress_handler(
+                handle.as_raw_handle().as_ptr(),
+                0,
+                None,
+                std::ptr::null_mut(),
+            );
+        }
+    }
+    pool.close().await;
+    let bulk = bulk
+        .unwrap_or_else(|error| panic!("bulk scan exceeded work budget at {work} steps: {error}"));
+    assert_eq!(
+        bulk.iter().map(|r| r.id).collect::<Vec<_>>(),
+        vec![count + 1]
+    );
+    assert_eq!(
+        elements.unwrap_or_else(|error| panic!(
+            "element scan exceeded work budget at {work} steps: {error}"
+        )),
+        (1, Some(count + 1))
+    );
+    assert!(
+        work < 100_000,
+        "selection revisited retained history: {work}"
+    );
+    eprintln!("offline cursor: retained_rows_per_table={count}, sqlite_steps={work}");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM _bulk_element_rows")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        count
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn element_publication_ignores_new_captures_but_rejects_changed_range_members() {
+    for archived in [false, true] {
+        for mutation in [
+            "INSERT INTO elements(id,frame_id,source,role,text,redacted_at) VALUES(30,1,'accessibility','AXText','new capture',1)",
+            "UPDATE elements SET text='edited while encoding' WHERE id=10",
+            "DELETE FROM elements WHERE id=10",
+            "INSERT INTO elements(id,frame_id,source,role,text,redacted_at) VALUES(15,1,'accessibility','AXText','inserted gap',1)",
+            "INSERT INTO elements(id,frame_id,source,role,text,redacted_at) VALUES(15,1,'accessibility','AXText','private gap',NULL)",
+            "UPDATE elements SET redacted_at=NULL WHERE id=10",
+            "DELETE FROM elements WHERE id=10; INSERT INTO elements(id,frame_id,source,role,text,redacted_at) VALUES(10,1,'accessibility','AXText','reused ID',1)",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let db = Arc::new(DatabaseManager::new_hybrid(root.path(), Default::default(),
+                crate::storage::MigrationOptions {
+                    privacy: crate::storage::PrivacyPolicy { identity: "private".into(), required_surfaces: 1 },
+                    ..Default::default()
+                }).await.unwrap());
+            db.execute_raw_sql_write("INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-09-17','pending frame'); INSERT INTO elements(id,frame_id,source,role,text,redacted_at) VALUES(10,1,'accessibility','AXText','ten',1),(20,1,'accessibility','AXText','twenty',1)").await.unwrap();
+            if archived {
+                assert_eq!(db.seal_payloads().await.unwrap(), 2);
+                db.execute_raw_sql_write("UPDATE elements SET text='restaged ten' WHERE id=10").await.unwrap();
+            }
+            let storage = db.storage.as_ref().unwrap();
+            let encoded = Arc::new(tokio::sync::Notify::new());
+            let announced = encoded.clone();
+            let pause = Pause::new();
+            let held = Pause(pause.0.clone());
+            *storage.bulk.element_publish_hook.lock().unwrap() = Some(Arc::new(move || {
+                announced.notify_one();
+                held.wait();
+            }));
+            let sealing = db.clone();
+            let task = tokio::spawn(async move { sealing.seal_payloads().await });
+            tokio::time::timeout(Duration::from_secs(10), encoded.notified()).await.unwrap();
+            // The archive is fully encoded while the writer remains available.
+            db.execute_raw_sql_write(mutation).await.unwrap();
+            let expected = db.query_raw_sql("SELECT id,text,redacted_at FROM elements ORDER BY id").await.unwrap();
+            pause.release();
+            let count = task.await.unwrap().unwrap();
+            assert_eq!(count, if mutation.contains("VALUES(30,") || (!archived && mutation.contains("private gap")) { 2 } else { 0 }, "archived={archived}; {mutation}");
+            *storage.bulk.element_publish_hook.lock().unwrap() = None;
+            assert_eq!(db.query_raw_sql("SELECT id,text,redacted_at FROM elements ORDER BY id").await.unwrap(), expected);
+            while db.seal_payloads().await.unwrap() != 0 {}
+            db.verify_storage().await.unwrap();
+            assert_eq!(db.query_raw_sql("SELECT id,text,redacted_at FROM elements ORDER BY id").await.unwrap(), expected);
+            db.close().await;
+        }
+    }
+}
+
 async fn fixture_mode(hybrid: bool) -> (tempfile::TempDir, Arc<DatabaseManager>) {
     let root = tempfile::tempdir().unwrap();
     let db = Arc::new(
@@ -55,6 +213,63 @@ async fn fixture_mode(hybrid: bool) -> (tempfile::TempDir, Arc<DatabaseManager>)
 
 async fn fixture() -> (tempfile::TempDir, Arc<DatabaseManager>) {
     fixture_mode(true).await
+}
+
+#[tokio::test]
+async fn element_scans_decode_each_file_once_and_point_reads_stay_selective() {
+    let root = tempfile::tempdir().unwrap();
+    let db = DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+        .await
+        .unwrap();
+    db.execute_raw_sql_write("INSERT INTO frames(id,timestamp) VALUES(1,'2026-09-15'),(2,'2026-09-15'),(3,'2026-09-15'); INSERT INTO elements(id,frame_id,source,role,text) VALUES(1,1,'accessibility','AXText','one'),(2,2,'accessibility','AXText','two'),(3,3,'accessibility','AXText','three');").await.unwrap();
+    while db.seal_payloads().await.unwrap() != 0 {}
+    let storage = db.storage.as_ref().unwrap();
+    let paths: Vec<String> =
+        sqlx::query_scalar("SELECT path FROM _bulk_files WHERE table_name='elements'")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(paths.len(), 1);
+    storage.bulk.cache.retire(&paths).unwrap();
+    let decoded = Arc::new(Mutex::new(Vec::<String>::new()));
+    let observed = decoded.clone();
+    *storage.bulk.decode_hook.lock().unwrap() = Some(Arc::new(move |key| {
+        observed.lock().unwrap().push(key.to_owned());
+    }));
+    // Migration receipts use ID windows across all frames, including multiple
+    // windows in one file. A frame projection must not be decoded per window.
+    for (id, expected) in [(1, "one"), (2, "two"), (3, "three")] {
+        let actual: String =
+            sqlx::query_scalar("SELECT text FROM elements WHERE id>=? ORDER BY id LIMIT 1")
+                .bind(id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(actual, expected);
+    }
+    {
+        let keys = decoded.lock().unwrap();
+        assert_eq!(keys.iter().filter(|k| k.starts_with("records:")).count(), 1);
+        assert!(!keys.iter().any(|k| k.starts_with("element-frame:")));
+    }
+    for sql in [
+        "SELECT text FROM elements WHERE id=2",
+        "SELECT text FROM elements WHERE frame_id=2",
+    ] {
+        storage.bulk.cache.retire(&paths).unwrap();
+        decoded.lock().unwrap().clear();
+        let actual: String = sqlx::query_scalar(sql).fetch_one(&db.pool).await.unwrap();
+        assert_eq!(actual, "two");
+        let keys = decoded.lock().unwrap();
+        assert_eq!(
+            keys.iter()
+                .filter(|k| k.starts_with("element-frame:"))
+                .count(),
+            1
+        );
+        assert!(!keys.iter().any(|k| k.starts_with("records:")));
+    }
+    db.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -135,7 +135,7 @@ describe("SpeakerParagraph render isolation", () => {
       "data-final",
       "false",
     );
-    const partialIndicator = getByLabelText("transcribing partial text");
+    const partialIndicator = getByLabelText("Transcribing partial text");
     expect(partialIndicator).toBeInTheDocument();
     expect(partialIndicator.firstElementChild).toHaveClass("bg-foreground");
     expect(isSpeakerContinuation(block, partial)).toBe(true);

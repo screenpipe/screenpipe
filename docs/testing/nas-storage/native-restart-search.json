@@ -1,0 +1,171 @@
+{
+  "observed_after_app_restart": true,
+  "app_restart_utc": "2026-09-18T06:32:53Z",
+  "source": "Authenticated local API; only synthetic fixture content retained in this evidence",
+  "retained-history": {
+    "pagination": {
+      "limit": 10,
+      "offset": 0,
+      "total": 8
+    },
+    "data": [
+      {
+        "frame_id": 8,
+        "timestamp": "2026-09-18T05:46:10.851684+00:00",
+        "app_name": "NAS History",
+        "text": "NAS retained historical marker 7",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/historical-marker.jpg"
+      },
+      {
+        "frame_id": 7,
+        "timestamp": "2026-09-18T05:45:10.736280+00:00",
+        "app_name": "NAS History",
+        "text": "NAS retained historical marker 6",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/historical-marker.jpg"
+      },
+      {
+        "frame_id": 6,
+        "timestamp": "2026-09-18T05:44:10.620499+00:00",
+        "app_name": "NAS History",
+        "text": "NAS retained historical marker 5",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/historical-marker.jpg"
+      },
+      {
+        "frame_id": 5,
+        "timestamp": "2026-09-18T05:43:10.506151+00:00",
+        "app_name": "NAS History",
+        "text": "NAS retained historical marker 4",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/historical-marker.jpg"
+      },
+      {
+        "frame_id": 4,
+        "timestamp": "2026-09-18T05:42:10.393216+00:00",
+        "app_name": "NAS History",
+        "text": "NAS retained historical marker 3",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/historical-marker.jpg"
+      },
+      {
+        "frame_id": 3,
+        "timestamp": "2026-09-18T05:41:10.264860+00:00",
+        "app_name": "NAS History",
+        "text": "NAS retained historical marker 2",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/historical-marker.jpg"
+      },
+      {
+        "frame_id": 2,
+        "timestamp": "2026-09-18T05:40:10.134791+00:00",
+        "app_name": "NAS History",
+        "text": "NAS retained historical marker 1",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/historical-marker.jpg"
+      },
+      {
+        "frame_id": 1,
+        "timestamp": "2026-09-18T05:39:09.985239+00:00",
+        "app_name": "NAS History",
+        "text": "NAS retained historical marker 0",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/historical-marker.jpg"
+      }
+    ]
+  },
+  "retained-new": {
+    "pagination": {
+      "limit": 50,
+      "offset": 0,
+      "total": 11
+    },
+    "data": [
+      {
+        "frame_id": 46,
+        "timestamp": "2026-09-18T06:35:59.034467+00:00",
+        "app_name": "TextEdit",
+        "text": "NASPOSTMIGRATIONCONFIRMED 20260918 NASNETWORKRETURN NAS AFTER MIGRATION CEDE 20260918\n\nScreenpipe is recording new activity after SQLite to Parquet migration.\nThis TextEdit window and its JPEG must remain in Timeline after app restart.\nThe data directory is on an SMB network share.\nEdited\n\u2014\nNAS-AFTER-MIGRATION-CEDE-20260918.txt",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/data/data/2026-09-18/1789713359034_m1.jpg"
+      },
+      {
+        "frame_id": 45,
+        "timestamp": "2026-09-18T06:35:28.859057+00:00",
+        "app_name": "TextEdit",
+        "text": "NASPOSTMIGRATIONCONFIRMED 20260918 NASNETWORKRETURN NAS AFTER MIGRATION CEDE 20260918\n\nScreenpipe is recording new activity after SQLite to Parquet migration.\nThis TextEdit window and its JPEG must remain in Timeline after app restart.\nThe data directory is on an SMB network share.\nEdited\n\u2014\nNAS-AFTER-MIGRATION-CEDE-20260918.txt",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/data/data/2026-09-18/1789713328859_m1.jpg"
+      },
+      {
+        "frame_id": 44,
+        "timestamp": "2026-09-18T06:34:58.460627+00:00",
+        "app_name": "TextEdit",
+        "text": "NASPOSTMIGRATIONCONFIRMED 20260918 NASNETWORKRETURN NAS AFTER MIGRATION CEDE 20260918\n\nScreenpipe is recording new activity after SQLite to Parquet migration.\nThis TextEdit window and its JPEG must remain in Timeline after app restart.\nThe data directory is on an SMB network share.\nEdited\n\u2014\nNAS-AFTER-MIGRATION-CEDE-20260918.txt",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/data/data/2026-09-18/1789713298460_m1.jpg"
+      },
+      {
+        "frame_id": 43,
+        "timestamp": "2026-09-18T06:34:28.016114+00:00",
+        "app_name": "TextEdit",
+        "text": "NASPOSTMIGRATIONCONFIRMED 20260918 NASNETWORKRETURN NAS AFTER MIGRATION CEDE 20260918\n\nScreenpipe is recording new activity after SQLite to Parquet migration.\nThis TextEdit window and its JPEG must remain in Timeline after app restart.\nThe data directory is on an SMB network share.\nEdited\n\u2014\nNAS-AFTER-MIGRATION-CEDE-20260918.txt",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/data/data/2026-09-18/1789713268016_m1.jpg"
+      },
+      {
+        "frame_id": 42,
+        "timestamp": "2026-09-18T06:33:57.573050+00:00",
+        "app_name": "TextEdit",
+        "text": "NASPOSTMIGRATIONCONFIRMED 20260918 NASNETWORKRETURN NAS AFTER MIGRATION CEDE 20260918\n\nScreenpipe is recording new activity after SQLite to Parquet migration.\nThis TextEdit window and its JPEG must remain in Timeline after app restart.\nThe data directory is on an SMB network share.\nEdited\n\u2014\nNAS-AFTER-MIGRATION-CEDE-20260918.txt",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/data/data/2026-09-18/1789713237573_m1.jpg"
+      },
+      {
+        "frame_id": 41,
+        "timestamp": "2026-09-18T06:33:27.094288+00:00",
+        "app_name": "TextEdit",
+        "text": "NASPOSTMIGRATIONCONFIRMED 20260918 NASNETWORKRETURN NAS AFTER MIGRATION CEDE 20260918\n\nScreenpipe is recording new activity after SQLite to Parquet migration.\nThis TextEdit window and its JPEG must remain in Timeline after app restart.\nThe data directory is on an SMB network share.\nEdited\n\u2014\nNAS-AFTER-MIGRATION-CEDE-20260918.txt",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/data/data/2026-09-18/1789713207094_m1.jpg"
+      },
+      {
+        "frame_id": 39,
+        "timestamp": "2026-09-18T06:32:54.652491+00:00",
+        "app_name": "TextEdit",
+        "text": "NASPOSTMIGRATIONCONFIRMED 20260918 NASNETWORKRETURN NAS AFTER MIGRATION CEDE 20260918\n\nScreenpipe is recording new activity after SQLite to Parquet migration.\nThis TextEdit window and its JPEG must remain in Timeline after app restart.\nThe data directory is on an SMB network share.\nEdited\n\u2014\nNAS-AFTER-MIGRATION-CEDE-20260918.txt",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/data/data/2026-09-18/1789713174652_m1.jpg"
+      },
+      {
+        "frame_id": 38,
+        "timestamp": "2026-09-18T06:31:37.936301+00:00",
+        "app_name": "TextEdit",
+        "text": "NASPOSTMIGRATIONCONFIRMED 20260918 NASNETWORKRETURN NAS AFTER MIGRATION CEDE 20260918\n\nScreenpipe is recording new activity after SQLite to Parquet migration.\nThis TextEdit window and its JPEG must remain in Timeline after app restart.\nThe data directory is on an SMB network share.\nEdited\n\u2014\nNAS-AFTER-MIGRATION-CEDE-20260918.txt",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/data/data/2026-09-18/1789713097936_m1.jpg"
+      },
+      {
+        "frame_id": 37,
+        "timestamp": "2026-09-18T06:31:19.019688+00:00",
+        "app_name": "TextEdit",
+        "text": "NASPOSTMIGRATIONCONFIRMED 20260918 NAS AFTER MIGRATION CEDE 20260918\n\nScreenpipe is recording new activity after SQLite to Parquet migration.\nThis TextEdit window and its JPEG must remain in Timeline after app restart.\nThe data directory is on an SMB network share.\nEdited\n\u2014\nNAS-AFTER-MIGRATION-CEDE-20260918.txt",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/data/data/2026-09-18/1789713079019_m1.jpg"
+      },
+      {
+        "frame_id": 36,
+        "timestamp": "2026-09-18T06:30:48.577376+00:00",
+        "app_name": "TextEdit",
+        "text": "NASPOSTMIGRATIONCONFIRMED 20260918 NAS AFTER MIGRATION CEDE 20260918\n\nScreenpipe is recording new activity after SQLite to Parquet migration.\nThis TextEdit window and its JPEG must remain in Timeline after app restart.\nThe data directory is on an SMB network share.\nEdited\n\u2014\nNAS-AFTER-MIGRATION-CEDE-20260918.txt",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/data/data/2026-09-18/1789713048577_m1.jpg"
+      },
+      {
+        "frame_id": 35,
+        "timestamp": "2026-09-18T06:30:18.124923+00:00",
+        "app_name": "TextEdit",
+        "text": "NASPOSTMIGRATIONCONFIRMED 20260918 NAS AFTER MIGRATION CEDE 20260918\n\nScreenpipe is recording new activity after SQLite to Parquet migration.\nThis TextEdit window and its JPEG must remain in Timeline after app restart.\nThe data directory is on an SMB network share.\nEdited\n\u2014\nNAS-AFTER-MIGRATION-CEDE-20260918.txt",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/data/data/2026-09-18/1789713018124_m1.jpg"
+      }
+    ]
+  },
+  "retained-audio": {
+    "pagination": {
+      "limit": 10,
+      "offset": 0,
+      "total": 1
+    },
+    "data": [
+      {
+        "chunk_id": 2,
+        "timestamp": "2026-09-18T06:27:00+00:00",
+        "text": "audio device and stored on the network drive. The history remains searchable after restarting the application. Network storage validation. The recording continues after the migration. Both the old screen history and this new audio should still be available when the application starts again.",
+        "file_path": "/Volumes/ScreenpipeApp/Mac Mini/data/System Audio (output)_2026-09-18_06-27-00.mp4"
+      }
+    ]
+  }
+}

@@ -1,0 +1,42 @@
+[
+  {
+    "bytes_saved": 0,
+    "root": "/Volumes/ScreenpipeApp/Mac Mini",
+    "elapsed_seconds": 19,
+    "total_records": null,
+    "recovering": false,
+    "message": "Your history has been migrated and recording has resumed.",
+    "completed_records": null,
+    "busy": false,
+    "available_bytes": 31909462016,
+    "completed": true,
+    "error": null
+  },
+  {
+    "can_cancel": false,
+    "message": "",
+    "generation": "d9ae4f35-2564-4f49-a825-0a7fdeb20bfc",
+    "can_delete_source": false,
+    "busy": false,
+    "error": null,
+    "completed": true,
+    "using_new_storage": true,
+    "pending": false,
+    "available_bytes": 31919730688,
+    "app_session_id": "f8935253-7e97-413b-b3b1-997504a4040e",
+    "in_place": true,
+    "source_bytes": 0,
+    "root": "/Volumes/ScreenpipeApp/Mac Mini",
+    "blocked_reason": null,
+    "bytes_saved": 0,
+    "migrated_bytes": 6944768,
+    "can_migrate": false
+  },
+  {
+    "phase": "ready",
+    "message": null,
+    "sinceEpochSecs": 1789712704,
+    "error": null,
+    "cpuCompatMode": false
+  }
+]

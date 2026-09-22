@@ -90,7 +90,7 @@ impl SnapshotWriter {
         let mut encoder = JpegEncoder::new_with_quality(&mut writer, quality);
         encoder.encode_image(img)?;
         writer.flush()?;
-        writer.get_ref().sync_all()?;
+        screenpipe_fs::sync_all(writer.get_ref())?;
 
         debug!(
             "snapshot written: {} ({}x{} -> {}x{}, q={})",

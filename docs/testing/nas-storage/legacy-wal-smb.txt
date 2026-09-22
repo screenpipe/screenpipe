@@ -1,0 +1,6 @@
+
+running 1 test
+NAS WAL: verification preserved database and committed WAL bytes; pending incident recovered; acknowledged and new rows survive restart in rollback mode
+test network_wal_verification_and_reopen_preserve_committed_rows ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 13.52s

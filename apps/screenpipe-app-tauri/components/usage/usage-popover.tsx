@@ -34,6 +34,8 @@ import {
   contextUsageState,
 } from "@/components/usage/context-usage-panel";
 
+import { useGT } from "gt-react";
+
 export function UsagePopover({
   activePreset,
   sessionId,
@@ -41,6 +43,7 @@ export function UsagePopover({
   activePreset: AIPreset | null | undefined;
   sessionId: string | null;
 }) {
+  const ui = useGT();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const usesCloudAllowance = presetUsesHostedAllowance(activePreset);
@@ -79,20 +82,20 @@ export function UsagePopover({
         : "ok";
   const readings = [
     contextPercent !== null
-      ? `Context usage, ${Math.round(contextPercent)}% full`
+      ? ui("Context usage, {percent}% full", { percent: Math.round(contextPercent) })
       : null,
     cloudManaged
       ? cloudPercent
-        ? `Screenpipe Cloud usage, ${cloudPercent} used`
-        : "Screenpipe Cloud usage unavailable"
+        ? ui("Screenpipe Cloud usage, {percent} used", { percent: cloudPercent })
+        : ui("Screenpipe Cloud usage unavailable")
       : null,
   ].filter((reading): reading is string => reading !== null);
   const accessibleLabel =
-    readings.length > 0 ? readings.join("; ") : "Usage details";
+    readings.length > 0 ? readings.join("; ") : ui("Usage details");
   const unavailableMessage =
     hosted?.plan === "unknown"
-      ? "sign in to view your usage limits."
-      : (allowanceExemption ?? "usage data is unavailable. try refreshing.");
+      ? ui("sign in to view your usage limits.")
+      : (allowanceExemption ?? ui("usage data is unavailable. try refreshing."));
 
   return (
     // Click, not hover: this panel is something you go and read, and a chip

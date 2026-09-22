@@ -95,6 +95,16 @@ struct AudioUpdate: Equatable {
     static let matchWindow: TimeInterval = 60
 }
 
+struct DeleteRangeResponse: Decodable, Equatable {
+    var framesDeleted: Int
+    var audioTranscriptionsDeleted: Int
+
+    enum CodingKeys: String, CodingKey {
+        case framesDeleted = "frames_deleted"
+        case audioTranscriptionsDeleted = "audio_transcriptions_deleted"
+    }
+}
+
 struct SpeakerReassignResponse: Decodable, Equatable {
     var newSpeakerId: Int64
     var newSpeakerName: String
@@ -212,8 +222,8 @@ enum TimelineBackoff {
     static func retryMessage(attempt: Int) -> String? {
         switch attempt {
         case 0: return nil
-        case 1: return "Loading history... server is warming up"
-        default: return "Timeline is still warming up. Try again in a moment."
+        case 1: return uiText("Loading history... server is warming up")
+        default: return uiText("Timeline is still warming up. Try again in a moment.")
         }
     }
 }
@@ -221,11 +231,11 @@ enum TimelineBackoff {
 // MARK: - Websocket client
 
 protocol FrameStreamClientDelegate: AnyObject {
-    func frameStream(didReceive batch: [StreamTimeSeriesResponse])
-    func frameStream(didReceive audioUpdate: AudioUpdate)
-    func frameStream(didChangeState state: FrameStreamClient.State)
-    func frameStream(didComplete completion: FrameStreamCompletion)
-    func frameStream(didFail message: String)
+    func frameStream(_ stream: FrameStreamClient, didReceive batch: [StreamTimeSeriesResponse])
+    func frameStream(_ stream: FrameStreamClient, didReceive audioUpdate: AudioUpdate)
+    func frameStream(_ stream: FrameStreamClient, didChangeState state: FrameStreamClient.State)
+    func frameStream(_ stream: FrameStreamClient, didComplete completion: FrameStreamCompletion)
+    func frameStream(_ stream: FrameStreamClient, didFail message: String)
 }
 
 /// Owns one `/stream/frames` socket, reconnecting forever with backoff.
@@ -263,7 +273,7 @@ final class FrameStreamClient: NSObject {
     private(set) var state: State = .idle {
         didSet {
             if state != oldValue {
-                delegate?.frameStream(didChangeState: state)
+                delegate?.frameStream(self, didChangeState: state)
             }
         }
     }
@@ -303,8 +313,8 @@ final class FrameStreamClient: NSObject {
         guard let data = try? JSONEncoder().encode(req),
               let text = String(data: data, encoding: .utf8) else { return }
         task.send(.string(text)) { [weak self] error in
-            if let error {
-                self?.delegate?.frameStream(didFail: "request failed: \(error.localizedDescription)")
+            if let self, let error {
+                self.delegate?.frameStream(self, didFail: "request failed: \(error.localizedDescription)")
             }
         }
     }
@@ -363,7 +373,7 @@ final class FrameStreamClient: NSObject {
                 nsError.localizedDescription,
                 nsError.localizedFailureReason ?? "none"
             )
-            delegate?.frameStream(didFail: error.localizedDescription)
+            delegate?.frameStream(self, didFail: error.localizedDescription)
             scheduleReconnect()
         case .success(let message):
             lastMessageAt = Date()
@@ -385,13 +395,13 @@ final class FrameStreamClient: NSObject {
     private func handle(text: String) {
         switch FrameStreamMessage.decode(text) {
         case .some(.batch(let batch)):
-            delegate?.frameStream(didReceive: batch)
+            delegate?.frameStream(self, didReceive: batch)
         case .some(.audioUpdate(let update)):
-            delegate?.frameStream(didReceive: update)
+            delegate?.frameStream(self, didReceive: update)
         case .some(.complete(let completion)):
-            delegate?.frameStream(didComplete: completion)
+            delegate?.frameStream(self, didComplete: completion)
         case .some(.serverError(let message)):
-            delegate?.frameStream(didFail: message)
+            delegate?.frameStream(self, didFail: message)
         case .some(.keepAlive):
             break
         case .none:
@@ -557,6 +567,22 @@ struct TimelineRESTClient {
         )
         _ = try await perform(req)
         return true
+    }
+
+    /// `POST /data/delete-range` using the original frame timestamps so an
+    /// inclusive boundary never loses sub-millisecond precision.
+    func deleteRange(start: String, end: String) async throws -> DeleteRangeResponse {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "start": start,
+            "end": end,
+        ])
+        let req = authorized(
+            config.httpBase.appendingPathComponent("data/delete-range"),
+            method: "POST",
+            body: body
+        )
+        let data = try await perform(req)
+        return try JSONDecoder().decode(DeleteRangeResponse.self, from: data)
     }
 
     /// `POST /speakers/reassign` — the same intent-aware correction path used

@@ -10,6 +10,7 @@ mod families;
 mod native_macos;
 mod obsidian;
 mod persisted_web;
+mod web_content;
 
 pub use catalog::{builtin_app_profiles, AppFamily, BuiltinAppProfile};
 pub use chatgpt::ChatGptParser;
@@ -22,6 +23,9 @@ use crate::{ParserRegistry, RegistryError};
 use native_macos::native_macos_parsers;
 
 pub fn register_builtin_parsers(registry: &mut ParserRegistry) -> Result<(), RegistryError> {
+    for &app in web_content::IDS {
+        registry.register(Box::new(web_content::WebContentParser::new(app)))?;
+    }
     registry.register(Box::new(ChatGptParser::new()))?;
     registry.register(Box::new(ClaudeParser::new()))?;
     registry.register(Box::new(ObsidianParser::new()))?;

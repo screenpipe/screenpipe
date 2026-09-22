@@ -452,3 +452,174 @@ mod tests {
         assert!(redacted.contains("request 42"));
     }
 }
+
+/// Strict contribution redaction. No regex-only fallback, no content-bearing
+/// errors, no capture settings, and no chunk boundaries through identifiers.
+#[tauri::command]
+#[specta::specta]
+pub async fn redact_workflow_contribution(text: String) -> Result<String, String> {
+    if text.trim().is_empty() || text.len() > 1800 {
+        return Err("Message is outside the contribution size limit".into());
+    }
+    let redactor = TinfoilRedactor::new(TinfoilConfig {
+        // Pin the production attestation identity; do not honor local overrides.
+        enclave: Some("pii.screenpipe.containers.tinfoil.dev".into()),
+        repo: Some("screenpipe/privacy-filter".into()),
+        labels: [
+            "person",
+            "email",
+            "phone",
+            "address",
+            "url",
+            "company",
+            "repo",
+            "handle",
+            "channel",
+            "id",
+            "date",
+            "secret",
+            "sensitive",
+        ]
+        .iter()
+        .map(|label| (*label).to_owned())
+        .collect(),
+        timeout: Some(Duration::from_secs(20)),
+        ..Default::default()
+    });
+    strict_workflow_redaction(&redactor, &text, Duration::from_secs(25)).await
+}
+
+async fn strict_workflow_redaction(
+    redactor: &dyn Redactor,
+    text: &str,
+    budget: Duration,
+) -> Result<String, String> {
+    // The common adapter bypasses very short input. A fixed context prefix
+    // ensures even a short name is submitted to the enclave for classification.
+    let input = format!("Workflow message:\n{text}");
+    let output = tokio::time::timeout(budget, redactor.redact(&input))
+        .await
+        .map_err(|_| "Redaction timed out".to_string())?
+        .map_err(|_| "Redaction unavailable".to_string())?;
+    let redacted = output
+        .redacted
+        .strip_prefix("Workflow message:\n")
+        .unwrap_or(&output.redacted)
+        .trim();
+    if redacted.is_empty() || redacted.len() > 8000 {
+        return Err("Invalid redaction result".into());
+    }
+    Ok(redacted.to_owned())
+}
+
+#[cfg(test)]
+mod workflow_contribution_tests {
+    use super::*;
+    use async_trait::async_trait;
+    use screenpipe_redact::{RedactError, RedactionOutput};
+    struct FakeRedactor(&'static str);
+    #[async_trait]
+    impl Redactor for FakeRedactor {
+        fn name(&self) -> &str {
+            "fake"
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        async fn redact_batch(
+            &self,
+            texts: &[String],
+        ) -> Result<Vec<RedactionOutput>, RedactError> {
+            assert!(texts[0].starts_with("Workflow message:\n"));
+            assert!(texts[0].chars().count() >= 8);
+            if self.0 == "fail" {
+                return Err(RedactError::Runtime("private input in error".into()));
+            }
+            if self.0 == "hang" {
+                return std::future::pending().await;
+            }
+            Ok(texts
+                .iter()
+                .map(|text| RedactionOutput {
+                    input: text.clone(),
+                    redacted: self.0.into(),
+                    spans: vec![],
+                })
+                .collect())
+        }
+    }
+    #[tokio::test]
+    async fn short_names_are_redacted_without_the_adapters_short_input_bypass() {
+        let result = strict_workflow_redaction(
+            &FakeRedactor("Workflow message:\n[PERSON]"),
+            "Alice",
+            Duration::from_secs(1),
+        )
+        .await;
+        assert_eq!(result.unwrap(), "[PERSON]");
+    }
+    #[tokio::test]
+    async fn failure_never_returns_raw_or_regex_fallback_or_sensitive_errors() {
+        let result =
+            strict_workflow_redaction(&FakeRedactor("fail"), "Alice", Duration::from_secs(1)).await;
+        assert_eq!(result.unwrap_err(), "Redaction unavailable");
+        assert!(
+            strict_workflow_redaction(&FakeRedactor(""), "Alice", Duration::from_secs(1))
+                .await
+                .is_err()
+        );
+    }
+    #[tokio::test]
+    async fn deadline_is_fail_closed() {
+        let result =
+            strict_workflow_redaction(&FakeRedactor("hang"), "Alice", Duration::from_millis(10))
+                .await;
+        assert_eq!(result.unwrap_err(), "Redaction timed out");
+    }
+    #[tokio::test]
+    async fn oversized_and_empty_messages_never_contact_the_enclave() {
+        assert!(redact_workflow_contribution(" ".into()).await.is_err());
+        assert!(redact_workflow_contribution("a".repeat(1801))
+            .await
+            .is_err());
+    }
+
+    /// Bounded synthetic-data smoke eval through the exact production command.
+    /// Run explicitly; ordinary tests never depend on the live enclave.
+    #[tokio::test]
+    #[ignore = "requires the live attested Tinfoil enclave"]
+    async fn live_workflow_contribution_redaction_eval() {
+        let cases: &[(&str, &[&str])] = &[
+            ("Alice", &["Alice"]),
+            (
+                "Send the invoice to alice@example.com or call 415-555-0142.",
+                &["alice@example.com", "415-555-0142"],
+            ),
+            (
+                "The customer Marcus Chen lives at 123 Maple Street, Springfield.",
+                &["Marcus Chen", "123 Maple Street"],
+            ),
+            (
+                "My password is hunter2 and my API key is sk-test-synthetic-0123456789abcdef.",
+                &["hunter2", "sk-test-synthetic-0123456789abcdef"],
+            ),
+            (
+                "Contact Zoë Martin at zoe@example.org to review the workflow.",
+                &["Zoë Martin", "zoe@example.org"],
+            ),
+        ];
+        for (index, (input, sensitive)) in cases.iter().enumerate() {
+            let output = redact_workflow_contribution((*input).into())
+                .await
+                .unwrap_or_else(|error| panic!("live case {index}: {error}"));
+            assert!(!output.trim().is_empty(), "empty live case {index}");
+            for value in *sensitive {
+                assert!(
+                    !output.to_lowercase().contains(&value.to_lowercase()),
+                    "sensitive value survived live case {index}"
+                );
+            }
+            println!("live workflow redaction case {index}: passed");
+        }
+    }
+}

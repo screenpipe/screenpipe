@@ -8,6 +8,7 @@ license-file.workspace = true
 edition.workspace = true
 
 [dependencies]
+screenpipe-fs = { path = "../screenpipe-fs" }
 fs2 = "0.4"
 libsqlite3-sys = { workspace = true }
 serde = { workspace = true }

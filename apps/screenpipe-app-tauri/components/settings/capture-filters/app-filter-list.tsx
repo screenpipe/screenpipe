@@ -24,6 +24,8 @@ import {
 	type AppStatusFilter,
 } from "@/lib/settings/capture-filters";
 import { appIconUrl } from "./icon-urls";
+import { useGT } from "gt-react";
+
 
 const formatCaptures = (count: number): string =>
 	count >= 1000 ? `${(count / 1000).toFixed(1)}k captures` : `${count} captures`;
@@ -45,16 +47,18 @@ interface AppRowProps {
  * everything the switch can't say on its own.
  */
 const AppRow = React.memo(function AppRow({ row, onToggle, onRemoveRule }: AppRowProps) {
+
+  const ui = useGT();
 	const [iconFailed, setIconFailed] = useState(false);
 	const captured = row.state === "captured" || row.state === "partial";
 
 	const note = (() => {
 		if (row.state === "partial") {
-			return `capturing, except ${row.scopedRules.length === 1 ? "1 window rule" : `${row.scopedRules.length} window rules`}`;
+			return `Capturing, except ${row.scopedRules.length === 1 ? "1 window rule" : `${row.scopedRules.length} window rules`}`;
 		}
-		if (row.state === "outside-allowlist") return "not in the allowlist";
-		if (row.origin === "installed") return "installed, not captured yet";
-		if (row.origin === "rule") return "from a rule, not seen on this machine";
+		if (row.state === "outside-allowlist") return "Not in the allowlist";
+		if (row.origin === "installed") return "Installed, not captured yet";
+		if (row.origin === "rule") return "From a rule, not seen on this machine";
 		return formatCaptures(row.captures);
 	})();
 
@@ -83,7 +87,7 @@ const AppRow = React.memo(function AppRow({ row, onToggle, onRemoveRule }: AppRo
 					{note}
 					{row.blockedIndirectly && row.blockingRules.length > 0 && (
 						<>
-							{" · hidden by rule "}
+							{ui(" · hidden by rule ")}
 							<code className="rounded bg-muted px-1 py-px font-mono text-[10px]">
 								{row.blockingRules[0]}
 							</code>
@@ -92,7 +96,7 @@ const AppRow = React.memo(function AppRow({ row, onToggle, onRemoveRule }: AppRo
 								onClick={() => onRemoveRule(row.blockingRules[0])}
 								className="ml-1 underline underline-offset-2 hover:text-foreground"
 							>
-								remove
+								Remove
 							</button>
 						</>
 					)}
@@ -102,7 +106,7 @@ const AppRow = React.memo(function AppRow({ row, onToggle, onRemoveRule }: AppRo
 			<Switch
 				checked={captured}
 				onCheckedChange={(next) => onToggle(row.app, next)}
-				aria-label={`Capture ${row.app}`}
+				aria-label={ui("Capture {value1}", { value1: row.app })}
 			/>
 		</div>
 	);
@@ -127,6 +131,8 @@ export function AppFilterList({
 	onToggleApp,
 	onRemoveRule,
 }: AppFilterListProps) {
+
+  const ui = useGT();
 	const [query, setQuery] = useState("");
 	const [status, setStatus] = useState<AppStatusFilter>("all");
 
@@ -148,7 +154,7 @@ export function AppFilterList({
 					<Input
 						value={query}
 						onChange={(event) => setQuery(event.target.value)}
-						placeholder="Search apps..."
+						placeholder={ui("Search apps...")}
 						className="h-8 pl-7 text-[13px]"
 						data-testid="privacy-app-search"
 					/>
@@ -194,10 +200,10 @@ export function AppFilterList({
 				) : visible.length === 0 ? (
 					<p className="p-2 text-[12px] text-muted-foreground">
 						{query.trim() !== ""
-							? "No apps match your search."
+							? ui("No apps match your search.")
 							: status === "ignored"
-								? "No apps are excluded."
-								: "No apps found yet. They appear here once recorded."}
+								? ui("No apps are excluded.")
+								: ui("No apps found yet. They appear here once recorded.")}
 					</p>
 				) : (
 					visible.map((row) => (

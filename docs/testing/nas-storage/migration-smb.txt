@@ -1,0 +1,120 @@
+
+running 1 test
+2026-09-18T06:00:46.430413Z  INFO screenpipe_db::storage::diagnostics: storage migration diagnostic event="started" diagnostic={"schema_version":1,"process_id":1334,"database_version":"0.4.50","attempt_id":"b4cfe818-06d9-43ef-ab6b-1e0e6aee74d1","kind":"conversion","started_at":"2026-09-18T06:00:46.430235+00:00","observed_at":"2026-09-18T06:00:46.430329+00:00","status":"running","stage":"starting","table":null,"first_id":null,"last_id":null,"batch_rows":null,"batch_bytes":null,"completed_records":null,"total_records":null,"table_records":{},"elapsed_seconds":0,"idle_seconds":0,"failure_stage":null,"error":null}
+2026-09-18T06:00:46.456566Z  INFO screenpipe_db::storage::reclaim: filesystem does not support sparse reclamation; keeping reusable SQLite free pages and enforcing migration disk reserve
+2026-09-18T06:00:49.616300Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=_sqlx_migrations rows=116
+2026-09-18T06:00:49.617207Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=activity_actions rows=0
+2026-09-18T06:00:49.618053Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=activity_evidence rows=0
+2026-09-18T06:00:49.619246Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=activity_intervals rows=0
+2026-09-18T06:00:49.620301Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=activity_ledger_state rows=0
+2026-09-18T06:00:49.621104Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=activity_tasks rows=0
+2026-09-18T06:00:49.622191Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=audio_chunks rows=0
+2026-09-18T06:00:49.622935Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=audio_tags rows=0
+2026-09-18T06:00:49.623716Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=audio_transcriptions rows=0
+2026-09-18T06:00:49.624697Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=diarization_runs rows=0
+2026-09-18T06:00:49.625468Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=diarization_segments rows=0
+2026-09-18T06:00:49.626144Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=display_layout rows=0
+2026-09-18T06:00:51.142857Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=elements rows=48
+2026-09-18T06:00:51.144045Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=feedback rows=0
+2026-09-18T06:00:55.962003Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=frames rows=48
+2026-09-18T06:00:55.962796Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=meeting_transcript_segments rows=0
+2026-09-18T06:00:55.963479Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=meetings rows=0
+2026-09-18T06:00:55.964472Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=memories rows=0
+2026-09-18T06:00:55.965183Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=output_search_index rows=0
+2026-09-18T06:00:55.965918Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=outputs rows=0
+2026-09-18T06:00:55.966870Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=pipe_event_runs rows=0
+2026-09-18T06:00:55.967902Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=pipe_executions rows=0
+2026-09-18T06:00:55.968659Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=pipe_scheduler_state rows=0
+2026-09-18T06:00:55.969550Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=semantic_actor_aliases rows=0
+2026-09-18T06:00:55.970479Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=semantic_actors rows=0
+2026-09-18T06:00:55.971178Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=semantic_item_actors rows=0
+2026-09-18T06:00:55.972213Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=semantic_items rows=0
+2026-09-18T06:00:55.972883Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=semantic_run_items rows=0
+2026-09-18T06:00:55.973560Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=semantic_runs rows=0
+2026-09-18T06:00:55.974474Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=speaker_embeddings rows=0
+2026-09-18T06:00:55.975196Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=speaker_identity_evidence rows=0
+2026-09-18T06:00:55.975877Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=speakers rows=0
+2026-09-18T06:00:55.977053Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=sqlite_sequence rows=4
+2026-09-18T06:00:55.978007Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=tags rows=0
+2026-09-18T06:00:55.979005Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=ui_events rows=0
+2026-09-18T06:00:55.979723Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=video_chunks rows=0
+2026-09-18T06:00:55.980614Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=vision_tags rows=0
+2026-09-18T06:00:56.048054Z  INFO screenpipe_db::storage::reclaim: filesystem does not support sparse reclamation; keeping reusable SQLite free pages and enforcing migration disk reserve
+2026-09-18T06:00:56.335110Z  INFO screenpipe_db::storage::bulk::schema: building bulk storage schema table="elements"
+2026-09-18T06:00:56.412341Z  INFO screenpipe_db::storage::bulk::schema: building bulk storage schema table="audio_transcriptions"
+2026-09-18T06:00:56.483418Z  INFO screenpipe_db::storage::bulk::schema: building bulk storage schema table="ui_events"
+2026-09-18T06:00:56.552217Z  INFO screenpipe_db::storage::bulk::schema: building bulk storage schema table="semantic_items"
+2026-09-18T06:00:56.662382Z  INFO screenpipe_db::storage::bulk::schema: building bulk storage schema table="pipe_executions"
+2026-09-18T06:00:56.722109Z  INFO screenpipe_db::storage::bulk::schema: building bulk storage schema table="meeting_transcript_segments"
+2026-09-18T06:00:56.784225Z  INFO screenpipe_db::storage::bulk::schema: building bulk storage schema table="outputs"
+2026-09-18T06:01:16.442159Z  INFO screenpipe_db::storage::diagnostics: storage migration diagnostic event="heartbeat" diagnostic={"schema_version":1,"process_id":1334,"database_version":"0.4.50","attempt_id":"b4cfe818-06d9-43ef-ab6b-1e0e6aee74d1","kind":"conversion","started_at":"2026-09-18T06:00:46.430235+00:00","observed_at":"2026-09-18T06:01:16.442065+00:00","status":"running","stage":"committing_frame_archive","table":"frames","first_id":25,"last_id":26,"batch_rows":2,"batch_bytes":983096,"completed_records":24,"total_records":96,"table_records":{"_sqlx_migrations":116,"activity_actions":0,"activity_evidence":0,"activity_intervals":0,"activity_ledger_state":0,"activity_tasks":0,"audio_chunks":0,"audio_tags":0,"audio_transcriptions":0,"diarization_runs":0,"diarization_segments":0,"display_layout":0,"elements":48,"feedback":0,"frames":48,"meeting_transcript_segments":0,"meetings":0,"memories":0,"output_search_index":0,"outputs":0,"pipe_event_runs":0,"pipe_executions":0,"pipe_scheduler_state":0,"semantic_actor_aliases":0,"semantic_actors":0,"semantic_item_actors":0,"semantic_items":0,"semantic_run_items":0,"semantic_runs":0,"speaker_embeddings":0,"speaker_identity_evidence":0,"speakers":0,"sqlite_sequence":4,"tags":0,"ui_events":0,"video_chunks":0,"vision_tags":0},"elapsed_seconds":30,"idle_seconds":0,"failure_stage":null,"error":null}
+2026-09-18T06:01:26.980182Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:29.112981Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+test non_sparse_volume_migrates_and_keeps_recording_after_restart has been running for over 60 seconds
+2026-09-18T06:01:31.205479Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:33.241612Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:35.169095Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:37.049472Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:38.834816Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:40.604754Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:42.292471Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:43.942755Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:45.476275Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:46.452572Z  INFO screenpipe_db::storage::diagnostics: storage migration diagnostic event="heartbeat" diagnostic={"schema_version":1,"process_id":1334,"database_version":"0.4.50","attempt_id":"b4cfe818-06d9-43ef-ab6b-1e0e6aee74d1","kind":"conversion","started_at":"2026-09-18T06:00:46.430235+00:00","observed_at":"2026-09-18T06:01:46.452480+00:00","status":"running","stage":"committing_element_staging","table":"elements","first_id":23,"last_id":24,"batch_rows":null,"batch_bytes":null,"completed_records":70,"total_records":96,"table_records":{"_sqlx_migrations":116,"activity_actions":0,"activity_evidence":0,"activity_intervals":0,"activity_ledger_state":0,"activity_tasks":0,"audio_chunks":0,"audio_tags":0,"audio_transcriptions":0,"diarization_runs":0,"diarization_segments":0,"display_layout":0,"elements":48,"feedback":0,"frames":48,"meeting_transcript_segments":0,"meetings":0,"memories":0,"output_search_index":0,"outputs":0,"pipe_event_runs":0,"pipe_executions":0,"pipe_scheduler_state":0,"semantic_actor_aliases":0,"semantic_actors":0,"semantic_item_actors":0,"semantic_items":0,"semantic_run_items":0,"semantic_runs":0,"speaker_embeddings":0,"speaker_identity_evidence":0,"speakers":0,"sqlite_sequence":4,"tags":0,"ui_events":0,"video_chunks":0,"vision_tags":0},"elapsed_seconds":60,"idle_seconds":0,"failure_stage":null,"error":null}
+2026-09-18T06:01:47.009144Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:48.461330Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:49.858574Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:51.153947Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:52.432764Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:53.658131Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:54.827932Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:55.938619Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:56.973103Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:57.947561Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:58.862975Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:01:59.745989Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:02:00.541019Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=2 files=1
+2026-09-18T06:02:02.075869Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=_sqlx_migrations rows=116
+2026-09-18T06:02:02.079246Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=activity_actions rows=0
+2026-09-18T06:02:02.082644Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=activity_evidence rows=0
+2026-09-18T06:02:02.086292Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=activity_intervals rows=0
+2026-09-18T06:02:02.089649Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=activity_ledger_state rows=0
+2026-09-18T06:02:02.093040Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=activity_tasks rows=0
+2026-09-18T06:02:02.096691Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=audio_chunks rows=0
+2026-09-18T06:02:02.099976Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=audio_tags rows=0
+2026-09-18T06:02:02.103450Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=audio_transcriptions rows=0
+2026-09-18T06:02:02.107117Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=diarization_runs rows=0
+2026-09-18T06:02:02.110480Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=diarization_segments rows=0
+2026-09-18T06:02:02.113771Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=display_layout rows=0
+2026-09-18T06:02:02.188055Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=elements rows=48
+2026-09-18T06:02:02.191769Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=feedback rows=0
+2026-09-18T06:02:02.449357Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=frames rows=48
+2026-09-18T06:02:02.453649Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=meeting_transcript_segments rows=0
+2026-09-18T06:02:02.458026Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=meetings rows=0
+2026-09-18T06:02:02.461979Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=memories rows=0
+2026-09-18T06:02:02.465858Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=output_search_index rows=0
+2026-09-18T06:02:02.470358Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=outputs rows=0
+2026-09-18T06:02:02.474252Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=pipe_event_runs rows=0
+2026-09-18T06:02:02.478534Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=pipe_executions rows=0
+2026-09-18T06:02:02.482735Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=pipe_scheduler_state rows=0
+2026-09-18T06:02:02.486688Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=semantic_actor_aliases rows=0
+2026-09-18T06:02:02.490590Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=semantic_actors rows=0
+2026-09-18T06:02:02.494900Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=semantic_item_actors rows=0
+2026-09-18T06:02:02.499017Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=semantic_items rows=0
+2026-09-18T06:02:02.503078Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=semantic_run_items rows=0
+2026-09-18T06:02:02.507329Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=semantic_runs rows=0
+2026-09-18T06:02:02.511258Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=speaker_embeddings rows=0
+2026-09-18T06:02:02.515427Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=speaker_identity_evidence rows=0
+2026-09-18T06:02:02.519906Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=speakers rows=0
+2026-09-18T06:02:02.526502Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=sqlite_sequence rows=4
+2026-09-18T06:02:02.530702Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=tags rows=0
+2026-09-18T06:02:02.535084Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=ui_events rows=0
+2026-09-18T06:02:02.539451Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=video_chunks rows=0
+2026-09-18T06:02:02.543426Z  INFO screenpipe_db::storage::lifecycle: storage parity receipt complete table=vision_tags rows=0
+2026-09-18T06:02:02.749744Z  INFO screenpipe_db::storage::diagnostics: storage migration diagnostic event="completed" diagnostic={"schema_version":1,"process_id":1334,"database_version":"0.4.50","attempt_id":"b4cfe818-06d9-43ef-ab6b-1e0e6aee74d1","kind":"conversion","started_at":"2026-09-18T06:00:46.430235+00:00","observed_at":"2026-09-18T06:02:02.749644+00:00","status":"completed","stage":"saving_completion_receipt","table":"vision_tags","first_id":-9223372036854775808,"last_id":null,"batch_rows":0,"batch_bytes":null,"completed_records":96,"total_records":96,"table_records":{"_sqlx_migrations":116,"activity_actions":0,"activity_evidence":0,"activity_intervals":0,"activity_ledger_state":0,"activity_tasks":0,"audio_chunks":0,"audio_tags":0,"audio_transcriptions":0,"diarization_runs":0,"diarization_segments":0,"display_layout":0,"elements":48,"feedback":0,"frames":48,"meeting_transcript_segments":0,"meetings":0,"memories":0,"output_search_index":0,"outputs":0,"pipe_event_runs":0,"pipe_executions":0,"pipe_scheduler_state":0,"semantic_actor_aliases":0,"semantic_actors":0,"semantic_item_actors":0,"semantic_items":0,"semantic_run_items":0,"semantic_runs":0,"speaker_embeddings":0,"speaker_identity_evidence":0,"speakers":0,"sqlite_sequence":4,"tags":0,"ui_events":0,"video_chunks":0,"vision_tags":0},"elapsed_seconds":76,"idle_seconds":0,"failure_stage":null,"error":null}
+2026-09-18T06:02:03.618910Z  INFO screenpipe_db::storage::bulk::elements::lifecycle: sealed element records rows=1 files=1
+2026-09-18T06:02:03.628762Z  INFO screenpipe_db::storage::bulk::lifecycle: sealing bulk payload batch table="audio_transcriptions" rows=1
+non-sparse migration: 48 historical frames verified; receipt present; journal removed; new frame, element and transcript sealed, searchable and intact after restart; source_bytes=48115712 index_bytes=48881664 parquet_bytes=154176
+test non_sparse_volume_migrates_and_keeps_recording_after_restart ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 93.62s

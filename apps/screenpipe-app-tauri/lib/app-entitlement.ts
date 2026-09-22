@@ -541,6 +541,27 @@ export function needsAppEntitlementRefresh(user: AppUser | null | undefined) {
   return appearsEntitled && !isEntitlementFresh(entitlement);
 }
 
+export function isBusinessSubscriptionPlan(plan: string | null | undefined): boolean {
+  // `cloud_subscribed` can remain true in persisted settings after the server
+  // resolves an old one-time license as Lifetime. Explicit plan truth must win
+  // or Lifetime/Basic users land in the Business-active branch with no upgrade
+  // action. Keep the no-plan fallback for older Business responses that only
+  // carried the cloud flag.
+  if (!plan) return true;
+  return [
+    "pro",
+    "business",
+    "pro_max",
+    "business_max",
+    "pro_ultra",
+    "business_ultra",
+    "team",
+    "enterprise",
+    "monthly",
+    "annual",
+  ].includes(plan.toLowerCase());
+}
+
 export function normalizePlanLabel(plan: string | null | undefined) {
   if (!plan || plan === "none") return "no active plan";
   return plan.replace(/_/g, " ");

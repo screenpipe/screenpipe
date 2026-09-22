@@ -84,6 +84,9 @@ pub struct ServerCore {
     /// The HTTP serve task. Resolves only once every connection task has
     /// finished; `shutdown()` awaits it (bounded) after signaling above.
     http_task: Option<tokio::task::JoinHandle<()>>,
+    /// Keeps this generation's runtime alive through shutdown, even after the
+    /// core is removed from RecordingState. Dropped last, after all resources.
+    _runtime_lifetime: tokio::sync::oneshot::Sender<()>,
 }
 
 /// Bind attempts before giving up on the HTTP port. Together with
@@ -95,6 +98,20 @@ const BIND_RETRY_DELAY: Duration = Duration::from_millis(500);
 const PORT_HOLDER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 const OPENAI_COMPATIBLE_FAILURE_POLL_INTERVAL: Duration = Duration::from_secs(15);
 const OPENAI_COMPATIBLE_FAILURE_NOTIFICATION_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+
+async fn initialize_frame_privacy_policy(
+    db: &DatabaseManager,
+    data_dir: &std::path::Path,
+) -> Result<(), String> {
+    if let Err(error) = db.set_frame_privacy_policy(&Default::default()).await {
+        let message = format!("Failed to initialize database frame privacy policy: {error}");
+        crate::health::set_boot_error(&message);
+        crate::recording::recovery_log::append(data_dir, "database_startup_failed", &message);
+        db.close().await;
+        return Err(message);
+    }
+    Ok(())
+}
 
 fn should_notify_openai_compatible_failure(
     previous_error_count: u64,
@@ -146,13 +163,7 @@ fn monitor_openai_compatible_transcription_failures(
                 last_notification,
                 now,
             ) {
-                crate::notifications::client::send_typed_with_priority(
-                    "OpenAI Compatible transcription is failing",
-                    "Screenpipe is still recording audio, but the endpoint is failing or returning empty transcripts, so new audio may not be searchable. Check Settings and run Test and enable again.",
-                    "system",
-                    Some(20_000),
-                    crate::notifications::store::NotificationPriority::High,
-                );
+                crate::notifications::client::send_typed_with_priority(crate::localization::ui_text("OpenAI Compatible transcription is failing"), crate::localization::ui_text("Screenpipe is still recording audio, but the endpoint is failing or returning empty transcripts, so new audio may not be searchable. Check Settings and run Test and enable again."), "system", Some(20_000), crate::notifications::store::NotificationPriority::High);
                 last_notification = Some(now);
             }
 
@@ -308,6 +319,8 @@ impl ServerCore {
         // PiExecutor, the Tauri command writer) share one storage cell.
         cloud_token_handle: std::sync::Arc<arc_swap::ArcSwap<Option<String>>>,
         history_access: screenpipe_engine::history_access::HistoryAccessPolicy,
+        workflow_catalog_dir: Option<std::path::PathBuf>,
+        runtime_lifetime: tokio::sync::oneshot::Sender<()>,
     ) -> Result<Self, String> {
         info!("Starting server core on port {}", config.port);
         crate::health::set_boot_phase("starting", Some("starting server"));
@@ -459,6 +472,17 @@ impl ServerCore {
         };
         info!("Database initialized at {}", db_path);
 
+        // Finish fallible database setup before sharing the owner with pipes,
+        // HTTP, or background workers. A failure must close this generation.
+        if !config.async_pii_redaction {
+            initialize_frame_privacy_policy(&db, &local_data_dir).await?;
+        }
+
+        // A pending update may interrupt database recovery, but must exclude
+        // native model initialization until the old process exits. Retain the
+        // read guard through all remaining startup work, including errors.
+        let _native_startup = crate::update_restart::RESTART_SAFETY.native_startup().await;
+
         // --- Audio devices + manager (built but NOT started) ---
         let audio_devices = if config.disable_audio {
             Vec::new()
@@ -579,6 +603,7 @@ impl ServerCore {
             config.use_pii_removal,
             config.video_quality.clone(),
         );
+        server.workflow_catalog_dir = workflow_catalog_dir;
         server.vision_metrics = vision_metrics.clone();
         server.audio_metrics = audio_manager.metrics.clone();
         server.hot_frame_cache = Some(hot_frame_cache.clone());
@@ -1155,11 +1180,6 @@ impl ServerCore {
             }
         }
 
-        if !config.async_pii_redaction {
-            db.set_frame_privacy_policy(&Default::default())
-                .await
-                .map_err(|error| format!("initialize frame privacy policy: {error}"))?;
-        }
         if config.async_pii_redaction {
             use screenpipe_redact::adapters::onnx::{OnnxConfig, OnnxRedactor};
             use screenpipe_redact::adapters::opf::{OpfAdapter, OpfConfig};
@@ -1435,10 +1455,11 @@ impl ServerCore {
             owned_tasks,
             http_shutdown,
             http_task: Some(http_task),
+            _runtime_lifetime: runtime_lifetime,
         })
     }
 
-    /// Shut down the server core. Called only on app quit.
+    /// Shut down the server core before quit, restart, or storage migration.
     pub async fn shutdown(mut self) {
         info!("Shutting down server core");
         screenpipe_connect::mdns::shutdown();
@@ -1522,6 +1543,82 @@ impl ServerCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn failed_privacy_setup_releases_owner_and_preserves_recordings() {
+        let root = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+                .await
+                .unwrap(),
+        );
+        db.insert_audio_chunk("before-privacy-startup-failure.wav", None)
+            .await
+            .unwrap();
+        db.execute_raw_sql_write("UPDATE storage_metadata SET policy='previous-policy'")
+            .await
+            .unwrap();
+        db.execute_raw_sql_write("CREATE TRIGGER reject_privacy_setup BEFORE UPDATE ON storage_metadata BEGIN SELECT RAISE(ABORT, 'privacy setup unavailable; contact=private-person@example.com'); END").await.unwrap();
+
+        let error = initialize_frame_privacy_policy(&db, root.path())
+            .await
+            .unwrap_err();
+        assert!(error.contains("privacy setup unavailable"));
+        assert!(db.pool.is_closed());
+        assert!(crate::db_relaunch::is_db_shaped(&error));
+        // Retain the old Arc, just as pipe callbacks may do. Reopening must
+        // depend on completed close, not the last Arc being dropped.
+        let reopened = DatabaseManager::new(
+            root.path().join("db.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        reopened
+            .execute_raw_sql_write("DROP TRIGGER reject_privacy_setup")
+            .await
+            .unwrap();
+        initialize_frame_privacy_policy(&reopened, root.path())
+            .await
+            .unwrap();
+        reopened
+            .insert_audio_chunk("after-privacy-startup-failure.wav", None)
+            .await
+            .unwrap();
+        assert!(reopened
+            .find_audio_chunk_id("before-privacy-startup-failure.wav")
+            .await
+            .unwrap()
+            .is_some());
+        assert!(reopened
+            .find_audio_chunk_id("after-privacy-startup-failure.wav")
+            .await
+            .unwrap()
+            .is_some());
+        reopened.close().await;
+        crate::recording::recovery_log::append(
+            root.path(),
+            "engine_started",
+            "database reopened after privacy setup retry",
+        );
+
+        for day in 1..=7 {
+            std::fs::write(
+                root.path()
+                    .join(format!("screenpipe-app.2026-09-{day:02}.log")),
+                "app restarted\n",
+            )
+            .unwrap();
+        }
+        let report =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[root.path().to_path_buf()])
+                .await
+                .unwrap();
+        assert!(report.contains("database_startup_failed"));
+        assert!(report.contains("privacy setup unavailable"));
+        assert!(report.contains("database reopened after privacy setup retry"));
+        assert!(!report.contains("private-person@example.com"));
+    }
 
     fn localhost(port: u16) -> SocketAddr {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)

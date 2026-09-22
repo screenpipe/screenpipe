@@ -15,6 +15,9 @@ import {
 import { formatClock } from "@/lib/utils/meeting-format";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { nativeCalendarLabel } from "./calendar-connect-dialog";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 export type ComingUpStatus =
   | "loading"
@@ -63,9 +66,9 @@ function relativeDayLabel(date: Date): string | null {
   const diffDays = Math.round(
     (today.getTime() - candidate.getTime()) / (24 * 60 * 60 * 1000),
   );
-  if (diffDays === 0) return "today";
-  if (diffDays === -1) return "tomorrow";
-  if (diffDays === 1) return "yesterday";
+  if (diffDays === 0) return "Today";
+  if (diffDays === -1) return "Tomorrow";
+  if (diffDays === 1) return "Yesterday";
   return null;
 }
 
@@ -77,6 +80,7 @@ export function ComingUp({
   onStart,
   meetingActive,
 }: ComingUpProps) {
+
   const trimmed = events.slice(0, MAX_EVENTS);
   const buckets = bucketByDay(trimmed);
   const platform = usePlatform();
@@ -170,10 +174,10 @@ function ComingUpEmptyState({
   const loading = status === "loading";
   const needsAttention = status === "error";
   const title = loading
-    ? "checking calendars"
+    ? "Checking calendars"
     : needsAttention
-      ? "calendar needs attention"
-      : "no upcoming meetings";
+      ? "Calendar needs attention"
+      : "No upcoming meetings";
   const body = needsAttention
     ? "Review your calendar connections."
     : connectedLabel
@@ -205,7 +209,7 @@ function ComingUpEmptyState({
         className="gap-2 normal-case tracking-normal border-border bg-background text-foreground hover:bg-muted hover:text-foreground active:bg-muted disabled:opacity-100 disabled:bg-muted/40 disabled:text-muted-foreground disabled:border-border shrink-0"
       >
         <Settings2 className="h-3.5 w-3.5" />
-        calendars
+        Calendars
       </Button>
     </div>
   );
@@ -222,12 +226,13 @@ function DayBlock({
   onStart: (event: CalendarEvent) => void | Promise<void>;
   meetingActive: boolean;
 }) {
+  const uiLocale = useUiLocale();
   const day = String(date.getDate()).padStart(2, "0");
   const month = date
-    .toLocaleString(undefined, { month: "short" })
+    .toLocaleString(uiLocale, { month: "short" })
     .toLowerCase();
   const dow = date
-    .toLocaleString(undefined, { weekday: "short" })
+    .toLocaleString(uiLocale, { weekday: "short" })
     .toLowerCase();
   const rel = relativeDayLabel(date);
 
@@ -240,7 +245,7 @@ function DayBlock({
         <div className="text-[11px] text-muted-foreground mt-1.5">{month}</div>
         <div className="text-[11px] text-muted-foreground/70 mt-0.5">{dow}</div>
         {rel && (
-          <div className="text-[10px] uppercase tracking-[0.15em] text-foreground/80 mt-2">
+          <div className="text-[10px] normal-case tracking-[0.15em] text-foreground/80 mt-2">
             {rel}
           </div>
         )}
@@ -268,6 +273,8 @@ function ComingUpRow({
   onStart: (event: CalendarEvent) => void | Promise<void>;
   disabled: boolean;
 }) {
+
+  const ui = useGT();
   const startsIn = formatStartsIn(event.start);
   const attendeeCount = event.attendees?.filter(Boolean).length ?? 0;
   const isImminent = (() => {
@@ -286,8 +293,8 @@ function ComingUpRow({
         )}
         title={
           disabled
-            ? "a meeting is already recording"
-            : "start a meeting seeded from this event"
+            ? ui("A meeting is already recording")
+            : ui("Start a meeting seeded from this event")
         }
       >
         <div
@@ -302,11 +309,11 @@ function ComingUpRow({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-sm font-medium text-foreground truncate">
-              {event.title || "untitled event"}
+              {event.title || ui("Untitled event")}
             </span>
             {isImminent && (
-              <span className="shrink-0 text-[9px] uppercase tracking-[0.15em] text-foreground border border-foreground px-1 py-px">
-                {startsIn === "now" ? "now" : "soon"}
+              <span className="shrink-0 text-[9px] normal-case tracking-[0.15em] text-foreground border border-foreground px-1 py-px">
+                {startsIn === "now" ? ui("Now") : ui("Soon")}
               </span>
             )}
           </div>
@@ -320,7 +327,7 @@ function ComingUpRow({
               <>
                 <span className="text-muted-foreground/60">·</span>
                 <span>
-                  {attendeeCount} {attendeeCount === 1 ? "person" : "people"}
+                  {attendeeCount} {attendeeCount === 1 ? ui("person") : ui("people")}
                 </span>
               </>
             )}

@@ -56,6 +56,23 @@ describe("HomeCardAgentActions", () => {
     vi.clearAllMocks();
   });
 
+  it("expands the optional stack without launching and restores it on Escape", () => {
+    render(<HomeCardAgentActions pipe={DAY_RECAP} placement="toolbar" stacked />);
+    const trigger = screen.getByRole("button", { name: "Choose an AI agent" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Run in Claude" })).not.toBeInTheDocument();
+    fireEvent.focus(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const claude = screen.getByRole("button", { name: "Run in Claude" });
+    fireEvent.keyDown(claude, { key: "Escape" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(mocks.openUrl).not.toHaveBeenCalled();
+    expect(mocks.copyTextToClipboard).not.toHaveBeenCalled();
+  });
+
   it("offers named Claude, Cursor, and Codex actions and tooltips", async () => {
     render(<HomeCardAgentActions pipe={DAY_RECAP} />);
 
@@ -82,6 +99,13 @@ describe("HomeCardAgentActions", () => {
       expect(button).toHaveAccessibleDescription(`Run in ${agent}`);
       fireEvent.blur(button);
     }
+  });
+
+  it("keeps workflow toolbar launchers visible and in document flow", () => {
+    render(<HomeCardAgentActions pipe={DAY_RECAP} placement="toolbar" />);
+    const actions = screen.getByRole("group", { name: "Run Day Recap in another agent" });
+    expect(actions).toHaveClass("opacity-100", "pointer-events-auto");
+    expect(actions).not.toHaveClass("relative", "absolute", "z-20", "opacity-0", "-translate-y-1/2");
   });
 
   it("centers the action cluster over compact chips", () => {
@@ -141,7 +165,7 @@ describe("HomeCardAgentActions", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("opened"),
+      expect(screen.getByRole("status")).toHaveTextContent("Opened"),
     );
     const prompt = buildHomeCardAgentPrompt(DAY_RECAP, "claude");
     expect(mocks.copyTextToClipboard).toHaveBeenCalledWith(prompt);
@@ -187,7 +211,7 @@ describe("HomeCardAgentActions", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("opened"),
+      expect(screen.getByRole("status")).toHaveTextContent("Opened"),
     );
     expect(mocks.capture).toHaveBeenCalledWith(
       "home_card_agent_handoff_clicked",
@@ -219,7 +243,7 @@ describe("HomeCardAgentActions", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("copied"),
+      expect(screen.getByRole("status")).toHaveTextContent("Copied"),
     );
     expect(mocks.capture).toHaveBeenCalledWith(
       "home_card_agent_handoff_completed",
@@ -247,7 +271,7 @@ describe("HomeCardAgentActions", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("unavailable"),
+      expect(screen.getByRole("status")).toHaveTextContent("Unavailable"),
     );
     const prompt = buildHomeCardAgentPrompt(DAY_RECAP, "cursor");
     expect(mocks.openUrl).toHaveBeenCalledWith(

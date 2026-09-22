@@ -1,0 +1,198 @@
+{
+  "database_id": "0ead31f8-872a-4b45-9f9f-d6bbe527c919",
+  "generation": "d9ae4f35-2564-4f49-a825-0a7fdeb20bfc",
+  "frames": 23,
+  "tables": [
+    {
+      "table": "_sqlx_migrations",
+      "rows": 116,
+      "sha256": "5f1f93ad6802725c08762ee80badf5f6f28d0680846563eab299b1d3edac3a61"
+    },
+    {
+      "table": "activity_actions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "activity_evidence",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "activity_intervals",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "activity_ledger_state",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "activity_tasks",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "audio_chunks",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "audio_tags",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "audio_transcriptions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "diarization_runs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "diarization_segments",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "display_layout",
+      "rows": 1,
+      "sha256": "6276b802984af91edb9c3ec8a54650baaef2da8f83b99c3d04cefd554e56e4c8"
+    },
+    {
+      "table": "elements",
+      "rows": 302,
+      "sha256": "11045bd6236efea46095f2d506ad7d80f801f0193d3ee063f51b5f04b52d1f99"
+    },
+    {
+      "table": "feedback",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "frames",
+      "rows": 23,
+      "sha256": "9396d546abeea2e80ffb5824aaaef2af1184a2ec154818f3740ebf8f97ba6663"
+    },
+    {
+      "table": "meeting_transcript_segments",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "meetings",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "memories",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "output_search_index",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "outputs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "pipe_event_runs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "pipe_executions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "pipe_scheduler_state",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "semantic_actor_aliases",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "semantic_actors",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "semantic_item_actors",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "semantic_items",
+      "rows": 1,
+      "sha256": "a14be6afec791ac3990e16254b06873ce46efaa30b3f781f2ee5129feeaaef6b"
+    },
+    {
+      "table": "semantic_run_items",
+      "rows": 1,
+      "sha256": "25345362ca16e3e36f0f395b26e2d95e18946b3cb07db41f7f496e66f224a763"
+    },
+    {
+      "table": "semantic_runs",
+      "rows": 1,
+      "sha256": "117b0fffddd03aa2ff0510c2e047ff5f6e710b91262355031a479988e17aec52"
+    },
+    {
+      "table": "speaker_embeddings",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "speaker_identity_evidence",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "speakers",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "sqlite_sequence",
+      "rows": 9,
+      "sha256": "ea682e970a7bac268eae1cdbf8a673616d8223bb396069221c0d73a1aeb6d638"
+    },
+    {
+      "table": "tags",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "table": "ui_events",
+      "rows": 6,
+      "sha256": "7f28a2df41ddd8d0eb7e9e08b013064770df00dd157024673a632670e39b353a"
+    },
+    {
+      "table": "video_chunks",
+      "rows": 1,
+      "sha256": "877363632c18993c585851d9cc2e5ed220b5399d00cfea095d258b170840d196"
+    },
+    {
+      "table": "vision_tags",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "source_bytes": 6037504,
+  "index_bytes": 6901760,
+  "payload_bytes": 33814,
+  "source_identity": null,
+  "allocated_before_bytes": 6037504,
+  "allocated_after_bytes": 6944768
+}

@@ -45,6 +45,7 @@ import { readFile } from "@tauri-apps/plugin-fs";
 import posthog from "posthog-js";
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { Button } from "@/components/ui/button";
+import { LANGUAGE_OPTIONS } from "@/lib/language";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -220,6 +221,9 @@ import {
   hostedAiAllowanceForModel,
   useUsageStatus,
 } from "@/lib/hooks/use-usage-status";
+import { useGT, useMessages } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
 // Transcript window handed to a chat turn. Long meetings are windowed to the
@@ -300,6 +304,10 @@ export function NoteView({
   transcriptOpenRequestKey,
   initialWorkspaceTab,
 }: NoteViewProps) {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
+  const uiMessages = useMessages();
   const { toast } = useToast();
   const [title, setTitle] = useState(meeting.title ?? "");
   const [attendees, setAttendees] = useState(meeting.attendees ?? "");
@@ -455,11 +463,11 @@ export function NoteView({
       return;
     }
     toast({
-      title: "couldn't send",
+      title: ui("Couldn't send"),
       description: result.error,
       variant: "destructive",
     });
-  }, [oneTapSend, toast]);
+  }, [oneTapSend, toast, uiLanguage]);
 
   const summaryPipeSlug = settings.meetingSummaryPipeSlug || "meeting-summary";
   // The picker offers ACP presets behind the same rollout gate as the rest of
@@ -539,8 +547,8 @@ export function NoteView({
         setSummaryPresetIds(previousPresetIds);
         console.error("failed to save meeting summary model", error);
         toast({
-          title: "couldn't change summary model",
-          description: "your previous model is still selected.",
+          title: ui("Couldn't change summary model"),
+          description: ui("Your previous model is still selected."),
           variant: "destructive",
         });
         return false;
@@ -548,12 +556,7 @@ export function NoteView({
         setSummaryPresetSaving(false);
       }
     },
-    [
-      summaryPipeSlug,
-      summaryPresetIds,
-      summaryPresetSaving,
-      toast,
-    ],
+    [summaryPipeSlug, summaryPresetIds, summaryPresetSaving, toast, uiLanguage],
   );
   const summaryPresentation = meetingSummaryPresentation({
     isLive,
@@ -823,8 +826,8 @@ export function NoteView({
       if (paths.length === 0) return;
       if (imagePaths.length === 0) {
         toast({
-          title: "couldn't insert image",
-          description: "drop a png, jpg, gif, webp, bmp, or svg file.",
+          title: ui("Couldn't insert image"),
+          description: ui("Drop a png, jpg, gif, webp, bmp, or svg file."),
           variant: "destructive",
         });
         return;
@@ -846,7 +849,7 @@ export function NoteView({
       } catch (err) {
         console.error("failed to insert dropped meeting note image", err);
         toast({
-          title: "couldn't insert image",
+          title: ui("Couldn't insert image"),
           description: String(err),
           variant: "destructive",
         });
@@ -1159,9 +1162,9 @@ export function NoteView({
     });
     if (!canSummarizeMeeting) {
       toast({
-        title: "stop the meeting first",
+        title: ui("Stop the meeting first"),
         description:
-          "summaries run on the saved transcript after the meeting ends.",
+          ui("Summaries run on the saved transcript after the meeting ends."),
       });
       return;
     }
@@ -1193,8 +1196,8 @@ export function NoteView({
     } catch (err) {
       console.error("failed to summarize meeting", err);
       toast({
-        title: "couldn't start summary",
-        description: "try again in a moment.",
+        title: ui("Couldn't start summary"),
+        description: ui("Try again in a moment."),
         variant: "destructive",
       });
     } finally {
@@ -1206,9 +1209,9 @@ export function NoteView({
     if (retranscribing || summaryWorking) return;
     if (!meeting.meeting_end) {
       toast({
-        title: "stop the meeting first",
+        title: ui("Stop the meeting first"),
         description:
-          "batch retranscribe runs on the saved audio after a meeting ends.",
+          ui("Batch retranscribe runs on the saved audio after a meeting ends."),
       });
       return;
     }
@@ -1235,7 +1238,7 @@ export function NoteView({
       }
       setTranscriptRefreshKey((key) => key + 1);
       toast({
-        title: "transcript refreshed",
+        title: ui("Transcript refreshed"),
         description: meetingRetranscribeSuccessCopy({
           batchesProcessed: body?.batches_processed,
           autoSummaryEnabled,
@@ -1246,7 +1249,7 @@ export function NoteView({
     } catch (err) {
       console.error("failed to retranscribe meeting", err);
       toast({
-        title: "couldn't retranscribe",
+        title: ui("Couldn't retranscribe"),
         description: String(err),
         variant: "destructive",
       });
@@ -1276,9 +1279,9 @@ export function NoteView({
         } catch (saveErr) {
           console.error("failed to save meeting note before stop", saveErr);
           toast({
-            title: "couldn't save notes",
+            title: ui("Couldn't save notes"),
             description:
-              "stopping anyway — your latest edits may not be saved.",
+              ui("Stopping anyway — your latest edits may not be saved."),
             variant: "destructive",
           });
         }
@@ -1287,7 +1290,7 @@ export function NoteView({
     } catch (err) {
       console.error("failed to stop meeting", err);
       toast({
-        title: "couldn't stop meeting",
+        title: ui("Couldn't stop meeting"),
         description: String(err),
         variant: "destructive",
       });
@@ -1300,9 +1303,9 @@ export function NoteView({
     if (exporting) return;
     if (!meeting.meeting_end) {
       toast({
-        title: "stop the meeting first",
+        title: ui("Stop the meeting first"),
         description:
-          "mp4 export runs on the saved frames and audio after a meeting ends.",
+          ui("Mp4 export runs on the saved frames and audio after a meeting ends."),
       });
       return;
     }
@@ -1325,7 +1328,7 @@ export function NoteView({
     } catch (err) {
       console.error("failed to open save dialog", err);
       toast({
-        title: "couldn't open save dialog",
+        title: ui("Couldn't open save dialog"),
         description: String(err),
         variant: "destructive",
       });
@@ -1335,9 +1338,9 @@ export function NoteView({
 
     setExporting(true);
     toast({
-      title: "exporting mp4…",
+      title: ui("Exporting mp4…"),
       description:
-        "stitching frames and audio — this can take a minute for long meetings.",
+        ui("Stitching frames and audio — this can take a minute for long meetings."),
     });
     let jobId: string | null = null;
     let unlisten: (() => void) | null = null;
@@ -1359,7 +1362,7 @@ export function NoteView({
             ? (summary.file_size_bytes / (1024 * 1024)).toFixed(1)
             : null;
           toast({
-            title: "mp4 exported",
+            title: ui("Mp4 exported"),
             description: [
               `${summary?.frame_count ?? 0} frames`,
               `${summary?.audio_chunk_count ?? 0} audio chunks`,
@@ -1383,7 +1386,7 @@ export function NoteView({
             stack: event.error,
           });
           toast({
-            title: "couldn't export mp4",
+            title: ui("Couldn't export mp4"),
             description: event.error,
             variant: "destructive",
           });
@@ -1410,7 +1413,7 @@ export function NoteView({
         stack: err instanceof Error ? (err.stack ?? err.message) : String(err),
       });
       toast({
-        title: "couldn't export mp4",
+        title: ui("Couldn't export mp4"),
         description: String(err),
         variant: "destructive",
       });
@@ -1447,11 +1450,11 @@ export function NoteView({
       const ctx = await copyMeetingToClipboard(fresh);
       setMeetingCtx(ctx);
       confirmCopied("meeting");
-      toast({ title: "copied to clipboard" });
+      toast({ title: ui("Copied to clipboard") });
     } catch (err) {
       console.error("failed to copy meeting", err);
       toast({
-        title: "couldn't copy",
+        title: ui("Couldn't copy"),
         description: String(err),
         variant: "destructive",
       });
@@ -1466,15 +1469,15 @@ export function NoteView({
     try {
       const copiedTranscript = await copyMeetingTranscript(currentMeeting());
       if (!copiedTranscript) {
-        toast({ title: "nothing transcribed yet" });
+        toast({ title: ui("Nothing transcribed yet") });
         return;
       }
       confirmCopied("transcript");
-      toast({ title: "transcript copied" });
+      toast({ title: ui("Transcript copied") });
     } catch (err) {
       console.error("failed to copy transcript", err);
       toast({
-        title: "couldn't copy transcript",
+        title: ui("Couldn't copy transcript"),
         description: String(err),
         variant: "destructive",
       });
@@ -1493,15 +1496,15 @@ export function NoteView({
         extractMeetingSummary(note),
       );
       if (!shared) {
-        toast({ title: "no summary to copy yet" });
+        toast({ title: ui("No summary to copy yet") });
         return;
       }
       confirmCopied("summary");
-      toast({ title: "summary copied", description: "paste it anywhere" });
+      toast({ title: ui("Summary copied"), description: ui("Paste it anywhere") });
     } catch (err) {
       console.error("failed to copy meeting summary", err);
       toast({
-        title: "couldn't copy summary",
+        title: ui("Couldn't copy summary"),
         description: String(err),
         variant: "destructive",
       });
@@ -1514,11 +1517,11 @@ export function NoteView({
         currentMeeting(),
         extractMeetingSummary(note),
       );
-      if (!shared) toast({ title: "no summary to send yet" });
+      if (!shared) toast({ title: ui("No summary to send yet") });
     } catch (err) {
       console.error("failed to open email draft", err);
       toast({
-        title: "couldn't open your email app",
+        title: ui("Couldn't open your email app"),
         description: String(err),
         variant: "destructive",
       });
@@ -1535,7 +1538,7 @@ export function NoteView({
       onBack();
     } catch (err) {
       toast({
-        title: "couldn't delete meeting",
+        title: ui("Couldn't delete meeting"),
         description: String(err),
         variant: "destructive",
       });
@@ -1543,8 +1546,6 @@ export function NoteView({
   };
 
   const attendeeCount = parseAttendees(attendees).length;
-  const englishOnly =
-    settings.languages.length === 1 && settings.languages[0] === "english";
   const meetingDateLabel = formatDateOnly(meeting.meeting_start);
   const meetingStartClock = formatClock(meeting.meeting_start);
   const meetingEndClock = meeting.meeting_end
@@ -1584,18 +1585,6 @@ export function NoteView({
       !!meetingTitle && !!eventTitle && meetingTitle === eventTitle;
     return { link, mapped };
   }, [calendarEvents, dismissedJoinUrl, isLive, meeting, meetingCtx]);
-
-  const setLanguagePreference = async (languages: string[]) => {
-    try {
-      await updateSettings({ languages });
-    } catch (err) {
-      toast({
-        title: "couldn't update language",
-        description: String(err),
-        variant: "destructive",
-      });
-    }
-  };
 
   const handleResumeAfterInactivity = async () => {
     setInactivityPrompt(false);
@@ -1661,12 +1650,12 @@ export function NoteView({
         );
       }
       toast({
-        title: "microphone capture resumed",
-        description: "Transcript should start once speech is detected.",
+        title: ui("Microphone capture resumed"),
+        description: ui("Transcript should start once speech is detected."),
       });
     } catch (err) {
       toast({
-        title: "couldn't resume microphone",
+        title: ui("Couldn't resume microphone"),
         description: String(err),
         variant: "destructive",
       });
@@ -1681,7 +1670,7 @@ export function NoteView({
       setDismissedJoinUrl(link.url);
     } catch (err) {
       toast({
-        title: "couldn't open meeting",
+        title: ui("Couldn't open meeting"),
         description: String(err),
         variant: "destructive",
       });
@@ -1695,62 +1684,62 @@ export function NoteView({
   const summaryStatus = (() => {
     if (isLive) {
       return {
-        title: captureState?.label ?? "recording meeting",
-        detail: "notes and transcript save automatically",
+        title: captureState?.label ?? ui("Recording meeting"),
+        detail: ui("notes and transcript save automatically"),
       };
     }
     if (resuming) {
       return {
-        title: "resuming meeting",
-        detail: "reopening this note for live capture",
+        title: ui("Resuming meeting"),
+        detail: ui("reopening this note for live capture"),
       };
     }
     if (summaryPresentation.transitionPhase === "finalizing") {
       return {
-        title: "meeting saved",
+        title: ui("Meeting saved"),
         detail:
-          "finishing the transcript before summary · you can safely leave",
+          ui("finishing the transcript before summary · you can safely leave"),
       };
     }
     if (summaryWorking) {
       return {
         title: retranscriptionSummaryRefreshWorking
-          ? "refreshing summary"
-          : "summarizing meeting",
+          ? ui("Refreshing summary")
+          : ui("Summarizing meeting"),
         detail: retranscriptionSummaryRefreshWorking
-          ? "using the refreshed transcript · it appears here live"
-          : "you can leave · it appears here live and saves when finished",
+          ? ui("using the refreshed transcript · it appears here live")
+          : ui("you can leave · it appears here live and saves when finished"),
       };
     }
     if (visibleSummaryLifecycle.kind === "completed") {
       return {
-        title: "summary ready",
-        detail: "saved to this meeting note",
+        title: ui("Summary ready"),
+        detail: ui("saved to this meeting note"),
       };
     }
     if (visibleSummaryLifecycle.kind === "failed") {
-      const failure = meetingSummaryFailure(visibleSummaryLifecycle.execution);
+      const failure = meetingSummaryFailure(visibleSummaryLifecycle.execution, uiMessages);
       return {
         // "Nothing to summarize" is a factual outcome, not something the user
         // needs to fix — keep "needs attention" for actionable failures only.
         title:
           failure.kind === "nothing_to_summarize"
-            ? "nothing to summarize"
-            : "summary needs attention",
+            ? ui("Nothing to summarize")
+            : ui("Summary needs attention"),
         detail: failure.copy,
       };
     }
     return {
-      title: "meeting saved",
+      title: ui("Meeting saved"),
       detail:
         autoSummaryEnabled === false
-          ? "automatic summary is off"
-          : "notes and transcript saved locally",
+          ? ui("automatic summary is off")
+          : ui("notes and transcript saved locally"),
     };
   })();
   const summaryFailure =
     visibleSummaryLifecycle.kind === "failed"
-      ? meetingSummaryFailure(visibleSummaryLifecycle.execution)
+      ? meetingSummaryFailure(visibleSummaryLifecycle.execution, uiMessages)
       : null;
   const summaryUpgrade = summaryFailure?.upgrade ?? null;
   const handleSummaryUpgrade = useCallback(async () => {
@@ -1771,12 +1760,12 @@ export function NoteView({
     } catch (error) {
       console.error("failed to open meeting summary upgrade", error);
       toast({
-        title: "couldn't open upgrade options",
-        description: "try again from Settings → Account.",
+        title: ui("Couldn't open upgrade options"),
+        description: ui("Try again from Settings → Account."),
         variant: "destructive",
       });
     }
-  }, [summaryUpgrade, toast]);
+  }, [summaryUpgrade, toast, uiLanguage]);
   // Notes and Summary now own their summary lifecycle in the reading area.
   // Repeating the same state in the footer made the page look like two jobs
   // were running. Transcript still gets the global footer because it has no
@@ -2111,7 +2100,7 @@ export function NoteView({
   const summaryMenuItems: MeetingMenuGroup["items"] = [
     {
       key: "summary-model",
-      label: "summary model",
+      label: ui("Summary model"),
       icon: Sparkles,
       disabled:
         !summaryPresetReady ||
@@ -2146,37 +2135,37 @@ export function NoteView({
     });
   }
   const meetingMenuGroups: MeetingMenuGroup[] = [
-    { label: "summary", items: summaryMenuItems },
+    { label: ui("Summary"), items: summaryMenuItems },
     ...(isLive || resuming
       ? []
       : [
           {
-            label: "meeting",
+            label: ui("Meeting"),
             items: [
               {
                 key: "resume",
-                label: resuming ? "resuming meeting" : "resume meeting",
+                label: resuming ? ui("Resuming meeting") : ui("Resume meeting"),
                 icon: resuming ? Loader2 : Play,
                 onSelect: () => void onResume(),
                 disabled: resuming,
               },
               {
                 key: "retranscribe",
-                label: "retranscribe saved audio",
+                label: ui("Retranscribe saved audio"),
                 icon: retranscribing ? Loader2 : AudioLines,
                 onSelect: () => setConfirmingAction("retranscribe"),
                 disabled: retranscribing || summaryWorking,
               },
               {
                 key: "export",
-                label: "export to mp4",
+                label: ui("Export to mp4"),
                 icon: exporting ? Loader2 : Download,
                 onSelect: () => void handleExport(),
                 disabled: exporting,
               },
               {
                 key: "delete",
-                label: "delete meeting",
+                label: ui("Delete meeting"),
                 icon: Trash2,
                 onSelect: () => setConfirmingAction("delete"),
                 destructive: true,
@@ -2198,34 +2187,34 @@ export function NoteView({
       {confirmingAction === "retranscribe" ? (
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>retranscribe meeting</AlertDialogTitle>
+            <AlertDialogTitle>Retranscribe meeting</AlertDialogTitle>
             <AlertDialogDescription>
-              rebuild the transcript from saved audio. this replaces the current
+              Rebuild the transcript from saved audio. This replaces the current
               transcript and refreshes the summary when automatic summary is on.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>cancel</AlertDialogCancel>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => void handleRetranscribe()}>
-              retranscribe
+              Retranscribe
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       ) : confirmingAction === "delete" ? (
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>delete meeting</AlertDialogTitle>
+            <AlertDialogTitle>Delete meeting</AlertDialogTitle>
             <AlertDialogDescription>
-              your notes and transcript will be permanently deleted.
+              Your notes and transcript will be permanently deleted.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>cancel</AlertDialogCancel>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               onClick={() => void handleDelete()}
             >
-              delete
+              Delete
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -2249,7 +2238,7 @@ export function NoteView({
         <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-background/60">
           <div className="border border-foreground bg-foreground px-12 py-10 text-background">
             <span className="text-sm font-medium tracking-tight">
-              drop image to add to note
+              Drop image to add to note
             </span>
           </div>
         </div>
@@ -2263,23 +2252,23 @@ export function NoteView({
             variant="ghost"
             size="sm"
             onClick={onBack}
-            aria-label="back to meetings"
+            aria-label={ui("Back to meetings")}
             className={cn(
               MEETING_QUIET_CONTROL_CLASS,
               "-ml-2 h-7 gap-1.5 px-2 text-xs",
             )}
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            meetings
+            Meetings
           </Button>
 
           <div className="mt-1 flex min-w-0 items-center gap-2">
             <input
               value={title}
               onChange={(event) => setTitle(event.target.value)}
-              placeholder="untitled meeting"
+              placeholder={ui("Untitled meeting")}
               spellCheck={false}
-              aria-label="meeting title"
+              aria-label={ui("Meeting title")}
               className="min-w-0 flex-1 bg-transparent text-xl font-medium leading-tight tracking-tight text-foreground placeholder:text-muted-foreground/40 focus:outline-none sm:text-2xl"
             />
           </div>
@@ -2308,7 +2297,7 @@ export function NoteView({
             {meeting.meeting_app && meeting.meeting_app !== "manual" && (
               <>
                 <span aria-hidden>·</span>
-                <span>{meeting.meeting_app.toLowerCase()}</span>
+                <span>{meeting.meeting_app}</span>
               </>
             )}
             <span className="ml-1">
@@ -2344,9 +2333,9 @@ export function NoteView({
               <button
                 type="button"
                 data-testid="meeting-chat-toggle"
-                aria-label="ask about this meeting"
+                aria-label={ui("Ask about this meeting")}
                 aria-pressed={chatOpen}
-                title="ask about this meeting"
+                title={ui("Ask about this meeting")}
                 onClick={() => {
                   setChatOpen((open) => {
                     if (!open) {
@@ -2456,7 +2445,7 @@ export function NoteView({
               value={note}
               onChange={setNote}
               placeholder={
-                'write what matters — it helps focus the summary · "/" for blocks'
+                ui("Write what matters — it helps focus the summary · \"/\" for blocks")
               }
               readOnly={summaryWorking}
               summaryRevealKey={summaryRevealKey}
@@ -2484,8 +2473,6 @@ export function NoteView({
               devices={audioStatusDevices}
               isLive={isLive}
               settings={settings}
-              englishOnly={englishOnly}
-              onLanguagePreference={setLanguagePreference}
             />
           }
         />
@@ -2511,9 +2498,9 @@ export function NoteView({
                     retryable: summaryFailure.retryable,
                     upgrade: summaryUpgrade
                       ? {
-                          label: `upgrade to ${QUOTA_PLAN_LABELS[
+                          label: ui("Upgrade to {value1}", { value1: QUOTA_PLAN_LABELS[
                             summaryUpgrade.requiredPlan
-                          ].toLowerCase()}`,
+                          ].toLowerCase() }),
                           onSelect: () => void handleSummaryUpgrade(),
                         }
                       : undefined,
@@ -2728,7 +2715,7 @@ export function NoteView({
                         className="underline underline-offset-2 transition-colors hover:text-foreground"
                         onClick={() => void handleSummaryUpgrade()}
                       >
-                        upgrade to{" "}
+                        Upgrade to{" "}
                         {QUOTA_PLAN_LABELS[
                           summaryUpgrade.requiredPlan
                         ].toLowerCase()}
@@ -2757,7 +2744,7 @@ export function NoteView({
                       onClick={() => void handleStopClick()}
                       disabled={stopping || savingBeforeStop}
                       aria-label={stopActionLabel}
-                      className="h-9 gap-2 rounded-none px-3 font-mono text-[10px] uppercase tracking-[0.1em] disabled:border-border disabled:bg-muted/40 disabled:text-muted-foreground disabled:opacity-100"
+                      className="h-9 gap-2 rounded-md px-3 font-mono text-[10px] normal-case tracking-[0.1em] disabled:border-border disabled:bg-muted/40 disabled:text-muted-foreground disabled:opacity-100"
                     >
                       {stopping || savingBeforeStop ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2796,7 +2783,7 @@ function MeetingControlTooltip({
       <TooltipTrigger asChild>
         <span className="inline-flex">{children}</span>
       </TooltipTrigger>
-      <TooltipContent side="top" className="rounded-none font-mono text-xs">
+      <TooltipContent side="top" className="rounded-lg font-mono text-xs">
         {label}
       </TooltipContent>
     </Tooltip>
@@ -2807,17 +2794,20 @@ function AudioHealthButton({
   devices,
   isLive,
   settings,
-  englishOnly,
-  onLanguagePreference,
 }: {
   devices: AudioStatusDevice[];
   isLive: boolean;
   settings: Settings;
-  englishOnly: boolean;
-  onLanguagePreference: (languages: string[]) => void | Promise<void>;
 }) {
+
+  const ui = useGT();
   const inputs = devices.filter((device) => device.kind === "input");
   const outputs = devices.filter((device) => device.kind === "output");
+  const languageLabel = settings.languages.length === 0
+    ? ui("Auto-detect")
+    : settings.languages
+        .map((code) => LANGUAGE_OPTIONS.find((language) => language.code === code)?.name ?? code)
+        .join(", ");
   const selectedDevices = (settings.audioDevices ?? []).filter(
     (device) => device && device !== "default",
   );
@@ -2847,11 +2837,11 @@ function AudioHealthButton({
           variant="ghost"
           size="sm"
           className={cn(
-            "relative h-7 w-7 rounded-none p-0",
+            "relative h-7 w-7 rounded-md p-0",
             open && "invisible",
           )}
-          title="audio health"
-          aria-label="audio health"
+          title={ui("Audio health")}
+          aria-label={ui("Audio health")}
         >
           <AudioLines className="h-3.5 w-3.5" />
           {anyAudioActive && (
@@ -2875,14 +2865,14 @@ function AudioHealthButton({
                 <span className="absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-foreground" />
               )}
             </span>
-            audio settings
+            Audio settings
           </div>
           <button
             type="button"
             onClick={openAudioSettings}
             className="flex h-7 w-7 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
-            title="open audio settings"
-            aria-label="open audio settings"
+            title={ui("Open audio settings")}
+            aria-label={ui("Open audio settings")}
           >
             <ExternalLink className="h-3.5 w-3.5" />
           </button>
@@ -2891,7 +2881,7 @@ function AudioHealthButton({
         <div className="px-3 py-3">
           <AudioDeviceRow
             icon={<Mic2 className="h-3.5 w-3.5" />}
-            label="audio input"
+            label={ui("Audio input")}
             value={audioDeviceLabel({
               devices: inputs,
               selectedDevices,
@@ -2905,7 +2895,7 @@ function AudioHealthButton({
           />
           <AudioDeviceRow
             icon={<Volume2 className="h-3.5 w-3.5" />}
-            label="system audio"
+            label={ui("System audio")}
             value={audioDeviceLabel({
               devices: outputs,
               selectedDevices,
@@ -2919,14 +2909,14 @@ function AudioHealthButton({
           />
 
           <div className="mt-3 grid grid-cols-[112px_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-[11px] leading-tight">
-            <span className="text-muted-foreground">transcription engine</span>
+            <span className="text-muted-foreground">Transcription engine</span>
             <span className="truncate">
               {liveEnabled
                 ? providerLabel(
                     settings.meetingLiveTranscriptionProvider,
                     settings.audioTranscriptionEngine,
                   )
-                : "off"}
+                : ui("Off")}
             </span>
           </div>
         </div>
@@ -2934,36 +2924,11 @@ function AudioHealthButton({
         <div className="flex items-center justify-between gap-3 border-t border-border px-3 py-2.5">
           <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
             <Languages className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">language</span>
+            <span className="truncate">Language</span>
           </div>
-          <div className="inline-flex shrink-0 border border-border">
-            <button
-              type="button"
-              onClick={() => void onLanguagePreference(["english"])}
-              className={cn(
-                "flex h-8 min-w-16 items-center justify-center gap-1.5 px-2 text-[11px] transition-colors hover:bg-muted",
-                englishOnly
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground",
-              )}
-            >
-              <span>english</span>
-              {englishOnly && <Check className="h-3 w-3" />}
-            </button>
-            <button
-              type="button"
-              onClick={() => void onLanguagePreference([])}
-              className={cn(
-                "flex h-8 min-w-14 items-center justify-center gap-1.5 border-l border-border px-2 text-[11px] transition-colors hover:bg-muted",
-                !englishOnly
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground",
-              )}
-            >
-              <span>auto</span>
-              {!englishOnly && <Check className="h-3 w-3" />}
-            </button>
-          </div>
+          <span className="max-w-[170px] truncate text-xs" title={languageLabel}>
+            {languageLabel}
+          </span>
         </div>
       </PopoverContent>
     </Popover>
@@ -2981,7 +2946,8 @@ function JoinMeetingSuggestion({
   onJoin: () => void;
   onDismiss: () => void;
 }) {
-  const label = mapped ? link.label : "nearby calendar event — join the call?";
+  const ui = useGT();
+  const label = mapped ? link.label : "Nearby calendar event — join the call?";
   return (
     <div className="mb-3 flex justify-center">
       <div className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-muted px-1 py-1 shadow-sm">
@@ -2998,8 +2964,8 @@ function JoinMeetingSuggestion({
           type="button"
           onClick={onDismiss}
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
-          aria-label="dismiss join suggestion"
-          title="dismiss"
+          aria-label={ui("Dismiss join suggestion")}
+          title={ui("Dismiss")}
         >
           <X className="h-4 w-4" />
         </button>
@@ -3017,6 +2983,7 @@ function InactivityResumeBanner({
   onDismiss: () => void;
   onResume: () => void;
 }) {
+  const ui = useGT();
   return (
     <div className="mb-3 flex items-center justify-between gap-3 border border-border bg-background px-3 py-2 shadow-sm">
       <div className="flex min-w-0 items-center gap-3">
@@ -3030,32 +2997,32 @@ function InactivityResumeBanner({
           type="button"
           variant="ghost"
           size="sm"
-          className="h-8 rounded-none px-2 text-muted-foreground hover:text-foreground"
+          className="h-8 rounded-md px-2 text-muted-foreground hover:text-foreground"
           onClick={onDismiss}
         >
-          dismiss
+          Dismiss
         </Button>
         <Button
           type="button"
           variant="secondary"
           size="sm"
-          className="h-8 rounded-none px-3"
+          className="h-8 rounded-md px-3"
           onClick={onResume}
           disabled={resuming}
         >
           {resuming ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            "resume"
+            ui("Resume")
           )}
         </Button>
         <Button
           type="button"
           variant="ghost"
           size="sm"
-          className="h-8 w-8 rounded-none p-0 text-muted-foreground hover:text-foreground sm:hidden"
+          className="h-8 w-8 rounded-md p-0 text-muted-foreground hover:text-foreground sm:hidden"
           onClick={onDismiss}
-          aria-label="dismiss inactivity message"
+          aria-label={ui("Dismiss inactivity message")}
         >
           <X className="h-3.5 w-3.5" />
         </Button>
@@ -3075,6 +3042,7 @@ function LiveCaptureIssueBanner({
   resuming: boolean;
   onResumeInput: () => void;
 }) {
+  const ui = useGT();
   return (
     <div className="mb-3 flex items-center justify-between gap-3 border border-amber-500/30 bg-amber-500/10 px-3 py-2 shadow-sm">
       <div className="flex min-w-0 items-start gap-3">
@@ -3085,7 +3053,7 @@ function LiveCaptureIssueBanner({
           </div>
           <div className="mt-0.5 text-xs leading-5 text-muted-foreground">
             {state.description}
-            {state.recordingContinues ? " Recording continues." : ""}
+            {state.recordingContinues ? ui(" Recording continues.") : ""}
           </div>
         </div>
       </div>
@@ -3094,14 +3062,14 @@ function LiveCaptureIssueBanner({
           type="button"
           variant="secondary"
           size="sm"
-          className="h-8 shrink-0 rounded-none px-3"
+          className="h-8 shrink-0 rounded-md px-3"
           onClick={onResumeInput}
           disabled={resuming}
         >
           {resuming ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            "resume mic"
+            ui("Resume mic")
           )}
         </Button>
       )}
@@ -3137,6 +3105,7 @@ function AudioDeviceRow({
 }
 
 function AudioLevelBars({ active, level }: { active: boolean; level: number }) {
+
   const meterValue = active ? audioLevelToMeterValue(level) : 0;
   const bars = [0.45, 0.72, 1, 0.72, 0.45];
 
@@ -3186,11 +3155,12 @@ function Pill({
 }
 
 function SaveIndicator({ state }: { state: SaveState }) {
+
   if (state.kind === "saving") {
     return (
       <span className="flex items-center gap-1.5">
         <Loader2 className="h-3 w-3 animate-spin" />
-        saving…
+        Saving…
       </span>
     );
   }
@@ -3198,12 +3168,12 @@ function SaveIndicator({ state }: { state: SaveState }) {
     return (
       <span className="flex items-center gap-1.5">
         <Check className="h-3 w-3" />
-        saved · {formatClock(new Date(state.at).toISOString())}
+        Saved · {formatClock(new Date(state.at).toISOString())}
       </span>
     );
   }
   if (state.kind === "error") {
-    return <span className="text-destructive">offline — will retry</span>;
+    return <span className="text-destructive">Offline — will retry</span>;
   }
   return <span aria-hidden>&nbsp;</span>;
 }
@@ -3217,6 +3187,7 @@ function MeetingDuration({
   endIso: string | null;
   isLive: boolean;
 }) {
+
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -3416,25 +3387,25 @@ function providerLabel(
     case "selected-engine":
       return transcriptionEngineLabel(selectedEngine);
     case "deepgram-live":
-      return "deepgram live";
+      return "Deepgram live";
     case "screenpipe-cloud":
     default:
-      return "screenpipe cloud";
+      return "Screenpipe cloud";
   }
 }
 
 function transcriptionEngineLabel(engine: string) {
   switch (engine) {
     case "screenpipe-cloud":
-      return "screenpipe cloud";
+      return "Screenpipe cloud";
     case "deepgram":
-      return "deepgram";
+      return "Deepgram";
     case "whisper-large-v3-turbo":
-      return "whisper turbo";
+      return "Whisper turbo";
     case "whisper-large-v3-turbo-quantized":
-      return "whisper turbo fast";
+      return "Whisper turbo fast";
     case "openai-compatible":
-      return "openai compatible";
+      return "OpenAI compatible";
     case "disabled":
       return "off";
     default:

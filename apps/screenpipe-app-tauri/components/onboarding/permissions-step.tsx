@@ -14,6 +14,8 @@ import { usePlatform } from "@/lib/hooks/use-platform";
 import { motion } from "framer-motion";
 import posthog from "posthog-js";
 import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
+import { useGT } from "gt-react";
+
 
 interface PermissionsStepProps {
   handleNextSlide: () => void;
@@ -68,6 +70,7 @@ function PermissionRow({
   distance: number;
   onGrant: () => void;
 }) {
+
   const interactive = focused && !granted;
 
   return (
@@ -118,11 +121,11 @@ function PermissionRow({
       <div className="ml-auto shrink-0">
         {granted ? (
           <span className="font-mono text-[10px] text-muted-foreground">
-            granted
+            Granted
           </span>
         ) : interactive ? (
           <span className="font-mono text-[10px] text-muted-foreground group-hover:text-background/70">
-            grant →
+            Grant →
           </span>
         ) : null}
       </div>
@@ -134,6 +137,8 @@ export default function PermissionsStep({
   handleNextSlide,
   onProgressChange,
 }: PermissionsStepProps) {
+
+  const ui = useGT();
   const { isMac, isLoading: isPlatformLoading } = usePlatform();
   const [statuses, setStatuses] = useState<Record<string, boolean>>({});
   const [requesting, setRequesting] = useState(false);
@@ -156,16 +161,16 @@ export default function PermissionsStep({
     {
       id: "mic",
       icon: <Mic className="w-3.5 h-3.5" strokeWidth={1.5} />,
-      title: "Capture what you say",
-      subtitle: "Lets Screenpipe transcribe your voice in meetings and calls",
+      title: ui("Capture what you say"),
+      subtitle: ui("Lets Screenpipe transcribe your voice in meetings and calls"),
       check: () => commands.checkMicrophonePermission(),
       request: () => commands.requestPermission("microphone"),
     },
     {
       id: "accessibility",
       icon: <Keyboard className="w-3.5 h-3.5" strokeWidth={1.5} />,
-      title: "Read on-screen text",
-      subtitle: "Lets Screenpipe understand app content without OCR",
+      title: ui("Read on-screen text"),
+      subtitle: ui("Lets Screenpipe understand app content without OCR"),
       // Silent poll until the user asks for it, then the live tccd probe so a
       // grant made in Settings is seen without an app relaunch.
       check: () =>
@@ -181,13 +186,13 @@ export default function PermissionsStep({
     {
       id: "screen",
       icon: <Monitor className="w-3.5 h-3.5" strokeWidth={1.5} />,
-      title: "Capture your screen",
+      title: ui("Capture your screen"),
       subtitle: (
         <>
           Lets Screenpipe index what&apos;s on your screen: windows, docs,
           chats, code. {" "}
           <strong className="font-bold">
-            restart after granting this permission.
+            Restart after granting this permission.
           </strong>
         </>
       ),
@@ -379,7 +384,7 @@ export default function PermissionsStep({
       {/* Branding */}
       <div className="flex flex-col items-center mb-6">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="w-12 h-12 mb-2" src="/128x128.png" alt="screenpipe" />
+        <img className="w-12 h-12 mb-2" src="/128x128.png" alt={ui("Screenpipe")} />
         <h1 className="font-mono text-base font-bold text-foreground">
           Unlock the full experience
         </h1>
@@ -393,9 +398,9 @@ export default function PermissionsStep({
           className="w-full max-w-sm border border-foreground px-5 py-5 text-center"
           data-testid="screen-recording-restart-prompt"
         >
-          <h2 className="font-mono text-sm font-semibold">restart required</h2>
+          <h2 className="font-mono text-sm font-semibold">Restart required</h2>
           <p className="mt-1 font-mono text-xs text-muted-foreground">
-            screenpipe won&apos;t work until you restart.
+            Screenpipe won&apos;t work until you restart.
           </p>
           <button
             type="button"
@@ -407,7 +412,7 @@ export default function PermissionsStep({
             <RefreshCw
               className={`h-3.5 w-3.5 ${restarting ? "animate-spin" : ""}`}
             />
-            {restarting ? "restarting..." : "restart screenpipe"}
+            {restarting ? ui("Restarting...") : ui("Restart screenpipe")}
           </button>
         </div>
       ) : (

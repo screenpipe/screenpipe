@@ -1,3 +1,5 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
 import React, { useEffect, useState } from "react";
 import { Settings, Shortcut, useSettings } from "@/lib/hooks/use-settings";
 import { parseKeyboardShortcut } from "@/lib/utils";
@@ -7,6 +9,8 @@ import { cn } from "@/lib/utils";
 import { Pencil, X } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import hotkeys from "hotkeys-js";
+import { useGT } from "gt-react";
+
 
 interface ShortcutRowProps {
   shortcut: string;
@@ -29,6 +33,8 @@ const ShortcutRow = ({
   type,
   value,
 }: ShortcutRowProps) => {
+
+  const ui = useGT();
   const reminderShortcutKeys = new Set([
     "showScreenpipeShortcut",
     "showChatShortcut",
@@ -166,16 +172,16 @@ const ShortcutRow = ({
       );
       if (conflict) {
         toast({
-          title: "shortcut conflict",
-          description: `this shortcut is already used by "${conflict[0].replace(/([A-Z])/g, " $1").trim().toLowerCase()}". choose a different combination.`,
+          title: ui("Shortcut conflict"),
+          description: ui("This shortcut is already used by \"{value1}\". choose a different combination.", { value1: conflict[0].replace(/([A-Z])/g, " $1").trim().toLowerCase() }),
           variant: "destructive",
         });
         return;
       }
 
       toast({
-        title: "shortcut enabled",
-        description: `${shortcut.replace(/_/g, " ")} enabled`,
+        title: ui("Shortcut enabled"),
+        description: ui("{value1} enabled", { value1: shortcut.replace(/_/g, " ") }),
       });
 
       // Remove from disabled shortcuts and set the key value in a single update
@@ -224,9 +230,9 @@ const ShortcutRow = ({
     } catch (error) {
       console.error("error updating shortcut", error);
       toast({
-        title: "error updating shortcut",
+        title: ui("Error updating shortcut"),
         description:
-          "failed to register shortcut. please try a different combination.",
+          ui("Failed to register shortcut. Please try a different combination."),
         variant: "destructive",
       });
     }
@@ -234,8 +240,8 @@ const ShortcutRow = ({
 
   const handleDisableShortcut = async () => {
     toast({
-      title: "shortcut disabled",
-      description: `${shortcut.replace(/_/g, " ")} disabled`,
+      title: ui("Shortcut disabled"),
+      description: ui("{value1} disabled", { value1: shortcut.replace(/_/g, " ") }),
     });
     await updateSettings({
       disabledShortcuts: Array.from(
@@ -309,12 +315,12 @@ const ShortcutRow = ({
         >
           {isRecording ? (
             <span className="flex items-center justify-between gap-2 w-full">
-              <span className="animate-pulse">press keys...</span>
+              <span className="animate-pulse">Press keys...</span>
               <span
                 role="button"
                 onClick={(e) => { e.stopPropagation(); setIsRecording(false); }}
                 className="text-muted-foreground hover:text-foreground transition-colors"
-                title="cancel"
+                title={ui("Cancel")}
               >
                 <X className="h-3 w-3" />
               </span>

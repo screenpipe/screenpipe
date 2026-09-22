@@ -11,6 +11,7 @@ mod ffi {
     use std::os::raw::{c_char, c_int};
 
     extern "C" {
+        pub fn notif_set_ui_locale(json: *const c_char);
         pub fn notif_is_available() -> c_int;
         pub fn notif_show(json: *const c_char) -> c_int;
         pub fn notif_hide() -> c_int;
@@ -20,6 +21,12 @@ mod ffi {
     }
 
     /// Returns true if the native SwiftUI panel is compiled in and the OS supports it.
+    pub fn set_ui_locale(json: &str) {
+        if let Ok(value) = CString::new(json) {
+            unsafe { notif_set_ui_locale(value.as_ptr()) }
+        }
+    }
+
     pub fn is_available() -> bool {
         unsafe { notif_is_available() == 1 }
     }
@@ -83,3 +90,6 @@ mod ffi {
 }
 
 pub use ffi::*;
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_ui_locale(_json: &str) {}

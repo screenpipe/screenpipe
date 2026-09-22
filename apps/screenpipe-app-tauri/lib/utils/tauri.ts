@@ -15,6 +15,14 @@ export const commands = {
 async activateAppAfterOauth() : Promise<void> {
     await TAURI_INVOKE("activate_app_after_oauth");
 },
+async analyzeWorkflows(days: number | null, profile: JsonValue | null) : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("analyze_workflows", { days, profile }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Reconcile the live app + the next-boot config with the current enterprise
  * hidden-UI policy. The frontend calls this right after pushing a freshly
@@ -477,6 +485,14 @@ async ensureWebviewFocus() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async ensureWorkflowsRuntime() : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ensure_workflows_runtime") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Export a recording to `output_path` (an .mp4).
  *
@@ -520,6 +536,14 @@ async forceRegenerateSuggestions() : Promise<Result<CachedSuggestions, string>> 
 async generateActivityHistory(start: string, end: string, idempotencyKey: string) : Promise<Result<PersistedActivityHistory, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("generate_activity_history", { start, end, idempotencyKey }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async generateWorkflowSkill(workflow: JsonValue, profile: JsonValue | null) : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("generate_workflow_skill", { workflow, profile }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -856,6 +880,9 @@ async getSyncStatus() : Promise<Result<SyncStatusResponse, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async getWorkflowsRuntime() : Promise<JsonValue> {
+    return await TAURI_INVOKE("get_workflows_runtime");
 },
 async grokbotConnection(action: string) : Promise<Result<JsonValue, string>> {
     try {
@@ -1194,6 +1221,14 @@ async loadBrainViewCanvas(viewId: string) : Promise<Result<BrainViewCanvasDocume
     else return { status: "error", error: e  as any };
 }
 },
+async loadWorkflowRecording(timestamp: string, appName: string) : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_workflow_recording", { timestamp, appName }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Lock sync (clear keys from memory and stop server sync service).
  */
@@ -1387,6 +1422,14 @@ async openViewerWindow(path: string) : Promise<Result<null, string>> {
 async openWindowsShellTarget(target: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("open_windows_shell_target", { target }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async openWorkflowCapturedMoment(frameId: number, timestamp: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_workflow_captured_moment", { frameId, timestamp }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2030,6 +2073,18 @@ async redactPiiForFeedback(text: string, settingsJson: string) : Promise<Result<
 }
 },
 /**
+ * Strict contribution redaction. No regex-only fallback, no content-bearing
+ * errors, no capture settings, and no chunk boundaries through identifiers.
+ */
+async redactWorkflowContribution(text: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("redact_workflow_contribution", { text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Tauri command: re-encrypt store.bin after frontend saves.
  *
  * Runs on a blocking worker. The previous sync command ran `fsync` of a
@@ -2076,6 +2131,9 @@ async registerWindowShortcuts() : Promise<Result<null, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async releaseWorkflowRecording(url: string) : Promise<void> {
+    await TAURI_INVOKE("release_workflow_recording", { url });
 },
 async remoteSyncDiscoverHosts() : Promise<Result<DiscoveredHost[], string>> {
     try {
@@ -2393,6 +2451,14 @@ async saveEnterpriseLicenseKey(licenseKey: string) : Promise<Result<null, string
 async saveEnterpriseTeamConfig(isAdmin: boolean | null, licenseActive: boolean | null, teamApiToken: string | null, gatewayUrl: string | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("save_enterprise_team_config", { isAdmin, licenseActive, teamApiToken, gatewayUrl }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async saveWorkflowSkill(draft: JsonValue) : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_workflow_skill", { draft }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -3775,7 +3841,8 @@ deepgramApiKey: string;
 filterMusic: boolean;
 /**
  * Maximum batch duration in seconds for batch transcription.
- * None = use engine-aware defaults (Deepgram=5000s, OpenAI=3000s, Whisper=600s).
+ * None or zero = use the audio engine's default. Overrides apply only to
+ * OpenAI-compatible endpoints, including meeting retranscription.
  * Also controls the max deferral cap during active meetings.
  */
 batchMaxDurationSecs?: number | null;
@@ -4206,7 +4273,15 @@ listenOnLan?: boolean }) &
  * that the Rust struct doesn't know about. Without this, `save()` would
  * serialize only known fields and silently wipe frontend-only data.
  */
-({ [key in string]: null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue } }) & { aiPresets: AIPreset[]; isLoading: boolean; devMode: boolean; ocrEngine: string; dataDir: string; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; lockVaultShortcut?: string;
+({ [key in string]: null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue } }) & { aiPresets: AIPreset[]; isLoading: boolean;
+/**
+ * Interface language only. "system" follows the OS; never changes capture.
+ */
+uiLocale: string;
+/**
+ * Last resolved PostHog rollout decision, shared with all native surfaces.
+ */
+uiLocalizationEnabled: boolean; devMode: boolean; ocrEngine: string; dataDir: string; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; lockVaultShortcut?: string;
 /**
  * Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
  */
@@ -4259,14 +4334,14 @@ autoUpdatePipes?: boolean;
  */
 enhancedAI?: boolean;
 /**
- * Explicit consumer opt-in for on-demand remote diagnostic log requests.
+ * Default-enabled on-demand remote diagnostic log requests.
  * Enterprise builds enforce remote log collection separately; this stored
- * value remains false unless a consumer chooses to enable it.
+ * value can be disabled by the user after the one-time default migration.
  */
 remoteLogCollectionEnabled?: boolean;
 /**
- * Account that granted remote log collection consent on this device.
- * Consumer collection is allowed only while this matches the current user.
+ * Account for an explicit enable; None uses the device-wide default.
+ * An explicit account binding must match the current user; None uses the device default.
  */
 remoteLogCollectionUserId?: string | null;
 /**
@@ -4332,7 +4407,7 @@ headless?: boolean;
 headlessRecordOnly?: boolean }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
 export type StartExportRecordingResponse = { jobId: string }
-export type StorageMigrationActivity = { root: string | null; busy: boolean; message: string; error: string | null; elapsed_seconds: number; completed_records: number | null; total_records: number | null; bytes_saved: number | null; available_bytes: number | null; completed: boolean }
+export type StorageMigrationActivity = { root: string | null; busy: boolean; recovering: boolean; message: string; error: string | null; elapsed_seconds: number; completed_records: number | null; total_records: number | null; bytes_saved: number | null; available_bytes: number | null; completed: boolean }
 export type StorageMigrationStatus = { root: string; app_session_id: string; busy: boolean; message: string; error: string | null; pending: boolean; in_place: boolean; completed: boolean; using_new_storage: boolean; generation: string | null; source_bytes: number; migrated_bytes: number | null; bytes_saved: number | null; available_bytes: number | null; can_migrate: boolean; can_cancel: boolean; can_delete_source: boolean; blocked_reason: string | null }
 export type Suggestion = { text: string;
 /**

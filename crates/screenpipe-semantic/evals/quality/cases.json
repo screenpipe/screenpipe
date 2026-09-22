@@ -1,0 +1,457 @@
+[
+  {
+    "id": "slack_message_actions",
+    "app": {
+      "platform": "windows",
+      "display_name": "Slack",
+      "executable": "slack.exe",
+      "browser_url": null
+    },
+    "nodes": [
+      {
+        "role": "Window",
+        "depth": 0,
+        "text": "#release"
+      },
+      {
+        "role": "Group",
+        "depth": 1,
+        "text": "",
+        "class_name": "message-item"
+      },
+      {
+        "role": "Text",
+        "depth": 2,
+        "text": "Alice",
+        "class_name": "sender"
+      },
+      {
+        "role": "Text",
+        "depth": 2,
+        "text": "Copy link\nShip the fix Friday."
+      },
+      {
+        "role": "Link",
+        "depth": 2,
+        "text": ""
+      },
+      {
+        "role": "Text",
+        "depth": 3,
+        "text": "Release checklist"
+      },
+      {
+        "role": "Button",
+        "depth": 2,
+        "text": ""
+      },
+      {
+        "role": "Text",
+        "depth": 3,
+        "text": "deployment-notes.pdf"
+      },
+      {
+        "role": "Button",
+        "depth": 2,
+        "text": ""
+      },
+      {
+        "role": "Text",
+        "depth": 3,
+        "text": "Reply to thread"
+      },
+      {
+        "role": "Button",
+        "depth": 2,
+        "text": ""
+      },
+      {
+        "role": "Text",
+        "depth": 3,
+        "text": "Add reaction"
+      },
+      {
+        "role": "MenuItem",
+        "depth": 2,
+        "text": ""
+      },
+      {
+        "role": "Text",
+        "depth": 3,
+        "text": "More actions"
+      },
+      {
+        "role": "Group",
+        "depth": 1,
+        "text": "",
+        "class_name": "message-item outgoing"
+      },
+      {
+        "role": "Text",
+        "depth": 2,
+        "text": "Agreed. Keep the label."
+      }
+    ],
+    "checks": [
+      {
+        "path": "/1/actor",
+        "expected": "Alice"
+      },
+      {
+        "path": "/1/body",
+        "expected": "Copy link\nShip the fix Friday.\nRelease checklist\ndeployment-notes.pdf"
+      },
+      {
+        "path": "/1/parent_local_id",
+        "expected": "conversation"
+      },
+      {
+        "path": "/2/actor",
+        "expected": "[user]"
+      },
+      {
+        "path": "/2/body",
+        "expected": "Agreed. Keep the label."
+      }
+    ],
+    "forbidden_context": [
+      "Reply to thread",
+      "Add reaction",
+      "More actions"
+    ],
+    "required_context": []
+  },
+  {
+    "id": "task_decision_fields",
+    "app": {
+      "platform": "windows",
+      "display_name": "Todoist",
+      "executable": "Todoist.exe",
+      "browser_url": null
+    },
+    "nodes": [
+      {
+        "role": "Window",
+        "depth": 0,
+        "text": "Release tasks"
+      },
+      {
+        "role": "Group",
+        "depth": 1,
+        "text": "",
+        "class_name": "task-item unchecked"
+      },
+      {
+        "role": "Text",
+        "depth": 2,
+        "text": "Ship parser context",
+        "class_name": "task-title"
+      },
+      {
+        "role": "Group",
+        "depth": 2,
+        "text": "",
+        "class_name": "task-status",
+        "role_description": "group"
+      },
+      {
+        "role": "Text",
+        "depth": 3,
+        "text": "In progress"
+      },
+      {
+        "role": "Group",
+        "depth": 2,
+        "text": "",
+        "class_name": "task-assignee",
+        "role_description": "group"
+      },
+      {
+        "role": "Text",
+        "depth": 3,
+        "text": "Alice"
+      },
+      {
+        "role": "Group",
+        "depth": 2,
+        "text": "",
+        "class_name": "task-due-date",
+        "role_description": "group"
+      },
+      {
+        "role": "Text",
+        "depth": 3,
+        "text": "Friday, September 25"
+      },
+      {
+        "role": "Text",
+        "depth": 2,
+        "text": "High",
+        "class_name": "task-priority"
+      },
+      {
+        "role": "Button",
+        "depth": 2,
+        "text": "Edit due date"
+      }
+    ],
+    "checks": [
+      {
+        "path": "/0/title",
+        "expected": "Ship parser context"
+      },
+      {
+        "path": "/0/status",
+        "expected": "In progress"
+      },
+      {
+        "path": "/0/metadata/assignee",
+        "expected": "Alice"
+      },
+      {
+        "path": "/0/metadata/due",
+        "expected": "Friday, September 25"
+      },
+      {
+        "path": "/0/metadata/priority",
+        "expected": "High"
+      }
+    ],
+    "forbidden_context": [
+      "Edit due date"
+    ],
+    "required_context": [
+      "assignee=Alice",
+      "due=Friday, September 25"
+    ]
+  },
+  {
+    "id": "task_state_evidence",
+    "app": {
+      "platform": "windows",
+      "display_name": "Todoist",
+      "executable": "Todoist.exe",
+      "browser_url": null
+    },
+    "nodes": [
+      {
+        "role": "Window",
+        "depth": 0,
+        "text": "Task states"
+      },
+      {
+        "role": "Group",
+        "depth": 1,
+        "text": "",
+        "class_name": "task-row unchecked",
+        "help_text": "Review unchecked migration"
+      },
+      {
+        "role": "Text",
+        "depth": 2,
+        "text": "Review unchecked migration",
+        "class_name": "task-title"
+      },
+      {
+        "role": "Group",
+        "depth": 1,
+        "text": "",
+        "class_name": "task-row incomplete",
+        "help_text": "Complete the rollout"
+      },
+      {
+        "role": "Text",
+        "depth": 2,
+        "text": "Complete the rollout",
+        "class_name": "task-title"
+      },
+      {
+        "role": "Group",
+        "depth": 1,
+        "text": "",
+        "class_name": "task-row not-completed",
+        "help_text": "Review open issues"
+      },
+      {
+        "role": "Text",
+        "depth": 2,
+        "text": "Review open issues",
+        "class_name": "task-title"
+      },
+      {
+        "role": "Group",
+        "depth": 1,
+        "text": "",
+        "class_name": "task-row completed",
+        "help_text": "Write release notes"
+      },
+      {
+        "role": "Text",
+        "depth": 2,
+        "text": "Write release notes",
+        "class_name": "task-title"
+      },
+      {
+        "role": "Group",
+        "depth": 1,
+        "text": "",
+        "class_name": "task-row is-completed",
+        "help_text": "Update handbook"
+      },
+      {
+        "role": "Text",
+        "depth": 2,
+        "text": "Update handbook",
+        "class_name": "task-title"
+      },
+      {
+        "role": "Group",
+        "depth": 1,
+        "class_name": "task-row",
+        "help_text": "Completed planning last week"
+      },
+      {
+        "role": "Text",
+        "depth": 2,
+        "text": "Implement the plan",
+        "class_name": "task-title"
+      }
+    ],
+    "checks": [
+      {
+        "path": "/0/title",
+        "expected": "Review unchecked migration"
+      },
+      {
+        "path": "/0/status",
+        "expected": null
+      },
+      {
+        "path": "/1/title",
+        "expected": "Complete the rollout"
+      },
+      {
+        "path": "/1/status",
+        "expected": null
+      },
+      {
+        "path": "/2/title",
+        "expected": "Review open issues"
+      },
+      {
+        "path": "/2/status",
+        "expected": null
+      },
+      {
+        "path": "/3/title",
+        "expected": "Write release notes"
+      },
+      {
+        "path": "/3/status",
+        "expected": "completed"
+      },
+      {
+        "path": "/4/title",
+        "expected": "Update handbook"
+      },
+      {
+        "path": "/4/status",
+        "expected": "completed"
+      },
+      {
+        "path": "/5/title",
+        "expected": "Implement the plan"
+      },
+      {
+        "path": "/5/status",
+        "expected": null
+      }
+    ],
+    "forbidden_context": [],
+    "required_context": []
+  },
+  {
+    "id": "mail_body_actions",
+    "app": {
+      "platform": "windows",
+      "display_name": "Chrome",
+      "executable": "chrome.exe",
+      "browser_url": "https://mail.google.com/mail/u/0/#inbox/example"
+    },
+    "nodes": [
+      {
+        "role": "Window",
+        "depth": 0,
+        "text": "Inbox"
+      },
+      {
+        "role": "Text",
+        "depth": 1,
+        "text": "Release approval",
+        "class_name": "subject"
+      },
+      {
+        "role": "Group",
+        "depth": 1,
+        "text": "",
+        "class_name": "email-message"
+      },
+      {
+        "role": "Text",
+        "depth": 2,
+        "text": "Alice",
+        "class_name": "sender"
+      },
+      {
+        "role": "Group",
+        "depth": 2,
+        "text": "",
+        "class_name": "message-body"
+      },
+      {
+        "role": "Text",
+        "depth": 3,
+        "text": "The answer is Reply.\nPlease ship Friday."
+      },
+      {
+        "role": "Button",
+        "depth": 3,
+        "text": ""
+      },
+      {
+        "role": "Text",
+        "depth": 4,
+        "text": "Download attachment"
+      },
+      {
+        "role": "Button",
+        "depth": 3,
+        "text": ""
+      },
+      {
+        "role": "Text",
+        "depth": 4,
+        "text": "Forward message"
+      }
+    ],
+    "checks": [
+      {
+        "path": "/1/actor",
+        "expected": "Alice"
+      },
+      {
+        "path": "/1/body",
+        "expected": "The answer is Reply.\nPlease ship Friday."
+      },
+      {
+        "path": "/1/parent_local_id",
+        "expected": "thread"
+      }
+    ],
+    "forbidden_context": [
+      "Download attachment",
+      "Forward message"
+    ],
+    "required_context": []
+  }
+]

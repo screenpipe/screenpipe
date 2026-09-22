@@ -175,6 +175,26 @@ describe("SidebarNavList", () => {
     expect(handlers.onSetHidden).toHaveBeenCalledWith("pipes", true);
   });
 
+  it.each([
+    ["timeline", "Timeline"],
+    ["meetings", "Meetings"],
+  ] as const)("hides %s with right-click and restores it from Sidebar options", (id, label) => {
+    const hidden = renderList({
+      items: [...ITEMS, { id, label, icon: <span /> }],
+    });
+    rightClick(`nav-${id}`);
+    fireEvent.click(screen.getByText("Hide from sidebar"));
+    expect(hidden.onSetHidden).toHaveBeenCalledWith(id, true);
+
+    cleanup();
+    const restored = renderCustomizationMenu({
+      hiddenItems: [{ id, label }],
+    });
+    openDropdown("sidebar-options");
+    fireEvent.click(screen.getByText(`Show ${label}`));
+    expect(restored.onSetHidden).toHaveBeenCalledWith(id, false);
+  });
+
   it("restores hidden rows through progressive disclosure", () => {
     const handlers = renderCustomizationMenu();
     openDropdown("sidebar-options");
@@ -182,7 +202,18 @@ describe("SidebarNavList", () => {
     expect(handlers.onSetHidden).toHaveBeenCalledWith("meetings", false);
   });
 
-  it("adds no sidebar-options chrome before the layout changes", () => {
+  it("offers Show Library from the default layout without a no-op reset", () => {
+    const handlers = renderCustomizationMenu({
+      hiddenItems: [{ id: "brain", label: "Library" }],
+      canReset: false,
+    });
+    openDropdown("sidebar-options");
+    expect(screen.queryByTestId("sidebar-options-reset")).toBeNull();
+    fireEvent.click(screen.getByText("Show Library"));
+    expect(handlers.onSetHidden).toHaveBeenCalledWith("brain", false);
+  });
+
+  it("adds no sidebar-options chrome when nothing can be restored or reset", () => {
     renderCustomizationMenu({ hiddenItems: [], canReset: false });
     expect(screen.queryByTestId("sidebar-options")).toBeNull();
   });

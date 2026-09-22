@@ -9,12 +9,14 @@ mod bindings;
 pub(crate) mod bulk;
 mod codec;
 mod command;
+pub mod diagnostics;
 mod faults;
 mod import;
 mod in_place;
 mod inventory;
 mod lifecycle;
 mod maintenance;
+mod parity;
 pub(crate) mod read_schema;
 mod reader;
 mod reclaim;
@@ -29,8 +31,9 @@ pub use command::run_command;
 pub use inventory::{artifact_bytes, inventory};
 pub use lifecycle::{
     cancel_migration, migrate, migrate_with_progress, migration_report, migration_requires_resume,
-    pause_interrupted_migration, recover_interrupted_migration, MigrationOptions,
-    MigrationProgress, MigrationReport,
+    pause_interrupted_migration, recover_interrupted_migration,
+    recover_interrupted_migration_with_progress, MigrationOptions, MigrationProgress,
+    MigrationReport,
 };
 pub use maintenance::{compact, export_sqlite};
 pub use reader::StorageReadToken;
@@ -73,10 +76,13 @@ pub struct StorageBudget {
     pub row_group_rows: usize,
     pub file_rows: usize,
     pub file_bytes: usize,
+    /// Maximum record the archiver processes; larger captures remain in SQLite.
     pub record_bytes: usize,
     pub decode_bytes: usize,
     pub response_bytes: usize,
     pub concurrent_decodes: usize,
+    /// Background reclamation headroom and legacy staging allowance. It must
+    /// never limit durable recording; memory is bounded by processing batches.
     pub staging_bytes: u64,
     pub disk_reserve_bytes: u64,
     pub operation_timeout_secs: u64,
@@ -104,6 +110,15 @@ impl Default for StorageBudget {
 }
 
 impl StorageBudget {
+    /// Oversized frames are resident history, not work for the sealer.
+    pub(super) fn staged_frame_bytes(&self, bytes: usize) -> usize {
+        if bytes <= self.record_bytes {
+            bytes
+        } else {
+            0
+        }
+    }
+
     pub fn validate(&self) -> Result<(), sqlx::Error> {
         if self.row_group_rows == 0
             || self.file_rows < self.row_group_rows
@@ -184,7 +199,8 @@ pub(crate) struct HybridStorage {
     pub gate: Arc<Mutex<()>>,
     pub leases: Arc<RwLock<()>>,
     pub decoder: Arc<Semaphore>,
-    pub file_job: Mutex<()>,
+    /// Serializes file jobs; the value is the next table's archival turn.
+    pub file_job: Mutex<usize>,
     pub read_lanes: std::sync::OnceLock<Arc<Semaphore>>,
     pub closing: tokio_util::sync::CancellationToken,
     pub privacy_ready: std::sync::atomic::AtomicBool,
@@ -339,13 +355,13 @@ pub(crate) fn sync_file(path: &Path) -> Result<(), sqlx::Error> {
     // completed file was written by SQLite or copied through another handle.
     #[cfg(windows)]
     options.write(true);
-    options.open(path)?.sync_all()?;
+    screenpipe_fs::sync_all(&options.open(path)?)?;
     Ok(())
 }
 
 pub(crate) fn sync_directory(path: &Path) -> Result<(), sqlx::Error> {
     #[cfg(unix)]
-    std::fs::File::open(path)?.sync_all()?;
+    screenpipe_fs::sync_all(&std::fs::File::open(path)?)?;
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
@@ -367,7 +383,7 @@ pub(crate) fn durable_json<T: Serialize>(path: &Path, value: &T) -> Result<(), s
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
     serde_json::to_writer(&mut temporary, value).map_err(storage_error)?;
     temporary.write_all(b"\n")?;
-    temporary.as_file().sync_all()?;
+    screenpipe_fs::sync_all(temporary.as_file())?;
     temporary
         .persist(path)
         .map_err(|e| sqlx::Error::Io(e.error))?;
@@ -460,7 +476,7 @@ impl HybridStorage {
             descriptor,
             gate: Arc::new(Mutex::new(())),
             leases: Arc::new(RwLock::new(())),
-            file_job: Mutex::new(()),
+            file_job: Mutex::new(0),
             read_lanes: std::sync::OnceLock::new(),
             closing: tokio_util::sync::CancellationToken::new(),
             privacy_ready: std::sync::atomic::AtomicBool::new(false),

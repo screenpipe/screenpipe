@@ -646,7 +646,11 @@ async fn snapshot_db(live_db: &Path, dest: &Path) -> Result<()> {
     // would do real POSIX locking against handles that no longer lock at all.
     #[cfg(target_os = "macos")]
     {
-        opts = opts.vfs("unix-excl");
+        // The network-volume recorder uses SQLite's filesystem-aware locks
+        // and rollback journal; preserve that same domain for snapshots.
+        if !screenpipe_fs::is_network_volume(live_db.parent().unwrap_or(live_db))? {
+            opts = opts.vfs("unix-excl");
+        }
     }
 
     let pool = SqlitePoolOptions::new()

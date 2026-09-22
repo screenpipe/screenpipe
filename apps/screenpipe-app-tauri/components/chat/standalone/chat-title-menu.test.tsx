@@ -79,7 +79,7 @@ describe("ChatTitleMenu", () => {
     expect(screen.getAllByTestId("chat-title")).toHaveLength(1);
     expect(screen.getByTestId("chat-title")).toHaveTextContent("day recap");
 
-    fireEvent.click(screen.getByRole("button", { name: "chat options for day recap" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chat options for day recap" }));
     expect(await screen.findByRole("button", { name: "Pin" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Rename" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Archive" })).toBeVisible();
@@ -104,7 +104,7 @@ describe("ChatTitleMenu", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "chat options for day recap" }),
+      screen.getByRole("button", { name: "Chat options for day recap" }),
     );
     expect(await screen.findByRole("button", { name: "Archive" })).toBeVisible();
     expect(screen.getByText(/⌘E|Ctrl\+E/)).toBeVisible();
@@ -121,7 +121,7 @@ describe("ChatTitleMenu", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "chat options for day recap" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chat options for day recap" }));
     fireEvent.click(await screen.findByRole("button", { name: "Rename" }));
 
     const input = screen.getByRole("textbox");

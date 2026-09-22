@@ -285,7 +285,7 @@ function truncationNote(
   noun: string,
 ): string | null {
   if (received <= kept) return null;
-  return `showing first ${kept} of ${received} ${noun}`;
+  return `Showing first ${kept} of ${received} ${noun}`;
 }
 
 function parseBarOrLine(

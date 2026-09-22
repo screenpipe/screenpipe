@@ -79,10 +79,8 @@ fn handle_audio_stall(app: &AppHandle, event: StallEvent) {
         if let Err(e) = app_for_notify
             .notification()
             .builder()
-            .title("screenpipe is not capturing audio")
-            .body(format!(
-                "no audio reached the meeting after {elapsed}s — check mic permissions or restart the recorder"
-            ))
+            .title(crate::localization::ui_text("screenpipe is not capturing audio"))
+            .body(crate::localization::ui_format("no audio reached the meeting after {value1}s — check mic permissions or restart the recorder", &[("value1", (elapsed).to_string())]))
             .show()
         {
             error!("meeting stall: failed to send OS notification: {}", e);
@@ -102,14 +100,7 @@ fn handle_transcript_stall(app: &AppHandle, event: StallEvent) {
         event.meeting_id, event.provider, elapsed
     );
 
-    client::send_typed_with_actions_and_priority(
-        "live transcript not flowing",
-        format!("audio is still being captured, but the transcript is delayed by {elapsed}s — keep the meeting open while screenpipe retries"),
-        "meeting",
-        Some(30_000),
-        Vec::new(),
-        NotificationPriority::High,
-    );
+    client::send_typed_with_actions_and_priority(crate::localization::ui_text("live transcript not flowing"), crate::localization::ui_format("audio is still being captured, but the transcript is delayed by {value1}s — keep the meeting open while screenpipe retries", &[("value1", (elapsed).to_string())]), "meeting", Some(30_000), Vec::new(), NotificationPriority::High);
 }
 
 fn pref_enabled(app: &AppHandle, key: &str) -> bool {

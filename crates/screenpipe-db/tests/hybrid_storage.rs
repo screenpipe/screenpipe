@@ -609,9 +609,10 @@ async fn legacy_exports_can_be_migrated_again() {
 }
 
 #[tokio::test]
-async fn storage_budget_rejects_before_acknowledging_and_accepts_after_reclamation() {
+async fn archive_record_budget_keeps_large_captures_resident_and_archives_later_work() {
     let root = tempfile::tempdir().unwrap();
     let mut options = MigrationOptions::default();
+    options.budget.record_bytes = 1024;
     options.budget.staging_bytes = options.budget.record_bytes as u64;
     let limit = options.budget.record_bytes;
     let db = DatabaseManager::new_hybrid(root.path(), Default::default(), options)
@@ -619,22 +620,27 @@ async fn storage_budget_rejects_before_acknowledging_and_accepts_after_reclamati
         .unwrap();
     let large = "x".repeat(limit + 1);
     let mut tx = db.begin_immediate_with_retry().await.unwrap();
-    let error = sqlx::query("INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-09-11',?)")
+    sqlx::query("INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-09-11',?)")
         .bind(&large)
         .execute(&mut **tx.conn())
         .await
-        .unwrap_err();
-    assert!(error.to_string().contains("record budget"));
-    tx.rollback().await.unwrap();
+        .unwrap();
+    tx.commit().await.unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM frames")
             .fetch_one(&db.pool)
             .await
             .unwrap(),
-        0
+        1
     );
     seed(&db, 2, Some("complete payload"), None).await;
-    db.seal_frame_payloads().await.unwrap();
+    assert_eq!(db.seal_frame_payloads().await.unwrap(), 1);
+    assert_eq!(
+        db.frame_payloads(&[1], Projection::All).await.unwrap()[&1]
+            .full_text
+            .as_deref(),
+        Some(large.as_str())
+    );
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT staging_bytes FROM storage_metadata")
             .fetch_one(&db.pool)

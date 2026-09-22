@@ -314,7 +314,7 @@ pub(crate) fn durable_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         }
         let mut f = opts.open(&tmp)?;
         f.write_all(bytes)?;
-        f.sync_all()?; // contents + metadata to stable storage before the rename
+        screenpipe_fs::sync_all(&f)?; // contents + metadata to stable storage before the rename
     }
     replace_store_temp(&tmp, path)?;
     // fsync the directory so the rename itself survives a crash. Best-effort:
@@ -323,7 +323,7 @@ pub(crate) fn durable_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     #[cfg(unix)]
     if let Some(dir) = path.parent() {
         if let Ok(d) = std::fs::File::open(dir) {
-            let _ = d.sync_all();
+            let _ = screenpipe_fs::sync_all(&d);
         }
     }
     Ok(())
@@ -1370,6 +1370,14 @@ pub struct SettingsStore {
     #[serde(rename = "isLoading")]
     pub is_loading: bool,
 
+    /// Interface language only. "system" follows the OS; never changes capture.
+    #[serde(rename = "uiLocale")]
+    pub ui_locale: String,
+
+    /// Last resolved PostHog rollout decision, shared with all native surfaces.
+    #[serde(rename = "uiLocalizationEnabled")]
+    pub ui_localization_enabled: bool,
+
     #[serde(rename = "devMode")]
     pub dev_mode: bool,
     #[serde(rename = "ocrEngine")]
@@ -1448,13 +1456,13 @@ pub struct SettingsStore {
     /// Better quality but sends activity context to the cloud (zero data retention).
     #[serde(rename = "enhancedAI", default)]
     pub enhanced_ai: bool,
-    /// Explicit consumer opt-in for on-demand remote diagnostic log requests.
+    /// Default-enabled on-demand remote diagnostic log requests.
     /// Enterprise builds enforce remote log collection separately; this stored
-    /// value remains false unless a consumer chooses to enable it.
-    #[serde(rename = "remoteLogCollectionEnabled", default)]
+    /// value can be disabled by the user after the one-time default migration.
+    #[serde(rename = "remoteLogCollectionEnabled", default = "default_true")]
     pub remote_log_collection_enabled: bool,
-    /// Account that granted remote log collection consent on this device.
-    /// Consumer collection is allowed only while this matches the current user.
+    /// Account for an explicit enable; None uses the device-wide default.
+    /// An explicit account binding must match the current user; None uses the device default.
     #[serde(rename = "remoteLogCollectionUserId", default)]
     pub remote_log_collection_user_id: Option<String>,
     /// Timeline overlay mode: "fullscreen" (floating panel above everything) or
@@ -1926,7 +1934,7 @@ Rules:
             max_tokens: 4096,
         };
 
-        // Rust persists store.bin before the frontend mounts. All-null values
+        // Rust persists store.bin before the frontend mounts. Null values
         // identify a genuinely new install that may inherit remote defaults;
         // legacy stores lack this object and are migrated from their current
         // effective values. The persisted policy also lets Rust enforce every
@@ -1935,7 +1943,7 @@ Rules:
             (
                 "remoteControlPreferences".to_string(),
                 json!({
-                    "semanticContext": null,
+                    "semanticContext": true,
                     "coreAudioSystemAudio": null,
                     "smartRecording": null,
                     "filterMusic": null,
@@ -1949,7 +1957,7 @@ Rules:
                     "schemaVersion": 1,
                     "boolean": {
                         "semanticContext": {
-                            "defaultEnabled": false,
+                            "defaultEnabled": true,
                             "forceDisabled": false,
                         },
                         "coreAudioSystemAudio": {
@@ -1983,6 +1991,7 @@ Rules:
         Self {
             // App-specific defaults override RecordingSettings::default() where needed
             recording: screenpipe_config::RecordingSettings {
+                enable_semantic_context: true,
                 audio_transcription_engine: "whisper-large-v3-turbo-quantized".to_string(),
                 monitor_ids: vec!["default".to_string()],
                 audio_devices: vec!["default".to_string()],
@@ -1993,6 +2002,8 @@ Rules:
             },
             ai_presets: vec![default_free_preset],
             is_loading: false,
+            ui_locale: "system".to_string(),
+            ui_localization_enabled: false,
             dev_mode: false,
             #[cfg(target_os = "macos")]
             ocr_engine: "apple-native".to_string(),
@@ -2049,7 +2060,7 @@ Rules:
             update_channel: default_update_channel(),
             auto_update_pipes: true,
             enhanced_ai: false,
-            remote_log_collection_enabled: false,
+            remote_log_collection_enabled: true,
             remote_log_collection_user_id: None,
             #[cfg(target_os = "macos")]
             overlay_mode: "fullscreen".to_string(),
@@ -2247,6 +2258,9 @@ impl SettingsStore {
 
     pub fn to_recording_settings(&self) -> screenpipe_config::RecordingSettings {
         let mut settings = self.recording.clone();
+        // App context is built in, even for old stores with the toggle off.
+        // The remote emergency shutoff below still takes precedence.
+        settings.enable_semantic_context = true;
         // Automatic meeting capture also applies before the frontend mounts,
         // including old stores with the former opt-in saved as false.
         settings.experimental_meeting_piggyback =
@@ -2631,6 +2645,39 @@ fn restore_headed_mode_for_consumer(
     true
 }
 
+/// Retire the consumer timeline switch in favor of sidebar customization.
+/// Preserve screenshot consent and custom layout, and clear the legacy gate so
+/// users can restore Timeline from the sidebar without restarting capture.
+fn migrate_timeline_visibility_to_sidebar(
+    settings: &mut SettingsStore,
+    is_enterprise_build: bool,
+) -> bool {
+    if is_enterprise_build || !settings.recording.disable_timeline {
+        return false;
+    }
+    let layout = settings
+        .extra
+        .entry("sidebarNavLayout".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !layout.is_object() {
+        *layout = serde_json::json!({});
+    }
+    let hidden = layout
+        .as_object_mut()
+        .unwrap()
+        .entry("hidden".to_string())
+        .or_insert_with(|| serde_json::json!(["brain"]));
+    if !hidden.is_array() {
+        *hidden = serde_json::json!(["brain"]);
+    }
+    let hidden = hidden.as_array_mut().unwrap();
+    if !hidden.iter().any(|id| id.as_str() == Some("timeline")) {
+        hidden.push(Value::String("timeline".to_string()));
+    }
+    settings.recording.disable_timeline = false;
+    true
+}
+
 const WINDOWS_TIMELINE_WINDOW_MODE_MIGRATION: &str =
     "windowsTimelineWindowModeMigrationV1";
 
@@ -2655,6 +2702,18 @@ fn migrate_windows_timeline_to_window_mode(settings: &mut SettingsStore) -> bool
         WINDOWS_TIMELINE_WINDOW_MODE_MIGRATION.to_string(),
         Value::Bool(true),
     );
+    true
+}
+
+/// Enable diagnostics once for existing installs. Later opt-outs stay off.
+fn migrate_remote_logs_default_enabled(settings: &mut SettingsStore) -> bool {
+    const MARKER: &str = "remoteLogsDefaultEnabledV1";
+    if settings.extra.get(MARKER).and_then(Value::as_bool) == Some(true) {
+        return false;
+    }
+    settings.remote_log_collection_enabled = true;
+    settings.remote_log_collection_user_id = None;
+    settings.extra.insert(MARKER.to_string(), Value::Bool(true));
     true
 }
 
@@ -2860,6 +2919,12 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         should_save = true;
     }
 
+    if can_run_settings_migrations
+        && migrate_timeline_visibility_to_sidebar(&mut store, cfg!(feature = "enterprise-build"))
+    {
+        should_save = true;
+    }
+
     if cfg!(target_os = "windows")
         && can_run_settings_migrations
         && migrate_windows_timeline_to_window_mode(&mut store)
@@ -2867,6 +2932,13 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         tracing::info!(
             "settings migration: selected window mode for the Windows timeline overlay"
         );
+        should_save = true;
+    }
+
+    if !cfg!(feature = "enterprise-build")
+        && can_run_settings_migrations
+        && migrate_remote_logs_default_enabled(&mut store)
+    {
         should_save = true;
     }
 
@@ -3436,6 +3508,61 @@ mod tests {
     }
 
     #[test]
+    fn timeline_visibility_migration_preserves_capture_and_custom_layout() {
+        for screenshots_disabled in [true, false] {
+            let mut settings = SettingsStore::default();
+            settings.recording.disable_timeline = true;
+            settings.recording.disable_screenshots = screenshots_disabled;
+            settings.extra.insert(
+                "sidebarNavLayout".into(),
+                serde_json::json!({
+                    "order": ["timeline", "home", "meetings"], "hidden": ["pipes"]
+                }),
+            );
+            assert!(migrate_timeline_visibility_to_sidebar(&mut settings, false));
+            assert!(!settings.recording.disable_timeline);
+            assert_eq!(settings.recording.disable_screenshots, screenshots_disabled);
+            assert_eq!(
+                settings.extra["sidebarNavLayout"],
+                serde_json::json!({
+                    "order": ["timeline", "home", "meetings"], "hidden": ["pipes", "timeline"]
+                })
+            );
+            // Persisted migration must not hide the item again after the user restores it.
+            let mut reloaded: SettingsStore =
+                serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
+            reloaded.extra.get_mut("sidebarNavLayout").unwrap()["hidden"] = serde_json::json!([]);
+            assert!(!migrate_timeline_visibility_to_sidebar(
+                &mut reloaded,
+                false
+            ));
+            assert_eq!(
+                reloaded.extra["sidebarNavLayout"]["hidden"],
+                serde_json::json!([])
+            );
+        }
+    }
+
+    #[test]
+    fn timeline_visibility_migration_preserves_defaults_and_enterprise() {
+        let mut settings = SettingsStore::default();
+        assert!(!migrate_timeline_visibility_to_sidebar(
+            &mut settings,
+            false
+        ));
+        assert!(!settings.extra.contains_key("sidebarNavLayout"));
+        settings.recording.disable_timeline = true;
+        assert!(!migrate_timeline_visibility_to_sidebar(&mut settings, true));
+        assert!(settings.recording.disable_timeline);
+        assert!(!settings.extra.contains_key("sidebarNavLayout"));
+        assert!(migrate_timeline_visibility_to_sidebar(&mut settings, false));
+        assert_eq!(
+            settings.extra["sidebarNavLayout"]["hidden"],
+            serde_json::json!(["brain", "timeline"])
+        );
+    }
+
+    #[test]
     fn windows_timeline_migration_moves_legacy_fullscreen_to_window_once() {
         let mut settings = SettingsStore {
             overlay_mode: "fullscreen".to_string(),
@@ -3470,22 +3597,38 @@ mod tests {
     }
 
     #[test]
-    fn remote_log_collection_defaults_to_disabled() {
-        assert!(!SettingsStore::default().remote_log_collection_enabled);
+    fn remote_log_collection_defaults_to_enabled() {
+        assert!(SettingsStore::default().remote_log_collection_enabled);
         assert!(SettingsStore::default()
             .remote_log_collection_user_id
             .is_none());
     }
 
     #[test]
-    fn missing_remote_log_collection_deserializes_disabled() {
+    fn missing_remote_log_collection_deserializes_enabled() {
         let settings: SettingsStore = serde_json::from_value(json!({
             "aiPresets": []
         }))
         .unwrap();
 
-        assert!(!settings.remote_log_collection_enabled);
+        assert!(settings.remote_log_collection_enabled);
         assert!(settings.remote_log_collection_user_id.is_none());
+    }
+
+    #[test]
+    fn remote_log_collection_migration_runs_once_and_preserves_later_opt_out() {
+        let mut settings = SettingsStore::default();
+        settings.remote_log_collection_enabled = false;
+        settings.remote_log_collection_user_id = Some("old-account".to_string());
+        assert!(migrate_remote_logs_default_enabled(&mut settings));
+        assert!(settings.remote_log_collection_enabled);
+        assert!(settings.remote_log_collection_user_id.is_none());
+        settings.remote_log_collection_enabled = false;
+        // Exercise persistence: the migration marker must survive reload.
+        let mut reloaded: SettingsStore =
+            serde_json::from_value(serde_json::to_value(settings).unwrap()).unwrap();
+        assert!(!migrate_remote_logs_default_enabled(&mut reloaded));
+        assert!(!reloaded.remote_log_collection_enabled);
     }
 
     #[test]
@@ -5238,6 +5381,28 @@ mod tests {
         assert_eq!(settings.user.token, None);
         assert_eq!(settings.embedded_llm.enabled, false);
         assert_eq!(settings.ai_presets.len(), 0);
+    }
+
+    #[test]
+    fn structured_context_is_automatic_before_frontend_startup() {
+        let mut store = SettingsStore::default();
+        assert!(store.recording.enable_semantic_context);
+        assert!(store.to_recording_settings().enable_semantic_context);
+        store.recording.enable_semantic_context = false;
+        store.extra.insert(
+            "remoteControlPreferences".into(),
+            json!({"semanticContext": false}),
+        );
+        assert!(store.to_recording_settings().enable_semantic_context);
+        store.extra.insert(
+            "remoteControlPolicy".into(),
+            json!({"schemaVersion": 1, "boolean": {
+                "semanticContext": {"defaultEnabled": false, "forceDisabled": true}
+            }}),
+        );
+        assert!(!store.to_recording_settings().enable_semantic_context);
+        store.extra.remove("remoteControlPolicy");
+        assert!(store.to_recording_settings().enable_semantic_context);
     }
 
     #[test]

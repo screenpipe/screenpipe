@@ -54,6 +54,7 @@ build_preview() {
         -swift-version 5 \
         -sdk "$sdk_path" \
         -target "$swift_target" \
+        "$swift_dir/UILocalization.swift" \
         "$timeline_dir"/*.swift \
         "$swift_dir/timeline_preview.swift" \
         -o "$binary"
@@ -61,7 +62,7 @@ build_preview() {
 
 source_signature() {
     # shellcheck disable=SC2012
-    stat -f '%m:%z' "$timeline_dir"/*.swift "$swift_dir/timeline_preview.swift" | shasum | cut -d ' ' -f 1
+    stat -f '%m:%z' "$swift_dir/UILocalization.swift" "$timeline_dir"/*.swift "$swift_dir/timeline_preview.swift" | shasum | cut -d ' ' -f 1
 }
 
 resolve_token() {

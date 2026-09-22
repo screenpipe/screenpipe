@@ -35,6 +35,8 @@ import type {
 } from "@/lib/connected-share";
 import { cn } from "@/lib/utils";
 import { MEETING_RULE_ACTION_CLASS } from "./meeting-workspace";
+import { useGT } from "gt-react";
+
 
 /**
  * Every action for the whole meeting, in three controls.
@@ -91,12 +93,12 @@ export type MeetingShareAction =
 const RULE_ACTION_CLASS = MEETING_RULE_ACTION_CLASS;
 
 const ACTION_LABEL: Record<MeetingShareAction, string> = {
-  summary: "copy summary",
-  email: "email summary",
-  transcript: "copy transcript",
-  meeting: "copy meeting + transcript",
-  send: "send to an app…",
-  resend: "send again",
+  summary: "Copy summary",
+  email: "Email summary",
+  transcript: "Copy transcript",
+  meeting: "Copy meeting + transcript",
+  send: "Send to an app…",
+  resend: "Send again",
 };
 
 const ACTION_ICON: Record<
@@ -205,6 +207,8 @@ export function MeetingShareMenu({
   onDestinationSelect?: (destination: ConnectedShareDestination) => void;
   onShare: (action: MeetingShareAction) => void;
 }) {
+
+  const ui = useGT();
   const primary: MeetingShareAction = canShareSummary ? "summary" : "meeting";
   // `send` graduated to its own button, so it is no longer listed here.
   const clipboardActions: MeetingShareAction[] = canShareSummary
@@ -243,11 +247,11 @@ export function MeetingShareMenu({
   ];
 
   const groups: MeetingMenuGroup[] = [
-    { label: "copy", items: toItems(clipboardActions) },
+    { label: ui("Copy"), items: toItems(clipboardActions) },
     {
-      label: "send",
+      label: ui("Send"),
       items: toItems(sendGroupActions).map((item) =>
-        item.key === "send" ? { ...item, label: "send somewhere else…" } : item,
+        item.key === "send" ? { ...item, label: ui("Send somewhere else…") } : item,
       ),
     },
     ...moreGroups,
@@ -263,8 +267,8 @@ export function MeetingShareMenu({
         aria-label={ACTION_LABEL[primary]}
         title={
           canShareSummary
-            ? "copy the summary as rich text, without the transcript"
-            : "copy the meeting and its transcript"
+            ? ui("Copy the summary as rich text, without the transcript")
+            : ui("Copy the meeting and its transcript")
         }
         className={cn(RULE_ACTION_CLASS, "px-4")}
       >
@@ -276,7 +280,7 @@ export function MeetingShareMenu({
         {/* Icon only at rest, so it does not compete with the tabs beside it.
             The word comes back to confirm the copy, which is the moment it
             carries information the icon does not. */}
-        {confirmed && <span className="hidden sm:inline">copied</span>}
+        {confirmed && <span className="hidden sm:inline">Copied</span>}
       </button>
 
       {/* Connected destinations become one compact visual region. At rest the
@@ -290,7 +294,7 @@ export function MeetingShareMenu({
           <div
             className="group flex h-11 shrink-0 items-center border-l border-border px-2"
             data-testid="meeting-share-destinations"
-            aria-label="connected apps suggested for this meeting"
+            aria-label={ui("Connected apps suggested for this meeting")}
           >
             {suggestedDestinations.slice(0, 4).map((suggestion, index) => (
               <button
@@ -298,7 +302,7 @@ export function MeetingShareMenu({
                 type="button"
                 disabled={busy}
                 data-testid={`meeting-send-${suggestion.app}`}
-                aria-label={`review and send to ${suggestion.name}`}
+                aria-label={ui("Review and send to {value1}", { value1: suggestion.name })}
                 title={`${suggestion.name}${suggestion.observed ? " · used during this meeting" : ""}`}
                 onClick={() => onDestinationSelect(suggestion.destination)}
                 style={{ zIndex: suggestedDestinations.length - index }}
@@ -309,7 +313,7 @@ export function MeetingShareMenu({
               >
                 <ConnectedShareAppIcon app={suggestion.app} />
                 {suggestion.observed && (
-                  <span className="sr-only">used during this meeting</span>
+                  <span className="sr-only">Used during this meeting</span>
                 )}
               </button>
             ))}
@@ -327,7 +331,7 @@ export function MeetingShareMenu({
             disabled={busy}
             data-testid="meeting-send-button"
             aria-label={sendLabel ?? ACTION_LABEL.send}
-            title="review this meeting, then send it to a connected app"
+            title={ui("Review this meeting, then send it to a connected app")}
             className={cn(RULE_ACTION_CLASS, "px-4")}
           >
             <Share className="h-3.5 w-3.5" />
@@ -346,8 +350,8 @@ export function MeetingShareMenu({
           onClick={() => onShare("resend")}
           disabled={busy}
           data-testid="meeting-resend-button"
-          aria-label={`send to ${oneTap}`}
-          title={`send this meeting to ${oneTap} now`}
+          aria-label={ui("Send to {value1}", { value1: oneTap })}
+          title={ui("Send this meeting to {value1} now", { value1: oneTap })}
           className={cn(RULE_ACTION_CLASS, "gap-1.5 px-4")}
         >
           {busy ? (
@@ -366,8 +370,8 @@ export function MeetingShareMenu({
           <button
             type="button"
             disabled={busy}
-            aria-label="more meeting actions"
-            title="everything else for this meeting"
+            aria-label={ui("More meeting actions")}
+            title={ui("Everything else for this meeting")}
             className={cn(RULE_ACTION_CLASS, "px-3")}
             data-testid="meeting-more-button"
           >
@@ -381,7 +385,7 @@ export function MeetingShareMenu({
             return (
               <React.Fragment key={group.label}>
                 {groupIndex > 0 && <DropdownMenuSeparator />}
-                <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                <DropdownMenuLabel className="font-mono text-[10px] normal-case tracking-[0.12em] text-muted-foreground">
                   {group.label}
                 </DropdownMenuLabel>
                 {ordinary.map((item) =>

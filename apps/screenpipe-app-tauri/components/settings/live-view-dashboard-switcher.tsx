@@ -42,6 +42,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { MAX_DASHBOARDS } from "@/lib/live-views/constants";
 import type { BrainViewDefinition } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+
 
 export function LiveViewDashboardSwitcher({
   views,
@@ -68,6 +70,8 @@ export function LiveViewDashboardSwitcher({
   onDuplicate: () => void | Promise<void>;
   onDelete: () => void | Promise<void>;
 }) {
+
+  const ui = useGT();
   const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [renameTitle, setRenameTitle] = useState(current.title);
@@ -92,7 +96,7 @@ export function LiveViewDashboardSwitcher({
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <select
             data-testid="overview-dashboard-selector"
-            aria-label="Dashboard"
+            aria-label={ui("Dashboard")}
             value={current.id}
             disabled={selectionDisabled}
             className="h-9 min-w-0 flex-1 border border-border bg-background px-3 text-sm font-medium outline-none focus:border-foreground disabled:opacity-50 sm:min-w-60"
@@ -111,21 +115,21 @@ export function LiveViewDashboardSwitcher({
                 type="button"
                 variant="outline"
                 size="icon"
-                className="h-9 w-9 shrink-0 rounded-none"
-                aria-label="dashboard actions"
-                title="dashboard actions"
+                className="h-9 w-9 shrink-0 rounded-md"
+                aria-label={ui("Dashboard actions")}
+                title={ui("Dashboard actions")}
                 disabled={busy}
               >
                 <MoreHorizontal className="h-3.5 w-3.5" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44 rounded-none">
+            <DropdownMenuContent align="end" className="w-44 rounded-lg">
               <DropdownMenuItem
                 data-testid="overview-new-dashboard"
                 disabled={views.length >= MAX_DASHBOARDS}
                 onSelect={onCreate}
               >
-                <Plus className="mr-2 h-3.5 w-3.5" /> new dashboard
+                <Plus className="mr-2 h-3.5 w-3.5" /> New dashboard
               </DropdownMenuItem>
               {onCustomize && (
                 <DropdownMenuItem
@@ -133,7 +137,7 @@ export function LiveViewDashboardSwitcher({
                   onSelect={onCustomize}
                 >
                   <SlidersHorizontal className="mr-2 h-3.5 w-3.5" />
-                  customize
+                  Customize
                 </DropdownMenuItem>
               )}
               {onOpenTemplates && (
@@ -141,22 +145,22 @@ export function LiveViewDashboardSwitcher({
                   data-testid="overview-templates"
                   onSelect={onOpenTemplates}
                 >
-                  <LayoutTemplate className="mr-2 h-3.5 w-3.5" /> templates
+                  <LayoutTemplate className="mr-2 h-3.5 w-3.5" /> Templates
                 </DropdownMenuItem>
               )}
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => setRenameOpen(true)}>
-                <Pencil className="mr-2 h-3.5 w-3.5" /> rename
+                <Pencil className="mr-2 h-3.5 w-3.5" /> Rename
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => void onDuplicate()}>
-                <Copy className="mr-2 h-3.5 w-3.5" /> duplicate
+                <Copy className="mr-2 h-3.5 w-3.5" /> Duplicate
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 className="text-destructive focus:text-destructive"
                 onSelect={() => setDeleteOpen(true)}
               >
-                <Trash2 className="mr-2 h-3.5 w-3.5" /> delete
+                <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -193,7 +197,7 @@ export function LiveViewDashboardSwitcher({
               variant="outline"
               onClick={() => setRenameOpen(false)}
             >
-              cancel
+              Cancel
             </Button>
             <Button
               data-testid="overview-confirm-rename"
@@ -204,14 +208,14 @@ export function LiveViewDashboardSwitcher({
                 setRenameOpen(false);
               }}
             >
-              rename
+              Rename
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <AlertDialogContent className="rounded-none">
+        <AlertDialogContent className="rounded-lg">
           <AlertDialogHeader>
             <AlertDialogTitle>Delete “{current.title}”?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -220,14 +224,14 @@ export function LiveViewDashboardSwitcher({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               data-testid="overview-confirm-delete"
               variant="destructive"
               disabled={busy}
               onClick={() => void onDelete()}
             >
-              delete dashboard
+              Delete dashboard
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

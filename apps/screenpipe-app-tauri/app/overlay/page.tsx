@@ -41,6 +41,8 @@ import SplashScreen from "@/components/splash-screen";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { hasCachedData } from "@/lib/hooks/use-timeline-cache";
 import { screenpipeWebBase } from "@/lib/web-url";
+import { useGT } from "gt-react";
+
 
 function TimelineErrorFallback({
   error,
@@ -53,18 +55,18 @@ function TimelineErrorFallback({
   return (
     <div className="flex items-center justify-center h-screen bg-background">
       <div className="text-center space-y-4 max-w-md">
-        <p className="text-lg font-medium">timeline crashed</p>
+        <p className="text-lg font-medium">Timeline crashed</p>
         <p className="text-sm text-muted-foreground">{error?.message}</p>
         <div className="flex gap-2 justify-center">
           <Button onClick={onRetry} variant="outline">
             <RefreshCw className="h-4 w-4 mr-2" />
-            retry
+            Retry
           </Button>
           <Button
             variant="outline"
             onClick={() => openFeedback(`Timeline crashed: ${error?.message || "unknown error"}`)}
           >
-            report crash
+            Report crash
           </Button>
         </div>
       </div>
@@ -103,6 +105,8 @@ class TimelineErrorBoundary extends React.Component<
 }
 
 export default function OverlayPage() {
+
+  const ui = useGT();
   const { settings, updateSettings, loadUser, reloadStore, isSettingsLoaded, loadingError } = useSettings();
   const { toast } = useToast();
   const openFeedback = useFeedbackStore((s) => s.openFeedback);
@@ -114,11 +118,11 @@ export default function OverlayPage() {
   const [isSendingLogs, setIsSendingLogs] = useState(false);
   const [logsSent, setLogsSent] = useState(false);
   const isProcessingRef = useRef(false);
-  
+
   // Optimistic UI: track if user has any data (cached or live)
   const { frames, isConnected, loadFromCache } = useTimelineStore();
   const [hasAnyData, setHasAnyData] = useState(false);
-  
+
   // Check for cached data on mount
   useEffect(() => {
     const checkCache = async () => {
@@ -131,7 +135,7 @@ export default function OverlayPage() {
     };
     checkCache();
   }, [loadFromCache]);
-  
+
   // Update hasAnyData when frames change
   useEffect(() => {
     if (frames.length > 0) {
@@ -205,7 +209,7 @@ export default function OverlayPage() {
   // Auto-init cloud sync from saved password on app startup
   useEffect(() => {
     if (!isSettingsLoaded || !settings.user?.token) return;
-    
+
     const autoInitSync = async () => {
       try {
         // Check if sync is already running
@@ -324,44 +328,44 @@ export default function OverlayPage() {
     setIsRestarting(true);
     try {
       toast({
-        title: "restarting server",
-        description: "stopping screenpipe server...",
+        title: ui("Restarting server"),
+        description: ui("Stopping screenpipe server..."),
         duration: 3000,
       });
 
       // Stop the server first
       await commands.stopScreenpipe();
-      
+
       // Wait for proper cleanup
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       toast({
-        title: "restarting server",
-        description: "starting screenpipe server...",
+        title: ui("Restarting server"),
+        description: ui("Starting screenpipe server..."),
         duration: 3000,
       });
 
       // Start the server
       await commands.spawnScreenpipe(null);
-      
+
       toast({
-        title: "server restarted",
-        description: "screenpipe server has been restarted successfully.",
+        title: ui("Server restarted"),
+        description: ui("Screenpipe server has been restarted successfully."),
         duration: 3000,
       });
     } catch (error) {
       console.error("failed to restart server:", error);
       toast({
-        title: "restart failed",
+        title: ui("Restart failed"),
         description: (
           <span>
-            failed to restart screenpipe server.{" "}
+            Failed to restart screenpipe server.{" "}
             <button
               type="button"
               className="underline underline-offset-2 text-inherit opacity-80 hover:opacity-100"
               onClick={() => openFeedback(`Server restart failed: ${error instanceof Error ? error.message : String(error)}`)}
             >
-              report issue
+              Report issue
             </button>
           </span>
         ),
@@ -395,7 +399,7 @@ export default function OverlayPage() {
           {!isManagedDeployment && <LoginDialog />}
           <ModelDownloadTracker />
           <UpdateBanner />
-          
+
           {showTimeline ? (
             <div className="w-full h-screen scrollbar-hide bg-transparent relative">
               <NativeTimelineBridge />
@@ -403,16 +407,16 @@ export default function OverlayPage() {
               {hasAnyData && !isConnected && isServerDown && (
                 <div className="fixed top-10 right-4 z-50 flex items-center gap-2 px-3 py-1.5 bg-muted/90 backdrop-blur-sm rounded-full text-xs text-muted-foreground border">
                   <WifiOff className="h-3 w-3" />
-                  <span>reconnecting...</span>
+                  <span>Reconnecting...</span>
                 </div>
               )}
-              
+
               {/* Show connecting overlay only if NO data and still loading */}
               {!hasAnyData && isHealthLoading && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
                   <div className="flex flex-col items-center gap-3">
                     <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
-                    <p className="text-sm text-muted-foreground">connecting to screenpipe...</p>
+                    <p className="text-sm text-muted-foreground">Connecting to screenpipe...</p>
                   </div>
                 </div>
               )}
@@ -459,7 +463,7 @@ export default function OverlayPage() {
                         className="flex items-center gap-2"
                       >
                         <RefreshCw className={`h-4 w-4 ${isRestarting ? 'animate-spin' : ''}`} />
-                        {isRestarting ? "Starting..." : "Start Server"}
+                        {isRestarting ? ui("Starting...") : ui("Start Server")}
                       </Button>
                     </div>
                   </div>
@@ -507,7 +511,7 @@ export default function OverlayPage() {
                     ) : (
                       <Upload className="h-4 w-4 mr-1.5" />
                     )}
-                    {logsSent ? "logs sent" : isSendingLogs ? "sending..." : "send logs"}
+                    {logsSent ? ui("logs sent") : isSendingLogs ? "sending..." : ui("send logs")}
                   </Button>
                   <Button
                     variant="outline"
@@ -516,7 +520,7 @@ export default function OverlayPage() {
                     className="text-muted-foreground"
                   >
                     <Calendar className="h-4 w-4 mr-1.5" />
-                    schedule call
+                    Schedule call
                   </Button>
                   <Button
                     variant="outline"
@@ -525,7 +529,7 @@ export default function OverlayPage() {
                     className="text-muted-foreground"
                   >
                     <X className="h-4 w-4 mr-1.5" />
-                    close
+                    Close
                   </Button>
                 </div>
               </div>
@@ -535,7 +539,7 @@ export default function OverlayPage() {
             <div className="flex items-center justify-center h-screen">
               <div className="flex flex-col items-center gap-3">
                 <RefreshCw className="h-6 w-6 animate-spin text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">starting up...</p>
+                <p className="text-sm text-muted-foreground">Starting up...</p>
               </div>
             </div>
           )}

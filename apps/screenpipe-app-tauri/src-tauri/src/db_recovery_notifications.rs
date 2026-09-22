@@ -92,8 +92,8 @@ fn notify(app: &AppHandle, _state: DbRecoveryState) {
         return;
     }
     let (title, body) = (
-        "recording interrupted — retrying",
-        "screenpipe temporarily can't access its database. it will keep trying and resume recording automatically when access returns.",
+        crate::localization::ui_text("recording interrupted — retrying"),
+        crate::localization::ui_text("screenpipe temporarily can't access its database. it will keep trying and resume recording automatically when access returns."),
     );
 
     client::send_typed_with_priority(title, body, "db_recovery", None, NotificationPriority::High);
@@ -114,7 +114,7 @@ fn dismiss_action() -> serde_json::Value {
     json!({
         "id": "dismiss-database-recovery",
         "action": "dismiss-database-recovery",
-        "label": "not now",
+        "label": crate::localization::ui_text("not now"),
         "type": "dismiss",
     })
 }
@@ -158,14 +158,7 @@ pub fn restart_quarantined_database_verification(app: AppHandle) -> Result<(), S
 }
 
 fn send_recovery_offer() {
-    client::send_typed_with_actions_and_priority(
-        "recording paused — database repair needed",
-        "your original database is protected. screenpipe can repair a verified copy and preserve the original. keep at least twice the database size free while it works.",
-        "db_recovery",
-        Some(0),
-        vec![recovery_action("recover database"), dismiss_action()],
-        NotificationPriority::High,
-    );
+    client::send_typed_with_actions_and_priority(crate::localization::ui_text("recording paused — database repair needed"), crate::localization::ui_text("your original database is protected. screenpipe can repair a verified copy and preserve the original. keep at least twice the database size free while it works."), "db_recovery", Some(0), vec![recovery_action(&crate::localization::ui_text("recover database")), dismiss_action()], NotificationPriority::High);
 }
 
 /// Recovery actions use the same selected path as the active lifecycle.
@@ -219,26 +212,14 @@ fn start_quarantined_database_recovery_inner(
     }
     if RECOVERY_ACTIVE.swap(true, Ordering::SeqCst) {
         if initiation.is_interactive() {
-            client::send_typed_with_priority(
-                "database repair already running",
-                "keep screenpipe open while it builds and verifies a fresh database.",
-                "db_recovery",
-                Some(8_000),
-                NotificationPriority::High,
-            );
+            client::send_typed_with_priority(crate::localization::ui_text("database repair already running"), crate::localization::ui_text("keep screenpipe open while it builds and verifies a fresh database."), "db_recovery", Some(8_000), NotificationPriority::High);
         }
         return Ok(());
     }
 
     RECOVERY_QUIT_NOTICE_SHOWN.store(false, Ordering::SeqCst);
     if initiation.is_interactive() {
-        client::send_typed_with_priority(
-            "repairing your database",
-            "your original data is protected. screenpipe is building and verifying a fresh copy. keep screenpipe open.",
-            "db_recovery",
-            Some(0),
-            NotificationPriority::High,
-        );
+        client::send_typed_with_priority(crate::localization::ui_text("repairing your database"), crate::localization::ui_text("your original data is protected. screenpipe is building and verifying a fresh copy. keep screenpipe open."), "db_recovery", Some(0), NotificationPriority::High);
     }
 
     tauri::async_runtime::spawn(async move {
@@ -246,13 +227,7 @@ fn start_quarantined_database_recovery_inner(
             Ok(()) => {
                 RECOVERY_ACTIVE.store(false, Ordering::SeqCst);
                 if initiation.is_interactive() {
-                    client::send_typed_with_priority(
-                        "database repaired",
-                        "your original database was preserved. screenpipe is reopening and checking recording.",
-                        "db_recovery",
-                        Some(0),
-                        NotificationPriority::High,
-                    );
+                    client::send_typed_with_priority(crate::localization::ui_text("database repaired"), crate::localization::ui_text("your original database was preserved. screenpipe is reopening and checking recording."), "db_recovery", Some(0), NotificationPriority::High);
                 }
                 crate::process_exit::request_app_relaunch(
                     app,
@@ -264,14 +239,7 @@ fn start_quarantined_database_recovery_inner(
                 RECOVERY_ACTIVE.store(false, Ordering::SeqCst);
                 error!("protected database recovery failed: {recovery_error:#}");
                 if initiation.is_interactive() {
-                    client::send_typed_with_actions_and_priority(
-                        "database repair paused",
-                        "your original data is still protected. screenpipe couldn't finish the repair. check free disk space, then retry. technical details were saved to the logs.",
-                        "db_recovery",
-                        Some(0),
-                        vec![recovery_action("retry repair"), dismiss_action()],
-                        NotificationPriority::High,
-                    );
+                    client::send_typed_with_actions_and_priority(crate::localization::ui_text("database repair paused"), crate::localization::ui_text("your original data is still protected. screenpipe couldn't finish the repair. check free disk space, then retry. technical details were saved to the logs."), "db_recovery", Some(0), vec![recovery_action(&crate::localization::ui_text("retry repair")), dismiss_action()], NotificationPriority::High);
                 }
             }
         }
@@ -291,13 +259,7 @@ pub fn notify_recovery_quit_blocked() {
     if RECOVERY_QUIT_NOTICE_SHOWN.swap(true, Ordering::SeqCst) {
         return;
     }
-    client::send_typed_with_priority(
-        "database repair still running",
-        "keep screenpipe open until the repair finishes. your original data remains protected.",
-        "db_recovery",
-        Some(8_000),
-        NotificationPriority::High,
-    );
+    client::send_typed_with_priority(crate::localization::ui_text("database repair still running"), crate::localization::ui_text("keep screenpipe open until the repair finishes. your original data remains protected."), "db_recovery", Some(8_000), NotificationPriority::High);
 }
 
 fn pref_enabled(app: &AppHandle, key: &str) -> bool {

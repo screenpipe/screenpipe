@@ -25,6 +25,9 @@ import {
   TRIAL_ACTIVATION_CHECKOUT_STATE_KEY,
   TRIAL_ACTIVATION_UNLOCKED_STEP,
 } from "@/lib/first-run/trial-activation";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 const HOSTED_CHECKOUT_URL = screenpipeWebUrl(
   "/onboarding/checkout",
@@ -38,6 +41,9 @@ export function TrialActivationPaywall({
   open: boolean;
   locked: boolean;
 }) {
+
+  const ui = useGT();
+  const locale = useUiLocale();
   const { settings } = useSettings();
   const user = settings.user as AppUser | null | undefined;
   const [checkoutToken, setCheckoutToken] = React.useState<string | null>(
@@ -122,6 +128,7 @@ export function TrialActivationPaywall({
         "pending",
       );
       submitHostedCheckoutStart({
+        locale,
         hostedCheckoutUrl: HOSTED_CHECKOUT_URL,
         token: checkoutToken,
         currentHref: window.location.href,
@@ -132,10 +139,10 @@ export function TrialActivationPaywall({
       setError(
         checkoutError instanceof Error
           ? checkoutError.message
-          : "secure checkout could not be opened",
+          : ui("Secure checkout could not be opened"),
       );
     }
-  }, [checkoutToken]);
+  }, [checkoutToken, locale]);
 
   React.useEffect(() => {
     if (!open || !tokenResolved || !checkoutToken || returnedWithoutStatus) {
@@ -160,7 +167,7 @@ export function TrialActivationPaywall({
         onPointerDownOutside={(event) => event.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle>opening secure checkout</DialogTitle>
+          <DialogTitle>Opening secure checkout</DialogTitle>
           <DialogDescription>
             Using the account you already signed into during onboarding.
             Nothing is charged today.
@@ -168,36 +175,36 @@ export function TrialActivationPaywall({
         </DialogHeader>
         {!tokenResolved ? (
           <p className="py-8 text-center text-sm text-muted-foreground">
-            loading your authenticated checkout
+            Loading your authenticated checkout
           </p>
         ) : !checkoutToken ? (
           <div className="space-y-4 py-8 text-center">
             <p className="text-sm text-muted-foreground">
-              couldn&apos;t load your saved session
+              Couldn&apos;t load your saved session
             </p>
             <Button variant="outline" onClick={() => void resolveCheckoutToken()}>
-              retry
+              Retry
             </Button>
           </div>
         ) : returnedWithoutStatus ? (
           <div className="space-y-4 py-6 text-center">
             <p className="text-sm text-muted-foreground">
-              checkout closed before payment was confirmed
+              Checkout closed before payment was confirmed
             </p>
             <Button variant="outline" onClick={startCheckout}>
-              try checkout again
+              Try checkout again
             </Button>
           </div>
         ) : error ? (
           <div className="space-y-4 py-6 text-center">
             <p className="text-sm text-destructive">{error}</p>
             <Button variant="outline" onClick={startCheckout}>
-              retry
+              Retry
             </Button>
           </div>
         ) : (
           <p className="py-8 text-center text-sm text-muted-foreground">
-            loading screenpipe.com
+            Loading screenpipe.com
           </p>
         )}
       </DialogContent>

@@ -4,6 +4,9 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { LanguageSelector } from "@/components/language-selector";
+import { useLocalizationEnabled } from "@/lib/i18n/provider";
+import { useGT, useMessages } from "gt-react";
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { Switch } from "@/components/ui/switch";
@@ -36,12 +39,13 @@ import posthog from "posthog-js";
 
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
-  { label: "Auto-start", keywords: ["autostart", "launch", "startup"] },
-  { label: "Auto-update", keywords: ["updates"] },
-  { label: "Check for updates", keywords: ["version"] },
-  { label: "Auto-update scheduled tasks", keywords: ["pipes", "store", "tasks"] },
-  { label: "Reset Onboarding", keywords: ["setup"] },
-  { label: "Your goal", keywords: ["onboarding", "purpose", "personalization"] },
+  { label: msg("Language", {}), keywords: ["locale", "translation"] },
+  { label: msg("Auto-start", {}), keywords: ["autostart", "launch", "startup"] },
+  { label: msg("Auto-update", {}), keywords: ["updates"] },
+  { label: msg("Check for updates", {}), keywords: ["version"] },
+  { label: msg("Auto-update scheduled tasks", {}), keywords: ["pipes", "store", "tasks"] },
+  { label: msg("Reset Onboarding", {}), keywords: ["setup"] },
+  { label: msg("Your goal", {}), keywords: ["onboarding", "purpose", "personalization"] },
 ];
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { screenpipeWebUrl } from "@/lib/web-url";
@@ -54,8 +58,14 @@ import {
 import { getRemoteAutoUpdatePolicy } from "@/lib/desktop-remote-control";
 import { useEnterpriseBuildStatus } from "@/lib/hooks/use-is-enterprise-build";
 import { useExperimentalFeaturesEnabled } from "@/lib/experimental-features";
+import { msg } from "gt-react";
+
 
 export default function GeneralSettings() {
+  const localizationEnabled = useLocalizationEnabled();
+
+  const gt = useGT();
+  const m = useMessages();
   const { isManagedDeployment } = useManagedPolicy();
   const enterpriseBuild = useEnterpriseBuildStatus();
   const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
@@ -84,8 +94,8 @@ export default function GeneralSettings() {
     } catch (error) {
       console.error("failed to save user goal:", error);
       toast({
-        title: "couldn't save your goal",
-        description: "please try again",
+        title: gt("Couldn't save your goal"),
+        description: gt("Please try again"),
         variant: "destructive",
       });
     }
@@ -100,9 +110,9 @@ export default function GeneralSettings() {
     } catch (error) {
       console.error("failed to reset onboarding:", error);
       toast({
-        title: "couldn't reset onboarding",
+        title: gt("Couldn't reset onboarding"),
         description:
-          error instanceof Error ? error.message : "please try again",
+          error instanceof Error ? error.message : gt("Please try again"),
         variant: "destructive",
       });
     } finally {
@@ -118,23 +128,23 @@ export default function GeneralSettings() {
         const pending = pendingRes.data;
         if (pending.auth_required) {
           toast({
-            title: "update available",
-            description: `v${pending.version} is available — sign in to download it`,
+            title: gt("Update available"),
+            description: gt("v{version} is available — sign in to download it", { version: pending.version }),
           });
           return;
         }
 
         if (pending.downloaded) {
           toast({
-            title: "update ready",
-            description: `v${pending.version} is ready — restart to update`,
+            title: gt("Update ready"),
+            description: gt("v{version} is ready — restart to update", { version: pending.version }),
           });
           return;
         }
 
         toast({
-          title: "update found",
-          description: `v${pending.version} is still downloading in the background`,
+          title: gt("Update found"),
+          description: gt("v{version} is still downloading in the background", { version: pending.version }),
         });
         return;
       }
@@ -143,15 +153,15 @@ export default function GeneralSettings() {
       if (res.status === "error") throw new Error(res.error);
       const updateFound = res.data;
       toast({
-        title: updateFound ? "update found" : "you're up to date",
+        title: updateFound ? gt("Update found") : gt("You're up to date"),
         description: updateFound
-          ? "downloading in the background — banner will appear when ready"
-          : `running latest version${currentVersion ? ` (v${currentVersion})` : ""}`,
+          ? gt("Downloading in the background — banner will appear when ready")
+          : currentVersion ? gt("Running latest version (v{version})", { version: currentVersion }) : gt("Running latest version"),
       });
     } catch (e: any) {
       toast({
-        title: "update check failed",
-        description: e?.toString() || "please try again later",
+        title: gt("Update check failed"),
+        description: e?.toString() || gt("Please try again later"),
         variant: "destructive",
       });
     } finally {
@@ -174,16 +184,16 @@ export default function GeneralSettings() {
     try {
       await commands.setAutostart(checked);
       toast({
-        title: checked ? "auto-start enabled" : "auto-start disabled",
+        title: checked ? gt("Auto-start enabled") : gt("Auto-start disabled"),
         description: checked
-          ? "screenpipe will start in the background when you log in"
-          : "screenpipe won't launch at startup",
+          ? gt("Screenpipe will start in the background when you log in")
+          : gt("Screenpipe won't launch at startup"),
       });
     } catch (e: any) {
       handleSettingsChange({ autoStartEnabled: !checked });
       toast({
-        title: "failed to update auto-start",
-        description: e?.toString() || "check system permissions and try again",
+        title: gt("Failed to update auto-start"),
+        description: e?.toString() || gt("Check system permissions and try again"),
         variant: "destructive",
       });
     }
@@ -221,8 +231,8 @@ export default function GeneralSettings() {
     } catch (e: any) {
       window.open(url, "_blank");
       toast({
-        title: "opened in browser",
-        description: e?.toString() || "check your browser for version downloads",
+        title: gt("Opened in browser"),
+        description: e?.toString() || gt("Check your browser for version downloads"),
         variant: "destructive",
       });
     }
@@ -239,6 +249,7 @@ export default function GeneralSettings() {
       </div>
 
       <div className="space-y-2">
+        {localizationEnabled && <Card><CardContent className="px-3 py-2.5"><LanguageSelector /></CardContent></Card>}
         <LockedSetting settingKey="auto_start">
         <Card className="border-border bg-card">
           <CardContent className="px-3 py-2.5">
@@ -272,8 +283,8 @@ export default function GeneralSettings() {
                     <h3 className="text-sm font-medium text-foreground">Auto-update</h3>
                     <p className="text-xs text-muted-foreground">
                       {autoUpdateForcedByRemote
-                        ? "Required temporarily so this installation receives reliability fixes."
-                        : "Restart automatically when an update is downloaded. Off: a \"restart to update\" banner appears instead."}
+                        ? gt("Required temporarily so this installation receives reliability fixes.")
+                        : gt("Restart automatically when an update is downloaded. Off: a \"restart to update\" banner appears instead.")}
                     </p>
                   </div>
                 </div>
@@ -332,7 +343,7 @@ export default function GeneralSettings() {
                   <div>
                     <h3 className="text-sm font-medium text-foreground">Check for updates</h3>
                     <p className="text-xs text-muted-foreground">
-                      {currentVersion ? `Running v${currentVersion}` : "Look for a new version now"}
+                      {currentVersion ? gt("Running v{version}", { version: currentVersion }) : gt("Look for a new version now")}
                     </p>
                   </div>
                 </div>
@@ -343,7 +354,7 @@ export default function GeneralSettings() {
                   disabled={isCheckingForUpdate}
                   className="ml-4 h-8"
                 >
-                  {isCheckingForUpdate ? "checking..." : "check now"}
+                  {isCheckingForUpdate ? gt("Checking...") : gt("Check now")}
                 </Button>
               </div>
             </CardContent>
@@ -360,7 +371,7 @@ export default function GeneralSettings() {
                     <h3 className="text-sm font-medium text-foreground">App updates</h3>
                     <p className="text-xs text-muted-foreground">
                       {describeEnterpriseUpdateMode(enterpriseAppUpdatePolicy)}
-                      {enterpriseInstallMetadata?.managed ? " · managed device detected" : ""}
+                      {enterpriseInstallMetadata?.managed ? gt(" · managed device detected") : ""}
                     </p>
                   </div>
                 </div>
@@ -411,8 +422,8 @@ export default function GeneralSettings() {
                   </h3>
                   <p className="text-xs text-muted-foreground">
                     {isManagedDeployment
-                      ? "Open builds managed by your organization"
-                      : "Open recent stable versions on screenpipe.com"}
+                      ? gt("Open builds managed by your organization")
+                      : gt("Open recent stable versions on screenpipe.com")}
                   </p>
                 </div>
               </div>
@@ -422,7 +433,7 @@ export default function GeneralSettings() {
                 onClick={handleOpenVersions}
                 className="ml-4 h-7 text-xs gap-1.5"
               >
-                open
+                Open
                 <ExternalLink className="h-3 w-3" />
               </Button>
             </div>
@@ -451,14 +462,14 @@ export default function GeneralSettings() {
                 void handleUserGoalChange(value as UserGoalCategory)
               }
             >
-              <SelectTrigger className="h-8 w-[230px] text-xs">
+              <SelectTrigger aria-label={gt("Your goal")} className="h-8 w-[230px] text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="default">No specific goal</SelectItem>
                 {ONBOARDING_GOALS.map((goal) => (
                   <SelectItem key={goal.category} value={goal.category}>
-                    {goal.title}
+                    {m(goal.title)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -484,7 +495,7 @@ export default function GeneralSettings() {
               disabled={isResettingOnboarding}
               onClick={() => void handleResetOnboarding()}
             >
-              {isResettingOnboarding ? "resetting..." : "reset"}
+              {isResettingOnboarding ? gt("Resetting...") : gt("Reset")}
             </Button>
           </div>
         </CardContent>

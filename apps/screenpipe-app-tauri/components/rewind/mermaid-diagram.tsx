@@ -1,6 +1,10 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useGT } from "gt-react";
+
 
 // Screenpipe brand theme — outlined minimalist (DESIGN.md):
 // white fills, black 1px borders, black text in light mode (inverted in dark).
@@ -123,6 +127,8 @@ interface MermaidDiagramProps {
 }
 
 export function MermaidDiagram({ chart, className }: MermaidDiagramProps) {
+
+  const ui = useGT();
   const containerRef = useRef<HTMLDivElement>(null);
   const [svg, setSvg] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
@@ -169,7 +175,7 @@ export function MermaidDiagram({ chart, className }: MermaidDiagramProps) {
         setError(null);
       } catch (err) {
         console.error("Mermaid render error:", err);
-        setError(err instanceof Error ? err.message : "Failed to render diagram");
+        setError(err instanceof Error ? err.message : ui("Failed to render diagram"));
       }
     };
 
@@ -179,7 +185,7 @@ export function MermaidDiagram({ chart, className }: MermaidDiagramProps) {
   if (error) {
     return (
       <div className="border border-destructive/50 bg-destructive/10 p-4 my-2 font-mono text-sm">
-        <p className="text-destructive mb-2">diagram error:</p>
+        <p className="text-destructive mb-2">Diagram error:</p>
         <pre className="text-xs overflow-auto">{chart}</pre>
       </div>
     );

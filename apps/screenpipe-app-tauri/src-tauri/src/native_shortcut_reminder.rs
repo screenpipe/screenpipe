@@ -57,6 +57,7 @@ mod ffi {
     use std::sync::atomic::Ordering;
 
     extern "C" {
+        pub fn shortcut_set_ui_locale(json: *const c_char);
         pub fn shortcut_is_available() -> c_int;
         pub fn shortcut_show(json: *const c_char) -> c_int;
         pub fn shortcut_hide() -> c_int;
@@ -84,6 +85,12 @@ mod ffi {
         #[cfg_attr(not(feature = "e2e"), allow(dead_code))]
         pub fn shortcut_toggle_meeting_pin() -> c_int;
         pub fn shortcut_set_action_callback(cb: Option<extern "C" fn(*const c_char)>);
+    }
+
+    pub fn set_ui_locale(json: &str) {
+        if let Ok(value) = CString::new(json) {
+            unsafe { shortcut_set_ui_locale(value.as_ptr()) }
+        }
     }
 
     pub fn is_available() -> bool {
@@ -248,3 +255,6 @@ mod ffi {
 }
 
 pub use ffi::*;
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_ui_locale(_json: &str) {}

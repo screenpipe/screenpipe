@@ -775,12 +775,14 @@ pub(crate) fn acquire_input_processes(
 /// Platform-agnostic: delegates to `MeetingUiScanner::scan_process` which
 /// uses AX on macOS, UIA on Windows, and is a no-op on other platforms.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 struct CallSignalScanTarget {
     session_key: ProcessKey,
     platform: String,
     pid: i32,
     profile_index: usize,
+    #[cfg(any(target_os = "macos", test))]
+    browser_app: Option<String>,
 }
 
 fn candidate_call_signal_profile<'a>(
@@ -789,6 +791,14 @@ fn candidate_call_signal_profile<'a>(
 ) -> Option<(&'a MeetingDetectionProfile, usize)> {
     let (platform, _, _, is_browser) = candidate.call_signal_identity()?;
     profiles.iter().enumerate().find_map(|(index, profile)| {
+        // A browser-only profile can share a platform name with the native
+        // profile, whose start policy must remain independent.
+        if !is_browser
+            && profile.app_identifiers.macos_app_names.is_empty()
+            && profile.app_identifiers.windows_process_names.is_empty()
+        {
+            return None;
+        }
         (platform_name_for_profile(profile, is_browser).eq_ignore_ascii_case(platform))
             .then_some((profile, index))
     })
@@ -802,7 +812,7 @@ fn candidate_requires_call_signal(
         .is_some_and(|(profile, _)| profile.requires_call_signal)
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn call_signal_scan_target(
     candidate: &ResolvedMeetingCandidate,
     profiles: &[MeetingDetectionProfile],
@@ -817,7 +827,105 @@ fn call_signal_scan_target(
         platform: platform.to_string(),
         pid: process.pid?,
         profile_index,
+        #[cfg(any(target_os = "macos", test))]
+        browser_app: match candidate {
+            ResolvedMeetingCandidate::Browser { browser_app, .. } => Some(browser_app.clone()),
+            _ => None,
+        },
     })
+}
+
+/// CoreAudio commonly identifies a Chromium audio helper. Its AX tree has no
+/// browser windows: scan the browser UI process while keeping the evidence
+/// keyed to the original microphone session. Do not fall back to the helper
+/// when the browser has exited or its UI process cannot be resolved.
+#[cfg(any(target_os = "macos", test))]
+fn call_signal_scan_pid(
+    target: &CallSignalScanTarget,
+    resolve_browser: impl FnOnce(&str) -> i32,
+) -> Option<i32> {
+    let pid = target
+        .browser_app
+        .as_deref()
+        .map(resolve_browser)
+        .unwrap_or(target.pid);
+    if pid > 0 {
+        Some(pid)
+    } else {
+        warn!(
+            platform = %target.platform,
+            audio_pid = target.pid,
+            "meeting call-control scan could not resolve the browser UI process; meeting start withheld"
+        );
+        None
+    }
+}
+
+#[cfg(test)]
+mod call_signal_target_tests {
+    use super::*;
+
+    #[test]
+    fn browser_controls_are_scanned_in_the_ui_process_and_keep_the_audio_session() {
+        let process = AudioInputProcess {
+            audio_session_id: Some("arc-helper-mic-session".into()),
+            audio_object_id: Some(300),
+            pid: Some(84),
+            bundle_id: Some("company.thebrowser.Browser.helper".into()),
+            process_name: Some("Arc Helper".into()),
+            owner_app_name: Some("Arc".into()),
+            owner_bundle_id: Some("company.thebrowser.Browser".into()),
+            first_seen_at_ms: None,
+        };
+        let session_key = ProcessKey::from_process(&process).unwrap();
+        let candidate = ResolvedMeetingCandidate::Browser {
+            platform: "Slack Huddle".into(),
+            meeting_url: "https://app.slack.com/client/T123/C456".into(),
+            browser_app: "Arc".into(),
+            session_key: session_key.clone(),
+            first_seen_at: Instant::now(),
+            process,
+            live_evidence: true,
+        };
+        let profiles = load_detection_profiles();
+        let target = call_signal_scan_target(&candidate, &profiles).unwrap();
+        assert_eq!(target.session_key, session_key);
+        assert_eq!(
+            call_signal_scan_pid(&target, |browser| {
+                assert_eq!(browser, "Arc");
+                123
+            }),
+            Some(123)
+        );
+        let log = tempfile::NamedTempFile::new().unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(log.reopen().unwrap())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            assert_eq!(call_signal_scan_pid(&target, |_| -1), None);
+        });
+        let diagnostic = std::fs::read_to_string(log.path()).unwrap();
+        assert!(diagnostic.contains("could not resolve the browser UI process"));
+        assert!(diagnostic.contains("meeting start withheld"));
+        assert!(diagnostic.contains("platform=Slack Huddle"));
+        assert_eq!(
+            diagnostic.trim(),
+            include_str!("../../../tests/fixtures/slack-missing-browser-diagnostic.txt").trim()
+        );
+        println!("{diagnostic}");
+        assert_eq!(call_signal_scan_pid(&target, |_| 0), None);
+
+        let native = CallSignalScanTarget {
+            browser_app: None,
+            ..target
+        };
+        assert_eq!(
+            call_signal_scan_pid(&native, |_| panic!("native must use its own PID")),
+            Some(84)
+        );
+    }
 }
 
 pub(crate) fn retain_candidates_with_required_call_signal(
@@ -880,26 +988,42 @@ async fn scan_messaging_call_signals(
         let scanner = crate::meeting_watcher::shared::scanner::MeetingUiScanner::new();
         to_scan
             .into_iter()
-            .map(|target| {
+            .filter_map(|target| {
                 let profile = &profiles[target.profile_index];
-                let result = scanner.scan_process(target.pid, profile);
+                #[cfg(target_os = "macos")]
+                let Some(pid) = call_signal_scan_pid(
+                    &target,
+                    crate::meeting_watcher::ui_scan::resolve_browser_pid,
+                ) else {
+                    return None;
+                };
+                #[cfg(not(target_os = "macos"))]
+                let pid = target.pid;
+                let result = scanner.scan_process(pid, profile);
                 debug!(
                     "audio-process meeting detector: call signal scan for {} (pid {}): \
                      is_in_call={}, signals={:?}",
-                    target.platform, target.pid, result.is_in_call, result.matched_signals
+                    target.platform, pid, result.is_in_call, result.matched_signals
                 );
-                CallSignalEvidence {
+                Some(CallSignalEvidence {
                     session_key: target.session_key,
                     platform: target.platform.to_lowercase(),
                     is_in_call: result.is_in_call,
                     matched_signals: result.matched_signals,
-                }
+                })
             })
             .collect()
     });
     match tokio::time::timeout(Duration::from_secs(5), scan).await {
         Ok(Ok(results)) => results,
-        _ => Vec::new(),
+        Ok(Err(error)) => {
+            warn!(%error, "meeting call-control scan task failed; meeting start withheld");
+            Vec::new()
+        }
+        Err(error) => {
+            warn!(%error, "meeting call-control scan timed out; meeting start withheld");
+            Vec::new()
+        }
     }
 }
 

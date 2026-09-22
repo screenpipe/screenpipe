@@ -21,7 +21,7 @@ describe("starter skills and learning setup", () => {
   it("makes no writes until opted in and exposes all eight workflows", async () => {
     render(<StarterSkillsCard />); await screen.findByRole("button", { name: "turn on learning" });
     expect(mocks.fetch.mock.calls.every(([, init]) => !init.method)).toBe(true);
-    fireEvent.click(screen.getByText("explore the 8 skills")); expect(screen.getAllByRole("listitem")).toHaveLength(8);
+    fireEvent.click(screen.getByText("Explore the 8 skills")); expect(screen.getAllByRole("listitem")).toHaveLength(8);
     expect(screen.getByText("Uses your local model.", { exact: false })).toBeTruthy();
   });
   it("persists model before enabling, verifies the result and can pause", async () => {
@@ -48,8 +48,8 @@ describe("starter skills and learning setup", () => {
     expect(mocks.fetch.mock.calls.some(([p]) => p.endsWith("/enable"))).toBe(false);
   });
   it("shows unavailable state and retry instead of assuming setup is off", async () => {
-    mocks.fetch.mockRejectedValueOnce(new Error("engine offline")); render(<StarterSkillsCard />); await screen.findByRole("button", { name: "retry" });
-    expect(screen.getByText("status unavailable")).toBeTruthy(); fireEvent.click(screen.getByRole("button", { name: "retry" })); await screen.findByRole("button", { name: "turn on learning" });
+    mocks.fetch.mockRejectedValueOnce(new Error("engine offline")); render(<StarterSkillsCard />); await screen.findByRole("button", { name: "Retry" });
+    expect(screen.getByText("Status unavailable")).toBeTruthy(); fireEvent.click(screen.getByRole("button", { name: "Retry" })); await screen.findByRole("button", { name: "turn on learning" });
   });
   it("disables learning when no compatible model exists", async () => {
     mocks.presets = []; render(<StarterSkillsCard />); await waitFor(() => expect(screen.getByRole("button", { name: "turn on learning" })).toBeDisabled());

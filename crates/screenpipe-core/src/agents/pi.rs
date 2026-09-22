@@ -61,6 +61,7 @@ fn user_skill_fingerprint(root: &Path) -> std::io::Result<String> {
 
 pub const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent@0.84.1";
 pub const PI_AI_PACKAGE: &str = "@earendil-works/pi-ai@0.84.1";
+pub const TINFOIL_SDK_VERSION: &str = "1.2.1";
 pub const PI_NAMESPACE_DIR: &str = "@earendil-works";
 pub const SCREENPIPE_API_URL: &str = "https://api.screenpipe.com/v1";
 const PI_INSTALL_ARGS: [&str; 3] = ["install", "--force", "--ignore-scripts"];
@@ -510,7 +511,9 @@ fn gateway_models_to_pi_models(data: &[serde_json::Value]) -> Vec<serde_json::Va
                 "id": id,
                 "name": name,
                 "reasoning": reasoning,
-                "input": ["text", "image"],
+                // A distinct API fails closed when its secure extension is absent.
+                "api": if id == "glm-5.3-flash-reap50-iq3m" { "screenpipe-tinfoil" } else { "openai-completions" },
+                "input": if id == "glm-5.3-flash-reap50-iq3m" { json!(["text"]) } else { json!(["text", "image"]) },
                 "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
                 "contextWindow": ctx,
                 "maxTokens": max_tokens,
@@ -814,6 +817,10 @@ impl PiExecutor {
         let skills: &[(&str, &str)] = &[
             ("screenpipe-api", api_skill.as_str()),
             (
+                "screenpipe-workflow-maintenance",
+                include_str!("../../assets/skills/screenpipe-workflow-maintenance/SKILL.md"),
+            ),
+            (
                 "screenpipe-cli",
                 include_str!("../../assets/skills/screenpipe-cli/SKILL.md"),
             ),
@@ -890,8 +897,9 @@ impl PiExecutor {
     /// [`Self::USER_SKILL_MARKER`], be deleted by a later sync. The desktop
     /// importer already rejects these names; this guards any folder that reaches
     /// the store another way.
-    const BASELINE_SKILL_NAMES: [&'static str; 5] = [
+    const BASELINE_SKILL_NAMES: [&'static str; 6] = [
         "screenpipe-api",
+        "screenpipe-workflow-maintenance",
         "screenpipe-cli",
         "screenpipe-chats",
         "screenpipe-team",
@@ -1037,6 +1045,11 @@ impl PiExecutor {
                 Box::new(|_| true), // always installed — unified API skill
             ),
             (
+                "screenpipe-workflow-maintenance",
+                include_str!("../../assets/skills/screenpipe-workflow-maintenance/SKILL.md"),
+                Box::new(|_| true), // guidance only; existing API permissions still apply
+            ),
+            (
                 "screenpipe-cli",
                 include_str!("../../assets/skills/screenpipe-cli/SKILL.md"),
                 Box::new(|_| true), // always installed — pipe & connection management
@@ -1117,6 +1130,41 @@ impl PiExecutor {
         Ok(())
     }
 
+    /// Normal tools and MCP must use the scheduled Pipe's scoped recorder access.
+    /// Interactive chats without a permissions file keep their existing auth.
+    fn configure_local_api(&self, cmd: &mut tokio::process::Command, dir: &Path) -> Result<()> {
+        let permissions = dir.join(".screenpipe-permissions.json");
+        let key = if permissions.exists() {
+            let value: serde_json::Value = serde_json::from_slice(&std::fs::read(permissions)?)?;
+            let base = value["api_base"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Pipe recorder address unavailable"))?;
+            let url = reqwest::Url::parse(base)?;
+            if url.scheme() != "http"
+                || !matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
+            {
+                anyhow::bail!("Pipe requires its local recorder");
+            }
+            let token = value["pipe_token"]
+                .as_str()
+                .filter(|key| !key.is_empty())
+                .ok_or_else(|| anyhow!("Pipe recorder token unavailable"))?;
+            cmd.env("SCREENPIPE_LOCAL_API_URL", base);
+            cmd.env(
+                "SCREENPIPE_PORT",
+                url.port_or_known_default().unwrap_or(3030).to_string(),
+            );
+            Some(token.to_owned())
+        } else {
+            self.api_auth_key.clone()
+        };
+        if let Some(key) = key {
+            cmd.env("SCREENPIPE_LOCAL_API_KEY", &key);
+            cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
+        }
+        Ok(())
+    }
+
     /// Install the shared self-improvement extension for native Pi sessions.
     /// It exposes the same profile and skill-management contract ACP agents
     /// receive from the bundled screenpipe-tools MCP server.
@@ -1127,6 +1175,17 @@ impl PiExecutor {
         let ext_path = ext_dir.join("self-improvement.ts");
         std::fs::write(&ext_path, ext_content)?;
         debug!("self-improvement extension installed at {:?}", ext_path);
+        // Retire the duplicate history tools in both existing chats and tasks.
+        let legacy_memory = ext_dir.join("workflow-memory.ts");
+        if legacy_memory.exists() {
+            std::fs::remove_file(legacy_memory)?;
+        }
+        // Remove the retired workflow tool layer in existing installations too.
+        let legacy_catalog = ext_dir.join("workflow-catalog.ts");
+        if legacy_catalog.exists() {
+            std::fs::remove_file(legacy_catalog)?;
+        }
+
         if project_dir.file_name().and_then(|name| name.to_str()) == Some("skill-learning")
             && project_dir.join("pipe.md").is_file()
         {
@@ -1181,6 +1240,38 @@ impl PiExecutor {
         // app build. Pi loads every extension in this directory.
         let _ = std::fs::remove_file(ext_dir.join("view-data.ts"));
         debug!("structured-output extension installed at {:?}", ext_path);
+        Ok(())
+    }
+
+    pub fn ensure_workflow_workspace_extension(project_dir: &Path) -> Result<()> {
+        let dir = project_dir.join(".pi/extensions");
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(
+            dir.join("workflow-workspace.ts"),
+            include_str!("../../assets/extensions/workflow-workspace.ts"),
+        )?;
+        Ok(())
+    }
+
+    pub fn ensure_tinfoil_extension(project_dir: &Path) -> Result<()> {
+        let ext_dir = project_dir.join(".pi").join("extensions");
+        std::fs::create_dir_all(ext_dir.join("lib"))?;
+        let package_json = crate::paths::default_screenpipe_data_dir()
+            .join("pi-agent")
+            .join("package.json");
+        let source = include_str!("../../assets/extensions/tinfoil.ts").replace(
+            "__SCREENPIPE_PI_PACKAGE_JSON__",
+            &serde_json::to_string(&package_json.to_string_lossy())?,
+        );
+        std::fs::write(ext_dir.join("tinfoil.ts"), source)?;
+        std::fs::write(
+            ext_dir.join("lib").join("tinfoil-transport.ts"),
+            include_str!("../../assets/extensions/lib/tinfoil-transport.ts"),
+        )?;
+        std::fs::write(
+            ext_dir.join("lib").join("glm-protocol.ts"),
+            include_str!("../../assets/extensions/lib/glm-protocol.ts"),
+        )?;
         Ok(())
     }
 
@@ -1654,6 +1745,11 @@ impl PiExecutor {
     /// `Ok(model)`  → the requested model is allowed (or we can't validate).
     /// `Err(model)` → requested not allowed; the returned value is the fallback.
     fn pick_allowed_model(requested: &str, allowed: &[String]) -> Result<String, String> {
+        // Confidential selection is a transport promise. An unavailable model
+        // must fail rather than downgrade to a plaintext hosted provider.
+        if requested == "glm-5.3-flash-reap50-iq3m" {
+            return Ok(requested.to_string());
+        }
         // No catalog, or only the gateway fallback sentinel → we
         // couldn't actually validate, so don't second-guess the requested
         // model. Without the sentinel check the `["auto"]` list returned by
@@ -1706,6 +1802,7 @@ impl PiExecutor {
         continue_session: bool,
         pipe_system_prompt: Option<&str>,
     ) -> Result<AgentOutput> {
+        super::pi_compaction::ensure_for_entrypoint(Path::new(pi_path))?;
         let mut cmd = build_async_command(pi_path);
         cmd.current_dir(working_dir);
         apply_pi_isolation_env(&mut |k, v| {
@@ -1763,10 +1860,7 @@ impl PiExecutor {
         // pipe.md files that hardcoded the old name (e.g. an older
         // meeting-summary install on disk that install_builtin_pipes won't
         // overwrite). TODO(remove next release): drop SCREENPIPE_API_AUTH_KEY.
-        if let Some(ref key) = self.api_auth_key {
-            cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
-            cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
-        }
+        self.configure_local_api(&mut cmd, working_dir)?;
 
         // Auto-auth the agent's `curl localhost:3030/...` calls via a bash
         // shim sourced from $BASH_ENV on every subshell. See bash_env.rs.
@@ -1851,6 +1945,7 @@ impl PiExecutor {
         mcp_server_allowlist: Option<&[String]>,
         session_owner: Option<&str>,
     ) -> Result<AgentOutput> {
+        super::pi_compaction::ensure_for_entrypoint(Path::new(pi_path))?;
         let mut cmd = build_async_command(pi_path);
         cmd.current_dir(working_dir);
         apply_pi_isolation_env(&mut |k, v| {
@@ -1916,10 +2011,7 @@ impl PiExecutor {
         }
 
         // See spawn_pi above — TODO(remove next release): drop the deprecated alias.
-        if let Some(ref key) = self.api_auth_key {
-            cmd.env("SCREENPIPE_LOCAL_API_KEY", key);
-            cmd.env("SCREENPIPE_API_AUTH_KEY", key); // deprecated alias
-        }
+        self.configure_local_api(&mut cmd, working_dir)?;
 
         if let Some(ids) = mcp_server_allowlist {
             cmd.env("SCREENPIPE_MCP_SERVER_ALLOWLIST", ids.join(","));
@@ -2100,6 +2192,40 @@ impl AgentExecutor for PiExecutor {
         // Provider resolution:
         // 1. Explicit provider from pipe frontmatter → use it
         // 2. No provider specified → screenpipe cloud (default)
+        let workflow_task = crate::workflows::pipeline::task_at(working_dir).is_some();
+        let model = if workflow_task {
+            crate::workflows::model_choice::selected_model()?
+        } else {
+            model
+        };
+        let provider = if workflow_task {
+            Some("screenpipe")
+        } else {
+            provider
+        };
+        let provider_url = if workflow_task { None } else { provider_url };
+        let provider_api_key = if workflow_task {
+            None
+        } else {
+            provider_api_key
+        };
+        if workflow_task {
+            if !crate::workflows::pipeline::has_pending_input(working_dir).await? {
+                return Ok(AgentOutput {
+                    stdout: "No new workflow input; saved results kept.".into(),
+                    stderr: String::new(),
+                    success: true,
+                    pid: None,
+                });
+            }
+            crate::workflows::pipeline::check_admission(
+                &self.api_url,
+                self.current_user_token().as_deref(),
+                model,
+            )
+            .await?;
+        }
+        let workflow_save_state = crate::workflows::pipeline::save_state(working_dir).await?;
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
 
         let (resolved_model, fell_back_from) = self
@@ -2130,6 +2256,7 @@ impl AgentExecutor for PiExecutor {
             &self.api_url,
         )?;
         Self::ensure_context_pruning_extension(working_dir)?;
+        Self::ensure_tinfoil_extension(working_dir)?;
         Self::ensure_orphan_guard_extension(working_dir)?;
         Self::ensure_self_improvement_extension(working_dir)?;
         Self::ensure_mcp_bridge_extension(working_dir)?;
@@ -2147,7 +2274,7 @@ impl AgentExecutor for PiExecutor {
             resolved_provider, resolved_model
         );
 
-        let output = self
+        let mut output = self
             .spawn_pi(
                 &pi_path,
                 prompt,
@@ -2183,7 +2310,7 @@ impl AgentExecutor for PiExecutor {
                 provider_url,
             )
             .await?;
-            return self
+            output = self
                 .spawn_pi(
                     &pi_path,
                     prompt,
@@ -2195,9 +2322,22 @@ impl AgentExecutor for PiExecutor {
                     continue_session,
                     None,
                 )
-                .await;
+                .await?;
         }
 
+        if output.success {
+            if let Err(error) =
+                crate::workflows::pipeline::verify_saved(working_dir, workflow_save_state).await
+            {
+                output.success = false;
+                output.stderr.push_str(
+                    &serde_json::json!({"error": {
+                        "code": "missing_output", "message": error.to_string()
+                    }})
+                    .to_string(),
+                );
+            }
+        }
         Ok(output)
     }
 
@@ -2218,6 +2358,40 @@ impl AgentExecutor for PiExecutor {
         session_owner: Option<&str>,
         _executor_config: Option<&serde_json::Value>,
     ) -> Result<AgentOutput> {
+        let workflow_task = crate::workflows::pipeline::task_at(working_dir).is_some();
+        let model = if workflow_task {
+            crate::workflows::model_choice::selected_model()?
+        } else {
+            model
+        };
+        let provider = if workflow_task {
+            Some("screenpipe")
+        } else {
+            provider
+        };
+        let provider_url = if workflow_task { None } else { provider_url };
+        let provider_api_key = if workflow_task {
+            None
+        } else {
+            provider_api_key
+        };
+        if workflow_task {
+            if !crate::workflows::pipeline::has_pending_input(working_dir).await? {
+                return Ok(AgentOutput {
+                    stdout: "No new workflow input; saved results kept.".into(),
+                    stderr: String::new(),
+                    success: true,
+                    pid: None,
+                });
+            }
+            crate::workflows::pipeline::check_admission(
+                &self.api_url,
+                self.current_user_token().as_deref(),
+                model,
+            )
+            .await?;
+        }
+        let workflow_save_state = crate::workflows::pipeline::save_state(working_dir).await?;
         let resolved_provider = provider.unwrap_or("screenpipe").to_string();
         let (resolved_model, fell_back_from) = self
             .resolve_screenpipe_model(model, &resolved_provider)
@@ -2252,6 +2426,7 @@ impl AgentExecutor for PiExecutor {
             &self.api_url,
         )?;
         Self::ensure_context_pruning_extension(working_dir)?;
+        Self::ensure_tinfoil_extension(working_dir)?;
         Self::ensure_orphan_guard_extension(working_dir)?;
         Self::ensure_self_improvement_extension(working_dir)?;
         Self::ensure_mcp_bridge_extension(working_dir)?;
@@ -2362,6 +2537,19 @@ impl AgentExecutor for PiExecutor {
         })
         .await?;
 
+        if output.success {
+            if let Err(error) =
+                crate::workflows::pipeline::verify_saved(working_dir, workflow_save_state).await
+            {
+                output.success = false;
+                output.stderr.push_str(
+                    &serde_json::json!({"error": {
+                        "code": "missing_output", "message": error.to_string()
+                    }})
+                    .to_string(),
+                );
+            }
+        }
         Ok(output)
     }
 
@@ -2497,7 +2685,45 @@ pub fn pi_config_dir() -> Result<PathBuf> {
         _ => crate::paths::default_screenpipe_data_dir().join("pi-config"),
     };
     seed_pi_config_from_global(&dir);
+    ensure_pi_compaction_default(&dir)?;
     Ok(dir)
+}
+
+/// Pi's 20k recent-history default leaves too little room for the system prompt,
+/// skill instructions and a summary on 32k models. Use its standard setting for
+/// both chat and Pipes. Explicit user settings (including disabled compaction)
+/// remain authoritative; no model selection or summarization logic lives here.
+fn ensure_pi_compaction_default(config_dir: &Path) -> Result<()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOCK
+        .lock()
+        .map_err(|_| anyhow!("pi settings lock poisoned"))?;
+    let path = config_dir.join("settings.json");
+    let mut settings: serde_json::Value = match std::fs::read_to_string(&path) {
+        Ok(raw) => match serde_json::from_str(&raw) {
+            Ok(value) => value,
+            // Leave malformed/user-owned configuration intact for Pi to report.
+            Err(_) => return Ok(()),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(error) => return Err(error.into()),
+    };
+    let Some(object) = settings.as_object_mut() else {
+        return Ok(());
+    };
+    let compaction = object.entry("compaction").or_insert_with(|| json!({}));
+    let Some(compaction) = compaction.as_object_mut() else {
+        return Ok(());
+    };
+    if compaction.contains_key("keepRecentTokens") {
+        return Ok(());
+    }
+    compaction.insert("keepRecentTokens".into(), json!(8192));
+    std::fs::create_dir_all(config_dir)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(config_dir)?;
+    serde_json::to_writer_pretty(temporary.as_file_mut(), &settings)?;
+    temporary.persist(path)?;
+    Ok(())
 }
 
 fn pi_package_source_matches(source: &str, package_name: &str) -> bool {
@@ -2557,6 +2783,11 @@ pub fn apply_pi_isolation_env(apply: &mut dyn FnMut(&str, &str)) {
     // We pin the pi version ourselves (ensure_installed); don't let the
     // subprocess phone pi.dev for update checks on every run.
     apply("PI_SKIP_VERSION_CHECK", "1");
+    // Bun's native-first import bypasses Pi's host SDK aliases. Extensions
+    // with top-level await (pi-subagents) can then be only partly initialized
+    // when jiti retries them. Use jiti's alias-aware loader from the start;
+    // nested Pi processes inherit the same setting.
+    apply("JITI_TRY_NATIVE", "0");
     // Same reasoning one layer out: the bundled skills tell agents to run the
     // screenpipe CLI, and `bun x screenpipe@latest` spends ~1.5s resolving the
     // registry on every single call. Hand them an already-resolved native
@@ -2976,9 +3207,9 @@ const BOUNDED_OUTPUT_TAIL: usize = 192 * 1024;
 ///
 /// The agent's stdout was accumulated into an unbounded `String` for the whole
 /// run, so a long agent turn with large tool results held all of it resident.
-/// Nothing parses this buffer — the JSON events are decoded per line as they
-/// arrive and this is only the stored record — so eliding the middle costs no
-/// behavior.
+/// Live JSON events are decoded before buffering. The scheduler also checks
+/// the stored final event, so an oversized agent_end keeps its final assistant
+/// outcome without retaining a second copy of the entire tool history.
 ///
 /// Both ends are kept deliberately: the head carries the run's setup and the
 /// tail carries the result or the error, which are the two things anyone
@@ -2992,6 +3223,8 @@ pub struct BoundedOutput {
 
 impl BoundedOutput {
     pub fn push_line(&mut self, line: &str) {
+        let compact = compact_oversized_agent_end(line);
+        let line = compact.as_deref().unwrap_or(line);
         // `self.tail.is_empty()` closes the head for good once anything has
         // spilled. Without it a short line still fits the head's leftover
         // capacity after longer lines have already gone to the tail, and the
@@ -3026,6 +3259,49 @@ impl BoundedOutput {
             self.head, self.dropped, self.tail
         )
     }
+}
+
+// Pi repeats the complete run history (including images) in agent_end. Keep
+// its terminal outcome small enough to survive the same bounded stdout buffer.
+fn compact_oversized_agent_end(line: &str) -> Option<String> {
+    if line.len() <= BOUNDED_OUTPUT_TAIL || !line.contains("agent_end") {
+        return None;
+    }
+    let event: serde_json::Value = serde_json::from_str(line).ok()?;
+    if event["type"] != "agent_end" {
+        return None;
+    }
+    let last = event["messages"]
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|m| m["role"] == "assistant")?;
+    let reason = last["stopReason"].as_str()?;
+    if !matches!(reason, "stop" | "error" | "aborted" | "length") {
+        return None;
+    }
+    let text: String = last["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|b| b["type"] == "text")
+        .filter_map(|b| b["text"].as_str())
+        .flat_map(str::chars)
+        .take(8192)
+        .collect();
+    let error: String = last["errorMessage"]
+        .as_str()
+        .unwrap_or("")
+        .chars()
+        .take(2048)
+        .collect();
+    Some(
+        serde_json::json!({"type":"agent_end","messages":[{
+            "role":"assistant","stopReason":reason,"errorMessage":error,
+            "content":[{"type":"text","text":text}]
+        }]})
+        .to_string(),
+    )
 }
 
 /// Last `max` bytes of a captured process stream, lossy-decoded and
@@ -3173,6 +3449,7 @@ fn seed_pi_package_json(install_dir: &Path) -> Result<()> {
     let expected_pi_version = json!(PI_PACKAGE.rsplit('@').next().unwrap_or(""));
     let expected_pi_ai_version = json!(PI_AI_PACKAGE.rsplit('@').next().unwrap_or(""));
     let expected_sdk = json!("^0.91.1");
+    let expected_tinfoil = json!(TINFOIL_SDK_VERSION);
     let expected_overrides = json!({
         "hosted-git-info": {
             "lru-cache": "^10.0.0"
@@ -3231,6 +3508,7 @@ fn seed_pi_package_json(install_dir: &Path) -> Result<()> {
                     ("@earendil-works/pi-coding-agent", &expected_pi_version),
                     ("@earendil-works/pi-ai", &expected_pi_ai_version),
                     ("@anthropic-ai/sdk", &expected_sdk),
+                    ("tinfoil", &expected_tinfoil),
                 ] {
                     if deps_obj.get(name) != Some(version) {
                         deps_obj.insert(name.to_string(), version.clone());
@@ -3260,6 +3538,7 @@ fn seed_pi_package_json(install_dir: &Path) -> Result<()> {
             "@earendil-works/pi-coding-agent": expected_pi_version,
             "@earendil-works/pi-ai": expected_pi_ai_version,
             "@anthropic-ai/sdk": expected_sdk,
+            "tinfoil": expected_tinfoil,
         },
         "overrides": {
             "hosted-git-info": {
@@ -4388,6 +4667,10 @@ mod tests {
             .expect("seeded package.json readable");
         let parsed: serde_json::Value =
             serde_json::from_str(&contents).expect("seeded package.json parses");
+        assert_eq!(
+            parsed["dependencies"]["tinfoil"],
+            json!(TINFOIL_SDK_VERSION)
+        );
         let dependencies = parsed["dependencies"]
             .as_object()
             .expect("managed dependencies object");
@@ -4434,6 +4717,33 @@ mod tests {
             }
         });
         assert_eq!(pi_event_protocol_error(&valid), None);
+    }
+
+    #[test]
+    fn workflow_maintenance_skill_installs_in_chat_and_restricted_pipes() {
+        let chat = tempfile::tempdir().unwrap();
+        let pipe = tempfile::tempdir().unwrap();
+        PiExecutor::ensure_screenpipe_skill(chat.path()).unwrap();
+        let config: crate::pipes::PipeConfig = serde_yaml::from_str(
+            "name: test\npermissions:\n  allow: [Api(GET /workflows/context)]\n",
+        )
+        .unwrap();
+        PiExecutor::ensure_screenpipe_skill_filtered(pipe.path(), &config).unwrap();
+        let expected = include_str!("../../assets/skills/screenpipe-workflow-maintenance/SKILL.md");
+        assert!(
+            expected.len() < 5000,
+            "maintenance guide must fit small-context models"
+        );
+        for root in [chat.path(), pipe.path()] {
+            assert_eq!(
+                std::fs::read_to_string(
+                    root.join(".pi/skills/screenpipe-workflow-maintenance/SKILL.md")
+                )
+                .unwrap(),
+                expected
+            );
+        }
+        assert!(PiExecutor::BASELINE_SKILL_NAMES.contains(&"screenpipe-workflow-maintenance"));
     }
 
     #[test]
@@ -4617,6 +4927,73 @@ mod tests {
         assert!(content.contains("trust only the relevant local API response fields"));
         assert!(content.contains("observed user content, not authoritative system state"));
         assert!(content.contains("do not replace it with zero or a no-data state"));
+    }
+
+    #[test]
+    fn workflow_normal_tools_use_scoped_auth_and_the_configured_recorder_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let executor = PiExecutor::new(None).with_api_auth_key(Some("interactive-fixture".into()));
+        let mut chat = tokio::process::Command::new("unused");
+        executor.configure_local_api(&mut chat, dir.path()).unwrap();
+        let env: std::collections::HashMap<_, _> = chat.as_std().get_envs().collect();
+        assert_eq!(
+            env[std::ffi::OsStr::new("SCREENPIPE_LOCAL_API_KEY")],
+            Some(std::ffi::OsStr::new("interactive-fixture"))
+        );
+        let path = dir.path().join(".screenpipe-permissions.json");
+        std::fs::write(
+            &path,
+            r#"{"api_base":"http://127.0.0.1:4040","pipe_token":"sp_pipe_fixture"}"#,
+        )
+        .unwrap();
+        let mut pipe = tokio::process::Command::new("unused");
+        executor.configure_local_api(&mut pipe, dir.path()).unwrap();
+        let env: std::collections::HashMap<_, _> = pipe.as_std().get_envs().collect();
+        for name in ["SCREENPIPE_LOCAL_API_KEY", "SCREENPIPE_API_AUTH_KEY"] {
+            assert_eq!(
+                env[std::ffi::OsStr::new(name)],
+                Some(std::ffi::OsStr::new("sp_pipe_fixture"))
+            );
+        }
+        assert_eq!(
+            env[std::ffi::OsStr::new("SCREENPIPE_LOCAL_API_URL")],
+            Some(std::ffi::OsStr::new("http://127.0.0.1:4040"))
+        );
+        assert_eq!(
+            env[std::ffi::OsStr::new("SCREENPIPE_PORT")],
+            Some(std::ffi::OsStr::new("4040"))
+        );
+        for invalid in [
+            r#"{"api_base":"http://127.0.0.1:4040"}"#,
+            r#"{"api_base":"https://example.com","pipe_token":"sp_pipe_fixture"}"#,
+            "broken",
+        ] {
+            std::fs::write(&path, invalid).unwrap();
+            assert!(executor
+                .configure_local_api(&mut tokio::process::Command::new("unused"), dir.path())
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn workflow_cleanup_preserves_shared_tools() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let dir = root.path().join("workflow-activity");
+        let extensions = dir.join(".pi/extensions");
+        std::fs::create_dir_all(&extensions).unwrap();
+        std::fs::write(dir.join("pipe.md"), "test task").unwrap();
+        std::fs::write(extensions.join("workflow-memory.ts"), "legacy override").unwrap();
+        std::fs::write(extensions.join("workflow-catalog.ts"), "legacy override").unwrap();
+        std::fs::write(extensions.join("mcp-bridge.ts"), "shared bridge").unwrap();
+        PiExecutor::ensure_self_improvement_extension(&dir).unwrap();
+        assert!(!extensions.join("workflow-memory.ts").exists());
+        assert!(!extensions.join("workflow-catalog.ts").exists());
+        assert!(extensions.join("self-improvement.ts").exists());
+        assert_eq!(
+            std::fs::read_to_string(extensions.join("mcp-bridge.ts")).unwrap(),
+            "shared bridge"
+        );
+        PiExecutor::ensure_self_improvement_extension(&dir).unwrap();
     }
 
     #[test]
@@ -5124,6 +5501,54 @@ mod tests {
         assert_eq!(lines[1], "OK");
     }
 
+    #[test]
+    fn pi_compaction_default_preserves_user_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"theme":"dark","compaction":{"enabled":false,"reserveTokens":12000}}"#,
+        )
+        .unwrap();
+        ensure_pi_compaction_default(dir.path()).unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(settings["theme"], "dark");
+        assert_eq!(
+            settings["compaction"],
+            json!({"enabled":false,"reserveTokens":12000,"keepRecentTokens":8192})
+        );
+        let original = std::fs::read(&path).unwrap();
+        ensure_pi_compaction_default(dir.path()).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn pi_compaction_default_does_not_replace_explicit_or_invalid_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        for original in [
+            r#"{"compaction":{"keepRecentTokens":24000}}"#,
+            "invalid",
+            "[]",
+            r#"{"compaction":null}"#,
+        ] {
+            std::fs::write(&path, original).unwrap();
+            ensure_pi_compaction_default(dir.path()).unwrap();
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn pi_compaction_default_initializes_fresh_config() {
+        let dir = tempfile::tempdir().unwrap();
+        ensure_pi_compaction_default(dir.path()).unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(settings, json!({"compaction":{"keepRecentTokens":8192}}));
+    }
+
     /// First-run seed copies config + screenpipe-owned sessions from the
     /// global `~/.pi/agent`, strips `packages` from settings.json, and never
     /// touches the global dir. A second call is a no-op via the marker.
@@ -5268,6 +5693,13 @@ mod tests {
 
     #[test]
     fn test_pick_allowed_model() {
+        assert_eq!(
+            PiExecutor::pick_allowed_model(
+                "glm-5.3-flash-reap50-iq3m",
+                &["auto".into(), "gpt-5.6-luna".into()],
+            ),
+            Ok("glm-5.3-flash-reap50-iq3m".into())
+        );
         let allowed: Vec<String> = ["auto", "claude-haiku-4-5", "gemini-3.5-flash"]
             .iter()
             .map(|s| s.to_string())
@@ -5329,6 +5761,12 @@ mod tests {
 
     #[test]
     fn gateway_catalog_omits_locked_models_from_pi() {
+        let confidential = gateway_models_to_pi_models(&[json!({
+            "id": "glm-5.3-flash-reap50-iq3m", "context_window": 32768,
+            "max_output_tokens": 8192
+        })]);
+        assert_eq!(confidential[0]["api"], json!("screenpipe-tinfoil"));
+        assert_eq!(confidential[0]["input"], json!(["text"]));
         let models = gateway_models_to_pi_models(&[
             json!({
                 "id": "auto",

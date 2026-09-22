@@ -51,9 +51,7 @@ export function NotificationActionButton({
     <TooltipProvider delayDuration={150}>
       <Tooltip
         open={tooltipOpen}
-        onOpenChange={(open) =>
-          setTooltipOpen(open && measureTruncation())
-        }
+        onOpenChange={(open) => setTooltipOpen(open && measureTruncation())}
       >
         <TooltipTrigger asChild>
           <button
@@ -69,11 +67,16 @@ export function NotificationActionButton({
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
-              background: primary ? "rgba(0, 0, 0, 0.06)" : "none",
-              border: "1px solid rgba(0, 0, 0, 0.12)",
-              color: "rgba(0, 0, 0, 0.75)",
+              background: primary
+                ? "hsl(var(--foreground) / 0.88)"
+                : "hsl(var(--foreground) / 0.04)",
+              border: "1px solid hsl(var(--border))",
+              borderRadius: "6px",
+              color: primary
+                ? "hsl(var(--background))"
+                : "hsl(var(--foreground) / 0.8)",
               cursor: "pointer",
-              padding: "4px 10px",
+              padding: "6px 10px",
               fontSize: "10px",
               lineHeight: "1.4",
               fontFamily: '"IBM Plex Mono", monospace',
@@ -81,12 +84,14 @@ export function NotificationActionButton({
               letterSpacing: "0.03em",
             }}
             onMouseEnter={(event) => {
-              event.currentTarget.style.background = "rgba(0, 0, 0, 0.08)";
+              event.currentTarget.style.background = primary
+                ? "hsl(var(--foreground) / 0.75)"
+                : "hsl(var(--foreground) / 0.08)";
             }}
             onMouseLeave={(event) => {
               event.currentTarget.style.background = primary
-                ? "rgba(0, 0, 0, 0.06)"
-                : "none";
+                ? "hsl(var(--foreground) / 0.88)"
+                : "hsl(var(--foreground) / 0.04)";
             }}
           >
             {label}
@@ -95,7 +100,7 @@ export function NotificationActionButton({
         {isTruncated && (
           <TooltipContent
             side="top"
-            className="max-w-[calc(100vw-16px)] rounded-none border-black/15 bg-white/95 px-2 py-1 font-mono text-[10px] text-black/75 shadow-md"
+            className="max-w-[calc(100vw-16px)] rounded-sm border-border bg-background/95 px-2 py-1 font-mono text-[10px] text-foreground/75 shadow-md"
           >
             {label}
           </TooltipContent>

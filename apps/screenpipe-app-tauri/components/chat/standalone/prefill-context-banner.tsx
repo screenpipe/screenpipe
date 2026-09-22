@@ -6,6 +6,8 @@
 import { X } from "lucide-react";
 import { getApiBaseUrl, appendAuthToken } from "@/lib/api";
 import type { PrefillComposerProps } from "./composer-types";
+import { useGT } from "gt-react";
+
 
 type ContextPresentation = {
   label: string;
@@ -28,7 +30,7 @@ export function prefillContextPresentation(
         typeof value.title === "string"
       ) {
         return {
-          label: "frozen Screenpipe snapshot",
+          label: "Frozen Screenpipe snapshot",
           preview: `${value.title} · ${value.source === "live-view" ? "Live View" : "meeting notes"} · reviewed copy`,
         };
       }
@@ -39,10 +41,10 @@ export function prefillContextPresentation(
 
   return {
     label: source?.startsWith("activity-history-")
-      ? "activity episode"
+      ? "Activity episode"
       : source === "timeline"
-        ? "timeline selection"
-        : "search",
+        ? "Timeline selection"
+        : "Search",
     preview: `${context.slice(0, 150)}${context.length > 150 ? "..." : ""}`,
   };
 }
@@ -52,6 +54,7 @@ export function PrefillContextBanner({
 }: {
   prefill: PrefillComposerProps;
 }) {
+  const ui = useGT();
   if (!prefill.context && !prefill.frameId) return null;
   const contextPresentation = prefill.context
     ? prefillContextPresentation(prefill.context, prefill.source)
@@ -68,7 +71,7 @@ export function PrefillContextBanner({
                 src={appendAuthToken(
                   `${getApiBaseUrl()}/frames/${prefill.frameId}`,
                 )}
-                alt="Attached frame"
+                alt={ui("Attached frame")}
                 className="w-16 h-12 object-cover rounded border border-border/50"
               />
               <button
@@ -83,8 +86,8 @@ export function PrefillContextBanner({
         )}
         {prefill.context && (
           <div className="flex-1 min-w-0">
-            <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
-              context from {contextPresentation?.label}
+            <div className="text-[10px] font-medium text-muted-foreground normal-case tracking-wider mb-1">
+              Context from {contextPresentation?.label}
             </div>
             <p className="text-xs text-foreground font-mono line-clamp-2">
               {contextPresentation?.preview}

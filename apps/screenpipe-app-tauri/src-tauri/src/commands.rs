@@ -2090,7 +2090,7 @@ pub async fn open_login_window(
             label.clone(),
             WebviewUrl::External(parsed_login_url),
         )
-        .title("sign in to screenpipe")
+        .title(crate::localization::ui_text("sign in to screenpipe"))
         .inner_size(460.0, 700.0)
         .focused_gated(true);
 
@@ -2176,7 +2176,7 @@ pub async fn open_google_calendar_auth_window(
     let parsed_url = auth_url.parse().map_err(|e| format!("invalid url: {e}"))?;
     let mut builder =
         WebviewWindowBuilder::new(&app_handle, label, WebviewUrl::External(parsed_url))
-            .title("connect google calendar")
+            .title(crate::localization::ui_text("connect google calendar"))
             .inner_size(500.0, 700.0)
             .focused_gated(true);
 

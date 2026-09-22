@@ -16,9 +16,9 @@ mod tests;
 
 use super::{storage_error, HybridStorage};
 pub(crate) use connection::pool_options;
-pub(crate) use connection::register_hash;
+pub(crate) use connection::{register_hash, register_hash_extension};
 pub(super) use lifecycle::export;
-pub(super) use schema::{bootstrap, bootstrap_in_place, finish_indexes};
+pub(super) use schema::{bootstrap, bootstrap_in_place, finish_indexes, upgrade_recording};
 use std::sync::{atomic::AtomicUsize, Arc, Mutex};
 
 pub const CAPABILITY: &str = "parquet-bulk-v1";
@@ -110,6 +110,15 @@ pub(super) static TABLES: &[Table] = &[
 ];
 
 impl Table {
+    // An encoder bound selects work; it cannot reject valid resident history.
+    fn sealable(&self) -> String {
+        format!(
+            "({}) AND ({})<=(SELECT record_limit FROM storage_metadata)",
+            self.eligible,
+            self.all_bytes("")
+        )
+    }
+
     fn mask(&self) -> i64 {
         (1 << self.columns.len()) - 1
     }
@@ -200,6 +209,8 @@ pub(crate) struct Runtime {
     element_frames: Mutex<Option<(String, Arc<std::collections::HashMap<i64, Vec<usize>>>)>>,
     #[cfg(test)]
     decode_hook: Mutex<Option<Arc<dyn Fn(&str) + Send + Sync>>>,
+    #[cfg(test)]
+    element_publish_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 #[derive(Clone)]

@@ -57,6 +57,9 @@ import {
 } from "@/lib/stores/chat-store";
 import { createConversationBranch } from "@/lib/chat/branch-conversation";
 import { showChatArchiveUndoToast } from "@/components/chat/archive-undo-toast";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 // --- Hook options ---
 
@@ -141,6 +144,8 @@ function newestUserMessageTimestamp(messages: Message[]): number | undefined {
 const aiTitleAttempted = new Set<string>();
 
 export function useChatConversations(opts: UseChatConversationsOpts) {
+  const uiLanguage = useLocale();
+  const ui = useGT();
   const {
     messages,
     setMessages,
@@ -235,7 +240,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
 
     const meta: ConversationMeta = {
       id: conversation.id,
-      title: typeof conversation.title === "string" ? conversation.title : "untitled",
+      title: typeof conversation.title === "string" ? conversation.title : ui("untitled"),
       createdAt: typeof conversation.createdAt === "number" ? conversation.createdAt : 0,
       updatedAt: typeof conversation.updatedAt === "number" ? conversation.updatedAt : 0,
       messageCount: msgs.length,
@@ -263,7 +268,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         .slice(0, CHAT_HISTORY_INITIAL_LIMIT);
     });
     lastHistoryQueryRef.current = "";
-  }, [historySearch]);
+  }, [historySearch, uiLanguage]);
 
   const syncConversationTitleState = useCallback(async (
     id: string,
@@ -1389,7 +1394,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         if (!sessionAfterLoad) {
           store.actions.upsert({
             id: conv.id,
-            title: persisted.title || "untitled",
+            title: persisted.title || ui("untitled"),
             ...(persisted.titleSource ? { titleSource: persisted.titleSource } : {}),
             preview: "",
             status: "idle",
@@ -1409,7 +1414,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           });
         } else {
           store.actions.patch(conv.id, {
-            title: persisted.title || sessionAfterLoad.title || "untitled",
+            title: persisted.title || sessionAfterLoad.title || ui("untitled"),
             ...(persisted.titleSource ? { titleSource: persisted.titleSource } : {}),
             pinned: persisted.pinned === true,
             hidden: persisted.hidden === true,
@@ -1512,7 +1517,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       if (!sessionBeforeSeed) {
         store.actions.upsert({
           id: conv.id,
-          title: full.title || "untitled",
+          title: full.title || ui("untitled"),
           ...(full.titleSource ? { titleSource: full.titleSource } : {}),
           preview: "",
           status: "idle",
@@ -1535,7 +1540,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         });
       } else if (conv.kind || conv.pipeContext || conv.sidebarGroup || full.sidebarGroup) {
         store.actions.patch(conv.id, {
-          title: full.title || sessionBeforeSeed.title || "untitled",
+          title: full.title || sessionBeforeSeed.title || ui("untitled"),
           ...(full.titleSource ? { titleSource: full.titleSource } : {}),
           pinned: full.pinned === true,
           hidden: full.hidden === true,
@@ -1837,8 +1842,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       store.actions.upsert({
         id: newSid,
         title: options.sideConversationParentId
-          ? "temporary side chat"
-          : "untitled",
+          ? ui("temporary side chat")
+          : ui("untitled"),
         preview: "",
         status: "idle",
         messageCount: 0,
@@ -1986,13 +1991,13 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       }
     }
 
-    if (todayConvs.length > 0) groups.push({ label: "Today", conversations: todayConvs });
-    if (yesterdayConvs.length > 0) groups.push({ label: "Yesterday", conversations: yesterdayConvs });
-    if (lastWeekConvs.length > 0) groups.push({ label: "Last 7 Days", conversations: lastWeekConvs });
-    if (olderConvs.length > 0) groups.push({ label: "Older", conversations: olderConvs });
+    if (todayConvs.length > 0) groups.push({ label: ui("Today"), conversations: todayConvs });
+    if (yesterdayConvs.length > 0) groups.push({ label: ui("Yesterday"), conversations: yesterdayConvs });
+    if (lastWeekConvs.length > 0) groups.push({ label: ui("Last 7 Days"), conversations: lastWeekConvs });
+    if (olderConvs.length > 0) groups.push({ label: ui("Older"), conversations: olderConvs });
 
     return groups;
-  }, [filteredConversations]);
+  }, [filteredConversations, uiLanguage]);
 
   return {
     showHistory,

@@ -16,6 +16,8 @@ import {
 	type DomainRule,
 	type UrlRule,
 } from "@/lib/settings/capture-filters";
+import { useGT } from "gt-react";
+
 
 export interface ObservedDomain {
 	name: string;
@@ -38,6 +40,8 @@ export type WebsiteRuleListProps =
 
 /** Domain rules with explicit descendant and exception behavior. */
 export function WebsiteRuleList(props: WebsiteRuleListProps) {
+
+  const ui = useGT();
 	const { rules, observed, mode } = props;
 	const [draft, setDraft] = useState("");
 	const [error, setError] = useState<string | null>(null);
@@ -53,7 +57,7 @@ export function WebsiteRuleList(props: WebsiteRuleListProps) {
 	const addRule = () => {
 		const domain = normalizeRuleDomain(draft);
 		if (domain === "") {
-			setError("Enter a full hostname such as docs.google.com");
+			setError(ui("Enter a full hostname such as docs.google.com"));
 			return;
 		}
 		if (
@@ -64,7 +68,7 @@ export function WebsiteRuleList(props: WebsiteRuleListProps) {
 					) === domain,
 			)
 		) {
-			setError("That hostname is already listed");
+			setError(ui("That hostname is already listed"));
 			return;
 		}
 		commit([
@@ -93,7 +97,7 @@ export function WebsiteRuleList(props: WebsiteRuleListProps) {
 					list={listId}
 					placeholder="docs.google.com"
 					className="h-8 text-xs"
-					aria-label={mode === "allow" ? "Hostname to allow" : "Hostname to block"}
+					aria-label={mode === "allow" ? ui("Hostname to allow") : ui("Hostname to block")}
 				/>
 				<datalist id={listId}>
 					{observed.map((item) => (
@@ -101,7 +105,7 @@ export function WebsiteRuleList(props: WebsiteRuleListProps) {
 					))}
 				</datalist>
 				<Button type="button" size="sm" className="h-8 gap-1" onClick={addRule}>
-					<Plus className="h-3 w-3" /> add
+					<Plus className="h-3 w-3" /> Add
 				</Button>
 			</div>
 			{error && (
@@ -133,7 +137,7 @@ export function WebsiteRuleList(props: WebsiteRuleListProps) {
 								{rule.domain}
 								{legacy && normalizedLegacy === "" && (
 									<span className="ml-1 font-sans text-[10px] text-muted-foreground">
-										legacy broad match
+										Legacy broad match
 									</span>
 								)}
 							</span>
@@ -156,9 +160,9 @@ export function WebsiteRuleList(props: WebsiteRuleListProps) {
 											),
 										)
 									}
-									aria-label={`Include subdomains of ${rule.domain}`}
+									aria-label={ui("Include subdomains of {value1}", { value1: rule.domain })}
 								/>
-								include subdomains
+								Include subdomains
 							</label>
 							<Button
 								type="button"
@@ -166,7 +170,7 @@ export function WebsiteRuleList(props: WebsiteRuleListProps) {
 								size="icon"
 								className="h-6 w-6"
 								onClick={() => commit(rules.filter((_, entryIndex) => entryIndex !== index))}
-								aria-label={`Remove ${rule.domain}`}
+								aria-label={ui("Remove {value1}", { value1: rule.domain })}
 							>
 								<Trash2 className="h-3 w-3" />
 							</Button>
@@ -195,7 +199,7 @@ export function WebsiteRuleList(props: WebsiteRuleListProps) {
 											),
 										)
 									}
-									placeholder={`e.g. private.${rule.domain}`}
+									placeholder={ui("E.g. Private.{value1}", { value1: rule.domain })}
 									allowCustomValues
 								/>
 							</div>

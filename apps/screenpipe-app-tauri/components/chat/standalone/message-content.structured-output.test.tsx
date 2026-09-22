@@ -71,7 +71,7 @@ describe("MessageContent — structured assistant output", () => {
       );
 
       const toggle = screen.getByRole("button", {
-        name: "structured output · 1 entry",
+        name: "Structured output · 1 entry",
       });
       expect(toggle).toHaveAttribute("aria-expanded", "false");
       expect(screen.queryByText(rawActivityTimeline)).toBeNull();
@@ -95,6 +95,6 @@ describe("MessageContent — structured assistant output", () => {
     const output = parseStructuredAssistantOutput(rawActivityTimeline);
 
     expect(output?.json).toContain('\n  "entries": [');
-    expect(output?.label).toBe("structured output · 1 entry");
+    expect(output?.label).toBe("Structured output · 1 entry");
   });
 });

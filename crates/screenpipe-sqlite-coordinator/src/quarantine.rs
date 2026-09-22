@@ -285,7 +285,7 @@ fn marker_for(
 #[cfg(unix)]
 fn sync_parent(path: &Path) -> io::Result<()> {
     if let Some(parent) = path.parent() {
-        fs::File::open(parent)?.sync_all()?;
+        screenpipe_fs::sync_all(&fs::File::open(parent)?)?;
     }
     Ok(())
 }
@@ -318,7 +318,7 @@ fn atomic_write_json(path: &Path, marker: &SqliteQuarantineMarker) -> io::Result
             .open(&temp_path)?;
         file.write_all(&body)?;
         file.write_all(b"\n")?;
-        file.sync_all()?;
+        screenpipe_fs::sync_all(&file)?;
         fs::rename(&temp_path, path)?;
         sync_parent(path)
     })();

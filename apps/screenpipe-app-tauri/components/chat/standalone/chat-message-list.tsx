@@ -27,18 +27,20 @@ import {
   getMessageIntentLabel,
   isNormalUserMessage,
   isSteeredAssistantMessage,
-  hasAssistantToolWorkBody,
   hasRenderableAssistantBody,
   isPendingAgentActionMessage,
   hasPendingPermissionRequest,
 } from "@/lib/chat/message-rendering";
 import { cn } from "@/lib/utils";
+import { presentMcpStartup } from "@/lib/chat/tool-presentation";
 import { useAcpBootLabel } from "@/lib/stores/acp-boot-state";
 import type { ContentBlock, Message } from "@/lib/chat/types";
 import type { ConnectionListItem } from "@/lib/chat/connection-suggestions";
 import type { InlineConnectStatus } from "@/lib/connections/inline-connect";
 import type { MarkdownCitationPlan } from "@/lib/chat/markdown-export";
 import type { ChatRichResult } from "@/lib/chat/rich-results";
+import { useGT } from "gt-react";
+
 
 const MAX_MESSAGE_EDIT_HEIGHT_PX = 240;
 
@@ -159,6 +161,26 @@ export function ChatMessageList({
   onAskSelectedTextInSideChat,
   suppressSourceFooters = false,
 }: ChatMessageListProps) {
+
+  const ui = useGT();
+  const retryInFlightRef = React.useRef(false);
+  const [isRetrying, setIsRetrying] = React.useState(false);
+  const retryDisabled = isLoading || isStreaming || isRetrying;
+
+  async function retryFailedMessage(prompt: string) {
+    if (retryDisabled || retryInFlightRef.current) return;
+    // Send preflight is async. Lock all retry buttons before loading updates,
+    // otherwise a second click takes the normal send path into the queue.
+    retryInFlightRef.current = true;
+    setIsRetrying(true);
+    try {
+      await sendMessage(prompt);
+    } finally {
+      retryInFlightRef.current = false;
+      setIsRetrying(false);
+    }
+  }
+
   // Null unless an ACP agent is installing/starting. Ticks only while it is.
   const acpBoot = useAcpBootLabel();
   const messageBubbleRefs = React.useRef(new Map<string, HTMLDivElement>());
@@ -203,9 +225,8 @@ export function ChatMessageList({
     activeAssistantIndex >= 0 &&
     hasPendingPermissionRequest(messages.slice(activeAssistantIndex));
 
-  // A steered child keeps its parent tool receipt live. This set also lets the
-  // generic status row ask whether a visible tool group truly owns liveness,
-  // instead of disappearing merely because some historical tool block exists.
+  // A steered child keeps its parent tool receipt live. Include its running
+  // tools when deciding whether tool activity owns the turn's progress display.
   const steerChildActiveParentIds = new Set<string>();
   if (turnActive && activeAssistantMessageId) {
     const activeIdx = visibleMessages.findIndex((message) => message.id === activeAssistantMessageId);
@@ -221,11 +242,14 @@ export function ChatMessageList({
       }
     }
   }
-  const hasLiveToolStatusOwner = transformationActive && visibleMessages.some(
+  const hasRunningToolStatusOwner = transformationActive && visibleMessages.some(
     (message) =>
       message.role === "assistant" &&
-      hasAssistantToolWorkBody(message) &&
-      (message.id === activeAssistantMessageId || steerChildActiveParentIds.has(message.id)),
+      (message.id === activeAssistantMessageId || steerChildActiveParentIds.has(message.id)) &&
+      message.contentBlocks?.some((block) =>
+        block.type === "tool" && block.toolCall.isRunning &&
+        presentMcpStartup(block.toolCall) === null,
+      ),
   );
 
   return (
@@ -336,7 +360,7 @@ export function ChatMessageList({
                   {intentLabel ? (
                     <div
                       className={cn(
-                        "mb-1 px-1 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground/80",
+                        "mb-1 px-1 text-[11px] font-medium normal-case tracking-[0.16em] text-muted-foreground/80",
                         message.role === "user" ? "text-right" : "text-left"
                       )}
                     >
@@ -393,7 +417,7 @@ export function ChatMessageList({
                           data-testid="chat-message-editor"
                         >
                           <textarea
-                            aria-label="Edit message"
+                            aria-label={ui("Edit message")}
                             ref={(el) => {
                               editTextareaRef.current = el;
                               if (!el) return;
@@ -468,7 +492,8 @@ export function ChatMessageList({
                               : false
                           }
                           onImageClick={onOpenImageViewer}
-                          onRetry={(prompt) => sendMessage(prompt)}
+                          onRetry={retryFailedMessage}
+                          retryDisabled={retryDisabled}
                           onOpenViewerPath={openFilePreview}
                           onOpenRichResult={onOpenRichResult}
                           connectionItems={connectionItems}
@@ -522,7 +547,7 @@ export function ChatMessageList({
                               }
                             }}
                             className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                            title="Copy message"
+                            title={ui("Copy message")}
                           >
                             {copiedMessageId === message.id ? (
                               <Check className="h-3 w-3" />
@@ -539,7 +564,7 @@ export function ChatMessageList({
                                 beginEditingMessage(message);
                               }}
                               className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                              title="Edit"
+                              title={ui("Edit")}
                             >
                               <Pencil className="h-3 w-3" />
                             </button>
@@ -553,11 +578,11 @@ export function ChatMessageList({
                               )}
                             />
                           )}
-                          {message.role === "assistant" && !isLoading && !hasFollowingSteeredAssistant && (
+                          {message.role === "assistant" && !retryDisabled && !hasFollowingSteeredAssistant && (
                             <button
                               onClick={() => onRetryAssistantMessage(message.id)}
                               className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                              title="Retry"
+                              title={ui("Retry")}
                             >
                               <RefreshCw className="h-3 w-3" />
                             </button>
@@ -570,7 +595,7 @@ export function ChatMessageList({
                               <PopoverTrigger asChild>
                                 <button
                                   className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                                  title="More options"
+                                  title={ui("More options")}
                                 >
                                   <MoreHorizontal className="h-3 w-3" />
                                 </button>
@@ -635,17 +660,16 @@ export function ChatMessageList({
         })()}
       </AnimatePresence>
       <AnimatePresence>
-        {isLoading && (() => {
+        {turnActive && (() => {
           const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
           const blocks = lastAssistant?.contentBlocks;
           // A pending permission/sign-in card already states the turn is blocked
           // on the user ("needs your approval"); a generic status row below it
           // is both redundant and wrong (the agent is waiting, not working).
           if (lastAssistant && isPendingAgentActionMessage(lastAssistant)) return null;
-          // Suppress the fallback only when the active turn's visible tool
-          // group is actually rendering its live state. Historical tool blocks
-          // cannot erase the only indication that a newer turn is still active.
-          if (hasLiveToolStatusOwner) return null;
+          // A completed tool receipt is not a loader. Keep the turn status
+          // visible while the model continues after tool execution finishes.
+          if (hasRunningToolStatusOwner || waitingForApproval) return null;
 
           // One row, one phase. The ACP boot label is a phase of this row
           // rather than a second loader mounted beside it: a cold npx fetch can

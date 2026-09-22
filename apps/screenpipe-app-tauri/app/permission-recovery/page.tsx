@@ -11,6 +11,8 @@ import { commands } from "@/lib/utils/tauri";
 import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import posthog from "posthog-js";
+import { useGT } from "gt-react";
+
 
 // Same permission wheel as onboarding: rows recede in opacity, scale, and
 // depth (blur) by distance from the focused step — plain CSS transitions.
@@ -52,6 +54,7 @@ function PermissionRow({
   onFix: () => void;
   testId: string;
 }) {
+
   const isGranted = status === "granted";
   const interactive = focused && status === "denied";
   return (
@@ -109,10 +112,10 @@ function PermissionRow({
 
       <div className="ml-auto shrink-0">
         {isGranted ? (
-          <span className="font-mono text-[10px] text-muted-foreground">ok</span>
+          <span className="font-mono text-[10px] text-muted-foreground">Ok</span>
         ) : interactive ? (
           <span className="font-mono text-[10px] text-muted-foreground group-hover:text-background/70">
-            grant →
+            Grant →
           </span>
         ) : null}
       </div>
@@ -121,6 +124,8 @@ function PermissionRow({
 }
 
 export default function PermissionRecoveryPage() {
+
+  const ui = useGT();
   const [permissions, setPermissions] = useState<Record<string, string> | null>(null);
   // Keychain: "granted" if enabled or unavailable (no keychain on this OS),
   // "denied" only if the user previously opted in but access is now refused.
@@ -244,8 +249,8 @@ export default function PermissionRecoveryPage() {
     {
       id: "microphone",
       icon: <Mic className="w-4 h-4" strokeWidth={1.5} />,
-      label: "microphone",
-      description: "transcribe audio",
+      label: ui("Microphone"),
+      description: ui("Transcribe audio"),
       status: micStatus,
       onFix: () => handleFix("microphone"),
       testId: "permission-row-microphone",
@@ -255,8 +260,8 @@ export default function PermissionRecoveryPage() {
           {
             id: "accessibility",
             icon: <Keyboard className="w-4 h-4" strokeWidth={1.5} />,
-            label: "accessibility",
-            description: "read text from apps",
+            label: ui("Accessibility"),
+            description: ui("Read text from apps"),
             status: accessibilityStatus,
             onFix: () => handleFix("accessibility"),
             testId: "permission-row-accessibility",
@@ -266,8 +271,8 @@ export default function PermissionRecoveryPage() {
     {
       id: "screen",
       icon: <Monitor className="w-4 h-4" strokeWidth={1.5} />,
-      label: "screen",
-      description: "capture display",
+      label: ui("Screen"),
+      description: ui("Capture display"),
       status: screenStatus,
       onFix: () => handleFix("screenRecording"),
       testId: "permission-row-screen",
@@ -277,8 +282,8 @@ export default function PermissionRecoveryPage() {
           {
             id: "keychain",
             icon: <Lock className="w-4 h-4" strokeWidth={1.5} />,
-            label: "secure storage",
-            description: "encrypt api keys & credentials",
+            label: ui("Secure storage"),
+            description: ui("Encrypt API keys & credentials"),
             status: keychainStatus,
             onFix: handleFixKeychain,
             testId: "permission-row-keychain",
@@ -322,9 +327,9 @@ export default function PermissionRecoveryPage() {
             className="w-full max-w-sm border border-foreground px-5 py-5 text-center"
             data-testid="permission-recovery-restart-prompt"
           >
-            <h2 className="font-mono text-sm font-semibold">restart required</h2>
+            <h2 className="font-mono text-sm font-semibold">Restart required</h2>
             <p className="mt-1 font-mono text-xs text-muted-foreground">
-              screenpipe won&apos;t work until you restart.
+              Screenpipe won&apos;t work until you restart.
             </p>
             <button
               type="button"
@@ -336,20 +341,20 @@ export default function PermissionRecoveryPage() {
               <RefreshCw
                 className={`h-3.5 w-3.5 ${restartingApp ? "animate-spin" : ""}`}
               />
-              {restartingApp ? "restarting..." : "restart screenpipe"}
+              {restartingApp ? ui("Restarting...") : ui("Restart screenpipe")}
             </button>
           </div>
         ) : allOk ? (
           <div className="text-center space-y-2" data-testid="permission-recovery-all-fixed">
             <Check className="w-5 h-5 mx-auto text-muted-foreground" />
-            <p className="font-mono text-sm">all fixed — resuming</p>
+            <p className="font-mono text-sm">All fixed — resuming</p>
           </div>
         ) : (
           <div className="w-full max-w-sm space-y-4" data-testid="permission-recovery-page">
             <div className="text-center">
-              <h2 className="font-mono text-sm">recording paused</h2>
+              <h2 className="font-mono text-sm">Recording paused</h2>
               <p className="font-mono text-xs text-muted-foreground mt-1">
-                some permissions were revoked
+                Some permissions were revoked
               </p>
             </div>
 
@@ -370,7 +375,7 @@ export default function PermissionRecoveryPage() {
             </div>
 
             <p className="font-mono text-[10px] text-muted-foreground text-center">
-              closes automatically once fixed
+              Closes automatically once fixed
             </p>
           </div>
         )}

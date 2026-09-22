@@ -403,6 +403,13 @@ describe("provider error copy", () => {
     );
   });
 
+  it("shows hosted GLM's limit without directing users to a hidden manual setting", () => {
+    expect(buildProviderErrorMessage(
+      "400 request (33252 tokens) exceeds the available context size (32768 tokens), try increasing it",
+      { provider: "screenpipe-cloud", model: "glm-5.3-flash-reap50-iq3m" },
+    )).toBe("This model accepts 32,768 context tokens, but the request used 33,252. Start a new chat or choose a model with a larger context window, then retry.");
+  });
+
   it("points larger-context providers at the matching preset value", () => {
     const raw = "request (70000 tokens) exceeds the available context size (65536 tokens)";
     expect(

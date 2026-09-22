@@ -439,6 +439,11 @@ jobs:
               pacman -Q libavif libsharpyuv || true
               ls -l /usr/lib/libavif.so.* /usr/lib/libsharpyuv.so.* || true
 
+              # Containers do not boot systemd, which normally creates this.
+              # Exercise normal first-launch identity with an owned container ID.
+              dbus-uuidgen > /etc/machine-id
+              test -s /etc/machine-id
+
               useradd -m smoke-user
               chown -R smoke-user:smoke-user /smoke
               install -d -m 700 -o smoke-user -g smoke-user /tmp/screenpipe-runtime

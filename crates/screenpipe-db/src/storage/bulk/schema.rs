@@ -127,20 +127,18 @@ fn triggers(table: &Table, original_columns: &[String]) -> String {
     let t = table.name;
     let new_bytes = table.all_bytes("NEW.");
     let old_bytes = table.local_bytes("OLD.");
-    let check=format!("SELECT CASE WHEN ({new_bytes})>(SELECT record_limit FROM storage_metadata) THEN RAISE(ABORT,'bulk record budget exceeded') END;");
-    let staging_check = "SELECT CASE WHEN (SELECT staging_bytes>staging_limit FROM storage_metadata) THEN RAISE(ABORT,'storage staging budget reached') END;";
     let fts = reindex(table);
     let fts_delete = if table.fts.is_empty() {
         String::new()
     } else {
         format!("DELETE FROM {t}_fts WHERE rowid=OLD.id;")
     };
-    let mut sql=format!("CREATE TRIGGER hybrid_bulk_{t}_id BEFORE UPDATE OF id ON {t} WHEN OLD._archive_file IS NOT NULL AND NEW.id!=OLD.id BEGIN SELECT RAISE(ABORT,'archived record IDs are immutable'); END; CREATE TRIGGER hybrid_bulk_{t}_insert AFTER INSERT ON {t} WHEN (SELECT maintenance=0 FROM storage_metadata) BEGIN {check} UPDATE storage_metadata SET staging_bytes=staging_bytes+({new_bytes}),revision=revision+1; {staging_check} {fts} END; CREATE TRIGGER hybrid_bulk_{t}_delete BEFORE DELETE ON {t} BEGIN {fts_delete} UPDATE _bulk_files SET state='dirty' WHERE id=OLD._archive_file; UPDATE storage_metadata SET staging_bytes=staging_bytes-({old_bytes}),revision=revision+1; END;");
+    let mut sql=format!("CREATE TRIGGER hybrid_bulk_{t}_id BEFORE UPDATE OF id ON {t} WHEN OLD._archive_file IS NOT NULL AND NEW.id!=OLD.id BEGIN SELECT RAISE(ABORT,'archived record IDs are immutable'); END; CREATE TRIGGER hybrid_bulk_{t}_insert AFTER INSERT ON {t} WHEN (SELECT maintenance=0 FROM storage_metadata) BEGIN UPDATE storage_metadata SET staging_bytes=staging_bytes+({new_bytes}),revision=revision+1; {fts} END; CREATE TRIGGER hybrid_bulk_{t}_delete BEFORE DELETE ON {t} BEGIN {fts_delete} UPDATE _bulk_files SET state='dirty' WHERE id=OLD._archive_file; UPDATE storage_metadata SET staging_bytes=staging_bytes-({old_bytes}),revision=revision+1; END;");
     sql.push_str(&format!("CREATE TRIGGER hybrid_bulk_{t}_revision AFTER UPDATE OF {} ON {t} WHEN (SELECT maintenance=0 FROM storage_metadata) BEGIN UPDATE storage_metadata SET revision=revision+1; END;", original_columns.join(",")));
     for (index, column) in table.columns.iter().enumerate() {
         let c = column.name;
         let bit = 1 << index;
-        sql.push_str(&format!("CREATE TRIGGER hybrid_bulk_{t}_{c} AFTER UPDATE OF {c} ON {t} WHEN (SELECT maintenance=0 FROM storage_metadata) BEGIN {check} UPDATE {t} SET _archive_mask=_archive_mask|{bit},_archive_generation=_archive_generation+1 WHERE id=NEW.id; UPDATE _bulk_files SET state='dirty' WHERE id=OLD._archive_file; UPDATE storage_metadata SET staging_bytes=staging_bytes+COALESCE(length(CAST(NEW.{c} AS BLOB)),0)-CASE WHEN (OLD._archive_mask & {bit})!=0 THEN COALESCE(length(CAST(OLD.{c} AS BLOB)),0) ELSE 0 END; {staging_check} {fts} END;"));
+        sql.push_str(&format!("CREATE TRIGGER hybrid_bulk_{t}_{c} AFTER UPDATE OF {c} ON {t} WHEN (SELECT maintenance=0 FROM storage_metadata) BEGIN UPDATE {t} SET _archive_mask=_archive_mask|{bit},_archive_generation=_archive_generation+1 WHERE id=NEW.id; UPDATE _bulk_files SET state='dirty' WHERE id=OLD._archive_file; UPDATE storage_metadata SET staging_bytes=staging_bytes+COALESCE(length(CAST(NEW.{c} AS BLOB)),0)-CASE WHEN (OLD._archive_mask & {bit})!=0 THEN COALESCE(length(CAST(OLD.{c} AS BLOB)),0) ELSE 0 END; {fts} END;"));
     }
     let metadata = table
         .fts
@@ -152,4 +150,31 @@ fn triggers(table: &Table, original_columns: &[String]) -> String {
         sql.push_str(&format!("CREATE TRIGGER hybrid_bulk_{t}_fts_metadata AFTER UPDATE OF {} ON {t} WHEN (SELECT maintenance=0 FROM storage_metadata) BEGIN {fts} END;",metadata.join(",")));
     }
     sql
+}
+
+// Called inside the startup schema transaction; preserve v2's identity while
+// upgrading the installed triggers for existing as well as new generations.
+pub(crate) async fn upgrade_recording(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    for table in TABLES.iter().filter(|t| t.name != "elements") {
+        let columns: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM pragma_table_info(?) WHERE name NOT LIKE '_archive_%' ORDER BY cid",
+        )
+        .bind(table.name)
+        .fetch_all(&mut *conn)
+        .await?;
+        let names: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name=? AND name GLOB 'hybrid_bulk_*'")
+            .bind(table.name).fetch_all(&mut *conn).await?;
+        for name in names {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                "DROP TRIGGER \"{}\"",
+                name.replace('"', "\"\"")
+            )))
+            .execute(&mut *conn)
+            .await?;
+        }
+        sqlx::raw_sql(sqlx::AssertSqlSafe(triggers(table, &columns)))
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
 }

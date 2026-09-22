@@ -85,7 +85,7 @@ describe("StorageSection clear cache", () => {
 
     await waitFor(() => expect(mocks.clearTimelineCache).toHaveBeenCalledTimes(1));
     expect(mocks.deleteCacheFiles).not.toHaveBeenCalled();
-    expect(mocks.toast).toHaveBeenCalledWith({ title: "cache cleared" });
+    expect(mocks.toast).toHaveBeenCalledWith({ title: "Cache cleared" });
   });
 
   it("leaves the timeline cache alone when nothing is cached", async () => {
@@ -96,7 +96,7 @@ describe("StorageSection clear cache", () => {
     fireEvent.click(screen.getByRole("button", { name: /^clear$/i }));
 
     await waitFor(() =>
-      expect(mocks.toast).toHaveBeenCalledWith({ title: "nothing to clean up" }),
+      expect(mocks.toast).toHaveBeenCalledWith({ title: "Nothing to clean up" }),
     );
     expect(mocks.clearTimelineCache).not.toHaveBeenCalled();
   });
@@ -112,11 +112,11 @@ describe("StorageSection clear cache", () => {
     await waitFor(() =>
       expect(mocks.toast).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "failed to clear cache",
+          title: "Failed to clear cache",
           variant: "destructive",
         }),
       ),
     );
-    expect(mocks.toast).not.toHaveBeenCalledWith({ title: "cache cleared" });
+    expect(mocks.toast).not.toHaveBeenCalledWith({ title: "Cache cleared" });
   });
 });

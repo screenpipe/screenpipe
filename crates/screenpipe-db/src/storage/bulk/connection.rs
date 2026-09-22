@@ -138,10 +138,39 @@ async fn register(
 
 pub(crate) async fn register_hash(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     let mut locked = conn.lock_handle().await?;
+    // SAFETY: SQLx holds the live connection exclusively during registration.
+    let result = unsafe { register_hash_raw(locked.as_raw_handle().as_ptr()) };
+    if result != ffi::SQLITE_OK {
+        return Err(storage_error("cannot register payload identity function"));
+    }
+    Ok(())
+}
+
+/// Independent recovery connections evaluate the persistent payload-identity
+/// index before storage pools exist, including on the first open after restart.
+pub(crate) fn register_hash_extension() -> Result<(), sqlx::Error> {
+    unsafe extern "C" fn init(
+        db: *mut ffi::sqlite3,
+        _: *mut *mut std::ffi::c_char,
+        _: *const ffi::sqlite3_api_routines,
+    ) -> c_int {
+        register_hash_raw(db)
+    }
+    // SAFETY: init has SQLite's extension ABI and retains no connection state.
+    let result = unsafe { ffi::sqlite3_auto_extension(Some(init)) };
+    if result != ffi::SQLITE_OK {
+        return Err(storage_error(format!(
+            "cannot register payload identity extension: SQLite error code {result}"
+        )));
+    }
+    Ok(())
+}
+
+unsafe fn register_hash_raw(db: *mut ffi::sqlite3) -> c_int {
     // SAFETY: the callback borrows only SQLite's argument and copies its result.
-    let result = unsafe {
+    unsafe {
         ffi::sqlite3_create_function_v2(
-            locked.as_raw_handle().as_ptr(),
+            db,
             c"screenpipe_payload_sha256".as_ptr(),
             1,
             ffi::SQLITE_UTF8 | ffi::SQLITE_DETERMINISTIC | ffi::SQLITE_INNOCUOUS,
@@ -151,11 +180,7 @@ pub(crate) async fn register_hash(conn: &mut SqliteConnection) -> Result<(), sql
             None,
             None,
         )
-    };
-    if result != ffi::SQLITE_OK {
-        return Err(storage_error("cannot register payload identity function"));
     }
-    Ok(())
 }
 
 unsafe extern "C" fn hash(

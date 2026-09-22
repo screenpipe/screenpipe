@@ -11,13 +11,23 @@
     "e2e/mock-updates/windows-persistence-server.ts",
     "e2e/scripts/verify-spotlight-exclusion.ts",
     "scripts/timeline-parity-export.ts",
-    "scripts/**/*.js"
+    "scripts/eval-pi-compaction.ts",
+    "scripts/eval-pi-extensions.ts",
+    "scripts/eval-workflow-assistant.ts",
+    "scripts/eval-workflow-discovery.ts",
+    "scripts/eval-workflow-guide.ts",
+    "scripts/eval-private-ai.ts",
+    "scripts/eval-workflow-quality.ts",
+    "scripts/eval-workflow-pipeline.ts",
+    "scripts/eval-workflow-workspace.ts",
+    "scripts/eval-workflows-context.ts",
+    "scripts/**/*.{js,mjs}"
   ],
   "project": [
     "app/**/*.{ts,tsx}",
     "components/**/*.{ts,tsx}",
     "lib/**/*.{ts,tsx}",
-    "scripts/**/*.{ts,js}",
+    "scripts/**/*.{ts,js,mjs}",
     "e2e/**/*.{ts,js}"
   ],
   "ignore": [

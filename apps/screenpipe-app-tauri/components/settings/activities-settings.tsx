@@ -9,15 +9,19 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useSettings } from "@/lib/hooks/use-settings";
 import type { SettingsField } from "./settings-search";
+import { useGT } from "gt-react";
+import { msg } from "gt-react";
+
 
 const DEFAULT_INTERVAL_MINUTES = 15;
 
 export const searchIndex: SettingsField[] = [
-  { label: "Enable activities", keywords: ["activity", "history", "automatic"] },
-  { label: "Interval", keywords: ["frequency", "cadence", "minutes", "schedule"] },
+  { label: msg("Enable activities", {}), keywords: ["activity", "history", "automatic"] },
+  { label: msg("Interval", {}), keywords: ["frequency", "cadence", "minutes", "schedule"] },
 ];
 
 export function ActivitiesSettings() {
+  const ui = useGT();
   const { settings, updateSettings } = useSettings();
   const pause = settings.activitiesQuotaPause;
   const enabled = settings.activitiesEnabled ?? false;
@@ -57,7 +61,7 @@ export function ActivitiesSettings() {
             data-testid="activities-enabled-toggle"
             checked={enabled}
             onCheckedChange={(checked) => updateSettings({ activitiesEnabled: checked })}
-            aria-label="Enable activities"
+            aria-label={ui("Enable activities")}
           />
         </div>
 
@@ -73,7 +77,7 @@ export function ActivitiesSettings() {
               </div>
             </div>
             <select
-              aria-label="Activity interval"
+              aria-label={ui("Activity interval")}
               value={intervalMinutes}
               disabled={!enabled}
               onChange={(event) =>

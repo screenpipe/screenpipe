@@ -33,6 +33,7 @@ xcrun swiftc \
     -swift-version 5 \
     -sdk "$sdk_path" \
     -target "$swift_target" \
+    "$swift_dir/UILocalization.swift" \
     "$swift_dir/shortcut_reminder.swift" \
     "$swift_dir/shortcut_reminder_tests.swift" \
     -o "$binary"

@@ -6,6 +6,8 @@ import { useState, useCallback, useRef } from "react";
 import { Settings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import { tauriFetchWithDeadline } from "@/lib/http/tauri-fetch";
+import { useGT } from "gt-react";
+
 
 const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:8080";
 // Probes gate UI feedback — fail fast rather than the wrapper's 30s default.
@@ -29,6 +31,7 @@ export const INITIAL_TX_DIAGNOSTICS: TxDiagnostics = {
 export function useTranscriptionDiagnostics(opts: {
   settings: Settings;
 }) {
+  const uiPlural = useGT();
   const { settings } = opts;
 
   const [txTestStatus, setTxTestStatus] = useState<"idle" | "testing" | "done">("idle");
@@ -167,7 +170,7 @@ export function useTranscriptionDiagnostics(opts: {
       models: {
         status: "pass",
         message: modelCount > 0
-          ? `${modelCount} model${modelCount !== 1 ? "s" : ""} available`
+          ? uiPlural("{value1, plural, one {# model} other {# models}} available", { value1: modelCount })
           : "No models listed (you can still type a model name)",
       },
       transcribe: { status: "running", message: "Sending test audio..." },

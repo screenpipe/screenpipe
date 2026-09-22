@@ -122,7 +122,7 @@ describe("submitChatResponseFeedback", () => {
       target: { kind: "chat", id: "assistant-message-1" },
       producer_ref: "agent:screenpipe-chat",
       rating: "down",
-      comment: "missed my context",
+      comment: "Missed my context",
       snapshot: {
         response: "private local answer",
         truncated: false,
