@@ -79,7 +79,11 @@ pub(super) fn preserve_edits(previous: &Value, next: &mut Value) {
                     }
                 })
                 .collect::<Vec<_>>());
-            invalidate_step_claims(next);
+            // Prior edits alone do not invalidate newly verified timing. Only
+            // invalidate when preserving owner changes alters the reviewed map.
+            if next["stages"] != json!(proposed) {
+                invalidate_step_claims(next);
+            }
         }
     }
 }
@@ -353,6 +357,19 @@ mod tests {
             preserve_edits(&previous, &mut next);
             assert_eq!(next["stages"], previous["stages"]);
         }
+    }
+    #[test]
+    fn historical_edit_flag_does_not_discard_newly_verified_timing() {
+        let previous =
+            json!({"userEdits":{"stages":true},"stages":[{"name":"Review","procedure":[]}]});
+        let mut next = json!({"stages":[{"name":"Review","procedure":[{"text":"Supported action"}]}],
+            "evidenceStatus":"verified","timing":{"averageMinutes":7},"durationSource":"observed","durationSampleCount":2});
+        let reviewed = next.clone();
+        preserve_edits(&previous, &mut next);
+        assert_eq!(next["stages"], reviewed["stages"]);
+        assert_eq!(next["timing"], reviewed["timing"]);
+        assert_eq!(next["durationSampleCount"], 2);
+        assert_eq!(next["evidenceStatus"], "verified");
     }
     #[tokio::test]
     async fn http_edit_contract_rejects_fabricated_evidence_and_saves_owner_edits() {

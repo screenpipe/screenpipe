@@ -201,3 +201,15 @@ test("maintenance sees neglected empty steps and historical sources without priv
   expect(index.userEdits).toEqual({stages:true});
   expect(JSON.stringify(index)).not.toContain("private");
 });
+
+
+test("new-cycle context exposes prior investigation without treating it as workflow evidence",async()=>{
+  const notes={"workflow-maintain":{cycleId:"previous",through:"2026-09-21T12:00:00Z",note:"wf-a: earlier recording unavailable; recheck with new evidence.",truncated:false}};
+  server.reload({fetch:(req:Request)=>Response.json(new URL(req.url).pathname==="/workflows/workspace"
+    ? {workspace:{revision:9,cycle:{id:"next"},drafts:{},researchNotes:notes},catalogRevision:4,ready:true}
+    : {workflows:[{id:"wf-a",title:"Receipts"}],profile:{}})});
+  const result=JSON.parse((await tool.execute("id",{action:"context"},new AbortController().signal)).content[0].text);
+  expect(result.researchNotes).toEqual(notes);
+  expect(result.cycle.id).toBe("next");
+  expect(result.workflows[0].evidence).toBeUndefined();
+});

@@ -99,6 +99,7 @@ export default function (pi: ExtensionAPI) {
               cycle:ws.cycle && {id:ws.cycle.id,status:ws.cycle.status,start:ws.cycle.start,end:ws.cycle.end,finished:ws.cycle.finished,changes:ws.cycle.changes},
               drafts:Object.values(ws.drafts || {}).map((d:any)=>({id:d.id,status:d.status,assignee:d.assignee,version:d.version,title:d.payload?.title || d.payload?.name,question:d.history?.at(-1)?.note})),
               workflows:catalog.workflows.map(workflowIndex),
+              researchNotes:ws.researchNotes || {},
               profile:catalog.profile,
               next:'Read a draft with {"action":"context","draft_id":"exact-id"}, or a saved workflow with {"action":"context","workflow_id":"exact-id"}. These return the full record and outputContract. Do not reconstruct unseen payloads from this index.' };
           }
