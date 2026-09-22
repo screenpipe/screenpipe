@@ -56,6 +56,23 @@ describe("HomeCardAgentActions", () => {
     vi.clearAllMocks();
   });
 
+  it("expands the optional stack without launching and restores it on Escape", () => {
+    render(<HomeCardAgentActions pipe={DAY_RECAP} placement="toolbar" stacked />);
+    const trigger = screen.getByRole("button", { name: "Choose an AI agent" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Run in Claude" })).not.toBeInTheDocument();
+    fireEvent.focus(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const claude = screen.getByRole("button", { name: "Run in Claude" });
+    fireEvent.keyDown(claude, { key: "Escape" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(mocks.openUrl).not.toHaveBeenCalled();
+    expect(mocks.copyTextToClipboard).not.toHaveBeenCalled();
+  });
+
   it("offers named Claude, Cursor, and Codex actions and tooltips", async () => {
     render(<HomeCardAgentActions pipe={DAY_RECAP} />);
 

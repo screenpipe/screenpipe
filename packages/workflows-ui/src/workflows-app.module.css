@@ -14,7 +14,6 @@
   --signal: #333333;
   --chart-secondary: #b8b8b0;
   --heading-font: var(--font-workflow-heading, "Space Grotesk"), Inter, system-ui, sans-serif;
-  --evidence-font: var(--font-workflow-mono, "IBM Plex Mono"), ui-monospace, monospace;
   --warm: #fff1c8;
   height: 100vh;
   min-height: 0;
@@ -93,7 +92,7 @@
 .nav button:hover { background: #e8e9e3; color: var(--ink); }
 .nav button > span { margin-left: auto; color: #888b82; font-size: 10px; }
 .nav .navActive { background: var(--ink); color: #fff; box-shadow: none; }
-.nav .navActive > span { color: #fff; font-family: var(--evidence-font); }
+.nav .navActive > span { color: #fff; }
 
 .sidebarBottom { margin-top: auto; display: flex; flex-direction: column; gap: 10px; }
 .shortcutsButton {
@@ -458,8 +457,7 @@
 .workflowCard { position: relative; min-width: 0; display: flex; flex-direction: column; min-height: 250px; padding: 22px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: inherit; text-align: left; transition: border-color .15s ease; }
 .workflowCard:hover { border-color: var(--muted); }
 .workflowCardTop { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.workflowCardTop > span { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font: 10px/1.6 var(--evidence-font); font-variant-numeric: tabular-nums; }
-.workflowCardTop > span::before { content: ""; width: 7px; height: 7px; border-left: 1px solid currentColor; border-top: 1px solid currentColor; }
+.workflowCardTop > span { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .workflowCardTop > div { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 5px; min-width: 0; }
 .workflowCardTop .pill { white-space: normal; }
 .workflowCard h2 { margin: 16px 0 8px; font-size: 21px; font-weight: 600; letter-spacing: -.035em; }
@@ -543,7 +541,7 @@
 .stageList .stageOpen { border-color: #bfc3b6; box-shadow: 0 8px 22px rgba(35,38,28,.06); }
 .stageSummary { width: 100%; min-height: 91px; display: grid; grid-template-columns: 34px minmax(0,1fr) 115px 18px; gap: 13px; align-items: center; padding: 13px 15px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .stageSummary:hover { background: #fbfcf8; }
-.stageNumber { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 4px; background: var(--soft); color: var(--signal); font: 10px var(--evidence-font); }
+.stageNumber { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 4px; background: var(--soft); color: var(--signal); font-size: 10px; }
 .stageBody > div { display: flex; align-items: center; gap: 8px; }
 .stageBody h3 { margin: 0; font-size: 11px; }
 .stageBody p { margin: 5px 0; color: #7a7e74; font-size: 9px; line-height: 1.45; }
@@ -991,7 +989,7 @@
 .runToggle svg, .runActivity svg { flex-shrink: 0; }
 .runToggle time { font-variant-numeric: tabular-nums; font-size: 11px; }
 .runSpinner { animation: runSpin 1.4s linear infinite; }
-.runToggle > .runSpinner { box-sizing: content-box; padding: 4px; border-radius: 50%; background: var(--lime); color: var(--ink); }
+.runToggle > .runSpinner { color: var(--muted); }
 .runActivity { position: absolute; z-index: 30; right: 0; top: calc(100% + 8px); width: min(340px, calc(100vw - 64px)); background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 16px #0000000d; }
 .runActivity header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
 .runActivity header strong { font-size: 12px; font-weight: 600; }
@@ -1069,3 +1067,9 @@
   .cardSummary { gap: 6px; }
   .filterPanel { grid-template-columns: 1fr; }
 }
+
+/* Motion marks a user opening a surface, never an idle decoration. */
+@media (prefers-reduced-motion: no-preference) {
+  .runActivity { animation: surfaceReveal 150ms ease-out; }
+}
+@keyframes surfaceReveal { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }

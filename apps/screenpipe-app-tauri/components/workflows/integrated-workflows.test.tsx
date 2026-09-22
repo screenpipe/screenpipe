@@ -56,6 +56,8 @@ it("opens the existing sharing review from the selected workflow in the main app
   fireEvent.click(within(card).getByRole("button", { name: "Open map" }));
   expect(screen.queryByRole("dialog", { name: "Sharing review" })).not.toBeInTheDocument();
   const agents = screen.getByRole("group", { name: "Run Research synthesis in another agent" });
+  expect(agents.parentElement).toContainElement(screen.getByRole("button", { name: "Create SOP" }));
+  fireEvent.focus(within(agents).getByRole("button", { name: "Choose an AI agent" }));
   for (const name of ["Claude", "Cursor", "Codex"]) {
     expect(within(agents).getByRole("button", { name: `Run in ${name}` })).toBeVisible();
   }
