@@ -79,6 +79,7 @@ export default function FinalSetupStep({ userToken, handleNextSlide }: {
 
   const uiMessages = useMessages();
   const ui = useGT();
+  const completionFailureMessage = ui("Screenpipe couldn't finish setup. Completed tasks are saved. Try again.");
   const { settings } = useSettings();
   const presets = (settings.aiPresets ?? []).filter(p => p.provider !== "acp" && !!p.model);
   const preset = presets.find(p => p.defaultPreset) ?? presets[0];
@@ -137,7 +138,7 @@ export default function FinalSetupStep({ userToken, handleNextSlide }: {
     } catch (failure) {
       if (controller.signal.aborted) return;
       captureSetupEvent("onboarding_default_setup_failed", { step: taskSlug, stage, setup_version: 3, attempt_id: attemptId, ...(stage === "continue" ? completionFailureProperties(failure) : setupFailureProperties(failure)), completed_steps: completedThisAttempt, outcome: "retry_available" });
-      setError(stage === "continue" ? ui("Your setup is saved. Screenpipe couldn't open. Try again.") : failure instanceof SetupRequestError && failure.code === "free_pipe_limit_reached" ? ui("Your free plan's task limit is reached. Completed tasks are saved. Finish setup later, or delete a task or upgrade before retrying.") : ui("Screenpipe couldn't finish setup. Completed tasks are saved; retry or finish later in Scheduled Tasks."));
+      setError(stage === "continue" ? completionFailureMessage : failure instanceof SetupRequestError && failure.code === "free_pipe_limit_reached" ? ui("Your free plan's task limit is reached. Completed tasks are saved. Finish setup later, or delete a task or upgrade before retrying.") : ui("Screenpipe couldn't finish setup. Completed tasks are saved; retry or finish later in Scheduled Tasks."));
     } finally {
       if (!controller.signal.aborted) { setBusy(false); setPhase(""); }
       running.current = false;
@@ -152,7 +153,7 @@ export default function FinalSetupStep({ userToken, handleNextSlide }: {
     try { await handleNextSlide(); }
     catch (failure) {
       captureSetupEvent("onboarding_default_setup_failed", { setup_version: 3, attempt_id: attemptId, ...completionFailureProperties(failure), completed_steps: completed, outcome: "retry_available" });
-      setError(ui("Screenpipe couldn't open. Try again."));
+      setError(completionFailureMessage);
     }
     finally { running.current = false; setBusy(false); }
   }

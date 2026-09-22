@@ -869,7 +869,8 @@ describe("enterprise onboarding authentication", () => {
       expect(tasks.get("digital-clone")).toBe(originalClone);
 
       await act(async () => finishNative({ status: "error", error: JSON.stringify({ stage: "persist", error_code: "permission_denied", attempt_id: "00000000-0000-4000-8000-000000000001" }) }));
-      expect(await screen.findByRole("alert")).toHaveTextContent("Screenpipe couldn't open");
+      expect(await screen.findByRole("alert")).toHaveTextContent("Screenpipe couldn't finish setup. Completed tasks are saved. Try again.");
+      expect(screen.getByRole("alert")).not.toHaveTextContent("Your setup is saved");
       expect(screen.getByTestId("onboarding-final-setup")).toBe(form);
       expect(learning).toHaveAttribute("data-state", "unchecked");
       expect(learning).toBeEnabled();

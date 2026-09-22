@@ -185,7 +185,8 @@ describe("default onboarding setup", () => {
   it("keeps setup retryable if advancing onboarding fails", async () => {
     const next = vi.fn().mockRejectedValueOnce(new Error("save failed")).mockResolvedValue(undefined);
     render(<FinalSetupStep handleNextSlide={next} />); start(); await screen.findByRole("alert");
-    expect(screen.getByRole("alert")).toHaveTextContent("Your setup is saved");
+    expect(screen.getByRole("alert")).toHaveTextContent("Screenpipe couldn't finish setup. Completed tasks are saved. Try again.");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("Your setup is saved");
     const previousWrites = writes().length; fireEvent.click(screen.getByRole("button", { name: "Retry setup" }));
     await waitFor(() => expect(next).toHaveBeenCalledTimes(2)); expect(writes()).toHaveLength(previousWrites);
   });
