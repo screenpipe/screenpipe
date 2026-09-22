@@ -52,11 +52,21 @@
 .brand div span { margin-top: 3px; color: var(--muted); font-size: 11px; }
 
 .brandMark {
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-  background: url("./assets/screenpipe.png") center / contain no-repeat;
+  width: 25px;
+  height: 25px;
+  display: flex !important;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 7px;
+  background: var(--ink);
 }
+
+.brandMark span { width: 3px; margin: 0; border-radius: 2px; background: var(--lime); }
+.brandMark span:nth-child(1) { height: 6px; }
+.brandMark span:nth-child(2) { height: 12px; }
+.brandMark span:nth-child(3) { height: 9px; }
 
 .app h1, .app h2, .app h3, .brand strong {
   font-family: var(--heading-font);
