@@ -40,6 +40,7 @@ use updates::start_update_check;
 use window::ShowRewindWindow;
 
 mod activity_history;
+mod app_panic;
 mod first_run_summary;
 mod analytics;
 mod auth_session;
@@ -761,14 +762,9 @@ async fn main() {
     // Rotate the crash log on startup (don't truncate). Relaunch after a crash
     // is the common case — truncating loses the message we most need to diagnose.
     // Previous panic moves to last-panic.log.prev; new file starts empty.
-    {
-        let log_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-        let cur = log_dir.join("last-panic.log");
-        let prev = log_dir.join("last-panic.log.prev");
-        if cur.exists() {
-            let _ = std::fs::rename(&cur, &prev);
-        }
-    }
+    screenpipe_engine::crash_log::rotate_panic_log(
+        &screenpipe_core::paths::default_screenpipe_data_dir(),
+    );
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         // Log the actual panic first — before any processing. Once unwinding hits
@@ -800,31 +796,17 @@ async fn main() {
         // Force-capture a backtrace before abort() kills us
         let backtrace = std::backtrace::Backtrace::force_capture();
 
-        let crash_msg = format!(
-            "PANIC on thread '{}' at {}: {}\n\nBacktrace:\n{}",
-            thread_name, location, payload, backtrace
+        let crash_msg = app_panic::write_report(
+            &screenpipe_core::paths::default_screenpipe_data_dir(),
+            &thread_name,
+            &location,
+            &payload,
+            &backtrace,
+            app_panic::setup_started(),
         );
 
         // Log to stderr (survives even if tracing isn't initialized yet)
         eprintln!("{}", crash_msg);
-
-        // Write to a crash log file — this survives abort() since we fsync
-        // Critical for diagnosing panics inside tao's extern "C" callbacks
-        // (send_event, did_finish_launching) where panic_cannot_unwind → abort()
-        let log_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-        let crash_path = log_dir.join("last-panic.log");
-        // Append instead of truncate — when panic_cannot_unwind fires after
-        // the original panic, both messages are preserved in the file.
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&crash_path)
-        {
-            use std::io::Write;
-            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-            let _ = writeln!(f, "[{}] {}", timestamp, crash_msg);
-            let _ = f.sync_all(); // fsync before abort() kills us
-        }
 
         // Also report to Sentry if initialized
         sentry::capture_message(
@@ -1140,6 +1122,7 @@ async fn main() {
         .manage(sync_scheduler)
         .invoke_handler(tauri_helper::tauri_collect_commands!())
         .setup(move |app| {
+            app_panic::mark_setup_started();
             // Capture before setup does any other work: this callback runs
             // synchronously inside applicationDidFinishLaunching, while the
             // kAEOpenApplication event (including Apple's `lgit` login-item

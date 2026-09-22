@@ -37,7 +37,7 @@
  * nothing closes the meeting and the assertion passes even against the bug.
  *
  * Run:
- *   SCREENPIPE_E2E_SEED=onboarding,capture-restart-devices \
+ *   SCREENPIPE_E2E_SEED=onboarding,capture-restart-devices,db-hard-fault \
  *     bun run wdio run e2e/wdio.conf.ts \
  *     --spec e2e/specs/meeting-restart-live-transcription.spec.ts
  */
@@ -150,5 +150,18 @@ describe("live transcription survives a recording restart", function () {
     );
 
     await saveScreenshot("meeting-restart-live-transcription");
+  });
+
+  it("reattaches live transcription after database write-wedge recovery", async function () {
+    if (!E2E_SEED_FLAGS.split(",").includes("db-hard-fault")) this.skip();
+    expect(await activeMeetingId()).toBe(meetingId);
+    await browser.setTimeout({ script: t(120_000) });
+    const event = await invokeOrThrow<{ meeting_id: number }>(
+      "plugin:e2e|recover_meeting_from_db_wedge",
+    );
+    expect(event.meeting_id).toBe(meetingId);
+    await waitForLocalApi(cfg, t(45_000));
+    expect(await activeMeetingId()).toBe(meetingId);
+    await saveScreenshot("meeting-db-recovery-reattached");
   });
 });

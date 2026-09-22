@@ -341,6 +341,75 @@ async fn cache_hits_and_unrelated_readers_progress_during_a_decode() {
     db.close().await;
 }
 
+#[test]
+fn parity_scan_completes_across_many_cold_element_files() {
+    use crate::storage::parity::{hash_cell, scan};
+    use rusqlite::types::ValueRef;
+    use sha2::{Digest, Sha256};
+
+    // A regressed blocking scan cannot be aborted by Tokio. Shut the test
+    // runtime down with a timeout so the regression fails instead of hanging CI.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (expected, result) = runtime.block_on(async {
+        let root = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap();
+        db.execute_raw_sql_write("INSERT INTO frames(id,timestamp) VALUES(1,'2026-09-22')")
+            .await
+            .unwrap();
+        let mut expected = Sha256::new();
+        // Two cold projections per file cross Tokio's cooperative budget in
+        // one synchronous SQLite statement, as migration verification does.
+        for id in 1..=96 {
+            db.execute_raw_sql_write(&format!("INSERT INTO elements(id,frame_id,source,role,text) VALUES({id},1,'accessibility','AXText','history {id}')"))
+                .await.unwrap();
+            while db.seal_payloads().await.unwrap() != 0 {}
+            hash_cell(&mut expected, ValueRef::Integer(id));
+            hash_cell(
+                &mut expected,
+                ValueRef::Text(format!("history {id}").as_bytes()),
+            );
+            expected.update(b"E");
+        }
+        let paths: Vec<String> =
+            sqlx::query_scalar("SELECT path FROM _bulk_files WHERE table_name='elements'")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(paths.len(), 96);
+        db.storage
+            .as_ref()
+            .unwrap()
+            .bulk
+            .cache
+            .retire(&paths)
+            .unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            scan(
+                db.pool.clone(),
+                "elements".into(),
+                "SELECT id,id,text FROM elements ORDER BY id".into(),
+            ),
+        )
+        .await;
+        if result.is_ok() {
+            db.close().await;
+        }
+        (format!("{:x}", expected.finalize()), result)
+    });
+    runtime.shutdown_timeout(Duration::from_secs(1));
+    let receipt = result
+        .expect("parity scan stalled while decoding cold element files")
+        .unwrap();
+    assert_eq!(receipt.rows, 96);
+    assert_eq!(receipt.sha256, expected);
+}
+
 #[tokio::test]
 async fn sql_readers_start_during_file_unlink_without_interrupts() {
     let (_root, db) = fixture().await;

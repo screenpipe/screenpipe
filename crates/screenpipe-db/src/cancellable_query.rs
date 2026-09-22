@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{instrument::WithSubscriber, warn};
 
 /// Number of SQLite virtual-machine instructions between cancellation checks.
 ///
@@ -166,7 +166,8 @@ impl CancellableReadConnection {
         // The cleanup task owns the connection before this method awaits. If
         // the caller is cancelled while awaiting the JoinHandle, cleanup keeps
         // running and a stale progress handler still cannot reach the pool.
-        let cleanup = tokio::spawn(clean_and_return_connection(connection));
+        let cleanup =
+            tokio::spawn(clean_and_return_connection(connection).with_current_subscriber());
         cleanup
             .await
             .map_err(|error| sqlx::Error::Protocol(format!("query cleanup task failed: {error}")))?
@@ -208,14 +209,17 @@ impl Drop for CancellableReadConnection {
             return;
         };
 
-        runtime.spawn(async move {
-            if let Err(error) = clean_and_return_connection(connection).await {
-                warn!(
-                    error = %error,
-                    "failed to clear SQLite progress handler; connection closed"
-                );
+        runtime.spawn(
+            async move {
+                if let Err(error) = clean_and_return_connection(connection).await {
+                    warn!(
+                        error = %error,
+                        "failed to clean up SQLite read connection; connection closed"
+                    );
+                }
             }
-        });
+            .with_current_subscriber(),
+        );
     }
 }
 
@@ -251,18 +255,27 @@ pub fn is_sqlite_interrupt(error: &sqlx::Error) -> bool {
     }
 }
 
-async fn remove_progress_handler(
-    connection: &mut PoolConnection<Sqlite>,
-) -> Result<(), sqlx::Error> {
-    let mut handle = connection.lock_handle().await?;
-    handle.remove_progress_handler();
+async fn clean_read_connection(connection: &mut PoolConnection<Sqlite>) -> Result<(), sqlx::Error> {
+    let in_transaction = {
+        let mut handle = connection.lock_handle().await?;
+        handle.remove_progress_handler();
+        // SAFETY: the handle guard exclusively owns this connection.
+        unsafe { libsqlite3_sys::sqlite3_get_autocommit(handle.as_raw_handle().as_ptr()) == 0 }
+    };
+    // Cancellation can land after SQLite executes a raw BEGIN but before
+    // the snapshot owner is constructed. SQLx does not track that transaction.
+    // Nobody owns this read now: release its snapshot before pool reuse.
+    if in_transaction {
+        sqlx::query("ROLLBACK").execute(&mut **connection).await?;
+        warn!("abandoned SQLite read transaction rolled back before pool reuse; released WAL snapshot without stopping recording");
+    }
     Ok(())
 }
 
 async fn clean_and_return_connection(
     mut connection: PoolConnection<Sqlite>,
 ) -> Result<(), sqlx::Error> {
-    match remove_progress_handler(&mut connection).await {
+    match clean_read_connection(&mut connection).await {
         Ok(()) => {
             // Drive SQLx's pool-return path to completion instead of merely
             // dropping the connection and spawning another detached task.
@@ -270,8 +283,8 @@ async fn clean_and_return_connection(
             Ok(())
         }
         Err(error) => {
-            // A connection whose handler could not be cleared must never be
-            // reused. Closing lets the pool create a clean replacement.
+            // A stale handler or open transaction must never reach the next
+            // borrower. Closing lets the pool create a clean replacement.
             let _ = connection.close().await;
             Err(error)
         }
@@ -286,6 +299,79 @@ mod tests {
 
     const LONG_QUERY: &str = "WITH RECURSIVE counter(value) AS (VALUES(0) UNION ALL SELECT value + 1 FROM counter WHERE value < 100000000) SELECT sum(value) FROM counter";
     const HANDLER_PROBE_QUERY: &str = "WITH RECURSIVE counter(value) AS (VALUES(0) UNION ALL SELECT value + 1 FROM counter WHERE value < 2000000) SELECT sum(value) FROM counter";
+
+    #[tokio::test]
+    async fn abandoned_read_transaction_does_not_pin_recording_wal() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = screenpipe_config::DbConfig::default();
+        config.read_pool_max = 1;
+        config.read_pool_min = 1;
+        let db = DatabaseManager::new(dir.path().join("db.sqlite").to_str().unwrap(), config)
+            .await
+            .unwrap();
+        db.execute_raw_sql_write("CREATE TABLE capture_probe(id INTEGER PRIMARY KEY, value TEXT)")
+            .await
+            .unwrap();
+        db.wal_checkpoint().await.unwrap();
+
+        let (ready, began) = tokio::sync::oneshot::channel();
+        let pool = db.pool.clone();
+        let request = tokio::spawn(async move {
+            let mut connection = CancellableReadConnection::acquire(
+                &pool,
+                Instant::now() + Duration::from_secs(30),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+            // The raw BEGIN used by hybrid snapshots is not a SQLx Transaction.
+            // Abort while the request owns it, before an explicit rollback.
+            sqlx::query("BEGIN")
+                .execute(&mut *connection)
+                .await
+                .unwrap();
+            sqlx::query("SELECT count(*) FROM capture_probe")
+                .fetch_one(&mut *connection)
+                .await
+                .unwrap();
+            ready.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        began.await.unwrap();
+        db.execute_raw_sql_write("INSERT INTO capture_probe(value) VALUES('during read')")
+            .await
+            .unwrap();
+        let (_, pages, checkpointed) = db.wal_checkpoint().await.unwrap();
+        assert!(
+            pages > checkpointed,
+            "the read must actually pin WAL frames"
+        );
+        request.abort();
+        let _ = request.await;
+
+        // Acquiring the sole read slot waits for cancellation cleanup. Keep
+        // the returned connection idle to expose a leaked transaction.
+        let idle_reader = db.pool.acquire().await.unwrap();
+        db.execute_raw_sql_write("INSERT INTO capture_probe(value) VALUES('after cancellation')")
+            .await
+            .unwrap();
+        let (busy, pages, checkpointed) = db.wal_checkpoint().await.unwrap();
+        assert_eq!(busy, 0);
+        assert_eq!(
+            pages, checkpointed,
+            "abandoned reader pinned the capture WAL"
+        );
+        drop(idle_reader);
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM capture_probe")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            count, 2,
+            "recording must persist through reader cancellation"
+        );
+        db.close().await;
+    }
 
     #[tokio::test]
     async fn aborting_release_cannot_return_a_stale_handler() {

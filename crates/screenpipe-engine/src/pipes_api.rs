@@ -24,6 +24,45 @@ use tokio::sync::Mutex;
 /// Shared pipe manager state.
 pub type SharedPipeManager = Arc<Mutex<PipeManager>>;
 
+/// Preserve the originating filesystem cause without sending paths or backend
+/// messages into setup telemetry or collected logs. Keep the existing API error
+/// text for callers that display it locally.
+pub(crate) fn pipe_setup_failure(operation: &'static str, error: &anyhow::Error) -> Value {
+    use std::io::ErrorKind;
+    let code = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+        .map(|cause| match cause.kind() {
+            ErrorKind::PermissionDenied => "permission_denied",
+            ErrorKind::StorageFull => "disk_full",
+            ErrorKind::NotFound => "pipe_not_found",
+            ErrorKind::InvalidData
+            | ErrorKind::InvalidInput
+            | ErrorKind::NotADirectory
+            | ErrorKind::IsADirectory
+            | ErrorKind::UnexpectedEof => "invalid_state",
+            ErrorKind::TimedOut => "timeout",
+            _ => "io_error",
+        })
+        .unwrap_or_else(|| {
+            if error
+                .to_string()
+                .starts_with(screenpipe_core::pipes::PIPE_LIMIT_ERROR_CODE)
+            {
+                "free_pipe_limit_reached"
+            } else {
+                "operation_failed"
+            }
+        });
+    tracing::warn!(
+        operation,
+        error_code = code,
+        outcome = "retry_available",
+        "pipe_setup_failed"
+    );
+    json!({ "error": error.to_string(), "error_code": code })
+}
+
 // ---------------------------------------------------------------------------
 // Request / response types
 // ---------------------------------------------------------------------------
@@ -184,7 +223,11 @@ pub async fn get_pipe(State(pm): State<SharedPipeManager>, Path(id): Path<String
     }
     match mgr.get_pipe(&id).await {
         Some(pipe) => Json(json!({ "data": pipe })),
-        None => Json(json!({ "error": format!("pipe '{}' not found", id) })),
+        None => Json(
+            mgr.pipe_suppression_error(&id)
+                .map(|error| pipe_setup_failure("read", &error))
+                .unwrap_or_else(|| json!({ "error": format!("pipe '{}' not found", id) })),
+        ),
     }
 }
 
@@ -197,7 +240,7 @@ pub async fn enable_pipe(
     let mgr = pm.lock().await;
     match mgr.enable_pipe(&id, body.enabled).await {
         Ok(()) => Json(json!({ "success": true })),
-        Err(e) => Json(json!({ "error": e.to_string() })),
+        Err(e) => Json(pipe_setup_failure("enable", &e)),
     }
 }
 
@@ -480,7 +523,7 @@ pub async fn update_pipe_config(
         Ok(()) => (StatusCode::OK, Json(json!({ "success": true }))),
         Err(e) => (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": e.to_string() })),
+            Json(pipe_setup_failure("configure", &e)),
         ),
     }
 }
@@ -509,12 +552,14 @@ pub async fn install_bundled_pipe(
     let mgr = pm.lock().await;
     let installed = match install_bundled_pipe_asset(mgr.pipes_dir(), &id) {
         Ok(installed) => installed,
-        Err(error) => return Json(json!({ "error": error.to_string() })),
+        Err(error) => return Json(pipe_setup_failure("install", &error)),
     };
     if let Err(error) = mgr.load_pipes().await {
-        return Json(json!({
-            "error": format!("bundled Pipe was copied but could not be loaded: {error}")
-        }));
+        let mut failure = pipe_setup_failure("load", &error);
+        failure["error"] = json!(format!(
+            "bundled Pipe was copied but could not be loaded: {error}"
+        ));
+        return Json(failure);
     }
 
     let enabled_override = screenpipe_core::pipes::load_local_overrides(mgr.pipes_dir())
@@ -633,6 +678,165 @@ mod tests {
         assert_eq!(run_trigger_type(Some(&onboarding)), "onboarding");
         assert_eq!(run_trigger_type(Some(&untrusted)), "manual");
         assert_eq!(run_trigger_type(None), "manual");
+    }
+
+    #[test]
+    fn setup_failure_retains_wrapped_filesystem_causes() {
+        for (kind, expected) in [
+            (std::io::ErrorKind::PermissionDenied, "permission_denied"),
+            (std::io::ErrorKind::StorageFull, "disk_full"),
+            (std::io::ErrorKind::NotADirectory, "invalid_state"),
+        ] {
+            let error = anyhow::Error::new(std::io::Error::new(kind, "private path token=secret"))
+                .context("failed to save configuration");
+            assert_eq!(
+                pipe_setup_failure("configure", &error)["error_code"],
+                expected
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn setup_handlers_preserve_permission_denial_and_recover() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let pipes_dir = dir.path().join("pipes");
+        let state = Arc::new(Mutex::new(PipeManager::new(
+            pipes_dir.clone(),
+            HashMap::new(),
+            None,
+            3030,
+        )));
+        let Json(installed) = install_bundled_pipe(
+            State(state.clone()),
+            Path("speaker-reconciliation".to_string()),
+        )
+        .await;
+        assert_eq!(installed["success"], true);
+
+        let pipe_dir = pipes_dir.join("speaker-reconciliation");
+        let permissions = std::fs::metadata(&pipe_dir).unwrap().permissions();
+        std::fs::set_permissions(&pipe_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let (status, Json(config_error)) = update_pipe_config(
+            State(state.clone()),
+            Path("speaker-reconciliation".to_string()),
+            Json(ConfigUpdateRequest {
+                config: HashMap::new(),
+            }),
+        )
+        .await;
+        let Json(enable_error) = enable_pipe(
+            State(state.clone()),
+            Path("speaker-reconciliation".to_string()),
+            Json(EnableRequest { enabled: true }),
+        )
+        .await;
+        std::fs::set_permissions(&pipe_dir, permissions).unwrap();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(config_error["error_code"], "permission_denied");
+        assert_eq!(enable_error["error_code"], "permission_denied");
+
+        // A fresh bundled installation fails through the same originating I/O
+        // category, and repairing the directory permits the normal retry.
+        let fresh = dir.path().join("fresh-pipes");
+        std::fs::create_dir_all(&fresh).unwrap();
+        let permissions = std::fs::metadata(&fresh).unwrap().permissions();
+        let fresh_state = Arc::new(Mutex::new(PipeManager::new(
+            fresh.clone(),
+            HashMap::new(),
+            None,
+            3030,
+        )));
+        std::fs::set_permissions(&fresh, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let Json(install_error) = install_bundled_pipe(
+            State(fresh_state.clone()),
+            Path("speaker-reconciliation".to_string()),
+        )
+        .await;
+        std::fs::set_permissions(&fresh, permissions).unwrap();
+        assert_eq!(install_error["error_code"], "permission_denied");
+
+        let Json(retry) = install_bundled_pipe(
+            State(fresh_state),
+            Path("speaker-reconciliation".to_string()),
+        )
+        .await;
+        assert_eq!(retry["success"], true);
+        let (status, _) = update_pipe_config(
+            State(state.clone()),
+            Path("speaker-reconciliation".to_string()),
+            Json(ConfigUpdateRequest {
+                config: HashMap::new(),
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let Json(retry) = enable_pipe(
+            State(state),
+            Path("speaker-reconciliation".to_string()),
+            Json(EnableRequest { enabled: true }),
+        )
+        .await;
+        assert_eq!(retry["success"], true);
+    }
+
+    #[tokio::test]
+    async fn setup_handlers_report_only_actual_cap_suppression_as_quota() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipes_dir = dir.path().join("pipes");
+        let mut manager = PipeManager::new(pipes_dir.clone(), HashMap::new(), None, 3030);
+        for name in ["first", "second", "third"] {
+            manager
+                .install_pipe_from_store("---\nenabled: false\n---\n\nTask", name, 1)
+                .await
+                .unwrap();
+        }
+        manager.install_builtin_pipes().unwrap();
+        manager.set_max_non_template_pipes(Some(2));
+        manager.load_pipes().await.unwrap();
+        let state = Arc::new(Mutex::new(manager));
+        let Json(suppressed) = get_pipe(State(state.clone()), Path("third".into())).await;
+        assert_eq!(suppressed["error_code"], "free_pipe_limit_reached");
+        assert!(!suppressed["error"].as_str().unwrap().contains("not found"));
+        let (status, Json(adoption)) = update_pipe_config(
+            State(state.clone()),
+            Path("skill-learning".into()),
+            Json(ConfigUpdateRequest {
+                config: HashMap::from([("preset".into(), json!(["chosen-model"]))]),
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(adoption["error_code"], "free_pipe_limit_reached");
+        let Json(enabled) = enable_pipe(
+            State(state.clone()),
+            Path("skill-learning".into()),
+            Json(EnableRequest { enabled: true }),
+        )
+        .await;
+        assert_eq!(enabled["error_code"], "free_pipe_limit_reached");
+
+        std::fs::create_dir_all(pipes_dir.join("invalid")).unwrap();
+        std::fs::write(pipes_dir.join("invalid/pipe.md"), "---\nenabled: [\n---\n").unwrap();
+        for name in [
+            "missing",
+            "invalid",
+            "../third",
+            "third/../third",
+            "C:\\third",
+        ] {
+            let Json(result) = get_pipe(State(state.clone()), Path(name.into())).await;
+            assert_ne!(result["error_code"], "free_pipe_limit_reached", "{name}");
+        }
+        // Raising the cap exposes the original, unchanged task again.
+        {
+            let mut manager = state.lock().await;
+            manager.set_max_non_template_pipes(None);
+            manager.load_pipes().await.unwrap();
+        }
+        let Json(restored) = get_pipe(State(state), Path("third".into())).await;
+        assert_eq!(restored["data"]["config"]["enabled"], false);
     }
 
     #[tokio::test]

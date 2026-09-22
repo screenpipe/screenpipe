@@ -1,0 +1,14 @@
+[
+  {
+    "event": "onboarding_default_setup_failed",
+    "properties": { "step": "speaker-reconciliation", "stage": "setup", "operation": "configure", "error_code": "permission_denied", "http_status": 400, "outcome": "retry_available", "completed_steps": ["digital-clone"] }
+  },
+  {
+    "event": "onboarding_connection_cta_failed",
+    "properties": { "integration": "google-calendar", "failure_stage": "oauth_connect", "error_code": "authorization_denied", "outcome": "retry_available" }
+  },
+  {
+    "event": "onboarding_default_setup_failed",
+    "properties": { "step": "skill-learning", "stage": "setup", "operation": "configure", "error_code": "free_pipe_limit_reached", "http_status": 400, "outcome": "retry_available", "completed_steps": ["digital-clone", "speaker-reconciliation"] }
+  }
+]

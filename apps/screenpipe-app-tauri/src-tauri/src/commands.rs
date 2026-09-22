@@ -2773,33 +2773,193 @@ pub async fn get_onboarding_status(
     OnboardingStore::get(&app_handle).map(|o| o.unwrap_or_default())
 }
 
+// Preserve receipt identity on retry. The store cache may already contain
+// completion after a failed disk save, so emit after every successful save;
+// consumers can deduplicate retries by completion_id. Completion means saved
+// setup, not that the destination window opened successfully.
+fn mark_onboarding_completed(onboarding: &mut OnboardingStore) -> serde_json::Value {
+    if !onboarding.is_completed || onboarding.completed_at.is_none() {
+        onboarding.complete();
+    }
+    serde_json::json!({
+        "telemetry_schema_version": 2,
+        "owner": "native",
+        "completion_id": onboarding.completed_at,
+        "outcome": "saved",
+    })
+}
+
+fn onboarding_completion_failure(stage: &str, attempt_id: &str, error: &str) -> String {
+    let lower = error.to_lowercase();
+    let code = if lower.contains("permission denied") || lower.contains("access is denied")
+        || lower.contains("operation not permitted") {
+        "permission_denied"
+    } else if lower.contains("no space left") || lower.contains("disk full") {
+        "disk_full"
+    } else if lower.contains("deserialize") || lower.contains("invalid") {
+        "invalid_state"
+    } else {
+        "operation_failed"
+    };
+    let diagnostic = serde_json::json!({
+        "stage": stage, "attempt_id": attempt_id, "error_code": code,
+        "outcome": "retry_available"
+    });
+    // Error strings can contain paths or provider credentials. The fixed stage
+    // and cause are sufficient for support without retaining their raw text.
+    tracing::warn!("onboarding_completion_failed {}", diagnostic);
+    diagnostic.to_string()
+}
+
+#[cfg(test)]
+mod onboarding_receipt_tests {
+    use super::*;
+
+    #[test]
+    fn retry_after_a_failed_save_preserves_completion_time_and_receipt_identity() {
+        let mut onboarding = OnboardingStore::default();
+        let receipt = mark_onboarding_completed(&mut onboarding);
+        assert!(onboarding.is_completed);
+        let completed_at = onboarding.completed_at.clone();
+        assert_eq!(receipt["completion_id"], serde_json::json!(completed_at));
+        assert_eq!(mark_onboarding_completed(&mut onboarding), receipt);
+        assert_eq!(onboarding.completed_at, completed_at);
+    }
+
+    #[tokio::test]
+    async fn setup_failures_and_recovery_survive_rotation_and_support_redaction() {
+        let logs = tempfile::tempdir().unwrap();
+        let current = logs.path().join("screenpipe-app.2026-09-22.log");
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(std::fs::File::create(&current).unwrap())
+            .finish();
+        let events: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../lib/__tests__/fixtures/onboarding-support-events.json"
+        ))
+        .unwrap();
+        let attempt_id = "00000000-0000-4000-8000-000000000001";
+        tracing::subscriber::with_default(subscriber, || {
+            for event in &events {
+                let mut properties = event["properties"].clone();
+                properties["attempt_id"] = serde_json::json!(attempt_id);
+                write_browser_log(
+                    "warn".into(),
+                    format!("{} {}", event["event"].as_str().unwrap(), properties),
+                );
+            }
+            write_browser_log(
+                "warn".into(),
+                serde_json::json!({
+                    "event": "trial_activation_assignment_failed", "reason": "load_error",
+                    "stage": "waiting_for_fresh_response", "attempt_id": attempt_id,
+                    "response_count": 2, "elapsed_ms": 10, "identity_matches": true,
+                    "fallback_variant": "control", "outcome": "continue_setup"
+                })
+                .to_string(),
+            );
+            let error = onboarding_completion_failure(
+                "persist",
+                attempt_id,
+                "Operation not permitted: /private/person@example.com/token=secret",
+            );
+            assert!(!error.contains("secret"));
+            assert!(!error.contains("person@example.com"));
+        });
+        std::fs::rename(
+            &current,
+            logs.path().join("screenpipe-app.2026-09-22.1.log"),
+        )
+        .unwrap();
+        std::fs::write(
+            &current,
+            "onboarding_completion_persisted outcome=saved\ncontact=person@example.com\n",
+        )
+        .unwrap();
+        let report =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[logs.path().to_path_buf()])
+                .await
+                .unwrap();
+        for expected in [
+            "onboarding_default_setup_failed",
+            "speaker-reconciliation",
+            "skill-learning",
+            "free_pipe_limit_reached",
+            "configure",
+            "permission_denied",
+            "digital-clone",
+            "onboarding_connection_cta_failed",
+            "authorization_denied",
+            "oauth_connect",
+            "onboarding_completion_failed",
+            "permission_denied",
+            "retry_available",
+            attempt_id,
+            "onboarding_completion_persisted",
+            "trial_activation_assignment_failed",
+            "load_error",
+            "waiting_for_fresh_response",
+            "continue_setup",
+        ] {
+            assert!(report.contains(expected), "missing {expected}: {report}");
+        }
+        assert!(!report.contains("person@example.com"));
+        assert!(!report.contains("secret"));
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn complete_onboarding(app_handle: tauri::AppHandle) -> Result<(), String> {
-    // Update the persistent store
+    let attempt_id = uuid::Uuid::new_v4().to_string();
+    let mut receipt = None;
+    let mut persisted = None;
     OnboardingStore::update(&app_handle, |onboarding| {
-        onboarding.complete();
+        receipt = Some(mark_onboarding_completed(onboarding));
+        persisted = Some(onboarding.clone());
     })
-    .map_err(|e| e.to_string())?;
+    .map_err(|error| onboarding_completion_failure("persist", &attempt_id, &error))?;
 
-    // Update the managed state in memory
-    if let Some(managed_store) = app_handle.try_state::<OnboardingStore>() {
-        // Get the current state and create an updated version
-        let mut updated_store = managed_store.inner().clone();
-        updated_store.complete();
-        // Replace the managed state with the updated version
-        app_handle.manage(updated_store);
+    if let Some(persisted) = persisted {
+        app_handle.manage(persisted);
+    }
+    info!(
+        "onboarding_completion_persisted attempt_id={} receipt={}",
+        attempt_id,
+        receipt.as_ref().unwrap_or(&serde_json::Value::Null)
+    );
+    // Capture only after persistence succeeds. The task belongs to the native
+    // process and survives the onboarding webview being destroyed below.
+    if let (Some(properties), Some(analytics)) = (
+        receipt,
+        app_handle.try_state::<std::sync::Arc<AnalyticsManager>>(),
+    ) {
+        let analytics = std::sync::Arc::clone(&analytics);
+        tauri::async_runtime::spawn(async move {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                analytics.send_event("onboarding_completed", Some(properties)),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => tracing::warn!(%error, "onboarding completion receipt failed"),
+                Err(_) => tracing::warn!("onboarding completion receipt timed out"),
+            }
+        });
     }
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    close_window(app_handle.clone(), ShowRewindWindow::Onboarding).await?;
-    crate::first_run_summary::arm(&app_handle)?;
+    crate::first_run_summary::arm(&app_handle)
+        .map_err(|error| onboarding_completion_failure("arm_summary", &attempt_id, &error))?;
     let _ = refresh_tray_menu(app_handle.clone()).await;
 
     // Hidden UI applies to the main app, but incomplete onboarding remains
     // visible long enough to finish permissions. Once onboarding completes,
     // close that sole exemption without trying to open Home.
     if crate::enterprise_policy::is_app_ui_hidden() {
+        close_window(app_handle.clone(), ShowRewindWindow::Onboarding)
+            .await
+            .map_err(|error| onboarding_completion_failure("close_setup", &attempt_id, &error))?;
         info!("enterprise: onboarding completed; keeping main UI hidden");
         return Ok(());
     }
@@ -2814,7 +2974,13 @@ pub async fn complete_onboarding(app_handle: tauri::AppHandle) -> Result<(), Str
             page: Some("home".to_string()),
         },
     )
-    .await?;
+    .await
+    .map_err(|error| onboarding_completion_failure("open_home", &attempt_id, &error))?;
+
+    // Retain the retry UI until all fallible destination work succeeds.
+    close_window(app_handle.clone(), ShowRewindWindow::Onboarding)
+        .await
+        .map_err(|error| onboarding_completion_failure("close_setup", &attempt_id, &error))?;
 
     Ok(())
 }

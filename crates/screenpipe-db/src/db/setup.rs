@@ -406,13 +406,6 @@ impl DatabaseManager {
         // writer; only confirmed physical damage requires separate-copy repair.
         let write_queue_health =
             crate::write_queue::WriteQueueHealth::for_database_path(database_path);
-        let write_pool_rebuilder = crate::write_queue::WritePoolRebuilder::new(
-            connect_options,
-            write_pool_max,
-            1,
-            Duration::from_secs(10),
-        )
-        .with_storage(storage.clone());
         let persistent_failure_hook = crate::write_queue::persistent_failure_slot(None);
         let close_token = tokio_util::sync::CancellationToken::new();
         let write_queue = crate::write_queue::spawn_write_drain_with(
@@ -420,7 +413,6 @@ impl DatabaseManager {
             Arc::clone(&write_semaphore),
             Arc::from(database_path),
             crate::write_queue::WriteDrainOpts {
-                rebuilder: Some(write_pool_rebuilder),
                 on_persistent_failure: persistent_failure_hook.clone(),
                 health: write_queue_health.clone(),
                 shutdown: close_token.clone(),
@@ -585,14 +577,8 @@ impl DatabaseManager {
             db_manager.spawn_startup_integrity_check(Arc::from(database_path));
         }
 
-        // Periodic WAL checkpoint so the write-ahead log can't grow unbounded
-        // when passive auto-checkpoint is blocked by long-lived readers. An
-        // oversized WAL (observed at 650MB on a heavy 24/7 install) is the main
-        // driver of the WAL-index / `-shm` desync that corrupts the DB. Started
-        // here in `new()` — next to the integrity check — so EVERY caller gets
-        // it: the desktop app runs the engine in-process and previously never
-        // started it (only the standalone `screenpipe-engine` CLI did), so app
-        // users got no periodic checkpointing at all.
+        // Every recorder owns periodic PASSIVE checkpointing. Active readers
+        // can defer that work, but checkpoint pressure must not stop capture.
         if background {
             db_manager.start_wal_maintenance();
         }

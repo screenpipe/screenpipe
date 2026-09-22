@@ -91,15 +91,18 @@ impl Cache {
         // SQLite invokes payload callbacks synchronously on its worker. The
         // runtime-independent executor shares frame decoder admission without
         // nesting a Tokio runtime or holding the cache mutex across I/O.
+        // A parity scan can enter here inside a Tokio poll. This synchronous
+        // executor cannot yield to that outer poll, so its wait must not spend
+        // the outer cooperative budget. Decoder admission and shutdown still apply.
         flight.get_or_init(|| {
             let result = (|| {
-                let _permit = futures::executor::block_on(async {
+                let _permit = futures::executor::block_on(tokio::task::coop::unconstrained(async {
                     tokio::select! {
                         biased;
                         _ = storage.closing.cancelled() => Err(sqlx::Error::PoolClosed),
                         permit = storage.decoder.acquire() => permit.map_err(|_| sqlx::Error::PoolClosed),
                     }
-                })?;
+                }))?;
                 #[cfg(test)]
                 {
                     let hook = storage.bulk.decode_hook.lock().unwrap().clone();

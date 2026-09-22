@@ -23,6 +23,19 @@
 use screenpipe_config::{DbConfig, DeviceTier};
 use screenpipe_db::DatabaseManager;
 
+#[path = "support/writer_recovery.rs"]
+mod writer_recovery;
+
+#[tokio::test]
+async fn writer_starvation_keeps_all_pool_owners_until_coordinated_restart() {
+    writer_recovery::writer_starvation_recovery(false).await;
+}
+
+#[tokio::test]
+async fn hybrid_writer_starvation_keeps_all_pool_owners_until_coordinated_restart() {
+    writer_recovery::writer_starvation_recovery(true).await;
+}
+
 fn temp_db_path(tag: &str) -> String {
     let dir = std::env::temp_dir().join(format!("sp_close_test_{}_{}", tag, std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

@@ -180,6 +180,13 @@ describe("hosted onboarding checkout", () => {
 
   it("cheap-polls after return recovery without bypassing the payment-method gate", async () => {
     window.history.replaceState({}, "", "/onboarding?checkout=complete");
+    let finishRecovery: (() => void) | undefined;
+    mocks.loadUser.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRecovery = resolve;
+        }),
+    );
     const timerSpy = vi.spyOn(globalThis, "setTimeout");
     const next = vi.fn();
     render(<PlanSelectionStep handleNextSlide={next} />);
@@ -187,6 +194,12 @@ describe("hosted onboarding checkout", () => {
     await waitFor(() =>
       expect(mocks.loadUser).toHaveBeenCalledWith("token-1", true),
     );
+    expect(
+      timerSpy.mock.calls.find(([, delay]) => delay === 3_000),
+    ).toBeUndefined();
+    expect(next).not.toHaveBeenCalled();
+    await act(async () => finishRecovery?.());
+
     const pollTimer = timerSpy.mock.calls.find(([, delay]) => delay === 3_000);
     expect(pollTimer).toBeDefined();
     await act(async () => {

@@ -4,12 +4,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import { authorizeComposioToolkit, fetchComposioStatus, registerComposioMcpServer } from "@/lib/composio";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { foregroundAfterOAuth } from "@/lib/connections/foreground-oauth";
 import { commands } from "@/lib/utils/tauri";
+import { captureSetupEvent } from "@/lib/onboarding-diagnostics";
+import { SetupConnectionError, connectionFailureProperties } from "@/lib/onboarding-connection-error";
 import { useGT } from "gt-react";
 
 
@@ -20,7 +21,7 @@ type Connection = "gmail" | "google-calendar";
 function bounded<T>(promise: Promise<T>, signal: AbortSignal, ms = 10_000): Promise<T> {
   return new Promise((resolve, reject) => {
     const cancel = () => { cleanup(); reject(new Error("connection interrupted")); };
-    const timer = setTimeout(cancel, ms);
+    const timer = setTimeout(() => { cleanup(); reject(new SetupConnectionError("timeout")); }, ms);
     const cleanup = () => { clearTimeout(timer); signal.removeEventListener("abort", cancel); };
     signal.addEventListener("abort", cancel, { once: true });
     if (signal.aborted) { cancel(); return; }
@@ -63,39 +64,48 @@ export function SetupConnections({ userToken, disabled, onGmailChange, onBusyCha
     if (id === "gmail") statusOperation.current?.abort();
     running.current = true; setBusy(id); onBusyChange(true); setError("");
     const controller = new AbortController(); operation.current = controller;
-    const properties = { integration: id === "gmail" ? "composio-gmail" : id, source: "onboarding_final_setup" };
-    posthog.capture("onboarding_connection_cta_attempted", properties);
+    const properties = { integration: id === "gmail" ? "composio-gmail" : id, source: "onboarding_final_setup", attempt_id: crypto.randomUUID() };
+    let stage = id === "gmail" ? "authorization" : "oauth_connect";
+    const started = Date.now();
+    captureSetupEvent("onboarding_connection_cta_attempted", properties);
     try {
       if (id === "gmail") {
-        if (!userToken) throw new Error("sign in");
+        if (!userToken) throw new SetupConnectionError("authentication_required");
         const url = await bounded(authorizeComposioToolkit(userToken, "gmail"), controller.signal);
         controller.signal.throwIfAborted();
+        stage = "open_oauth";
         await bounded(openUrl(url), controller.signal);
+        stage = "completion";
         const deadline = Date.now() + 120_000;
         for (;;) {
-          const status = await bounded(fetchComposioStatus(userToken), controller.signal);
+          const status = await bounded(fetchComposioStatus(userToken, { throwOnError: true }), controller.signal);
+          if (!status) throw new SetupConnectionError("invalid_response");
           if (status?.gmail?.connected) break;
-          if (Date.now() >= deadline) throw new Error("connection not completed");
+          if (Date.now() >= deadline) throw new SetupConnectionError("timeout");
           await bounded(new Promise(resolve => setTimeout(resolve, 2_000)), controller.signal);
         }
         controller.signal.throwIfAborted();
         onGmailChange(true);
-        void registerComposioMcpServer(userToken).catch(() => {});
+        void bounded(registerComposioMcpServer(userToken), controller.signal).catch(failure => {
+          if (!controller.signal.aborted) captureSetupEvent("onboarding_connection_registration_failed", { ...properties, failure_stage: "registration", ...connectionFailureProperties(failure, "registration"), outcome: "connected_registration_pending" });
+        });
         void foregroundAfterOAuth();
-        posthog.capture("connection_saved", properties);
+        captureSetupEvent("connection_saved", properties);
       } else {
         const result = await bounded(commands.oauthConnect("google-calendar", null, null), controller.signal, 120_000);
-        if (result?.status !== "ok" || result.data?.connected !== true) throw new Error("connection not completed");
+        if (result?.status === "error") throw result.error;
+        if (result?.status !== "ok" || result.data?.connected !== true) throw new SetupConnectionError("verification_failed");
         controller.signal.throwIfAborted();
-        posthog.capture("google_calendar_connected", { source: properties.source });
+        captureSetupEvent("google_calendar_connected", { ...properties });
       }
       setConnected(previous => ({ ...previous, [id]: true }));
+      captureSetupEvent("onboarding_connection_completed", { ...properties, outcome: "connected", request_duration_ms: Date.now() - started });
       notifyConnectionsUpdated();
-    } catch {
+    } catch (failure) {
       if (!controller.signal.aborted) {
         if (id === "gmail") onGmailChange(false);
         setError(id === "gmail" && !userToken ? ui("Sign in to connect Gmail.") : ui("{value1} wasn't connected. Try again or connect later.", { value1: id === "gmail" ? "Gmail" : "Calendar" }));
-        posthog.capture("onboarding_connection_cta_failed", { ...properties, failure_stage: "connection" });
+        captureSetupEvent("onboarding_connection_cta_failed", { ...properties, failure_stage: stage, ...connectionFailureProperties(failure, stage), request_duration_ms: Date.now() - started, outcome: "retry_available" });
       }
     } finally {
       running.current = false;

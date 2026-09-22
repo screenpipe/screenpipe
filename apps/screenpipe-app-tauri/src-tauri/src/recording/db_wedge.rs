@@ -234,7 +234,19 @@ async fn recover_from_db_wedge(
             "database lifecycle recovery requested — restarting recording to rebuild all DB pools + the shared WAL-index"
         );
 
-        *recording_state.interrupted_meeting.lock().await = None;
+        if hard_faulted {
+            // A verified SQLite fault forbids further reads from this generation.
+            *recording_state.interrupted_meeting.lock().await = None;
+        } else if tokio::time::timeout(
+            DB_WEDGE_SERVER_SHUTDOWN_TIMEOUT,
+            super::remember_active_meeting_from_server(&recording_state, &server),
+        )
+        .await
+        .is_err()
+        {
+            *recording_state.interrupted_meeting.lock().await = None;
+            warn!("active meeting lookup timed out during database recovery; live transcription could not be preserved");
+        }
         if let Some(session) = capture {
             session.stop().await;
         }

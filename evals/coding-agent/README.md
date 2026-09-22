@@ -9,9 +9,27 @@ This is an agent eval suite, not a unit-test suite. Every case contains:
 - saved prompt, transcript, candidate patch, grader output, runtime fingerprint, and result;
 - repeated-trial reporting with success rate, `pass@k`, and `pass^k`.
 
-The current app corpus contains 69 git-mined regressions. See
+The current app corpus contains 70 git-mined regressions. See
 [DESIGN.md](./DESIGN.md) for the Anthropic guidance, source contract, and
 history-mining workflow. The companion website manifest uses this same harness.
+
+`app-onboarding-sdk-cold-start-assignment` runs the historical React page with
+PostHog 1.359.1, the SDK pinned by that source revision. It observes eleven
+cold-route, stale-identity, pinned-route, timeout, opt-out and unmount outcomes.
+Transport responses are synthetic; unpinned requests are served at a fixed
+latency without requiring a particular number of requests or callbacks. The
+parent fails four cold outcomes and one stale-cache outcome, preserving six;
+the reference passes all eleven. This complements the earlier mocked-callback
+login case below. It does not certify live analytics, native behavior or model
+performance.
+
+Run `bun test evals/coding-agent/calibrate-onboarding-sdk.test.js` with the exact
+locked SDK and desktop test dependencies installed. Calibration rejects an
+unused correct page, stale acceptance and blanket control, accepts an equivalent
+predicate, and separates missing-source setup failures. The grader refuses a
+mismatched SDK runtime and denies live fetch/XHR. Fixtures and dependency links
+are materialized only when grading starts; dependency links do not establish
+execution isolation. No model trial is implied.
 
 `app-onboarding-fresh-assignment-login` selects thirteen historical React outcome
 tests for disabled/absent experiment flags, final-identity assignment, pinned

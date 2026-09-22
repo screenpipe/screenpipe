@@ -399,25 +399,47 @@ fn persist(root: &Path, snapshot: &Snapshot) -> Result<(), sqlx::Error> {
         &directory.join(format!("{}.json", snapshot.attempt_id)),
         snapshot,
     )?;
-    for file in attempt_files(root)?.into_iter().skip(KEEP_ATTEMPTS) {
-        std::fs::remove_file(file)?;
+    let files = attempt_files(root)?;
+    let retained = retained_attempt_paths(&files);
+    for file in &files {
+        if !retained.contains(&file) {
+            std::fs::remove_file(file)?;
+        }
     }
     Ok(())
 }
 
 /// Feedback reads bounded snapshots without opening the migration database.
 pub fn recent(root: &Path) -> std::io::Result<Vec<Snapshot>> {
-    attempt_files(root)?
+    let files = attempt_files(root)?;
+    retained_attempt_paths(&files)
         .into_iter()
-        .take(KEEP_ATTEMPTS)
-        .map(|path| {
-            let mut bytes = Vec::new();
-            std::fs::File::open(path)?
-                .take(MAX_SNAPSHOT_BYTES)
-                .read_to_end(&mut bytes)?;
-            serde_json::from_slice(&bytes).map_err(std::io::Error::other)
-        })
+        .map(|path| read_snapshot(path))
         .collect()
+}
+
+fn read_snapshot(path: &Path) -> std::io::Result<Snapshot> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(MAX_SNAPSHOT_BYTES)
+        .read_to_end(&mut bytes)?;
+    serde_json::from_slice(&bytes).map_err(std::io::Error::other)
+}
+
+fn retained_attempt_paths(files: &[PathBuf]) -> Vec<&PathBuf> {
+    // Keep the recent attempts plus the latest conversion (at most one extra
+    // snapshot). Recording recovery, even when successful, cannot supersede
+    // the conversion cause or its last progress before a process interruption.
+    let mut retained = Vec::new();
+    let mut conversion_seen = false;
+    for (index, path) in files.iter().enumerate() {
+        let conversion = read_snapshot(path).is_ok_and(|snapshot| snapshot.kind == "conversion");
+        if index < KEEP_ATTEMPTS || (conversion && !conversion_seen) {
+            retained.push(path);
+        }
+        conversion_seen |= conversion;
+    }
+    retained
 }
 
 #[cfg(test)]
@@ -617,6 +639,52 @@ mod tests {
         .unwrap();
         saved(root.path(), "completed").await;
         assert!(receive.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn recording_recovery_does_not_evict_the_originating_conversion() {
+        let root = tempfile::tempdir().unwrap();
+        let _ = observe(root.path(), "conversion", |_, _| {}, async {
+            stage("validating_migration_source");
+            Err::<(), _>("source contains recorded history; both files have been kept")
+        })
+        .await;
+        let conversion = saved(root.path(), "failed").await;
+        let mut recovery = conversion.clone();
+        recovery.kind = "recording_recovery".into();
+        recovery.stage = "restoring_recording".into();
+        recovery.failure_stage = Some(recovery.stage.clone());
+        recovery.error = Some("pool timed out while waiting for an open connection".into());
+        for _ in 0..KEEP_ATTEMPTS + 2 {
+            recovery.attempt_id = uuid::Uuid::new_v4().to_string();
+            persist(root.path(), &recovery).unwrap();
+        }
+        let snapshots = recent(root.path()).unwrap();
+        assert!(snapshots
+            .iter()
+            .any(|s| s.attempt_id == conversion.attempt_id));
+        assert_eq!(snapshots.len(), KEEP_ATTEMPTS + 1);
+
+        // A later successful recovery still cannot claim archival completed.
+        recovery.attempt_id = uuid::Uuid::new_v4().to_string();
+        recovery.status = "completed".into();
+        recovery.failure_stage = None;
+        recovery.error = None;
+        persist(root.path(), &recovery).unwrap();
+        assert!(recent(root.path())
+            .unwrap()
+            .iter()
+            .any(|s| s.attempt_id == conversion.attempt_id && s.error == conversion.error));
+
+        // A new explicit conversion supersedes the protected attempt.
+        let mut retry = conversion.clone();
+        retry.attempt_id = uuid::Uuid::new_v4().to_string();
+        persist(root.path(), &retry).unwrap();
+        let snapshots = recent(root.path()).unwrap();
+        assert!(snapshots.iter().any(|s| s.attempt_id == retry.attempt_id));
+        assert!(!snapshots
+            .iter()
+            .any(|s| s.attempt_id == conversion.attempt_id));
     }
 
     #[tokio::test]

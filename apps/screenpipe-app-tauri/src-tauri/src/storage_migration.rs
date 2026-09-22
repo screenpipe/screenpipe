@@ -18,7 +18,7 @@ const MIGRATION_ERROR_FILE: &str = "storage-migration-error.txt";
 const INTERRUPTED_MIGRATION: &str =
     "The previous storage migration did not finish. Automatic retries are disabled; retry explicitly.";
 
-fn saved_migration_error(root: &Path) -> Option<String> {
+pub(crate) fn saved_migration_error(root: &Path) -> Option<String> {
     match std::fs::read_to_string(root.join(MIGRATION_ERROR_FILE)) {
         Ok(error) if !error.trim().is_empty() => Some(error),
         Ok(_) => Some(INTERRUPTED_MIGRATION.into()),
@@ -335,7 +335,7 @@ pub(crate) async fn resume_before_startup(
         .await
         .map_err(|e| e.to_string());
         if result.is_err() {
-            finish_recovery_operation(app, &root, &result);
+            finish_recovery_operation(app, &root, &result).await;
             result?;
         }
         update_operation(app, |operation| {
@@ -467,19 +467,37 @@ pub(crate) async fn finish_startup(
         error => error,
     };
     if migration.recovering {
-        finish_recovery_operation(app, &migration.root, &result);
+        finish_recovery_operation(app, &migration.root, &result).await;
     } else {
         finish_operation(app, &migration.root, &result);
     }
     result
 }
 
-fn finish_recovery_operation(app: &tauri::AppHandle, root: &Path, result: &Result<(), String>) {
+pub(crate) async fn record_recovery_outcome(root: &Path, result: &Result<(), String>) {
+    // This is the application outcome, after database recovery and the live
+    // recording check. Keep it separate from the original conversion cause:
+    // a later boot failure must not replace the durable migration retry block.
+    let _ = screenpipe_db::storage::diagnostics::observe(
+        root,
+        "recording_recovery",
+        |_, _| {},
+        async {
+            screenpipe_db::storage::diagnostics::stage("recording_recovery_outcome");
+            result.clone()
+        },
+    )
+    .await;
+}
+
+async fn finish_recovery_operation(
+    app: &tauri::AppHandle,
+    root: &Path,
+    result: &Result<(), String>,
+) {
+    record_recovery_outcome(root, result).await;
     if let Err(error) = result {
         report_migration_failure(app, root, error);
-        if let Err(save_error) = save_migration_error(root, error) {
-            tracing::error!(%save_error, "failed to save recording recovery error");
-        }
     }
     update_operation(app, |operation| {
         operation.elapsed_seconds = operation.activity().elapsed_seconds;

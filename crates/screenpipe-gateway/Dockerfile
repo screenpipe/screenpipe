@@ -8,14 +8,19 @@
 #   docker build -f crates/screenpipe-gateway/Dockerfile .
 #
 # Runtime choice: debian-slim (glibc) rather than musl-static — the closure
-# has exactly one C dependency (bundled SQLite + sqlite-vec), and sqlite-vec
+# includes bundled SQLite + sqlite-vec, and sqlite-vec
 # 0.1.3 does not compile under musl/alpine (cc failure in its extension
 # glue). glibc is the toolchain every other screenpipe artifact already
 # builds against. A fully-static scratch image is an M5 release-pipeline
 # refinement, not a functional need; debian:bookworm-slim is ~75MB and
 # gives us ca-certificates (TLS to S3) + curl (compose healthchecks).
+# Database migration recovery uses screenpipe-secrets, whose Linux keyring
+# backend also needs D-Bus at build time and in the runtime image.
 
 FROM rust:1-bookworm AS builder
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pkg-config libdbus-1-dev \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
@@ -23,7 +28,7 @@ RUN cargo build --locked --release -p screenpipe-gateway --bins
 
 FROM debian:bookworm-slim AS base
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl libdbus-1-3 \
     && rm -rf /var/lib/apt/lists/* \
     # uid/gid PINNED, not left to useradd's "next free system id". The
     # customer-facing Fargate template (website
