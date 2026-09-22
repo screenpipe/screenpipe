@@ -4,7 +4,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
-import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { SetupConnections } from "./setup-connections";
@@ -107,7 +106,7 @@ export default function FinalSetupStep({ userToken, handleNextSlide }: {
     const completedThisAttempt = [...completed];
     let taskSlug = "engine";
     let stage = "engine";
-    posthog.capture("onboarding_defaults_start_clicked", { setup_version: 3, attempt_id: attemptId, selected_steps: tasks.filter(task => selected[task.slug]).map(task => task.slug) });
+    captureSetupEvent("onboarding_defaults_start_clicked", { setup_version: 3, attempt_id: attemptId, selected_steps: tasks.filter(task => selected[task.slug]).map(task => task.slug) });
     try {
       setPhase("Starting Screenpipe");
       const health = await request("/health", controller.signal, undefined, 3_000).catch(() => null);
@@ -122,7 +121,7 @@ export default function FinalSetupStep({ userToken, handleNextSlide }: {
         if (task.slug === "daily-email-summary" && selected[task.slug] && !gmailConnected) continue;
         taskSlug = task.slug; stage = "setup";
         setPhase(`${selected[task.slug] ? "Setting up" : "Turning off"} ${task.label.toLowerCase()}`);
-        posthog.capture("onboarding_default_setup_attempted", { step: task.slug, enabled: selected[task.slug], setup_version: 3, attempt_id: attemptId });
+        captureSetupEvent("onboarding_default_setup_attempted", { step: task.slug, enabled: selected[task.slug], setup_version: 3, attempt_id: attemptId });
         await setupPipe(task, preset?.id, selected[task.slug], controller.signal);
         if (!completedThisAttempt.includes(task.slug)) completedThisAttempt.push(task.slug);
         setCompleted(previous => previous.includes(task.slug) ? previous : [...previous, task.slug]);

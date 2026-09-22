@@ -100,7 +100,7 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
       setFirstRunGuidePending(false);
       // Native code owns the persisted completion receipt: this webview may
       // be destroyed before the command resolves. Send intent and context now.
-      posthog.capture(
+      try { posthog.capture(
         "onboarding_completion_requested",
         {
           attempt_id: attemptId,
@@ -122,7 +122,7 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
             : {}),
         },
         { send_instantly: true },
-      );
+      ); } catch { /* Telemetry must not block the native completion attempt. */ }
       const result = await commands.completeOnboarding();
 
       if (result.status === "ok") {

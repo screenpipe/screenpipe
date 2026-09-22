@@ -4,7 +4,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import { authorizeComposioToolkit, fetchComposioStatus, registerComposioMcpServer } from "@/lib/composio";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
@@ -68,7 +67,7 @@ export function SetupConnections({ userToken, disabled, onGmailChange, onBusyCha
     const properties = { integration: id === "gmail" ? "composio-gmail" : id, source: "onboarding_final_setup", attempt_id: crypto.randomUUID() };
     let stage = id === "gmail" ? "authorization" : "oauth_connect";
     const started = Date.now();
-    posthog.capture("onboarding_connection_cta_attempted", properties);
+    captureSetupEvent("onboarding_connection_cta_attempted", properties);
     try {
       if (id === "gmail") {
         if (!userToken) throw new SetupConnectionError("authentication_required");
@@ -91,13 +90,13 @@ export function SetupConnections({ userToken, disabled, onGmailChange, onBusyCha
           if (!controller.signal.aborted) captureSetupEvent("onboarding_connection_registration_failed", { ...properties, failure_stage: "registration", ...connectionFailureProperties(failure, "registration"), outcome: "connected_registration_pending" });
         });
         void foregroundAfterOAuth();
-        posthog.capture("connection_saved", properties);
+        captureSetupEvent("connection_saved", properties);
       } else {
         const result = await bounded(commands.oauthConnect("google-calendar", null, null), controller.signal, 120_000);
         if (result?.status === "error") throw result.error;
         if (result?.status !== "ok" || result.data?.connected !== true) throw new SetupConnectionError("verification_failed");
         controller.signal.throwIfAborted();
-        posthog.capture("google_calendar_connected", { source: properties.source });
+        captureSetupEvent("google_calendar_connected", { ...properties });
       }
       setConnected(previous => ({ ...previous, [id]: true }));
       captureSetupEvent("onboarding_connection_completed", { ...properties, outcome: "connected", request_duration_ms: Date.now() - started });

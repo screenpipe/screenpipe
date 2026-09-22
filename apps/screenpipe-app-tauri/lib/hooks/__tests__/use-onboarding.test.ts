@@ -4,6 +4,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useOnboarding } from "../use-onboarding";
+import { writeBrowserLogNow } from "@/lib/logging/browser-log";
 
 const localStorageMock = (() => {
   const values = new Map<string, string>();
@@ -51,6 +52,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 describe("useOnboarding measurement", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.capture.mockReset();
     vi.stubGlobal("localStorage", localStorageMock);
     localStorage.clear();
     useOnboarding.setState({
@@ -62,6 +64,18 @@ describe("useOnboarding measurement", () => {
       isLoading: false,
       error: null,
     });
+  });
+
+  it("does not let failed telemetry strand native completion or its retry state", async () => {
+    mocks.capture.mockImplementation(() => { throw new Error("analytics unavailable"); });
+    mocks.completeOnboarding.mockResolvedValueOnce({ status: "error", error: "store unavailable" });
+    await expect(useOnboarding.getState().completeOnboarding({ method: "setup_finished" })).rejects.toThrow("store unavailable");
+    expect(useOnboarding.getState().isLoading).toBe(false);
+    expect(writeBrowserLogNow).toHaveBeenCalledWith("warn", expect.stringContaining("onboarding_completion_failed"));
+    mocks.completeOnboarding.mockResolvedValueOnce({ status: "ok" });
+    await useOnboarding.getState().completeOnboarding({ method: "setup_finished" });
+    expect(useOnboarding.getState().onboardingData.isCompleted).toBe(true);
+    expect(useOnboarding.getState().isLoading).toBe(false);
   });
 
   it("records intent before native completion closes the webview", async () => {

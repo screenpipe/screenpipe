@@ -159,6 +159,18 @@ describe("default onboarding setup", () => {
     const previousWrites = writes().length; fireEvent.click(screen.getByRole("button", { name: "Retry setup" }));
     await waitFor(() => expect(next).toHaveBeenCalledTimes(2)); expect(writes()).toHaveLength(previousWrites);
   });
+  it("restores retry UI and keeps support evidence when analytics throws", async () => {
+    mocks.capture.mockImplementation(() => { throw new Error("analytics unavailable"); });
+    const next = vi.fn().mockRejectedValueOnce(new Error("native completion failed")).mockResolvedValue(undefined);
+    render(<FinalSetupStep handleNextSlide={next} />); start();
+    await screen.findByRole("alert");
+    expect(screen.getByRole("button", { name: "Retry setup" })).toBeEnabled();
+    expect(writeBrowserLogNow).toHaveBeenCalledWith("warn", expect.stringContaining("onboarding_default_setup_failed"));
+    const previousWrites = writes().length;
+    fireEvent.click(screen.getByRole("button", { name: "Retry setup" }));
+    await waitFor(() => expect(next).toHaveBeenCalledTimes(2));
+    expect(writes()).toHaveLength(previousWrites);
+  });
 
   it("applies every opt-out, including pausing previously running tasks", async () => {
     for (const slug of ["digital-clone", "speaker-reconciliation", "skill-learning", "daily-email-summary"]) tasks.set(slug, { enabled: true });

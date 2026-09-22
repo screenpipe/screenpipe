@@ -6,8 +6,12 @@ import { writeBrowserLogNow } from "@/lib/logging/browser-log";
 // Callers supply only fixed labels, random attempt IDs, counts and allowlisted
 // error categories. Never pass backend text, credentials, URLs or task content.
 export function captureSetupEvent(event: string, properties: Record<string, unknown>) {
-  writeBrowserLogNow(event.endsWith("failed") ? "warn" : "info", `${event} ${JSON.stringify(properties)}`);
-  posthog.capture(event, properties, { send_instantly: true });
+  try {
+    writeBrowserLogNow(event.endsWith("failed") ? "warn" : "info", `${event} ${JSON.stringify(properties)}`);
+  } catch { /* Diagnostics must never consume the user's setup or retry. */ }
+  try {
+    posthog.capture(event, properties, { send_instantly: true });
+  } catch { /* Native support logs remain available if analytics is unavailable. */ }
 }
 
 export function completionFailureProperties(error: unknown) {
