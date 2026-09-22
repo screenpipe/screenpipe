@@ -806,7 +806,7 @@ pub async fn start_capture(
         let server_guard = state.server.lock().await;
         let Some(ref core) = *server_guard else {
             warn!("Server not running — requesting full restart");
-            let _ = app.emit("request-server-restart", ());
+            request_server_restart(&app, "server missing when Start recording was requested");
             return Err("Server not running — full restart requested".to_string());
         };
         (core.port, core.local_api_key.clone())
@@ -822,7 +822,10 @@ pub async fn start_capture(
             "Server unresponsive on port {} — requesting full restart",
             port
         );
-        let _ = app.emit("request-server-restart", ());
+        request_server_restart(
+            &app,
+            "server health probe failed when Start recording was requested",
+        );
         return Err(format!(
             "Server not responding on port {} — full restart requested",
             port
@@ -1075,7 +1078,20 @@ pub async fn retry_screenpipe(
     ) else {
         return Ok(());
     };
-    spawn_screenpipe_inner(&state, app).await
+    retry::run(
+        &crate::db_relaunch::active_data_dir(),
+        &state.wants_recording,
+        spawn_screenpipe_inner(&state, app),
+    )
+    .await
+}
+
+fn request_server_restart(app: &tauri::AppHandle, reason: &str) {
+    let data_dir = crate::db_relaunch::active_data_dir();
+    recovery_log::append(&data_dir, "retry_requested", reason);
+    if let Err(error) = app.emit("request-server-restart", ()) {
+        recovery_log::append(&data_dir, "retry_event_failed", &error.to_string());
+    }
 }
 
 pub(crate) async fn spawn_screenpipe_inner(
@@ -1143,7 +1159,7 @@ async fn spawn_screenpipe_after_migration(
             info!("Deferred spawn: server dead, triggering restart");
             is_starting.store(false, Ordering::SeqCst);
             last_spawn_epoch.store(0, Ordering::SeqCst);
-            let _ = app_handle.emit("request-server-restart", ());
+            request_server_restart(&app_handle, "server missing after restart cooldown");
         });
         return Ok(());
     }
@@ -1527,7 +1543,11 @@ async fn spawn_screenpipe_after_migration(
     let app_for_chat_destination = app.clone();
     let app_for_owned = app.clone();
     let app_for_port_conflict = app.clone();
-    let workflow_catalog_dir = app.path().app_local_data_dir().ok().map(|dir| dir.join("workflows"));
+    let workflow_catalog_dir = app
+        .path()
+        .app_local_data_dir()
+        .ok()
+        .map(|dir| dir.join("workflows"));
 
     // Owned-browser: create the connect-side instance and kick off the
     // webview install in the background. The engine starts immediately;

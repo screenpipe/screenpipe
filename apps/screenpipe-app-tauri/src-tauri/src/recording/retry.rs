@@ -4,6 +4,32 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{Mutex, MutexGuard};
 
+/// Keep the originating startup error in the bounded log collected by support.
+/// A completed invocation only describes startup; durable capture and upload
+/// remain independently observable outcomes.
+pub(super) async fn run(
+    data_dir: &std::path::Path,
+    wants_recording: &AtomicBool,
+    startup: impl std::future::Future<Output = Result<(), String>>,
+) -> Result<(), String> {
+    super::recovery_log::append(data_dir, "retry_started", "recording recovery admitted");
+    let result = startup.await;
+    let capture_intended = wants_recording.load(Ordering::SeqCst);
+    match &result {
+        Ok(()) => super::recovery_log::append(
+            data_dir,
+            "retry_completed",
+            &format!("startup command completed; capture_intended={capture_intended}"),
+        ),
+        Err(error) => super::recovery_log::append(
+            data_dir,
+            "retry_failed",
+            &format!("startup failed; capture_intended={capture_intended}; cause={error}"),
+        ),
+    }
+    result
+}
+
 /// Shared admission for watchdog and webview recovery. Inspect current intent
 /// only after acquiring the native lifecycle slot; never publish new intent.
 pub(super) fn admit<'a>(
@@ -27,6 +53,52 @@ pub(super) fn admit<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn retry_failure_and_paused_completion_survive_collected_redacted_support_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let intent = AtomicBool::new(true);
+        let failure = run(dir.path(), &intent, async {
+            // Exercise a real startup prerequisite failure, retaining its OS
+            // cause rather than replacing it with a generic retry error.
+            std::fs::read(dir.path().join("missing-config"))
+                .map(|_| ())
+                .map_err(|error| format!("recording configuration unavailable: {error}"))
+        })
+        .await
+        .unwrap_err();
+        run(dir.path(), &intent, async {
+            // Pause races an admitted recovery. Completing startup must leave
+            // that newer user intent intact and describe it accurately.
+            intent.store(false, Ordering::SeqCst);
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        // Simulate application-log rotation and restart. The recovery log
+        // must retain priority despite newer noisy application logs.
+        for day in 1..=7 {
+            std::fs::write(
+                dir.path()
+                    .join(format!("screenpipe-app.2026-09-{day:02}.log")),
+                "app restarted; contact=private-person@example.com\n",
+            )
+            .unwrap();
+        }
+        let report =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+                .await
+                .unwrap();
+        assert!(report.contains("retry_started: recording recovery admitted"));
+        assert!(report.contains("retry_failed: startup failed; capture_intended=true"));
+        assert!(report.contains(&failure));
+        assert!(
+            report.contains("retry_completed: startup command completed; capture_intended=false")
+        );
+        assert!(!report.contains("private-person@example.com"));
+        assert!(!intent.load(Ordering::SeqCst));
+    }
 
     #[test]
     fn pause_after_a_webview_observed_recording_cancels_native_retry() {
