@@ -1,18 +1,23 @@
 # Workflow sharing visual evidence
 
-Real React components rendered in a headless Chromium isolated preview with synthetic account/settings data. These are implementation screenshots, not design mockups or installed-app end-to-end evidence.
+Actual React components in an isolated Chromium preview with synthetic account/settings data and mocked native/backend operations. External network traffic is intercepted. No production collection or customer data is used.
 
-- Before: recreated from the implementation parent `558ffda349ca3553c9dabf5cc0fbaaa5a92e2357`.
-- After: implementation `39ffe5568c28c2828ffd9099f3b3614763d38c31`.
-- Components: `WorkflowTasksPrompt`, `WorkflowSharingControls`, and `PrivacySection`, with the repository's actual global CSS/Tailwind styles and UI primitives.
-- Native APIs, settings persistence, translation, scheduled-task setup and account endpoints were replaced at the external ports with synthetic fixtures. External network traffic was intercepted; no customer data or production collection was used.
-- Desktop viewport: 1100 × 1000 CSS pixels, device scale 1. Narrow dialog: 600 × 760. Dialog comparisons use the same fixed 500 × 920 crop. Settings excerpts preserve the same 786-pixel content width and show the sharing section through the existing cloud-redaction explanation; lower recording-category controls are outside the excerpt. Additional states show the sharing card.
-- Light/dark dialog comparisons use the same viewport, data and styles. Dark-mode modal intentionally retains its existing white surface.
+## Sources
+
+- `entry-before-*` and `settings-before-off`: recreated original baseline from `558ffda349ca3553c9dabf5cc0fbaaa5a92e2357`.
+- `before-combined`: previous combined-dialog implementation, unchanged visually through `cd6d691730549e5c2c0a3e6bee3c01e44e56e125`.
+- Remaining images: current two-step implementation in this commit, using actual `WorkflowTasksPrompt`, `WorkflowSharingControls`, `PrivacySection`, UI primitives and global styles.
+
+## Capture conditions
+
+Desktop viewport 1100 × 1000 CSS pixels at device scale 1. Dialog images use the same 500 × 920 crop. Narrow dialog viewport 600 × 760. Settings excerpts preserve the same 786-pixel content width and show sharing through the existing cloud-redaction explanation; lower recording-category controls are outside the excerpt. Additional settings states show the sharing card.
+
+The modal intentionally retains its white surface in both themes, with a light native color scheme for checkbox readability. Settings respect the app theme. All 30 PNGs were inspected. Temporary preview code and synthetic ports are outside the repository.
 
 ## Coverage
 
-Entry dialog: recreated before/after in light and dark; sharing on; separate model-training permission on; details expanded; narrow layout with both actions visible.
+Two-step entry: daily updates first; either explicit daily-update choice leads to optional sharing. Training starts unchecked and applies only to Screenpipe's own models. Captures include both themes, expanded details, training selected, narrow layout, pending saves and recoverable failures. Browser assertions also verified successful sharing closes the dialog.
 
-Privacy settings: recreated before; sharing off; sharing on with cloud selected and both backend choices disabled; model-training permission on; details expanded; deletion confirmation; completed deletion with Local restored and editable; saving; enable failure; stop-network failure with local opt-out retained; account unavailable; managed deployment; status-load failure; dark mode; recording redaction off while sharing still requires cloud.
+Privacy settings: before/after, sharing off/on, cloud backend locked, first-party training, expanded details, deletion confirmation/completion with Local restored, saving, enable/stop/status failures, unavailable/managed accounts, dark mode, and recording redaction staying off while sharing still requires cloud.
 
-Browser assertions verified enabled/disabled and checked states, successful training opt-in, deletion restoring Local, distinct error copy, and recording redaction remaining off. All 23 PNGs were visually inspected. Capture fixtures and server code are outside the repository and are not part of the PR.
+Focused tests additionally verify no implicit consent, remembered per-account dismissal, signed-out/already-sharing cases, repeat submission prevention, and failed saves preserving the prompt. Native redaction and deployed backend behavior are outside this visual preview.

@@ -79,4 +79,42 @@ describe("sharing consent UI", () => {
     await waitFor(() => expect(requests.length).toBe(1));
     expect(screen.getByRole("switch")).toBeDisabled();
   });
+  it("keeps training unchecked and submits sharing only after the explicit prompt action", async () => {
+    const done = vi.fn();
+    render(<WorkflowSharingControls compact onDone={done} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Share chats" })).toBeEnabled());
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+    expect(screen.getByText("Optional. Never external providers’ models.")).toBeVisible();
+    expect(requests.every(r => r.method === "GET")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Share chats" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    expect(requests.find(r => r.method === "PUT")!.body).toMatchObject({ sharing: true, training: false });
+  });
+  it("submits separate first-party training consent only when the checkbox was selected", async () => {
+    render(<WorkflowSharingControls compact />);
+    await waitFor(() => expect(screen.getByRole("checkbox")).toBeEnabled());
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(requests.every(r => r.method === "GET")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Share chats" }));
+    await waitFor(() => expect(requests.find(r => r.method === "PUT")!.body.training).toBe(true));
+  });
+  it("skips the sharing prompt without saving consent", async () => {
+    const done = vi.fn();
+    render(<WorkflowSharingControls compact onDone={done} />);
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    expect(done).toHaveBeenCalledOnce();
+    expect(f.update).not.toHaveBeenCalled();
+    expect(requests.every(r => r.method === "GET")).toBe(true);
+  });
+  it("keeps the prompt open when saving fails", async () => {
+    const done = vi.fn();
+    render(<WorkflowSharingControls compact onDone={done} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Share chats" })).toBeEnabled());
+    offline = true;
+    fireEvent.click(screen.getByRole("button", { name: "Share chats" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not enable sharing");
+    expect(done).not.toHaveBeenCalled();
+    expect(f.update).not.toHaveBeenCalled();
+  });
+
 });

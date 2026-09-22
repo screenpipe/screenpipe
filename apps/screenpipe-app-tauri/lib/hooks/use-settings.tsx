@@ -296,6 +296,7 @@ export interface ChatHistoryStore {
 // Extend SettingsStore with fields added before Rust types are regenerated
 export type Settings = SettingsStore & {
 	/** Explicit consent on this device. Content is never stored in this field. */
+	workflowSharingPromptSeen?: Record<string, string>;
 	workflowSharing?: { accountId: string; epoch: string; enabledAt: number; priorBackend: "local" | "tinfoil" } | null;
 	/** Enable account data sync for this device. Default false. */
 	dataSyncEnabled?: boolean;
