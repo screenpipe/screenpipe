@@ -155,10 +155,12 @@ export const ShareLogsButton = ({
   onComplete,
   onBackgroundStart,
   prefillText,
+  autoFocus = false,
 }: {
   onComplete?: () => void;
   onBackgroundStart?: () => void;
   prefillText?: string;
+  autoFocus?: boolean;
 }) => {
 
   const ui = useGT();
@@ -709,6 +711,13 @@ export const ShareLogsButton = ({
           value={feedbackText}
           onChange={(e) => setFeedbackText(e.target.value)}
           onPaste={handlePaste}
+          autoFocus={autoFocus}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !sending && !isProcessing && phase !== "sent") {
+              e.preventDefault();
+              void sendLogs();
+            }
+          }}
           className="min-h-[60px] resize-none text-xs bg-secondary/5 placeholder:text-muted-foreground/50 focus:border-secondary/30 focus:ring-0 transition-colors"
         />
 
