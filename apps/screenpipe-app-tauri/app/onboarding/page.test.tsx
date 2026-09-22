@@ -28,6 +28,8 @@ const mocks = vi.hoisted(() => ({
   routerReplace: vi.fn(),
   capture: vi.fn(),
   useRealLoginGate: false,
+  useRealFinalSetup: false,
+  onboardingLoading: false,
   trialActivationVariant: undefined as string | undefined,
   posthogDistinctId: "machine-1",
   featureFlagsReady: true,
@@ -85,7 +87,7 @@ vi.mock("next/navigation", () => {
 vi.mock("@/lib/hooks/use-onboarding", () => {
   const useOnboarding = () => ({
     onboardingData,
-    isLoading: false,
+    isLoading: mocks.onboardingLoading,
     completeOnboarding: mocks.completeOnboarding,
   });
   useOnboarding.getState = () => ({
@@ -166,14 +168,18 @@ vi.mock("@/components/onboarding/plan-selection-step", () => ({
     </div>
   ),
 }));
-vi.mock("@/components/onboarding/final-setup-step", () => ({
-  default: ({ handleNextSlide }: { handleNextSlide: () => void }) => (
+vi.mock("@/components/onboarding/setup-connections", () => ({ SetupConnections: () => null }));
+vi.mock("@/components/onboarding/final-setup-step", async (importOriginal) => {
+  const { default: FinalSetupStep } = await importOriginal<typeof import("@/components/onboarding/final-setup-step")>();
+  return {
+  default: ({ handleNextSlide }: { handleNextSlide: () => void }) => mocks.useRealFinalSetup ? <FinalSetupStep handleNextSlide={handleNextSlide} /> : (
     <div>
       <span>recommended setup</span>
-      <button onClick={handleNextSlide}>finish recommended setup</button>
+      <button onClick={() => { void Promise.resolve(handleNextSlide()).catch(() => {}); }}>finish recommended setup</button>
     </div>
   ),
-}));
+};
+});
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {
     setOnboardingStep: mocks.setOnboardingStep,
@@ -223,6 +229,8 @@ describe("enterprise onboarding authentication", () => {
     mocks.sdk = null;
     mocks.reloadFeatureFlags.mockImplementation(() => mocks.sdk?.reloadFeatureFlags());
     mocks.useRealLoginGate = false;
+    mocks.useRealFinalSetup = false;
+    mocks.onboardingLoading = false;
     mocks.trialActivationVariant = undefined;
     mocks.posthogDistinctId = "machine-1";
     mocks.featureFlagsReady = true;
@@ -752,6 +760,38 @@ describe("enterprise onboarding authentication", () => {
     expect(mocks.completeOnboarding).toHaveBeenCalledWith({
       method: "setup_finished",
     });
+  });
+
+  it("retains the setup form and selections across a pending completion failure and retry", async () => {
+    mocks.enterprisePolicy.isManagedDeployment = false;
+    mocks.trialActivationVariant = "summary_first";
+    onboardingData.trialActivationFreshInstall = true;
+    mocks.settings.user = { token: "tok" };
+    onboardingData.currentStep = "recommended-setup";
+    mocks.useRealFinalSetup = true;
+    let rejectCompletion!: (reason: Error) => void;
+    mocks.completeOnboarding.mockImplementationOnce(() => new Promise((_, reject) => {
+      rejectCompletion = reject;
+    }));
+    const view = render(<OnboardingPage />);
+    const selection = await screen.findByRole("switch", { name: /Improve my skills/ });
+    fireEvent.click(selection);
+    fireEvent.click(screen.getByRole("button", { name: "Finish setup later" }));
+    await waitFor(() => expect(mocks.completeOnboarding).toHaveBeenCalledTimes(1));
+    mocks.onboardingLoading = true;
+    view.rerender(<OnboardingPage />);
+    expect(screen.getByRole("switch", { name: /Improve my skills/ })).toBe(selection);
+    expect(selection).not.toBeChecked();
+    await act(async () => {
+      mocks.onboardingLoading = false;
+      rejectCompletion(new Error("store unavailable"));
+    });
+    view.rerender(<OnboardingPage />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Try again");
+    expect(screen.getByRole("switch", { name: /Improve my skills/ })).toBe(selection);
+    expect(selection).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Finish setup later" }));
+    await waitFor(() => expect(mocks.completeOnboarding).toHaveBeenCalledTimes(2));
   });
 
   it("retries a transient summary-step write before completing onboarding", async () => {

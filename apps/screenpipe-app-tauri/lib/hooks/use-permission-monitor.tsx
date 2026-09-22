@@ -35,6 +35,36 @@ export function usePermissionMonitor() {
   const cooldownRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pathname = usePathname();
 
+  // Onboarding can be the only mounted webview when Start recording requests
+  // recovery. Permission-dialog exclusions must not exclude server recovery.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let disposed = false;
+    let restartInFlight = false;
+    const unlistenRestart = listen("request-server-restart", async () => {
+      if (disposed || restartInFlight) return;
+      restartInFlight = true;
+      try {
+        // Native retry checks current intent under the lifecycle lock. The
+        // user-start command would overwrite a pause made after this event.
+        const result = await commands.retryScreenpipe();
+        if (result.status === "error") throw new Error(result.error);
+      } catch (error) {
+        console.error("Deferred server restart failed:", error);
+      } finally {
+        restartInFlight = false;
+      }
+    }).catch((error) => {
+      console.error("Failed to listen for server restart requests:", error);
+      return null;
+    });
+
+    return () => {
+      disposed = true;
+      void unlistenRestart.then((fn) => fn?.());
+    };
+  }, []);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -70,18 +100,6 @@ export function usePermissionMonitor() {
       }, 300000);
     });
 
-    // Listen for deferred restart requests from the cooldown logic in recording.rs.
-    // When a restart is blocked by cooldown, the backend schedules a deferred check
-    // and emits this event if the server is still dead after cooldown expires.
-    const unlistenRestart = listen("request-server-restart", async () => {
-      console.log("Deferred server restart requested by backend");
-      try {
-        await commands.spawnScreenpipe(null);
-      } catch (error) {
-        console.error("Deferred server restart failed:", error);
-      }
-    });
-
     // Listen for permission_needed events emitted when capture is blocked
     // waiting for user to grant permission via onboarding.
     // This signals that the app should show the permission flow UI.
@@ -102,7 +120,6 @@ export function usePermissionMonitor() {
 
     return () => {
       unlisten.then((fn) => fn());
-      unlistenRestart.then((fn) => fn());
       unlistenNeeded.then((fn) => fn());
       if (cooldownRef.current) {
         clearTimeout(cooldownRef.current);

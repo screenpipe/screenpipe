@@ -202,6 +202,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
   // continues, reaches the plan step and lands on Home — and counting it as
   // abandonment would bury the signal the beacon exists to carry.
   const leftDeliberatelyRef = useRef(false);
+  const stoppingRef = useRef(false);
   // Read by the unmount beacon so it can tell "left while still waiting" apart
   // from "left after the engine came up".
   const stateRef = useRef<StartupState>("starting");
@@ -224,6 +225,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
   // service and capture pipelines initialized; waiting for media data would
   // deadlock meetings-only audio whenever no meeting is active.
   const markEngineReady = useCallback(() => {
+    if (stoppingRef.current || leftDeliberatelyRef.current) return;
     setServerStarted(true);
     setAudioReady(true);
     setVisionReady(true);
@@ -236,6 +238,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
   // Do not stop a live session here: tearing it down during onboarding can
   // wedge OS capture devices, and readiness must not depend on incoming media.
   const ensureCaptureSession = useCallback(() => {
+    if (stoppingRef.current || leftDeliberatelyRef.current) return Promise.resolve();
     if (captureSetupPromiseRef.current) return captureSetupPromiseRef.current;
 
     captureSetupInFlightRef.current = true;
@@ -311,6 +314,8 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
           signal: AbortSignal.timeout(3000),
         }).catch(() => null);
 
+        if (stoppingRef.current || leftDeliberatelyRef.current) return;
+
         if (healthCheck) {
           const health = await readEngineHealth(healthCheck);
           if (health) {
@@ -320,6 +325,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
           }
         }
 
+        if (stoppingRef.current || leftDeliberatelyRef.current) return;
         const SPAWN_TIMED_OUT = Symbol("spawn-timed-out");
         let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
         const result = await Promise.race([
@@ -354,6 +360,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
         // apply the final settings through ensureCaptureSession, and only then
         // mark the step ready.
       } catch (err) {
+        if (stoppingRef.current || leftDeliberatelyRef.current) return;
         const message =
           typeof err === "string"
             ? err
@@ -522,10 +529,12 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
     const delay = Math.max(0, 1200 - elapsed);
     const timer = setTimeout(async () => {
       if (hasAdvancedRef.current) return;
+      if (stoppingRef.current || leftDeliberatelyRef.current) return;
       hasAdvancedRef.current = true;
       try {
         await ensureDefaultPreset();
       } catch {}
+      if (stoppingRef.current || leftDeliberatelyRef.current) return;
       handleNextSlide();
     }, delay);
     return () => clearTimeout(timer);
@@ -614,6 +623,8 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
   };
 
   const handleContinueWithoutRecording = async () => {
+    if (stoppingRef.current || leftDeliberatelyRef.current) return;
+    stoppingRef.current = true;
     try {
       // spawnScreenpipe marks capture as intended before startup. Clear that
       // intent so port recovery cannot start capture after this explicit choice.
@@ -630,6 +641,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
             : String(err ?? "unknown error");
       setSpawnError(`failed to stop recording: ${message}`);
       setSpawnErrorKind("other");
+      stoppingRef.current = false;
       return;
     }
     await handleSkip();
@@ -960,7 +972,7 @@ export default function EngineStartup({ handleNextSlide }: EngineStartupProps) {
                 )
               )}
               <button
-                onClick={handleSkip}
+                onClick={handleContinueWithoutRecording}
                 data-testid="onboarding-startup-skip"
                 className="font-mono text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-4"
               >

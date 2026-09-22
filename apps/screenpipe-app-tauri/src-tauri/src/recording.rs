@@ -1060,7 +1060,9 @@ pub(crate) fn resume_deferred_account_start(app: tauri::AppHandle) {
 
 /// Automatic retry preserves capture intent; unlike the user command it must
 /// not turn recording back on after the user stopped it.
-pub(crate) async fn retry_screenpipe(
+#[tauri::command]
+#[specta::specta]
+pub async fn retry_screenpipe(
     state: State<'_, RecordingState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
@@ -1532,7 +1534,11 @@ async fn spawn_screenpipe_after_migration(
     let app_for_chat_destination = app.clone();
     let app_for_owned = app.clone();
     let app_for_port_conflict = app.clone();
-    let workflow_catalog_dir = app.path().app_local_data_dir().ok().map(|dir| dir.join("workflows"));
+    let workflow_catalog_dir = app
+        .path()
+        .app_local_data_dir()
+        .ok()
+        .map(|dir| dir.join("workflows"));
 
     // Owned-browser: create the connect-side instance and kick off the
     // webview install in the background. The engine starts immediately;

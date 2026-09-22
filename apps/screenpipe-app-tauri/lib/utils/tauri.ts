@@ -2382,6 +2382,18 @@ async resumeGlobalShortcuts() : Promise<Result<null, string>> {
 }
 },
 /**
+ * Automatic retry preserves capture intent; unlike the user command it must
+ * not turn recording back on after the user stopped it.
+ */
+async retryScreenpipe() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("retry_screenpipe") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Reveal a file in the OS file browser (Finder / Explorer / etc).
  */
 async revealInDefaultBrowser(path: string) : Promise<Result<null, string>> {

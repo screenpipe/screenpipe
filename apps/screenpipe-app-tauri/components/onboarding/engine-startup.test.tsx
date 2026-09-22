@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   localFetch: vi.fn(),
   spawnScreenpipe: vi.fn(),
   stopCapture: vi.fn(),
+  stopScreenpipe: vi.fn(),
   startCapture: vi.fn(),
   getBootPhase: vi.fn(),
   handleNextSlide: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock("@/lib/utils/tauri", () => ({
     getBootPhase: mocks.getBootPhase,
     spawnScreenpipe: mocks.spawnScreenpipe,
     stopCapture: mocks.stopCapture,
+    stopScreenpipe: mocks.stopScreenpipe,
     startCapture: mocks.startCapture,
   },
 }));
@@ -87,6 +89,7 @@ describe("onboarding engine startup", () => {
     mocks.getBootPhase.mockResolvedValue(pendingBootPhase);
     mocks.spawnScreenpipe.mockResolvedValue({ status: "ok", data: null });
     mocks.stopCapture.mockResolvedValue({ status: "ok", data: null });
+    mocks.stopScreenpipe.mockResolvedValue({ status: "ok", data: null });
     mocks.startCapture.mockResolvedValue({ status: "ok", data: null });
     mocks.handleNextSlide.mockReset();
     mocks.settings.disableScreenshots = false;
@@ -633,6 +636,7 @@ describe("onboarding engine startup", () => {
     await act(async () => {
       getByTestId("onboarding-startup-skip").click();
     });
+    expect(mocks.stopScreenpipe).toHaveBeenCalledTimes(1);
     await waitFor(() =>
       expect(mocks.capture).toHaveBeenCalledWith(
         "onboarding_startup_skipped",
@@ -647,6 +651,46 @@ describe("onboarding engine startup", () => {
       expect.anything(),
       expect.anything(),
     );
+  });
+
+  it("ignores a late health response while Continue without recording is stopping", async () => {
+    vi.useFakeTimers();
+    try {
+      let finishHealth!: (response: Response) => void;
+      let finishStop!: (result: { status: "ok"; data: null }) => void;
+      mocks.localFetch.mockImplementationOnce(() => new Promise(resolve => { finishHealth = resolve; }));
+      mocks.localFetch.mockRejectedValue(new Error("server unavailable"));
+      mocks.getBootPhase.mockResolvedValue({ ...pendingBootPhase, phase: "idle" });
+      mocks.stopScreenpipe.mockReturnValueOnce(new Promise(resolve => { finishStop = resolve; }));
+      render(<EngineStartup handleNextSlide={mocks.handleNextSlide} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(STUCK_TIMEOUT_MS + 1000); });
+      await act(async () => { screen.getByTestId("onboarding-startup-skip").click(); });
+      await act(async () => {
+        finishHealth(Response.json({ frame_status: "ok", audio_status: "ok" }));
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(mocks.startCapture).not.toHaveBeenCalled();
+      expect(mocks.spawnScreenpipe).not.toHaveBeenCalled();
+      expect(mocks.handleNextSlide).not.toHaveBeenCalled();
+      await act(async () => { finishStop({ status: "ok", data: null }); });
+      expect(mocks.handleNextSlide).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps Continue without recording retryable when native stop fails", async () => {
+    mocks.localFetch.mockRejectedValue(new Error("server unavailable"));
+    mocks.spawnScreenpipe.mockResolvedValue({ status: "error", error: "startup failed" });
+    mocks.stopScreenpipe.mockResolvedValueOnce({ status: "error", error: "stop failed" });
+    render(<EngineStartup handleNextSlide={mocks.handleNextSlide} />);
+    const skip = await screen.findByTestId("onboarding-startup-skip");
+    await act(async () => { skip.click(); });
+    expect(mocks.handleNextSlide).not.toHaveBeenCalled();
+    expect(screen.getByText("failed to stop recording: stop failed")).toBeInTheDocument();
+    await act(async () => { skip.click(); });
+    expect(mocks.stopScreenpipe).toHaveBeenCalledTimes(2);
+    expect(mocks.handleNextSlide).toHaveBeenCalledTimes(1);
   });
 
   it("stays quiet on unmount once the engine is up", async () => {
