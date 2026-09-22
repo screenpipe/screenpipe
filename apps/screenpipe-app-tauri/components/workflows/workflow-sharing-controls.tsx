@@ -7,7 +7,7 @@ import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { commands } from "@/lib/utils/tauri";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { SHARING_NOTICE_VERSION, sharingRequest, workflowContributions, type SharingStatus } from "@/lib/workflows/contributions";
+import { SHARING_NOTICE_VERSION, sharingRequest, trajectoryCollector, type SharingStatus } from "@/lib/trajectories/collector";
 
 export function WorkflowSharingControls({ compact = false }: { compact?: boolean }) {
   const { settings, updateSettings } = useSettings();
@@ -41,7 +41,7 @@ export function WorkflowSharingControls({ compact = false }: { compact?: boolean
     try {
       const token = await commands.getCloudToken();
       if (!sharing) {
-        workflowContributions.stop();
+        trajectoryCollector.stop();
         // Persist refusal before making a fallible network request.
         await updateSettings({ workflowSharing: null,
           ...(before.workflowSharing ? { piiBackend: before.workflowSharing.priorBackend } : {}) });

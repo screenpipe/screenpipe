@@ -3,7 +3,7 @@
 import { commands } from "@/lib/utils/tauri";
 
 export const SHARING_NOTICE_VERSION = "2026-09-21";
-const endpoint = "https://screenpipe.com/api/workflow-contributions";
+const endpoint = "https://screenpipe.com/api/trajectories";
 export type LocalSharing = { accountId: string; epoch: string; enabledAt: number; priorBackend: "local" | "tinfoil" };
 export type SharingStatus = {
   accountId: string; available: boolean; sharing: boolean; training: boolean;
@@ -28,7 +28,7 @@ export async function sharingRequest(method: string, body?: unknown, token?: str
   } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
 }
 
-export type ContributionTicket = { local: LocalSharing; token: string; id: string };
+export type TrajectoryTicket = { local: LocalSharing; token: string; id: string };
 type Ports = {
   local: () => Promise<LocalSharing | null>;
   token: () => Promise<string | null>;
@@ -37,16 +37,16 @@ type Ports = {
 };
 // No raw-content queue, disk writes, retries, telemetry, or error logging.
 // Ports let tests prove that revoked/failed turns never cross the upload boundary.
-export function createContributionCollector(ports: Ports) {
+export function createTrajectoryCollector(ports: Ports) {
   const pending = new Set<AbortController>();
-  const current = async (ticket: ContributionTicket) => {
+  const current = async (ticket: TrajectoryTicket) => {
     const local = await ports.local();
     return local?.epoch === ticket.local.epoch && local.accountId === ticket.local.accountId &&
       await ports.token() === ticket.token;
   };
   return {
     stop() { for (const controller of pending) controller.abort(); },
-    async begin(): Promise<ContributionTicket | null> {
+    async begin(): Promise<TrajectoryTicket | null> {
       const startedAt = Date.now();
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -62,7 +62,7 @@ export function createContributionCollector(ports: Ports) {
       } catch { return null; }
       finally { clearTimeout(timer); }
     },
-    async complete(ticket: ContributionTicket | null, question: string, answer: string): Promise<void> {
+    async complete(ticket: TrajectoryTicket | null, question: string, answer: string): Promise<void> {
       if (!ticket || pending.size >= 2 || !question.trim() || !answer.trim() ||
         new TextEncoder().encode(question).length > 1800 || new TextEncoder().encode(answer).length > 1800) return;
       const controller = new AbortController();
@@ -82,12 +82,12 @@ export function createContributionCollector(ports: Ports) {
           id: ticket.id, epoch: ticket.local.epoch, source: "workflows-assistant",
           redaction: "tinfoil-strict-v1", question: redactedQuestion, answer: redactedAnswer,
         }, ticket.token, controller.signal);
-      } catch { /* Drop the turn. Contribution failure must not affect the chat. */ }
+      } catch { /* Drop the turn. Trajectory collection failure must not affect the chat. */ }
       finally { clearTimeout(timer); pending.delete(controller); }
     },
   };
 }
-export const workflowContributions = createContributionCollector({
+export const trajectoryCollector = createTrajectoryCollector({
   async local() {
     const { getStore } = await import("@/lib/hooks/use-settings");
     const settings = await (await getStore()).get<import("@/lib/hooks/use-settings").Settings>("settings");

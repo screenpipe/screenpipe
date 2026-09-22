@@ -1,17 +1,17 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 import { describe, it, expect, vi } from "vitest";
-import { createContributionCollector, type LocalSharing, type SharingStatus } from "./contributions";
+import { createTrajectoryCollector, type LocalSharing, type SharingStatus } from "./collector";
 function fixture() {
   let local: LocalSharing | null = { accountId: "user_one", epoch: "epoch-one", enabledAt: 0, priorBackend: "local" };
   let token: string | null = "token-one";
   const status: SharingStatus = { accountId: "user_one", epoch: "epoch-one", available: true, sharing: true, training: false, revision: 1, noticeVersion: "2026-09-21" };
   const request = vi.fn(async (_method: string, _body?: unknown, _token?: string, _signal?: AbortSignal) => status);
   const redact = vi.fn(async (_text: string) => "[REDACTED]");
-  const collector = createContributionCollector({ local: async () => local, token: async () => token, request, redact });
+  const collector = createTrajectoryCollector({ local: async () => local, token: async () => token, request, redact });
   return { collector, request, redact, status, setLocal: (value: LocalSharing | null) => { local = value; }, setToken: (value: string | null) => { token = value; } };
 }
-describe("Workflows contribution boundary", () => {
+describe("Trajectory collection boundary", () => {
   it("makes no network or redaction calls without a local opt-in", async () => {
     const f = fixture(); f.setLocal(null);
     await f.collector.complete(await f.collector.begin(), "private question", "private answer");
