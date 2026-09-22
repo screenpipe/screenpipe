@@ -298,6 +298,7 @@ const CAPTURE_RESTART_MEETING_REATTACH_WINDOW: Duration = Duration::from_secs(12
 
 mod db_wedge;
 pub(crate) mod recovery_log;
+mod retry;
 mod server_shutdown;
 pub use db_wedge::{
     make_database_restart_hook, new_db_wedge_breaker, DbWedgeBreaker, DbWedgeState,
@@ -812,7 +813,7 @@ pub async fn start_capture(
         let server_guard = state.server.lock().await;
         let Some(ref core) = *server_guard else {
             warn!("Server not running — requesting full restart");
-            let _ = app.emit("request-server-restart", ());
+            request_server_restart(&app, "server missing when Start recording was requested");
             return Err("Server not running — full restart requested".to_string());
         };
         (core.port, core.local_api_key.clone())
@@ -828,7 +829,10 @@ pub async fn start_capture(
             "Server unresponsive on port {} — requesting full restart",
             port
         );
-        let _ = app.emit("request-server-restart", ());
+        request_server_restart(
+            &app,
+            "server health probe failed when Start recording was requested",
+        );
         return Err(format!(
             "Server not responding on port {} — full restart requested",
             port
@@ -1060,27 +1064,41 @@ pub(crate) fn resume_deferred_account_start(app: tauri::AppHandle) {
 
 /// Automatic retry preserves capture intent; unlike the user command it must
 /// not turn recording back on after the user stopped it.
-pub(crate) async fn retry_screenpipe(
+#[tauri::command]
+#[specta::specta]
+pub async fn retry_screenpipe(
     state: State<'_, RecordingState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let Ok(_lifecycle_guard) = state.server_lifecycle.try_lock() else {
-        return Ok(());
-    };
-    if !state.capture_intended() || crate::process_exit::QUIT_REQUESTED.load(Ordering::SeqCst) {
-        return Ok(());
-    }
     // The watchdog owns retry timing. Do not enter the user command's
     // cooldown path, which schedules a frontend restart request later.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let last_spawn = state.last_spawn_epoch.load(Ordering::SeqCst);
-    if last_spawn > 0 && now.saturating_sub(last_spawn) < RESTART_COOLDOWN_SECS {
+    let Some(_lifecycle_guard) = retry::admit(
+        &state.server_lifecycle,
+        &state.wants_recording,
+        &crate::process_exit::QUIT_REQUESTED,
+        &state.last_spawn_epoch,
+        now,
+    ) else {
         return Ok(());
+    };
+    retry::run(
+        &crate::db_relaunch::active_data_dir(),
+        &state.wants_recording,
+        spawn_screenpipe_inner(&state, app),
+    )
+    .await
+}
+
+fn request_server_restart(app: &tauri::AppHandle, reason: &str) {
+    let data_dir = crate::db_relaunch::active_data_dir();
+    recovery_log::append(&data_dir, "retry_requested", reason);
+    if let Err(error) = app.emit("request-server-restart", ()) {
+        recovery_log::append(&data_dir, "retry_event_failed", &error.to_string());
     }
-    spawn_screenpipe_inner(&state, app).await
 }
 
 pub(crate) async fn spawn_screenpipe_inner(
@@ -1148,7 +1166,7 @@ async fn spawn_screenpipe_after_migration(
             info!("Deferred spawn: server dead, triggering restart");
             is_starting.store(false, Ordering::SeqCst);
             last_spawn_epoch.store(0, Ordering::SeqCst);
-            let _ = app_handle.emit("request-server-restart", ());
+            request_server_restart(&app_handle, "server missing after restart cooldown");
         });
         return Ok(());
     }
@@ -1532,7 +1550,11 @@ async fn spawn_screenpipe_after_migration(
     let app_for_chat_destination = app.clone();
     let app_for_owned = app.clone();
     let app_for_port_conflict = app.clone();
-    let workflow_catalog_dir = app.path().app_local_data_dir().ok().map(|dir| dir.join("workflows"));
+    let workflow_catalog_dir = app
+        .path()
+        .app_local_data_dir()
+        .ok()
+        .map(|dir| dir.join("workflows"));
 
     // Owned-browser: create the connect-side instance and kick off the
     // webview install in the background. The engine starts immediately;
@@ -1743,7 +1765,13 @@ async fn start_capture_internal(
     let store = SettingsStore::get(app).ok().flatten().unwrap_or_default();
     require_recording_access(app, &store)?;
 
-    let mut capture_guard = state.capture.lock().await;
+    let Some(mut capture_guard) =
+        retry::lock_intended_capture(&state.capture, &state.wants_recording).await
+    else {
+        state.is_starting.store(false, Ordering::SeqCst);
+        info!("Capture was deliberately stopped while recovery waited; leaving server running");
+        return Ok(());
+    };
     if capture_guard.is_some() {
         // A concurrent start_capture beat us to it.
         state.is_starting.store(false, Ordering::SeqCst);

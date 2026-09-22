@@ -154,6 +154,7 @@ jobs:
           sparse-checkout: |
             .github/actions/setup-persistent-windows-cache
             .github/actions/install-windows-frontend-dependencies
+            .github/actions/refresh-windows-signing-trust
             .github/scripts
 
       - name: Attach persistent Azure Windows cache
@@ -364,6 +365,9 @@ jobs:
           Expand-Archive -Path "$env:RUNNER_TEMP\cst.zip" -DestinationPath "$cstDest" -Force
           echo "CODESIGNTOOL_PATH=$cstDest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "CodeSignTool installed at $cstDest"
+
+      - name: Refresh Windows signing trust
+        uses: ./.release-workflow/.github/actions/refresh-windows-signing-trust
 
       - name: Build and sign Windows persistence helpers
         working-directory: apps/screenpipe-app-tauri

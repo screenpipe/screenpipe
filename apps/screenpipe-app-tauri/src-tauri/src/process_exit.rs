@@ -298,6 +298,12 @@ pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
 
     let env = app.env();
     if let Some(binary) = relaunch_binary(&app) {
+        if update_installed {
+            crate::update_diagnostics::record(
+                "relaunch_requested",
+                &format!("executable={}", binary.display()),
+            );
+        }
         #[cfg(target_os = "macos")]
         let mut command = if update_installed {
             macos_updater_relaunch_command(
@@ -337,7 +343,15 @@ pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
                 binary.display(),
                 child.id()
             ),
-            Err(err) => warn!("safe relaunch: failed to spawn {}: {err}", binary.display()),
+            Err(err) => {
+                if update_installed {
+                    crate::update_diagnostics::record(
+                        "relaunch_spawn_failed",
+                        &format!("executable={} error={err}", binary.display()),
+                    );
+                }
+                warn!("safe relaunch: failed to spawn {}: {err}", binary.display());
+            }
         }
     }
 

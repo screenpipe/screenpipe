@@ -262,7 +262,13 @@ fn classify_authentication(
 fn resolve(app: &tauri::AppHandle, settings: &mut SettingsStore) -> AuthenticationStatus {
     let status = classify_authentication(!crate::should_skip_onboarding(), || {
         if cfg!(feature = "enterprise-build") {
-            crate::enterprise_sync::authorize_startup(app)
+            let authenticated = crate::enterprise_sync::authorize_startup(app);
+            // Enterprise verification also persists the recording policy.
+            // The first native recorder uses this bootstrap snapshot.
+            if let Ok(Some(updated)) = SettingsStore::get(app) {
+                *settings = updated;
+            }
+            authenticated
         } else {
             refresh_consumer_account(app, settings);
             settings.has_cloud_authentication()

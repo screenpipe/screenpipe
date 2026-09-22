@@ -137,6 +137,7 @@ mod staged_update;
 mod stale_tier;
 mod startup_auth;
 mod update_restart;
+mod update_diagnostics;
 mod updates;
 mod voice_training;
 mod window;

@@ -109,6 +109,13 @@ async fn install_windows_update(
     if let Err(error) = update.install(bytes) {
         UPDATE_RESTART_STARTED.store(false, Ordering::SeqCst);
         recording.set_capture_intent(wants_recording);
+        crate::update_diagnostics::record(
+            "installer_handoff_failed",
+            &format!(
+                "from={} target={} error={error} capture_intent_restored={wants_recording}",
+                update.current_version, update.version,
+            ),
+        );
         return Err(error);
     }
     std::mem::forget(restart);
@@ -654,6 +661,16 @@ fn record_update_attempt(app: &tauri::AppHandle, to_version: &str) {
             .map(|d| d.as_secs())
             .unwrap_or(0),
     };
+    crate::update_diagnostics::record(
+        "restart_committed",
+        &format!(
+            "from={} target={} attempt_ts={} executable={:?}",
+            attempt.from_version,
+            attempt.to_version,
+            attempt.ts_epoch_secs,
+            std::env::current_exe()
+        ),
+    );
     match serde_json::to_vec(&attempt).map(|bytes| std::fs::write(&path, bytes)) {
         Ok(Ok(())) => info!(
             "update attempt recorded: {} → {}",
@@ -669,7 +686,11 @@ fn record_update_attempt(app: &tauri::AppHandle, to_version: &str) {
 /// unrelated cases.
 fn consume_update_attempt_marker(app: &tauri::AppHandle) -> Option<UpdateAttempt> {
     let path = update_attempt_marker_path(app)?;
-    let raw = std::fs::read(&path).ok()?;
+    consume_update_attempt_at(&path, &app.package_info().version.to_string())
+}
+
+fn consume_update_attempt_at(path: &std::path::Path, current: &str) -> Option<UpdateAttempt> {
+    let raw = std::fs::read(path).ok()?;
     if let Err(e) = std::fs::remove_file(&path) {
         warn!("failed to remove update-attempt marker: {}", e);
     }
@@ -680,7 +701,19 @@ fn consume_update_attempt_marker(app: &tauri::AppHandle) -> Option<UpdateAttempt
             return None;
         }
     };
-    let current = app.package_info().version.to_string();
+    crate::update_diagnostics::append(
+        path.parent()?,
+        "relaunch_observed",
+        &format!(
+            "from={} target={} attempt_ts={} running={} executable={:?} outcome={:?}",
+            attempt.from_version,
+            attempt.to_version,
+            attempt.ts_epoch_secs,
+            current,
+            std::env::current_exe(),
+            classify_update_attempt(&attempt, &current)
+        ),
+    );
     match classify_update_attempt(&attempt, &current) {
         UpdateAttemptOutcome::Applied => {
             info!(
@@ -1932,7 +1965,20 @@ pub fn start_update_check(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    #[cfg(target_os = "macos")]
+    pub(crate) fn consume_failed_update_fixture(root: &std::path::Path) {
+        let path = root.join(super::UPDATE_ATTEMPT_MARKER_FILE);
+        std::fs::write(
+            &path,
+            r#"{"from_version":"1.0.0","to_version":"99.0.0","ts_epoch_secs":1}"#,
+        )
+        .unwrap();
+        assert!(super::consume_update_attempt_at(&path, "1.0.0").is_some());
+        assert!(!path.exists());
+        assert!(super::consume_update_attempt_at(&path, "1.0.0").is_none());
+    }
+
     use super::*;
 
     const HOUR: Duration = Duration::from_secs(3600);

@@ -79,7 +79,12 @@ pub(crate) async fn read_tail(path: &Path, max_bytes: u64) -> anyhow::Result<Str
 pub async fn get_log_files(app: AppHandle) -> Result<Vec<LogFile>, String> {
     let data_dir = get_screenpipe_data_dir(&app).map_err(|e| e.to_string())?;
     let screenpipe_data_dir = get_data_dir(&app).map_err(|e| e.to_string())?;
-    Ok(collect_log_files(&[data_dir, screenpipe_data_dir]).await)
+    Ok(collect_log_files(&[
+        data_dir,
+        screenpipe_data_dir,
+        crate::config::app_data_dir().to_path_buf(),
+    ])
+    .await)
 }
 
 /// Absolute path of the data directory used by the running engine. This is
@@ -120,7 +125,9 @@ pub(crate) async fn collect_log_files(dirs: &[PathBuf]) -> Vec<LogFile> {
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| {
-                    is_panic_log(name) || name == crate::recording::recovery_log::LOG_NAME
+                    is_panic_log(name)
+                        || name == crate::recording::recovery_log::LOG_NAME
+                        || name == crate::update_diagnostics::LOG_NAME
                 }),
             std::cmp::Reverse(
                 metadata

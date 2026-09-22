@@ -1135,6 +1135,79 @@ mod tests {
         assert_eq!(upload.body, redacted.as_bytes());
     }
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn updater_failure_reaches_support_after_restart_and_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::staged_update::tests::failed_install_fixture(dir.path()).await;
+        // Simulate the next process consuming its marker, then ordinary log rotation.
+        crate::updates::tests::consume_failed_update_fixture(dir.path());
+        crate::update_diagnostics::append(dir.path(), "redaction_fixture", "password=hunter2");
+        for day in 10..22 {
+            std::fs::write(
+                dir.path().join(format!("screenpipe-app.2026-09-{day}.log")),
+                "restarted\n",
+            )
+            .unwrap();
+        }
+        let files = crate::log_files::collect_log_files(&[dir.path().to_path_buf()]).await;
+        assert_eq!(files[0].name, crate::update_diagnostics::LOG_NAME);
+        let raw = collect_log_text_from_files(files).await;
+        let redacted = crate::feedback_redact::redact_pii_for_feedback(raw, "{}".into())
+            .await
+            .unwrap();
+        // The unattended collector must preserve the same failure through its
+        // separate owned-file allow-list and stricter five-file limit.
+        let unattended =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+                .await
+                .unwrap();
+        for bundle in [&redacted, &unattended] {
+            for expected in [
+                "installer_failed",
+                "os error 2",
+                "target=99.0.0",
+                "relaunch_observed",
+                "running=1.0.0",
+                "outcome=Failed",
+            ] {
+                assert!(bundle.contains(expected), "missing {expected}: {bundle}");
+            }
+            assert!(!bundle.contains("hunter2"));
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "signedUrl": format!("{}/upload/log", server.uri()), "path": "logs/report.log"
+            }})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"id": 42}})))
+            .mount(&server)
+            .await;
+        upload_report(
+            &Client::new(),
+            &server.uri(),
+            &request(),
+            redacted.clone(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let upload = requests.iter().find(|r| r.method == "PUT").unwrap();
+        assert_eq!(upload.body, redacted.as_bytes());
+    }
+
     #[tokio::test]
     async fn writer_pool_recovery_reaches_support_after_rotation_and_redaction() {
         use tracing::instrument::WithSubscriber;
@@ -1289,6 +1362,84 @@ mod tests {
             "database has verified damage",
             "file is not a database",
             "engine startup pending",
+        ] {
+            assert!(report.contains(expected), "missing {expected}: {report}");
+        }
+        assert!(!report.contains("hunter2"));
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "windows")]
+    async fn meeting_output_compatibility_fallback_reaches_support_after_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let cause =
+            screenpipe_audio::core::process_tap::WindowsProcessTapCompatibility::MultipleRoots {
+                requested_pids: vec![120, 220],
+                roots: vec![120, 220],
+            }
+            .to_string();
+        let outcome = screenpipe_audio::audio_manager::compatibility_outcome_diagnostic(
+            "configured output restoration failed for Speakers (output): representative open failure",
+        );
+        assert!(cause.contains("multiple independent roots [120, 220]"));
+        assert!(outcome.contains("restoration failed"));
+        tokio::fs::write(
+            dir.path().join("screenpipe-app.2026-09-20.log"),
+            format!("INFO [MEETING_PIGGYBACK] {cause}; restoring configured output capture\nWARN {outcome}\npassword=hunter2\n"),
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            dir.path().join("screenpipe-app.2026-09-21.log"),
+            "INFO later application log after rotation\n",
+        )
+        .await
+        .unwrap();
+        let files = crate::log_files::collect_log_files(&[dir.path().to_path_buf()]).await;
+        let logs = collect_log_text_from_files(files).await;
+        let redacted = crate::feedback_redact::redact_diagnostics_locally(logs)
+            .await
+            .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "signedUrl": format!("{}/upload/log", server.uri()), "path": "logs/report.log"
+            }})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"id": 42}})))
+            .mount(&server)
+            .await;
+        upload_report(
+            &Client::new(),
+            &server.uri(),
+            &request(),
+            redacted,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let upload = requests
+            .iter()
+            .find(|request| request.method == "PUT")
+            .unwrap();
+        let report = String::from_utf8_lossy(&upload.body);
+        for expected in [
+            "requested pids [120, 220] resolve to multiple independent roots [120, 220]",
+            "compatibility outcome: configured output restoration failed",
+            "representative open failure",
+            "normal output follow remains enabled",
+            "later application log after rotation",
         ] {
             assert!(report.contains(expected), "missing {expected}: {report}");
         }

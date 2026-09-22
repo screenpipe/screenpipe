@@ -12,6 +12,7 @@ on:
       - .github/workflows/release-enterprise.yml
       - .github/workflows/test-release-workflows.yml
       - .github/actions/install-windows-frontend-dependencies/**
+      - .github/actions/refresh-windows-signing-trust/**
       - .github/scripts/release-workflows.test.ts
       - .github/scripts/enterprise-release.cjs
       - .github/actions/prepare-desktop-localization/**
@@ -34,6 +35,7 @@ on:
       - .github/workflows/release-enterprise.yml
       - .github/workflows/test-release-workflows.yml
       - .github/actions/install-windows-frontend-dependencies/**
+      - .github/actions/refresh-windows-signing-trust/**
       - .github/scripts/release-workflows.test.ts
       - .github/scripts/enterprise-release.cjs
       - .github/actions/prepare-desktop-localization/**
@@ -133,3 +135,22 @@ jobs:
           EXPECTED_DIGEST: ${{ needs.localization-generation.outputs.snapshot-digest }}
         run: |
           echo "$EXPECTED_DIGEST  .release-localization/snapshot.json" | sha256sum --check
+
+  windows-signing-trust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the release signing tool without credentials
+        shell: pwsh
+        run: |
+          $tool = Join-Path $env:RUNNER_TEMP 'CodeSignTool'
+          $zip = Join-Path $env:RUNNER_TEMP 'codesigntool.zip'
+          Invoke-WebRequest -Uri 'https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2-windows.zip' -OutFile $zip -TimeoutSec 120
+          Expand-Archive -LiteralPath $zip -DestinationPath $tool -Force
+          "CODESIGNTOOL_PATH=$tool" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - uses: ./.github/actions/refresh-windows-signing-trust

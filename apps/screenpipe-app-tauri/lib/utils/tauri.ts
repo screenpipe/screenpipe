@@ -2382,6 +2382,18 @@ async resumeGlobalShortcuts() : Promise<Result<null, string>> {
 }
 },
 /**
+ * Automatic retry preserves capture intent; unlike the user command it must
+ * not turn recording back on after the user stopped it.
+ */
+async retryScreenpipe() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("retry_screenpipe") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Reveal a file in the OS file browser (Finder / Explorer / etc).
  */
 async revealInDefaultBrowser(path: string) : Promise<Result<null, string>> {
@@ -3877,10 +3889,9 @@ enableSemanticContext?: boolean;
  */
 semanticContextMode?: SemanticContextMode;
 /**
- * Disable the timeline / rewind feature. When true, the engine skips
- * timeline-only work: warming the hot frame cache from the DB at startup
- * and buffering captured frames/audio into the in-memory hot cache that
- * only the timeline streaming endpoint reads.
+ * Legacy timeline gate retained for managed deployments and compatibility.
+ * Consumer installs migrate visibility to sidebarNavLayout. Screenshot
+ * capture controls cache work through `timeline_cache_disabled`.
  */
 disableTimeline?: boolean;
 /**

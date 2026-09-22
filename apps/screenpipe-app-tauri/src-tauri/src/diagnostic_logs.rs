@@ -79,6 +79,7 @@ fn owned_log_files(files: Vec<LogFile>) -> Vec<LogFile> {
 fn is_screenpipe_owned_log_name(name: &str) -> bool {
     crate::log_files::is_panic_log(name)
         || name == crate::recording::recovery_log::LOG_NAME
+        || name == crate::update_diagnostics::LOG_NAME
         || matches!(
             name,
             "screenpipe.log"
