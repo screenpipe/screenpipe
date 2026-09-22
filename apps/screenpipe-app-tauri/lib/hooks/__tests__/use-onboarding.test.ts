@@ -42,6 +42,7 @@ vi.mock("posthog-js", () => ({
     capture: mocks.capture,
   },
 }));
+vi.mock("@/lib/logging/browser-log", () => ({ writeBrowserLogNow: vi.fn() }));
 
 vi.mock("@tauri-apps/api/event", () => ({
   emit: mocks.emit,
@@ -80,6 +81,7 @@ describe("useOnboarding measurement", () => {
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_completion_requested",
       {
+        attempt_id: expect.any(String),
         completion_method: "pipes_installed",
         pipe_count: 2,
         customized: false,
@@ -120,7 +122,7 @@ describe("useOnboarding measurement", () => {
     );
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_completion_failed",
-      { completion_method: "pipe_step_skipped" },
+      expect.objectContaining({ completion_method: "pipe_step_skipped", attempt_id: expect.any(String), stage: "native_command", error_code: "ipc_error" }),
       { send_instantly: true },
     );
     expect(useOnboarding.getState().onboardingData.isCompleted).toBe(false);
@@ -156,6 +158,7 @@ describe("useOnboarding measurement", () => {
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_completion_requested",
       {
+        attempt_id: expect.any(String),
         completion_method: "live_view_created",
         pipe_count: 2,
         customized: undefined,
@@ -184,6 +187,7 @@ describe("useOnboarding measurement", () => {
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_completion_requested",
       {
+        attempt_id: expect.any(String),
         completion_method: "ai_connections_selected",
         pipe_count: undefined,
         customized: undefined,

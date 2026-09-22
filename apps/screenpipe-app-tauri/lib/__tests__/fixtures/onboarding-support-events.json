@@ -1,0 +1,10 @@
+[
+  {
+    "event": "onboarding_default_setup_failed",
+    "properties": { "step": "speaker-reconciliation", "stage": "setup", "operation": "configure", "error_code": "http_error", "http_status": 500, "outcome": "retry_available", "completed_steps": ["digital-clone"] }
+  },
+  {
+    "event": "onboarding_connection_cta_failed",
+    "properties": { "integration": "google-calendar", "failure_stage": "oauth_connect", "error_code": "authorization_denied", "outcome": "retry_available" }
+  }
+]

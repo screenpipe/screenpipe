@@ -234,15 +234,24 @@ async fn pipe_store_install_with_base(
     // 1. Fetch pipe detail from registry to get source_md
     let detail_url = format!("{}/api/pipes/store/{}", base, body.slug);
     let detail = match client.get(&detail_url).send().await {
+        Ok(resp) if !resp.status().is_success() => {
+            return Json(
+                json!({ "error": "registry rejected the request", "error_code": "registry_http_error", "http_status": resp.status().as_u16() }),
+            );
+        }
         Ok(resp) => match resp.json::<Value>().await {
             Ok(body) => body,
             Err(e) => {
                 return Json(
-                    json!({ "error": format!("failed to parse registry response: {}", e) }),
+                    json!({ "error": format!("failed to parse registry response: {}", e), "error_code": "invalid_registry_response" }),
                 )
             }
         },
-        Err(e) => return Json(json!({ "error": format!("failed to reach registry: {}", e) })),
+        Err(e) => {
+            return Json(
+                json!({ "error": "failed to reach registry", "error_code": if e.is_timeout() { "registry_timeout" } else { "registry_network" } }),
+            )
+        }
     };
 
     let source_md = match detail.get("source_md").and_then(|v| v.as_str()) {
@@ -255,7 +264,11 @@ async fn pipe_store_install_with_base(
                 .and_then(|v| v.as_str())
             {
                 Some(md) => md.to_string(),
-                None => return Json(json!({ "error": "pipe not found or missing source_md" })),
+                None => {
+                    return Json(
+                        json!({ "error": "pipe not found or missing source_md", "error_code": "pipe_not_found" }),
+                    )
+                }
             }
         }
     };
@@ -280,7 +293,11 @@ async fn pipe_store_install_with_base(
             .await
         {
             Ok(name) => name,
-            Err(e) => return Json(json!({ "error": format!("failed to install pipe: {}", e) })),
+            Err(e) => {
+                return Json(
+                    json!({ "error": format!("failed to install pipe: {}", e), "error_code": "installation_failed" }),
+                )
+            }
         }
     };
 
@@ -561,6 +578,37 @@ mod tests {
     use axum::body::to_bytes;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn install_preserves_safe_registry_failure_without_installing() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/pipes/store/test-pipe"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("private token=secret"))
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let pm = std::sync::Arc::new(tokio::sync::Mutex::new(
+            screenpipe_core::pipes::PipeManager::new(
+                dir.path().join("pipes"),
+                std::collections::HashMap::new(),
+                None,
+                3030,
+            ),
+        ));
+        let Json(body) = pipe_store_install_with_base(
+            pm,
+            StoreInstallRequest {
+                slug: "test-pipe".into(),
+            },
+            server.uri(),
+        )
+        .await;
+        assert_eq!(body["error_code"], "registry_http_error");
+        assert_eq!(body["http_status"], 503);
+        assert!(!body.to_string().contains("secret"));
+        assert!(!dir.path().join("pipes/test-pipe/pipe.md").exists());
+    }
 
     #[tokio::test]
     async fn slow_install_accounting_does_not_delay_local_success_or_hold_manager() {

@@ -37,8 +37,8 @@ export function ActivitiesSettings() {
         <div role="status" className="space-y-2 border border-border p-4 text-xs text-muted-foreground">
           <p>Automatic summaries are paused because your AI allowance is used up.</p>
           <p>{pause.retry_at
-            ? `Next automatic check: ${new Date(pause.retry_at).toLocaleString()}.`
-            : "Change your AI provider or plan, then retry."}</p>
+            ? ui("Next automatic check: {time}.", { time: new Date(pause.retry_at).toLocaleString() })
+            : ui("Change your AI provider or plan, then retry.")}</p>
           <Button variant="outline" size="sm" onClick={() => updateSettings({
             activitiesQuotaPause: null,
             activitiesNextRunAt: new Date().toISOString(),

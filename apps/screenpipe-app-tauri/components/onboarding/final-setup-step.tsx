@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { SetupConnections } from "./setup-connections";
 import { setupRequest as request, SetupRequestError, setupFailureProperties } from "@/lib/onboarding-setup-request";
+import { captureSetupEvent, completionFailureProperties } from "@/lib/onboarding-diagnostics";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { publishPipeInstalledReceipt } from "@/lib/pipe-install-receipt";
 import { commands } from "@/lib/utils/tauri";
@@ -103,6 +104,7 @@ export default function FinalSetupStep({ userToken, handleNextSlide }: {
     operation.current = controller;
     const tasks = localizeDefinitions(DEFAULTS, uiMessages);
     const attemptId = crypto.randomUUID();
+    const completedThisAttempt = [...completed];
     let taskSlug = "engine";
     let stage = "engine";
     posthog.capture("onboarding_defaults_start_clicked", { setup_version: 3, attempt_id: attemptId, selected_steps: tasks.filter(task => selected[task.slug]).map(task => task.slug) });
@@ -122,17 +124,19 @@ export default function FinalSetupStep({ userToken, handleNextSlide }: {
         setPhase(`${selected[task.slug] ? "Setting up" : "Turning off"} ${task.label.toLowerCase()}`);
         posthog.capture("onboarding_default_setup_attempted", { step: task.slug, enabled: selected[task.slug], setup_version: 3, attempt_id: attemptId });
         await setupPipe(task, preset?.id, selected[task.slug], controller.signal);
+        if (!completedThisAttempt.includes(task.slug)) completedThisAttempt.push(task.slug);
         setCompleted(previous => previous.includes(task.slug) ? previous : [...previous, task.slug]);
         // A distinct contract keeps automatic defaults out of historic opt-in metrics.
-        posthog.capture("onboarding_default_setup_completed", { step: task.slug, enabled: selected[task.slug], setup_version: 3, attempt_id: attemptId });
+        captureSetupEvent("onboarding_default_setup_completed", { step: task.slug, enabled: selected[task.slug], setup_version: 3, attempt_id: attemptId, outcome: "verified" });
       }
       stage = "continue";
       setPhase("Opening Screenpipe");
-      posthog.capture("onboarding_defaults_completed", { setup_version: 3, attempt_id: attemptId, selected_steps: tasks.filter(task => selected[task.slug]).map(task => task.slug) }, { send_instantly: true });
+      const deferredSteps = tasks.filter(task => selected[task.slug] && !completedThisAttempt.includes(task.slug)).map(task => task.slug);
+      captureSetupEvent("onboarding_defaults_completed", { setup_version: 3, attempt_id: attemptId, selected_steps: tasks.filter(task => selected[task.slug]).map(task => task.slug), completed_steps: completedThisAttempt, deferred_steps: deferredSteps, outcome: deferredSteps.length ? "completed_with_deferred_tasks" : "completed" });
       await handleNextSlide();
     } catch (failure) {
       if (controller.signal.aborted) return;
-      posthog.capture("onboarding_default_setup_failed", { step: taskSlug, stage, setup_version: 3, attempt_id: attemptId, ...setupFailureProperties(failure) });
+      captureSetupEvent("onboarding_default_setup_failed", { step: taskSlug, stage, setup_version: 3, attempt_id: attemptId, ...(stage === "continue" ? completionFailureProperties(failure) : setupFailureProperties(failure)), completed_steps: completedThisAttempt, outcome: "retry_available" });
       setError(stage === "continue" ? ui("Your setup is saved. Screenpipe couldn't open. Try again.") : ui("Screenpipe couldn't finish setup. Completed tasks are saved; retry or finish later in Scheduled Tasks."));
     } finally {
       if (!controller.signal.aborted) { setBusy(false); setPhase(""); }
@@ -143,9 +147,13 @@ export default function FinalSetupStep({ userToken, handleNextSlide }: {
   async function finishLater() {
     if (running.current) return;
     running.current = true; setBusy(true);
-    posthog.capture("onboarding_defaults_deferred", { setup_version: 3, completed_steps: completed });
+    const attemptId = crypto.randomUUID();
+    captureSetupEvent("onboarding_defaults_deferred", { setup_version: 3, attempt_id: attemptId, completed_steps: completed });
     try { await handleNextSlide(); }
-    catch { setError(ui("Screenpipe couldn't open. Try again.")); }
+    catch (failure) {
+      captureSetupEvent("onboarding_default_setup_failed", { setup_version: 3, attempt_id: attemptId, ...completionFailureProperties(failure), completed_steps: completed, outcome: "retry_available" });
+      setError(ui("Screenpipe couldn't open. Try again."));
+    }
     finally { running.current = false; setBusy(false); }
   }
 

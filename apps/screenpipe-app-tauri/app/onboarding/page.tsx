@@ -758,7 +758,7 @@ export default function OnboardingPage() {
         clearTrialActivationAssignment();
       } catch (error) {
         console.error("failed to finish onboarding:", error);
-        throw error;
+        if (currentSlide === "first-task" || currentSlide === "recommended-setup") throw error;
       } finally {
         // A transient store/IPC failure must not permanently consume the
         // user's click. The automatic retry above handles the common case;

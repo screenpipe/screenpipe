@@ -52,4 +52,10 @@ describe("bounded onboarding setup requests", () => {
     mocks.fetch.mockResolvedValueOnce(Response.json({ error: "not found" }, { status: 500 }));
     expect(await setupRequest("/pipes/x", signal()).catch(setupFailureProperties)).toMatchObject({ error_code: "http_error" });
   });
+  it("preserves safe registry failure causes and rejects untrusted codes", async () => {
+    mocks.fetch.mockResolvedValueOnce(Response.json({ error: "private backend text", error_code: "registry_http_error", http_status: 503 }));
+    expect(await setupRequest("/pipes/store/install", signal(), {}).catch(setupFailureProperties)).toMatchObject({ error_code: "registry_http_error", http_status: 503, operation: "install" });
+    mocks.fetch.mockResolvedValueOnce(Response.json({ error: "private backend text", error_code: "token=private", http_status: "private" }));
+    expect(await setupRequest("/pipes/store/install", signal(), {}).catch(setupFailureProperties)).toMatchObject({ error_code: "backend_error", http_status: 200 });
+  });
 });

@@ -3,7 +3,8 @@
 import { localFetch } from "@/lib/api";
 
 type Operation = "health" | "read" | "install" | "configure" | "enable" | "verify" | "model";
-type ErrorCode = "timeout" | "network" | "http_error" | "invalid_response" | "backend_error" | "verification_failed" | "model_unavailable";
+const ERROR_CODES = ["timeout", "network", "http_error", "invalid_response", "backend_error", "verification_failed", "model_unavailable", "registry_timeout", "registry_network", "registry_http_error", "invalid_registry_response", "pipe_not_found", "installation_failed"] as const;
+type ErrorCode = typeof ERROR_CODES[number];
 
 // Keep raw backend errors, URLs and request bodies out of analytics.
 export class SetupRequestError extends Error {
@@ -61,7 +62,13 @@ export async function setupRequest(path: string, signal: AbortSignal, body?: unk
       bounded.signal.throwIfAborted();
       if (!data || typeof data !== "object" || Array.isArray(data)) throw fail("invalid_response", response.status);
       if (body === undefined && typeof data.error === "string" && data.error.includes("not found")) return null;
-      if (data.error || data.success === false) throw fail("backend_error", response.status);
+      if (data.error || data.success === false) {
+        // New engines return a safe code; older engines retain the bounded
+        // generic category. Raw error messages never enter telemetry.
+        const code = ERROR_CODES.includes(data.error_code) ? data.error_code as ErrorCode : "backend_error";
+        const status = Number.isInteger(data.http_status) && data.http_status >= 100 && data.http_status <= 599 ? data.http_status : response.status;
+        throw fail(code, status);
+      }
       return data;
     })()]);
   } finally {

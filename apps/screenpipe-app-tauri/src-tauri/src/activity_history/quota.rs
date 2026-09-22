@@ -39,6 +39,10 @@ impl QuotaPause {
     pub fn blocks(&self, context: &str, now: DateTime<Utc>) -> bool {
         self.context == context && self.retry_at.is_none_or(|at| now < at)
     }
+
+    pub fn log_outcome(&self, outcome: &str) {
+        tracing::info!(reason = %self.code, retry_at = ?self.retry_at, outcome, "activity allowance state changed");
+    }
 }
 
 fn reset_time(error: &str) -> Option<DateTime<Utc>> {
@@ -113,6 +117,45 @@ mod tests {
         assert!(restored.blocks("preset-a", now() + Duration::hours(23)));
         assert!(!restored.blocks("preset-a", now() + Duration::hours(24)));
         assert!(!restored.blocks("new-provider-or-entitlement", now()));
+    }
+
+    #[tokio::test]
+    async fn allowance_pause_and_recovery_reach_redacted_support_after_rotation() {
+        let pause = QuotaPause::from_error(
+            "429 free_chat_limit_exceeded token=private",
+            "context".into(),
+            now(),
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("screenpipe-app.2026-09-22.log");
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(std::fs::File::create(&current).unwrap())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || pause.log_outcome("paused"));
+        std::fs::rename(&current, dir.path().join("screenpipe-app.2026-09-22.1.log")).unwrap();
+        let restored: QuotaPause =
+            serde_json::from_str(&serde_json::to_string(&pause).unwrap()).unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(std::fs::File::create(&current).unwrap())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || restored.log_outcome("resumed"));
+        let report =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+                .await
+                .unwrap();
+        for expected in [
+            "free_chat_limit_exceeded",
+            "paused",
+            "resumed",
+            "retry_at",
+            "2026-09-16",
+        ] {
+            assert!(report.contains(expected), "missing {expected}: {report}");
+        }
+        assert!(!report.contains("private"));
     }
 
     #[test]

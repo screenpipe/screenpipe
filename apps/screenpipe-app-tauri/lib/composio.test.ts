@@ -15,6 +15,7 @@ import {
   authorizeComposioToolkit,
   fetchComposioStatus,
   registerComposioMcpServer,
+  ComposioRequestError,
 } from "./composio";
 
 describe("Composio connection helpers", () => {
@@ -72,5 +73,21 @@ describe("Composio connection helpers", () => {
         body: expect.stringContaining("Bearer tok_test"),
       })
     );
+  });
+
+  it("preserves opt-in status diagnostics without breaking best-effort callers", async () => {
+    mocks.fetch.mockResolvedValue(Response.json({ error: "token=private" }, { status: 401 }));
+    expect(await fetchComposioStatus("synthetic-token")).toBeNull();
+    await expect(fetchComposioStatus("synthetic-token", { throwOnError: true })).rejects.toMatchObject({ code: "http_error", httpStatus: 401 });
+    const error = await authorizeComposioToolkit("synthetic-token", "gmail").catch(error => error);
+    expect(error).toBeInstanceOf(ComposioRequestError);
+    expect(error.message).not.toContain("private");
+  });
+
+  it("distinguishes failed transport from malformed authorization responses", async () => {
+    mocks.fetch.mockRejectedValueOnce(new TypeError("request failed token=private"));
+    await expect(authorizeComposioToolkit("synthetic-token", "gmail")).rejects.toMatchObject({ code: "network" });
+    mocks.fetch.mockResolvedValueOnce(Response.json({ error: "private backend text" }));
+    await expect(authorizeComposioToolkit("synthetic-token", "gmail")).rejects.toMatchObject({ code: "invalid_response" });
   });
 });

@@ -8,6 +8,7 @@ import { emit } from "@tauri-apps/api/event";
 import { commands, OnboardingStore } from "@/lib/utils/tauri";
 import { useEffect } from "react";
 import posthog from "posthog-js";
+import { captureSetupEvent, completionFailureProperties } from "@/lib/onboarding-diagnostics";
 import {
   isFirstRunGuidePending,
   setFirstRunGuidePending,
@@ -91,6 +92,7 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
 
   completeOnboarding: async (context) => {
     const firstRunGuideWasPending = isFirstRunGuidePending();
+    const attemptId = crypto.randomUUID();
     try {
       set({ isLoading: true, error: null });
       // The personalized Brain dashboard owns activation after onboarding.
@@ -101,6 +103,7 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
       posthog.capture(
         "onboarding_completion_requested",
         {
+          attempt_id: attemptId,
           completion_method: context.method,
           pipe_count: context.pipeCount,
           customized: context.customized,
@@ -167,12 +170,10 @@ export const useOnboarding = create<OnboardingState>((set, get) => ({
       // A completion that never persists also means `completedAt` is never
       // written, so the first-run window can never open. That used to leave no
       // trace at all beyond a console line in a webview nobody is watching.
-      posthog.capture(
+      captureSetupEvent(
         "onboarding_completion_failed",
-        { completion_method: context.method },
-        { send_instantly: true },
+        { completion_method: context.method, attempt_id: attemptId, ...completionFailureProperties(error), outcome: "retry_available" },
       );
-      console.error("Error completing onboarding:", error);
       set({
         error:
           error instanceof Error

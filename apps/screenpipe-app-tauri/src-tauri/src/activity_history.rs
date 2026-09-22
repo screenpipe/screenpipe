@@ -1797,8 +1797,9 @@ fn clear_quota_pause(app: &AppHandle, context: &str) -> Result<(), String> {
         .extra
         .get(QUOTA_PAUSE_KEY)
         .and_then(|value| serde_json::from_value::<QuotaPause>(value.clone()).ok());
-    if pause.is_some_and(|pause| pause.context == context) {
+    if let Some(pause) = pause.filter(|pause| pause.context == context) {
         write_quota_pause(app, None)?;
+        pause.log_outcome("resumed");
     }
     Ok(())
 }
@@ -1806,6 +1807,7 @@ fn clear_quota_pause(app: &AppHandle, context: &str) -> Result<(), String> {
 fn pause_after_quota_error(app: &AppHandle, error: &str, context: &str) -> Result<(), String> {
     if let Some(pause) = QuotaPause::from_error(error, context.to_string(), Utc::now()) {
         write_quota_pause(app, Some(&pause))?;
+        pause.log_outcome("paused");
         track_generation_event(
             app,
             "activity_generation_paused",
@@ -1909,6 +1911,7 @@ pub fn start(app: AppHandle) {
                     warn!(%error, "could not clear expired activity allowance pause");
                     continue;
                 }
+                pause.log_outcome("resumed");
                 true
             } else {
                 false

@@ -2785,7 +2785,29 @@ fn mark_onboarding_completed(onboarding: &mut OnboardingStore) -> serde_json::Va
         "telemetry_schema_version": 2,
         "owner": "native",
         "completion_id": onboarding.completed_at,
+        "outcome": "saved",
     })
+}
+
+fn onboarding_completion_failure(stage: &str, attempt_id: &str, error: &str) -> String {
+    let lower = error.to_lowercase();
+    let code = if lower.contains("permission denied") || lower.contains("access is denied") {
+        "permission_denied"
+    } else if lower.contains("no space left") || lower.contains("disk full") {
+        "disk_full"
+    } else if lower.contains("deserialize") || lower.contains("invalid") {
+        "invalid_state"
+    } else {
+        "operation_failed"
+    };
+    let diagnostic = serde_json::json!({
+        "stage": stage, "attempt_id": attempt_id, "error_code": code,
+        "outcome": "retry_available"
+    });
+    // Error strings can contain paths or provider credentials. The fixed stage
+    // and cause are sufficient for support without retaining their raw text.
+    tracing::warn!("onboarding_completion_failed {}", diagnostic);
+    diagnostic.to_string()
 }
 
 #[cfg(test)]
@@ -2802,22 +2824,107 @@ mod onboarding_receipt_tests {
         assert_eq!(mark_onboarding_completed(&mut onboarding), receipt);
         assert_eq!(onboarding.completed_at, completed_at);
     }
+
+    #[tokio::test]
+    async fn setup_failures_and_recovery_survive_rotation_and_support_redaction() {
+        let logs = tempfile::tempdir().unwrap();
+        let current = logs.path().join("screenpipe-app.2026-09-22.log");
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(std::fs::File::create(&current).unwrap())
+            .finish();
+        let events: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../lib/__tests__/fixtures/onboarding-support-events.json"
+        ))
+        .unwrap();
+        let attempt_id = "00000000-0000-4000-8000-000000000001";
+        tracing::subscriber::with_default(subscriber, || {
+            for event in &events {
+                let mut properties = event["properties"].clone();
+                properties["attempt_id"] = serde_json::json!(attempt_id);
+                write_browser_log(
+                    "warn".into(),
+                    format!("{} {}", event["event"].as_str().unwrap(), properties),
+                );
+            }
+            write_browser_log(
+                "warn".into(),
+                serde_json::json!({
+                    "event": "trial_activation_assignment_failed", "reason": "load_error",
+                    "stage": "waiting_for_fresh_response", "attempt_id": attempt_id,
+                    "response_count": 2, "elapsed_ms": 10, "identity_matches": true,
+                    "fallback_variant": "control", "outcome": "continue_setup"
+                })
+                .to_string(),
+            );
+            let error = onboarding_completion_failure(
+                "persist",
+                attempt_id,
+                "Permission denied: /private/person@example.com/token=secret",
+            );
+            assert!(!error.contains("secret"));
+            assert!(!error.contains("person@example.com"));
+        });
+        std::fs::rename(
+            &current,
+            logs.path().join("screenpipe-app.2026-09-22.1.log"),
+        )
+        .unwrap();
+        std::fs::write(
+            &current,
+            "onboarding_completion_persisted outcome=saved\ncontact=person@example.com\n",
+        )
+        .unwrap();
+        let report =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[logs.path().to_path_buf()])
+                .await
+                .unwrap();
+        for expected in [
+            "onboarding_default_setup_failed",
+            "speaker-reconciliation",
+            "configure",
+            "http_error",
+            "digital-clone",
+            "onboarding_connection_cta_failed",
+            "authorization_denied",
+            "oauth_connect",
+            "onboarding_completion_failed",
+            "permission_denied",
+            "retry_available",
+            attempt_id,
+            "onboarding_completion_persisted",
+            "trial_activation_assignment_failed",
+            "load_error",
+            "waiting_for_fresh_response",
+            "continue_setup",
+        ] {
+            assert!(report.contains(expected), "missing {expected}: {report}");
+        }
+        assert!(!report.contains("person@example.com"));
+        assert!(!report.contains("secret"));
+    }
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn complete_onboarding(app_handle: tauri::AppHandle) -> Result<(), String> {
+    let attempt_id = uuid::Uuid::new_v4().to_string();
     let mut receipt = None;
     let mut persisted = None;
     OnboardingStore::update(&app_handle, |onboarding| {
         receipt = Some(mark_onboarding_completed(onboarding));
         persisted = Some(onboarding.clone());
     })
-    .map_err(|e| e.to_string())?;
+    .map_err(|error| onboarding_completion_failure("persist", &attempt_id, &error))?;
 
     if let Some(persisted) = persisted {
         app_handle.manage(persisted);
     }
+    info!(
+        "onboarding_completion_persisted attempt_id={} receipt={}",
+        attempt_id,
+        receipt.as_ref().unwrap_or(&serde_json::Value::Null)
+    );
     // Capture only after persistence succeeds. The task belongs to the native
     // process and survives the onboarding webview being destroyed below.
     if let (Some(properties), Some(analytics)) = (
@@ -2839,15 +2946,17 @@ pub async fn complete_onboarding(app_handle: tauri::AppHandle) -> Result<(), Str
         });
     }
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    close_window(app_handle.clone(), ShowRewindWindow::Onboarding).await?;
-    crate::first_run_summary::arm(&app_handle)?;
+    crate::first_run_summary::arm(&app_handle)
+        .map_err(|error| onboarding_completion_failure("arm_summary", &attempt_id, &error))?;
     let _ = refresh_tray_menu(app_handle.clone()).await;
 
     // Hidden UI applies to the main app, but incomplete onboarding remains
     // visible long enough to finish permissions. Once onboarding completes,
     // close that sole exemption without trying to open Home.
     if crate::enterprise_policy::is_app_ui_hidden() {
+        close_window(app_handle.clone(), ShowRewindWindow::Onboarding)
+            .await
+            .map_err(|error| onboarding_completion_failure("close_setup", &attempt_id, &error))?;
         info!("enterprise: onboarding completed; keeping main UI hidden");
         return Ok(());
     }
@@ -2862,7 +2971,13 @@ pub async fn complete_onboarding(app_handle: tauri::AppHandle) -> Result<(), Str
             page: Some("home".to_string()),
         },
     )
-    .await?;
+    .await
+    .map_err(|error| onboarding_completion_failure("open_home", &attempt_id, &error))?;
+
+    // Retain the retry UI until all fallible destination work succeeds.
+    close_window(app_handle.clone(), ShowRewindWindow::Onboarding)
+        .await
+        .map_err(|error| onboarding_completion_failure("close_setup", &attempt_id, &error))?;
 
     Ok(())
 }

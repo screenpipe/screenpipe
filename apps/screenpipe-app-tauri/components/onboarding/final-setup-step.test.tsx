@@ -5,13 +5,17 @@ import React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import FinalSetupStep from "./final-setup-step";
+import supportEvents from "@/lib/__tests__/fixtures/onboarding-support-events.json";
+import { writeBrowserLogNow } from "@/lib/logging/browser-log";
+import { ComposioRequestError } from "@/lib/composio";
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), spawn: vi.fn(), capture: vi.fn(), receipt: vi.fn(), gmailStatus: vi.fn(), authorize: vi.fn(), register: vi.fn(), open: vi.fn(), calendarStatus: vi.fn(), calendarConnect: vi.fn(), presets: [{ id: "local", model: "local-test", provider: "native-ollama", defaultPreset: true }] }));
 vi.mock("@/lib/api", () => ({ localFetch: mocks.fetch }));
 vi.mock("@/lib/hooks/use-settings", () => ({ useSettings: () => ({ settings: { aiPresets: mocks.presets } }) }));
 vi.mock("@/lib/utils/tauri", () => ({ commands: { spawnScreenpipe: mocks.spawn, oauthStatus: mocks.calendarStatus, oauthConnect: mocks.calendarConnect } }));
 vi.mock("@/lib/pipe-install-receipt", () => ({ publishPipeInstalledReceipt: mocks.receipt }));
 vi.mock("posthog-js", () => ({ default: { capture: mocks.capture } }));
-vi.mock("@/lib/composio", () => ({ fetchComposioStatus: mocks.gmailStatus, authorizeComposioToolkit: mocks.authorize, registerComposioMcpServer: mocks.register }));
+vi.mock("@/lib/logging/browser-log", () => ({ writeBrowserLogNow: vi.fn() }));
+vi.mock("@/lib/composio", async () => ({ ...await vi.importActual("@/lib/composio"), fetchComposioStatus: mocks.gmailStatus, authorizeComposioToolkit: mocks.authorize, registerComposioMcpServer: mocks.register }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: mocks.open }));
 vi.mock("@/lib/connections-events", () => ({ notifyConnectionsUpdated: vi.fn() }));
 vi.mock("@/lib/connections/foreground-oauth", () => ({ foregroundAfterOAuth: vi.fn() }));
@@ -61,6 +65,7 @@ describe("default onboarding setup", () => {
     expect(writes().map(([path]) => path)).toEqual(["/pipes/store/install", "/pipes/digital-clone/config", "/pipes/digital-clone/enable", "/pipes/bundled/speaker-reconciliation/install", "/pipes/speaker-reconciliation/config", "/pipes/speaker-reconciliation/enable", "/pipes/bundled/skill-learning/install", "/pipes/skill-learning/config", "/pipes/skill-learning/enable"]);
     expect(JSON.parse(writes()[1][1].body)).toEqual({ agent: "pi", preset: ["local"], cloud_agent: null });
     expect(tasks.get("digital-clone")?.enabled).toBe(true); expect(tasks.get("speaker-reconciliation")?.enabled).toBe(true);
+    expect(mocks.capture).toHaveBeenCalledWith("onboarding_defaults_completed", expect.objectContaining({ completed_steps: ["digital-clone", "speaker-reconciliation", "skill-learning"], deferred_steps: ["daily-email-summary"], outcome: "completed_with_deferred_tasks" }), { send_instantly: true });
     expect(mocks.capture.mock.calls.some(([name]) => name === "first_run_next_step_selected")).toBe(false);
   });
   it("respects learning opt-out and never installs recap without Gmail", async () => {
@@ -79,7 +84,9 @@ describe("default onboarding setup", () => {
     const next = vi.fn(); render(<FinalSetupStep handleNextSlide={next} />); start(); await screen.findByRole("alert");
     expect(mocks.capture).toHaveBeenCalledWith("onboarding_default_setup_failed", expect.objectContaining({
       step: "speaker-reconciliation", operation: "configure", error_code: "http_error", http_status: 500, attempt_id: expect.any(String),
-    }));
+    }), { send_instantly: true });
+    expect(mocks.capture).toHaveBeenCalledWith(supportEvents[0].event, expect.objectContaining(supportEvents[0].properties), { send_instantly: true });
+    expect(writeBrowserLogNow).toHaveBeenCalledWith("warn", expect.stringContaining('"completed_steps":["digital-clone"]'));
     expect(next).not.toHaveBeenCalled(); expect(tasks.get("digital-clone")?.enabled).toBe(true); expect(tasks.get("speaker-reconciliation")?.enabled).toBe(false);
     fail = false; fireEvent.click(screen.getByRole("button", { name: "Retry setup" }));
     await waitFor(() => expect(next).toHaveBeenCalledTimes(1)); expect(writes().filter(([path]) => path === "/pipes/digital-clone/enable")).toHaveLength(1);
@@ -197,6 +204,37 @@ describe("default onboarding setup", () => {
     await screen.findByRole("alert"); expect(screen.getByRole("button", { name: "Start Screenpipe" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Connect Calendar" }));
     await screen.findByRole("button", { name: "Calendar connected" });
+  });
+  it("preserves Calendar denial cause in safe support diagnostics and reports recovery", async () => {
+    mocks.calendarConnect.mockResolvedValueOnce({ status: "error", error: "authorization was denied or cancelled in the browser — token=private-token" });
+    render(<FinalSetupStep handleNextSlide={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Connect Calendar" }));
+    await screen.findByRole("alert");
+    expect(mocks.capture).toHaveBeenCalledWith(supportEvents[1].event, expect.objectContaining({ ...supportEvents[1].properties, attempt_id: expect.any(String) }), { send_instantly: true });
+    expect(writeBrowserLogNow).toHaveBeenCalledWith("warn", expect.stringContaining('"error_code":"authorization_denied"'));
+    expect(JSON.stringify(mocks.capture.mock.calls)).not.toContain("private-token");
+    expect(JSON.stringify(vi.mocked(writeBrowserLogNow).mock.calls)).not.toContain("private-token");
+    fireEvent.click(screen.getByRole("button", { name: "Connect Calendar" }));
+    await screen.findByRole("button", { name: "Calendar connected" });
+    expect(mocks.capture).toHaveBeenCalledWith("onboarding_connection_completed", expect.objectContaining({ outcome: "connected" }), { send_instantly: true });
+  });
+  it("distinguishes Gmail authorization and status failures from unfinished consent", async () => {
+    mocks.authorize.mockRejectedValueOnce(new ComposioRequestError("http_error", 401));
+    render(<FinalSetupStep userToken="synthetic-token" handleNextSlide={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Connect Gmail" }));
+    await screen.findByRole("alert");
+    expect(mocks.capture).toHaveBeenCalledWith("onboarding_connection_cta_failed", expect.objectContaining({ failure_stage: "authorization", error_code: "http_error", http_status: 401 }), { send_instantly: true });
+    mocks.gmailStatus.mockRejectedValueOnce(new ComposioRequestError("network"));
+    fireEvent.click(screen.getByRole("button", { name: "Connect Gmail" }));
+    await waitFor(() => expect(mocks.capture).toHaveBeenCalledWith("onboarding_connection_cta_failed", expect.objectContaining({ failure_stage: "completion", error_code: "network" }), { send_instantly: true }));
+  });
+  it("classifies the bounded Calendar wait as a timeout and restores retry controls", async () => {
+    vi.useFakeTimers(); mocks.calendarConnect.mockImplementation(() => new Promise(() => {}));
+    render(<FinalSetupStep handleNextSlide={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Connect Calendar" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+    expect(mocks.capture).toHaveBeenCalledWith("onboarding_connection_cta_failed", expect.objectContaining({ failure_stage: "oauth_connect", error_code: "timeout", request_duration_ms: 120_000 }), { send_instantly: true });
+    expect(screen.getByRole("button", { name: "Connect Calendar" })).toBeEnabled();
   });
   it("does not register Gmail or update connections after unmount", async () => {
     let release!: (value: string) => void;
