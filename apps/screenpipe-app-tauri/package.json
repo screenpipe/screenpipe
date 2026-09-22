@@ -206,7 +206,6 @@
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "undici": "^6.21.3",
     "unplugin": "2.3.11",
     "vitest": "^1.6.1",
     "wdio-video-reporter": "^6.0.0"

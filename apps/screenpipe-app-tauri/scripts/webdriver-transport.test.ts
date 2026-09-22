@@ -12,7 +12,6 @@ test("E2E dispatcher creates and deletes a WebDriver session", () => {
     import assert from "node:assert/strict";
     import { createServer } from "node:http";
     import { remote } from "webdriverio";
-    import { getGlobalDispatcher } from "undici";
     import { config } from "./e2e/wdio.conf.ts";
 
     const requests = [];
@@ -43,7 +42,6 @@ test("E2E dispatcher creates and deletes a WebDriver session", () => {
       assert.equal(Number(requests[0].length), Buffer.byteLength(requests[0].body));
       assert.equal(JSON.parse(requests[0].body).capabilities.alwaysMatch.browserName, "chrome");
     } finally {
-      await getGlobalDispatcher().close();
       server.closeAllConnections();
       await new Promise(resolve => server.close(resolve));
     }
