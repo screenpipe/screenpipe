@@ -50,6 +50,16 @@ pub(super) fn admit<'a>(
     Some(guard)
 }
 
+/// A pause may complete after retry admission but before a healthy server's
+/// capture slot becomes available. Recheck intent while owning that slot.
+pub(super) async fn lock_intended_capture<'a, T>(
+    capture: &'a Mutex<Option<T>>,
+    wants_recording: &AtomicBool,
+) -> Option<MutexGuard<'a, Option<T>>> {
+    let guard = capture.lock().await;
+    wants_recording.load(Ordering::SeqCst).then_some(guard)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,5 +226,40 @@ mod tests {
         intent.store(false, Ordering::SeqCst);
         // Server startup uses this same last-moment check before CaptureSession.
         assert!(!super::super::capture_intended_now(&intent));
+    }
+
+    #[tokio::test]
+    async fn healthy_server_retry_honors_pause_while_waiting_for_capture_slot() {
+        let capture = Mutex::new(None::<()>);
+        let intent = AtomicBool::new(true);
+        let pause_guard = capture.lock().await;
+        let retry = lock_intended_capture(&capture, &intent);
+        tokio::pin!(retry);
+        assert!(futures::poll!(retry.as_mut()).is_pending());
+
+        // The pause completes with no capture to stop before retry gets the
+        // slot. A stale pre-lock intent check would create a new session here.
+        intent.store(false, Ordering::SeqCst);
+        drop(pause_guard);
+        let mut starts = 0;
+        if let Some(mut slot) = retry.await {
+            starts += 1;
+            *slot = Some(());
+        }
+        assert_eq!(starts, 0);
+        assert!(capture.lock().await.is_none());
+        assert!(!intent.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn intended_capture_start_keeps_slot_until_session_is_installed() {
+        let capture = Mutex::new(None::<()>);
+        let intent = AtomicBool::new(true);
+        let mut slot = lock_intended_capture(&capture, &intent).await.unwrap();
+        assert!(capture.try_lock().is_err());
+        *slot = Some(());
+        drop(slot);
+        assert!(capture.lock().await.is_some());
+        assert!(intent.load(Ordering::SeqCst));
     }
 }

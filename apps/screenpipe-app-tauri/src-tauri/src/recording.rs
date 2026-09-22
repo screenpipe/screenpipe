@@ -1765,7 +1765,13 @@ async fn start_capture_internal(
     let store = SettingsStore::get(app).ok().flatten().unwrap_or_default();
     require_recording_access(app, &store)?;
 
-    let mut capture_guard = state.capture.lock().await;
+    let Some(mut capture_guard) =
+        retry::lock_intended_capture(&state.capture, &state.wants_recording).await
+    else {
+        state.is_starting.store(false, Ordering::SeqCst);
+        info!("Capture was deliberately stopped while recovery waited; leaving server running");
+        return Ok(());
+    };
     if capture_guard.is_some() {
         // A concurrent start_capture beat us to it.
         state.is_starting.store(false, Ordering::SeqCst);
