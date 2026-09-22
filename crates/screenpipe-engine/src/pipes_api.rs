@@ -223,7 +223,11 @@ pub async fn get_pipe(State(pm): State<SharedPipeManager>, Path(id): Path<String
     }
     match mgr.get_pipe(&id).await {
         Some(pipe) => Json(json!({ "data": pipe })),
-        None => Json(json!({ "error": format!("pipe '{}' not found", id) })),
+        None => Json(
+            mgr.pipe_suppression_error(&id)
+                .map(|error| pipe_setup_failure("read", &error))
+                .unwrap_or_else(|| json!({ "error": format!("pipe '{}' not found", id) })),
+        ),
     }
 }
 
@@ -775,6 +779,64 @@ mod tests {
         )
         .await;
         assert_eq!(retry["success"], true);
+    }
+
+    #[tokio::test]
+    async fn setup_handlers_report_only_actual_cap_suppression_as_quota() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipes_dir = dir.path().join("pipes");
+        let mut manager = PipeManager::new(pipes_dir.clone(), HashMap::new(), None, 3030);
+        for name in ["first", "second", "third"] {
+            manager
+                .install_pipe_from_store("---\nenabled: false\n---\n\nTask", name, 1)
+                .await
+                .unwrap();
+        }
+        manager.install_builtin_pipes().unwrap();
+        manager.set_max_non_template_pipes(Some(2));
+        manager.load_pipes().await.unwrap();
+        let state = Arc::new(Mutex::new(manager));
+        let Json(suppressed) = get_pipe(State(state.clone()), Path("third".into())).await;
+        assert_eq!(suppressed["error_code"], "free_pipe_limit_reached");
+        assert!(!suppressed["error"].as_str().unwrap().contains("not found"));
+        let (status, Json(adoption)) = update_pipe_config(
+            State(state.clone()),
+            Path("skill-learning".into()),
+            Json(ConfigUpdateRequest {
+                config: HashMap::from([("preset".into(), json!(["chosen-model"]))]),
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(adoption["error_code"], "free_pipe_limit_reached");
+        let Json(enabled) = enable_pipe(
+            State(state.clone()),
+            Path("skill-learning".into()),
+            Json(EnableRequest { enabled: true }),
+        )
+        .await;
+        assert_eq!(enabled["error_code"], "free_pipe_limit_reached");
+
+        std::fs::create_dir_all(pipes_dir.join("invalid")).unwrap();
+        std::fs::write(pipes_dir.join("invalid/pipe.md"), "---\nenabled: [\n---\n").unwrap();
+        for name in [
+            "missing",
+            "invalid",
+            "../third",
+            "third/../third",
+            "C:\\third",
+        ] {
+            let Json(result) = get_pipe(State(state.clone()), Path(name.into())).await;
+            assert_ne!(result["error_code"], "free_pipe_limit_reached", "{name}");
+        }
+        // Raising the cap exposes the original, unchanged task again.
+        {
+            let mut manager = state.lock().await;
+            manager.set_max_non_template_pipes(None);
+            manager.load_pipes().await.unwrap();
+        }
+        let Json(restored) = get_pipe(State(state), Path("third".into())).await;
+        assert_eq!(restored["data"]["config"]["enabled"], false);
     }
 
     #[tokio::test]

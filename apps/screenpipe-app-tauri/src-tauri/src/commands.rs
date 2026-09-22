@@ -2883,6 +2883,8 @@ mod onboarding_receipt_tests {
         for expected in [
             "onboarding_default_setup_failed",
             "speaker-reconciliation",
+            "skill-learning",
+            "free_pipe_limit_reached",
             "configure",
             "permission_denied",
             "digital-clone",

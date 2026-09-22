@@ -97,6 +97,36 @@ describe("default onboarding setup", () => {
     expect(next).not.toHaveBeenCalled(); fireEvent.click(screen.getByRole("button", { name: "Finish setup later" }));
     await waitFor(() => expect(next).toHaveBeenCalledTimes(1));
   });
+  it("explains the task cap, preserves completed setup, and allows finishing later", async () => {
+    mocks.fetch.mockImplementation((path, init) => path === "/pipes/skill-learning/config"
+      ? Promise.resolve(Response.json({ error: "free_pipe_limit_reached: private backend detail", error_code: "free_pipe_limit_reached" }, { status: 400 }))
+      : normalFetch(path, init));
+    const next = vi.fn(); render(<FinalSetupStep handleNextSlide={next} />); start();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Your free plan's task limit is reached");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("private backend detail");
+    expect(tasks.get("digital-clone")?.enabled).toBe(true);
+    expect(tasks.get("speaker-reconciliation")?.enabled).toBe(true);
+    expect(tasks.get("skill-learning")?.enabled).toBe(false);
+    expect(mocks.capture).toHaveBeenCalledWith(supportEvents[2].event, expect.objectContaining(supportEvents[2].properties), { send_instantly: true });
+    expect(writeBrowserLogNow).toHaveBeenCalledWith("warn", expect.stringContaining('"error_code":"free_pipe_limit_reached"'));
+    expect(next).not.toHaveBeenCalled();
+    const completedWrites = writes().length;
+    fireEvent.click(screen.getByRole("button", { name: "Finish setup later" }));
+    await waitFor(() => expect(next).toHaveBeenCalledTimes(1));
+    expect(writes()).toHaveLength(completedWrites);
+    expect(mocks.capture).toHaveBeenCalledWith("onboarding_defaults_deferred", expect.objectContaining({ completed_steps: ["digital-clone", "speaker-reconciliation"] }), { send_instantly: true });
+    expect(mocks.capture.mock.calls.some(([event]) => event === "onboarding_defaults_completed")).toBe(false);
+  });
+  it("reports a suppressed installed task without reinstalling or retrying the read", async () => {
+    mocks.fetch.mockImplementation((path, init) => path === "/pipes/digital-clone"
+      ? Promise.resolve(Response.json({ error: "free_pipe_limit_reached: task retained on disk", error_code: "free_pipe_limit_reached" }))
+      : normalFetch(path, init));
+    render(<FinalSetupStep handleNextSlide={vi.fn()} />); start();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Your free plan's task limit is reached");
+    expect(writes()).toEqual([]);
+    expect(mocks.fetch.mock.calls.filter(([path]) => path === "/pipes/digital-clone")).toHaveLength(1);
+    expect(mocks.capture).toHaveBeenCalledWith("onboarding_default_setup_failed", expect.objectContaining({ operation: "read", error_code: "free_pipe_limit_reached" }), { send_instantly: true });
+  });
   it("does not duplicate installation on a double click", async () => {
     const next = vi.fn(); render(<FinalSetupStep handleNextSlide={next} />); const button = screen.getByRole("button", { name: "Start Screenpipe" }); fireEvent.click(button); fireEvent.click(button);
     await waitFor(() => expect(next).toHaveBeenCalledTimes(1)); expect(writes().filter(([path]) => path === "/pipes/store/install")).toHaveLength(1);

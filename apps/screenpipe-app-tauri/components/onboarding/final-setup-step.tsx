@@ -37,6 +37,7 @@ async function waitForPipe(slug: string, signal: AbortSignal) {
     try { return await readPipe(slug, signal); }
     catch (error) {
       signal.throwIfAborted();
+      if (error instanceof SetupRequestError && error.code === "free_pipe_limit_reached") throw error;
       if (Date.now() >= deadline) throw error;
       await new Promise<void>((resolve, reject) => {
         const cancel = () => { clearTimeout(timer); reject(new DOMException("cancelled", "AbortError")); };
@@ -136,7 +137,7 @@ export default function FinalSetupStep({ userToken, handleNextSlide }: {
     } catch (failure) {
       if (controller.signal.aborted) return;
       captureSetupEvent("onboarding_default_setup_failed", { step: taskSlug, stage, setup_version: 3, attempt_id: attemptId, ...(stage === "continue" ? completionFailureProperties(failure) : setupFailureProperties(failure)), completed_steps: completedThisAttempt, outcome: "retry_available" });
-      setError(stage === "continue" ? ui("Your setup is saved. Screenpipe couldn't open. Try again.") : ui("Screenpipe couldn't finish setup. Completed tasks are saved; retry or finish later in Scheduled Tasks."));
+      setError(stage === "continue" ? ui("Your setup is saved. Screenpipe couldn't open. Try again.") : failure instanceof SetupRequestError && failure.code === "free_pipe_limit_reached" ? ui("Your free plan's task limit is reached. Completed tasks are saved. Finish setup later, or delete a task or upgrade before retrying.") : ui("Screenpipe couldn't finish setup. Completed tasks are saved; retry or finish later in Scheduled Tasks."));
     } finally {
       if (!controller.signal.aborted) { setBusy(false); setPhase(""); }
       running.current = false;
