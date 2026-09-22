@@ -4,7 +4,8 @@
 
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { render } from "@/lib/i18n/test-utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import type { PostHog } from "posthog-js";
 
 const mocks = vi.hoisted(() => ({
   enterprisePolicy: {
@@ -30,6 +31,8 @@ const mocks = vi.hoisted(() => ({
   trialActivationVariant: undefined as string | undefined,
   posthogDistinctId: "machine-1",
   featureFlagsReady: true,
+  sdk: null as PostHog | null,
+  writeBrowserLogs: vi.fn(async (_entries: import("@/lib/utils/tauri").BrowserLogEntry[]) => undefined),
   featureFlagsError: false,
   featureFlagsCallback: undefined as
     | ((
@@ -177,12 +180,13 @@ vi.mock("@/lib/utils/tauri", () => ({
     setWindowSize: mocks.setWindowSize,
     showWindow: mocks.showWindow,
     applyEnterpriseUiVisibility: mocks.applyEnterpriseUiVisibility,
+    writeBrowserLogs: mocks.writeBrowserLogs,
   },
 }));
 vi.mock("posthog-js", () => ({
   default: {
     capture: mocks.capture,
-    get_distinct_id: () => mocks.posthogDistinctId,
+    get_distinct_id: () => mocks.sdk?.get_distinct_id() ?? mocks.posthogDistinctId,
     getFeatureFlag: mocks.getFeatureFlag,
     onFeatureFlags: vi.fn(
       (
@@ -192,9 +196,10 @@ vi.mock("posthog-js", () => ({
           context?: { errorsLoading?: boolean },
         ) => void,
       ) => {
+        if (mocks.sdk) return mocks.sdk.onFeatureFlags(callback);
         mocks.featureFlagsCallback = callback;
         if (mocks.featureFlagsReady) {
-          callback([], {}, { errorsLoading: mocks.featureFlagsError });
+          callback([], {});
           callback([], {}, { errorsLoading: mocks.featureFlagsError });
           callback([], {}, { errorsLoading: mocks.featureFlagsError });
         }
@@ -215,6 +220,8 @@ import {
 describe("enterprise onboarding authentication", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.sdk = null;
+    mocks.reloadFeatureFlags.mockImplementation(() => mocks.sdk?.reloadFeatureFlags());
     mocks.useRealLoginGate = false;
     mocks.trialActivationVariant = undefined;
     mocks.posthogDistinctId = "machine-1";
@@ -222,7 +229,7 @@ describe("enterprise onboarding authentication", () => {
     mocks.featureFlagsError = false;
     mocks.featureFlagsCallback = undefined;
     mocks.getFeatureFlag.mockImplementation(
-      () => mocks.trialActivationVariant,
+      (key, options) => mocks.sdk ? mocks.sdk.getFeatureFlag(key, options) : mocks.trialActivationVariant,
     );
     window.sessionStorage.clear();
     window.history.replaceState({}, "", "/onboarding");
@@ -531,7 +538,7 @@ describe("enterprise onboarding authentication", () => {
     expect(screen.queryByText("plan selection")).not.toBeInTheDocument();
 
     // A callback for the pre-login machine identity must not choose a route.
-    act(() => mocks.featureFlagsCallback?.([], {}, {}));
+    act(() => mocks.featureFlagsCallback?.([], {}, { errorsLoading: false }));
     expect(
       screen.getByTestId("trial-activation-assignment-pending"),
     ).toBeInTheDocument();
@@ -539,15 +546,15 @@ describe("enterprise onboarding authentication", () => {
     // Once identify has switched to the authenticated identity, pin the fresh
     // result. A later callback cannot flip this onboarding run to control.
     mocks.posthogDistinctId = "clerk-1";
-    act(() => mocks.featureFlagsCallback?.([], {}, {}));
+    act(() => mocks.featureFlagsCallback?.([], {}));
     expect(
       screen.getByTestId("trial-activation-assignment-pending"),
     ).toBeInTheDocument();
-    act(() => mocks.featureFlagsCallback?.([], {}, {}));
+    act(() => mocks.featureFlagsCallback?.([], {}, { errorsLoading: false }));
     expect(
       screen.getByTestId("trial-activation-assignment-pending"),
     ).toBeInTheDocument();
-    act(() => mocks.featureFlagsCallback?.([], {}, {}));
+    act(() => mocks.featureFlagsCallback?.([], {}, { errorsLoading: false }));
     expect(await screen.findByText("engine")).toBeInTheDocument();
     expect(mocks.getFeatureFlag).toHaveBeenCalledWith(
       "first-summary-card-trial-v1",
@@ -558,7 +565,7 @@ describe("enterprise onboarding authentication", () => {
       { fresh: true },
     );
     mocks.trialActivationVariant = "control";
-    act(() => mocks.featureFlagsCallback?.([], {}, {}));
+    act(() => mocks.featureFlagsCallback?.([], {}, { errorsLoading: false }));
 
     fireEvent.click(screen.getByRole("button", { name: "finish engine" }));
     expect(await screen.findByText("recommended setup")).toBeInTheDocument();
@@ -581,7 +588,7 @@ describe("enterprise onboarding authentication", () => {
     expect(await screen.findByText("engine")).toBeInTheDocument();
     expect(mocks.capture).toHaveBeenCalledWith(
       "trial_activation_assignment_failed",
-      { reason: "load_error", fallback_variant: "control" },
+      expect.objectContaining({ reason: "load_error", fallback_variant: "control", outcome: "continue_setup" }),
       { send_instantly: true },
     );
     fireEvent.click(screen.getByRole("button", { name: "finish engine" }));
@@ -640,9 +647,9 @@ describe("enterprise onboarding authentication", () => {
       .toHaveLength(1);
 
     act(() => {
-      mocks.featureFlagsCallback?.([], {}, {});
-      mocks.featureFlagsCallback?.([], {}, {});
-      mocks.featureFlagsCallback?.([], {}, {});
+      mocks.featureFlagsCallback?.([], {});
+      mocks.featureFlagsCallback?.([], {}, { errorsLoading: false });
+      mocks.featureFlagsCallback?.([], {}, { errorsLoading: false });
     });
     await waitFor(() => expect(screen.queryByTestId("trial-activation-assignment-pending"))
       .not.toBeInTheDocument());
@@ -1251,6 +1258,218 @@ describe("enterprise onboarding authentication", () => {
     closeWindow.mockRestore();
     consoleError.mockRestore();
   });
+
+  describe("real PostHog assignment transport", () => {
+    type FlagRequest = {
+      data: { distinct_id?: string };
+      callback?: (response: { statusCode: number; json?: object }) => void;
+    };
+    let requests: FlagRequest[];
+    let sdkCapture: MockInstance<PostHog["capture"]>;
+
+    beforeEach(async () => {
+      vi.useFakeTimers();
+      localStorage.clear();
+      const { PostHog: RealPostHog } = await vi.importActual<typeof import("posthog-js")>("posthog-js");
+      const sdk = new RealPostHog();
+      requests = [];
+      // Keep the installed SDK's request queue, flag parser, identity, cache,
+      // callbacks and exposure logic. Replace only the outbound transport.
+      vi.spyOn(sdk, "_send_request").mockImplementation((request) => {
+        if (request.url.includes("/flags/")) requests.push(request as unknown as FlagRequest);
+      });
+      sdkCapture = vi.spyOn(sdk, "capture").mockImplementation(() => undefined);
+      sdk.init("assignment-test", {
+        api_host: "https://posthog.invalid",
+        persistence: "memory",
+        bootstrap: { distinctID: "clerk-1", isIdentifiedID: true },
+        capture_pageview: false,
+        autocapture: false,
+        disable_session_recording: true,
+        disable_external_dependency_loading: true,
+        advanced_disable_feature_flags_on_first_load: true,
+      });
+      mocks.sdk = sdk;
+      mocks.enterprisePolicy.isManagedDeployment = false;
+      mocks.settings.user = {
+        clerk_id: "clerk-1", token: "private-token", email: "private@example.invalid",
+        has_payment_method: false, entitlement_source: "none",
+      };
+      onboardingData.trialActivationFreshInstall = true;
+      onboardingData.currentStep = "engine";
+    });
+
+    afterEach(() => {
+      mocks.sdk = null;
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    });
+
+    const respond = async (index: number, variant: string | false | undefined, statusCode = 200) => {
+      await act(async () => requests[index].callback?.({
+        statusCode,
+        json: { featureFlags: variant === undefined ? {} : { "first-summary-card-trial-v1": variant } },
+      }));
+    };
+
+    it("settles cold authenticated flags within five seconds without demanding a third round trip", async () => {
+      render(<OnboardingPage />);
+      await act(async () => vi.advanceTimersByTimeAsync(2_000));
+      expect(requests).toHaveLength(1);
+      expect(requests[0].data.distinct_id).toBe("clerk-1");
+      await respond(0, "summary_first");
+      await act(async () => vi.advanceTimersByTimeAsync(2_000));
+      expect(requests).toHaveLength(2);
+      await respond(1, "summary_first");
+      expect(screen.queryByTestId("trial-activation-assignment-pending")).not.toBeInTheDocument();
+      expect(screen.getByText("engine")).toBeInTheDocument();
+      expect(window.sessionStorage.getItem(TRIAL_ACTIVATION_ASSIGNMENT_SESSION_KEY)).toBe("summary_first");
+      await act(async () => vi.advanceTimersByTimeAsync(1_000));
+      expect(mocks.capture).not.toHaveBeenCalledWith("trial_activation_assignment_failed", expect.anything(), expect.anything());
+      expect(sdkCapture).toHaveBeenCalledWith("$feature_flag_called", expect.objectContaining({ $feature_flag_response: "summary_first" }));
+    });
+
+    it.each([undefined, false, "control"])("selects control from a fresh %s flag without false failure telemetry", async (variant) => {
+      render(<OnboardingPage />);
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      await respond(0, "summary_first");
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      await respond(1, variant);
+      expect(screen.getByText("engine")).toBeInTheDocument();
+      expect(window.sessionStorage.getItem(TRIAL_ACTIVATION_ASSIGNMENT_SESSION_KEY)).toBe("control");
+      expect(mocks.capture).not.toHaveBeenCalledWith("trial_activation_assignment_failed", expect.anything(), expect.anything());
+    });
+
+    it("drains a cached value and an in-flight previous-identity response before exposing the final route", async () => {
+      mocks.sdk!.identify("machine-1");
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      await respond(0, "summary_first");
+      mocks.sdk!.reloadFeatureFlags();
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      expect(requests[1].data.distinct_id).toBe("machine-1");
+      mocks.sdk!.identify("clerk-1");
+      sdkCapture.mockClear();
+      render(<OnboardingPage />);
+      // The immediate cached callback must not count as a remote completion.
+      expect(screen.getByTestId("trial-activation-assignment-pending")).toBeInTheDocument();
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      await respond(1, "summary_first");
+      expect(screen.getByTestId("trial-activation-assignment-pending")).toBeInTheDocument();
+      expect(requests[2].data.distinct_id).toBe("clerk-1");
+      expect(sdkCapture).not.toHaveBeenCalledWith("$feature_flag_called", expect.anything());
+      // Local overrides also carry no remote completion status.
+      act(() => mocks.sdk!.featureFlags.updateFlags({ "first-summary-card-trial-v1": "summary_first" }));
+      expect(screen.getByTestId("trial-activation-assignment-pending")).toBeInTheDocument();
+      await respond(2, "control");
+      expect(window.sessionStorage.getItem(TRIAL_ACTIVATION_ASSIGNMENT_SESSION_KEY)).toBe("control");
+      expect(sdkCapture).toHaveBeenCalledWith("$feature_flag_called", expect.objectContaining({ $feature_flag_response: "control" }));
+    });
+
+    it("restarts the freshness guard when the expected identity changes during a request", async () => {
+      const { rerender } = render(<OnboardingPage />);
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      await respond(0, "summary_first");
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      mocks.settings.user!.clerk_id = "clerk-2";
+      mocks.sdk!.identify("clerk-2");
+      rerender(<OnboardingPage />);
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      expect(requests[1].data.distinct_id).toBe("clerk-1");
+      await respond(1, "summary_first");
+      expect(screen.getByTestId("trial-activation-assignment-pending")).toBeInTheDocument();
+      expect(requests[2].data.distinct_id).toBe("clerk-2");
+      await respond(2, "control");
+      expect(window.sessionStorage.getItem(TRIAL_ACTIVATION_ASSIGNMENT_SESSION_KEY)).toBe("control");
+    });
+
+    it("drains an older request failure and accepts the fresh successful response", async () => {
+      render(<OnboardingPage />);
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      await respond(0, undefined, 503);
+      expect(screen.getByTestId("trial-activation-assignment-pending")).toBeInTheDocument();
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      await respond(1, "summary_first");
+      expect(window.sessionStorage.getItem(TRIAL_ACTIVATION_ASSIGNMENT_SESSION_KEY)).toBe("summary_first");
+      expect(mocks.capture).not.toHaveBeenCalledWith("trial_activation_assignment_failed", expect.anything(), expect.anything());
+    });
+
+    it("records a fresh request failure in the support log and continues setup without private data", async () => {
+      render(<OnboardingPage />);
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      await respond(0, "summary_first");
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      await respond(1, undefined, 503);
+      expect(screen.getByText("engine")).toBeInTheDocument();
+      const entry = mocks.writeBrowserLogs.mock.calls.at(-1)![0][0];
+      expect(entry).toEqual(expect.objectContaining({ level: "warn", route: "/onboarding" }));
+      expect(JSON.parse(entry.message)).toEqual({
+        event: "trial_activation_assignment_failed", reason: "load_error",
+        stage: "waiting_for_fresh_response", attempt_id: expect.any(String),
+        response_count: 2, elapsed_ms: 10, identity_matches: true,
+        fallback_variant: "control", outcome: "continue_setup",
+      });
+      expect(localStorage.getItem("console_logs")).toContain(entry.message);
+      expect(entry.message).not.toMatch(/private|clerk-|machine-/);
+      expect(window.sessionStorage.getItem(TRIAL_ACTIVATION_ASSIGNMENT_SESSION_KEY)).toBe("control");
+    });
+
+    it("retains the five-second control fallback and ignores a late treatment response", async () => {
+      render(<OnboardingPage />);
+      await act(async () => vi.advanceTimersByTimeAsync(4_999));
+      expect(screen.getByTestId("trial-activation-assignment-pending")).toBeInTheDocument();
+      await act(async () => vi.advanceTimersByTimeAsync(1));
+      expect(screen.getByText("engine")).toBeInTheDocument();
+      await respond(0, "summary_first");
+      expect(window.sessionStorage.getItem(TRIAL_ACTIVATION_ASSIGNMENT_SESSION_KEY)).toBe("control");
+      expect(mocks.capture).toHaveBeenCalledWith("trial_activation_assignment_failed", expect.objectContaining({
+        reason: "timeout", stage: "waiting_for_response", response_count: 0, elapsed_ms: 5_000, outcome: "continue_setup",
+      }), { send_instantly: true });
+    });
+
+    it("does not identify an opted-out user or use their machine assignment", async () => {
+      mocks.sdk!.identify("machine-1");
+      mocks.sdk!.opt_out_capturing();
+      const identify = vi.spyOn(mocks.sdk!, "identify");
+      render(<OnboardingPage />);
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      await respond(0, "summary_first");
+      await act(async () => vi.advanceTimersByTimeAsync(4_995));
+      expect(screen.getByText("engine")).toBeInTheDocument();
+      expect(identify).not.toHaveBeenCalled();
+      expect(mocks.sdk!.has_opted_out_capturing()).toBe(true);
+      expect(mocks.capture).toHaveBeenCalledWith("trial_activation_assignment_failed", expect.objectContaining({
+        reason: "timeout", stage: "waiting_for_identity", identity_matches: false,
+      }), { send_instantly: true });
+      expect(window.sessionStorage.getItem(TRIAL_ACTIVATION_ASSIGNMENT_SESSION_KEY)).toBe("control");
+    });
+
+    it("does not persist or diagnose an assignment after its page unmounts", async () => {
+      const { unmount } = render(<OnboardingPage />);
+      await act(async () => vi.advanceTimersByTimeAsync(5));
+      const handler = mocks.sdk!.featureFlags.featureFlagEventHandlers.at(-1)!;
+      unmount();
+      // Cover both SDK unsubscribe and a callback retained by a caller.
+      await respond(0, "summary_first");
+      act(() => {
+        handler([], {}, { errorsLoading: false });
+        handler([], {}, { errorsLoading: false });
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(5_000));
+      expect(window.sessionStorage.getItem(TRIAL_ACTIVATION_ASSIGNMENT_SESSION_KEY)).toBeNull();
+      expect(mocks.capture).not.toHaveBeenCalledWith("trial_activation_assignment_failed", expect.anything(), expect.anything());
+    });
+
+    it.each(["control", "summary_first"])("restores a pinned %s route without requesting fresh assignment", async (variant) => {
+      window.sessionStorage.setItem(TRIAL_ACTIVATION_ASSIGNMENT_SESSION_KEY, variant);
+      render(<OnboardingPage />);
+      await act(async () => vi.advanceTimersByTimeAsync(5_000));
+      expect(screen.getByText("engine")).toBeInTheDocument();
+      expect(requests).toHaveLength(0);
+      expect(window.sessionStorage.getItem(TRIAL_ACTIVATION_ASSIGNMENT_SESSION_KEY)).toBe(variant);
+    });
+
+  });
+
 });
 
 describe("timeline slide sequencing", () => {
