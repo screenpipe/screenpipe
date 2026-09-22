@@ -96,10 +96,10 @@ pub async fn writer_starvation_recovery(hybrid: bool) {
     db.wal_checkpoint().await.unwrap();
     db.close().await;
     assert!(shared_pool.is_closed());
-    assert!(matches!(
-        worker.lock().await.unwrap().pool().acquire().await,
-        Err(sqlx::Error::PoolClosed)
-    ));
+    let retired_writer = worker.lock().await.unwrap();
+    assert!(retired_writer.pool().is_closed());
+    assert!(retired_writer.pool().acquire().await.is_err());
+    drop(retired_writer);
 
     let reopened = DatabaseManager::new(&db_path, config).await.unwrap();
     let pending = reopened
@@ -124,15 +124,16 @@ pub async fn writer_starvation_recovery(hybrid: bool) {
         )
         .await
         .unwrap();
-    let transcripts: Vec<String> = sqlx::query_scalar(
-        "SELECT transcription FROM audio_transcriptions ORDER BY audio_chunk_id",
-    )
-    .fetch_all(&reopened.pool)
-    .await
-    .unwrap();
+    let transcripts = reopened
+        .query_raw_sql("SELECT transcription FROM audio_transcriptions ORDER BY audio_chunk_id")
+        .await
+        .unwrap();
     assert_eq!(
         transcripts,
-        vec!["historical transcript", "recovered transcript"]
+        serde_json::json!([
+            {"transcription": "historical transcript"},
+            {"transcription": "recovered transcript"}
+        ])
     );
     reopened
         .execute_raw_sql_write("INSERT INTO recovery_probe VALUES(2)")
@@ -141,10 +142,10 @@ pub async fn writer_starvation_recovery(hybrid: bool) {
     for path in ["historical-audio", "before-restart", "pending-audio"] {
         assert!(reopened.find_audio_chunk_id(path).await.unwrap().is_some());
     }
-    let values: Vec<i64> = sqlx::query_scalar("SELECT value FROM recovery_probe ORDER BY value")
-        .fetch_all(&reopened.pool)
+    let values = reopened
+        .query_raw_sql("SELECT value FROM recovery_probe ORDER BY value")
         .await
         .unwrap();
-    assert_eq!(values, vec![1, 2]);
+    assert_eq!(values, serde_json::json!([{"value": 1}, {"value": 2}]));
     reopened.close().await;
 }
