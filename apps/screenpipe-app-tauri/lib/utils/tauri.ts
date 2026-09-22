@@ -3889,10 +3889,9 @@ enableSemanticContext?: boolean;
  */
 semanticContextMode?: SemanticContextMode;
 /**
- * Disable the timeline / rewind feature. When true, the engine skips
- * timeline-only work: warming the hot frame cache from the DB at startup
- * and buffering captured frames/audio into the in-memory hot cache that
- * only the timeline streaming endpoint reads.
+ * Legacy timeline gate retained for managed deployments and compatibility.
+ * Consumer installs migrate visibility to sidebarNavLayout. Screenshot
+ * capture controls cache work through `timeline_cache_disabled`.
  */
 disableTimeline?: boolean;
 /**
