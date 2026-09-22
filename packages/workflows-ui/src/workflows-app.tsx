@@ -76,7 +76,6 @@ import {
   mergeWorkflowCatalog,
   sanitizeWorkflowAnalysis,
   WORKFLOW_CATALOG_DAYS,
-  workflowsForActivityPeriod,
   type WorkflowActivityPeriod,
 } from "./catalog";
 import {
@@ -369,8 +368,6 @@ function AppShell({
   workflowCount,
   query,
   setQuery,
-  activityPeriod,
-  setActivityPeriod,
   activeScope,
   scopes,
   setScope,
@@ -393,8 +390,6 @@ function AppShell({
   workflowCount: number;
   query: string;
   setQuery: (value: string) => void;
-  activityPeriod: WorkflowActivityPeriod;
-  setActivityPeriod: (value: WorkflowActivityPeriod) => void;
   activeScope: WorkflowScope | null;
   scopes: WorkflowScope[];
   setScope: (scopeId: string) => void;
@@ -510,16 +505,7 @@ function AppShell({
               {scopes.map((scope) => <option key={scope.id} value={scope.id}>{scope.label}</option>)}
             </select>
           </label>}
-          {view === "time" ? <div className={styles.profilePeriod}><CalendarRange size={13} /><span>{WORKFLOW_CATALOG_DAYS}-day profile</span></div> :
-            <label className={styles.periodControl}>
-              <CalendarRange size={13} />
-              <select value={activityPeriod} onChange={(event) => setActivityPeriod(Number(event.target.value) as WorkflowActivityPeriod)} aria-label={ui("Workflow activity period")}>
-                <option value={0}>All known</option>
-                <option value={7}>Active this week</option>
-                <option value={30}>Active in 30 days</option>
-                <option value={90}>Active in 90 days</option>
-              </select>
-            </label>}
+          {view === "time" && <div className={styles.profilePeriod}><CalendarRange size={13} /><span>{WORKFLOW_CATALOG_DAYS}-day profile</span></div>}
           {modelControl}
           {recordingStatus ?? <Pill tone={runtime?.recording ? "green" : "plain"}><span className={styles.liveDot} />{statusLabel}</Pill>}
           {assistant && !assistantDocked && assistantMode === "sidebar" && <button className={styles.panelToggle} data-workflows-assistant-toggle
@@ -716,7 +702,7 @@ function OverviewView({
   );
 }
 
-function WorkflowsView({ workflows, knownWorkflowCount, activityPeriod, filters, setFilters, openWorkflow, analyze, analyzing, error, stop, updatedAt, checkedThrough, changes, job, subscribe, analysisUnavailableReason }: { analysisUnavailableReason?: string; workflows: WorkflowMap[]; knownWorkflowCount: number; activityPeriod: WorkflowActivityPeriod; filters: WorkflowFilters; setFilters: (filters: WorkflowFilters) => void; openWorkflow: (index: number) => void; analyze: () => void; analyzing: boolean; error: string; stop?: () => void; updatedAt?: string; checkedThrough?: string; changes?: { created: number; updated: number }; job?: WorkflowAnalysisJob | null; subscribe?: WorkflowsPlatform["subscribeAnalysisActivity"] }) {
+function WorkflowsView({ workflows, knownWorkflowCount, filters, setFilters, openWorkflow, analyze, analyzing, error, stop, updatedAt, checkedThrough, changes, job, subscribe, analysisUnavailableReason }: { analysisUnavailableReason?: string; workflows: WorkflowMap[]; knownWorkflowCount: number; filters: WorkflowFilters; setFilters: (filters: WorkflowFilters) => void; openWorkflow: (index: number) => void; analyze: () => void; analyzing: boolean; error: string; stop?: () => void; updatedAt?: string; checkedThrough?: string; changes?: { created: number; updated: number }; job?: WorkflowAnalysisJob | null; subscribe?: WorkflowsPlatform["subscribeAnalysisActivity"] }) {
   const ui = useGT();
   const filtersId = useId();
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -734,7 +720,7 @@ function WorkflowsView({ workflows, knownWorkflowCount, activityPeriod, filters,
         <div className={styles.catalogHeading}>
           <h1>Your workflows</h1>
           <div className={styles.catalogCount}>
-            <span>{filterCount || filters.query ? ui("{visible} of {total} shown", { visible: visible.length, total: workflows.length }) : ui("{count, plural, one {# workflow} other {# workflows}}", { count: workflows.length })} · {activityPeriod === 0 ? ui("All known") : activityPeriodLabel(activityPeriod)}</span>
+            <span>{filterCount || filters.query ? ui("{visible} of {total} shown", { visible: visible.length, total: workflows.length }) : ui("{count, plural, one {# workflow} other {# workflows}}", { count: workflows.length })}</span>
             {(filterCount > 0 || filters.query) && <button className={styles.clearButton} onClick={() => setFilters(defaultWorkflowFilters)}>{ui("Clear filters")}</button>}
           </div>
         </div>
@@ -1318,7 +1304,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   const [analysisJob, setAnalysisJob] = useState<WorkflowAnalysisJob | null>(null);
   const [analysisError, setAnalysisError] = useState("");
   const [selectedWorkflow, setSelectedWorkflow] = useState(0);
-  const [activityPeriod, setActivityPeriod] = useState<WorkflowActivityPeriod>(0);
+  const activityPeriod: WorkflowActivityPeriod = 0;
   const [filters, setFilters] = useState<WorkflowFilters>(defaultWorkflowFilters);
   const [view, setView] = useState<AppView>("workflows");
   const [timeLens, setTimeLens] = useState<TimeLens>("categories");
@@ -1340,10 +1326,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
     window.history.pushState(null, "", url);
   }, []);
   const knownWorkflows = analysis?.analysis.workflows ?? [];
-  const workflows = useMemo(
-    () => workflowsForActivityPeriod(knownWorkflows, activityPeriod, analysis?.analyzedAt ?? new Date().toISOString()),
-    [activityPeriod, analysis?.analyzedAt, knownWorkflows],
-  );
+  const workflows = knownWorkflows;
   const activeWorkflow = workflows[selectedWorkflow] ?? workflows[0] ?? null;
   const openWorkflow = useCallback((index: number) => {
     if (index < 0) return;
@@ -1527,24 +1510,6 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
         shortcut,
         action: () => navigate(target),
       }));
-    const activityCommands = ([
-      [0, "All captured activity"],
-      [7, "Active in 7 days"],
-      [30, "Active in 30 days"],
-      [90, "Active in 90 days"],
-    ] as const).map(([period, label]) => ({
-      id: `activity-${period}`,
-      label,
-      detail: period ? `Limit workflow views to activity observed in the last ${period} days` : "Use the complete bounded workflow catalog",
-      group: "Activity period" as const,
-      icon: CalendarRange,
-      keywords: `period recent ${period}`,
-      disabled: activityPeriod === period,
-      action: () => {
-        setActivityPeriod(period);
-        setSelectedWorkflow(0);
-      },
-    }));
     const scopeCommands = scopes.length > 1 ? scopes.map((scope) => ({
       id: `scope-${scope.id}`,
       label: scope.label,
@@ -1606,7 +1571,6 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
         disabled: !filtersActive,
         action: () => setFilters(defaultWorkflowFilters),
       },
-      ...activityCommands,
       ...scopeCommands,
       ...workflowCommands,
     ];
@@ -1656,7 +1620,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   switch (view) {
     case "overview": content = <OverviewView analysis={analysis ? { ...analysis, analysis: { workflows } } : null} analyzing={analyzing} error={analysisError} analyze={() => void analyze()} openWorkflow={openWorkflow} navigate={navigate} knownWorkflowCount={knownWorkflows.length} activityPeriod={activityPeriod} runtime={runtime} workProfile={workProfile} refreshRuntime={refreshRuntime} openAccount={platform.openAccount} />; break;
     case "time": content = <TimeView analysis={analysis} analyze={() => void analyze()} analyzing={analyzing} workProfile={workProfile} lens={timeLens} setLens={setTimeLens} />; break;
-    case "workflows": content = <WorkflowsView analysisUnavailableReason={onAnalysisUnavailable ? undefined : analysisUnavailableReason} workflows={workflows} knownWorkflowCount={knownWorkflows.length} activityPeriod={activityPeriod} filters={filters} setFilters={setFilters} openWorkflow={openWorkflow} analyze={() => void analyze()} analyzing={analyzing} error={analysisError} stop={platform.cancelAnalysisJob ? () => { void platform.cancelAnalysisJob!().catch(error => setAnalysisError(String(error))); } : undefined} updatedAt={analysis?.analyzedAt} checkedThrough={analysis?.checkedThrough} changes={analysis?.changes} job={analysisJob} subscribe={platform.subscribeAnalysisActivity} />; break;
+    case "workflows": content = <WorkflowsView analysisUnavailableReason={onAnalysisUnavailable ? undefined : analysisUnavailableReason} workflows={workflows} knownWorkflowCount={knownWorkflows.length} filters={filters} setFilters={setFilters} openWorkflow={openWorkflow} analyze={() => void analyze()} analyzing={analyzing} error={analysisError} stop={platform.cancelAnalysisJob ? () => { void platform.cancelAnalysisJob!().catch(error => setAnalysisError(String(error))); } : undefined} updatedAt={analysis?.analyzedAt} checkedThrough={analysis?.checkedThrough} changes={analysis?.changes} job={analysisJob} subscribe={platform.subscribeAnalysisActivity} />; break;
     case "workflow": content = <WorkflowDetail key={activeWorkflow?.id || activeWorkflow?.title} onShareWorkflow={onShareWorkflow} workflowAgentActions={workflowAgentActions} workflow={activeWorkflow} navigate={navigate} platform={platform} workProfile={workProfile} saveEdits={catalogReady && platform.saveWorkflowEdits && (!activeScope || activeScope.kind === "personal") ? async (draft) => {
       let saved: WorkflowMap;
       try { saved = await platform.saveWorkflowEdits!(draft); }
@@ -1694,7 +1658,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   }
 
   return <>
-    <AppShell modelControl={platform.modelPreference ? <WorkflowModelControl preference={platform.modelPreference} /> : undefined} composerAccessory={composerAccessory} active={active} fullscreen={fullscreen} navigationFooter={navigationFooter} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={filters.query} setQuery={(query) => setFilters((current) => ({ ...current, query }))} activityPeriod={activityPeriod} setActivityPeriod={(period) => { setActivityPeriod(period); setSelectedWorkflow(0); }} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: ui("Context"), profile: workProfile } : { key: "workflows", title: ui("Your workflows"), catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{statusNotice}{content}</AppShell>
+    <AppShell modelControl={platform.modelPreference ? <WorkflowModelControl preference={platform.modelPreference} /> : undefined} composerAccessory={composerAccessory} active={active} fullscreen={fullscreen} navigationFooter={navigationFooter} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={filters.query} setQuery={(query) => setFilters((current) => ({ ...current, query }))} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: ui("Context"), profile: workProfile } : { key: "workflows", title: ui("Your workflows"), catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{statusNotice}{content}</AppShell>
     <CommandPalette open={active && commandPaletteOpen} commands={paletteCommands} close={() => setCommandPaletteOpen(false)} />
   </>;
 }

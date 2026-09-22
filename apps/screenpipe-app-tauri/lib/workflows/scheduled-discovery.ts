@@ -38,7 +38,7 @@ export async function loadWorkflowTaskSetup(): Promise<WorkflowTaskSetup> {
     if (typeof data?.config?.enabled !== "boolean") throw new Error("Could not read the workflow task settings.");
     tasks.push({ name, title: data.config.title || name, enabled: data.config.enabled });
   }
-  return { enabled: tasks.every(task => task.enabled), title: "Keep your workflows current", schedule: "Daily discovery, with evidence review and maintenance", tasks };
+  return { enabled: tasks.every(task => task.enabled), title: "Keep your workflows current", schedule: "Hourly discovery, with evidence review and maintenance", tasks };
 }
 
 // Only the explicit enable action opts in. Scheduling stays in the Pipe harness.

@@ -98,6 +98,7 @@ it("opens quiet header filters and restores the catalog after clearing them", as
   render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
   const filters = await screen.findByRole("button", { name: "Filters", exact: true });
   expect(filters).toHaveAttribute("title", "Filters");
+  expect(screen.queryByRole("combobox", { name:"Workflow activity period" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Update now" })).toHaveAttribute("title", "Update now");
   fireEvent.click(filters);
   const panel = screen.getByRole("region", { name: "Workflow filters" });

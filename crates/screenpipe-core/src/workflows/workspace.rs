@@ -53,7 +53,7 @@ pub fn ready(ws: &Value, task: &str) -> bool {
             && ws["cycle"]["end"]
                 .as_str()
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .is_some_and(|end| Utc::now().signed_duration_since(end) >= Duration::hours(24));
+                .is_some_and(|end| Utc::now().signed_duration_since(end) >= Duration::hours(1));
     }
     assigned(ws, task)
         || match task {
@@ -330,6 +330,19 @@ mod tests {
             ),
             note: "Investigate actual observed actions, not menu labels".into(),
         }
+    }
+    #[test]
+    fn completed_cycles_allow_hourly_discovery_without_completion_loops() {
+        let mut ws = empty();
+        ws["cycle"] =
+            json!({"status":"complete","end":(Utc::now()-Duration::minutes(30)).to_rfc3339()});
+        assert!(TASKS.iter().all(|task| !ready(&ws, task)));
+        ws["cycle"]["end"] = json!((Utc::now() - Duration::minutes(61)).to_rfc3339());
+        assert!(ready(&ws, TASKS[0]));
+        assert!(TASKS[1..].iter().all(|task| !ready(&ws, task)));
+        ws["cycle"] =
+            json!({"status":"paused","pausedAt":(Utc::now()-Duration::minutes(61)).to_rfc3339()});
+        assert!(TASKS.iter().all(|task| !ready(&ws, task)));
     }
     #[test]
     fn missing_targets_are_distinct_from_ownership_and_never_mutate() {

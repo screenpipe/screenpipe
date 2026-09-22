@@ -92,6 +92,14 @@ if (timing) {
   }
   ws.drafts={}; ws.cycle.finished={"workflow-discover":true};
 }
+const sparseProcedure = process.argv.includes("--sparse-procedure");
+if (sparseProcedure) {
+  if (timingCase !== "historical") throw new Error("Sparse procedure regression uses --timing=historical");
+  existing.stages.forEach((stage:any) => { stage.procedure=[]; stage.screenshot=null; });
+  existing.lastReviewedAt=existing.evidence[0].timestamp;
+  existing.userEdits={stages:true};
+  existing.limitations=["Old map has source addresses but no investigated procedure."];
+}
 const historyStart = new Date(Date.parse(now) - 90 * 86400000).toISOString();
 if (timingCase === "historical") {
   rows.push({timestamp:new Date(Date.parse(now)-3600000).toISOString(),app:"Browser",quote:"Reading a product announcement. No receipt entry in progress."});
@@ -205,6 +213,11 @@ try{
   });
   if(missingDraft)Object.assign(checks,{harnessReportsError:events.some(e=>e.type==="tool_execution_end"&&e.toolName==="workflow_workspace"&&e.isError===true)});
   if(timing) checks={exited:exit===0, completed:ws.cycle.status==="complete", sourceRead:reads>0, privateVerified:verified, ...gradeTiming(published,existing,timing.expected)};
+  if(sparseProcedure)Object.assign(checks,{
+    enrichedExisting:published.length>0 && published.at(-1).id===existing.id,
+    supportedProcedure:published.length>0 && published.at(-1).stages.every((s:any)=>s.procedure?.length>0 && s.procedure.every((p:any)=>rows.some(r=>r.timestamp===p.timestamp && r.app===p.app && typeof p.quote==="string" && p.quote.length>=12 && r.quote.includes(p.quote)))),
+    noInventedScreenshot:published.every(w=>w.stages.every((s:any)=>!s.screenshotFrameId)),
+  });
   if(contextHistoryCount)Object.assign(checks,{
     contextSnapshotExposed:events.some(e=>e.type==="tool_execution_end"&&e.toolName==="workflow_workspace"&&e.result?.details?.path?.includes(".workflow-context-")),
     preservedResolvedHistory:Object.entries(ws.drafts).filter(([id])=>id.startsWith("resolved-")).length===contextHistoryCount&&Object.entries(ws.drafts).filter(([id])=>id.startsWith("resolved-")).every(([,d]:any)=>d.status==="rejected"),

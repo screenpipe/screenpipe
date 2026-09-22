@@ -15,12 +15,15 @@ function publicationContract(catalog: any) {
 }
 // Small routing context, never a substitute for reading the workflow and sources.
 export function workflowIndex(workflow: any) {
-  const dates = (workflow.evidence ?? []).map((source: any) => source.timestamp)
+  const stages = Array.isArray(workflow.stages) ? workflow.stages : [];
+  const dates = [...(workflow.evidence ?? []), ...stages.flatMap((stage: any) => stage.evidence ?? [])].map((source: any) => source.timestamp)
     .filter((at: unknown) => typeof at === "string" && Number.isFinite(Date.parse(at)))
     .sort((a: string, b: string) => Date.parse(a) - Date.parse(b));
   const runs = Array.isArray(workflow.timingRuns) ? workflow.timingRuns : [];
   return {id:workflow.id,title:workflow.title,trigger:workflow.trigger,outcome:workflow.outcome,
     userCorrection:workflow.userCorrection,quality:workflow.quality,openQuestions:workflow.openQuestions,
+    lastReviewedAt:workflow.lastReviewedAt,userEdits:workflow.userEdits,
+    evidenceCoverage:{stageCount:stages.length,stagesWithProcedure:stages.filter((s:any)=>s.procedure?.length).length,stagesWithVerifiedScreenshot:stages.filter((s:any)=>s.screenshot?.visualVerified).length},
     timing:{runCount:runs.length},
     sourceRange:dates.length ? {first:dates[0],last:dates.at(-1)} : null};
 }

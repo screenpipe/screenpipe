@@ -188,3 +188,16 @@ test("batch and workspace contracts describe the same workflow fields",()=>{
   expect(item.startsWith('{"id":')).toBe(true);
   expect(batch).toContain(`"workflows":[${item}]`);
 });
+
+
+test("maintenance sees neglected empty steps and historical sources without private content", () => {
+  const index = workflowIndex({ id:"legacy", lastReviewedAt:"2026-09-10T10:00:00Z", userEdits:{stages:true}, evidence:[], stages:[
+    {procedure:[], evidence:[{timestamp:"2026-09-01T10:00:00Z",quote:"private"}], screenshot:{frameId:1}},
+    {procedure:[{text:"private action"}], evidence:[], screenshot:{visualVerified:true,dataUrl:"private pixels"}}
+  ]});
+  expect(index.evidenceCoverage).toEqual({stageCount:2,stagesWithProcedure:1,stagesWithVerifiedScreenshot:1});
+  expect(index.lastReviewedAt).toBe("2026-09-10T10:00:00Z");
+  expect(index.sourceRange?.first).toBe("2026-09-01T10:00:00Z");
+  expect(index.userEdits).toEqual({stages:true});
+  expect(JSON.stringify(index)).not.toContain("private");
+});

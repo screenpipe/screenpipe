@@ -112,11 +112,11 @@ pub(crate) async fn context(
     };
     let workflows: Vec<Value> = value["analysis"]["workflows"].as_array().into_iter().flatten().map(|w| json!({
         "id":workflow_id(w), "title":w["title"], "trigger":w["trigger"], "outcome":w["outcome"],
-        "description":w["description"], "userCorrection":w["userCorrection"], "lastReviewedAt":w["lastReviewedAt"],
+        "description":w["description"], "userEdits":w["userEdits"], "userCorrection":w["userCorrection"], "lastReviewedAt":w["lastReviewedAt"],
         "confidence":w["confidence"], "people":w["people"], "teams":w["teams"], "handoffs":w["handoffs"], "variations":w["variations"], "bottlenecks":w["bottlenecks"], "captureSequence":w["captureSequence"],
         "timingRuns":w["timing"]["runs"], "limitations":w["limitations"], "openQuestions":w["openQuestions"], "quality":w["quality"], "apps":w["apps"],
         "evidence":context_source_refs(&w["evidence"]),
-        "stages":w["stages"].as_array().into_iter().flatten().map(|s| json!({"name":s["name"],"description":s["description"],"apps":s["apps"],"confidence":s["confidence"],"procedure":s["procedure"],"evidence":context_source_refs(&s["evidence"]),"openQuestions":s["openQuestions"]})).collect::<Vec<_>>()
+        "stages":w["stages"].as_array().into_iter().flatten().map(|s| json!({"name":s["name"],"description":s["description"],"apps":s["apps"],"confidence":s["confidence"],"userEdited":s["userEdited"],"screenshot":s.get("screenshot").filter(|v| v.is_object()).map(|v| json!({"frameId":v["frameId"],"timestamp":v["timestamp"],"app":v["app"],"visualVerified":v["visualVerified"]})),"procedure":s["procedure"],"evidence":context_source_refs(&s["evidence"]),"openQuestions":s["openQuestions"]})).collect::<Vec<_>>()
     })).collect();
     Ok(Json(
         json!({"revision":value["revision"].as_u64().unwrap_or(0), "now":Utc::now().to_rfc3339(),
