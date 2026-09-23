@@ -51,6 +51,21 @@ outage recovery; this sample does not establish 504 recovery or a causal gain
 over a matched baseline. Original source reads, saved procedures and final
 reports were manually checked; the failed trace was retained privately.
 
+For matched replays, set `WORKFLOW_EVAL_NOW` to the same ISO timestamp in both
+runs. All default recorder rows now use that clock as well as the cycle interval;
+previously those rows still used wall time. Deadline enforcement still uses the
+real clock. In context-size trials the supported draft is placed after the
+resolved history, beyond the preview boundary, so the full snapshot must be read.
+
+The Review ownership repair is compared with the exact previous bundled prompt
+in `crates/screenpipe-core/assets/pipes/legacy-workflow-prompts/before-review-ownership-workflow-review.md`.
+Supply that file through `WORKFLOW_EVAL_PROMPT_FILE` for the baseline. The role
+now explicitly performs its own permitted recorder lookup and continues after a
+self-edit. Scope repairs also check other drafts and saved workflows to retain
+one canonical workflow without dropping useful new evidence. Include
+`--repair-source` alongside the outage, conflict and no-change cases to exercise
+a necessary payload edit without publishing duplicate workflows.
+
 `--reported-actions` reproduces a false accept where the draft admits missing execution evidence in limitations, but still describes connecting systems in its title and procedure. The agent must retain the observed planning and request for a receipt without promoting the assistant's report into external work. Its fixture-specific text checks are conservative and require manual review of the saved payload; they are not a general semantic grader.
 
 `--medium-context` preserves 40 resolved draft decisions, and `--large-context` preserves 160. Both require the actual file-snapshot path to be exposed and all prior decisions to remain intact. Older discovery trials cleared the resolved history before starting, so their large-context label was incorrect. The context tool now creates a snapshot before Private's 8K text boundary, rather than letting intermediate-size JSON be truncated with no complete copy available.
@@ -236,3 +251,28 @@ shared browser UI. Agent evaluation uses an isolated workspace endpoint; replay
 through the real backend independently verifies that its output is saveable.
 This is not a claim of installed desktop release validation or universal model
 reliability. Unknown timing remains correct when sources cannot establish runs.
+
+
+### Review follow-through validation, September 22
+
+The final Review prompt passed eight isolated `screenpipe`/`auto` trials with
+`WORKFLOW_EVAL_NOW=2026-09-23T01:20:27.387Z` and the default 180-second budget:
+`--publication-failure=504`, `--publication-failure=503`,
+`--publication-failure=persistent`, `--publication-failure=504 --large-context`,
+`--repair-source`, `--no-change`, `--conflict`, and `--timing=historical`.
+The last case enriches the existing workflow, proving that the duplicate check
+still permits useful updates. The large-context case reads the snapshot,
+preserves all resolved decisions and publishes the supported draft after recovery.
+
+A matched-clock baseline using the previous prompt retrieved and published but
+failed to finish the cycle; the final prompt completed. This is a small sampled
+comparison, not a reliability estimate. Intermediate failures included duplicate
+scope repairs and a truncated raw workspace read followed by a wrong workflow
+identity; their traces were retained. The final prompt routes workspace reads
+through the snapshot tool, preserves the correctly scoped draft, checks saved
+identity, and explicitly finishes after publication. Model trials remain mock
+persistence evaluations, not an installed-app end-to-end test.
+
+The original bundled prompt is retained as a migration fixture. The native
+migration suite verifies that recognized bodies receive this repair while
+preserving enabled state, schedule, model, timeout, trigger and custom instructions.

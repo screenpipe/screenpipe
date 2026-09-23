@@ -718,7 +718,13 @@ fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> 
         // Upgrade the shipped knowledge-work prompts too; otherwise existing
         // tasks never receive the observed-scope repair in a new app build.
         "workflow-deepen" => &["b278bd6a8abcfc77", "996ff7f9a6026e05", "cf31ccaa932b7784"],
-        "workflow-review" => &["ac29fac407670584", "182e0b733f5c2bce", "7cace9312eb52b72"],
+        "workflow-review" => &[
+            "ac29fac407670584",
+            "182e0b733f5c2bce",
+            "7cace9312eb52b72",
+            // Review must perform its own lookup and continue after self-edits.
+            "09a0ab9de50d94ff",
+        ],
         "workflow-maintain" => &["a769acb2f48eb6c3", "3fd301c337d95126", "75da536f6510aa25"],
         "workflow-discovery" => &["9e7b057416c5e119", "57b754f5d27ad27d", "3cb46a10a341de9b"],
         "workflow-activity" => &[
@@ -912,6 +918,7 @@ mod tests {
     #[test]
     fn all_staged_workflow_prompts_upgrade_without_changing_user_configuration() {
         let fixtures = [
+            ("workflow-review", include_str!("../../assets/pipes/legacy-workflow-prompts/before-review-ownership-workflow-review.md")),
             ("workflow-maintain", include_str!("../../assets/pipes/legacy-workflow-prompts/before-detail-enrichment-workflow-maintain.md")),
             ("workflow-maintain", include_str!("../../assets/pipes/legacy-workflow-prompts/before-timing-enrichment-workflow-maintain.md")),
             ("workflow-review", include_str!("../../assets/pipes/legacy-workflow-prompts/before-timing-enrichment-workflow-review.md")),

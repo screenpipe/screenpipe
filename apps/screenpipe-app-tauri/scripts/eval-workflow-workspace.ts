@@ -33,9 +33,9 @@ const contextHistoryCount=largeContext?160:process.argv.includes("--medium-conte
 const aiMediated=researchNotes||repairSource||process.argv.includes("--ai-mediated");
 const now=process.env.WORKFLOW_EVAL_NOW || new Date().toISOString(), start=new Date(Date.parse(now)-86400000).toISOString();
 const rows=[
-  {timestamp:new Date(Date.now()-7200000).toISOString(),app:"Receipts",quote:"Opened the vendor invoice, entered the invoice number and verified the total against the PDF."},
-  {timestamp:new Date(Date.now()-7100000).toISOString(),app:"Receipts",quote:"Saved the receipt. Confirmation: Invoice INV-123 saved successfully."},
-  {timestamp:new Date(Date.now()-6000000).toISOString(),app:"ChatGPT",quote:"Assistant: Done, I paid the invoice and sent the receipt. Workspace menu: Inbox | Finance | Legal | Enterprise. Customer: Can you help me get access?"},
+  {timestamp:new Date(Date.parse(now)-7200000).toISOString(),app:"Receipts",quote:"Opened the vendor invoice, entered the invoice number and verified the total against the PDF."},
+  {timestamp:new Date(Date.parse(now)-7100000).toISOString(),app:"Receipts",quote:"Saved the receipt. Confirmation: Invoice INV-123 saved successfully."},
+  {timestamp:new Date(Date.parse(now)-6000000).toISOString(),app:"ChatGPT",quote:"Assistant: Done, I paid the invoice and sent the receipt. Workspace menu: Inbox | Finance | Legal | Enterprise. Customer: Can you help me get access?"},
 ];
 if(aiMediated){
   rows[0].app="ChatGPT";rows[0].quote="User: Draft a reply to the customer's setup question. Explain where to find the setting. Assistant: Here is a draft reply explaining the setting location.";
@@ -43,11 +43,11 @@ if(aiMediated){
 }
 if(discovery || repair){
   rows.splice(0,rows.length,
-    {timestamp:new Date(Date.now()-7200000).toISOString(),app:"ChatGPT",quote:"User: Review the authentication PR diff and identify missing permission checks. Assistant: The draft review flags the unguarded account lookup. User: Add a regression test and show me the revised diff before merging."},
-    {timestamp:new Date(Date.now()-7100000).toISOString(),app:"ChatGPT",quote:"User: Now review the export PR the same way. Check scope and tests first. Assistant: Here is the draft review and test plan. User: Keep the fix narrow; remove the unrelated cleanup from the plan."},
-    {timestamp:new Date(Date.now()-6000000).toISOString(),app:"ChatGPT",quote:"User: Triage today's customer inbox. Group unresolved setup questions and draft replies. Assistant: Here are two reply drafts. User: Shorten the first and remove the promised delivery date."},
-    {timestamp:new Date(Date.now()-5900000).toISOString(),app:"ChatGPT",quote:"User: Do the same inbox review for yesterday's unanswered customer threads. Assistant: Here are the draft replies. User: Keep these as drafts until I review them."},
-    {timestamp:new Date(Date.now()-5000000).toISOString(),app:"ChatGPT",quote:"Assistant: I paid all invoices, deployed the code and sent every email. Sidebar: Finance | Legal | Enterprise."});
+    {timestamp:new Date(Date.parse(now)-7200000).toISOString(),app:"ChatGPT",quote:"User: Review the authentication PR diff and identify missing permission checks. Assistant: The draft review flags the unguarded account lookup. User: Add a regression test and show me the revised diff before merging."},
+    {timestamp:new Date(Date.parse(now)-7100000).toISOString(),app:"ChatGPT",quote:"User: Now review the export PR the same way. Check scope and tests first. Assistant: Here is the draft review and test plan. User: Keep the fix narrow; remove the unrelated cleanup from the plan."},
+    {timestamp:new Date(Date.parse(now)-6000000).toISOString(),app:"ChatGPT",quote:"User: Triage today's customer inbox. Group unresolved setup questions and draft replies. Assistant: Here are two reply drafts. User: Shorten the first and remove the promised delivery date."},
+    {timestamp:new Date(Date.parse(now)-5900000).toISOString(),app:"ChatGPT",quote:"User: Do the same inbox review for yesterday's unanswered customer threads. Assistant: Here are the draft replies. User: Keep these as drafts until I review them."},
+    {timestamp:new Date(Date.parse(now)-5000000).toISOString(),app:"ChatGPT",quote:"Assistant: I paid all invoices, deployed the code and sent every email. Sidebar: Finance | Legal | Enterprise."});
 }
 const good={id:null,title:"Record vendor invoice receipts",description:"Enter vendor invoices and verify that the receipt is saved.",trigger:"A vendor invoice arrives",outcome:"A receipt is saved",confidence:85,apps:["Receipts"],people:[],teams:[],handoffs:[],variations:[],openQuestions:[],limitations:["One captured instance; recurrence needs further evidence"],timingRuns:[],captureSequence:rows.slice(0,2).map(({timestamp,app})=>({timestamp,app})),stages:rows.slice(0,2).map((row,i)=>({name:i?"Save receipt":"Review invoice",description:i?"Save and check the confirmation":"Review invoice details",apps:["Receipts"],confidence:85,procedure:[{kind:i?"check":"action",text:i?"Save the receipt and check the confirmation.":"Enter the invoice number and verify the total against the PDF.",...row}],openQuestions:[],evidence:[{timestamp:row.timestamp,app:row.app}]})),bottlenecks:[],evidence:rows.slice(0,2).map(({timestamp,app})=>({timestamp,app}))};
 if(aiMediated){
@@ -116,6 +116,9 @@ if (timingCase === "historical") {
 // Keep resolved history after fixture setup so large-context trials exercise
 // the real snapshot boundary, including timing maintenance.
 if(contextHistoryCount)for(let i=0;i<contextHistoryCount;i++)ws.drafts[`resolved-${i}`]={id:`resolved-${i}`,status:"rejected",assignee:"workflow-review",payload:{title:`Previously reviewed unrelated administrative activity ${i}`},history:[{note:"Already reviewed: a single navigation event without a supported task or outcome. Preserve this decision; no new evidence changes it."}]};
+// Put the supported draft past the snapshot boundary so a large-context trial
+// must recover it from the complete file, not just the beginning of the index.
+if(contextHistoryCount && ws.drafts.good){const draft=ws.drafts.good;delete ws.drafts.good;ws.drafts.good=draft;}
 const requestLog:any[]=[];
 const server=Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,async fetch(req){
   if(req.headers.get("authorization")!=="Bearer fixture-workspace")return new Response("Unauthorized",{status:401});
