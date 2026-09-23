@@ -17,7 +17,8 @@
     "./context": "./src/context-tool.ts",
     "./context-import": "./src/context-import.ts",
     "./rich-text": "./src/rich-text.tsx",
-    "./procedure-markdown": "./src/procedure-markdown.ts"
+    "./procedure-markdown": "./src/procedure-markdown.ts",
+    "./sop-document": "./src/sop-document.tsx"
   },
   "dependencies": {
     "react-markdown": "^9.1.0",

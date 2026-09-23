@@ -24,6 +24,7 @@ export function WorkflowRichText({
   placeholder = "Add details…",
   maxLength = 4000,
   className = "",
+  fullDocument = false,
 }: {
   value: string;
   onChange?: (value: string) => void;
@@ -31,6 +32,7 @@ export function WorkflowRichText({
   placeholder?: string;
   maxLength?: number;
   className?: string;
+  fullDocument?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>();
@@ -150,7 +152,7 @@ export function WorkflowRichText({
     <div className={`${styles.root} ${className}`} data-testid="procedure-markdown">
       <div
         id={id}
-        className={long && !expanded ? styles.collapsed : undefined}
+        className={!fullDocument && long && !expanded ? styles.collapsed : undefined}
         onFocusCapture={() => setExpanded(true)}
       >
         <div
@@ -158,7 +160,7 @@ export function WorkflowRichText({
           className={`${styles.document} ${editable ? styles.editable : ""}`}
         />
       </div>
-      {long && (
+      {!fullDocument && long && (
         <button
           type="button"
           aria-expanded={expanded}

@@ -1,6 +1,6 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   render,
@@ -30,6 +30,14 @@ function GuideChat({ edit, save = vi.fn(), previousFeedback = false }: { edit: N
   return <PageAssistantContext.Provider value={setPage}>
     <WorkflowGuide workflow={workflow} close={() => {}} platform={{ load: async () => guide, generate: vi.fn(), save, export: vi.fn(), edit }} />
     {page && <WorkflowAssistant context={page.context} onDockChange={() => {}} platform={{ load: async () => previousFeedback ? previous : null, save: async () => {}, ask: page.ask }} />}
+  </PageAssistantContext.Provider>;
+}
+function GenerationChat({ platform }: { platform: NonNullable<WorkflowsPlatform["guides"]> }) {
+  const [page, setPage] = useState<PageAssistant | null>(null);
+  const assistant = useMemo(() => page ? { load: async () => null, save: async () => {}, ask: page.ask } : null, [page]);
+  return <PageAssistantContext.Provider value={setPage}>
+    <WorkflowGuide workflow={workflow} platform={platform} close={() => {}} />
+    {page && assistant && <WorkflowAssistant context={page.context} promptRequest={page.promptRequest} onDockChange={() => {}} platform={assistant} />}
   </PageAssistantContext.Provider>;
 }
 const workflow = structuredClone(fixtureWorkflowAnalysis.analysis.workflows[0]);
@@ -192,7 +200,7 @@ describe("guide editor", () => {
     await screen.findByRole("heading", { name: "Research guide" });
     expect(platform.generate).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Edit SOP" }));
-    fireEvent.change(screen.getByLabelText("Guide title"), {
+    fireEvent.change(screen.getByLabelText("SOP title"), {
       target: { value: "Team research handbook" },
     });
     await waitFor(() =>
@@ -318,11 +326,7 @@ describe("guide editor", () => {
       }),
     };
     const view = render(
-      <WorkflowGuide
-        workflow={workflow}
-        platform={platform}
-        close={() => {}}
-      />,
+      <GenerationChat platform={platform} />,
     );
     await waitFor(() => expect(signal).toBeDefined());
     view.unmount();
@@ -342,16 +346,17 @@ describe("guide editor", () => {
       save: vi.fn().mockRejectedValue(new Error("disk full")),
     };
     render(
-      <WorkflowGuide
-        workflow={workflow}
-        platform={platform}
-        close={() => {}}
-      />,
+      <GenerationChat platform={platform} />,
     );
     await screen.findByText("Account unavailable");
-    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    fireEvent.click(screen.getByRole("button", { name: /Try again|Retry/ }));
+    await screen.findByText("disk full");
+    expect(screen.queryByText("Saved your SOP on this device. Review its steps on the page.")).toBeNull();
+    platform.save.mockResolvedValue(undefined);
+    fireEvent.click(screen.getByRole("button", { name: /Try again|Retry/ }));
+    await screen.findByText("Saved your SOP on this device. Review its steps on the page.");
+    expect(platform.generate).toHaveBeenCalledTimes(2);
     await screen.findByRole("heading", { name: "Research guide" });
-    await screen.findByRole("button", { name: "Retry save" });
   });
 });
 

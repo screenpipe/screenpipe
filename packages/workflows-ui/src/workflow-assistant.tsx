@@ -14,8 +14,9 @@ import { useGT } from "gt-react";
 
 const FEEDBACK_PROMPT = "Review this workflow and ask me 3 specific questions to help refine it. Also invite any general feedback I have.";
 
-export function WorkflowAssistant({ platform, context, onDockChange, onWidthChange, onOpenChange, onModeChange, headerToggle = false, active = true, composerAccessory }: {
+export function WorkflowAssistant({ platform, context, onDockChange, onWidthChange, onOpenChange, onModeChange, headerToggle = false, active = true, composerAccessory, promptRequest }: {
   platform: WorkflowsAssistantPlatform;
+  promptRequest?: { id: string; text: string };
   context: AssistantContext;
   onDockChange: (docked: boolean) => void;
   onWidthChange?: (width: number) => void;
@@ -66,6 +67,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   const conversation = state.conversations.find((c) => c.id === state.activeId)!;
   const feedbackContext = conversation.feedbackContext;
   const selectedSop = useRef<string | null>(null);
+  const consumedPrompt = useRef<string | null>(null);
   const width = Number.isFinite(state.sidebarWidth) ? Math.max(340, Math.min(560, state.sidebarWidth!)) : 420;
 
   const persist = useCallback(async (snapshot: AssistantState) => {
@@ -203,16 +205,24 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
     requestAnimationFrame(() => input.current?.focus());
   }, [pendingFeedback, loaded, busy, update]);
 
+  useEffect(() => {
+    if (!promptRequest || !loaded || busy || controller.current || consumedPrompt.current === promptRequest.id) return;
+    consumedPrompt.current = promptRequest.id;
+    setOpen(true);
+    setIncludeContext(true);
+    void send(promptRequest.text, false, context);
+  }, [promptRequest, loaded, busy, context]);
+
   const patchMessage = (conversationId: string, messageId: string, patch: Partial<AssistantMessage>) => update((current) => ({
     ...current, conversations: current.conversations.map((c) => c.id !== conversationId ? c : { ...c, messages: c.messages.map((m) => m.id === messageId ? { ...m, ...patch } : m) }),
   }), 1000);
 
-  async function send(question: string, retry = false) {
+  async function send(question: string, retry = false, requestedContext?: AssistantContext) {
     if (!question.trim() || controller.current || !loadedRef.current) return;
     const current = stateRef.current.conversations.find((c) => c.id === stateRef.current.activeId)!;
     const previousUserIndex = current.messages.findLastIndex((m) => m.role === "user");
     const history = retry ? current.messages.slice(0, previousUserIndex) : current.messages;
-    const turnContext = retry ? current.messages[previousUserIndex]?.context ?? null : current.feedbackContext ? assistantContextSnapshot(current.feedbackContext) : includeContext ? assistantContextSnapshot(context) : null;
+    const turnContext = requestedContext ? assistantContextSnapshot(requestedContext) : retry ? current.messages[previousUserIndex]?.context ?? null : current.feedbackContext ? assistantContextSnapshot(current.feedbackContext) : includeContext ? assistantContextSnapshot(context) : null;
     const userId = crypto.randomUUID();
     const alreadySavedFeedback = retry && current.messages[previousUserIndex]?.feedbackSaved;
     const answerId = crypto.randomUUID();

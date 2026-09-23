@@ -25,10 +25,11 @@ import {
   guideSourceImage,
   type WorkflowGuide as Guide,
 } from "./guide";
+import { WorkflowRichText } from "./rich-text";
+import { SopDocument } from "./sop-document";
 import { GuideAssistant } from "./guide-assistant";
 import styles from "./workflow-guide.module.css";
 import { useGT } from "gt-react";
-
 
 export function WorkflowGuide({
   workflow,
@@ -40,9 +41,12 @@ export function WorkflowGuide({
   close: () => void;
 }) {
   const ui = useGT();
+  const [promptRequest, setPromptRequest] = useState<{
+    id: string;
+    text: string;
+  }>();
   const [draft, setDraft] = useState<Guide | null>(null);
   const [busy, setBusy] = useState(true);
-  const [progress, setProgress] = useState("Opening your SOP");
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
   const [editing, setEditing] = useState(false);
@@ -53,7 +57,6 @@ export function WorkflowGuide({
   const [webError, setWebError] = useState("");
   const [exportError, setExportError] = useState("");
   const dialog = useRef<HTMLDialogElement>(null);
-  const controller = useRef<AbortController>();
   const latest = useRef<Guide | null>(null);
   const saveVersion = useRef(0);
   const loadVersion = useRef(0);
@@ -65,45 +68,21 @@ export function WorkflowGuide({
       await platform.save(next);
       if (mounted.current && version === saveVersion.current)
         setSaved("Saved on this device");
-    } catch {
+    } catch (cause) {
       if (mounted.current && version === saveVersion.current)
         setSaved("Could not save. Retry before leaving.");
+      throw cause;
     }
   }
   function update(next: Guide) {
     latest.current = next;
     setDraft(next);
-    void persist(next);
-  }
-  async function generate() {
-    controller.current?.abort();
-    const run = new AbortController();
-    controller.current = run;
-    setBusy(true);
-    setError("");
-    setProgress("Reading your workflow");
-    try {
-      const next = await platform.generate(workflow, run.signal, (message) => {
-        if (!run.signal.aborted) setProgress(message);
-      });
-      if (run.signal.aborted) return;
-      update(next);
-    } catch (e) {
-      if (!run.signal.aborted)
-        setError(
-          e instanceof Error
-            ? e.message
-            : ui("Could not create the SOP. Try again."),
-        );
-    } finally {
-      if (!run.signal.aborted) setBusy(false);
-    }
+    void persist(next).catch(() => {});
   }
   async function openGuide() {
     const version = ++loadVersion.current;
     setBusy(true);
     setError("");
-    setProgress("Opening your SOP");
     try {
       const existing = await platform.load(workflow);
       if (version !== loadVersion.current) return;
@@ -112,7 +91,13 @@ export function WorkflowGuide({
         setDraft(existing);
         setSaved("Saved on this device");
         setBusy(false);
-      } else void generate();
+      } else {
+        setBusy(false);
+        setPromptRequest({
+          id: crypto.randomUUID(),
+          text: `Create an SOP for ${workflow.title} from its available evidence. Keep missing details as questions and save the draft for review.`,
+        });
+      }
     } catch {
       if (version === loadVersion.current) {
         setError(
@@ -128,7 +113,6 @@ export function WorkflowGuide({
     return () => {
       loadVersion.current++;
       mounted.current = false;
-      controller.current?.abort();
     };
   }, []);
   function jump(event: MouseEvent<HTMLAnchorElement>) {
@@ -174,7 +158,6 @@ export function WorkflowGuide({
       <header className={styles.toolbar}>
         <button
           onClick={() => {
-            controller.current?.abort();
             close();
           }}
         >
@@ -200,9 +183,11 @@ export function WorkflowGuide({
               </>
             )}
           </span>
-          {saved.startsWith("Could not") && (
+          {draft && saved.startsWith("Could not") && (
             <button
-              onClick={() => latest.current && void persist(latest.current)}
+              onClick={() =>
+                latest.current && void persist(latest.current).catch(() => {})
+              }
             >
               Retry save
             </button>
@@ -251,8 +236,25 @@ export function WorkflowGuide({
           )}
         </div>
       </header>
+      {!busy && !error && (
+        <GuideAssistant
+          guide={draft}
+          workflow={workflow}
+          platform={platform}
+          promptRequest={promptRequest}
+          update={async (next) => {
+            await persist(next);
+            if (!mounted.current) return;
+            latest.current = next;
+            setDraft(next);
+          }}
+        />
+      )}
       {draft && webReview && (
-        <section className={styles.section} aria-label={ui("Open SOP on the web")}>
+        <section
+          className={styles.section}
+          aria-label={ui("Open SOP on the web")}
+        >
           <h2>Open your SOP on the web</h2>
           <p>
             Save the reviewed SOP text to your Screenpipe account to edit and
@@ -285,55 +287,15 @@ export function WorkflowGuide({
         </section>
       )}
       {!draft ? (
-        <div className={styles.empty}>
-          <div className={styles.mark}>
-            {busy ? (
-              <Loader2 className={styles.spin} size={25} />
-            ) : (
-              <BookOpen size={25} />
-            )}
-          </div>
-          <p className={styles.eyebrow}>STANDARD OPERATING PROCEDURE</p>
-          <h1>
+        <SopDocument title={workflow.title} subtitle="Draft for review">
+          <p role="status">
             {busy
-              ? ui("Turning your work into an SOP")
-              : ui("Your SOP needs another try")}
-          </h1>
-          <p>{workflow.title}</p>
-          {busy ? (
-            <>
-              <p role="status">{progress}</p>
-              <div className={styles.phases}>
-                <span>Source material</span>
-                <span>Clear steps</span>
-                <span>Ready to review</span>
-              </div>
-              <button
-                onClick={() => {
-                  loadVersion.current++;
-                  controller.current?.abort();
-                  setBusy(false);
-                  setError(
-                    ui("Generation stopped. You can try again when you’re ready."),
-                  );
-                }}
-              >
-                Stop
-              </button>
-            </>
-          ) : (
-            <>
-              <p role="alert">{error}</p>
-              <button
-                className={styles.primary}
-                onClick={() => void openGuide()}
-              >
-                Try again
-              </button>
-            </>
-          )}
-          <small>Your workflow stays unchanged.</small>
-        </div>
+              ? "Opening SOP…"
+              : "Your SOP will appear here as you work with the assistant."}
+          </p>
+          {error && <p role="alert">{error}</p>}
+          {error && <button onClick={() => void openGuide()}>Try again</button>}
+        </SopDocument>
       ) : (
         <div className={styles.layout}>
           <aside className={styles.outline}>
@@ -359,46 +321,23 @@ export function WorkflowGuide({
               </small>
             </div>
           </aside>
-          <article className={styles.document}>
-            <div className={styles.intro}>
-              <p className={styles.eyebrow}>
-                STANDARD OPERATING PROCEDURE <span>Draft for review</span>
-              </p>
-              {editing ? (
-                <>
-                  <input
-                    aria-label={ui("Guide title")}
-                    value={draft.title}
-                    onChange={(e) =>
-                      update({ ...draft, title: e.target.value })
-                    }
-                  />
-                  <textarea
-                    aria-label={ui("Guide summary")}
-                    value={draft.summary}
-                    onChange={(e) =>
-                      update({ ...draft, summary: e.target.value })
-                    }
-                  />
-                </>
-              ) : (
-                <>
-                  <h1>{draft.title}</h1>
-                  <p>{draft.summary}</p>
-                </>
-              )}
-              <small>
-                {draft.steps.length} steps · Based on workflow revision{" "}
-                {draft.sourceRevision}
-              </small>
-            </div>
-            {platform.edit && (
-              <GuideAssistant
-                guide={draft}
-                workflow={workflow}
-                platform={platform}
-                update={update}
+          <SopDocument
+            title={draft.title}
+            onTitleChange={
+              editing ? (title) => update({ ...draft, title }) : undefined
+            }
+            subtitle={<>{draft.steps.length} steps · Draft for review</>}
+          >
+            {editing ? (
+              <textarea
+                aria-label="Guide summary"
+                value={draft.summary}
+                onChange={(event) =>
+                  update({ ...draft, summary: event.target.value })
+                }
               />
+            ) : (
+              <p>{draft.summary}</p>
             )}
             {stale && (
               <p className={styles.notice}>
@@ -431,7 +370,9 @@ export function WorkflowGuide({
                       <span className={styles.number}>{i + 1}</span>
                       {editing ? (
                         <input
-                          aria-label={ui("Step {value1} title", { value1: i + 1 })}
+                          aria-label={ui("Step {value1} title", {
+                            value1: i + 1,
+                          })}
                           value={step.title}
                           onChange={(e) =>
                             update({
@@ -448,7 +389,9 @@ export function WorkflowGuide({
                       {editing && (
                         <div className={styles.stepTools}>
                           <button
-                            aria-label={ui("Move step {value1} up", { value1: i + 1 })}
+                            aria-label={ui("Move step {value1} up", {
+                              value1: i + 1,
+                            })}
                             disabled={i === 0}
                             onClick={() => {
                               const steps = [...draft.steps];
@@ -462,7 +405,9 @@ export function WorkflowGuide({
                             <ArrowUp size={14} />
                           </button>
                           <button
-                            aria-label={ui("Move step {value1} down", { value1: i + 1 })}
+                            aria-label={ui("Move step {value1} down", {
+                              value1: i + 1,
+                            })}
                             disabled={i === draft.steps.length - 1}
                             onClick={() => {
                               const steps = [...draft.steps];
@@ -476,7 +421,9 @@ export function WorkflowGuide({
                             <ArrowDown size={14} />
                           </button>
                           <button
-                            aria-label={ui("Remove step {value1}", { value1: i + 1 })}
+                            aria-label={ui("Remove step {value1}", {
+                              value1: i + 1,
+                            })}
                             disabled={draft.steps.length === 1}
                             onClick={() =>
                               update({
@@ -490,29 +437,31 @@ export function WorkflowGuide({
                         </div>
                       )}
                     </div>
-                    {editing ? (
-                      <textarea
-                        aria-label={ui("Step {value1} instructions", { value1: i + 1 })}
-                        value={step.instruction}
-                        onChange={(e) =>
-                          update({
-                            ...draft,
-                            steps: draft.steps.map((s, j) =>
-                              j === i
-                                ? { ...s, instruction: e.target.value }
-                                : s,
-                            ),
-                          })
-                        }
-                      />
-                    ) : (
-                      <p>{step.instruction}</p>
-                    )}
+                    <WorkflowRichText
+                      value={step.instruction}
+                      label={ui("Step {value1} instructions", {
+                        value1: i + 1,
+                      })}
+                      fullDocument
+                      onChange={
+                        editing
+                          ? (instruction) =>
+                              update({
+                                ...draft,
+                                steps: draft.steps.map((step, index) =>
+                                  index === i ? { ...step, instruction } : step,
+                                ),
+                              })
+                          : undefined
+                      }
+                    />
                     {image ? (
                       <figure>
                         <img
                           src={image}
-                          alt={ui("Source for {value1}", { value1: step.title })}
+                          alt={ui("Source for {value1}", {
+                            value1: step.title,
+                          })}
                           draggable={false}
                         />
                         {editing && (
@@ -557,7 +506,9 @@ export function WorkflowGuide({
                     ) : (
                       <p className={styles.muted}>
                         {stale
-                          ? ui("Source changed. Regenerate this SOP to review its screenshots.")
+                          ? ui(
+                              "Source changed. Regenerate this SOP to review its screenshots.",
+                            )
                           : ui("No captured screenshot for this step.")}
                       </p>
                     )}
@@ -565,7 +516,9 @@ export function WorkflowGuide({
                       <label className={styles.result}>
                         Expected result
                         <input
-                          aria-label={ui("Step {value1} expected result", { value1: i + 1 })}
+                          aria-label={ui("Step {value1} expected result", {
+                            value1: i + 1,
+                          })}
                           value={step.expectedResult}
                           onChange={(e) =>
                             update({
@@ -624,7 +577,7 @@ export function WorkflowGuide({
               "questions",
               "No open questions in this draft.",
             )}
-          </article>
+          </SopDocument>
         </div>
       )}
       <dialog ref={dialog} className={styles.exportDialog}>

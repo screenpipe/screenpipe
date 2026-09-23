@@ -526,7 +526,7 @@ function AppShell({
         </nav>}
         <main className={styles.main}>{children}</main>
       </section>
-      {assistant && <WorkflowAssistant composerAccessory={composerAccessory} active={active} platform={assistantPlatform!} context={pageAssistant?.context ?? assistant.context} onDockChange={setAssistantDocked} onWidthChange={setAssistantWidth} onOpenChange={setAssistantOpen} onModeChange={setAssistantMode} headerToggle />}
+      {assistant && <WorkflowAssistant composerAccessory={composerAccessory} active={active} platform={assistantPlatform!} context={pageAssistant?.context ?? assistant.context} promptRequest={pageAssistant?.promptRequest} onDockChange={setAssistantDocked} onWidthChange={setAssistantWidth} onOpenChange={setAssistantOpen} onModeChange={setAssistantMode} headerToggle />}
     </div></PageAssistantContext.Provider>
   );
 }
@@ -991,7 +991,7 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
     return next;
   });
   const agentActions = workflowAgentActions?.(workflow);
-  const workflowActions = <div className={styles.workflowActions}>{agentActions}{platform.guides && <button className={styles.skillButton} type="button" onClick={() => setGuideOpen(true)}><BookOpen size={14}/>Create SOP</button>}{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? ui("Creating skill…") : skillSaved ? platform.skillInstallMode === "preview" ? ui("Skill preview") : ui("Skill installed") : skillDraft ? ui("Review skill") : ui("Create skill")}</button>}{onShareWorkflow && <button className={styles.skillButton} type="button" onClick={() => onShareWorkflow(workflow)}><Share2 size={14} />Share with team</button>}{platform.assistant?.saveFeedback && <button className={styles.skillButton} type="button" onClick={() => window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: { key: `feedback:${workflow.id || workflow.title}`, title: workflow.title, workflow, purpose: "feedback" } }))}><MessageCircle size={14} />Feedback</button>}</div>;
+  const workflowActions = <div className={styles.workflowActions}>{agentActions}{platform.guides && <button className={styles.skillButton} type="button" aria-label="Create SOP" title="Create SOP" onClick={() => setGuideOpen(true)}><BookOpen size={16} aria-hidden="true"/></button>}{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? ui("Creating skill…") : skillSaved ? platform.skillInstallMode === "preview" ? ui("Skill preview") : ui("Skill installed") : skillDraft ? ui("Review skill") : ui("Create skill")}</button>}{onShareWorkflow && <button className={styles.skillButton} type="button" onClick={() => onShareWorkflow(workflow)}><Share2 size={14} />Share with team</button>}{platform.assistant?.saveFeedback && <button className={styles.skillButton} type="button" onClick={() => window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: { key: `feedback:${workflow.id || workflow.title}`, title: workflow.title, workflow, purpose: "feedback" } }))}><MessageCircle size={14} />Feedback</button>}</div>;
   return (
     <>
       <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
