@@ -12,6 +12,9 @@ bun scripts/eval-workflow-workspace.ts --ai-mediated --conflict
 bun scripts/eval-workflow-workspace.ts --feedback-only
 bun scripts/eval-workflow-workspace.ts --missing-draft
 bun scripts/eval-workflow-workspace.ts --no-change
+bun scripts/eval-workflow-workspace.ts --publication-failure=503
+bun scripts/eval-workflow-workspace.ts --publication-failure=504
+bun scripts/eval-workflow-workspace.ts --publication-failure=persistent
 bun scripts/eval-workflow-workspace.ts --discover
 bun scripts/eval-workflow-workspace.ts --repair-delegation
 bun scripts/eval-workflow-workspace.ts --research-notes
@@ -26,6 +29,27 @@ These trials use real model calls and consume account usage. Recording data and 
 The withheld outcome checks distinguish directly observed actions from assistant completion claims and menu labels, accept work actually performed inside a chat, preserve source identity, exercise stale-write recovery, and check greetings are not treated as corrections. A successful process exit alone is not a pass. Private trials also check verified confidential transport.
 
 These are sampled agent trials, not exhaustive quality guarantees. The mock persistence server does not substitute for native route/storage tests. A short Private trial passing does not establish reliability for a long real-history scan.
+
+`--publication-failure=503` and `=504` fail the first valid publication and expose
+the durable `publicationRetry` marker through the real workspace extension. The
+agent must preserve the supported draft, reread current revisions and publish
+after recovery, while still rejecting unsupported claims. `=persistent` keeps
+verification unavailable: success means the agent exits with the supported draft
+open, no publication and no completed checkpoint. Reaching the deadline fails
+even if the server guard preserved the draft. These standalone cases mirror the
+retry contract in a mock server; Rust workspace and route tests independently
+verify the actual rejection guard, persistence and checkpoint behavior.
+
+On September 22, five 180-second `screenpipe`/`auto` trials yielded four passes:
+conflict recovery, no change, transient 503 recovery, and persistent outage. In
+the persistent case, Review stopped after two publication attempts with the
+supported draft open and accurately reported the unavailable recorder. The 504
+case failed before fault injection: Review did not query the recorder and handed
+the supported draft back to itself, leaving the cycle incomplete. No model or
+transport error was recorded. Keep that task failure distinct from successful
+outage recovery; this sample does not establish 504 recovery or a causal gain
+over a matched baseline. Original source reads, saved procedures and final
+reports were manually checked; the failed trace was retained privately.
 
 `--reported-actions` reproduces a false accept where the draft admits missing execution evidence in limitations, but still describes connecting systems in its title and procedure. The agent must retain the observed planning and request for a receipt without promoting the assistant's report into external work. Its fixture-specific text checks are conservative and require manual review of the saved payload; they are not a general semantic grader.
 
