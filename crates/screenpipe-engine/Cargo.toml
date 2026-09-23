@@ -145,6 +145,7 @@ dhat = { version = "0.3", optional = true }
 tikv-jemallocator = { version = "0.6", optional = true }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 chrono-tz = "0.10"
 env_logger = { workspace = true }
 serial_test = "3.2.0"
