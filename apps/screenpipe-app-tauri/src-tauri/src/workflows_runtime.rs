@@ -1091,7 +1091,8 @@ async fn request_workflow_analysis(
         evidence::resolve_references(recorder, &value, catalog, activity),
     )
     .await
-    .map_err(|_| "Source verification timed out; your previous map was kept".to_string())??;
+    .map_err(|_| "Source verification timed out; your previous map was kept".to_string())?
+    .map_err(|error| error.to_string())?;
     let metrics =
         json!({"agentRuns": 1, "sourceReads": reads, "elapsedMs": started.elapsed().as_millis()});
     Ok((value, catalog, metrics))
