@@ -20,11 +20,12 @@ export function FeedbackDialog() {
     <Dialog open={open} onOpenChange={(v) => !v && closeFeedback()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="text-sm font-medium">Report an issue</DialogTitle>
+          <DialogTitle className="text-sm font-medium">Send feedback</DialogTitle>
         </DialogHeader>
         <ShareLogsButton
           key={prefillText}
           prefillText={prefillText}
+          autoFocus
           onBackgroundStart={closeFeedback}
         />
       </DialogContent>

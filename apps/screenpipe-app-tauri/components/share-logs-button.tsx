@@ -155,10 +155,12 @@ export const ShareLogsButton = ({
   onComplete,
   onBackgroundStart,
   prefillText,
+  autoFocus = false,
 }: {
   onComplete?: () => void;
   onBackgroundStart?: () => void;
   prefillText?: string;
+  autoFocus?: boolean;
 }) => {
 
   const ui = useGT();
@@ -619,7 +621,7 @@ export const ShareLogsButton = ({
   const attachHint =
     image || video
       ? "one screenshot + one video per report — new files replace"
-      : "or drop / paste files — png, jpg, mov, mp4 · 50 mb max";
+      : null;
 
   // Status line above the send button.
   const sending = phase === "sending";
@@ -709,6 +711,13 @@ export const ShareLogsButton = ({
           value={feedbackText}
           onChange={(e) => setFeedbackText(e.target.value)}
           onPaste={handlePaste}
+          autoFocus={autoFocus}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !sending && !isProcessing && phase !== "sent") {
+              e.preventDefault();
+              void sendLogs();
+            }
+          }}
           className="min-h-[60px] resize-none text-xs bg-secondary/5 placeholder:text-muted-foreground/50 focus:border-secondary/30 focus:ring-0 transition-colors"
         />
 
@@ -804,17 +813,14 @@ export const ShareLogsButton = ({
           </p>
         )}
 
-        <p
-          data-testid="attach-hint"
-          className="text-[10px] text-muted-foreground leading-tight"
-        >
-          {attachHint}
-        </p>
-
-        <p className="text-[10px] text-muted-foreground leading-tight">
-          Logs, settings, and pi chat history are included to help us debug. API
-          keys, secrets, and personal info are automatically removed.
-        </p>
+        {attachHint && (
+          <p
+            data-testid="attach-hint"
+            className="text-[10px] text-muted-foreground leading-tight"
+          >
+            {attachHint}
+          </p>
+        )}
 
         {status && (
           <div
@@ -826,30 +832,39 @@ export const ShareLogsButton = ({
           </div>
         )}
 
-        <Button
-          variant="default"
-          size="sm"
-          onClick={sendLogs}
-          disabled={sending || isProcessing || phase === "sent"}
-          className="gap-1.5 h-8 text-xs w-full bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150 disabled:opacity-100 disabled:bg-secondary/40 disabled:text-muted-foreground"
-        >
-          {sending ? (
-            <>
-              <Loader className="h-3 w-3 animate-spin" />
-              <span>Sending…</span>
-            </>
-          ) : phase === "sent" ? (
-            <>
-              <Check className="h-3 w-3" />
-              <span>Sent</span>
-            </>
-          ) : (
-            <>
-              <Upload className="h-3 w-3" />
-              <span>Send logs & feedback</span>
-            </>
-          )}
-        </Button>
+        {/* Privacy note lives in the tooltip to keep the form to one glance. */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={sendLogs}
+              disabled={sending || isProcessing || phase === "sent"}
+              className="gap-1.5 h-8 text-xs w-full bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150 disabled:opacity-100 disabled:bg-secondary/40 disabled:text-muted-foreground"
+            >
+              {sending ? (
+                <>
+                  <Loader className="h-3 w-3 animate-spin" />
+                  <span>Sending…</span>
+                </>
+              ) : phase === "sent" ? (
+                <>
+                  <Check className="h-3 w-3" />
+                  <span>Sent</span>
+                </>
+              ) : (
+                <>
+                  <Upload className="h-3 w-3" />
+                  <span>Send logs & feedback</span>
+                </>
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-xs text-xs">
+            Logs, settings, and pi chat history are included to help us debug.
+            API keys, secrets, and personal info are automatically removed.
+          </TooltipContent>
+        </Tooltip>
 
         {isDragActive && (
           <div
