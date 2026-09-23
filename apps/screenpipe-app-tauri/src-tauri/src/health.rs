@@ -1311,6 +1311,61 @@ fn parse_devices_from_health(health_result: &Result<HealthCheckResponse>) -> Vec
     devices
 }
 
+/// Inventory identities used when the capture manager is absent (for example,
+/// during global pause). Labels are presentation, never monitor selectors.
+#[derive(Debug, Deserialize)]
+struct TrayMonitorInventory {
+    id: u32,
+    stable_id: String,
+    width: u32,
+    height: u32,
+    is_default: bool,
+}
+
+fn paused_monitor_devices(
+    inventory: &[TrayMonitorInventory],
+    monitor_ids: &[String],
+    use_all_monitors: bool,
+) -> Vec<DeviceInfo> {
+    let selected = |monitor: &&TrayMonitorInventory| {
+        if use_all_monitors || monitor_ids.is_empty() {
+            return true;
+        }
+        if monitor_ids == ["default"] {
+            return monitor.is_default;
+        }
+        // Match the engine's stable-id handling, including a moved display.
+        fn prefix(id: &str) -> &str {
+            id.rsplitn(2, '_').last().unwrap_or(id)
+        }
+        monitor_ids.iter().any(|id| {
+            *id == monitor.stable_id
+                || *id == monitor.id.to_string()
+                || prefix(id) == prefix(&monitor.stable_id)
+        })
+    };
+    let mut monitors: Vec<_> = inventory.iter().filter(selected).collect();
+    // The engine falls back to connected monitors when a stale allowlist no
+    // longer matches any display. Preserve that identity while it is paused.
+    if monitors.is_empty() {
+        monitors.extend(inventory.iter());
+    }
+    monitors
+        .into_iter()
+        .map(|monitor| DeviceInfo {
+            name: format!(
+                "Display {} ({}x{})",
+                monitor.id, monitor.width, monitor.height
+            ),
+            kind: DeviceKind::Monitor,
+            active: false,
+            last_seen_secs_ago: 0,
+            // No per-display toggle is available without a capture manager.
+            monitor_id: None,
+        })
+        .collect()
+}
+
 /// How many consecutive failed checks before showing a notification.
 /// At 1-second polling, 90 = 90 seconds of sustained failure.
 pub(crate) const CAPTURE_STALL_THRESHOLD: u32 = 90;
@@ -1572,6 +1627,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 }
             }
 
+            let mut has_vision_devices = false;
             // Per-monitor vision status — replaces health-derived monitor rows when
             // available so the tray can toggle individual displays.
             match api
@@ -1584,6 +1640,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                         if devs.is_empty() {
                             set_vision_device_status(Vec::new());
                         } else {
+                            has_vision_devices = true;
                             devices.retain(|d| d.kind != DeviceKind::Monitor);
                             let mut vision_entries = Vec::new();
                             for d in &devs {
@@ -1610,33 +1667,33 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 }
             }
 
-            // Filter monitors to only show those selected in recording settings.
-            if let Ok(Some(store)) = crate::store::SettingsStore::get(&app) {
-                if !store.recording.use_all_monitors
-                    && !store.recording.monitor_ids.is_empty()
-                    && store.recording.monitor_ids != vec!["default".to_string()]
-                {
-                    devices.retain(|d| {
-                        if d.kind != DeviceKind::Monitor {
-                            return true;
+            // /vision/device/status is already filtered by the engine, including
+            // stable IDs and its stale-selection fallback. Filtering its display
+            // labels again hides valid Windows selections (\\.\DISPLAYn != Display n).
+            // During global pause the manager returns no rows; /health still lists
+            // every physical display. Resolve the saved selection against inventory
+            // and show read-only, inactive rows instead of implying extra recording.
+            if !has_vision_devices {
+                devices.retain(|d| d.kind != DeviceKind::Monitor);
+                if let Ok(Some(store)) = crate::store::SettingsStore::get(&app) {
+                    if !store.recording.disable_vision {
+                        if let Ok(res) = api
+                            .apply_auth(client.get(api.url("/vision/list")))
+                            .timeout(Duration::from_secs(2))
+                            .send()
+                            .await
+                        {
+                            if res.status().is_success() {
+                                if let Ok(inventory) = res.json::<Vec<TrayMonitorInventory>>().await {
+                                    devices.extend(paused_monitor_devices(
+                                        &inventory,
+                                        &store.recording.monitor_ids,
+                                        store.recording.use_all_monitors,
+                                    ));
+                                }
+                            }
                         }
-                        store.recording.monitor_ids.iter().any(|allowed| {
-                            // Stable ID format: "Display 3_1920x1080_0,0"
-                            // Extract name prefix before last '_' (position coords)
-                            let allowed_name = allowed.rsplitn(2, '_').last().unwrap_or(allowed);
-                            // Health monitor format: "Display 3 (1920x1080)"
-                            // Extract just the display name
-                            let health_name = d.name.split(" (").next().unwrap_or(&d.name);
-                            let allowed_short =
-                                allowed_name.split('_').next().unwrap_or(allowed_name);
-                            // Also match numeric monitor IDs from CLI -m flag
-                            // e.g. allowed="3" should match health_name="Display 3"
-                            let numeric_match = health_name
-                                .strip_prefix("Display ")
-                                .map_or(false, |id| id == *allowed);
-                            health_name == allowed_short || numeric_match
-                        })
-                    });
+                    }
                 }
             }
 
@@ -2145,6 +2202,77 @@ async fn check_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tray_monitor_inventory() -> Vec<TrayMonitorInventory> {
+        vec![
+            TrayMonitorInventory {
+                id: 42,
+                stable_id: r"\\.\DISPLAY1_1280x720_0,0".into(),
+                width: 1280,
+                height: 720,
+                is_default: true,
+            },
+            TrayMonitorInventory {
+                id: 73,
+                stable_id: r"\\.\DISPLAY2_1280x720_1280,0".into(),
+                width: 1280,
+                height: 720,
+                is_default: false,
+            },
+            TrayMonitorInventory {
+                id: 81,
+                stable_id: r"\\.\DISPLAY3_1024x768_2560,0".into(),
+                width: 1024,
+                height: 768,
+                is_default: false,
+            },
+        ]
+    }
+
+    #[test]
+    fn paused_tray_resolves_default_and_numeric_monitor_selection() {
+        let mut inventory = tray_monitor_inventory();
+        inventory.swap(0, 2); // The primary display need not be first in enumeration.
+        for (ids, expected) in [(vec!["default".into()], 42), (vec!["73".into()], 73)] {
+            let rows = paused_monitor_devices(&inventory, &ids, false);
+            assert_eq!(rows.len(), 1);
+            assert!(rows[0].name.starts_with(&format!("Display {expected} (")));
+            assert!(!rows[0].active);
+            assert_eq!(
+                rows[0].monitor_id, None,
+                "paused rows must not call device toggles"
+            );
+        }
+    }
+
+    #[test]
+    fn paused_tray_keeps_windows_stable_ids_and_moved_displays() {
+        let inventory = tray_monitor_inventory();
+        let ids = vec![
+            inventory[0].stable_id.clone(),
+            r"\\.\DISPLAY2_1280x720_-1280,0".into(),
+        ];
+        let rows = paused_monitor_devices(&inventory, &ids, false);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].name, "Display 42 (1280x720)");
+        assert_eq!(rows[1].name, "Display 73 (1280x720)");
+        assert!(rows
+            .iter()
+            .all(|row| !row.active && row.monitor_id.is_none()));
+    }
+
+    #[test]
+    fn paused_tray_matches_all_monitors_and_stale_selection_fallback() {
+        let inventory = tray_monitor_inventory();
+        for (ids, all) in [
+            (vec!["default".into()], true),
+            (vec![], false),
+            (vec!["9999".into()], false),
+        ] {
+            assert_eq!(paused_monitor_devices(&inventory, &ids, all).len(), 3);
+        }
+        assert!(paused_monitor_devices(&[], &["default".into()], false).is_empty());
+    }
 
     #[test]
     fn ocr_unavailable_alert_emits_on_entry_and_reentry_only() {
