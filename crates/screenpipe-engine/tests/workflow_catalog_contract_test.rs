@@ -257,6 +257,7 @@ async fn check_workflow_catalog(migrate_to_parquet: bool) {
         StatusCode::NOT_FOUND
     );
     policy.set_last_24_hours(false);
+    let valid_catalog = tokio::fs::read(&catalog_path).await.unwrap();
     tokio::fs::write(&catalog_path, b"broken").await.unwrap();
     assert_eq!(
         request(&router, "/workflows", Some("workflow-test-key"))
@@ -264,4 +265,60 @@ async fn check_workflow_catalog(migrate_to_parquet: bool) {
             .0,
         StatusCode::SERVICE_UNAVAILABLE
     );
+    tokio::fs::write(&catalog_path, valid_catalog)
+        .await
+        .unwrap();
+    publication_outage_preserves_a_retryable_draft(&router, &catalog_path).await;
+}
+
+async fn publication_outage_preserves_a_retryable_draft(
+    router: &axum::Router,
+    path: &std::path::Path,
+) {
+    use screenpipe_core::workflows::workspace;
+    let mut catalog: Value = serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
+    let mut ws = workspace::empty();
+    workspace::start(&mut ws, &catalog);
+    let payload = json!({"title":"Prepare project status report","description":"Review captured work","stages":[]});
+    let proposal = workspace::Change {
+        action: "propose".into(),
+        expected_revision: workspace::revision(&ws),
+        draft_id: None,
+        assignee: Some("workflow-review".into()),
+        payload: Some(payload.clone()),
+        note: "Review this report procedure".into(),
+    };
+    let id = workspace::apply(&mut ws, "workflow-discover", &proposal).unwrap()["draft_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    catalog["agentWorkspace"] = ws.clone();
+    tokio::fs::write(path, serde_json::to_vec(&catalog).unwrap())
+        .await
+        .unwrap();
+    let post = |body: Value| {
+        router.clone().oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/workflows/workspace")
+                .header("Authorization", "Bearer workflow-test-key")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+    };
+    let response = post(json!({"task":"workflow-review","action":"publish","expected_revision":workspace::revision(&ws),"catalog_revision":catalog["revision"].as_u64().unwrap_or(0),"draft_id":id,"note":"Sources look ready"})).await.unwrap();
+    // This fixture has no PipeManager: publication really fails with 503.
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let after: Value = serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
+    let saved = workspace::state(&after);
+    assert_eq!(saved["drafts"][&id]["status"], "open");
+    assert_eq!(saved["drafts"][&id]["payload"], payload);
+    assert_eq!(saved["drafts"][&id]["publicationRetry"]["retryable"], true);
+    assert_eq!(after["checkedThrough"], catalog["checkedThrough"]);
+    assert_eq!(after["analysis"], catalog["analysis"]);
+    let rejected = post(json!({"task":"workflow-review","action":"reject","expected_revision":workspace::revision(&saved),"draft_id":id,"note":"Save failed so reject it"})).await.unwrap();
+    assert_eq!(rejected.status(), StatusCode::CONFLICT);
+    let unchanged: Value = serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
+    assert_eq!(unchanged, after);
 }

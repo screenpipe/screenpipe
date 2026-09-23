@@ -94,7 +94,7 @@ pub(crate) async fn update(
         }
         let catalog = read_catalog(&source).await?;
         let ws = workspace::state(&catalog);
-        let rev = body["expected_revision"].as_u64().ok_or_else(|| {
+        let mut rev = body["expected_revision"].as_u64().ok_or_else(|| {
             error(
                 StatusCode::BAD_REQUEST,
                 "Read the current workspace revision.",
@@ -124,18 +124,54 @@ pub(crate) async fn update(
         let through = ws["cycle"]["end"]
             .as_str()
             .ok_or_else(|| error(StatusCode::CONFLICT, "Start an update first."))?;
-        return super::workflow_catalog::commit(
-            State(state),
-            Extension(source),
+        let catalog_revision = body["catalog_revision"].as_u64().ok_or_else(|| {
+            error(
+                StatusCode::BAD_REQUEST,
+                "Read the current catalog revision.",
+            )
+        })?;
+        let draft_version = id.and_then(|id| ws["drafts"][id]["version"].as_u64());
+        if let (Some(id), Some(version)) = (id, draft_version) {
+            let _guard = super::workflow_catalog::WRITER.lock().await;
+            let previous = read_catalog(&source).await?;
+            let mut current = workspace::state(&previous);
+            workspace::check_publish(&current, rev, Some(id))
+                .map_err(|e| error(StatusCode::CONFLICT, &e))?;
+            if previous["revision"].as_u64().unwrap_or(0) != catalog_revision {
+                return Err(error(
+                    StatusCode::CONFLICT,
+                    "Catalog changed. Read context again.",
+                ));
+            }
+            if headers
+                .get("authorization")
+                .and_then(|h| h.to_str().ok())
+                .and_then(|h| h.strip_prefix("Bearer "))
+                .is_some_and(|token| {
+                    token.starts_with("sp_pipe_") && !state.pipe_permissions.contains_key(token)
+                })
+            {
+                return Err(error(
+                    StatusCode::CONFLICT,
+                    "Task stopped before publication.",
+                ));
+            }
+            // Persist before verification: a client disconnect, task cancellation,
+            // or outer request timeout may never reach the error handler below.
+            if workspace::set_publication_retry(&mut current, version, id, true) {
+                rev = workspace::revision(&current);
+                let mut next = previous.clone();
+                next["agentWorkspace"] = current;
+                super::workflow_catalog::persist(&source, &previous, &next).await?;
+            }
+        }
+        let result = super::workflow_catalog::commit(
+            State(state.clone()),
+            Extension(source.clone()),
             perms,
-            headers,
+            headers.clone(),
             Json(super::workflow_catalog::CommitRequest {
-                expected_revision: body["catalog_revision"].as_u64().ok_or_else(|| {
-                    error(
-                        StatusCode::BAD_REQUEST,
-                        "Read the current catalog revision.",
-                    )
-                })?,
+                expected_revision: catalog_revision,
                 checked_through: through.into(),
                 workflows,
                 pipeline_revision: None,
@@ -144,6 +180,34 @@ pub(crate) async fn update(
             }),
         )
         .await;
+        if let (Some(id), Some(version), Err((status, _))) = (id, draft_version, &result) {
+            if status.is_server_error() || *status == StatusCode::UNPROCESSABLE_ENTITY {
+                let _guard = super::workflow_catalog::WRITER.lock().await;
+                // A late failure must not overwrite another edit or undo Stop.
+                let stopped = headers
+                    .get("authorization")
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(|h| h.strip_prefix("Bearer "))
+                    .is_some_and(|token| {
+                        token.starts_with("sp_pipe_") && !state.pipe_permissions.contains_key(token)
+                    });
+                let previous = read_catalog(&source).await?;
+                let mut ws = workspace::state(&previous);
+                if !stopped
+                    && workspace::set_publication_retry(
+                        &mut ws,
+                        version,
+                        id,
+                        status.is_server_error(),
+                    )
+                {
+                    let mut next = previous.clone();
+                    next["agentWorkspace"] = ws;
+                    super::workflow_catalog::persist(&source, &previous, &next).await?;
+                }
+            }
+        }
+        return result;
     }
     let _guard = super::workflow_catalog::WRITER.lock().await;
     if headers

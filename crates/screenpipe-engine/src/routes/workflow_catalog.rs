@@ -401,7 +401,16 @@ pub(crate) async fn commit(
             "Source verification timed out.",
         )
     })?
-    .map_err(|e| error(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
+    .map_err(|e| {
+        error(
+            if e.retryable() {
+                StatusCode::SERVICE_UNAVAILABLE
+            } else {
+                StatusCode::UNPROCESSABLE_ENTITY
+            },
+            &e.to_string(),
+        )
+    })?;
     let mut normalized = normalize_updates(raw.clone(), &evidence)
         .map_err(|e| error(StatusCode::UNPROCESSABLE_ENTITY, &e))?;
     if body.workspace_revision.is_some() {

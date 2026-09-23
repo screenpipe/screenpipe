@@ -213,3 +213,12 @@ test("new-cycle context exposes prior investigation without treating it as workf
   expect(result.cycle.id).toBe("next");
   expect(result.workflows[0].evidence).toBeUndefined();
 });
+
+test("retryable publication state is visible in the draft index and full record", async () => {
+  const {draft} = contextFixture();
+  (draft as any).publicationRetry = {retryable:true};
+  const index = JSON.parse((await tool.execute("id", {action:"context"}, new AbortController().signal)).content[0].text);
+  expect(index.drafts[0].publicationRetry).toEqual({retryable:true});
+  const selected = JSON.parse((await tool.execute("id", {action:"context",draft_id:"draft-a"}, new AbortController().signal)).content[0].text);
+  expect(selected.draft.publicationRetry).toEqual({retryable:true});
+});

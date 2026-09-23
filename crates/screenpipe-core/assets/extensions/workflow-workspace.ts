@@ -97,7 +97,7 @@ export default function (pi: ExtensionAPI) {
             result = {task,ready:state.ready,canFinish:state.canFinish,revision:ws.revision,catalogRevision:state.catalogRevision,
               historyStart:catalog.historyStart,
               cycle:ws.cycle && {id:ws.cycle.id,status:ws.cycle.status,start:ws.cycle.start,end:ws.cycle.end,finished:ws.cycle.finished,changes:ws.cycle.changes},
-              drafts:Object.values(ws.drafts || {}).map((d:any)=>({id:d.id,status:d.status,assignee:d.assignee,version:d.version,title:d.payload?.title || d.payload?.name,question:d.history?.at(-1)?.note})),
+              drafts:Object.values(ws.drafts || {}).map((d:any)=>({id:d.id,status:d.status,assignee:d.assignee,version:d.version,publicationRetry:d.publicationRetry,title:d.payload?.title || d.payload?.name,question:d.history?.at(-1)?.note})),
               workflows:catalog.workflows.map(workflowIndex),
               researchNotes:ws.researchNotes || {},
               profile:catalog.profile,
@@ -114,7 +114,7 @@ export default function (pi: ExtensionAPI) {
               revision:state.workspace.revision, catalogRevision:state.catalogRevision,
               cycleStatus:state.workspace.cycle?.status, canFinish:state.canFinish,
               openDrafts:Object.values(state.workspace.drafts || {}).filter((d:any)=>d.status === "open")
-                .map((d:any)=>({id:d.id,assignee:d.assignee,title:d.payload?.title})),
+                .map((d:any)=>({id:d.id,assignee:d.assignee,title:d.payload?.title,publicationRetry:d.publicationRetry})),
             }};
           } catch {
             result = {...result, remaining: {unavailable:true, next:"The save succeeded. Read context before deciding what remains; do not repeat the save blindly."}};

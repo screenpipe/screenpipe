@@ -122,12 +122,41 @@ fn source_points(payload: &Value, at: DateTime<Utc>, app: &str) -> Vec<EvidenceP
         .collect()
 }
 
+#[derive(Debug)]
+pub enum VerificationError {
+    Unavailable(&'static str),
+    Invalid(String),
+}
+impl VerificationError {
+    pub fn retryable(&self) -> bool {
+        matches!(self, Self::Unavailable(_))
+    }
+}
+impl std::fmt::Display for VerificationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable(message) => f.write_str(message),
+            Self::Invalid(message) => f.write_str(message),
+        }
+    }
+}
+impl From<String> for VerificationError {
+    fn from(message: String) -> Self {
+        Self::Invalid(message)
+    }
+}
+impl From<&str> for VerificationError {
+    fn from(message: &str) -> Self {
+        Self::Invalid(message.into())
+    }
+}
+
 pub async fn resolve_references(
     endpoint: &RecorderEndpoint,
     value: &Value,
     mut catalog: EvidenceCatalog,
     activity: &[Value],
-) -> Result<(EvidenceCatalog, usize), String> {
+) -> Result<(EvidenceCatalog, usize), VerificationError> {
     let bounds = |key: &str| {
         activity
             .iter()
@@ -167,15 +196,34 @@ pub async fn resolve_references(
                     apply_auth(endpoint, client.get(url).timeout(Duration::from_secs(20)))
                         .send()
                         .await
-                        .map_err(|_| "Source verification could not reach the recorder")?
-                        .error_for_status()
-                        .map_err(|_| "Source verification failed; your previous map was kept")?;
-                let payload = response
-                    .json::<Value>()
-                    .await
-                    .map_err(|_| "Invalid recorder source response")?;
+                        .map_err(|_| {
+                            VerificationError::Unavailable(
+                                "Recorder source verification temporarily unavailable",
+                            )
+                        })?;
+                let status = response.status();
+                if status.is_server_error()
+                    || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    || status == reqwest::StatusCode::REQUEST_TIMEOUT
+                {
+                    return Err(VerificationError::Unavailable(
+                        "Recorder temporarily unavailable; retry publication later",
+                    ));
+                }
+                let response = response.error_for_status().map_err(|_| {
+                    VerificationError::Invalid(
+                        "Source verification was denied by the recorder".into(),
+                    )
+                })?;
+                let payload = response.json::<Value>().await.map_err(|_| {
+                    VerificationError::Unavailable(
+                        "Invalid recorder source response; retry publication later",
+                    )
+                })?;
                 if !payload.get("data").is_some_and(Value::is_array) {
-                    return Err("Incomplete recorder source response".to_string());
+                    return Err(VerificationError::Unavailable(
+                        "Incomplete recorder source response; retry publication later",
+                    ));
                 }
                 if payload
                     .pointer("/pagination/total")
@@ -185,7 +233,8 @@ pub async fn resolve_references(
                 {
                     return Err(
                         "Source verification response was incomplete; your previous map was kept"
-                            .to_string(),
+                            .to_string()
+                            .into(),
                     );
                 }
                 let frames: Vec<i64> = payload["data"]
@@ -209,7 +258,7 @@ pub async fn resolve_references(
             }
         })
         .buffered(HISTORY_QUERY_CONCURRENCY)
-        .collect::<Vec<Result<_, String>>>()
+        .collect::<Vec<Result<_, VerificationError>>>()
         .await;
     // New source reads replace sampled text at the same identity. Missing or
     // revoked sources cannot survive merely because they were in the index.
@@ -288,6 +337,43 @@ mod tests {
         assert!(resolve_references(&endpoint, &value, catalog, &activity)
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn unavailable_recorder_is_retryable_but_access_denial_is_not() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (status, retryable) in [
+            (503, true),
+            (504, true),
+            (429, true),
+            (408, true),
+            (403, false),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                socket.read(&mut request).await.unwrap();
+                socket.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            });
+            let endpoint = RecorderEndpoint {
+                source: "screenpipe",
+                base_url: format!("http://{address}"),
+                api_key: Some("fixture-key".into()),
+                health: json!({}),
+            };
+            let value = json!({"workflows":[{"evidence":[{"timestamp":"2026-08-01T10:00:00Z","app":"Editor"}]}]});
+            let activity =
+                vec![json!({"start":"2026-08-01T00:00:00Z","end":"2026-08-02T00:00:00Z"})];
+            let error =
+                resolve_references(&endpoint, &value, EvidenceCatalog::default(), &activity)
+                    .await
+                    .err()
+                    .unwrap();
+            assert_eq!(error.retryable(), retryable, "status {status}");
+            server.await.unwrap();
+        }
     }
 
     #[test]

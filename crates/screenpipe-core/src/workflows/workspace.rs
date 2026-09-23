@@ -198,7 +198,11 @@ pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, Strin
             if history.len() > 30 {
                 history.remove(0);
             }
+            let publication_failure = old.get("publicationRetry").cloned();
             ws["drafts"][&key] = json!({"id":key,"status":"open","version":rev,"assignee":assignee,"payload":payload,"history":history});
+            if let Some(failure) = publication_failure {
+                ws["drafts"][&key]["publicationRetry"] = failure;
+            }
         }
         "reject" => {
             let key = id.as_deref().ok_or("draft_id is required.")?;
@@ -210,6 +214,9 @@ pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, Strin
                 || ws["drafts"][key]["status"] != "open"
             {
                 return Err("Review must own this open draft to reject it.".into());
+            }
+            if ws["drafts"][key]["publicationRetry"]["retryable"] == true {
+                return Err("Publication is waiting for source verification. Keep this draft open and retry publication when the recorder recovers, or hand it off for investigation. A temporary save failure is not evidence against the workflow. Read current context before retrying.".into());
             }
             ws["drafts"][key]["status"] = json!("rejected");
             ws["drafts"][key]["decision"] = json!(change.note);
@@ -281,12 +288,48 @@ pub fn publication_payload(
     Ok(payload.clone())
 }
 
+/// Preserve in-flight publication and infrastructure failures without advancing the
+/// checkpoint or rejecting work. Only a definitive validation result clears the guard.
+/// Stale results and stopped cycles must never overwrite newer decisions.
+pub fn set_publication_retry(
+    ws: &mut Value,
+    expected_version: u64,
+    id: &str,
+    retryable: bool,
+) -> bool {
+    if ws["drafts"][id]["version"].as_u64() != Some(expected_version)
+        || ws["cycle"]["status"] != "running"
+        || ws["drafts"][id]["status"] != "open"
+        || ws["drafts"][id]["assignee"] != TASKS[2]
+    {
+        return false;
+    }
+    let draft = ws["drafts"][id].as_object_mut().unwrap();
+    if retryable {
+        if draft
+            .get("publicationRetry")
+            .is_some_and(|f| f["retryable"] == true)
+        {
+            return false;
+        }
+        draft.insert("publicationRetry".into(), json!({"retryable":true}));
+    } else if draft.remove("publicationRetry").is_none() {
+        return false;
+    }
+    ws["revision"] = json!(revision(ws) + 1);
+    true
+}
+
 pub fn published(ws: &mut Value, id: Option<&str>, payload: Option<&Value>, receipt: &Value) {
     if let Some(id) = id {
         if let Some(payload) = payload {
             ws["drafts"][id]["payload"] = payload.clone();
         }
         ws["drafts"][id]["status"] = json!("published");
+        ws["drafts"][id]
+            .as_object_mut()
+            .unwrap()
+            .remove("publicationRetry");
         ws["drafts"][id]["receipt"] = receipt.clone();
         for key in ["created", "updated"] {
             ws["cycle"]["changes"][key] = json!(
@@ -483,6 +526,88 @@ mod tests {
         assert_eq!(restored["cycle"], before["cycle"]);
         assert!(ready(&restored, TASKS[2]));
         assert!(revision(&restored) > revision(&before));
+    }
+
+    #[test]
+    fn temporary_publication_failure_cannot_be_rejected_or_finish_the_cycle() {
+        let mut ws = empty();
+        start(&mut ws, &json!({}));
+        let proposal = change("propose", &ws, None, Some(TASKS[2]));
+        let id = apply(&mut ws, TASKS[0], &proposal).unwrap()["draft_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        // Replay the next model action after a failed source-verification save.
+        ws["drafts"][&id]["publicationRetry"] = json!({"retryable":true});
+        ws["cycle"]["finished"][TASKS[0]] = json!(true);
+        ws["cycle"]["finished"][TASKS[3]] = json!(true);
+        let before = ws.clone();
+        let mut rejection = change("reject", &ws, Some(id.clone()), None);
+        rejection.note = "Publishing timed out, so reject this candidate".into();
+        assert!(apply(&mut ws, TASKS[2], &rejection).is_err());
+        assert_eq!(ws, before);
+        assert!(!can_finish(&ws));
+        assert!(check_publish(&ws, revision(&ws), Some(&id)).is_ok());
+    }
+
+    #[test]
+    fn retry_guard_survives_restart_handoff_and_stop_then_clears_after_validation() {
+        let mut ws = empty();
+        start(&mut ws, &json!({}));
+        let proposal = change("propose", &ws, None, Some(TASKS[2]));
+        let id = apply(&mut ws, TASKS[0], &proposal).unwrap()["draft_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let version = ws["drafts"][&id]["version"].as_u64().unwrap();
+        // Unrelated agent progress must not hide this draft's failure.
+        ws["revision"] = json!(revision(&ws) + 1);
+        assert!(set_publication_retry(&mut ws, version, &id, true));
+        let mut ws: Value = serde_json::from_slice(&serde_json::to_vec(&ws).unwrap()).unwrap();
+        let handoff = change("handoff", &ws, Some(id.clone()), Some(TASKS[1]));
+        apply(&mut ws, TASKS[2], &handoff).unwrap();
+        let handoff = change("handoff", &ws, Some(id.clone()), Some(TASKS[2]));
+        apply(&mut ws, TASKS[1], &handoff).unwrap();
+        assert_eq!(ws["drafts"][&id]["publicationRetry"]["retryable"], true);
+        let version = ws["drafts"][&id]["version"].as_u64().unwrap();
+        pause(&mut ws);
+        let paused = ws.clone();
+        assert!(!set_publication_retry(&mut ws, version, &id, false));
+        assert_eq!(ws, paused);
+        start(&mut ws, &json!({}));
+        let before = ws.clone();
+        assert!(!set_publication_retry(&mut ws, version - 1, &id, false));
+        assert_eq!(ws, before);
+        // A definitive invalid-evidence result permits an honest rejection.
+        assert!(set_publication_retry(&mut ws, version, &id, false));
+        let rejection = change("reject", &ws, Some(id.clone()), None);
+        apply(&mut ws, TASKS[2], &rejection).unwrap();
+        assert_eq!(ws["drafts"][&id]["status"], "rejected");
+    }
+
+    #[test]
+    fn successful_publication_clears_retry_guard_without_losing_the_draft() {
+        let mut ws = empty();
+        start(&mut ws, &json!({}));
+        let proposal = change("propose", &ws, None, Some(TASKS[2]));
+        let id = apply(&mut ws, TASKS[0], &proposal).unwrap()["draft_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let version = ws["drafts"][&id]["version"].as_u64().unwrap();
+        assert!(set_publication_retry(&mut ws, version, &id, true));
+        assert!(check_publish(&ws, revision(&ws), Some(&id)).is_ok());
+        let payload = ws["drafts"][&id]["payload"].clone();
+        published(
+            &mut ws,
+            Some(&id),
+            Some(&payload),
+            &json!({"changes":{"created":1}}),
+        );
+        assert_eq!(ws["drafts"][&id]["status"], "published");
+        assert!(ws["drafts"][&id]["publicationRetry"].is_null());
+        assert!(!set_publication_retry(&mut ws, version, &id, true));
+        assert_eq!(ws["drafts"][&id]["payload"], payload);
     }
 
     #[test]
