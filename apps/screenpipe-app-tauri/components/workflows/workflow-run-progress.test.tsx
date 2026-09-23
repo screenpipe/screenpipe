@@ -19,6 +19,11 @@ it("reveals real tool progress on demand, stops, and retains a calm completion r
   fireEvent.click(screen.getByRole("button", { name: "Stop" }));
   expect(stop).toHaveBeenCalledOnce();
   act(() => publish([{ id: "t", label: "Searched captured activity", status: "complete" }]));
+  expect(screen.getByRole("status")).toHaveTextContent("Updating workflows");
+  expect(screen.getByRole("region", { name: "Agent activity" })).toHaveTextContent("Searched captured activity");
+  act(() => publish([{ id: "t", label: "An update action failed", status: "error" }]));
+  expect(screen.getByRole("status")).toHaveTextContent("Updating workflows");
+  expect(screen.getByRole("region", { name: "Agent activity" })).toHaveTextContent("An update action failed");
   view.rerender(<WorkflowRunProgress {...props} active={false} job={{ id: "1", status: "complete" }} changes={{ created: 1, updated: 2 }} />);
   expect(off).toHaveBeenCalledOnce();
   expect(screen.getByRole("status")).toHaveTextContent("1 new · 2 updated");
@@ -31,7 +36,7 @@ it("cleans up late subscriptions and ignores stale events after switching runs",
   const off = vi.fn();
   const subscribe = vi.fn((_id, callback) => { publish = callback; return new Promise<() => void>(r => { resolve = r; }); });
   const view = render(<WorkflowRunProgress active job={{ id: "old", status: "queued" }} subscribe={subscribe} analyze={vi.fn()} />);
-  expect(screen.getByRole("status")).toHaveTextContent("Waiting for agent");
+  expect(screen.getByRole("status")).toHaveTextContent("Waiting to start");
   view.unmount();
   await act(async () => { resolve(off); });
   expect(off).toHaveBeenCalledOnce();

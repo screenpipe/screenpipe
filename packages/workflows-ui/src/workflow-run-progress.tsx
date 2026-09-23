@@ -48,13 +48,13 @@ export function WorkflowRunProgress({ job, active, subscribe, stop, analyze, upd
     return () => { disposed = true; off?.(); };
   }, [active, job?.id, subscribe]);
   const items = activity.jobId === job?.id ? activity.items : [];
-  const current = [...items].reverse().find(item => item.status === "running") ?? items.at(-1);
+  const current = [...items].reverse().find(item => item.status === "running");
   const seconds = job?.startedAt ? Math.max(0, Math.floor((now - Date.parse(job.startedAt)) / 1000)) : NaN;
   changes = job?.result?.changes ?? changes;
   checkedThrough = job?.result?.checkedThrough ?? checkedThrough;
   const reviewed = checkedThrough && Number.isFinite(Date.parse(checkedThrough)) ? new Date(checkedThrough).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : undefined;
   const result = changes ? changes.created === 0 && changes.updated === 0 ? "No changes found" : `${changes.created} new · ${changes.updated} updated` : "Workflows updated";
-  const label = active ? current?.label ?? (job?.message || (job?.status === "queued" ? "Waiting for agent" : "Agent working"))
+  const label = active ? current?.label ?? (job?.status === "queued" ? "Waiting to start" : "Updating workflows")
     : job?.status === "incomplete" ? "Update incomplete" : job?.status === "failed" ? "Update failed" : job?.status === "complete" ? result
     : updatedAt ? result : "";
   const receipt = quiet && !active && reviewed && job?.status !== "failed" && job?.status !== "incomplete"
@@ -74,7 +74,7 @@ export function WorkflowRunProgress({ job, active, subscribe, stop, analyze, upd
         {items.length ? <ol>{items.map(item => <li key={item.id}>
           {item.status === "error" ? <AlertCircle size={13} /> : item.status === "complete" ? <Check size={13} /> : active ? <Loader2 size={13} className={styles.runSpinner} /> : <Circle size={13} />}
           <span>{item.label}{!active && item.status === "running" ? ui(" · ended") : ""}</span>
-        </li>)}</ol> : active ? <p>{unavailable ? ui("Live activity is unavailable. The task status will keep updating.") : ui("Waiting for the next agent action…")}</p> : null}
+        </li>)}</ol> : active ? <p>{unavailable ? ui("Live activity is unavailable. The task status will keep updating.") : ui("The update is continuing. New activity will appear here.")}</p> : null}
         <footer>{active ? ui("Your saved workflows stay available.") : (job?.status === "failed" || job?.status === "incomplete") ? job.message : result}</footer>
       </section>}
     </div> : <span role="status">{label}</span>}

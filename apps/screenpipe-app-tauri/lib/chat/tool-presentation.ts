@@ -504,7 +504,7 @@ export type ToolActivityIcon =
   | "thinking"
   | "approval";
 
-const GENERIC_ACTIVITY: ToolActivityPresentation = {
+export const GENERIC_ACTIVITY: ToolActivityPresentation = {
   runningLabel: "Working on your request",
   completedLabel: "Completed a background step",
   icon: "work",
