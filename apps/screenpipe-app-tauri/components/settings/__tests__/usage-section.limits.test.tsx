@@ -4,10 +4,11 @@
 
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { trialQuotaRecoveryAction } from "@/lib/chat/quota-errors";
 import { HostedUsageLimits } from "../usage-section";
 
 describe("HostedUsageLimits", () => {
-  it("renders percentages for all rules and never renders dollar fields", () => {
+  it.each([false, true])("renders plan status and percentages (trial=%s)", (trial) => {
     const query = {
       usage: {
         tier: "subscribed" as const,
@@ -18,6 +19,7 @@ describe("HostedUsageLimits", () => {
         cost_limit_reached: false,
         hosted_ai: {
           plan: "business",
+          trial,
           allowance_managed_by: "cloudflare" as const,
           usage_as_of: "2026-08-07T18:00:00.000Z",
           allowances: [
@@ -38,7 +40,7 @@ describe("HostedUsageLimits", () => {
               resets_at: "2026-08-13T00:00:00.000Z",
             },
           ],
-          upgrade: null,
+          upgrade: trial ? trialQuotaRecoveryAction() : null,
           limit_usd: "$500",
         },
       },
@@ -50,6 +52,11 @@ describe("HostedUsageLimits", () => {
 
     render(<HostedUsageLimits query={query} />);
 
+    expect(screen.getByText(trial ? "Business trial" : "Business")).toBeTruthy();
+    if (trial) {
+      expect(screen.getByRole("link", {name: "Manage trial"})).toHaveAttribute("href", "https://screenpipe.com/account/billing");
+      expect(screen.queryByText(/Upgrade to/)).toBeNull();
+    }
     expect(screen.getByText("30-day limit")).toBeTruthy();
     expect(screen.getByText("Weekly AI allowance")).toBeTruthy();
     expect(screen.getByText("42%")).toBeTruthy();

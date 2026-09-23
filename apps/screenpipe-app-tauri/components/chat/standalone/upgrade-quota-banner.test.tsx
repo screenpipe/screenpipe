@@ -4,6 +4,7 @@
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { parseQuotaUpgradeAction } from "@/lib/chat/quota-errors";
 import type { AIPreset } from "@/lib/utils/tauri";
 import { UpgradeQuotaBanner } from "./upgrade-quota-banner";
 
@@ -35,7 +36,7 @@ vi.mock("@/lib/hooks/use-usage-status", () => ({
     mocks.usageQueryEnabled = enabled;
     return { usage: enabled ? mocks.usageState : null };
   },
-  formatResetTime: () => "5:00 PM",
+  formatResetTime: (iso: string) => iso ? "5:00 PM" : "",
   formatAllowanceReset: () => "Aug 17, 5:00 PM",
   formatUsagePercent: (percent: number) => `${percent}%`,
 }));
@@ -100,6 +101,32 @@ describe("UpgradeQuotaBanner", () => {
     mocks.openExternalUrl.mockResolvedValue(undefined);
     mocks.openBusinessUpgradeSurface.mockReset();
     mocks.openBusinessUpgradeSurface.mockResolvedValue(undefined);
+  });
+
+  it("shows trial recovery from a deployed error without borrowing the daily reset", async () => {
+    mocks.blockedUpgrade = parseQuotaUpgradeAction(JSON.stringify({error: "trial_cost_limit_exceeded", required_plan: "business_max", upgrade_url: "https://screenpipe.com/account/billing?target_plan=pro_max", resets_at: null}));
+    renderBanner();
+    expect(screen.getByText("Trial AI allowance used")).toBeInTheDocument();
+    expect(screen.getByText(/does not reset daily/)).toBeInTheDocument();
+    expect(screen.queryByText(/5:00|Business Max/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name: "Manage trial"}));
+    await waitFor(() => expect(mocks.openExternalUrl).toHaveBeenCalledWith("https://screenpipe.com/account/billing"));
+    expect(mocks.openBusinessUpgradeSurface).not.toHaveBeenCalled();
+  });
+
+  it("shows the trial notice from a polled legacy trial cap", () => {
+    mocks.usageState.cost_limit_reached = true;
+    mocks.usageState.hosted_ai = {trial: true, upgrade: parseQuotaUpgradeAction("trial_cost_limit_exceeded")};
+    renderBanner();
+    expect(screen.getByText("Trial AI allowance used")).toBeInTheDocument();
+    expect(screen.queryByText(/5:00|Business Max/)).toBeNull();
+  });
+
+  it("does not borrow a daily reset when a paid monthly rejection has no reset timestamp", () => {
+    mocks.blockedUpgrade = parseQuotaUpgradeAction(JSON.stringify({error: "monthly_cost_limit_exceeded", required_plan: "business_max", upgrade_url: "https://screenpipe.com/account/billing?target_plan=pro_max", resets_at: null}));
+    renderBanner();
+    expect(screen.queryByText(/Resets|5:00/)).toBeNull();
+    expect(screen.getByRole("button", {name: "Upgrade to Business Max"})).toBeInTheDocument();
   });
 
   it("does not render while hydrated eligibility gates are unresolved or false", () => {

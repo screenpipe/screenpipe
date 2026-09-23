@@ -231,7 +231,7 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
           </div>
           {plan && (
             <span className="shrink-0 font-mono text-xs text-muted-foreground">
-              {plan}
+              {plan}{hosted.trial ? " trial" : ""}
             </span>
           )}
         </div>
@@ -272,7 +272,7 @@ export function HostedUsageLimits({ query }: { query: UsageStatusQuery }) {
             rel="noopener noreferrer"
             className="inline-block text-xs underline underline-offset-4 hover:text-foreground"
           >
-            Upgrade to {quotaPlanLabel(hosted.upgrade.requiredPlan) ?? ui("a higher plan")}
+            {hosted.upgrade.kind === "trial" ? ui("Manage trial") : `Upgrade to ${quotaPlanLabel(hosted.upgrade.requiredPlan) ?? ui("a higher plan")}`}
           </a>
         )}
       </CardContent>

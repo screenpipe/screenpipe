@@ -164,7 +164,7 @@ import {
   type MeetingSummaryLifecycle,
   type MeetingSummaryStatus,
 } from "./meeting-summary-lifecycle";
-import { QUOTA_PLAN_LABELS } from "@/lib/chat/quota-errors";
+import { quotaRecoveryLabel } from "@/lib/chat/quota-errors";
 import { openExternalUrl } from "@/lib/open-external-url";
 import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
 import { MeetingSummaryTransition } from "./meeting-summary-transition";
@@ -2498,9 +2498,7 @@ export function NoteView({
                     retryable: summaryFailure.retryable,
                     upgrade: summaryUpgrade
                       ? {
-                          label: ui("Upgrade to {value1}", { value1: QUOTA_PLAN_LABELS[
-                            summaryUpgrade.requiredPlan
-                          ].toLowerCase() }),
+                          label: quotaRecoveryLabel(summaryUpgrade),
                           onSelect: () => void handleSummaryUpgrade(),
                         }
                       : undefined,
@@ -2715,10 +2713,7 @@ export function NoteView({
                         className="underline underline-offset-2 transition-colors hover:text-foreground"
                         onClick={() => void handleSummaryUpgrade()}
                       >
-                        Upgrade to{" "}
-                        {QUOTA_PLAN_LABELS[
-                          summaryUpgrade.requiredPlan
-                        ].toLowerCase()}
+                        {quotaRecoveryLabel(summaryUpgrade)}
                       </button>
                     </>
                   )}

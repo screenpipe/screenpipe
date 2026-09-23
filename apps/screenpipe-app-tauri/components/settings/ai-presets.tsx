@@ -1638,7 +1638,9 @@ const AISection = ({
                                       className={`text-[10px] ${lowCloudflareAllowance || lowLegacyAllowance ? "bg-yellow-500/10 text-yellow-700 border-yellow-500/40 dark:text-yellow-400" : ""}`}
                                       title={cloudflareAllowance
                                         ? `${formatUsagePercent(cloudflareAllowance.used_percent)} used${cloudflareAllowance.resets_at ? ` — resets ${formatAllowanceReset(cloudflareAllowance.resets_at)}` : ""}`
-                                        : ui("Approaching daily limit{value1}", { value1: usage?.resets_at ? ` — resets ${formatResetTime(usage.resets_at)}` : "" })}
+                                        : usage?.hosted_ai?.trial
+                                          ? ui("Trial AI allowance")
+                                          : ui("Approaching daily limit{value1}", { value1: usage?.resets_at ? ` — resets ${formatResetTime(usage.resets_at)}` : "" })}
                                     >
                                       {cloudflareAllowance
                                         ? `${formatUsagePercent(cloudflareAllowance.remaining_percent)} left`
