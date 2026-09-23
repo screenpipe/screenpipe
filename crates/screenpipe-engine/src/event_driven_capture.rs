@@ -1376,6 +1376,8 @@ pub(crate) async fn event_driven_capture_loop(
                     crate::schedule_monitor::schedule_paused(),
                 );
                 monitor.release_capture_stream();
+                #[cfg(target_os = "windows")]
+                settled_window.store(0, Ordering::Relaxed);
                 if let Err(error) = tree_walker
                     .suspend_with_timeout(Duration::from_millis(250))
                     .await
@@ -1458,6 +1460,12 @@ pub(crate) async fn event_driven_capture_loop(
             was_cold = is_cold;
             let accessibility_is_active = matches!(capture_state, CaptureState::Active);
             if should_suspend_on_focus_away(accessibility_was_active, accessibility_is_active) {
+                // The same HWND may return after moving to another display or
+                // being hidden. Its old settled state cannot describe the new
+                // compositor transition. Invalidate on the existing focus edge,
+                // retaining the cheap reuse path while focus stays active.
+                #[cfg(target_os = "windows")]
+                settled_window.store(0, Ordering::Relaxed);
                 if let Err(error) = tree_walker
                     .suspend_with_timeout(Duration::from_millis(250))
                     .await
@@ -1980,6 +1988,9 @@ pub(crate) async fn event_driven_capture_loop(
                 CaptureTrigger::AppSwitch { .. } | CaptureTrigger::WindowFocus { .. }
             ) {
                 last_content_hash = None;
+                // A restored window can keep its HWND on the same display.
+                #[cfg(target_os = "windows")]
+                settled_window.store(0, Ordering::Relaxed);
                 // Also reset elements cache on context change
                 last_elements_cache.remove(&device_name);
             }
@@ -3223,6 +3234,11 @@ async fn do_capture(
     let monitor_hosts_focus = crate::focus_tracker::foreground_window_is_on_monitor(params.monitor);
     #[cfg(not(target_os = "windows"))]
     let monitor_hosts_focus = _monitor_hosts_focus;
+    #[cfg(target_os = "windows")]
+    if !monitor_hosts_focus {
+        // Fresh geometry can detect a same-HWND move before the focus tracker.
+        params.settled_window.store(0, Ordering::Relaxed);
+    }
     let captured_at = Utc::now();
     let bypass_capture_throttles = bypasses_capture_throttles(trigger);
 
