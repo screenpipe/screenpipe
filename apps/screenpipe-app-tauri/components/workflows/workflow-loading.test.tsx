@@ -174,3 +174,30 @@ describe("workflow catalog loading", () => {
   });
 
 });
+
+it("keeps update activity when opening a map and through missing or failed status polls", async () => {
+  const platform = createFixtureWorkflowsPlatform();
+  platform.managesAnalysis = true;
+  platform.loadCapturedWork = async () => structuredClone(fixtureWorkflowAnalysis);
+  const job = { id: "discover:1", cycleId: "cycle", status: "processing" as const };
+  const latest = vi.fn().mockResolvedValue(job);
+  platform.getLatestAnalysisJob = latest;
+  platform.getAnalysisJob = async () => job;
+  let publish!: Parameters<NonNullable<typeof platform.subscribeAnalysisActivity>>[1];
+  const off = vi.fn();
+  platform.subscribeAnalysisActivity = vi.fn(async (_id, callback) => { publish = callback; return off; });
+  await mount(platform);
+  act(() => publish([{ id: "a", label: "Searched recordings", status: "complete" }]));
+  fireEvent.click(screen.getAllByRole("button", { name: "Open map" })[0]);
+  act(() => publish([{ id: "b", label: "Read saved workflows", status: "complete" }]));
+  fireEvent.click(screen.getByRole("button", { name: "All workflows" }));
+  fireEvent.click(screen.getByRole("button", { name: /Show agent activity/ }));
+  expect(screen.getByRole("region", { name: "Agent activity" })).toHaveTextContent("Searched recordings");
+  expect(screen.getByRole("region", { name: "Agent activity" })).toHaveTextContent("Read saved workflows");
+  latest.mockResolvedValueOnce(null).mockRejectedValueOnce(new TypeError("Load failed"));
+  await act(async () => { await vi.advanceTimersByTimeAsync(9000); });
+  expect(screen.getByRole("region", { name: "Agent activity" })).toHaveTextContent("Searched recordings");
+  expect(screen.getByRole("region", { name: "Agent activity" })).toHaveTextContent("Read saved workflows");
+  expect(platform.subscribeAnalysisActivity).toHaveBeenCalledOnce();
+  expect(off).not.toHaveBeenCalled();
+});

@@ -89,3 +89,68 @@ it("keeps quiet receipts compact without hiding failure, resume, or stop control
   fireEvent.click(screen.getByRole("button", { name: "Stop" }));
   expect(stop).toHaveBeenCalledOnce();
 });
+
+it("keeps an open feed across agent handoffs, namespaces action IDs, and resets only for a new cycle", async () => {
+  const callbacks = new Map<string, (items: WorkflowRunActivity[]) => void>();
+  const cleanups: ReturnType<typeof vi.fn>[] = [];
+  const subscribe = vi.fn(async (id, publish) => { callbacks.set(id, publish); const off = vi.fn(); cleanups.push(off); return off; });
+  const props = { active: true, subscribe, analyze: vi.fn() };
+  const view = render(<WorkflowRunProgress {...props} job={{ id: "discover:1", cycleId: "cycle-a", status: "processing" }} />);
+  await act(async () => {});
+  act(() => callbacks.get("discover:1")!([{ id: "1", label: "Searching recordings", status: "running" }]));
+  fireEvent.click(screen.getByRole("button", { name: /Show agent activity/ }));
+  view.rerender(<WorkflowRunProgress {...props} job={{ id: "review:2", cycleId: "cycle-a", status: "processing" }} />);
+  await act(async () => {});
+  act(() => callbacks.get("review:2")!([{ id: "1", label: "Saving workflows", status: "running" }]));
+  act(() => callbacks.get("discover:1")!([{ id: "1", label: "Searched recordings", status: "complete" }]));
+  expect(screen.getByRole("region", { name: "Agent activity" })).toHaveTextContent("Searched recordings");
+  expect(screen.getByRole("region", { name: "Agent activity" })).toHaveTextContent("Saving workflows");
+  expect(subscribe).toHaveBeenCalledTimes(2);
+  expect(cleanups[0]).not.toHaveBeenCalled();
+  view.rerender(<WorkflowRunProgress {...props} job={{ id: "discover:3", cycleId: "cycle-b", status: "processing" }} />);
+  await act(async () => {});
+  expect(cleanups[0]).toHaveBeenCalledOnce();
+  expect(cleanups[1]).toHaveBeenCalledOnce();
+  act(() => callbacks.get("review:2")!([{ id: "1", label: "Stale result", status: "complete" }]));
+  fireEvent.click(screen.getByRole("button", { name: /Show agent activity/ }));
+  expect(screen.getByRole("region", { name: "Agent activity" })).not.toHaveTextContent(/Searched recordings|Saving workflows|Stale result/);
+});
+
+it("keeps activity through reconnects and empty snapshots without duplicating replayed actions", async () => {
+  let publish!: (items: WorkflowRunActivity[]) => void;
+  const subscribe = vi.fn(async (_id, callback) => { publish = callback; return vi.fn(); });
+  const props = { active: true, subscribe, analyze: vi.fn(), job: { id: "1", cycleId: "cycle", status: "processing" as const } };
+  const view = render(<WorkflowRunProgress {...props} />);
+  await act(async () => {});
+  act(() => publish([{ id: "a", label: "Searched recordings", status: "complete" }]));
+  fireEvent.click(screen.getByRole("button", { name: /Show agent activity/ }));
+  view.rerender(<WorkflowRunProgress {...props} active={false} />);
+  view.rerender(<WorkflowRunProgress {...props} />);
+  await act(async () => {});
+  act(() => publish([]));
+  expect(screen.getByRole("region", { name: "Agent activity" })).toHaveTextContent("Searched recordings");
+  act(() => publish([{ id: "a", label: "Searching recordings", status: "running" }]));
+  expect(screen.getByRole("status")).toHaveTextContent("Updating workflows");
+  act(() => publish([{ id: "a", label: "Searched recordings", status: "complete" }]));
+  expect(screen.getAllByText("Searched recordings")).toHaveLength(1);
+});
+
+it("does not rotate old snapshots back into the recent feed during overlapping agents", async () => {
+  const callbacks = new Map<string, (items: WorkflowRunActivity[]) => void>();
+  const subscribe = vi.fn(async (id, callback) => { callbacks.set(id, callback); return vi.fn(); });
+  const props = { active: true, subscribe, analyze: vi.fn() };
+  const view = render(<WorkflowRunProgress {...props} job={{ id: "first", cycleId: "cycle", status: "processing" }} />);
+  await act(async () => {});
+  const old: WorkflowRunActivity[] = Array.from({ length: 20 }, (_, n) => ({ id: String(n), label: `Earlier action ${n}`, status: "complete" }));
+  act(() => callbacks.get("first")!(old));
+  fireEvent.click(screen.getByRole("button", { name: /Show agent activity/ }));
+  view.rerender(<WorkflowRunProgress {...props} job={{ id: "second", cycleId: "cycle", status: "processing" }} />);
+  await act(async () => {});
+  act(() => callbacks.get("second")!([{ id: "new", label: "Saving workflows", status: "running" }]));
+  act(() => callbacks.get("first")!(old));
+  expect(screen.getByRole("region", { name: "Agent activity" })).toHaveTextContent("Saving workflows");
+  expect(screen.queryByText("Earlier action 0", { exact: true })).not.toBeInTheDocument();
+  expect(screen.getAllByRole("listitem")).toHaveLength(20);
+  act(() => callbacks.get("first")!([{ ...old[0], label: "Earlier action failed", status: "error" }, ...old.slice(1)]));
+  expect(screen.getByRole("region", { name: "Agent activity" })).toHaveTextContent("Earlier action failed");
+});

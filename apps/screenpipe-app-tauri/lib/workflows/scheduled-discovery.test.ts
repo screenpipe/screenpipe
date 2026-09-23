@@ -178,3 +178,21 @@ describe("catalog request lifecycle", () => {
     } finally { vi.useRealTimers(); }
   });
 });
+
+it("uses the persisted update cycle across agent handoffs, resume and completion", async () => {
+  ws.cycle.id = "cycle-a";
+  executions["workflow-discover"] = { id: 1, status: "running", started_at: end };
+  expect(await getWorkflowJob("workflow-discover:1")).toMatchObject({ id: "workflow-discover:1", cycleId: "cycle-a" });
+  executions["workflow-discover"].status = "completed";
+  executions["workflow-review"] = { id: 2, status: "running", started_at: end };
+  expect(await getWorkflowJob("workflow-discover:1")).toMatchObject({ id: "workflow-review:2", cycleId: "cycle-a" });
+  executions["workflow-review"].status = "completed";
+  ws.cycle.status = "paused";
+  expect(await getWorkflowJob("workflow-review:2")).toMatchObject({ status: "incomplete", cycleId: "cycle-a" });
+  expect(await startWorkflowJob()).toMatchObject({ cycleId: "cycle-a" });
+  ws.cycle.status = "complete";
+  catalog = { analyzedAt: end, checkedThrough: end };
+  expect(await getWorkflowJob("workflow-review:2")).toMatchObject({ status: "complete", cycleId: "cycle-a" });
+  ws.cycle.id = "cycle-b";
+  expect(await getWorkflowJob("workflow-review:2")).toMatchObject({ cycleId: "cycle-b" });
+});

@@ -28,6 +28,8 @@ export type WorkflowRunActivity = {
 
 export type WorkflowAnalysisJob = {
   id: string;
+  /** Stable across agent executions belonging to one update. */
+  cycleId?: string;
   status: "queued" | "processing" | "complete" | "incomplete" | "failed";
   progress?: number;
   startedAt?: string;
