@@ -103,6 +103,7 @@ export type WorkflowStage = {
   observedDays: number;
   evidence: WorkflowEvidence[];
   screenshot?: WorkflowScreenshot | null;
+  screenshots?: WorkflowScreenshot[];
   procedure?: Array<{
     userEdited?: boolean;
     kind: "action" | "input" | "output" | "decision" | "check";

@@ -707,7 +707,8 @@ fn meeting_summary_evidence_steps() -> Option<&'static str> {
 
 /// Upgrade only recognized shipped staged-workflow instruction bodies.
 /// Keep frontmatter byte-for-byte for enrichment stages. Final review uses
-/// its existing permission migration below. Preserve disabled state and schedules.
+/// its existing permission migration below. Preserve disabled state and custom
+/// schedules; upgrade the shipped daily discovery default to hourly.
 /// Customized instructions are never overwritten. Hashes cover
 /// the shipped pipeline prompts from #7020, #7045, #7071, #7095 and the handoff repairs.
 fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> {
@@ -718,7 +719,7 @@ fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> 
         // tasks never receive the observed-scope repair in a new app build.
         "workflow-deepen" => &["b278bd6a8abcfc77", "996ff7f9a6026e05", "cf31ccaa932b7784"],
         "workflow-review" => &["ac29fac407670584", "182e0b733f5c2bce", "7cace9312eb52b72"],
-        "workflow-maintain" => &["a769acb2f48eb6c3", "3fd301c337d95126"],
+        "workflow-maintain" => &["a769acb2f48eb6c3", "3fd301c337d95126", "75da536f6510aa25"],
         "workflow-discovery" => &["9e7b057416c5e119", "57b754f5d27ad27d", "3cb46a10a341de9b"],
         "workflow-activity" => &[
             "f5adb347d838aff7",
@@ -743,12 +744,23 @@ fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> 
     }
     let body = parts[2].trim();
     let replacement = bundled_prompt(name)?.splitn(3, "---").nth(2)?.trim();
-    if body == replacement || !shipped_hashes.contains(&simple_hash(body).as_str()) {
+    let recognized = body == replacement || shipped_hashes.contains(&simple_hash(body).as_str());
+    if !recognized {
+        return None;
+    }
+    // Upgrade only the shipped daily discovery cadence. Keep explicit custom
+    // schedules, disabled state and customized prompt bodies unchanged.
+    let frontmatter = if name == "workflow-discover" {
+        parts[1].replace("\nschedule: every 24h\n", "\nschedule: every 1h\n")
+    } else {
+        parts[1].to_owned()
+    };
+    if body == replacement && frontmatter == parts[1] {
         return None;
     }
     Some(format!(
         "{}---{}---\n\n{}\n",
-        parts[0], parts[1], replacement
+        parts[0], frontmatter, replacement
     ))
 }
 
@@ -876,8 +888,31 @@ fn replace_prompt_body_when_hash_matches(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn default_discovery_cadence_upgrades_without_enabling_or_changing_custom_schedules() {
+        let bundled = super::bundled_prompt("workflow-discover").unwrap();
+        let daily = bundled.replace("schedule: every 1h", "schedule: every 24h");
+        for enabled in ["false", "true"] {
+            let original = daily.replace("enabled: false", &format!("enabled: {enabled}"));
+            let updated = super::migrate_builtin_pipe_text("workflow-discover", &original).unwrap();
+            assert!(updated.contains("schedule: every 1h"));
+            assert!(updated.contains(&format!("enabled: {enabled}")));
+            assert!(super::migrate_builtin_pipe_text("workflow-discover", &updated).is_none());
+        }
+        assert!(super::migrate_builtin_pipe_text(
+            "workflow-discover",
+            &daily.replace("every 24h", "every 48h")
+        )
+        .is_none());
+        assert!(super::migrate_builtin_pipe_text(
+            "workflow-discover",
+            &format!("{daily}\nOwner instructions")
+        )
+        .is_none());
+    }
+    #[test]
     fn all_staged_workflow_prompts_upgrade_without_changing_user_configuration() {
         let fixtures = [
+            ("workflow-maintain", include_str!("../../assets/pipes/legacy-workflow-prompts/before-detail-enrichment-workflow-maintain.md")),
             ("workflow-maintain", include_str!("../../assets/pipes/legacy-workflow-prompts/before-timing-enrichment-workflow-maintain.md")),
             ("workflow-review", include_str!("../../assets/pipes/legacy-workflow-prompts/before-timing-enrichment-workflow-review.md")),
             ("workflow-deepen", include_str!("../../assets/pipes/legacy-workflow-prompts/before-timing-enrichment-workflow-deepen.md")),

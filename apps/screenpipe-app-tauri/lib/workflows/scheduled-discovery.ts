@@ -8,8 +8,8 @@ import type { WorkflowAnalysis, WorkflowAnalysisJob, WorkflowMap } from "@screen
 export const WORKFLOW_TASKS = ["workflow-discover", "workflow-deepen", "workflow-review", "workflow-maintain"] as const;
 const LEGACY_TASKS = ["workflow-activity", "workflow-patterns", "workflow-procedures", "workflow-timing", "workflow-discovery"];
 const TASK = "workflow-review";
-async function request(path: string, body?: unknown) {
-  const response = await localFetch(path, body === undefined ? undefined : {
+async function request(path: string, body?: unknown, signal?: AbortSignal) {
+  const response = await localFetch(path, body === undefined ? (signal ? { signal } : undefined) : {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   const value = await response.json();
@@ -38,7 +38,7 @@ export async function loadWorkflowTaskSetup(): Promise<WorkflowTaskSetup> {
     if (typeof data?.config?.enabled !== "boolean") throw new Error("Could not read the workflow task settings.");
     tasks.push({ name, title: data.config.title || name, enabled: data.config.enabled });
   }
-  return { enabled: tasks.every(task => task.enabled), title: "Keep your workflows current", schedule: "Daily discovery, with evidence review and maintenance", tasks };
+  return { enabled: tasks.every(task => task.enabled), title: "Keep your workflows current", schedule: "Hourly discovery, with evidence review and maintenance", tasks };
 }
 
 // Only the explicit enable action opts in. Scheduling stays in the Pipe harness.
@@ -61,9 +61,23 @@ export async function enableWorkflowTask() {
   if (!setup.enabled) throw new Error("Some workflow tasks could not be enabled.");
 }
 
-export async function loadScheduledCatalog(): Promise<WorkflowAnalysis | null> {
-  const value = await request("/workflows/catalog");
-  return value.analyzedAt ? value as WorkflowAnalysis : null;
+export async function loadScheduledCatalog(signal?: AbortSignal): Promise<WorkflowAnalysis | null> {
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  if (signal?.aborted) cancel();
+  signal?.addEventListener("abort", cancel, { once: true });
+  let timedOut = false;
+  const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 10_000);
+  try {
+    const value = await request("/workflows/catalog", undefined, controller.signal);
+    return value.analyzedAt ? value as WorkflowAnalysis : null;
+  } catch (error) {
+    if (timedOut && !signal?.aborted) throw new DOMException("Workflow catalog request timed out", "TimeoutError");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", cancel);
+  }
 }
 
 function job(execution: any): WorkflowAnalysisJob {
@@ -110,27 +124,28 @@ async function workspace() {
 export async function getWorkflowJob(id: string): Promise<WorkflowAnalysisJob> {
   const [state, tasks] = await Promise.all([workspace(), latestTasks()]);
   const ws = state.workspace;
+  const cycleId = typeof ws.cycle?.id === "string" ? ws.cycle.id : undefined;
   const running = tasks.find(item => ["running", "queued"].includes(item.execution?.status));
-  if (running) return tracked(running.execution, running.task);
+  if (running) return { ...tracked(running.execution, running.task), cycleId };
   const startedAt = ws.cycle?.end;
-  if (ws.cycle?.status === "paused") return { id, startedAt, status: "incomplete", message: "Update stopped. Resume to continue from saved progress." };
+  if (ws.cycle?.status === "paused") return { id, cycleId, startedAt, status: "incomplete", message: "Update stopped. Resume to continue from saved progress." };
   if (ws.cycle?.status === "complete") {
     const result = await loadScheduledCatalog();
     // Completion is the atomic receipt for this exact requested interval.
-    if (result && result.checkedThrough === ws.cycle.end) return { id, startedAt, status: "complete", result };
+    if (result && result.checkedThrough === ws.cycle.end) return { id, cycleId, startedAt, status: "complete", result };
   }
   const failure = tasks.filter(item => item.execution && ["failed", "cancelled", "interrupted", "timed_out"].includes(item.execution.status)
     && Date.parse(item.execution.started_at) >= Date.parse(startedAt || ""))
     .sort((a,b) => Date.parse(b.execution.started_at) - Date.parse(a.execution.started_at))[0];
-  if (failure) return tracked(failure.execution, failure.task);
+  if (failure) return { ...tracked(failure.execution, failure.task), cycleId };
   const lastFinished = Math.max(Date.parse(startedAt || "") || 0, ...tasks.map(item => Date.parse(item.execution?.finished_at || "") || 0));
   // Completion events normally wake the next agent. Scheduled readiness checks
   // recover a missed event or a review handoff that triggers chain cooldown.
   if (ws.cycle?.status === "running" && Date.now() - lastFinished < 360_000) {
-    return { id, startedAt, status: "queued", message: "Preparing the next workflow agent" };
+    return { id, cycleId, startedAt, status: "queued", message: "Preparing the next workflow agent" };
   }
   const open = Object.values(ws.drafts || {}).filter((draft: any) => draft.status === "open").length;
-  return { id, startedAt, status: "incomplete", message: open
+  return { id, cycleId, startedAt, status: "incomplete", message: open
     ? `${open} workflow draft${open === 1 ? "" : "s"} awaiting investigation or review. Resume to continue.`
     : "The requested update is not complete yet. Resume to continue from saved progress." };
 }
@@ -142,9 +157,9 @@ export async function startWorkflowJob(): Promise<WorkflowAnalysisJob> {
   if (!setup.enabled) throw new Error("Enable workflow tasks before updating. Open Workflows again to review setup.");
   const tasks = await latestTasks();
   const running = tasks.find(item => ["running", "queued"].includes(item.execution?.status));
-  if (running) return tracked(running.execution, running.task);
+  if (running) return getWorkflowJob(`${running.task}:${running.execution.id}`);
   // Starting a new cycle fixes the requested end once. Resuming retains it.
-  await request("/workflows/workspace", {action:"start", task:WORKFLOW_TASKS[0]});
+  const startedCycle = await request("/workflows/workspace", {action:"start", task:WORKFLOW_TASKS[0]});
   // An explicit update/resume wakes every ready agent. A repeated wake event
   // may already be acknowledged by the scheduler from an interrupted run.
   const ready = await Promise.all(WORKFLOW_TASKS.map(async task => ({
@@ -168,7 +183,7 @@ export async function startWorkflowJob(): Promise<WorkflowAnalysisJob> {
       throw error;
     }
   }));
-  return { id: `${started[0].task}:${started[0].id}`, status: "queued", message: "Preparing workflow updates" };
+  return { id: `${started[0].task}:${started[0].id}`, cycleId: typeof startedCycle.cycle?.id === "string" ? startedCycle.cycle.id : undefined, status: "queued", message: "Preparing workflow updates" };
 }
 
 export async function stopWorkflowJob() {

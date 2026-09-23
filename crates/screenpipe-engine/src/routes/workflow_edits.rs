@@ -53,20 +53,37 @@ pub(super) fn preserve_edits(previous: &Value, next: &mut Value) {
     next["userEdits"] = previous["userEdits"].clone();
     next["userEditedAt"] = previous["userEditedAt"].clone();
     if let Some(edits) = previous["userEdits"].as_object() {
-        for key in [
-            "title",
-            "description",
-            "trigger",
-            "outcome",
-            "stages",
-            "bottlenecks",
-        ] {
+        for key in ["title", "description", "trigger", "outcome", "bottlenecks"] {
             if edits.get(key) == Some(&Value::Bool(true)) {
                 next[key] = previous[key].clone();
             }
         }
-        if edits.contains_key("stages") {
-            invalidate_step_claims(next);
+        if edits.get("stages") == Some(&Value::Bool(true)) {
+            // A reorder or one edited step must not freeze every other step's
+            // research. Preserve owner-authored structure and changed steps;
+            // accept verified enrichment only for an unedited, named match.
+            let proposed = next["stages"].as_array().cloned().unwrap_or_default();
+            next["stages"] = json!(previous["stages"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|stage| {
+                    let matches: Vec<_> = proposed
+                        .iter()
+                        .filter(|candidate| candidate["name"] == stage["name"])
+                        .collect();
+                    if stage["userEdited"] != true && matches.len() == 1 {
+                        matches[0].clone()
+                    } else {
+                        stage.clone()
+                    }
+                })
+                .collect::<Vec<_>>());
+            // Prior edits alone do not invalidate newly verified timing. Only
+            // invalidate when preserving owner changes alters the reviewed map.
+            if next["stages"] != json!(proposed) {
+                invalidate_step_claims(next);
+            }
         }
     }
 }
@@ -226,7 +243,7 @@ mod tests {
     use super::*;
     fn original() -> Value {
         json!({"id":"wf-test","revision":3,"title":"Prepare a report","description":"Description","trigger":"Request","outcome":"Report","timing":{"averageMinutes":5},"stages":[
-            {"name":"Read","description":"Review sources","evidence":[{"detail":"Original source"}],"screenshot":{"dataUrl":"fixture-image"},"procedure":[{"kind":"action","text":"Read notes","quote":"Original quotation","app":"Notes","timestamp":"2026-09-01T10:00:00Z"}]},
+            {"name":"Read","description":"Review sources","evidence":[{"detail":"Original source"}],"screenshot":{"dataUrl":"fixture-image"},"screenshots":[{"frameId":1,"dataUrl":"fixture-one"},{"frameId":2,"dataUrl":"fixture-two"}],"procedure":[{"kind":"action","text":"Read notes","quote":"Original quotation","app":"Notes","timestamp":"2026-09-01T10:00:00Z"}]},
             {"name":"Write","description":"Draft report","evidence":[]}],"bottlenecks":[{"stage":"Read","label":"Wait"}]})
     }
     fn request() -> EditRequest {
@@ -262,6 +279,10 @@ mod tests {
         assert_eq!(
             saved["stages"][1]["screenshot"],
             prior["stages"][0]["screenshot"]
+        );
+        assert_eq!(
+            saved["stages"][1]["screenshots"],
+            prior["stages"][0]["screenshots"]
         );
         assert_eq!(
             saved["stages"][1]["procedure"][0]["quote"],
@@ -311,6 +332,48 @@ mod tests {
         assert_eq!(agent["title"], "My title");
         assert_eq!(agent["description"], "New evidence");
         assert!(agent["userEdits"].get("description").is_none());
+    }
+    #[test]
+    fn edited_structure_does_not_freeze_unedited_step_research() {
+        let previous = json!({"userEdits":{"stages":true},"stages":[
+            {"name":"Review","description":"Old","procedure":[]},
+            {"name":"Send","description":"My wording","userEdited":true,"procedure":[]}
+        ]});
+        let mut next = json!({"stages":[
+            {"name":"Send","description":"Overwritten","procedure":[{"text":"AI"}]},
+            {"name":"Review","description":"Investigated","procedure":[{"text":"Verified detail"}],"screenshot":{"visualVerified":true}},
+            {"name":"Deleted by owner","description":"Should not return"}
+        ]});
+        preserve_edits(&previous, &mut next);
+        assert_eq!(next["stages"].as_array().unwrap().len(), 2);
+        assert_eq!(next["stages"][0]["description"], "Investigated");
+        assert_eq!(next["stages"][0]["procedure"][0]["text"], "Verified detail");
+        assert_eq!(next["stages"][0]["screenshot"]["visualVerified"], true);
+        assert_eq!(next["stages"][1], previous["stages"][1]);
+        assert_eq!(next["evidenceStatus"], "candidate");
+    }
+    #[test]
+    fn ambiguous_or_missing_step_matches_preserve_owner_structure() {
+        let previous =
+            json!({"userEdits":{"stages":true},"stages":[{"name":"Review","procedure":[]}]});
+        for proposed in [json!([]), json!([{"name":"Review"},{"name":"Review"}])] {
+            let mut next = json!({"stages":proposed});
+            preserve_edits(&previous, &mut next);
+            assert_eq!(next["stages"], previous["stages"]);
+        }
+    }
+    #[test]
+    fn historical_edit_flag_does_not_discard_newly_verified_timing() {
+        let previous =
+            json!({"userEdits":{"stages":true},"stages":[{"name":"Review","procedure":[]}]});
+        let mut next = json!({"stages":[{"name":"Review","procedure":[{"text":"Supported action"}]}],
+            "evidenceStatus":"verified","timing":{"averageMinutes":7},"durationSource":"observed","durationSampleCount":2});
+        let reviewed = next.clone();
+        preserve_edits(&previous, &mut next);
+        assert_eq!(next["stages"], reviewed["stages"]);
+        assert_eq!(next["timing"], reviewed["timing"]);
+        assert_eq!(next["durationSampleCount"], 2);
+        assert_eq!(next["evidenceStatus"], "verified");
     }
     #[tokio::test]
     async fn http_edit_contract_rejects_fabricated_evidence_and_saves_owner_edits() {

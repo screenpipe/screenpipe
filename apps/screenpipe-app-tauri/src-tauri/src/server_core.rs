@@ -605,7 +605,9 @@ impl ServerCore {
             })
             .unwrap_or_default();
         let power_manager = start_power_manager_with_pref(initial_power_pref);
-        if let Err(e) = screenpipe_engine::power::set_keep_awake(config.keep_computer_awake) {
+        if let Err(e) =
+            screenpipe_engine::power::set_keep_awake_async(config.keep_computer_awake).await
+        {
             warn!("failed to apply keep-awake setting: {}", e);
         }
 

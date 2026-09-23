@@ -1850,8 +1850,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                                     "stale_checks": recovered_after,
                                     "user_active": user_active,
                                 }),
-                            )
-                            .await;
+                            );
                         }
                     }
 
@@ -1871,8 +1870,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                                 "loop_stage": health.loop_stage.clone(),
                                 "loop_stage_age_secs": health.loop_stage_age_secs,
                             }),
-                        )
-                        .await;
+                        );
                     }
 
                     // After wake from sleep, reset stall counters and notification
@@ -2060,14 +2058,12 @@ async fn show_port_conflict_notification(app: &tauri::AppHandle, error_msg: &str
 /// Payload is content-free by construction: a stage name from a fixed enum,
 /// integer ages and a presence flag. No window titles, app names, monitor
 /// names, paths or pixels.
-async fn send_capture_stall_event(app: &tauri::AppHandle, event: &str, props: serde_json::Value) {
+fn send_capture_stall_event(app: &tauri::AppHandle, event: &'static str, props: serde_json::Value) {
     let Some(analytics) = app.try_state::<std::sync::Arc<crate::analytics::AnalyticsManager>>()
     else {
         return;
     };
-    if let Err(e) = analytics.send_event(event, Some(props)).await {
-        debug!("failed to send {event} analytics: {e}");
-    }
+    analytics.send_event_nonblocking(event, Some(props));
 }
 
 /// Show a notification telling the user that capture has stalled, with a restart button.

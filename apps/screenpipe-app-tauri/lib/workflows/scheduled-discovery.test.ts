@@ -2,7 +2,7 @@
 // https://screenpipe.com
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { localFetch } from "@/lib/api";
-import { WORKFLOW_TASKS, stopWorkflowJob, ensureWorkflowTask, enableWorkflowTask, loadWorkflowTaskSetup, getWorkflowJob, startWorkflowJob, saveWorkflowCorrections, saveWorkflowFeedback } from "./scheduled-discovery";
+import { WORKFLOW_TASKS, stopWorkflowJob, ensureWorkflowTask, enableWorkflowTask, loadWorkflowTaskSetup, getWorkflowJob, startWorkflowJob, saveWorkflowCorrections, saveWorkflowFeedback, loadScheduledCatalog } from "./scheduled-discovery";
 import { fixtureWorkflowAnalysis } from "@screenpipe/workflows-ui/fixture";
 vi.mock("@/lib/api", () => ({localFetch:vi.fn()}));
 vi.mock("@/lib/workflows/rollout", () => ({requireWorkflowsRollout:vi.fn(),syncWorkflowsRollout:vi.fn().mockResolvedValue(undefined)}));
@@ -146,4 +146,53 @@ describe("workflow agent workspace adapter",()=>{
     fetchMock.mockResolvedValueOnce(response({error:"Workflow no longer exists"},404));
     await expect(saveWorkflowFeedback({...workflow,id:"deleted"},"Feedback")).rejects.toThrow("no longer exists");
   });
+});
+
+
+describe("catalog request lifecycle", () => {
+  it("bounds stalled requests and classifies timeouts for reconnect", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockImplementation((_path, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      }));
+      const result = loadScheduledCatalog();
+      const rejected = expect(result).rejects.toMatchObject({ name: "TimeoutError" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await rejected;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+  it("propagates cancellation and cleans up its deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockImplementation((_path, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      }));
+      const controller = new AbortController();
+      const result = loadScheduledCatalog(controller.signal);
+      const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
+      controller.abort();
+      await rejected;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+});
+
+it("uses the persisted update cycle across agent handoffs, resume and completion", async () => {
+  ws.cycle.id = "cycle-a";
+  executions["workflow-discover"] = { id: 1, status: "running", started_at: end };
+  expect(await getWorkflowJob("workflow-discover:1")).toMatchObject({ id: "workflow-discover:1", cycleId: "cycle-a" });
+  executions["workflow-discover"].status = "completed";
+  executions["workflow-review"] = { id: 2, status: "running", started_at: end };
+  expect(await getWorkflowJob("workflow-discover:1")).toMatchObject({ id: "workflow-review:2", cycleId: "cycle-a" });
+  executions["workflow-review"].status = "completed";
+  ws.cycle.status = "paused";
+  expect(await getWorkflowJob("workflow-review:2")).toMatchObject({ status: "incomplete", cycleId: "cycle-a" });
+  expect(await startWorkflowJob()).toMatchObject({ cycleId: "cycle-a" });
+  ws.cycle.status = "complete";
+  catalog = { analyzedAt: end, checkedThrough: end };
+  expect(await getWorkflowJob("workflow-review:2")).toMatchObject({ status: "complete", cycleId: "cycle-a" });
+  ws.cycle.id = "cycle-b";
+  expect(await getWorkflowJob("workflow-review:2")).toMatchObject({ cycleId: "cycle-b" });
 });

@@ -654,6 +654,17 @@ pub fn normalize_analysis(
                 .enumerate()
                 .filter(|(index, source)| {
                     *index < 4
+                        || screenshot_frame_ids(stage).iter().any(|id| {
+                            catalog.frames.get(id).is_some_and(|(at, app)| {
+                                source["app"]
+                                    .as_str()
+                                    .is_some_and(|a| a.eq_ignore_ascii_case(app))
+                                    && source["timestamp"]
+                                        .as_str()
+                                        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                                        .is_some_and(|timestamp| timestamp == *at)
+                            })
+                        })
                         || procedure.iter().any(|item| {
                             item["timestamp"] == source["timestamp"] && item["app"] == source["app"]
                         })
@@ -691,6 +702,7 @@ pub fn normalize_analysis(
                 "observedDays": observed_days,
                 "evidence": evidence,
                 "screenshot": Value::Null,
+                "screenshots": [],
             }));
         }
         if stages.len() < 2 {
@@ -1253,6 +1265,35 @@ pub fn measured_time_profile(
     })
 }
 
+/// Requested exact frames, in display order. Old clients may send a single ID.
+pub fn screenshot_frame_ids(stage: &Value) -> Vec<i64> {
+    let mut seen = HashSet::new();
+    stage["screenshotFrameIds"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_i64)
+        .chain(stage["screenshotFrameId"].as_i64())
+        .filter(|id| *id > 0 && seen.insert(*id))
+        .collect()
+}
+
+/// Read both catalog generations without counting the same capture twice.
+pub fn stage_screenshots(stage: &Value) -> Vec<&Value> {
+    let mut seen = HashSet::new();
+    stage["screenshots"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(stage.get("screenshot").filter(|image| image.is_object()))
+        .filter(|image| {
+            image["frameId"]
+                .as_i64()
+                .is_some_and(|id| id > 0 && seen.insert(id))
+        })
+        .collect()
+}
+
 pub fn attach_screenshot_quality(analysis: &mut Value) {
     let Some(workflows) = analysis.get_mut("workflows").and_then(Value::as_array_mut) else {
         return;
@@ -1261,19 +1302,19 @@ pub fn attach_screenshot_quality(analysis: &mut Value) {
         let Some(stages) = workflow.get("stages").and_then(Value::as_array) else {
             continue;
         };
-        let screenshot_count = stages
+        let screenshot_count: usize = stages
             .iter()
-            .filter(|stage| {
-                stage
-                    .get("screenshot")
-                    .is_some_and(|value| !value.is_null())
-            })
+            .map(|stage| stage_screenshots(stage).len())
+            .sum();
+        let covered_stages = stages
+            .iter()
+            .filter(|stage| !stage_screenshots(stage).is_empty())
             .count();
         let stage_count = stages.len();
         let screenshot_coverage = if stage_count == 0 {
             0
         } else {
-            screenshot_count * 100 / stage_count
+            covered_stages * 100 / stage_count
         };
         if let Some(quality) = workflow.get_mut("quality").and_then(Value::as_object_mut) {
             quality.insert("screenshotCount".to_string(), json!(screenshot_count));
@@ -1295,7 +1336,7 @@ pub fn attach_screenshot_quality(analysis: &mut Value) {
             quality.insert("grade".to_string(), json!(screenshot_adjusted_grade));
             if let Some(reasons) = quality.get_mut("reasons").and_then(Value::as_array_mut) {
                 reasons.push(json!(format!(
-                    "{screenshot_count} of {} stages have a closely matched local screenshot",
+                    "{covered_stages} of {} stages have a closely matched local screenshot",
                     stage_count
                 )));
             }
@@ -1346,20 +1387,23 @@ pub fn analysis_quality(daily: &[Value], requested_days: u16, analysis: &Value) 
         .filter_map(|workflow| workflow.get("stages").and_then(Value::as_array))
         .map(Vec::len)
         .sum::<usize>();
-    let screenshot_count = workflows
+    let stages: Vec<&Value> = workflows
         .iter()
-        .filter_map(|workflow| workflow.get("stages").and_then(Value::as_array))
+        .filter_map(|w| w["stages"].as_array())
         .flatten()
-        .filter(|stage| {
-            stage
-                .get("screenshot")
-                .is_some_and(|value| !value.is_null())
-        })
+        .collect();
+    let screenshot_count: usize = stages
+        .iter()
+        .map(|stage| stage_screenshots(stage).len())
+        .sum();
+    let covered_stages = stages
+        .iter()
+        .filter(|stage| !stage_screenshots(stage).is_empty())
         .count();
     let screenshot_coverage = if stage_count == 0 {
         0
     } else {
-        screenshot_count * 100 / stage_count
+        covered_stages * 100 / stage_count
     };
     let verified_evidence_count = workflows
         .iter()
@@ -1411,7 +1455,7 @@ pub fn analysis_quality(daily: &[Value], requested_days: u16, analysis: &Value) 
     }
     if stage_count > 0 && screenshot_coverage < 100 {
         warnings.push(format!(
-            "Closely matched screenshots were available for {screenshot_count} of {stage_count} mapped stages"
+            "Closely matched screenshots were available for {covered_stages} of {stage_count} mapped stages"
         ));
     }
     if workflows.iter().any(|workflow| {
@@ -1516,6 +1560,30 @@ pub mod timing;
 #[cfg(test)]
 mod quote_tests {
     use super::*;
+
+    #[test]
+    fn multiple_screenshots_keep_order_legacy_compatibility_and_stage_coverage() {
+        assert_eq!(
+            screenshot_frame_ids(
+                &json!({"screenshotFrameIds":[3,2,3,-1,"4"],"screenshotFrameId":1})
+            ),
+            vec![3, 2, 1]
+        );
+        assert_eq!(
+            screenshot_frame_ids(&json!({"screenshotFrameId":9})),
+            vec![9]
+        );
+        let mut analysis = json!({"workflows":[{"stages":[
+            {"screenshots":[{"frameId":3},{"frameId":2}],"screenshot":{"frameId":3}},
+            {"screenshot":null}
+        ],"quality":{"grade":"strong","reasons":[]}}]});
+        attach_screenshot_quality(&mut analysis);
+        assert_eq!(analysis["workflows"][0]["quality"]["screenshotCount"], 2);
+        assert_eq!(
+            analysis["workflows"][0]["quality"]["stageScreenshotCoverage"],
+            50
+        );
+    }
 
     #[test]
     fn research_notes_get_field_errors_not_a_recurrence_rejection() {
@@ -1643,6 +1711,17 @@ mod quote_tests {
         assert!(!sources
             .iter()
             .any(|s| s["timestamp"] == references[5]["timestamp"]));
+        let mut with_images = raw.clone();
+        with_images["workflows"][0]["stages"][0]["screenshotFrameIds"] = json!([100]);
+        catalog
+            .frames
+            .insert(100, (catalog.points[5].timestamp, "Receipts".into()));
+        let retained = normalize_analysis(with_images, 90, &catalog).unwrap();
+        assert!(retained["workflows"][0]["stages"][0]["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|source| source["timestamp"] == references[5]["timestamp"]));
         // A late reference is not permission to accept an unsupported quote.
         let mut invalid = raw;
         invalid["workflows"][0]["stages"][0]["procedure"][1]["quote"] =

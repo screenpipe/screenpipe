@@ -3,7 +3,7 @@
 import type { WorkflowRunActivity } from "@screenpipe/workflows-ui";
 import { mountAgentEventBus, registerObserver } from "@/lib/events/bus";
 import { parsePipeSessionId } from "@/lib/events/types";
-import { presentToolActivity } from "@/lib/chat/tool-presentation";
+import { GENERIC_ACTIVITY, presentToolActivity } from "@/lib/chat/tool-presentation";
 import { getApiBaseUrl } from "@/lib/api";
 
 /** Read-only observer: keep Chat's event ownership and task lifecycle intact. */
@@ -23,8 +23,17 @@ export async function subscribeWorkflowActivity(jobId: string, onActivity: (item
     const running = event.type === "tool_execution_start";
     const presentation = presentations.get(event.toolCallId) ?? presentToolActivity({ toolName: event.toolName, args: event.args, kind: event.kind });
     presentations.set(event.toolCallId, presentation);
+    // Generic tool completions do not describe a workflow step or saved result.
+    // Keep meaningful actions and every failure, without filling the feed with
+    // identical internal bookkeeping events. The run status stays active.
+    if (presentation === GENERIC_ACTIVITY && !event.isError) {
+      items.delete(event.toolCallId);
+      presentations.delete(event.toolCallId);
+      onActivity([...items.values()]);
+      return;
+    }
     items.set(event.toolCallId, { id: event.toolCallId,
-      label: event.isError ? `${presentation.runningLabel} · failed` : running ? presentation.runningLabel : presentation.completedLabel,
+      label: presentation === GENERIC_ACTIVITY ? "An update action failed" : event.isError ? `${presentation.runningLabel} · failed` : running ? presentation.runningLabel : presentation.completedLabel,
       status: event.isError ? "error" : running ? "running" : "complete" });
     // Bounded summaries only. Never retain commands, source text or tool results.
     while (items.size > 20) {

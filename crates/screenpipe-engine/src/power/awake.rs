@@ -13,6 +13,20 @@ impl KeepAwakeGuard {
     pub fn acquire() -> Result<Self, String> {
         Self::start()
     }
+
+    /// Acquire on Tokio without blocking its executor on Linux D-Bus.
+    pub async fn acquire_async() -> Result<Self, String> {
+        #[cfg(target_os = "linux")]
+        {
+            tokio::time::timeout(std::time::Duration::from_secs(5), Self::start_async())
+                .await
+                .map_err(|_| "timed out acquiring logind wake lock after 5s".to_string())?
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Self::start()
+        }
+    }
 }
 
 /// Enable or disable the process-wide keep-awake lock.
@@ -31,6 +45,21 @@ pub fn set_keep_awake(enabled: bool) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Apply the setting without holding up the async executor on Linux.
+/// The synchronous setter serializes updates; its D-Bus acquisition is bounded.
+pub async fn set_keep_awake_async(enabled: bool) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        tokio::task::spawn_blocking(move || set_keep_awake(enabled))
+            .await
+            .map_err(|e| format!("keep-awake setting task failed: {e}"))?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        set_keep_awake(enabled)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -230,14 +259,34 @@ pub struct KeepAwakeGuard {
 #[cfg(target_os = "linux")]
 impl KeepAwakeGuard {
     fn start() -> Result<Self, String> {
-        let connection =
-            zbus::blocking::Connection::system().map_err(|e| format!("D-Bus system bus: {e}"))?;
-        let proxy = zbus::blocking::Proxy::new(
+        // Keep the synchronous API usable even inside an existing runtime.
+        // Async callers use acquire_async directly; this worker also gets its
+        // timeout, including connection/authentication rather than just Inhibit.
+        std::thread::Builder::new()
+            .name("screenpipe-keep-awake".into())
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| format!("failed to create keep-awake runtime: {e}"))?
+                    .block_on(Self::acquire_async())
+            })
+            .map_err(|e| format!("failed to spawn keep-awake thread: {e}"))?
+            .join()
+            .map_err(|_| "keep-awake thread panicked".to_string())?
+    }
+
+    async fn start_async() -> Result<Self, String> {
+        let connection = zbus::Connection::system()
+            .await
+            .map_err(|e| format!("D-Bus system bus: {e}"))?;
+        let proxy = zbus::Proxy::new(
             &connection,
             "org.freedesktop.login1",
             "/org/freedesktop/login1",
             "org.freedesktop.login1.Manager",
         )
+        .await
         .map_err(|e| format!("logind D-Bus proxy: {e}"))?;
         let fd: zbus::zvariant::OwnedFd = proxy
             .call(
@@ -249,6 +298,7 @@ impl KeepAwakeGuard {
                     "block",
                 ),
             )
+            .await
             .map_err(|e| format!("logind Inhibit call failed: {e}"))?;
 
         Ok(Self { _fd: fd })
@@ -264,3 +314,7 @@ impl KeepAwakeGuard {
         Err("keep-awake is not supported on this platform".to_string())
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "awake_tests.rs"]
+mod tests;

@@ -15,12 +15,15 @@ function publicationContract(catalog: any) {
 }
 // Small routing context, never a substitute for reading the workflow and sources.
 export function workflowIndex(workflow: any) {
-  const dates = (workflow.evidence ?? []).map((source: any) => source.timestamp)
+  const stages = Array.isArray(workflow.stages) ? workflow.stages : [];
+  const dates = [...(workflow.evidence ?? []), ...stages.flatMap((stage: any) => stage.evidence ?? [])].map((source: any) => source.timestamp)
     .filter((at: unknown) => typeof at === "string" && Number.isFinite(Date.parse(at)))
     .sort((a: string, b: string) => Date.parse(a) - Date.parse(b));
   const runs = Array.isArray(workflow.timingRuns) ? workflow.timingRuns : [];
   return {id:workflow.id,title:workflow.title,trigger:workflow.trigger,outcome:workflow.outcome,
     userCorrection:workflow.userCorrection,quality:workflow.quality,openQuestions:workflow.openQuestions,
+    lastReviewedAt:workflow.lastReviewedAt,userEdits:workflow.userEdits,
+    evidenceCoverage:{stageCount:stages.length,stagesWithProcedure:stages.filter((s:any)=>s.procedure?.length).length,stagesWithVerifiedScreenshot:stages.filter((s:any)=>[...(s.screenshots ?? []), s.screenshot].some(image => image?.visualVerified)).length},
     timing:{runCount:runs.length},
     sourceRange:dates.length ? {first:dates[0],last:dates.at(-1)} : null};
 }
@@ -96,6 +99,7 @@ export default function (pi: ExtensionAPI) {
               cycle:ws.cycle && {id:ws.cycle.id,status:ws.cycle.status,start:ws.cycle.start,end:ws.cycle.end,finished:ws.cycle.finished,changes:ws.cycle.changes},
               drafts:Object.values(ws.drafts || {}).map((d:any)=>({id:d.id,status:d.status,assignee:d.assignee,version:d.version,title:d.payload?.title || d.payload?.name,question:d.history?.at(-1)?.note})),
               workflows:catalog.workflows.map(workflowIndex),
+              researchNotes:ws.researchNotes || {},
               profile:catalog.profile,
               next:'Read a draft with {"action":"context","draft_id":"exact-id"}, or a saved workflow with {"action":"context","workflow_id":"exact-id"}. These return the full record and outputContract. Do not reconstruct unseen payloads from this index.' };
           }

@@ -151,7 +151,7 @@ export const desktopWorkflowsPlatform: WorkflowsPlatform = {
   fillContext: fillWorkContext,
   ensureRuntime: getWorkflowRuntime,
   analyzeCapturedWork: (days, options) => analyzeCapturedWork(days, options?.workProfile),
-  loadCapturedWork: () => browserPreview ? loadSavedAnalysis() : loadScheduledCatalog(),
+  loadCapturedWork: (_days, options) => browserPreview ? loadSavedAnalysis() : loadScheduledCatalog(options?.signal),
   saveCapturedWork: (analysis) => browserPreview ? saveAnalysis(analysis) : saveWorkflowCorrections(analysis),
   ...(!browserPreview ? { saveWorkflowEdits, managesAnalysis: true, ensureAnalysisTask: ensureWorkflowTask,
     startAnalysisJob: startWorkflowJob, getAnalysisJob: getWorkflowJob,

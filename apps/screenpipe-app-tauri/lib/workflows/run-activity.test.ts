@@ -39,3 +39,23 @@ it("bounds activity and preserves tool failures without exposing results or thou
   receive({ source: "pipe", sessionId: "pipe:workflow-discovery:7", event: { type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "private reasoning" } } });
   expect(update).toHaveBeenCalledTimes(count);
 });
+
+it("omits generic bookkeeping but retains useful actions and unknown failures", async () => {
+  const update = vi.fn();
+  await subscribeWorkflowActivity("7", update);
+  const receive = vi.mocked(registerObserver).mock.calls[0][0];
+  const emit = (id: string, toolName: string, end = false, isError = false) => receive({
+    source: "pipe", sessionId: "pipe:workflow-discovery:7", event: {
+      type: end ? "tool_execution_end" : "tool_execution_start", toolCallId: id, toolName, isError,
+      args: { command: "private-operation --secret value" },
+    },
+  });
+  emit("read", "workflow_context", true);
+  emit("generic", "bash");
+  emit("generic", "bash", true);
+  expect(update.mock.lastCall![0]).toEqual([{ id: "read", label: "Read saved workflows", status: "complete" }]);
+  emit("failed", "bash");
+  emit("failed", "bash", true, true);
+  expect(update.mock.lastCall![0].at(-1)).toEqual({ id: "failed", label: "An update action failed", status: "error" });
+  expect(JSON.stringify(update.mock.calls)).not.toMatch(/private-operation|secret|Completed a background step/);
+});

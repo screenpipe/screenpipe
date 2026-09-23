@@ -112,11 +112,11 @@ pub(crate) async fn context(
     };
     let workflows: Vec<Value> = value["analysis"]["workflows"].as_array().into_iter().flatten().map(|w| json!({
         "id":workflow_id(w), "title":w["title"], "trigger":w["trigger"], "outcome":w["outcome"],
-        "description":w["description"], "userCorrection":w["userCorrection"], "lastReviewedAt":w["lastReviewedAt"],
+        "description":w["description"], "userEdits":w["userEdits"], "userCorrection":w["userCorrection"], "lastReviewedAt":w["lastReviewedAt"],
         "confidence":w["confidence"], "people":w["people"], "teams":w["teams"], "handoffs":w["handoffs"], "variations":w["variations"], "bottlenecks":w["bottlenecks"], "captureSequence":w["captureSequence"],
         "timingRuns":w["timing"]["runs"], "limitations":w["limitations"], "openQuestions":w["openQuestions"], "quality":w["quality"], "apps":w["apps"],
         "evidence":context_source_refs(&w["evidence"]),
-        "stages":w["stages"].as_array().into_iter().flatten().map(|s| json!({"name":s["name"],"description":s["description"],"apps":s["apps"],"confidence":s["confidence"],"procedure":s["procedure"],"evidence":context_source_refs(&s["evidence"]),"openQuestions":s["openQuestions"]})).collect::<Vec<_>>()
+        "stages":w["stages"].as_array().into_iter().flatten().map(|s| json!({"name":s["name"],"description":s["description"],"apps":s["apps"],"confidence":s["confidence"],"userEdited":s["userEdited"],"screenshot":s.get("screenshot").filter(|v| v.is_object()).map(|v| json!({"frameId":v["frameId"],"timestamp":v["timestamp"],"app":v["app"],"visualVerified":v["visualVerified"]})),"screenshots":stage_screenshots(s).iter().map(|v| json!({"frameId":v["frameId"],"timestamp":v["timestamp"],"app":v["app"],"visualVerified":v["visualVerified"]})).collect::<Vec<_>>(),"procedure":s["procedure"],"evidence":context_source_refs(&s["evidence"]),"openQuestions":s["openQuestions"]})).collect::<Vec<_>>()
     })).collect();
     Ok(Json(
         json!({"revision":value["revision"].as_u64().unwrap_or(0), "now":Utc::now().to_rfc3339(),
@@ -238,6 +238,12 @@ pub(super) async fn persist(
     })?;
     let before = serde_json::to_vec(previous).unwrap();
     let after = serde_json::to_vec(next).unwrap();
+    if after.len() as u64 > super::workflows::MAX_CATALOG_BYTES {
+        return Err(error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Workflow catalog exceeds the local storage limit. No changes were saved.",
+        ));
+    }
     tokio::task::spawn_blocking(move || {
         let _lock = crate::atomic_file::lock(&dir.join("catalog.lock"))?;
         crate::atomic_file::replace(&dir.join("catalog.backup.json"), &before)?;
@@ -419,38 +425,14 @@ pub(crate) async fn commit(
     for w in updates.iter_mut() {
         if let Some(proposed) = body.workflows.iter().find(|p| p["title"] == w["title"]) {
             for stage in w["stages"].as_array_mut().into_iter().flatten() {
-                let frame = proposed["stages"]
+                let frames = proposed["stages"]
                     .as_array()
                     .into_iter()
                     .flatten()
                     .find(|s| s["name"] == stage["name"])
-                    .and_then(|s| s["screenshotFrameId"].as_i64());
-                if let Some(id) = frame.filter(|n| *n > 0) {
-                    if let Some((timestamp, app)) = evidence.frames.get(&id) {
-                        let matches = stage["evidence"].as_array().into_iter().flatten().any(|e| {
-                            e["app"]
-                                .as_str()
-                                .is_some_and(|a| a.eq_ignore_ascii_case(app))
-                                && e["timestamp"]
-                                    .as_str()
-                                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                                    .is_some_and(|at| at == *timestamp)
-                        });
-                        if matches {
-                            let response = apply_auth(&endpoint,reqwest::Client::new().get(format!("{}/frames/{id}/thumbnail?width=640&quality=68&fallback=false",endpoint.base_url)).timeout(Duration::from_secs(10))).send().await;
-                            if let Ok(response) = response {
-                                if response.status().is_success() {
-                                    if let Ok(bytes) = response.bytes().await {
-                                        if !bytes.is_empty() && bytes.len() <= 500_000 {
-                                            use base64::Engine;
-                                            stage["screenshot"] = json!({"frameId":id,"timestamp":timestamp.to_rfc3339(),"app":app,"matchDistanceSeconds":0,"visualVerified":true,"dataUrl":format!("data:image/jpeg;base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes))});
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                    .map(screenshot_frame_ids)
+                    .unwrap_or_default();
+                attach_stage_screenshots(stage, frames, &evidence, &endpoint).await;
             }
         }
     }
@@ -657,9 +639,127 @@ pub(crate) async fn correct(
     Ok(Json(json!({"success":true,"workflow":updated_workflow})))
 }
 
+async fn attach_stage_screenshots(
+    stage: &mut Value,
+    frames: Vec<i64>,
+    evidence: &EvidenceCatalog,
+    endpoint: &RecorderEndpoint,
+) {
+    let mut screenshots = Vec::new();
+    for id in frames {
+        if let Some((timestamp, app)) = evidence.frames.get(&id) {
+            let matches = stage["evidence"].as_array().into_iter().flatten().any(|e| {
+                e["app"]
+                    .as_str()
+                    .is_some_and(|a| a.eq_ignore_ascii_case(app))
+                    && e["timestamp"]
+                        .as_str()
+                        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                        .is_some_and(|at| at == *timestamp)
+            });
+            if matches {
+                let response = apply_auth(
+                    endpoint,
+                    reqwest::Client::new()
+                        .get(format!(
+                            "{}/frames/{id}/thumbnail?width=640&quality=68&fallback=false",
+                            endpoint.base_url
+                        ))
+                        .timeout(Duration::from_secs(10)),
+                )
+                .send()
+                .await;
+                if let Ok(response) = response {
+                    if response.status().is_success() {
+                        if let Ok(bytes) = response.bytes().await {
+                            if !bytes.is_empty() && bytes.len() <= 500_000 {
+                                use base64::Engine;
+                                screenshots.push(json!({"frameId":id,"timestamp":timestamp.to_rfc3339(),"app":app,"matchDistanceSeconds":0,"visualVerified":true,"dataUrl":format!("data:image/jpeg;base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes))}));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    stage["screenshots"] = json!(screenshots);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn multiple_exact_images_survive_publish_storage_and_reload() {
+        use axum::{routing::get, Router};
+        let app = Router::new().route(
+            "/frames/:id/thumbnail",
+            get(
+                |axum::extract::Path(id): axum::extract::Path<i64>,
+                 axum::extract::Query(query): axum::extract::Query<
+                    std::collections::HashMap<String, String>,
+                >| async move {
+                    assert_eq!(query.get("fallback").map(String::as_str), Some("false"));
+                    if id == 4 {
+                        (StatusCode::NOT_FOUND, Vec::new())
+                    } else {
+                        (StatusCode::OK, vec![0xff, 0xd8, 0xff, 0xd9])
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = RecorderEndpoint {
+            source: "test",
+            base_url: format!("http://{}", listener.local_addr().unwrap()),
+            api_key: None,
+            health: Value::Null,
+        };
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let at = DateTime::parse_from_rfc3339("2026-09-22T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut evidence = EvidenceCatalog::default();
+        for id in 1..=4 {
+            evidence
+                .frames
+                .insert(id, (at + ChronoDuration::seconds(id), "Notes".into()));
+        }
+        let mut stage = json!({"name":"Review notes", "screenshot":null, "evidence":[
+            {"timestamp":(at + ChronoDuration::seconds(1)).to_rfc3339(),"app":"Notes"},
+            {"timestamp":(at + ChronoDuration::seconds(2)).to_rfc3339(),"app":"Notes"},
+            {"timestamp":(at + ChronoDuration::seconds(4)).to_rfc3339(),"app":"Notes"}
+        ]});
+        // Duplicate, unsupported, unavailable, and missing frame references cannot add images.
+        let frames = screenshot_frame_ids(&json!({"screenshotFrameIds":[2,1,2,3,4,999]}));
+        attach_stage_screenshots(&mut stage, frames, &evidence, &endpoint).await;
+        assert_eq!(
+            stage["screenshots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|image| image["frameId"].as_i64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert!(stage["screenshots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|image| image["visualVerified"] == true && image["matchDistanceSeconds"] == 0));
+        let dir = tempfile::tempdir().unwrap();
+        let source = WorkflowCatalogSource(Some(dir.path().to_path_buf()));
+        let previous = read_catalog(&source).await.unwrap();
+        let next = json!({"schemaVersion":5,"analysis":{"workflows":[{"title":"Review notes","stages":[stage]}]}});
+        persist(&source, &previous, &next).await.unwrap();
+        assert_eq!(
+            read_catalog(&source).await.unwrap()["analysis"],
+            next["analysis"]
+        );
+        server.abort();
+    }
+
     #[test]
     fn context_preserves_source_addresses_without_capture_payloads() {
         let refs = context_source_refs(&json!([{

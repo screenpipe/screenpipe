@@ -92,6 +92,19 @@ if (timing) {
   }
   ws.drafts={}; ws.cycle.finished={"workflow-discover":true};
 }
+const repeatCycle = process.argv.includes("--repeat-cycle");
+if (repeatCycle && timingCase !== "historical") throw new Error("Repeat-cycle regression uses --timing=historical");
+let cycleNumber=1;
+const cycleResults:any[]=[];
+const laterEvidence={timestamp:new Date(Date.parse(now)-1800000).toISOString(),app:"Receipts",quote:"Receipt INV-124 saved. Copied receipt confirmation ID RCPT-246 into the reconciliation log. The reconciliation log shows RCPT-246 saved beside INV-124."};
+const sparseProcedure = process.argv.includes("--sparse-procedure");
+if (sparseProcedure) {
+  if (timingCase !== "historical") throw new Error("Sparse procedure regression uses --timing=historical");
+  existing.stages.forEach((stage:any) => { stage.procedure=[]; stage.screenshot=null; stage.screenshots=[]; });
+  existing.lastReviewedAt=existing.evidence[0].timestamp;
+  existing.userEdits={stages:true};
+  existing.limitations=["Old map has source addresses but no investigated procedure."];
+}
 const historyStart = new Date(Date.parse(now) - 90 * 86400000).toISOString();
 if (timingCase === "historical") {
   rows.push({timestamp:new Date(Date.parse(now)-3600000).toISOString(),app:"Browser",quote:"Reading a product announcement. No receipt entry in progress."});
@@ -140,6 +153,7 @@ const server=Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,async fetch(
     } else if(b.action==="finish") {
       if(timingCase&&task==="workflow-review"&&!ws.cycle.finished["workflow-maintain"])return Response.json({error:"Maintenance has not finished."},{status:409});
       if(Object.values(ws.drafts).some((d:any)=>d.status==="open"&&((!timingCase&&!discovery&&task!=="workflow-deepen")||d.assignee===task)))return Response.json({error:"Open drafts remain"},{status:409});
+      ws.cycle.notes ||= {};ws.cycle.notes[task]=b.note;
       if(task==="workflow-deepen"||(timingCase&&task==="workflow-maintain"))ws.cycle.finished[task]=true;else ws.cycle.status="complete";
     }else return Response.json({error:"Unknown action"},{status:400});
     ws.revision++;return Response.json({saved:true,revision:ws.revision});
@@ -172,7 +186,7 @@ try{
   let stdout="", stderr="", exit=0;
   const promptVersions: any[] = [];
   const deadline=Date.now()+timeoutMs;
-  for(let pass=0;pass<((timingCase||repair||researchNotes||repairSource)?5:1)&&Date.now()<deadline;pass++){
+  for(let pass=0;pass<(repeatCycle?10:(timingCase||repair||researchNotes||repairSource)?5:1)&&Date.now()<deadline;pass++){
   const template=await Bun.file((pass===0&&process.env.WORKFLOW_EVAL_PROMPT_FILE)||(process.env.WORKFLOW_EVAL_PIPE_DIR ? join(process.env.WORKFLOW_EVAL_PIPE_DIR,task,"pipe.md") : join(assets,`pipes/${task}/pipe.md`))).text();
   const skillFile=process.env.WORKFLOW_EVAL_SKILL_FILE || join(assets,"skills/screenpipe-workflow-maintenance/SKILL.md");
   const hash=(text:string)=>createHash("sha256").update(text).digest("hex");
@@ -184,7 +198,20 @@ try{
   const timer=setTimeout(()=>child.kill(),Math.max(1,deadline-Date.now()));
   const [out,err,code]=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]);clearTimeout(timer);
   stdout+=out;stderr+=err;exit=code;
-  if(code!==0||ws.cycle.status==="complete")break;
+  if(code!==0)break;
+  if(ws.cycle.status==="complete") {
+    cycleResults.push({cycle:cycleNumber,workspace:structuredClone(ws),published:structuredClone(published),requestCount:requestLog.length});
+    if(!repeatCycle || cycleNumber===2)break;
+    // The real Rust cycle transition is tested separately. Model replay uses
+    // the same serialized catalog and last investigations, with new evidence.
+    if(!published.length)break;
+    Object.assign(existing,structuredClone(published.at(-1)));
+    ws=JSON.parse(JSON.stringify(ws));
+    ws.researchNotes=Object.fromEntries(Object.entries(ws.cycle.notes||{}).map(([agent,note])=>[agent,{cycleId:ws.cycle.id,through:ws.cycle.end,note,truncated:false}]));
+    ws.cycle={id:"fixture-cycle-2",start:new Date(Date.parse(now)-3600000).toISOString(),end:now,status:"running",finished:{"workflow-discover":true},changes:{created:0,updated:0}};
+    ws.drafts={};ws.revision++;cycleNumber=2;
+    rows.push(laterEvidence);task="workflow-maintain";continue;
+  }
   const next=Object.values(ws.drafts).find((d:any)=>d.status==="open") as any;
   task=next?.assignee||(timingCase && !ws.cycle.finished["workflow-maintain"] ? "workflow-maintain" : "workflow-review");
   }
@@ -205,12 +232,31 @@ try{
   });
   if(missingDraft)Object.assign(checks,{harnessReportsError:events.some(e=>e.type==="tool_execution_end"&&e.toolName==="workflow_workspace"&&e.isError===true)});
   if(timing) checks={exited:exit===0, completed:ws.cycle.status==="complete", sourceRead:reads>0, privateVerified:verified, ...gradeTiming(published,existing,timing.expected)};
+  if(sparseProcedure)Object.assign(checks,{
+    enrichedExisting:published.length>0 && published.at(-1).id===existing.id,
+    supportedProcedure:published.length>0 && published.at(-1).stages.every((s:any)=>s.procedure?.length>0 && s.procedure.every((p:any)=>rows.some(r=>r.timestamp===p.timestamp && r.app===p.app && typeof p.quote==="string" && p.quote.length>=12 && r.quote.includes(p.quote)))),
+    noInventedScreenshot:published.every(w=>w.stages.every((s:any)=>!s.screenshotFrameId && !(s.screenshotFrameIds?.length))),
+  });
   if(contextHistoryCount)Object.assign(checks,{
     contextSnapshotExposed:events.some(e=>e.type==="tool_execution_end"&&e.toolName==="workflow_workspace"&&e.result?.details?.path?.includes(".workflow-context-")),
     preservedResolvedHistory:Object.entries(ws.drafts).filter(([id])=>id.startsWith("resolved-")).length===contextHistoryCount&&Object.entries(ws.drafts).filter(([id])=>id.startsWith("resolved-")).every(([,d]:any)=>d.status==="rejected"),
   });
+  if(repeatCycle) {
+    const first=cycleResults[0]?.published.at(-1), second=published.at(-1);
+    const firstSources=new Set(first?.stages.flatMap((s:any)=>s.procedure.map((p:any)=>p.timestamp))||[]);
+    const secondSources=new Set(second?.stages.flatMap((s:any)=>s.procedure.map((p:any)=>p.timestamp))||[]);
+    // Timing is already graded on the individual fixtures. For two cycles,
+    // judge accumulated supported knowledge, stable identity and new evidence.
+    checks={exited:exit===0,completed:cycleResults.length===2,sourceRead:reads>0,privateVerified:verified,
+      sameWorkflow:!!first && !!second && published.every(w=>w.id==="wf-receipts"),
+      retainedPriorEvidence:firstSources.size>0 && [...firstSources].every(at=>secondSources.has(at)),
+      learnedNewAction:!!second && second.stages.some((s:any)=>s.procedure?.some((p:any)=>p.timestamp===laterEvidence.timestamp && /confirmation|reconciliation/i.test(p.text) && laterEvidence.quote.includes(p.quote))),
+      priorInvestigationAvailable:!!ws.researchNotes?.["workflow-maintain"]?.note,
+      noInventedScreenshot:published.every(w=>w.stages.every((s:any)=>!s.screenshotFrameId && !(s.screenshotFrameIds?.length))),
+    };
+  }
   const passed=Object.values(checks).every(Boolean);
-  await writeFile(join(root,"result.json"),JSON.stringify({passed,checks,ws,published,requestLog,promptVersions,model,case:timingCase||null,now,timeoutMs}),{mode:0o600});
+  await writeFile(join(root,"result.json"),JSON.stringify({passed,checks,ws,published,cycleResults,requestLog,promptVersions,model,case:timingCase||null,now,timeoutMs}),{mode:0o600});
   if(timing && timing.expected.length && published.length) await writeFile(join(root,"native-timing-input.json"),JSON.stringify({payload:published.at(-1),rows:timing.rows,expectedAverageMinutes:7,expectedSamples:2}),{mode:0o600});
   console.log(JSON.stringify({passed,checks,artifact:root,model}));if(!passed)process.exitCode=1;
 }finally{server.stop(true);}

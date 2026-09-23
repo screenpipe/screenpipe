@@ -132,6 +132,21 @@ describe("guide contracts and export", () => {
     );
     expect(clean.analysis.workflows[0].quality.screenshotCount).toBe(2);
   });
+  it("round-trips multiple screenshots and counts images separately from covered steps", () => {
+    const catalog = structuredClone(fixtureWorkflowAnalysis);
+    const w = catalog.analysis.workflows[0];
+    catalog.analysis.workflows = [w];
+    const first = w.stages[0].screenshot!;
+    w.stages[0].screenshots = [first, { ...first, frameId: 901 }, { ...first, frameId: 902 }];
+    w.stages[1].screenshot = null;
+    w.stages[2].screenshot = null;
+    const clean = sanitizeWorkflowAnalysis(JSON.parse(JSON.stringify(catalog)));
+    expect(clean.analysis.workflows[0].stages[0].screenshots).toEqual(w.stages[0].screenshots);
+    expect(clean.analysis.workflows[0].quality.screenshotCount).toBe(3);
+    expect(clean.analysis.workflows[0].quality.stageScreenshotCoverage).toBe(33);
+    expect(clean.quality.screenshotCount).toBe(3);
+    expect(clean.quality.screenshotCoverage).toBe(33);
+  });
   it("persists human review, but never accepts it from generated output or for another source", () => {
     const w = structuredClone(workflow);
     delete w.stages[0].screenshot!.visualVerified;

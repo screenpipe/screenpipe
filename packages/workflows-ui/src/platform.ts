@@ -15,6 +15,7 @@ import type { WorkflowGuide } from "./guide";
 import type { WorkflowsAssistantPlatform } from "./assistant";
 
 export type WorkflowAnalysisOptions = {
+  signal?: AbortSignal;
   scope?: WorkflowScope;
   workProfile?: WorkProfile | null;
 };
@@ -27,6 +28,8 @@ export type WorkflowRunActivity = {
 
 export type WorkflowAnalysisJob = {
   id: string;
+  /** Stable across agent executions belonging to one update. */
+  cycleId?: string;
   status: "queued" | "processing" | "complete" | "incomplete" | "failed";
   progress?: number;
   startedAt?: string;

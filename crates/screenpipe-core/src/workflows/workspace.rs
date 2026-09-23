@@ -53,7 +53,7 @@ pub fn ready(ws: &Value, task: &str) -> bool {
             && ws["cycle"]["end"]
                 .as_str()
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .is_some_and(|end| Utc::now().signed_duration_since(end) >= Duration::hours(24));
+                .is_some_and(|end| Utc::now().signed_duration_since(end) >= Duration::hours(1));
     }
     assigned(ws, task)
         || match task {
@@ -103,6 +103,25 @@ pub fn start(ws: &mut Value, catalog: &Value) {
     }
     if !ws["cycle"].is_null() && ws["cycle"]["status"] == "running" {
         return;
+    }
+    // Keep the last completed investigation per agent across cycles/restarts.
+    // Durable facts belong in the catalog; these bounded notes retain research
+    // gaps and decisions, not another copy of every draft or captured source.
+    if ws["cycle"]["status"] == "complete" {
+        for task in TASKS {
+            if let Some(note) = ws["cycle"]["notes"][task]
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+            {
+                let summary: String = note.chars().take(8000).collect();
+                let entry = json!({"cycleId":ws["cycle"]["id"],"through":ws["cycle"]["end"],
+                    "note":summary,"truncated":summary.len() < note.len()});
+                if !ws["researchNotes"].is_object() {
+                    ws["researchNotes"] = json!({});
+                }
+                ws["researchNotes"][task] = entry;
+            }
+        }
     }
     let now = Utc::now();
     let start = catalog["checkedThrough"]
@@ -319,6 +338,58 @@ pub fn validate_publication(raw: &Value, normalized: &Value) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn completed_research_survives_cycles_restart_and_pause() {
+        let mut ws = empty();
+        start(&mut ws, &json!({}));
+        ws["cycle"]["notes"][TASKS[3]] = json!("wf-a: preparation verified; earlier recording unavailable. Recheck if new evidence appears.");
+        ws["cycle"]["status"] = json!("complete");
+        let old_id = ws["cycle"]["id"].clone();
+        let mut restored = state(
+            &serde_json::from_str::<Value>(&json!({"agentWorkspace":ws}).to_string()).unwrap(),
+        );
+        start(&mut restored, &json!({}));
+        assert_eq!(restored["researchNotes"][TASKS[3]]["cycleId"], old_id);
+        assert!(restored["researchNotes"][TASKS[3]]["note"]
+            .as_str()
+            .unwrap()
+            .contains("earlier recording unavailable"));
+        let saved_notes = restored["researchNotes"].clone();
+        start(&mut restored, &json!({}));
+        pause(&mut restored);
+        start(&mut restored, &json!({}));
+        assert_eq!(restored["researchNotes"], saved_notes);
+        restored["cycle"]["status"] = json!("complete");
+        restored["cycle"]["notes"][TASKS[0]] = json!("New job investigated");
+        start(&mut restored, &json!({}));
+        assert_eq!(restored["researchNotes"][TASKS[3]], saved_notes[TASKS[3]]);
+        assert_eq!(
+            restored["researchNotes"][TASKS[0]]["note"],
+            "New job investigated"
+        );
+        restored["cycle"]["status"] = json!("complete");
+        restored["cycle"]["notes"][TASKS[3]] = json!("Updated evidence closes the gap");
+        start(&mut restored, &json!({}));
+        assert_eq!(
+            restored["researchNotes"][TASKS[3]]["note"],
+            "Updated evidence closes the gap"
+        );
+    }
+    #[test]
+    fn retained_research_is_bounded_without_invalid_unicode() {
+        let mut ws = empty();
+        ws["cycle"] = json!({"status":"complete","notes":{TASKS[3]:"界".repeat(9000)}});
+        start(&mut ws, &json!({}));
+        assert_eq!(
+            ws["researchNotes"][TASKS[3]]["note"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            8000
+        );
+        assert_eq!(ws["researchNotes"][TASKS[3]]["truncated"], true);
+    }
     fn change(action: &str, ws: &Value, id: Option<String>, assignee: Option<&str>) -> Change {
         Change {
             action: action.into(),
@@ -330,6 +401,19 @@ mod tests {
             ),
             note: "Investigate actual observed actions, not menu labels".into(),
         }
+    }
+    #[test]
+    fn completed_cycles_allow_hourly_discovery_without_completion_loops() {
+        let mut ws = empty();
+        ws["cycle"] =
+            json!({"status":"complete","end":(Utc::now()-Duration::minutes(30)).to_rfc3339()});
+        assert!(TASKS.iter().all(|task| !ready(&ws, task)));
+        ws["cycle"]["end"] = json!((Utc::now() - Duration::minutes(61)).to_rfc3339());
+        assert!(ready(&ws, TASKS[0]));
+        assert!(TASKS[1..].iter().all(|task| !ready(&ws, task)));
+        ws["cycle"] =
+            json!({"status":"paused","pausedAt":(Utc::now()-Duration::minutes(61)).to_rfc3339()});
+        assert!(TASKS.iter().all(|task| !ready(&ws, task)));
     }
     #[test]
     fn missing_targets_are_distinct_from_ownership_and_never_mutate() {

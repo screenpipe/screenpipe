@@ -313,7 +313,7 @@ pub(crate) async fn resume_before_startup(
         // large index: expose that work and keep retry unavailable until the
         // server and saved capture preference have actually been restored.
         let awake =
-            screenpipe_engine::power::KeepAwakeGuard::acquire().map_err(|e| e.to_string())?;
+            screenpipe_engine::power::KeepAwakeGuard::acquire_async().await?;
         update_operation(app, |operation| {
             *operation = Operation {
                 root: Some(root.clone()),
@@ -353,7 +353,7 @@ pub(crate) async fn resume_before_startup(
     {
         return Ok(None);
     }
-    let awake = screenpipe_engine::power::KeepAwakeGuard::acquire().map_err(|e| e.to_string())?;
+    let awake = screenpipe_engine::power::KeepAwakeGuard::acquire_async().await?;
     crate::health::set_boot_phase(
         "migrating_database",
         Some("Resuming saved storage migration"),
@@ -780,12 +780,14 @@ async fn start_storage_migration_inner(
     }
     // Independent of the recording preference, which startup reapplies during switchover.
     // Acquire before pausing so a failed wake lock never strands recording.
-    let awake = screenpipe_engine::power::KeepAwakeGuard::acquire().map_err(|error| {
-        let error = format!("Could not prevent sleep. Migration has not started: {error}");
-        report_migration_failure(&app, &root, &error);
-        let _ = save_migration_error(&root, &error);
-        error
-    })?;
+    let awake = screenpipe_engine::power::KeepAwakeGuard::acquire_async()
+        .await
+        .map_err(|error| {
+            let error = format!("Could not prevent sleep. Migration has not started: {error}");
+            report_migration_failure(&app, &root, &error);
+            let _ = save_migration_error(&root, &error);
+            error
+        })?;
     // Write BEFORE pausing recording. A crash, kill, or failed error write must
     // never erase the block and let the next launch pause recording again.
     save_migration_error(&root, INTERRUPTED_MIGRATION).map_err(|error| {

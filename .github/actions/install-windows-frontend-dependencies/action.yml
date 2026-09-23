@@ -25,6 +25,13 @@ runs:
             Remove-Item -LiteralPath $destination -Recurse -Force
           }
         }
+        # Bun's frozen install can retain packages removed from the lockfile.
+        # Tauri scans installed plugins, so an orphan can fail its version gate.
+        # Rebuild the installed tree; the persistent Bun download cache remains.
+        $modules = Join-Path (Get-Location) 'node_modules'
+        if (Test-Path -LiteralPath $modules) {
+          Remove-Item -LiteralPath $modules -Recurse -Force
+        }
         $staged = Join-Path (Get-Location) '.release-workflows-ui'
         New-Item -ItemType Directory -Force -Path $staged | Out-Null
         Copy-Item -LiteralPath "$source/package.json" -Destination $staged -Force
