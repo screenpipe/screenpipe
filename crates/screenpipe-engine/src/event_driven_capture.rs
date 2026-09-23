@@ -3293,8 +3293,14 @@ async fn do_capture(
     let needs_settle = monitor_hosts_focus
         && !screenshot_disabled
         && !skip_pixels_for_unknown_exclusions
-        && screenshot_window
-            .is_some_and(|window| params.settled_window.load(Ordering::Relaxed) != window);
+        && (screenshot_window
+            .is_some_and(|window| params.settled_window.load(Ordering::Relaxed) != window)
+            // A settled HWND does not mean an edit has finished painting. UIA
+            // can observe the completed value after pixels captured mid-input.
+            // Reuse the bounded render check for accepted editing checkpoints
+            // and their Manual follow-up, preserving the normal debounce gates.
+            || is_soft_checkpoint_trigger(trigger)
+            || matches!(trigger, CaptureTrigger::Manual));
     #[cfg(target_os = "windows")]
     let mut render_stable = !needs_settle;
 
