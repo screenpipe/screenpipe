@@ -422,6 +422,8 @@ pub struct TreeSnapshot {
     /// configured. Downstream, the meeting OCR gate uses this to scope
     /// text-region detection and OCR to the meeting window (#5054).
     pub window_bounds: Option<WindowBounds>,
+    /// Exact native window walked (Windows HWND). Ephemeral, never persisted.
+    pub native_window_id: Option<usize>,
 }
 
 impl TreeSnapshot {
@@ -967,6 +969,7 @@ mod tests {
             retained_work_pending: false,
             max_depth_reached: 1,
             window_bounds: None,
+            native_window_id: None,
         }
     }
 

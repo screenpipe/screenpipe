@@ -309,6 +309,10 @@ async fn wait_for_warm_focus_or_timeout(
 /// Groups parameters that don't change between captures on the same monitor,
 /// keeping `do_capture`'s argument list manageable.
 pub(crate) struct CaptureParams<'a> {
+    #[cfg(target_os = "windows")]
+    pub settled_window: &'a std::sync::atomic::AtomicUsize,
+    #[cfg(target_os = "windows")]
+    pub render_recheck_needed: &'a AtomicBool,
     pub db: &'a DatabaseManager,
     pub monitor: &'a SafeMonitor,
     pub monitor_id: u32,
@@ -1154,7 +1158,17 @@ pub(crate) async fn event_driven_capture_loop(
     let tree_walker =
         TreeWalkerWorker::spawn(format!("monitor-{monitor_id}"), tree_walker_config.clone())?;
 
+    #[cfg(target_os = "windows")]
+    let settled_window = std::sync::atomic::AtomicUsize::new(0);
+    #[cfg(target_os = "windows")]
+    let render_recheck_needed = AtomicBool::new(false);
+    #[cfg(target_os = "windows")]
+    let mut render_recheck = RenderRecheck::default();
     let capture_params = CaptureParams {
+        #[cfg(target_os = "windows")]
+        settled_window: &settled_window,
+        #[cfg(target_os = "windows")]
+        render_recheck_needed: &render_recheck_needed,
         db: &db,
         monitor: &monitor,
         monitor_id,
@@ -1212,6 +1226,13 @@ pub(crate) async fn event_driven_capture_loop(
         .await
         {
             Ok(Ok(output)) => {
+                #[cfg(target_os = "windows")]
+                render_recheck.record(
+                    render_recheck_needed.swap(false, Ordering::Relaxed),
+                    false,
+                    output.result.is_some(),
+                    Instant::now(),
+                );
                 state.mark_captured();
                 if let Some(ref mut comparer) = frame_comparer {
                     let _ = comparer.compare(&output.image);
@@ -1935,6 +1956,22 @@ pub(crate) async fn event_driven_capture_loop(
             }
         }
 
+        // A focus/paint race must not leave the final screen unindexed until
+        // the idle backstop. Preserve the original pixels, then make at most
+        // two normal, privacy-gated follow-up captures. Never bypass pause,
+        // focus, DRM, schedule or capture debounce for this recheck.
+        #[cfg(target_os = "windows")]
+        let render_recheck_trigger = trigger
+            .is_none()
+            .then(|| render_recheck.trigger(Instant::now(), state.can_capture()))
+            .flatten();
+        #[cfg(target_os = "windows")]
+        let is_render_recheck = render_recheck_trigger.is_some();
+        #[cfg(target_os = "windows")]
+        if let Some(recheck) = render_recheck_trigger {
+            trigger = Some(recheck);
+        }
+
         if let Some(trigger) = trigger {
             // Reset content hash on app/window change so the first frame
             // of a new context is never deduped by a stale hash
@@ -2057,6 +2094,10 @@ pub(crate) async fn event_driven_capture_loop(
                     &monitor_liveness,
                     screenpipe_screen::CaptureLoopStage::Capture,
                 );
+                #[cfg(target_os = "windows")]
+                if is_render_recheck {
+                    render_recheck.consume();
+                }
                 let capture_result = capture_with_timeout(
                     CAPTURE_OPERATION_TIMEOUT,
                     do_capture(
@@ -2080,6 +2121,23 @@ pub(crate) async fn event_driven_capture_loop(
 
                 match capture_result {
                     Ok(Ok(output)) => {
+                        #[cfg(target_os = "windows")]
+                        render_recheck.record(
+                            render_recheck_needed.swap(false, Ordering::Relaxed),
+                            is_render_recheck,
+                            output.result.is_some(),
+                            Instant::now(),
+                        );
+                        #[cfg(target_os = "windows")]
+                        if is_soft_checkpoint_trigger(&trigger) {
+                            // UIA or pixels may still describe the beginning of
+                            // an edit burst. Coalescing limits attempts, but a
+                            // successful early capture is not an end-of-edit
+                            // observation. A skipped/deduped attempt also cannot
+                            // prove that final state was stored. Arm one bounded,
+                            // privacy-gated follow-up after input settles.
+                            render_recheck.after_edit(Instant::now());
+                        }
                         state.mark_captured();
 
                         if consecutive_capture_errors > 0 {
@@ -2403,6 +2461,160 @@ async fn push_to_hot_cache(
     cache.push_frame(hot).await;
 }
 
+/// Two bounded follow-ups recover final-state indexing after a paint race.
+/// A continuous animation cannot create an unbounded polling/recording loop.
+#[cfg(any(target_os = "windows", test))]
+#[derive(Default)]
+struct RenderRecheck {
+    deadline: Option<Instant>,
+    attempts: u8,
+}
+#[cfg(any(target_os = "windows", test))]
+impl RenderRecheck {
+    fn due(&self, now: Instant) -> bool {
+        self.deadline.is_some_and(|deadline| now >= deadline)
+    }
+    fn trigger(&self, now: Instant, can_capture: bool) -> Option<CaptureTrigger> {
+        // This is recovery of a recorded focus checkpoint, not background
+        // visual polling. A VisualChange would be discarded by the walk
+        // budget immediately after the first (uncertain) walk. Preserve the
+        // normal capture cadence, but use the existing checkpoint admission
+        // path so processing throttles cannot erase the bounded follow-up.
+        (can_capture && self.due(now)).then_some(CaptureTrigger::Manual)
+    }
+    fn after_edit(&mut self, now: Instant) {
+        self.attempts = 0;
+        self.deadline = Some(now + Duration::from_millis(750));
+    }
+    fn consume(&mut self) {
+        self.deadline = None;
+        self.attempts = self.attempts.saturating_add(1);
+    }
+    fn record(&mut self, uncertain: bool, is_recheck: bool, persisted: bool, now: Instant) {
+        // Budget/privacy/dedup skips are not healthy observations. They must
+        // not erase a pending follow-up for the last uncertain stored frame.
+        // A skipped recheck has already consumed its slot and cannot spin.
+        if !persisted {
+            return;
+        }
+        if !is_recheck {
+            self.attempts = 0;
+        }
+        self.deadline =
+            (uncertain && self.attempts < 2).then_some(now + Duration::from_millis(750));
+    }
+}
+
+/// A focus event can precede the compositor's final paint. Require repeated
+/// equal samples rather than assuming that sleeping for one fixed delay works.
+#[cfg(any(target_os = "windows", test))]
+#[derive(Default)]
+struct RenderStability {
+    previous: Option<u64>,
+    equal_samples: u8,
+}
+#[cfg(any(target_os = "windows", test))]
+impl RenderStability {
+    fn observe(&mut self, signature: u64) -> bool {
+        self.equal_samples = if self.previous == Some(signature) {
+            self.equal_samples.saturating_add(1)
+        } else {
+            0
+        };
+        self.previous = Some(signature);
+        self.equal_samples >= 2
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn render_signature(image: &image::DynamicImage) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    (image.width(), image.height(), image.color()).hash(&mut hash);
+    image.as_bytes().hash(&mut hash);
+    hash.finish()
+}
+
+/// Verify the tree's actual target, not only the foreground at two instants.
+/// A rapid A -> B -> A switch (including windows in the same process) must
+/// never associate B's tree with A's screenshot.
+#[cfg(any(target_os = "windows", test))]
+fn window_identity_matches(
+    pixels: Option<usize>,
+    tree: Option<usize>,
+    current: Option<usize>,
+) -> bool {
+    pixels.is_some() && pixels == tree && pixels == current
+}
+
+/// Reconfirm the exact pre-walk render, tolerating a temporary caret phase by
+/// waiting, never by masking or accepting a percentage of changed pixels.
+/// Timeout/errors preserve pixels but refuse the AX-to-pixel association.
+#[cfg(any(target_os = "windows", test))]
+async fn confirm_render<F, Fut>(
+    image: &image::DynamicImage,
+    budget: Duration,
+    mut sample: F,
+) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<image::DynamicImage>>,
+{
+    let deadline = Instant::now() + budget;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        match tokio::time::timeout(remaining, sample()).await {
+            Ok(Ok(after)) => {
+                if image.width() == after.width()
+                    && image.height() == after.height()
+                    && image.color() == after.color()
+                    && image.as_bytes() == after.as_bytes()
+                {
+                    return true;
+                }
+            }
+            _ => return false,
+        }
+        tokio::time::sleep(
+            Duration::from_millis(60).min(deadline.saturating_duration_since(Instant::now())),
+        )
+        .await;
+    }
+}
+
+#[cfg(target_os = "windows")]
+async fn settle_windows_frame(
+    monitor: &SafeMonitor,
+    mut image: image::DynamicImage,
+) -> (image::DynamicImage, bool) {
+    let deadline = Instant::now() + Duration::from_millis(600);
+    let mut stability = RenderStability::default();
+    stability.observe(render_signature(&image));
+    loop {
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, monitor.capture_image_while_settling()).await {
+            Ok(Ok(next)) => {
+                let stable = stability.observe(render_signature(&next));
+                image = next;
+                if stable {
+                    return (image, true);
+                }
+            }
+            _ => break,
+        }
+    }
+    // Preserve the recording on timeout/animation; only pixel alignment is
+    // uncertain. The caller retains AX as non-visual evidence and uses OCR.
+    (image, false)
+}
+
 /// Result of do_capture: paired capture result + the screenshot image for comparer reuse.
 struct CaptureOutput {
     /// None when content dedup skipped the capture (identical accessibility text).
@@ -2492,6 +2704,9 @@ fn normalize_metadata_value(value: Option<&str>) -> Option<String> {
 }
 
 fn should_query_lightweight_focus(trigger: &CaptureTrigger) -> bool {
+    if cfg!(target_os = "windows") {
+        return true;
+    }
     match trigger {
         CaptureTrigger::AppSwitch { app_name, .. } => app_name.trim().is_empty(),
         _ => true,
@@ -2511,6 +2726,13 @@ fn capture_gate_app_name(
     trigger: &CaptureTrigger,
     lightweight_metadata: Option<&LightweightFocusedMetadata>,
 ) -> Option<String> {
+    if cfg!(target_os = "windows") {
+        if let Some(app) = lightweight_metadata
+            .and_then(|metadata| normalize_metadata_value(metadata.app_name.as_deref()))
+        {
+            return Some(app);
+        }
+    }
     match trigger {
         CaptureTrigger::AppSwitch { app_name, .. } => {
             normalize_metadata_value(Some(app_name.as_str()))
@@ -2533,12 +2755,30 @@ fn resolve_capture_metadata(
     Option<String>,
     Option<String>,
 ) {
-    resolve_capture_metadata_with_policy(
+    let current_trigger = if cfg!(target_os = "windows") && lightweight_metadata.is_some() {
+        &CaptureTrigger::Idle
+    } else {
+        trigger
+    };
+    let mut resolved = resolve_capture_metadata_with_policy(
         tree_snapshot,
-        trigger,
+        current_trigger,
         lightweight_metadata,
-        cfg!(target_os = "linux"),
-    )
+        cfg!(any(target_os = "linux", target_os = "windows")),
+    );
+    // A fresh native title replacing an old UIA title cannot inherit that
+    // old window's URL/document. Keep URL allowlists fail-closed.
+    if cfg!(target_os = "windows")
+        && tree_snapshot.is_some_and(|tree| {
+            resolved.0.as_deref() != normalize_metadata_value(Some(&tree.app_name)).as_deref()
+                || resolved.1.as_deref()
+                    != normalize_metadata_value(Some(&tree.window_name)).as_deref()
+        })
+    {
+        resolved.2 = None;
+        resolved.3 = None;
+    }
+    resolved
 }
 
 fn resolve_capture_metadata_with_policy(
@@ -2859,9 +3099,13 @@ fn dedup_applies(
     in_meeting: bool,
     since_last_db_write: Duration,
 ) -> bool {
-    let meeting_visual_change = in_meeting && matches!(trigger, CaptureTrigger::VisualChange);
+    // On Windows a focus event can precede DWM's final paint while UIA already
+    // exposes the complete text. A changed image is new recording evidence even
+    // if that text hash is unchanged. Do not discard the settled screen.
+    let preserve_visual_change = (in_meeting || cfg!(target_os = "windows"))
+        && matches!(trigger, CaptureTrigger::VisualChange);
     !hd_active
-        && !meeting_visual_change
+        && !preserve_visual_change
         && !is_hard_checkpoint_trigger(trigger)
         && since_last_db_write < Duration::from_secs(30)
 }
@@ -2971,8 +3215,14 @@ async fn do_capture(
     screenshot_disabled: bool,
     hd_active: bool,
     in_meeting: bool,
-    monitor_hosts_focus: bool,
+    _monitor_hosts_focus: bool,
 ) -> Result<CaptureOutput> {
+    // Scheduling can use cached focus. Attaching a focused tree to pixels
+    // requires the window's current display, including same-HWND moves.
+    #[cfg(target_os = "windows")]
+    let monitor_hosts_focus = crate::focus_tracker::foreground_window_is_on_monitor(params.monitor);
+    #[cfg(not(target_os = "windows"))]
+    let monitor_hosts_focus = _monitor_hosts_focus;
     let captured_at = Utc::now();
     let bypass_capture_throttles = bypasses_capture_throttles(trigger);
 
@@ -3013,6 +3263,25 @@ async fn do_capture(
         }
     }
 
+    #[cfg(target_os = "windows")]
+    params.render_recheck_needed.store(false, Ordering::Relaxed);
+    #[cfg(target_os = "windows")]
+    let screenshot_focus_pid = if monitor_hosts_focus && !screenshot_disabled {
+        get_focused_pid_fresh()
+    } else {
+        None
+    };
+    #[cfg(target_os = "windows")]
+    let screenshot_window = screenpipe_a11y::platform::windows::get_focused_window_id_fresh();
+    #[cfg(target_os = "windows")]
+    let needs_settle = monitor_hosts_focus
+        && !screenshot_disabled
+        && !skip_pixels_for_unknown_exclusions
+        && screenshot_window
+            .is_some_and(|window| params.settled_window.load(Ordering::Relaxed) != window);
+    #[cfg(target_os = "windows")]
+    let mut render_stable = !needs_settle;
+
     let image = if screenshot_disabled || skip_pixels_for_unknown_exclusions {
         debug!(
             "screenshot capture skipped for monitor {} (trigger={})",
@@ -3021,7 +3290,7 @@ async fn do_capture(
         );
         image::DynamicImage::new_rgba8(1, 1)
     } else {
-        let excluded_ids = storage_exclusions.unwrap_or_default();
+        let excluded_ids = storage_exclusions.as_deref().unwrap_or(&[]);
 
         // Take screenshot (with ignored windows excluded at the OS level)
         let (image, capture_dur) = capture_monitor_image(params.monitor, &excluded_ids).await?;
@@ -3029,10 +3298,18 @@ async fn do_capture(
             "screenshot captured in {:?} for monitor {}",
             capture_dur, params.monitor_id
         );
+        #[cfg(target_os = "windows")]
+        let image = if needs_settle {
+            let (image, stable) = settle_windows_frame(params.monitor, image).await;
+            render_stable = stable;
+            image
+        } else {
+            image
+        };
         image
     };
-    // This scalar is the screenshot's app identity. Read it immediately after
-    // ScreenCaptureKit returns so no process object travels with the pixels.
+
+    #[cfg(not(target_os = "windows"))]
     let screenshot_focus_pid = if monitor_hosts_focus && !screenshot_disabled {
         get_focused_pid_fresh()
     } else {
@@ -3341,15 +3618,60 @@ async fn do_capture(
     } else {
         None
     };
+    #[cfg(target_os = "windows")]
+    let render_stable_before_walk = render_stable;
+    #[cfg(target_os = "windows")]
+    if needs_settle && render_stable && tree_snapshot.is_some() {
+        // UIA may outlast a caret blink. A single different sample is not proof
+        // of a content transition: give periodic paint a bounded opportunity to
+        // return to the exact pre-walk pixels. No pixels are exempted. A real
+        // page change that never matches still detaches AX and uses OCR.
+        render_stable = confirm_render(&image, Duration::from_millis(650), || {
+            params.monitor.capture_image_while_settling()
+        })
+        .await;
+    }
+    #[cfg(target_os = "windows")]
+    let window_coherent = screenshot_disabled
+        || !monitor_hosts_focus
+        || (render_stable
+            && crate::focus_tracker::foreground_window_is_on_monitor(params.monitor)
+            && window_identity_matches(
+                screenshot_window,
+                tree_snapshot
+                    .as_ref()
+                    .map_or(screenshot_window, |tree| tree.native_window_id),
+                screenpipe_a11y::platform::windows::get_focused_window_id_fresh(),
+            ));
+    #[cfg(not(target_os = "windows"))]
+    let window_coherent = true;
+
     let ax_screenshot_coherent = match (screenshot_focus_pid, ax_focus_pid) {
         (Some(screenshot_pid), Some(ax_pid)) => screenshot_pid == ax_pid,
         _ => true,
-    };
+    } && window_coherent;
+    #[cfg(target_os = "windows")]
+    if needs_settle {
+        params.settled_window.store(
+            if ax_screenshot_coherent {
+                screenshot_window.unwrap_or(0)
+            } else {
+                0
+            },
+            Ordering::Relaxed,
+        );
+    }
+    #[cfg(target_os = "windows")]
+    if needs_settle {
+        debug!(render_stable_before_walk, render_stable, screenshot_window,
+            current_window = ?screenpipe_a11y::platform::windows::get_focused_window_id_fresh(),
+            "capture coherence probe");
+    }
     if tree_snapshot.is_some() && !ax_screenshot_coherent {
         debug!(
             screenshot_pid = screenshot_focus_pid,
             ax_pid = ax_focus_pid,
-            "focused process changed across screenshot/AX capture; preserving AX as non-pixel-aligned"
+            "focus or rendered content changed across screenshot/AX capture; preserving AX as non-pixel-aligned"
         );
         if let Some(snapshot) = tree_snapshot.as_mut() {
             detach_tree_from_pixels(snapshot);
@@ -3422,7 +3744,11 @@ async fn do_capture(
             )
         } else {
             (
-                screenshot_focus_pid.and_then(app_name_for_pid),
+                if cfg!(target_os = "windows") {
+                    None
+                } else {
+                    screenshot_focus_pid.and_then(app_name_for_pid)
+                },
                 None,
                 None,
                 None,
@@ -3474,13 +3800,27 @@ async fn do_capture(
     // returned no verdict while focus ownership remained confirmed (for example,
     // a WindowFocus trigger still supplied the window title). Uses full
     // `window_pattern` semantics, so scoped `App::Title` patterns still fire here.
-    if resolved_window_matches_privacy_filters(
-        params.tree_walker_config.ignore_incognito_windows,
-        monitor_hosts_focus,
-        &params.ignored_patterns,
-        app_name_owned.as_deref(),
-        window_name_owned.as_deref(),
-    ) {
+    let current_windows_focus_filtered = cfg!(target_os = "windows")
+        && lightweight_focused_metadata
+            .as_ref()
+            .is_some_and(|metadata| {
+                resolved_window_matches_privacy_filters(
+                    params.tree_walker_config.ignore_incognito_windows,
+                    monitor_hosts_focus,
+                    &params.ignored_patterns,
+                    metadata.app_name.as_deref(),
+                    metadata.window_name.as_deref(),
+                )
+            });
+    if current_windows_focus_filtered
+        || resolved_window_matches_privacy_filters(
+            params.tree_walker_config.ignore_incognito_windows,
+            monitor_hosts_focus,
+            &params.ignored_patterns,
+            app_name_owned.as_deref(),
+            window_name_owned.as_deref(),
+        )
+    {
         let check_app = app_name_owned.as_deref().unwrap_or_default().to_lowercase();
         let check_win = window_name_owned
             .as_deref()
@@ -3641,6 +3981,10 @@ async fn do_capture(
             }
         }
     }
+    #[cfg(target_os = "windows")]
+    params
+        .render_recheck_needed
+        .store(!window_coherent, Ordering::Relaxed);
     let deduped = !defer_text_extraction && elements_ref_frame_id.is_some();
     // Extract image from Arc for comparer reuse. Arc::try_unwrap succeeds
     // because paired_capture no longer retains a clone.
@@ -3725,46 +4069,17 @@ fn get_focused_metadata_lightweight() -> Option<LightweightFocusedMetadata> {
 /// `get_effective_app_name`), so the walk budget's per-app cost tracking keys
 /// line up across `should_walk` and `record_walk`.
 ///
-/// **Caching**: capture triggers fire on every click / typing pause / visual
-/// change, and the focused window rarely changes between triggers. A 1-second
-/// TTL bounds staleness below human perception while collapsing the common
-/// case to a single atomic load — same rationale as the macOS implementation.
+/// Read the HWND/title afresh: a one-second metadata TTL can cross an app
+/// switch and attach the previous window title to otherwise coherent pixels.
+/// Process-name lookup remains cached inside the native helper.
 #[cfg(target_os = "windows")]
 fn get_focused_metadata_lightweight() -> Option<LightweightFocusedMetadata> {
-    use arc_swap::ArcSwap;
-    use std::sync::OnceLock;
-    use std::time::{Duration, Instant};
-
-    const CACHE_TTL: Duration = Duration::from_secs(1);
-
-    static CACHE: OnceLock<ArcSwap<(Option<LightweightFocusedMetadata>, Instant)>> =
-        OnceLock::new();
-    let cache = CACHE.get_or_init(|| {
-        // Seed with an already-expired timestamp. Windows `Instant` counts
-        // from boot, so subtracting can fail in the first seconds after boot
-        // (autostart) — fall back to "fresh", costing one stale-second at most.
-        let expired = Instant::now()
-            .checked_sub(CACHE_TTL + Duration::from_secs(1))
-            .unwrap_or_else(Instant::now);
-        ArcSwap::from_pointee((None, expired))
-    });
-
-    let now = Instant::now();
-    {
-        let snap = cache.load();
-        if now.duration_since(snap.1) < CACHE_TTL {
-            return snap.0.clone();
-        }
-    }
-
-    let fresh = screenpipe_a11y::platform::windows::get_focused_app_window_lightweight().map(
+    screenpipe_a11y::platform::windows::get_focused_app_window_lightweight().map(
         |(app_name, window_name)| LightweightFocusedMetadata {
             app_name: Some(app_name),
             window_name,
         },
-    );
-    cache.store(std::sync::Arc::new((fresh.clone(), now)));
-    fresh
+    )
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -3986,6 +4301,239 @@ fn is_frame_corrupt(image: &image::DynamicImage) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_identity_rejects_switch_away_and_back_during_tree_walk() {
+        assert!(window_identity_matches(Some(11), Some(11), Some(11)));
+        assert!(!window_identity_matches(Some(11), Some(22), Some(11)));
+        assert!(!window_identity_matches(Some(11), Some(11), Some(22)));
+        assert!(!window_identity_matches(None, None, None));
+        assert!(!window_identity_matches(Some(11), None, Some(11)));
+    }
+
+    #[tokio::test]
+    async fn render_confirmation_accepts_returned_caret_phase_but_not_changed_content() {
+        use image::GenericImage;
+        let before = image::DynamicImage::new_rgba8(12, 12);
+        let mut blink = before.clone();
+        blink.put_pixel(3, 4, image::Rgba([255, 255, 255, 255]));
+        let mut calls = 0;
+        assert!(
+            confirm_render(&before, Duration::from_millis(250), || {
+                calls += 1;
+                std::future::ready(Ok(if calls == 1 {
+                    blink.clone()
+                } else {
+                    before.clone()
+                }))
+            })
+            .await
+        );
+        assert_eq!(calls, 2);
+        assert!(
+            !confirm_render(&before, Duration::from_millis(80), || std::future::ready(
+                Ok(blink.clone())
+            ))
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn render_confirmation_rejects_error_timeout_and_changed_dimensions() {
+        let before = image::DynamicImage::new_rgba8(12, 12);
+        assert!(
+            !confirm_render(&before, Duration::from_millis(10), || std::future::ready(
+                Err(anyhow::anyhow!("capture unavailable"))
+            ))
+            .await
+        );
+        assert!(
+            !confirm_render(
+                &before,
+                Duration::from_millis(10),
+                || std::future::pending::<anyhow::Result<image::DynamicImage>>()
+            )
+            .await
+        );
+        assert!(
+            !confirm_render(&before, Duration::from_millis(10), || std::future::ready(
+                Ok(image::DynamicImage::new_rgba8(6, 24))
+            ))
+            .await
+        );
+    }
+
+    #[test]
+    fn skipped_capture_does_not_cancel_recovery_of_uncertain_stored_frame() {
+        let now = Instant::now();
+        let mut retry = RenderRecheck::default();
+        retry.record(true, false, true, now);
+        // An intervening normal trigger is throttled or deduplicated.
+        retry.record(false, false, false, now + Duration::from_millis(400));
+        assert!(retry.trigger(now + Duration::from_secs(1), true).is_some());
+        retry.consume();
+        // A privacy-blocked follow-up still consumes its one attempt.
+        retry.record(false, true, false, now + Duration::from_secs(1));
+        assert!(!retry.due(now + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn coalesced_edit_gets_one_final_checkpoint_even_after_dedup_skip() {
+        let now = Instant::now();
+        let mut retry = RenderRecheck::default();
+        retry.record(false, false, false, now);
+        retry.after_edit(now);
+        assert!(retry
+            .trigger(now + Duration::from_millis(749), true)
+            .is_none());
+        assert!(retry
+            .trigger(now + Duration::from_millis(750), true)
+            .is_some());
+        // A later edit postpones the final checkpoint until the burst settles.
+        retry.after_edit(now + Duration::from_millis(500));
+        assert!(retry
+            .trigger(now + Duration::from_millis(800), true)
+            .is_none());
+        assert!(retry
+            .trigger(now + Duration::from_millis(1250), true)
+            .is_some());
+        retry.consume();
+        retry.record(false, true, true, now + Duration::from_secs(2));
+        assert!(retry.trigger(now + Duration::from_secs(10), true).is_none());
+    }
+
+    #[test]
+    fn render_recheck_waits_and_stops_after_two_uncertain_followups() {
+        let now = Instant::now();
+        let mut retry = RenderRecheck::default();
+        retry.record(true, false, true, now);
+        assert!(!retry.due(now + Duration::from_millis(749)));
+        for attempt in 1..=2 {
+            let next = now + Duration::from_secs(attempt);
+            assert!(retry.due(next));
+            retry.consume();
+            retry.record(true, true, true, next);
+        }
+        assert!(!retry.due(now + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn render_recheck_clears_after_healthy_capture_and_rearms_for_new_activity() {
+        let now = Instant::now();
+        let mut retry = RenderRecheck::default();
+        retry.record(true, false, true, now);
+        retry.consume();
+        retry.record(false, true, true, now);
+        assert!(!retry.due(now + Duration::from_secs(60)));
+        retry.record(true, false, true, now);
+        assert!(retry.due(now + Duration::from_secs(1)));
+        assert_eq!(retry.attempts, 0);
+    }
+
+    #[test]
+    fn render_recheck_respects_capture_cadence_but_bypasses_processing_budget() {
+        let now = Instant::now();
+        let mut retry = RenderRecheck::default();
+        retry.record(true, false, true, now);
+        assert!(retry.trigger(now, true).is_none());
+        assert!(retry.trigger(now + Duration::from_secs(1), false).is_none());
+        let trigger = retry.trigger(now + Duration::from_secs(1), true).unwrap();
+        assert!(bypasses_capture_throttles(&trigger));
+        assert!(!dedup_applies(&trigger, false, false, Duration::ZERO));
+        let mut budget = screenpipe_a11y::budget::AppWalkBudget::new();
+        budget.record_walk("msedge.exe", Duration::from_millis(180), false);
+        assert!(!budget.should_walk("msedge.exe").walk);
+        assert!(is_hard_checkpoint_trigger(&trigger));
+    }
+
+    #[test]
+    fn render_recheck_failed_attempt_does_not_spin() {
+        let now = Instant::now();
+        let mut retry = RenderRecheck::default();
+        retry.record(true, false, true, now);
+        retry.consume(); // timeout/error does not call record
+        assert!(!retry.due(now + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn window_render_settling_requires_repeated_equal_pixels_and_resets_on_change() {
+        let mut state = RenderStability::default();
+        for signature in [1, 2, 3, 3, 4, 4] {
+            assert!(!state.observe(signature), "animation is not settled");
+        }
+        assert!(state.observe(4));
+        assert!(
+            !state.observe(5),
+            "a new paint invalidates the settled observation"
+        );
+        assert!(!state.observe(5));
+        assert!(state.observe(5));
+    }
+
+    #[test]
+    fn window_render_signature_detects_pixels_and_dimensions_without_tree_text() {
+        let original = image::DynamicImage::new_rgba8(10, 10);
+        let mut repainted = original.clone();
+        use image::GenericImage;
+        repainted.put_pixel(7, 7, image::Rgba([255, 255, 255, 255]));
+        assert_ne!(render_signature(&original), render_signature(&repainted));
+        assert_ne!(
+            render_signature(&original),
+            render_signature(&image::DynamicImage::new_rgba8(5, 20))
+        );
+        assert_eq!(
+            render_signature(&repainted),
+            render_signature(&repainted.clone())
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_capture_uses_current_title_not_queued_previous_window_event() {
+        let metadata = LightweightFocusedMetadata {
+            app_name: Some("msedge.exe".into()),
+            window_name: Some("Shipment review".into()),
+        };
+        let (app, title, _, _) = resolve_capture_metadata(
+            None,
+            &CaptureTrigger::WindowFocus {
+                window_name: "Notepad".into(),
+                target: None,
+            },
+            Some(&metadata),
+        );
+        assert_eq!(app.as_deref(), Some("msedge.exe"));
+        assert_eq!(title.as_deref(), Some("Shipment review"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_app_switch_uses_current_metadata_for_budget_and_capture() {
+        let trigger = CaptureTrigger::AppSwitch {
+            app_name: "notepad.exe".into(),
+            target: None,
+        };
+        let metadata = LightweightFocusedMetadata {
+            app_name: Some("msedge.exe".into()),
+            window_name: Some("Shipment review".into()),
+        };
+        assert!(should_query_lightweight_focus(&trigger));
+        assert_eq!(
+            capture_gate_app_name(&trigger, Some(&metadata)).as_deref(),
+            Some("msedge.exe")
+        );
+        let (app, title, _, _) = resolve_capture_metadata(None, &trigger, Some(&metadata));
+        assert_eq!(app.as_deref(), Some("msedge.exe"));
+        assert_eq!(title.as_deref(), Some("Shipment review"));
+        let ignored = WindowPattern::parse_list(&["msedge.exe::Shipment review".into()]);
+        assert!(resolved_window_matches_privacy_filters(
+            false,
+            true,
+            &ignored,
+            metadata.app_name.as_deref(),
+            metadata.window_name.as_deref()
+        ));
+    }
 
     #[test]
     fn url_allowlist_masks_everything_outside_focused_window() {
@@ -4222,13 +4770,16 @@ mod tests {
     }
 
     #[test]
-    fn named_app_switch_keeps_fast_paths() {
+    fn named_app_switch_uses_platform_appropriate_metadata_path() {
         let trigger = CaptureTrigger::AppSwitch {
             app_name: " Finder ".into(),
             target: None,
         };
 
-        assert!(!should_query_lightweight_focus(&trigger));
+        assert_eq!(
+            should_query_lightweight_focus(&trigger),
+            cfg!(target_os = "windows")
+        );
         assert_eq!(drm_trigger_app_name(&trigger), Some("Finder"));
         assert_eq!(
             capture_gate_app_name(&trigger, None).as_deref(),
@@ -4301,6 +4852,7 @@ mod tests {
             retained_work_pending: false,
             max_depth_reached: 0,
             window_bounds: None,
+            native_window_id: None,
         };
         let metadata = LightweightFocusedMetadata {
             app_name: Some(" org.telegram.desktop ".into()),
@@ -4337,6 +4889,7 @@ mod tests {
             retained_work_pending: false,
             max_depth_reached: 0,
             window_bounds: None,
+            native_window_id: None,
         };
         let metadata = LightweightFocusedMetadata {
             app_name: Some("Alacritty".into()),
@@ -4377,6 +4930,7 @@ mod tests {
             retained_work_pending: false,
             max_depth_reached: 0,
             window_bounds: None,
+            native_window_id: None,
         };
         let metadata = LightweightFocusedMetadata {
             app_name: Some("Terminal".into()),
@@ -4417,6 +4971,7 @@ mod tests {
             retained_work_pending: false,
             max_depth_reached: 0,
             window_bounds: None,
+            native_window_id: None,
         };
 
         let (app_name, window_name, _, _) =
@@ -4427,19 +4982,20 @@ mod tests {
     }
 
     #[test]
-    fn resolve_capture_metadata_prefers_window_focus_trigger_title() {
+    fn cached_metadata_policy_prefers_window_focus_trigger_title() {
         let metadata = LightweightFocusedMetadata {
             app_name: Some("Telegram".into()),
             window_name: Some("Stale Title".into()),
         };
 
-        let (app_name, window_name, _, _) = resolve_capture_metadata(
+        let (app_name, window_name, _, _) = resolve_capture_metadata_with_policy(
             None,
             &CaptureTrigger::WindowFocus {
                 window_name: "Fresh Title".into(),
                 target: None,
             },
             Some(&metadata),
+            false,
         );
 
         assert_eq!(app_name.as_deref(), Some("Telegram"));
@@ -4447,32 +5003,34 @@ mod tests {
     }
 
     #[test]
-    fn resolve_capture_metadata_normalizes_window_focus_trigger_title() {
+    fn cached_metadata_policy_normalizes_window_focus_trigger_title() {
         let metadata = LightweightFocusedMetadata {
             app_name: Some("Telegram".into()),
             window_name: Some("Recovered Title".into()),
         };
 
         for trigger_window in ["", "   ", "\t", "\n"] {
-            let (_, window_name, _, _) = resolve_capture_metadata(
+            let (_, window_name, _, _) = resolve_capture_metadata_with_policy(
                 None,
                 &CaptureTrigger::WindowFocus {
                     window_name: trigger_window.into(),
                     target: None,
                 },
                 Some(&metadata),
+                false,
             );
 
             assert_eq!(window_name.as_deref(), Some("Recovered Title"));
         }
 
-        let (_, window_name, _, _) = resolve_capture_metadata(
+        let (_, window_name, _, _) = resolve_capture_metadata_with_policy(
             None,
             &CaptureTrigger::WindowFocus {
                 window_name: " Fresh Title ".into(),
                 target: None,
             },
             Some(&metadata),
+            false,
         );
         assert_eq!(window_name.as_deref(), Some("Fresh Title"));
     }
@@ -4500,6 +5058,7 @@ mod tests {
             retained_work_pending: false,
             max_depth_reached: 0,
             window_bounds: None,
+            native_window_id: None,
         };
 
         let (_, window_name, browser_url, document_path) = resolve_capture_metadata(
@@ -4612,6 +5171,7 @@ mod tests {
             retained_work_pending: false,
             max_depth_reached: 0,
             window_bounds: None,
+            native_window_id: None,
         };
 
         let (app_name, window_name, browser_url, document_path) = resolve_capture_metadata(
@@ -4818,14 +5378,12 @@ mod tests {
         let recent = Duration::from_secs(5);
         let stale = Duration::from_secs(31);
 
-        // Baseline (not in a meeting): a change-driven trigger within the 30s
-        // floor → dedup applies.
-        assert!(dedup_applies(
-            &CaptureTrigger::VisualChange,
-            false,
-            false,
-            recent
-        ));
+        // Windows visual changes must preserve a settled repaint even when
+        // UIA exposed identical text before the first compositor frame.
+        assert_eq!(
+            dedup_applies(&CaptureTrigger::VisualChange, false, false, recent),
+            !cfg!(target_os = "windows")
+        );
         assert!(dedup_applies(
             &CaptureTrigger::Click { x: 10, y: 20 },
             false,

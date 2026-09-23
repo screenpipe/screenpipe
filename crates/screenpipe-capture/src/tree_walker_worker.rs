@@ -676,6 +676,7 @@ mod tests {
             retained_work_pending,
             max_depth_reached: 1,
             window_bounds: None,
+            native_window_id: None,
         })
     }
 

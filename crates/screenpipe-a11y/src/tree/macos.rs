@@ -1098,6 +1098,7 @@ impl MacosTreeWalker {
             retained_work_pending: false,
             max_depth_reached: state.max_depth_reached,
             window_bounds,
+            native_window_id: None,
         }))
     }
 }

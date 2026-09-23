@@ -122,6 +122,24 @@ fn foreground_window_anchor() -> Option<(i32, i32)> {
     Some((cx, cy))
 }
 
+/// Capture-time ownership must not rely on the foreground-event cache: moving
+/// the same HWND between displays need not emit EVENT_SYSTEM_FOREGROUND.
+#[cfg(target_os = "windows")]
+pub(crate) fn foreground_window_is_on_monitor(
+    monitor: &screenpipe_screen::monitor::SafeMonitor,
+) -> bool {
+    let rect = MonitorRect {
+        identity: MonitorIdentity::from_monitor(monitor),
+        x: monitor.x(),
+        y: monitor.y(),
+        w: monitor.width(),
+        h: monitor.height(),
+    };
+    foreground_window_anchor()
+        .and_then(|(x, y)| pick_monitor(std::slice::from_ref(&rect), x, y))
+        .is_some()
+}
+
 struct Inner {
     tx: broadcast::Sender<FocusEvent>,
     current: Mutex<Option<MonitorIdentity>>,

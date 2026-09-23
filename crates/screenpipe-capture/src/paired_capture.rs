@@ -247,6 +247,17 @@ pub struct PairedCaptureResult {
     pub content_hash: Option<i64>,
 }
 
+/// Windows UIA can return rich page text while omitting an edited field's
+/// value. An accepted editing checkpoint also needs pixel-derived text;
+/// the existing OCR content gate still reuses unchanged recognition results.
+fn windows_edit_checkpoint_needs_pixel_text(trigger: &str) -> bool {
+    cfg!(target_os = "windows")
+        && matches!(
+            trigger,
+            "key_press" | "typing_pause" | "clipboard" | "manual"
+        )
+}
+
 /// Performs a paired capture: screenshot + accessibility tree data.
 ///
 /// This is the primary capture function for event-driven mode.
@@ -378,9 +389,15 @@ async fn paired_capture_inner(
     let meeting_matched = app_name.map(is_meeting_app).unwrap_or(false)
         || browser_url.map(is_meeting_url).unwrap_or(false);
     let meeting_trigger = ctx.in_meeting && meeting_matched && ctx.monitor_hosts_focus;
+    let editing_checkpoint =
+        ctx.monitor_hosts_focus && windows_edit_checkpoint_needs_pixel_text(ctx.capture_trigger);
     let wants_ocr = !defer_text_extraction
         && !ctx.screenshot_disabled
-        && (app_prefers_ocr || meeting_trigger || !has_accessibility_text || a11y_is_thin_generic);
+        && (app_prefers_ocr
+            || meeting_trigger
+            || editing_checkpoint
+            || !has_accessibility_text
+            || a11y_is_thin_generic);
 
     let mut ocr_gate = ocr_gate;
     let mut ocr_gate_escalated = false;
@@ -1140,6 +1157,57 @@ mod tests {
         Arc::new(DynamicImage::ImageRgb8(RgbImage::new(100, 100)))
     }
 
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_rich_uia_edit_checkpoint_uses_pixel_gate_and_respects_pause() {
+        let tmp = TempDir::new().unwrap();
+        let snapshot_writer = SnapshotWriter::new(tmp.path(), 80, 1920);
+        let db = DatabaseManager::new("sqlite::memory:", Default::default())
+            .await
+            .unwrap();
+        let mut ctx = CaptureContext {
+            db: &db,
+            snapshot_writer: &snapshot_writer,
+            image: strokes_image(),
+            captured_at: Utc::now(),
+            monitor_id: 0,
+            device_name: "test_monitor",
+            app_name: Some("msedge.exe"),
+            window_name: Some("Invoice review"),
+            browser_url: None,
+            document_path: None,
+            focused: true,
+            capture_trigger: "key_press",
+            use_pii_removal: false,
+            languages: vec![],
+            elements_ref_frame_id: None,
+            screenshot_disabled: false,
+            in_meeting: false,
+            monitor_hosts_focus: true,
+            ax_screenshot_coherent: true,
+            focused_window_bounds: None,
+        };
+        let snap = rich_meeting_snap();
+        let mut gate = OcrGate::new();
+        let result = paired_capture(&ctx, Some(&snap), Some(&mut gate))
+            .await
+            .unwrap();
+        assert_eq!(result.ocr_gate_decision, Some(OcrGateDecision::CropOcr));
+        assert!(
+            result.ocr_duration_ms.is_some(),
+            "rich UIA cannot suppress pixel text for an edit"
+        );
+        // The same rich UIA and pixels must not run OCR or write screenshots
+        // when screenshot capture is paused.
+        ctx.screenshot_disabled = true;
+        ctx.capture_trigger = "manual";
+        let paused = paired_capture(&ctx, Some(&snap), Some(&mut gate))
+            .await
+            .unwrap();
+        assert!(paused.ocr_duration_ms.is_none());
+        assert!(paused.snapshot_path.is_empty());
+    }
+
     #[tokio::test]
     async fn deferred_extraction_persists_pixels_and_recovers_after_reopen() {
         let tmp = TempDir::new().unwrap();
@@ -1372,6 +1440,7 @@ mod tests {
             retained_work_pending: false,
             max_depth_reached: 0,
             window_bounds: None,
+            native_window_id: None,
         };
         let result = paired_capture(&ctx, Some(&snap), None).await.unwrap();
 
@@ -1440,6 +1509,7 @@ mod tests {
             retained_work_pending: false,
             max_depth_reached: 0,
             window_bounds: None,
+            native_window_id: None,
         };
         let result = paired_capture(&ctx, Some(&snap), None).await.unwrap();
 
@@ -1559,6 +1629,7 @@ mod tests {
             retained_work_pending: false,
             max_depth_reached: 0,
             window_bounds: None,
+            native_window_id: None,
         }
     }
 

@@ -17,6 +17,8 @@ mod linux;
 mod null;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(target_os = "windows")]
+pub(crate) use windows::foreground_window_is_on_monitor;
 
 pub use null::NullFocusTracker;
 

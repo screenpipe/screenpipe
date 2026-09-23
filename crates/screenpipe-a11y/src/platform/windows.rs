@@ -2064,6 +2064,15 @@ pub fn get_focused_pid_fresh() -> Option<i32> {
     }
 }
 
+/// Foreground HWND, read without UIA. Unlike a PID, this distinguishes two
+/// windows owned by the same application during a capture.
+pub fn get_focused_window_id_fresh() -> Option<usize> {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        (!hwnd.is_invalid() && !is_transient_shell_window(hwnd)).then_some(hwnd.0 as usize)
+    }
+}
+
 /// Resolve a process name for screenshot attribution after focus has moved.
 pub fn app_name_for_pid(pid: i32) -> Option<String> {
     u32::try_from(pid).ok().and_then(get_process_name)

@@ -781,6 +781,7 @@ mod tests {
             retained_work_pending: false,
             max_depth_reached: 3,
             window_bounds: None,
+            native_window_id: None,
             semantic_nodes: Vec::new(),
             nodes,
         }
