@@ -8,8 +8,8 @@ import type { WorkflowAnalysis, WorkflowAnalysisJob, WorkflowMap } from "@screen
 export const WORKFLOW_TASKS = ["workflow-discover", "workflow-deepen", "workflow-review", "workflow-maintain"] as const;
 const LEGACY_TASKS = ["workflow-activity", "workflow-patterns", "workflow-procedures", "workflow-timing", "workflow-discovery"];
 const TASK = "workflow-review";
-async function request(path: string, body?: unknown) {
-  const response = await localFetch(path, body === undefined ? undefined : {
+async function request(path: string, body?: unknown, signal?: AbortSignal) {
+  const response = await localFetch(path, body === undefined ? (signal ? { signal } : undefined) : {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   const value = await response.json();
@@ -61,9 +61,23 @@ export async function enableWorkflowTask() {
   if (!setup.enabled) throw new Error("Some workflow tasks could not be enabled.");
 }
 
-export async function loadScheduledCatalog(): Promise<WorkflowAnalysis | null> {
-  const value = await request("/workflows/catalog");
-  return value.analyzedAt ? value as WorkflowAnalysis : null;
+export async function loadScheduledCatalog(signal?: AbortSignal): Promise<WorkflowAnalysis | null> {
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  if (signal?.aborted) cancel();
+  signal?.addEventListener("abort", cancel, { once: true });
+  let timedOut = false;
+  const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 10_000);
+  try {
+    const value = await request("/workflows/catalog", undefined, controller.signal);
+    return value.analyzedAt ? value as WorkflowAnalysis : null;
+  } catch (error) {
+    if (timedOut && !signal?.aborted) throw new DOMException("Workflow catalog request timed out", "TimeoutError");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", cancel);
+  }
 }
 
 function job(execution: any): WorkflowAnalysisJob {

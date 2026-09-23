@@ -15,6 +15,7 @@ import type { WorkflowGuide } from "./guide";
 import type { WorkflowsAssistantPlatform } from "./assistant";
 
 export type WorkflowAnalysisOptions = {
+  signal?: AbortSignal;
   scope?: WorkflowScope;
   workProfile?: WorkProfile | null;
 };

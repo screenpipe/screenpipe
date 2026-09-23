@@ -35,7 +35,7 @@ const workflowAgentActions = (workflow: WorkflowMap) => <HomeCardAgentActions ke
 // Only the existing browser-mock build gets synthetic data. Native builds use
 // the parent PR's adapter, native recorder and app-local persistent storage.
 const platform = process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock"
-  ? createFixtureWorkflowsPlatform()
+  ? createFixtureWorkflowsPlatform(undefined, typeof window === "undefined" ? "ready" : new URLSearchParams(window.location.search).get("workflowConnection") ?? "ready")
   : desktopWorkflowsPlatform;
 export function IntegratedWorkflows({ active, fullscreen = false, onModeChange, recordingStatus, navigationFooter }: { active: boolean; fullscreen?: boolean; onModeChange: (mode: ProductMode) => void; recordingStatus: React.ReactNode; navigationFooter?: WorkflowsAppProps["navigationFooter"] }) {
   const enabled = useWorkflowsRolloutEnabled();

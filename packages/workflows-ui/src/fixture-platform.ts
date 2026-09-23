@@ -448,7 +448,8 @@ export function fixtureGuides(): NonNullable<WorkflowsPlatform["guides"]> {
   };
 }
 
-export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixtureWorkflowAnalysis): WorkflowsPlatform {
+export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixtureWorkflowAnalysis, connection = "ready"): WorkflowsPlatform {
+  let firstReadAt: number | undefined;
   let profile = fixturePersonalWorkProfile;
   const storageKey = "screenpipe:fictional-workflow-editor-preview";
   let current = structuredClone(analysis);
@@ -477,7 +478,12 @@ export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixt
       return { kind: "image", url: capture.dataUrl, frameId: capture.frameId, timestamp: capture.timestamp, offsetSeconds: 0, matchDistanceSeconds: 0 };
     },
     ensureRuntime: async () => fixtureWorkflowRuntime,
-    loadCapturedWork: async () => { const value = restore(); await Promise.all(value.analysis.workflows.map(rasterizeFixture)); return structuredClone(value); },
+    loadCapturedWork: async () => {
+      firstReadAt ??= Date.now();
+      if (connection === "offline" || (connection === "startup" && Date.now() - firstReadAt < 20_000)) throw new TypeError("Load failed");
+      if (connection === "unreadable") throw Object.assign(new Error("workflow_catalog_unreadable"), { status: 503 });
+      const value = restore(); await Promise.all(value.analysis.workflows.map(rasterizeFixture)); return structuredClone(value);
+    },
     analyzeCapturedWork: async () => restore(),
     saveWorkflowEdits: async (draft) => {
       restore();
