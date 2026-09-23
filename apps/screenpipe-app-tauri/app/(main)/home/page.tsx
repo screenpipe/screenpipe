@@ -55,6 +55,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
 import { AppSidebar, useSidebarContext } from "@/components/app-sidebar";
+import { AnnualPlanBanner } from "@/components/annual-plan-banner";
 import { UpdateBanner } from "@/components/update-banner";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
@@ -1652,6 +1653,7 @@ function HomeContent() {
               narrow window with the sidebar open the whole pane gets
               clipped at the right window edge instead of truncating. */}
           <div className={cn("flex-1 min-w-0 flex flex-col h-full bg-background min-h-0 relative", workflowsActive && "hidden", isTranslucent ? "rounded-none" : "rounded-tr-lg")} data-testid="home-page">
+            <AnnualPlanBanner />
             {/* ALWAYS-MOUNTED chat layer.
                 Hidden via CSS (display:none) when the user is on a non-chat
                 section, so the StandaloneChat component never unmounts. This
