@@ -14,10 +14,10 @@ use chrono::Utc;
 use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, trace, warn};
 
@@ -30,10 +30,10 @@ use windows::Win32::UI::Accessibility::{
     AutomationElementMode_Full, AutomationElementMode_None, CUIAutomation, IUIAutomation,
     IUIAutomationCacheRequest, IUIAutomationElement, IUIAutomationFocusChangedEventHandler,
     IUIAutomationFocusChangedEventHandler_Impl, IUIAutomationTreeWalker, TreeScope_Element,
-    TreeScope_Subtree, UIA_AcceleratorKeyPropertyId, UIA_AccessKeyPropertyId,
-    UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId, UIA_ClassNamePropertyId,
-    UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId,
-    UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId, UIA_IsPasswordPropertyId,
+    UIA_AcceleratorKeyPropertyId, UIA_AccessKeyPropertyId, UIA_AutomationIdPropertyId,
+    UIA_BoundingRectanglePropertyId, UIA_ClassNamePropertyId, UIA_ControlTypePropertyId,
+    UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId, UIA_IsEnabledPropertyId,
+    UIA_IsKeyboardFocusablePropertyId, UIA_IsPasswordPropertyId,
     UIA_LocalizedControlTypePropertyId, UIA_NamePropertyId, UIA_ValueValuePropertyId,
     UIA_PROPERTY_ID,
 };
@@ -108,30 +108,34 @@ pub(crate) struct CapturedTree {
 /// Records the first limit hit so callers can report truncation.
 struct TreeBudget {
     max_elements: usize,
-    /// `None` = node cap only. Used for the cached path: its subtree is
-    /// already materialized in-process by the time nodes are built, so a
-    /// deadline there can only discard data that was already paid for —
-    /// it cannot shorten the target app's freeze.
-    deadline: Option<Instant>,
+    deadline: Instant,
     count: usize,
     truncation: TruncationReason,
+}
+
+struct PendingWalkerNode {
+    element: IUIAutomationElement,
+    node: AccessibilityNode,
+    children: Vec<usize>,
+    last_child: Option<IUIAutomationElement>,
+}
+
+fn finish_walker_node(index: usize, arena: &mut [Option<PendingWalkerNode>]) -> AccessibilityNode {
+    let pending = arena[index].take().expect("walker node materialized once");
+    let mut node = pending.node;
+    node.children = pending
+        .children
+        .into_iter()
+        .map(|child| finish_walker_node(child, arena))
+        .collect();
+    node
 }
 
 impl TreeBudget {
     fn new(max_elements: usize, deadline: Instant) -> Self {
         Self {
             max_elements,
-            deadline: Some(deadline),
-            count: 0,
-            truncation: TruncationReason::None,
-        }
-    }
-
-    /// Budget bounded by node count only (cached, in-process tree builds).
-    fn node_capped(max_elements: usize) -> Self {
-        Self {
-            max_elements,
-            deadline: None,
+            deadline,
             count: 0,
             truncation: TruncationReason::None,
         }
@@ -145,66 +149,24 @@ impl TreeBudget {
             }
             return true;
         }
-        if let Some(deadline) = self.deadline {
-            if Instant::now() >= deadline {
-                if self.truncation == TruncationReason::None {
-                    self.truncation = TruncationReason::Timeout;
-                }
-                return true;
+        if Instant::now() >= self.deadline {
+            if self.truncation == TruncationReason::None {
+                self.truncation = TruncationReason::Timeout;
             }
+            return true;
         }
         false
     }
-}
 
-/// How long a "this window needs the TreeWalker fallback" verdict stays valid.
-/// TTL'd because HWNDs get recycled by the OS and a provider can start
-/// populating the cached subtree later; re-probing costs one cross-process
-/// call, so a stale verdict is cheap to correct.
-const WALKER_FALLBACK_MEMO_TTL: Duration = Duration::from_secs(300);
-
-/// Process-wide memo of windows whose UIA provider requires the per-element
-/// TreeWalker fallback (Chromium/Electron). Shared across capture pipelines —
-/// the paired-capture path recreates its `UiaContext` per walk, so this can't
-/// live on the context.
-fn walker_fallback_memo() -> &'static Mutex<HashMap<isize, Instant>> {
-    static MEMO: OnceLock<Mutex<HashMap<isize, Instant>>> = OnceLock::new();
-    MEMO.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// True if `hwnd` was recently observed to need the TreeWalker fallback.
-fn needs_walker_fallback(hwnd: HWND) -> bool {
-    let mut memo = walker_fallback_memo().lock();
-    let key = hwnd.0 as isize;
-    match memo.get(&key) {
-        Some(seen) if seen.elapsed() < WALKER_FALLBACK_MEMO_TTL => true,
-        Some(_) => {
-            memo.remove(&key);
-            false
-        }
-        None => false,
+    fn charge_fetched(&mut self) {
+        debug_assert!(self.count < self.max_elements);
+        self.count += 1;
     }
-}
-
-/// Record that `hwnd`'s provider needs the TreeWalker fallback.
-fn remember_walker_fallback(hwnd: HWND) {
-    let mut memo = walker_fallback_memo().lock();
-    if memo.len() >= 64 {
-        memo.retain(|_, seen| seen.elapsed() < WALKER_FALLBACK_MEMO_TTL);
-    }
-    memo.insert(hwnd.0 as isize, Instant::now());
-}
-
-/// Drop the fallback verdict for `hwnd` (cached path produced a real tree).
-fn forget_walker_fallback(hwnd: HWND) {
-    walker_fallback_memo().lock().remove(&(hwnd.0 as isize));
 }
 
 /// UIA context holding COM objects (single-thread only, not Send)
 pub(crate) struct UiaContext {
     automation: IUIAutomation,
-    /// Cached-only subtree request used only by full-window tree capture.
-    cache_request: IUIAutomationCacheRequest,
     /// Cached-only single-element request for click and focus enrichment.
     /// Keeping this separate prevents enrichment from synchronously asking the
     /// target provider to materialize every descendant of a container.
@@ -246,16 +208,11 @@ impl UiaContext {
             let control_view_condition = automation.ControlViewCondition()?;
             cache_request.SetTreeFilter(&control_view_condition)?;
 
-            // Cached-only mode: no live COM references, less memory
-            cache_request.SetAutomationElementMode(AutomationElementMode_None)?;
-
             // Clone the initialized property set for click/focus enrichment.
             // Those paths only consume the returned element, never descendants.
             let enrichment_cache_request = cache_request.Clone()?;
             enrichment_cache_request.SetTreeScope(TreeScope_Element)?;
-
-            // Full tree capture keeps the subtree request.
-            cache_request.SetTreeScope(TreeScope_Subtree)?;
+            enrichment_cache_request.SetAutomationElementMode(AutomationElementMode_None)?;
 
             // Create walker-specific cache request for Chromium/Electron fallback.
             // Same properties, but Element scope (one node at a time) and Full
@@ -287,7 +244,6 @@ impl UiaContext {
 
             Ok(Self {
                 automation,
-                cache_request,
                 enrichment_cache_request,
                 walker_cache_request,
                 tree_walker,
@@ -314,19 +270,15 @@ impl UiaContext {
     /// Capture the full accessibility tree of a window by HWND, bounded by a
     /// node cap and a wall-clock deadline.
     ///
-    /// Uses CacheRequest to batch all property reads into minimal cross-process
-    /// calls. Falls back to TreeWalker for apps whose UIA providers don't
-    /// populate the cached subtree (Chromium, Electron, etc.).
+    /// Uses an element-scoped CacheRequest while navigating with TreeWalker.
+    /// Every provider call is preceded by the deadline check, so a hostile or
+    /// very large provider can overrun the budget by at most one element call.
     ///
-    /// The deadline bounds the per-element TreeWalker fallback (~2 cross-process
-    /// COM round-trips per element, serviced on the target app's UI thread — the
-    /// unbounded-freeze path), checked before every element fetch so it overruns
-    /// by at most one element. The cached path is different: its one
-    /// `ElementFromHandleBuildCache` call is synchronous and cannot be
-    /// interrupted, and afterwards the subtree is already materialized
-    /// in-process — so building it is bounded by the node cap only. Truncating
-    /// that local build on the deadline would discard data the target app
-    /// already paid to produce without shortening its freeze.
+    /// Do not replace this with `ElementFromHandleBuildCache(TreeScope_Subtree)`:
+    /// that call asks the provider to materialize the entire window before our
+    /// node/deadline budget can run. Large WinForms grids service it on their UI
+    /// thread, freezing input while the outer worker eventually discards the
+    /// still-running call as a timeout.
     pub(crate) fn capture_window_tree_bounded(
         &self,
         hwnd: HWND,
@@ -334,70 +286,12 @@ impl UiaContext {
         timeout: Duration,
     ) -> Option<CapturedTree> {
         let deadline = Instant::now() + timeout;
-
-        // Windows already known to need the per-element fallback (Chromium/
-        // Electron) go straight to it, so the walker gets the full wall-clock
-        // budget instead of paying for a cached attempt that returns a handful
-        // of titlebar nodes every single walk.
-        if needs_walker_fallback(hwnd) {
-            let mut walker_budget = TreeBudget::new(max_elements, deadline);
-            if let Some(root) = self.capture_window_tree_walker(hwnd, &mut walker_budget) {
-                return Some(CapturedTree {
-                    root,
-                    truncation: walker_budget.truncation,
-                });
-            }
-            // Walker setup failed (window gone, provider error) — fall through
-            // to the cached path rather than dropping the capture.
-        }
-
-        unsafe {
-            let element = self
-                .automation
-                .ElementFromHandleBuildCache(hwnd, &self.cache_request)
-                .ok()?;
-
-            // Node cap only: the whole subtree was materialized by the single
-            // COM call above; building nodes from it is local work.
-            let mut budget = TreeBudget::node_capped(max_elements);
-            let root = self.build_node(&element, &mut budget);
-            let count = budget.count;
-
-            // Some UIA providers (notably Chromium/Electron) don't populate the
-            // cached subtree via ElementFromHandleBuildCache, returning only a
-            // handful of titlebar nodes. When this happens, fall back to
-            // TreeWalker which makes individual COM calls per element. The
-            // fallback runs against the original deadline (so a slow cached
-            // attempt shrinks its window) with a fresh node budget, matching
-            // the count comparison below.
-            if count <= 10 {
-                let mut walker_budget = TreeBudget::new(max_elements, deadline);
-                if let Some(walker_root) = self.capture_window_tree_walker(hwnd, &mut walker_budget)
-                {
-                    let walker_count = walker_root.node_count();
-                    if walker_count > count {
-                        debug!(
-                            "Cache returned {} nodes, walker returned {} - using walker result",
-                            count, walker_count
-                        );
-                        remember_walker_fallback(hwnd);
-                        return Some(CapturedTree {
-                            root: walker_root,
-                            truncation: walker_budget.truncation,
-                        });
-                    }
-                }
-            } else {
-                // Cached path works for this window — clear any stale memo
-                // (HWND recycling, provider started populating the cache).
-                forget_walker_fallback(hwnd);
-            }
-
-            Some(CapturedTree {
+        let mut budget = TreeBudget::new(max_elements, deadline);
+        self.capture_window_tree_walker(hwnd, &mut budget)
+            .map(|root| CapturedTree {
                 root,
                 truncation: budget.truncation,
             })
-        }
     }
 
     /// Fallback tree capture using TreeWalker for UIA providers that don't
@@ -427,7 +321,7 @@ impl UiaContext {
     ) -> Option<CapturedTree> {
         let deadline = Instant::now() + timeout;
         let mut budget = TreeBudget::new(max_elements, deadline);
-        self.capture_window_tree_walker_with(
+        self.capture_window_tree_depth_first_with(
             hwnd,
             &mut budget,
             &self.semantic_tree_walker,
@@ -447,109 +341,156 @@ impl UiaContext {
         cache_request: &IUIAutomationCacheRequest,
     ) -> Option<AccessibilityNode> {
         unsafe {
-            // Get a live element (required for TreeWalker navigation)
+            if budget.exhausted() {
+                return None;
+            }
+            // These COM calls are synchronous and cannot be interrupted once
+            // entered. Checking before each call prevents starting new provider
+            // work after the deadline; it is not a hard cancellation guarantee.
             let live_element = self.automation.ElementFromHandle(hwnd).ok()?;
-            // Cache properties on the root element
+            if budget.exhausted() {
+                return None;
+            }
             let cached_root = live_element.BuildUpdatedCache(cache_request).ok()?;
-
-            Some(self.build_node_walker(&cached_root, budget, tree_walker, cache_request))
+            budget.charge_fetched();
+            Some(self.build_node_walker(cached_root, budget, tree_walker, cache_request))
         }
     }
 
-    /// Recursively build an AccessibilityNode using TreeWalker navigation.
-    /// Unlike build_node which reads pre-cached children, this walks the tree
-    /// one element at a time via COM calls (~2 cross-process round trips per
-    /// element), so the budget's deadline is checked before every fetch.
-    fn build_node_walker(
+    /// RawView browser capture retains its historical depth-first discovery
+    /// policy. This matters when a node or deadline budget truncates the tree:
+    /// semantic consumers expect the same document branch prefix as before.
+    fn capture_window_tree_depth_first_with(
         &self,
-        element: &IUIAutomationElement,
+        hwnd: HWND,
+        budget: &mut TreeBudget,
+        tree_walker: &IUIAutomationTreeWalker,
+        cache_request: &IUIAutomationCacheRequest,
+    ) -> Option<AccessibilityNode> {
+        unsafe {
+            if budget.exhausted() {
+                return None;
+            }
+            let live_element = self.automation.ElementFromHandle(hwnd).ok()?;
+            if budget.exhausted() {
+                return None;
+            }
+            let cached_root = live_element.BuildUpdatedCache(cache_request).ok()?;
+            budget.charge_fetched();
+            Some(self.build_node_walker_depth_first(
+                cached_root,
+                budget,
+                tree_walker,
+                cache_request,
+            ))
+        }
+    }
+
+    fn build_node_walker_depth_first(
+        &self,
+        element: IUIAutomationElement,
         budget: &mut TreeBudget,
         tree_walker: &IUIAutomationTreeWalker,
         cache_request: &IUIAutomationCacheRequest,
     ) -> AccessibilityNode {
-        budget.count += 1;
+        let mut node = self.node_from_cached(&element);
+        if budget.exhausted() {
+            return node;
+        }
 
-        let control_type = self.get_control_type_name(element);
-        let name = self.get_cached_string(element, UIA_NamePropertyId);
-        let automation_id = self.get_cached_string(element, UIA_AutomationIdPropertyId);
-        let class_name = self.get_cached_string(element, UIA_ClassNamePropertyId);
-        let value = self.get_cached_string(element, UIA_ValueValuePropertyId);
-        let bounds = self.get_cached_bounds(element);
-        let is_enabled = self.get_cached_bool(element, UIA_IsEnabledPropertyId);
-        let is_focused = self.get_cached_bool_opt(element, UIA_HasKeyboardFocusPropertyId);
-        let is_keyboard_focusable =
-            self.get_cached_bool_opt(element, UIA_IsKeyboardFocusablePropertyId);
-        let help_text = self.get_cached_string(element, UIA_HelpTextPropertyId);
-        let is_password = self.get_cached_bool_opt(element, UIA_IsPasswordPropertyId);
-        let accelerator_key = self.get_cached_string(element, UIA_AcceleratorKeyPropertyId);
-        let access_key = self.get_cached_string(element, UIA_AccessKeyPropertyId);
-        let localized_control_type =
-            self.get_cached_string(element, UIA_LocalizedControlTypePropertyId);
+        let first_child =
+            unsafe { tree_walker.GetFirstChildElementBuildCache(&element, cache_request) };
+        let Ok(mut child) = first_child else {
+            return node;
+        };
 
-        let mut children = Vec::new();
-        if !budget.exhausted() {
-            unsafe {
-                // Navigate to first child via TreeWalker
-                if let Ok(child) =
-                    tree_walker.GetFirstChildElementBuildCache(element, cache_request)
-                {
-                    children.push(self.build_node_walker(
-                        &child,
-                        budget,
-                        tree_walker,
-                        cache_request,
-                    ));
-                    // Iterate siblings
-                    let mut current = child;
-                    while !budget.exhausted() {
-                        match tree_walker.GetNextSiblingElementBuildCache(&current, cache_request) {
-                            Ok(next) => {
-                                children.push(self.build_node_walker(
-                                    &next,
-                                    budget,
-                                    tree_walker,
-                                    cache_request,
-                                ));
-                                current = next;
-                            }
-                            Err(_) => break,
-                        }
-                    }
-                }
+        loop {
+            // A successful provider fetch is always charged and retained, even
+            // when it consumes the last node or deadline budget allowance.
+            budget.charge_fetched();
+            node.children.push(self.build_node_walker_depth_first(
+                child.clone(),
+                budget,
+                tree_walker,
+                cache_request,
+            ));
+            if budget.exhausted() {
+                break;
+            }
+            match unsafe { tree_walker.GetNextSiblingElementBuildCache(&child, cache_request) } {
+                Ok(next) => child = next,
+                Err(_) => break,
             }
         }
 
-        AccessibilityNode {
-            control_type,
-            name,
-            automation_id,
-            class_name,
-            value,
-            bounds,
-            is_enabled,
-            is_focused,
-            is_keyboard_focusable,
-            help_text,
-            is_password,
-            is_selected: None, // requires SelectionItemPattern, not available via simple cache
-            is_expanded: None, // requires ExpandCollapsePattern, not available via simple cache
-            accelerator_key,
-            access_key,
-            localized_control_type,
-            children,
-        }
+        node
     }
 
-    /// Recursively build an AccessibilityNode from a cached UIA element.
-    /// The subtree is already materialized in-process, so per-node work is a
-    /// local property read; callers pass a node-cap-only budget.
-    fn build_node(
+    /// Build a tree through a fair frontier. Each pending parent fetches one
+    /// next child before yielding, so a wide grid cannot starve its siblings or
+    /// their headings. Every successfully fetched element is charged and its
+    /// cached properties are retained immediately. Child indexes reconstruct
+    /// the provider's exact sibling order without sorting RawView or ControlView.
+    fn build_node_walker(
         &self,
-        element: &IUIAutomationElement,
+        root: IUIAutomationElement,
         budget: &mut TreeBudget,
+        tree_walker: &IUIAutomationTreeWalker,
+        cache_request: &IUIAutomationCacheRequest,
     ) -> AccessibilityNode {
-        budget.count += 1;
+        let mut arena = vec![Some(PendingWalkerNode {
+            node: self.node_from_cached(&root),
+            element: root,
+            children: Vec::new(),
+            last_child: None,
+        })];
+        let mut frontier = VecDeque::from([0usize]);
 
+        while let Some(parent_index) = frontier.pop_front() {
+            if budget.exhausted() {
+                break;
+            }
+            let (parent, last_child) = {
+                let pending = arena[parent_index].as_ref().unwrap();
+                (pending.element.clone(), pending.last_child.clone())
+            };
+            let fetched = unsafe {
+                match last_child {
+                    Some(previous) => {
+                        tree_walker.GetNextSiblingElementBuildCache(&previous, cache_request)
+                    }
+                    None => tree_walker.GetFirstChildElementBuildCache(&parent, cache_request),
+                }
+            };
+            let Ok(child) = fetched else {
+                continue;
+            };
+
+            // Charge and retain the node as soon as the provider returns it.
+            // No later deadline check can discard already-fetched properties.
+            budget.charge_fetched();
+            let child_index = arena.len();
+            arena.push(Some(PendingWalkerNode {
+                node: self.node_from_cached(&child),
+                element: child.clone(),
+                children: Vec::new(),
+                last_child: None,
+            }));
+            let pending = arena[parent_index].as_mut().unwrap();
+            pending.children.push(child_index);
+            pending.last_child = Some(child);
+
+            // The parent keeps its place ahead of the new child. This preserves
+            // sibling discovery order while still giving every discovered
+            // parent one provider call per frontier cycle.
+            frontier.push_back(parent_index);
+            frontier.push_back(child_index);
+        }
+
+        finish_walker_node(0, &mut arena)
+    }
+
+    fn node_from_cached(&self, element: &IUIAutomationElement) -> AccessibilityNode {
         let control_type = self.get_control_type_name(element);
         let name = self.get_cached_string(element, UIA_NamePropertyId);
         let automation_id = self.get_cached_string(element, UIA_AutomationIdPropertyId);
@@ -566,25 +507,6 @@ impl UiaContext {
         let access_key = self.get_cached_string(element, UIA_AccessKeyPropertyId);
         let localized_control_type =
             self.get_cached_string(element, UIA_LocalizedControlTypePropertyId);
-
-        let mut children = Vec::new();
-        if !budget.exhausted() {
-            unsafe {
-                // Walk cached children (already fetched via TreeScope_Subtree)
-                if let Ok(child_array) = element.GetCachedChildren() {
-                    if let Ok(len) = child_array.Length() {
-                        for i in 0..len {
-                            if budget.exhausted() {
-                                break;
-                            }
-                            if let Ok(child) = child_array.GetElement(i) {
-                                children.push(self.build_node(&child, budget));
-                            }
-                        }
-                    }
-                }
-            }
-        }
 
         AccessibilityNode {
             control_type,
@@ -603,7 +525,7 @@ impl UiaContext {
             accelerator_key,
             access_key,
             localized_control_type,
-            children,
+            children: Vec::new(),
         }
     }
 
@@ -1426,7 +1348,7 @@ mod tests {
         assert_eq!(budget.truncation, TruncationReason::MaxNodes);
 
         // First-hit reason sticks even if the deadline also passes later.
-        budget.deadline = Some(Instant::now() - Duration::from_secs(1));
+        budget.deadline = Instant::now() - Duration::from_secs(1);
         assert!(budget.exhausted());
         assert_eq!(budget.truncation, TruncationReason::MaxNodes);
     }
@@ -1439,34 +1361,19 @@ mod tests {
     }
 
     #[test]
-    fn test_tree_budget_node_capped_ignores_time() {
-        // Cached-path budget: no deadline, only the node cap binds.
-        let mut budget = TreeBudget::node_capped(3);
-        assert!(!budget.exhausted());
-        budget.count = 3;
+    fn test_tree_budget_charges_every_fetched_node() {
+        let mut budget = TreeBudget::new(3, Instant::now() + Duration::from_secs(60));
+        for expected in 1..=3 {
+            assert!(!budget.exhausted());
+            budget.charge_fetched();
+            assert_eq!(budget.count, expected);
+        }
         assert!(budget.exhausted());
         assert_eq!(budget.truncation, TruncationReason::MaxNodes);
     }
 
-    #[test]
-    fn test_walker_fallback_memo_roundtrip() {
-        // Distinct pointer value so parallel tests sharing the process-wide
-        // memo can't interfere.
-        let hwnd = HWND(0x5EED_F00D_usize as *mut _);
-
-        assert!(!needs_walker_fallback(hwnd));
-        remember_walker_fallback(hwnd);
-        assert!(needs_walker_fallback(hwnd));
-        forget_walker_fallback(hwnd);
-        assert!(!needs_walker_fallback(hwnd));
-    }
-
     /// Live test: the wall-clock deadline bounds a real capture.
-    /// Focus a Chromium/Electron window (whose provider forces the
-    /// per-element TreeWalker fallback) to see `Timeout` truncation — the
-    /// deadline binds that path. Windows served by the cached path return
-    /// their full (node-capped) tree regardless of the deadline, since the
-    /// subtree arrives in one COM call. Run:
+    /// Focus an accessible window to see `Timeout` truncation. Run:
     /// cargo test -p screenpipe-a11y test_live_bounded_capture -- --ignored --nocapture
     #[test]
     #[ignore]
@@ -1494,7 +1401,7 @@ mod tests {
         );
 
         // Tightly bounded walk must come back promptly. The deadline can't
-        // interrupt the initial ElementFromHandleBuildCache COM call, so the
+        // interrupt an in-flight UIA COM call, so the
         // assertion is loose — the point is it doesn't run for seconds.
         let start = std::time::Instant::now();
         let bounded = uia
@@ -1513,6 +1420,127 @@ mod tests {
             "bounded walk took {}ms — deadline not honored",
             bounded_ms
         );
+        unsafe { CoUninitialize() };
+    }
+
+    /// Fixture-backed regression for wide WinForms grids. The bounded fair
+    /// frontier must retain both the procedure field and a native column
+    /// heading, charge all retained nodes, and preserve provider sibling order.
+    #[test]
+    #[ignore]
+    fn test_live_winforms_grid_fair_frontier() {
+        fn collect<'a>(node: &'a AccessibilityNode, out: &mut Vec<&'a AccessibilityNode>) {
+            out.push(node);
+            for child in &node.children {
+                collect(child, out);
+            }
+        }
+
+        unsafe {
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+                .ok()
+                .expect("COM init failed");
+        }
+        let uia = UiaContext::new().expect("UIA init failed");
+        let hwnd = unsafe { GetForegroundWindow() };
+        let captured = uia
+            .capture_window_tree_bounded(hwnd, 5_000, Duration::from_millis(250))
+            .expect("capture failed");
+        assert!(captured.root.node_count() <= 5_000);
+
+        let mut nodes = Vec::new();
+        collect(&captured.root, &mut nodes);
+        assert!(
+            nodes.iter().any(|node| {
+                node.automation_id.as_deref() == Some("ProcedureInput")
+                    || node.name.as_deref() == Some("Procedure input and verified readback")
+            }),
+            "bounded tree lost the procedure field"
+        );
+        assert!(
+            nodes
+                .iter()
+                .any(|node| { matches!(node.name.as_deref(), Some("Field 0") | Some("Field 1")) }),
+            "bounded tree lost native grid column headings"
+        );
+
+        let live_root = unsafe { uia.automation.ElementFromHandle(hwnd).unwrap() };
+        let mut expected_ids = Vec::new();
+        unsafe {
+            if let Ok(first) = uia
+                .tree_walker
+                .GetFirstChildElementBuildCache(&live_root, &uia.walker_cache_request)
+            {
+                let mut current = first;
+                loop {
+                    expected_ids.push(uia.get_cached_string(&current, UIA_AutomationIdPropertyId));
+                    match uia
+                        .tree_walker
+                        .GetNextSiblingElementBuildCache(&current, &uia.walker_cache_request)
+                    {
+                        Ok(next) => current = next,
+                        Err(_) => break,
+                    }
+                }
+            }
+        }
+        let actual_ids: Vec<_> = captured
+            .root
+            .children
+            .iter()
+            .map(|child| child.automation_id.clone())
+            .collect();
+        assert_eq!(actual_ids, expected_ids[..actual_ids.len()]);
+
+        drop(uia);
+        unsafe { CoUninitialize() };
+    }
+
+    /// Live browser regression: focus the static Edge semantic fixture. A
+    /// node-capped RawView capture must remain the depth-first prefix of a
+    /// larger capture rather than switching to the native fair frontier.
+    #[test]
+    #[ignore = "requires SCREENPIPE_REAL_BROWSER_HWND for the static Edge fixture"]
+    fn test_live_browser_semantic_capture_preserves_depth_first_prefix() {
+        fn identities(node: &AccessibilityNode, out: &mut Vec<(String, String, String)>) {
+            out.push((
+                node.control_type.clone(),
+                node.name.clone().unwrap_or_default(),
+                node.automation_id.clone().unwrap_or_default(),
+            ));
+            for child in &node.children {
+                identities(child, out);
+            }
+        }
+
+        unsafe {
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+                .ok()
+                .expect("COM init failed");
+        }
+        let uia = UiaContext::new().expect("UIA init failed");
+        let raw_hwnd = std::env::var("SCREENPIPE_REAL_BROWSER_HWND")
+            .expect("SCREENPIPE_REAL_BROWSER_HWND must identify the static Edge fixture")
+            .parse::<isize>()
+            .expect("SCREENPIPE_REAL_BROWSER_HWND must be a decimal window handle");
+        let hwnd = HWND(raw_hwnd as *mut _);
+        let full = uia
+            .capture_window_tree_bounded_semantic(hwnd, 5_000, Duration::from_secs(10))
+            .expect("full semantic capture failed");
+        let bounded = uia
+            .capture_window_tree_bounded_semantic(hwnd, 80, Duration::from_secs(10))
+            .expect("bounded semantic capture failed");
+
+        let mut full_ids = Vec::new();
+        let mut bounded_ids = Vec::new();
+        identities(&full.root, &mut full_ids);
+        identities(&bounded.root, &mut bounded_ids);
+        assert_eq!(bounded.truncation, TruncationReason::MaxNodes);
+        assert_eq!(bounded_ids.len(), 80);
+        assert!(full_ids.len() > bounded_ids.len());
+        assert_eq!(bounded_ids, full_ids[..bounded_ids.len()]);
+
+        drop(uia);
         unsafe { CoUninitialize() };
     }
 
@@ -2037,7 +2065,14 @@ mod tests {
         }
 
         let uia = UiaContext::new().expect("UIA init failed");
-        let hwnd = unsafe { GetForegroundWindow() };
+        let fixture_hwnd = std::env::var("SCREENPIPE_REAL_UIA_HWND").ok().map(|raw| {
+            HWND(
+                raw.parse::<isize>()
+                    .expect("SCREENPIPE_REAL_UIA_HWND must be a decimal window handle")
+                    as *mut _,
+            )
+        });
+        let hwnd = fixture_hwnd.unwrap_or_else(|| unsafe { GetForegroundWindow() });
         assert!(!hwnd.is_invalid(), "No foreground window");
 
         unsafe {
@@ -2045,13 +2080,23 @@ mod tests {
                 uia.enrichment_cache_request.TreeScope().unwrap(),
                 TreeScope_Element
             );
-            assert_eq!(uia.cache_request.TreeScope().unwrap(), TreeScope_Subtree);
+            assert_eq!(
+                uia.enrichment_cache_request
+                    .AutomationElementMode()
+                    .unwrap(),
+                AutomationElementMode_None
+            );
 
-            let focused = uia
-                .automation
-                .GetFocusedElementBuildCache(&uia.enrichment_cache_request)
-                .expect("focused enrichment call failed");
-            let cached_child_count = focused
+            let selected = match fixture_hwnd {
+                Some(hwnd) => uia
+                    .automation
+                    .ElementFromHandleBuildCache(hwnd, &uia.enrichment_cache_request),
+                None => uia
+                    .automation
+                    .GetFocusedElementBuildCache(&uia.enrichment_cache_request),
+            }
+            .expect("selected-element enrichment call failed");
+            let cached_child_count = selected
                 .GetCachedChildren()
                 .ok()
                 .and_then(|children| children.Length().ok())
@@ -2061,7 +2106,7 @@ mod tests {
                 "single-element enrichment unexpectedly cached descendants"
             );
 
-            let context = uia.element_to_context(&focused);
+            let context = uia.element_to_context(&selected);
             assert!(!context.role.is_empty(), "element role metadata was lost");
             assert!(
                 context.name.is_some() || context.value.is_some() || context.bounds.is_some(),

@@ -1088,6 +1088,43 @@ mod tests {
         assert!(!report.contains("hunter2"));
     }
 
+    /// Exercises the support boundary with a real production-engine log. Set
+    /// SCREENPIPE_REAL_UIA_LOG to a completed run containing the deadline line.
+    #[tokio::test]
+    #[ignore = "requires SCREENPIPE_REAL_UIA_LOG from a completed production run"]
+    async fn real_bounded_uia_outcome_survives_rotated_log_collection_and_redaction() {
+        let source = std::env::var("SCREENPIPE_REAL_UIA_LOG")
+            .expect("SCREENPIPE_REAL_UIA_LOG must name a real completed engine log");
+        let real_log = tokio::fs::read_to_string(source).await.unwrap();
+        assert!(real_log.contains("technical_cause=\"per_element_uia_deadline_exhausted\""));
+        assert!(real_log.contains("capture_outcome=\"produced_partial_tree\""));
+
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(dir.path().join("screenpipe.2026-09-21.log"), real_log)
+            .await
+            .unwrap();
+        tokio::fs::write(
+            dir.path().join("screenpipe.2026-09-22.log"),
+            "INFO accessibility recording continued after rotated log\n",
+        )
+        .await
+        .unwrap();
+
+        let files = crate::log_files::collect_log_files(&[dir.path().to_path_buf()]).await;
+        let logs = collect_log_text_from_files(files).await;
+        let redacted = crate::feedback_redact::redact_diagnostics_locally(logs)
+            .await
+            .unwrap();
+
+        for expected in [
+            "capture_outcome=\"produced_partial_tree\"",
+            "technical_cause=\"per_element_uia_deadline_exhausted\"",
+            "accessibility recording continued after rotated log",
+        ] {
+            assert!(redacted.contains(expected), "missing {expected}");
+        }
+    }
+
     #[tokio::test]
     async fn transcription_gateway_failure_reaches_support_after_log_rotation() {
         let server = MockServer::start().await;

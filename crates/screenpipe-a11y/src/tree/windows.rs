@@ -19,7 +19,7 @@ use chrono::Utc;
 use screenpipe_core::window_pattern::{self, WindowPattern};
 use std::cell::UnsafeCell;
 use std::time::Instant;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HWND, RECT};
@@ -439,6 +439,18 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         let content_hash = TreeSnapshot::compute_hash(&text_buffer);
         let simhash = TreeSnapshot::compute_simhash(&text_buffer);
         let walk_duration = start.elapsed();
+
+        if truncation_reason == super::TruncationReason::Timeout {
+            warn!(
+                app = %app_name,
+                pid,
+                nodes_captured = node_count,
+                duration_ms = walk_duration.as_millis(),
+                capture_outcome = "produced_partial_tree",
+                technical_cause = "per_element_uia_deadline_exhausted",
+                "a11y: window tree capture reached its provider-call deadline; returning the bounded partial result"
+            );
+        }
 
         debug!(
             "tree walk: app={}, window={}, nodes={}, text_len={}, duration={:?}",
