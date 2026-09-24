@@ -1710,13 +1710,21 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 api.apply_auth(client.get(api.url("/vision/device/status"))),
             )
             .await;
-            let mut observed = vision_status.as_deref().and_then(recording_monitor_devices);
+            let settings = crate::store::SettingsStore::get(&app).ok().flatten();
+            let vision_disabled = settings
+                .as_ref()
+                .is_some_and(|store| store.recording.disable_vision);
+            let mut observed = if vision_disabled {
+                // Audio-only recording is an explicit configuration, even when
+                // the capture manager is absent or its endpoint is unavailable.
+                Some(Vec::new())
+            } else {
+                vision_status.as_deref().and_then(recording_monitor_devices)
+            };
             // Only an explicit intentional pause can use inventory as inactive rows.
-            if should_use_paused_inventory(vision_status.as_deref(), status) {
-                if let Ok(Some(store)) = crate::store::SettingsStore::get(&app) {
-                    if store.recording.disable_vision {
-                        observed = Some(Vec::new());
-                    } else if let Ok(res) = api
+            if !vision_disabled && should_use_paused_inventory(vision_status.as_deref(), status) {
+                if let Some(store) = settings {
+                    if let Ok(res) = api
                         .apply_auth(client.get(api.url("/vision/list")))
                         .timeout(Duration::from_secs(2))
                         .send()
