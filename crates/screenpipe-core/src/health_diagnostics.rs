@@ -140,6 +140,7 @@ struct State {
     compactions: u64,
     media_required: Option<bool>,
     model_generation: u64,
+    last_hd_success: Option<i64>,
     // A success in one pipeline must not clear a failure in another.
     media_failures: BTreeMap<String, (i64, String)>,
 }
@@ -223,6 +224,14 @@ impl MediaOperation {
         match result {
             Ok(_) => {
                 s.media_failures.remove(self.kind);
+                if self.kind == "hd" {
+                    s.last_hd_success = Some(at);
+                }
+                if s.ffmpeg.binary.status == "spawn_failing" {
+                    s.ffmpeg.binary.status = "ok".into();
+                    s.ffmpeg.binary.error = None;
+                    s.ffmpeg.binary.error_at = None;
+                }
             }
             Err(e) => {
                 let error: String = e.to_string().chars().take(2048).collect();
@@ -455,7 +464,7 @@ fn snapshot_from(s: &State, audio_disabled: bool) -> Diagnostics {
     if ffmpeg
         .processes
         .last_stall_at
-        .is_some_and(|t| now() - t < 180)
+        .is_some_and(|t| now() - t < 180 && s.last_hd_success.is_none_or(|success| success < t))
     {
         ffmpeg.binary.status = "stalled".into();
     }
@@ -521,6 +530,7 @@ fn snapshot_from(s: &State, audio_disabled: bool) -> Diagnostics {
         }
     }
     let compat = !crate::cpu_features::has_avx2();
+    let avx2 = cfg!(target_arch = "x86_64").then(crate::cpu_features::has_avx2);
     let degraded_features: Vec<_> = runtime
         .iter()
         .filter(|(_, c)| matches!(c.status.as_str(), "init_failed" | "init_timed_out"))
@@ -547,7 +557,7 @@ fn snapshot_from(s: &State, audio_disabled: bool) -> Diagnostics {
                 "init_timed_out": onnx_status == "init_timed_out",
                 "degraded_features": degraded_features, "initializations": runtime,
             },
-            "cpu": { "avx2": crate::cpu_features::has_avx2(), "compat_mode": compat },
+            "cpu": { "avx2": avx2, "compat_mode": compat },
             "msvc_runtime": { "status": if cfg!(windows) { "unknown" } else { "not_required" } },
             "swift_runtime": { "status": if cfg!(target_os = "macos") { "unknown" } else { "not_required" } },
             "crash_dump_helper": { "status": if cfg!(windows) { "unknown" } else { "not_required" } },
@@ -579,6 +589,15 @@ mod tests {
             snapshot(false).dependencies["ffmpeg"]["processes"]["audio_encodes_running"],
             0
         );
+        let hd = MediaOperation::start("hd");
+        media_stall();
+        assert!(snapshot(false)
+            .unhealthy_reasons
+            .iter()
+            .any(|f| f.code == "ffmpeg_stalled"));
+        hd.finish::<_, &str>(&Ok(()));
+        assert!(snapshot(false).unhealthy_reasons.is_empty());
+        drop(hd);
         let old = begin_transcription_model("old engine");
         let current = begin_transcription_model("current engine");
         transcription_model_state(current, "ready", None, None);

@@ -587,7 +587,9 @@ async fn compact_chunk(
     // Encode JPEGs → MP4 via ffmpeg (low-priority, capped threads, JPEG passthrough)
     let operation = screenpipe_core::health_diagnostics::MediaOperation::start("compaction");
     let started = start_ffmpeg_lowpri(&mp4_path_str, fps, video_quality).await;
-    operation.finish(&started);
+    if started.is_err() {
+        operation.finish(&started);
+    }
     let (mut child, encoder) = started?;
     let mut stdin = child
         .stdin
