@@ -56,6 +56,13 @@ export type WorkflowsPlatform = {
     app: string,
   ) => Promise<WorkflowRecording | null>;
   releaseWorkflowRecording?: (url: string) => Promise<void>;
+  /** Exact source preview, not verification of the step. Blob URLs are released
+   * by the view; never persist this transient image in the workflow catalog. */
+  loadWorkflowScreenshot?: (
+    timestamp: string,
+    app: string,
+    signal: AbortSignal,
+  ) => Promise<import("./model").WorkflowScreenshot | null>;
   openCapturedMoment?: (frameId: number, timestamp: string) => Promise<void>;
   assistant?: WorkflowsAssistantPlatform;
   /** The host can discover context without uploaded sources. */

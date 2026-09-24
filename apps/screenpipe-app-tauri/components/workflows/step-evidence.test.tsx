@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 import React from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkflowStepEvidence } from "../../../../packages/workflows-ui/src/workflow-step-evidence";
 import { fixtureWorkflowAnalysis } from "../../../../packages/workflows-ui/src/fixture-platform";
@@ -12,6 +12,96 @@ const stage = workflow.stages[0];
 const close = () => fireEvent.click(screen.getByRole("button", { name: `Close recording for ${stage.name}` }));
 const play = () => fireEvent.click(screen.getByRole("button", { name: `View recording for ${stage.name}` }));
 afterEach(cleanup);
+
+describe("missing attached screenshots", () => {
+  const bare = { ...stage, screenshot: null, screenshots: [] };
+  it("automatically shows an exact source preview without changing evidence or starting replay", async () => {
+    const preview = { ...stage.screenshot!, visualVerified: false };
+    const load = vi.fn().mockResolvedValue(preview);
+    const recording = vi.fn();
+    const open = vi.fn().mockResolvedValue(undefined);
+    const before = JSON.stringify(bare);
+    render(<WorkflowStepEvidence workflow={workflow} stage={bare} platform={{ loadWorkflowScreenshot: load, loadWorkflowRecording: recording, openCapturedMoment: open } as unknown as WorkflowsPlatform} />);
+    expect(await screen.findByRole("img")).toHaveAttribute("src", preview.dataUrl);
+    expect(screen.getByText(/Source screenshot/)).toBeVisible();
+    expect(load).toHaveBeenCalledWith(bare.evidence[0].timestamp, bare.evidence[0].app, expect.any(AbortSignal));
+    expect(recording).not.toHaveBeenCalled();
+    expect(JSON.stringify(bare)).toBe(before);
+    fireEvent.click(screen.getByRole("button", { name: `Open recording for ${stage.name}` }));
+    await waitFor(() => expect(open).toHaveBeenCalledWith(preview.frameId, preview.timestamp));
+  });
+  it("keeps attached images without a lookup", () => {
+    const load = vi.fn();
+    render(<WorkflowStepEvidence workflow={workflow} stage={stage} platform={{ loadWorkflowScreenshot: load } as unknown as WorkflowsPlatform} />);
+    expect(screen.getByRole("img")).toBeVisible();
+    expect(load).not.toHaveBeenCalled();
+  });
+  it("recovers the source image when a catalog refresh omits the attachment", async () => {
+    const load = vi.fn().mockResolvedValue({ ...stage.screenshot!, visualVerified: false });
+    const platform = { loadWorkflowScreenshot: load } as unknown as WorkflowsPlatform;
+    const { rerender } = render(<WorkflowStepEvidence workflow={workflow} stage={stage} platform={platform} />);
+    expect(load).not.toHaveBeenCalled();
+    rerender(<WorkflowStepEvidence workflow={workflow} stage={bare} platform={platform} />);
+    expect(await screen.findByRole("img")).toHaveAttribute("src", stage.screenshot!.dataUrl);
+    expect(screen.getByText(/Source screenshot/)).toBeVisible();
+  });
+  it("does not look up media until the step approaches the viewport", async () => {
+    let observe!: (entries: { isIntersecting: boolean }[]) => void;
+    const disconnect = vi.fn();
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(callback: typeof observe) { observe = callback; }
+      observe() {} disconnect = disconnect;
+    });
+    try {
+      const load = vi.fn().mockResolvedValue(stage.screenshot);
+      render(<WorkflowStepEvidence workflow={workflow} stage={bare} platform={{ loadWorkflowScreenshot: load } as unknown as WorkflowsPlatform} />);
+      expect(load).not.toHaveBeenCalled();
+      act(() => observe([{ isIntersecting: true }]));
+      expect(await screen.findByRole("img")).toBeVisible();
+      expect(disconnect).toHaveBeenCalled();
+    } finally { cleanup(); vi.unstubAllGlobals(); }
+  });
+  it("tries another source when the first capture is unavailable", async () => {
+    const second = { ...bare.evidence[0], timestamp: "2026-09-23T10:00:00Z" };
+    const load = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ ...stage.screenshot!, timestamp: second.timestamp });
+    render(<WorkflowStepEvidence workflow={workflow} stage={{ ...bare, evidence: [bare.evidence[0], second] }} platform={{ loadWorkflowScreenshot: load } as unknown as WorkflowsPlatform} />);
+    expect(await screen.findByRole("img")).toBeVisible();
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+  it("shows missing capture and recovers from a transient failure with retry", async () => {
+    const load = vi.fn().mockResolvedValueOnce(null).mockRejectedValueOnce(new Error("offline")).mockResolvedValue(stage.screenshot);
+    render(<WorkflowStepEvidence workflow={workflow} stage={bare} platform={{ loadWorkflowScreenshot: load } as unknown as WorkflowsPlatform} />);
+    expect(await screen.findByText("No screenshot available for this step.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Retry screenshot" }));
+    expect(await screen.findByText("Could not load the source screenshot.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Retry screenshot" }));
+    expect(await screen.findByRole("img")).toBeVisible();
+  });
+  it("aborts navigation and releases a late blob without attaching it to another step", async () => {
+    const revoke = vi.fn();
+    Object.defineProperty(URL, "revokeObjectURL", { value: revoke, configurable: true });
+    let resolve!: (value: any) => void;
+    const load = vi.fn().mockImplementationOnce(() => new Promise(r => { resolve = r; })).mockResolvedValue(null);
+    const platform = { loadWorkflowScreenshot: load } as unknown as WorkflowsPlatform;
+    const { rerender } = render(<WorkflowStepEvidence workflow={workflow} stage={bare} platform={platform} />);
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    const signal = load.mock.calls[0][2];
+    rerender(<WorkflowStepEvidence workflow={workflow} stage={{ ...bare, evidence: [{ ...bare.evidence[0], timestamp: "2026-09-24T12:00:00Z" }] }} platform={platform} />);
+    await act(async () => resolve({ ...stage.screenshot!, dataUrl: "blob:late" }));
+    expect(signal.aborted).toBe(true);
+    expect(revoke).toHaveBeenCalledWith("blob:late");
+    expect(screen.queryByRole("img")).toBeNull();
+  });
+  it("releases visible preview blobs on unmount", async () => {
+    const revoke = vi.fn();
+    Object.defineProperty(URL, "revokeObjectURL", { value: revoke, configurable: true });
+    const load = vi.fn().mockResolvedValue({ ...stage.screenshot!, dataUrl: "blob:preview" });
+    const { unmount } = render(<WorkflowStepEvidence workflow={workflow} stage={bare} platform={{ loadWorkflowScreenshot: load } as unknown as WorkflowsPlatform} />);
+    await screen.findByRole("img");
+    unmount();
+    expect(revoke).toHaveBeenCalledWith("blob:preview");
+  });
+});
 
 describe("step evidence media", () => {
   it("shows all unique verified images, keeps independent sizing and opens the selected frame", async () => {

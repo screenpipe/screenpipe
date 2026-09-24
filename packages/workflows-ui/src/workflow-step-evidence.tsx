@@ -9,6 +9,7 @@ import type { WorkflowsPlatform } from "./platform";
 import { WorkflowQuestion } from "./workflow-question";
 import { WorkflowReplay } from "./workflow-replay";
 import { verifiedStageScreenshots } from "./screenshots";
+import { useSourceScreenshot } from "./use-source-screenshot";
 import styles from "./workflow-step-evidence.module.css";
 
 const when = (value: string) => Number.isFinite(Date.parse(value))
@@ -28,7 +29,9 @@ export function WorkflowStepEvidence({ workflow, stage, platform }: {
     ...stage, evidence: stage.evidence.filter(e => e.app.toLowerCase() === selected.app.toLowerCase()
       && Date.parse(e.timestamp) === Date.parse(selected.timestamp)),
   } : stage] }), [workflow, stage, selected]);
-  const screenshots = verifiedStageScreenshots(stage);
+  const attached = verifiedStageScreenshots(stage);
+  const preview = useSourceScreenshot(stage, attached.length > 0, platform.loadWorkflowScreenshot);
+  const screenshots = attached.length ? attached : preview.image ? [preview.image] : [];
   const screenshot = screenshots[0];
   const canReplay = platform.loadWorkflowRecording && stage.evidence.some(e => !["audio", "meeting"].includes(e.source ?? "") && Number.isFinite(Date.parse(e.timestamp)));
   const openRecording = async (capture = screenshot) => {
@@ -51,7 +54,11 @@ export function WorkflowStepEvidence({ workflow, stage, platform }: {
       else if (media?.url && platform.releaseWorkflowRecording) void platform.releaseWorkflowRecording(media.url).catch(() => {});
     }
   };
-  return <section className={`${styles.evidence} ph-no-capture ph-mask`} aria-label={`References for ${stage.name}`}>
+  return <section ref={preview.ref} className={`${styles.evidence} ph-no-capture ph-mask`} aria-label={`References for ${stage.name}`}>
+    {!playing && !screenshots.length && <div className={styles.previewStatus} role="status">
+      {preview.status === "loading" ? "Loading source screenshot…" : preview.status === "error" ? "Could not load the source screenshot." : "No screenshot available for this step."}
+      {preview.canRetry && preview.status !== "loading" && <button type="button" onClick={preview.retry}>Retry screenshot</button>}
+    </div>}
     {!playing && screenshots.map((capture, index) => {
       const expanded = !reduced.has(capture.frameId);
       const suffix = screenshots.length > 1 ? ` ${index + 1}` : "";
@@ -62,7 +69,7 @@ export function WorkflowStepEvidence({ workflow, stage, platform }: {
           <img src={capture.dataUrl} alt={`Captured reference${suffix} for ${stage.name}`} loading="lazy" draggable={false} data-lm-disable="true" />
           <span className={styles.zoom}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</span>
         </button>
-        <figcaption><span>{capture.app} · {when(capture.timestamp)}</span>
+        <figcaption><span>{!capture.visualVerified ? "Source screenshot · " : ""}{capture.app} · {when(capture.timestamp)}</span>
           {screenshots.length > 1 && (canReplay || platform.openCapturedMoment) && <button type="button" disabled={opening} onClick={() => void openRecording(capture)} aria-label={`${platform.openCapturedMoment ? "Open" : "View"} recording${suffix} for ${stage.name}`}><Play size={13} />{platform.openCapturedMoment ? "Open recording" : "View recording"}</button>}
         </figcaption>
       </figure>;
