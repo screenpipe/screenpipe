@@ -1140,6 +1140,36 @@ pub async fn start_monitor_watcher(
                 }
             }
 
+            // Windows can keep a runtime ID across resolution, rotation and
+            // position changes. Refresh the running handle, focus identity and
+            // tree-walk bounds together, rather than merely updating inventory.
+            // Only existing captures qualify; paused/unselected displays have no
+            // stored geometry. start_monitor_handle also retains the pause guard.
+            #[cfg(target_os = "windows")]
+            for monitor in &current_monitors {
+                if vision_manager.active_monitor_geometry_changed(monitor) {
+                    info!(
+                        "Windows monitor {} geometry changed; refreshing capture",
+                        monitor.id()
+                    );
+                    if let Err(error) = vision_manager.stop_monitor(monitor.id()).await {
+                        warn!(
+                            "failed to stop monitor {} for geometry refresh: {:?}",
+                            monitor.id(),
+                            error
+                        );
+                        continue;
+                    }
+                    if let Err(error) = vision_manager.start_monitor_handle(monitor.clone()).await {
+                        warn!(
+                            "failed to refresh monitor {} geometry: {:?}",
+                            monitor.id(),
+                            error
+                        );
+                    }
+                }
+            }
+
             // Get currently recording monitors
             let active_ids: HashSet<u32> =
                 vision_manager.active_monitors().await.into_iter().collect();
