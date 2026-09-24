@@ -93,8 +93,8 @@ export const trajectoryCollector = createTrajectoryCollector({
   async local() {
     const { getStore } = await import("@/lib/hooks/use-settings");
     const settings = await (await getStore()).get<import("@/lib/hooks/use-settings").Settings>("settings");
-    // Managed deployments never contribute, even if an old local preference exists.
-    if (settings?.enterpriseManagedSettings || settings?.piiBackend !== "tinfoil") return null;
+    // Every account needs explicit opt-in and strict cloud redaction.
+    if (settings?.piiBackend !== "tinfoil") return null;
     return settings?.workflowSharing ?? null;
   },
   token: () => commands.getCloudToken(),

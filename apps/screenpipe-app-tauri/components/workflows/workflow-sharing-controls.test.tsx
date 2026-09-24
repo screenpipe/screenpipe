@@ -66,9 +66,8 @@ describe("sharing consent UI", () => {
     await waitFor(() => expect(requests.some(r => r.method === "DELETE")).toBe(true));
     expect(f.settings.workflowSharing).toBeNull();
   });
-  it.each(["unavailable", "managed", "notice mismatch"])("keeps %s sharing visible without saving a choice", async reason => {
+  it.each(["unavailable", "notice mismatch"])("keeps %s sharing visible without saving a choice", async reason => {
     if (reason === "unavailable") remote.available = false;
-    if (reason === "managed") f.managed = true;
     if (reason === "notice mismatch") remote.noticeVersion = "different-version";
     const done = vi.fn();
     render(<WorkflowSharingControls compact onDone={done} />);
@@ -79,10 +78,17 @@ describe("sharing consent UI", () => {
     expect(f.update).not.toHaveBeenCalled();
     expect(requests.every(r => r.method === "GET")).toBe(true);
   });
-  it("does not enable sharing for managed deployments", async () => {
-    f.managed = true; render(<WorkflowSharingControls />);
-    await waitFor(() => expect(requests.length).toBe(1));
-    expect(screen.getByRole("switch")).toBeDisabled();
+  it.each([false, true])("allows managed accounts to opt in explicitly (compact=%s)", async compact => {
+    f.managed = true;
+    f.settings.enterpriseManagedSettings = { serverUrl: "https://example.com" };
+    render(<WorkflowSharingControls compact={compact} />);
+    const control = compact ? screen.getByRole("button", { name: "Allow sharing" }) : screen.getByRole("switch");
+    await waitFor(() => expect(control).toBeEnabled());
+    expect(requests.every(r => r.method === "GET")).toBe(true);
+    expect(f.update).not.toHaveBeenCalled();
+    fireEvent.click(control);
+    await waitFor(() => expect(f.settings.workflowSharing).toMatchObject({ accountId: "user_one" }));
+    expect(requests.find(r => r.method === "PUT")!.body).toMatchObject({ sharing: true, training: true });
   });
   it("submits both permissions only after the explicit prompt action", async () => {
     const done = vi.fn();

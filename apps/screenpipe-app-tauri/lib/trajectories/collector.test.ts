@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 import { describe, it, expect, vi } from "vitest";
-import { createTrajectoryCollector, type LocalSharing, type SharingStatus } from "./collector";
+import { createTrajectoryCollector, type LocalSharing, type SharingStatus, trajectoryCollector } from "./collector";
 function fixture() {
   let local: LocalSharing | null = { accountId: "user_one", epoch: "epoch-one", enabledAt: 0, priorBackend: "local" };
   let token: string | null = "token-one";
@@ -70,4 +70,17 @@ describe("Trajectory collection boundary", () => {
     await f.collector.complete(ticket, "💬".repeat(500), "answer");
     await f.collector.complete(ticket, "question", " "); expect(f.request).not.toHaveBeenCalled();
   });
+});
+
+const managed = vi.hoisted(() => ({ settings: {} as any }));
+vi.mock("@/lib/hooks/use-settings", () => ({ getStore: async () => ({ get: async () => managed.settings }) }));
+vi.mock("@/lib/utils/tauri", () => ({ commands: { getCloudToken: async () => "token-one" } }));
+it("honors explicit managed-account consent while requiring cloud redaction", async () => {
+  managed.settings = { enterpriseManagedSettings: { serverUrl: "https://example.com" }, piiBackend: "tinfoil", workflowSharing: { accountId: "user_one", epoch: "epoch-one", enabledAt: 0, priorBackend: "local" } };
+  expect(await trajectoryCollector.begin()).toMatchObject({ local: { accountId: "user_one", epoch: "epoch-one" } });
+  managed.settings.piiBackend = "local";
+  expect(await trajectoryCollector.begin()).toBeNull();
+  managed.settings.piiBackend = "tinfoil";
+  managed.settings.workflowSharing = null;
+  expect(await trajectoryCollector.begin()).toBeNull();
 });

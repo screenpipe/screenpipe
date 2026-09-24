@@ -4,7 +4,6 @@
 import { PROD_WEB_BASE, screenpipeWebUrl } from "@/lib/web-url";
 import { useEffect, useRef, useState } from "react";
 import { useSettings } from "@/lib/hooks/use-settings";
-import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { commands } from "@/lib/utils/tauri";
 import { Button } from "@/components/ui/button";
 import { Loader2, MessageSquare, ShieldCheck } from "lucide-react";
@@ -17,7 +16,6 @@ export function WorkflowSharingControls({ compact = false, onDone, onBusyChange 
   onBusyChange?: (busy: boolean) => void;
 }) {
   const { settings, updateSettings } = useSettings();
-  const { isManagedDeployment } = useManagedPolicy();
   const [status, setStatus] = useState<SharingStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -38,7 +36,7 @@ export function WorkflowSharingControls({ compact = false, onDone, onBusyChange 
   }, [settings.user?.id, settings.workflowSharing?.epoch, reload, compact]);
   const local = settings.workflowSharing;
   const enabled = !!local && status?.acceptedNoticeVersion === SHARING_NOTICE_VERSION && status.training && status?.sharing === true && status.accountId === local.accountId && status.epoch === local.epoch;
-  const available = !!status?.available && !isManagedDeployment && status.noticeVersion === SHARING_NOTICE_VERSION;
+  const available = !!status?.available && status.noticeVersion === SHARING_NOTICE_VERSION;
 
   async function change(sharing: boolean, remove = false) {
     if (busy || (sharing && !available)) return;
