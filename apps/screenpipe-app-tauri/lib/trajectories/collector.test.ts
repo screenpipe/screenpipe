@@ -5,7 +5,7 @@ import { createTrajectoryCollector, type LocalSharing, type SharingStatus } from
 function fixture() {
   let local: LocalSharing | null = { accountId: "user_one", epoch: "epoch-one", enabledAt: 0, priorBackend: "local" };
   let token: string | null = "token-one";
-  const status: SharingStatus = { accountId: "user_one", epoch: "epoch-one", available: true, sharing: true, training: false, revision: 1, noticeVersion: "2026-09-21" };
+  const status: SharingStatus = { accountId: "user_one", epoch: "epoch-one", available: true, sharing: true, training: true, revision: 1, noticeVersion: "2026-09-23", acceptedNoticeVersion: "2026-09-23" };
   const request = vi.fn(async (_method: string, _body?: unknown, _token?: string, _signal?: AbortSignal) => status);
   const redact = vi.fn(async (_text: string) => "[REDACTED]");
   const collector = createTrajectoryCollector({ local: async () => local, token: async () => token, request, redact });
@@ -27,12 +27,12 @@ describe("Trajectory collection boundary", () => {
     }, "token-one", expect.any(AbortSignal));
     expect(JSON.stringify(f.request.mock.calls)).not.toContain("private question");
   });
-  it.each(["available", "sharing"] as const)("fails closed when server %s is false", async key => {
+  it.each(["available", "sharing", "training"] as const)("fails closed when server %s is false", async key => {
     const f = fixture(); f.status[key] = false;
     await f.collector.complete(await f.collector.begin(), "question", "answer");
     expect(f.redact).not.toHaveBeenCalled(); expect(f.request).toHaveBeenCalledTimes(1);
   });
-  it.each(["accountId", "epoch", "noticeVersion"] as const)("refuses a stale %s", async key => {
+  it.each(["accountId", "epoch", "noticeVersion", "acceptedNoticeVersion"] as const)("refuses a stale %s", async key => {
     const f = fixture(); f.status[key] = "changed";
     await f.collector.complete(await f.collector.begin(), "question", "answer");
     expect(f.redact).not.toHaveBeenCalled();

@@ -15,13 +15,13 @@ beforeEach(() => {
   f.settings = { user: { id: "internal-id" }, piiBackend: "local", workflowSharing: null };
   f.managed = false; f.token = "token";
   f.update.mockReset().mockImplementation(async (updates: any) => { f.settings = { ...f.settings, ...updates }; });
-  remote = { accountId: "user_one", available: true, sharing: false, training: false, epoch: null, revision: 0, noticeVersion: "2026-09-21" };
+  remote = { accountId: "user_one", available: true, sharing: false, training: false, epoch: null, revision: 0, noticeVersion: "2026-09-23", acceptedNoticeVersion: null };
   requests = []; offline = false;
   vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
     if (offline) throw new Error("offline");
     const body = init.body ? JSON.parse(init.body) : null;
     requests.push({ method: init.method, body });
-    if (init.method === "PUT") remote = { ...remote, ...body, epoch: `epoch-${++remote.revision}` };
+    if (init.method === "PUT") remote = { ...remote, ...body, acceptedNoticeVersion: body.noticeVersion, epoch: `epoch-${++remote.revision}` };
     if (init.method === "DELETE") remote = { ...remote, sharing: false, training: false, epoch: "deleted" };
     return { ok: true, json: async () => ({ ...remote }) };
   }));
@@ -37,16 +37,14 @@ describe("sharing consent UI", () => {
     expect(requests.every(r => r.method === "GET")).toBe(true);
     fireEvent.click(screen.getByRole("switch"));
     await waitFor(() => expect(screen.getByRole("switch")).toBeChecked());
-    expect(f.update).toHaveBeenCalledWith({ piiBackend: "tinfoil", workflowSharing: { accountId: "user_one", epoch: "epoch-1", enabledAt: expect.any(Number), priorBackend: "local" } });
-    expect(requests.find(r => r.method === "PUT")!.body).toMatchObject({ sharing: true, training: false });
-    expect(screen.getByRole("checkbox")).not.toBeChecked();
+    expect(f.update).toHaveBeenCalledWith({ piiBackend: "tinfoil", workflowSharingPromptSeen: { "internal-id": "2026-09-23" }, workflowSharing: { accountId: "user_one", epoch: "epoch-1", enabledAt: expect.any(Number), priorBackend: "local" } });
+    expect(requests.find(r => r.method === "PUT")!.body).toMatchObject({ sharing: true, training: true, noticeVersion: "2026-09-23" });
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   });
-  it("requires a separate training choice and restores the prior backend on off", async () => {
+  it("revokes both permissions and restores the prior backend on off", async () => {
     render(<WorkflowSharingControls />); await ready();
     fireEvent.click(screen.getByRole("switch"));
-    await waitFor(() => expect(screen.getByRole("checkbox")).toBeEnabled());
-    fireEvent.click(screen.getByRole("checkbox"));
-    await waitFor(() => expect(screen.getByRole("checkbox")).toBeChecked());
+    await waitFor(() => expect(screen.getByRole("switch")).toBeChecked());
     expect(requests.filter(r => r.method === "PUT").at(-1)!.body.training).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Turn off sharing" }));
     await waitFor(() => expect(f.settings.workflowSharing).toBeNull());
@@ -79,29 +77,31 @@ describe("sharing consent UI", () => {
     await waitFor(() => expect(requests.length).toBe(1));
     expect(screen.getByRole("switch")).toBeDisabled();
   });
-  it("keeps training unchecked and submits sharing only after the explicit prompt action", async () => {
+  it("submits both permissions only after the explicit prompt action", async () => {
     const done = vi.fn();
     render(<WorkflowSharingControls compact onDone={done} />);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Share chats" })).toBeEnabled());
-    expect(screen.getByRole("checkbox")).not.toBeChecked();
-    expect(screen.getByText("Optional. Never external providers’ models.")).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Allow sharing" })).toBeEnabled());
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     expect(requests.every(r => r.method === "GET")).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Share chats" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow sharing" }));
     await waitFor(() => expect(done).toHaveBeenCalledOnce());
-    expect(requests.find(r => r.method === "PUT")!.body).toMatchObject({ sharing: true, training: false });
+    expect(requests.find(r => r.method === "PUT")!.body).toMatchObject({ sharing: true, training: true, noticeVersion: "2026-09-23" });
   });
-  it("submits separate first-party training consent only when the checkbox was selected", async () => {
-    render(<WorkflowSharingControls compact />);
-    await waitFor(() => expect(screen.getByRole("checkbox")).toBeEnabled());
-    fireEvent.click(screen.getByRole("checkbox"));
+  it("does not silently upgrade existing sharing-only consent", async () => {
+    f.settings.workflowSharing = { accountId: "user_one", epoch: "legacy", enabledAt: 0, priorBackend: "local" };
+    remote = { ...remote, sharing: true, training: false, epoch: "legacy", acceptedNoticeVersion: "2026-09-21" };
+    render(<WorkflowSharingControls />); await ready();
+    expect(screen.getByRole("switch")).not.toBeChecked();
+    expect(screen.getByText(/Sharing is paused on this version/)).toBeVisible();
     expect(requests.every(r => r.method === "GET")).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Share chats" }));
-    await waitFor(() => expect(requests.find(r => r.method === "PUT")!.body.training).toBe(true));
+    fireEvent.click(screen.getByRole("switch"));
+    await waitFor(() => expect(screen.getByRole("switch")).toBeChecked());
+    expect(requests.find(r => r.method === "PUT")!.body).toMatchObject({ sharing: true, training: true, noticeVersion: "2026-09-23" });
   });
   it("skips the sharing prompt without saving consent", async () => {
     const done = vi.fn();
     render(<WorkflowSharingControls compact onDone={done} />);
-    fireEvent.click(screen.getByRole("button", { name: "Don’t share" }));
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
     expect(done).toHaveBeenCalledOnce();
     expect(f.update).not.toHaveBeenCalled();
     expect(requests.every(r => r.method === "GET")).toBe(true);
@@ -109,23 +109,29 @@ describe("sharing consent UI", () => {
   it("keeps the prompt open when saving fails", async () => {
     const done = vi.fn();
     render(<WorkflowSharingControls compact onDone={done} />);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Share chats" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Allow sharing" })).toBeEnabled());
     offline = true;
-    fireEvent.click(screen.getByRole("button", { name: "Share chats" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow sharing" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not enable sharing");
     expect(done).not.toHaveBeenCalled();
     expect(f.update).not.toHaveBeenCalled();
   });
 
-  it("clears an unsubmitted training choice when the signed-in account changes", async () => {
+  it("does not save a late consent response into a different signed-in account", async () => {
     const view = render(<WorkflowSharingControls compact />);
-    await waitFor(() => expect(screen.getByRole("checkbox")).toBeEnabled());
-    fireEvent.click(screen.getByRole("checkbox"));
-    expect(screen.getByRole("checkbox")).toBeChecked();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Allow sharing" })).toBeEnabled());
+    let release!: () => void;
+    const fetchNow = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => {
+      if ((args[1] as RequestInit).method === "PUT") await new Promise<void>(resolve => { release = resolve; });
+      return fetchNow(...args);
+    }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow sharing" }));
+    await waitFor(() => expect(release).toBeDefined());
     f.settings = { ...f.settings, user: { id: "different-account" } };
     view.rerender(<WorkflowSharingControls compact />);
-    await waitFor(() => expect(screen.getByRole("checkbox")).not.toBeChecked());
-    expect(requests.every(r => r.method === "GET")).toBe(true);
+    release();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Allow sharing" })).toBeEnabled());
+    expect(f.update).not.toHaveBeenCalled();
   });
-
 });

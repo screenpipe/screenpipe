@@ -3,12 +3,12 @@
 import { PROD_WEB_BASE, screenpipeWebUrl } from "@/lib/web-url";
 import { commands } from "@/lib/utils/tauri";
 
-export const SHARING_NOTICE_VERSION = "2026-09-21";
-const endpoint = screenpipeWebUrl("/api/trajectories", PROD_WEB_BASE);
+export const SHARING_NOTICE_VERSION = "2026-09-23";
+const endpoint = screenpipeWebUrl(`/api/trajectories?noticeVersion=${SHARING_NOTICE_VERSION}`, PROD_WEB_BASE);
 export type LocalSharing = { accountId: string; epoch: string; enabledAt: number; priorBackend: "local" | "tinfoil" };
 export type SharingStatus = {
   accountId: string; available: boolean; sharing: boolean; training: boolean;
-  epoch: string | null; revision: number; noticeVersion: string;
+  epoch: string | null; revision: number; noticeVersion: string; acceptedNoticeVersion: string | null;
 };
 export async function sharingRequest(method: string, body?: unknown, token?: string, signal?: AbortSignal): Promise<SharingStatus> {
   const bearer = token ?? await commands.getCloudToken();
@@ -74,6 +74,7 @@ export function createTrajectoryCollector(ports: Ports) {
         const consent = await ports.request("GET", undefined, ticket.token, controller.signal);
         if (!consent.available || !consent.sharing || consent.accountId !== ticket.local.accountId ||
           consent.epoch !== ticket.local.epoch || consent.noticeVersion !== SHARING_NOTICE_VERSION ||
+          consent.acceptedNoticeVersion !== SHARING_NOTICE_VERSION || !consent.training ||
           controller.signal.aborted || !await current(ticket)) return;
         const redactedQuestion = await ports.redact(question);
         if (controller.signal.aborted || !await current(ticket)) return;

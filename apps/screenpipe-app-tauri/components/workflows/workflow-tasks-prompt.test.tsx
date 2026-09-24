@@ -36,18 +36,18 @@ describe("workflow task opt-in", () => {
     expect(tasks.enable).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Not now" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    await waitFor(() => expect(f.settings.workflowSharingPromptSeen).toEqual({ "fixture-user": "2026-09-21" }));
+    await waitFor(() => expect(f.settings.workflowSharingPromptSeen).toEqual({ "fixture-user": "2026-09-23" }));
     view.rerender(<WorkflowTasksPrompt active={false} tasks={tasks} />);
     view.rerender(<WorkflowTasksPrompt active tasks={tasks} />);
     expect(await screen.findByRole("dialog")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Not now" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
-  it("does not prompt or mutate an already enabled task", async () => {
+  it("offers the new consent without mutating an already enabled task", async () => {
     const tasks = service(true);
     render(<WorkflowTasksPrompt active tasks={tasks} />);
     await waitFor(() => expect(tasks.load).toHaveBeenCalledOnce());
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("sharing-controls")).toBeVisible();
     expect(tasks.enable).not.toHaveBeenCalled();
   });
   it("enables once then offers sharing only on success", async () => {
@@ -83,12 +83,22 @@ describe("workflow task opt-in", () => {
   });
   it("does not ask again when sharing is already enabled", async () => {
     f.settings.workflowSharing = { epoch: "existing" };
+    f.settings.workflowSharingPromptSeen = { "fixture-user": "2026-09-23" };
     render(<WorkflowTasksPrompt active tasks={service()} />);
     fireEvent.click(await screen.findByRole("button", { name: "Not now" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
+  it("asks existing sharing users to accept the new notice", async () => {
+    f.settings.workflowSharing = { epoch: "existing" };
+    f.settings.workflowSharingPromptSeen = { "fixture-user": "2026-09-21" };
+    render(<WorkflowTasksPrompt active tasks={service(true)} />);
+    expect(await screen.findByTestId("sharing-controls")).toBeVisible();
+    expect(screen.getByText("Help improve Screenpipe")).toBeVisible();
+    expect(screen.getByText(/train Screenpipe’s own AI models/)).toBeVisible();
+    expect(f.update).not.toHaveBeenCalled();
+  });
   it("does not reuse another account's dismissal", async () => {
-    f.settings.workflowSharingPromptSeen = { "different-user": "2026-09-21" };
+    f.settings.workflowSharingPromptSeen = { "different-user": "2026-09-23" };
     render(<WorkflowTasksPrompt active tasks={service()} />);
     fireEvent.click(await screen.findByRole("button", { name: "Not now" }));
     expect(screen.getByTestId("sharing-controls")).toBeVisible();

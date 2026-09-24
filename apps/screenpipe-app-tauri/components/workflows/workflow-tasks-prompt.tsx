@@ -41,7 +41,7 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks }: {
   }, [updateSettings]);
   function nextStep() {
     const value = current.current;
-    if (value.user?.id && !value.workflowSharing && value.workflowSharingPromptSeen?.[value.user.id] !== SHARING_NOTICE_VERSION) {
+    if (value.user?.id && value.workflowSharingPromptSeen?.[value.user.id] !== SHARING_NOTICE_VERSION) {
       setError(""); setStep("sharing");
     } else setOpen(false);
   }
@@ -61,7 +61,10 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks }: {
         if (cancelled) return;
         setSetup(value);
         setError("");
-        setOpen(!value.enabled);
+        const account = current.current.user?.id;
+        const offerSharing = !!account && current.current.workflowSharingPromptSeen?.[account] !== SHARING_NOTICE_VERSION;
+        setStep(value.enabled ? "sharing" : "tasks");
+        setOpen(!value.enabled || offerSharing);
       } catch {
         if (cancelled) return;
         // Recorder startup is not a consent failure. Retry quietly first.
@@ -102,10 +105,10 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks }: {
     } as CSSProperties} className="max-w-md [&_button]:normal-case [&_button]:tracking-normal [&_button]:font-[inherit]" overlayClassName="bg-black/30" hideCloseButton={busy}>
       <DialogHeader className="text-left">
         <DialogTitle ref={title} tabIndex={-1} style={{ fontFamily: "inherit", letterSpacing: 0 }} className="text-xl normal-case outline-none">
-          {step === "tasks" ? "Keep your workflows up to date?" : "Help improve Workflows?"}
+          {step === "tasks" ? "Keep your workflows up to date?" : "Help improve Screenpipe"}
         </DialogTitle>
         <DialogDescription className="text-muted-foreground">
-          {step === "tasks" ? "Discover workflows and keep them accurate with daily updates." : "Share new Workflows chats to improve skills and evaluations."}
+          {step === "tasks" ? "Discover workflows and keep them accurate with daily updates." : "Share new Workflows chats to improve workflows and train Screenpipe’s own AI models. Never external providers’ models."}
         </DialogDescription>
       </DialogHeader>
       {step === "sharing" ? <WorkflowSharingControls compact onDone={finishSharing} onUnavailable={close} onBusyChange={setBusy} /> : <>
