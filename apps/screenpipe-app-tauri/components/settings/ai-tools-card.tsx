@@ -11,7 +11,7 @@
 // explicit connect, and explicit removal surface.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Check, Loader2, Plus, RotateCw } from "lucide-react";
+import { Code2, Bot, Check, Loader2, Plus, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import posthog from "posthog-js";
 import { CursorLogo } from "./tool-logos";
@@ -31,6 +31,7 @@ import {
   isGeminiMcpInstalled,
   isRunnerMcpInstalled,
   isWindsurfMcpInstalled,
+  isVscodeMcpInstalled,
 } from "@/lib/ai-tools-mcp";
 import { areExternalAgentSkillsInstalled } from "@/lib/external-agent-skills";
 import {
@@ -112,6 +113,8 @@ async function isToolConnected(id: ConnectAllToolId): Promise<boolean> {
       return isRunnerMcpInstalled();
     case "windsurf":
       return isWindsurfMcpInstalled();
+    case "vscode":
+      return isVscodeMcpInstalled();
   }
 }
 
@@ -134,6 +137,8 @@ function ToolIcon({ id }: { id: ConnectAllToolId }) {
       return <img src="/images/openclaw.png" alt="" className={`${img} rounded`} />;
     case "hermes":
       return <img src="/images/hermes.png" alt="" className={`${img} rounded`} />;
+    case "vscode":
+      return <Code2 className={img} />;
     case "grokbot":
     case "runner":
       return <Bot className={img} />;
@@ -386,6 +391,11 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
                             Open file
                           </button>
                         )}
+                      </p>
+                    )}
+                    {id === "vscode" && isOn && !err && (
+                      <p className="text-[11px] mt-1 text-muted-foreground">
+                        In VS Code, open Copilot Chat and approve screenpipe when prompted.
                       </p>
                     )}
                     {id === "runner" && isOn && !err && (

@@ -6517,6 +6517,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jsonc-parser"
+version = "0.33.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ff5a48f48971be8e762a6ff955725a0802b6e46c441057992da5a673db9fd3a"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "jsonptr"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11607,6 +11616,7 @@ dependencies = [
  "http-body-util",
  "hyper-util",
  "image 0.25.10",
+ "jsonc-parser",
  "libc",
  "lru",
  "md5 0.7.0",

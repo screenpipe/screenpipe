@@ -6,7 +6,7 @@
 // launch reconciliation in crates/screenpipe-engine/src/cli/agent.rs; this
 // module remains the explicit connect/remove surface in Settings.
 
-import { homeDir, join, dirname } from "@tauri-apps/api/path";
+import { homeDir, configDir, join, dirname } from "@tauri-apps/api/path";
 import {
   readTextFile,
   writeFile,
@@ -31,6 +31,8 @@ import {
 
 import { isGrokBotDetected, grokBotConnection } from "@/lib/grokbot-connection";
 
+import { parse, modify, applyEdits, type ParseError } from "jsonc-parser";
+
 type McpCommand = { command: string; args: string[]; env?: Record<string, string> };
 
 // ─── Tool matrix ──────────────────────────────────────────────────────────────
@@ -45,6 +47,7 @@ const CONNECT_ALL_TOOL_IDS = [
   "hermes",
   "runner",
   "windsurf",
+  "vscode",
   "grokbot",
 ] as const;
 export type ConnectAllToolId = (typeof CONNECT_ALL_TOOL_IDS)[number];
@@ -63,6 +66,7 @@ export const CONNECT_ALL_TOOL_NAMES: Record<ConnectAllToolId, string> = {
   // config stayed at ~/.codeium/windsurf — show both names so users on either
   // side of the OTA update recognize it.
   windsurf: "Windsurf (Devin Desktop)",
+  vscode: "VS Code",
 };
 
 // Skills support per tool lives in the disconnect-all component's
@@ -92,6 +96,7 @@ export async function detectAiTools(): Promise<ConnectAllToolId[]> {
     ["hermes", async () => exists(await join(home, ".hermes"))],
     ["runner", async () => exists(await join(home, ".runner"))],
     ["windsurf", async () => exists(await join(home, ".codeium", "windsurf"))],
+    ["vscode", async () => exists(await dirname(await getVscodeMcpConfigPath()))],
     // Connect all finishes the local integrations before a cloud request.
     ["grokbot", isGrokBotDetected],
   ];
@@ -552,6 +557,63 @@ export async function uninstallHermesMcp(): Promise<void> {
   await replaceConfig(configPath, next);
 }
 
+// VS Code's default user profile uses JSONC and a `servers` map.
+export async function getVscodeMcpConfigPath(): Promise<string> {
+  return join(await configDir(), "Code", "User", "mcp.json");
+}
+
+function parseVscodeConfig(text: string, path: string): Record<string, unknown> {
+  const errors: ParseError[] = [];
+  const parsed = parse(text, errors, { allowTrailingComma: true, allowEmptyContent: true });
+  const root = parsed === undefined ? {} : parsed;
+  if (errors.length || !root || typeof root !== "object" || Array.isArray(root)) {
+    throw new Error(`${path} is not valid JSON — fix or remove it; screenpipe won't overwrite it`);
+  }
+  if ("servers" in root && (!root.servers || typeof root.servers !== "object" || Array.isArray(root.servers))) {
+    throw new Error(`${path}: servers is present but not an object`);
+  }
+  return root;
+}
+
+export async function isVscodeMcpInstalled(): Promise<boolean> {
+  try {
+    const path = await getVscodeMcpConfigPath();
+    const root = parseVscodeConfig(await readTextFile(path), path);
+    const servers = root.servers as Record<string, { type?: string }> | undefined;
+    return Object.entries(servers ?? {}).some(([key, value]) =>
+      key.toLowerCase() === "screenpipe" && value?.type === "stdio");
+  } catch { return false; }
+}
+
+async function updateVscodeMcp(mcp?: McpCommand): Promise<void> {
+  const path = await getVscodeMcpConfigPath();
+  let text = (await readConfigText(path)) ?? "";
+  const root = parseVscodeConfig(text, path);
+  const servers = root.servers as Record<string, unknown> | undefined;
+  const keys = Object.keys(servers ?? {}).filter((key) => key.toLowerCase() === "screenpipe");
+  if (!mcp && !keys.length) return;
+  const options = { formattingOptions: { insertSpaces: true, tabSize: 2 } };
+  for (const key of keys) {
+    text = applyEdits(text, modify(text, ["servers", key], undefined, options));
+  }
+  if (mcp) text = applyEdits(text, modify(text, ["servers", "screenpipe"], { type: "stdio", ...mcp }, options));
+  await replaceConfig(path, text);
+}
+
+export async function installVscodeMcp(): Promise<McpCommand> {
+  const mcp = await buildMcpConfig({ client: "vscode" });
+  const config = await commands.getLocalApiConfig() as { port?: number };
+  if (config?.port) {
+    mcp.env = { ...mcp.env, SCREENPIPE_API_URL: `http://localhost:${config.port}` };
+  }
+  await updateVscodeMcp(mcp);
+  return mcp;
+}
+
+export async function uninstallVscodeMcp(): Promise<void> {
+  await updateVscodeMcp();
+}
+
 // ─── Windsurf ────────────────────────────────────────────────────────────────
 // MCP-only (no skills dir), standard mcpServers JSON at
 // ~/.codeium/windsurf/mcp_config.json.
@@ -666,6 +728,7 @@ const INSTALL_MCP: Record<Exclude<ConnectAllToolId, "grokbot">, () => Promise<Mc
   hermes: installHermesMcp,
   runner: installRunnerMcp,
   windsurf: installWindsurfMcp,
+  vscode: installVscodeMcp,
 };
 
 const UNINSTALL_MCP: Record<Exclude<ConnectAllToolId, "grokbot">, () => Promise<void>> = {
@@ -678,6 +741,7 @@ const UNINSTALL_MCP: Record<Exclude<ConnectAllToolId, "grokbot">, () => Promise<
   hermes: uninstallHermesMcp,
   runner: uninstallRunnerMcp,
   windsurf: uninstallWindsurfMcp,
+  vscode: uninstallVscodeMcp,
 };
 
 async function setAutoConnectOptOut(id: ConnectAllToolId, optOut: boolean): Promise<void> {
@@ -889,6 +953,11 @@ export async function isToolConfigHealthy(id: ConnectAllToolId): Promise<boolean
       case "openclaw":
         await readJsonConfigStrict(await getOpenclawMcpConfigPath());
         return true;
+      case "vscode": {
+        const path = await getVscodeMcpConfigPath();
+        parseVscodeConfig((await readConfigText(path)) ?? "", path);
+        return true;
+      }
       case "windsurf":
         await readJsonConfigStrict(await getWindsurfMcpConfigPath());
         return true;

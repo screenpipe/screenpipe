@@ -17,6 +17,7 @@ edition = { workspace = true }
 screenpipe-fs = { path = "../screenpipe-fs" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+jsonc-parser = { version = "0.33.2", features = ["cst", "serde_json"] }
 serde_yaml = { workspace = true }
 libc = { workspace = true }
 oasgen = { workspace = true }

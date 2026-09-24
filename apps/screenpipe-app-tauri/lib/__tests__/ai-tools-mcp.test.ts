@@ -38,6 +38,7 @@ vi.mock("@tauri-apps/api/path", async () => {
   const simplified = (path: string) => path.replace(/^\\\\\?\\/, "");
   return {
     homeDir: vi.fn(async () => pathMock.home),
+    configDir: vi.fn(async () => paths().join(pathMock.home, "Library/Application Support")),
     join: vi.fn(async (...parts: string[]) => simplified(paths().join(...parts)).replace(/[\\/]+$/, "")),
     dirname: vi.fn(async (path: string) => simplified(paths().dirname(path))),
   };
@@ -100,6 +101,10 @@ vi.mock("@/lib/hooks/use-hardcoded-tiles", () => ({
 vi.mock("@/lib/external-agent-skills", () => skillsMock);
 
 import {
+  installVscodeMcp,
+  uninstallVscodeMcp,
+  isVscodeMcpInstalled,
+  isToolConfigHealthy,
   installCodexMcp,
   uninstallCodexMcp,
   installCursorMcp,
@@ -501,5 +506,51 @@ describe("Grok Bot skill transport", () => {
   it("treats unconfirmed installation as a failed connection", async () => {
     tauriMock.grokbotConnection.mockResolvedValue({ status: "ok", data: { detected: true, connected: false } });
     await expect(connectAiTool("grokbot")).rejects.toThrow("not confirmed");
+  });
+});
+
+
+describe("VS Code MCP", () => {
+  const path = "/Users/test/Library/Application Support/Code/User/mcp.json";
+  it("detects the user profile and preserves JSONC, inputs, and other servers through connect/disconnect", async () => {
+    fsMock.files.set(path.slice(0, -"/mcp.json".length), "");
+    const original = `{
+      // keep this comment
+      "servers": { "other": { "type": "http", "url": "https://example.com" }, },
+      "inputs": [{ "id": "token" }],
+    }`;
+    fsMock.files.set(path, original);
+    expect(await detectAiTools()).toContain("vscode");
+    expect(await isToolConfigHealthy("vscode")).toBe(true);
+    await connectAiTool("vscode");
+    expect(await isVscodeMcpInstalled()).toBe(true);
+    const text = fsMock.files.get(path)!;
+    const { parse } = await import("jsonc-parser");
+    const config = parse(text);
+    expect(text).toContain("// keep this comment");
+    expect(config.servers.other.url).toBe("https://example.com");
+    expect(config.inputs).toEqual([{ id: "token" }]);
+    expect(config.mcpServers).toBeUndefined();
+    expect(config.servers.screenpipe).toMatchObject({ type: "stdio", command: "/app/bun", env: { SCREENPIPE_LOCAL_API_KEY: "sp-test", SCREENPIPE_MCP_CLIENT: "vscode", SCREENPIPE_API_URL: "http://localhost:3030" } });
+    expect(backupsOf(path).map((p) => fsMock.files.get(p))).toContain(original);
+    expect(tauriMock.setAiToolAutoConnectOptOut).toHaveBeenCalledWith("vscode", false);
+    await disconnectAiTool("vscode");
+    expect(tauriMock.setAiToolAutoConnectOptOut).toHaveBeenCalledWith("vscode", true);
+    expect(await isVscodeMcpInstalled()).toBe(false);
+    expect(parse(fsMock.files.get(path)!).servers.other).toEqual(config.servers.other);
+    expect(skillsMock.installExternalAgentSkills).not.toHaveBeenCalled();
+  });
+  it.each(["[]", "null", '{"servers":[]}', '{"servers":null}', '{"servers":{} "inputs":[]}'])("refuses malformed config %s without overwriting", async (original) => {
+    fsMock.files.set(path, original);
+    await expect(installVscodeMcp()).rejects.toThrow();
+    expect(fsMock.files.get(path)).toBe(original);
+    expect(await isToolConfigHealthy("vscode")).toBe(false);
+  });
+  it("initializes missing config and removes mixed-case stale entries", async () => {
+    await installVscodeMcp();
+    expect(await isVscodeMcpInstalled()).toBe(true);
+    fsMock.files.set(path, '{"servers":{"Screenpipe":{"type":"stdio"},"screenpipe":{"type":"stdio"},"other":{}}}');
+    await uninstallVscodeMcp();
+    expect(JSON.parse(fsMock.files.get(path)!).servers).toEqual({ other: {} });
   });
 });

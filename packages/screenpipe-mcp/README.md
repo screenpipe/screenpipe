@@ -13,7 +13,7 @@ MCP server for screenpipe - search your screen recordings, audio transcriptions,
 When Screenpipe analytics are enabled, successful nonempty retrievals produce
 `qualified_value_event` with `surface` (`api` or `mcp`) and `agent_client`.
 Supported app identifiers are `claude`, `chatgpt`, `codex`, `cursor`, `gemini`,
-`openclaw`, `hermes`, `runner`, `windsurf`, `grok`, and `grokbot`. Claude Desktop
+`openclaw`, `hermes`, `runner`, `windsurf`, `vscode`, `grok`, and `grokbot`. Claude Desktop
 and Claude Code share the existing `claude` bucket. This identifies the caller,
 not the app appearing in a recording.
 

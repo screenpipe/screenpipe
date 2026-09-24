@@ -22,6 +22,7 @@ const libMocks = vi.hoisted(() => ({
   isGeminiMcpInstalled: vi.fn(async () => false),
   isRunnerMcpInstalled: vi.fn(async () => false),
   isWindsurfMcpInstalled: vi.fn(async () => false),
+  isVscodeMcpInstalled: vi.fn(async () => false),
 }));
 
 const hookMocks = vi.hoisted(() => ({
@@ -54,6 +55,7 @@ vi.mock("@/lib/ai-tools-mcp", () => ({
     hermes: "Hermes",
     runner: "Runner",
     windsurf: "Windsurf (Devin Desktop)",
+    vscode: "VS Code",
   },
   SKILLS_TARGET: {
     claude: "claude",
@@ -89,6 +91,17 @@ describe("AiToolsCard", () => {
   });
 
   afterEach(() => cleanup());
+
+  it("shows VS Code as connected and allows removing its MCP connection", async () => {
+    libMocks.detectAiTools.mockResolvedValue(["vscode"]);
+    libMocks.isVscodeMcpInstalled.mockResolvedValue(true);
+    render(<AiToolsCard />);
+    expect(await screen.findByText("All 1 connected")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /manage/i }));
+    expect(await screen.findByText("VS Code")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /remove/i }));
+    await waitFor(() => expect(libMocks.disconnectAiToolTargets).toHaveBeenCalledWith(["vscode"]));
+  });
 
   it("shows the last confirmed Grok Bot connection without reconnecting", async () => {
     libMocks.detectAiTools.mockResolvedValue(["grokbot"]);

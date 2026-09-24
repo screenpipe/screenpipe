@@ -55,7 +55,7 @@ pub enum AgentCommand {
     Setup {
         /// Which agent to wire up. Omit when using --all.
         #[arg(
-            value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "gemini", "runner", "windsurf"],
+            value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "gemini", "runner", "windsurf", "vscode"],
             required_unless_present = "all",
             conflicts_with = "all"
         )]
@@ -75,7 +75,7 @@ pub enum AgentCommand {
     /// agent's own config or other skills.
     Remove {
         /// Which agent to unwire.
-        #[arg(value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "gemini", "runner", "windsurf"])]
+        #[arg(value_parser = ["openclaw", "hermes", "claude-code", "claude-desktop", "codex", "cursor", "gemini", "runner", "windsurf", "vscode"])]
         target: String,
     },
 }
@@ -251,6 +251,12 @@ fn detected_agents_in(home: &Path) -> Vec<DetectedAgent> {
             detected.push(DetectedAgent { target, name });
         }
     }
+    if vscode_config(home).parent().is_some_and(Path::is_dir) {
+        detected.push(DetectedAgent {
+            target: "vscode",
+            name: "VS Code",
+        });
+    }
     detected
 }
 
@@ -297,15 +303,21 @@ fn has_screenpipe_mcp(layout: &AgentLayout) -> bool {
         return false;
     };
     match layout.mcp_format {
-        McpFormat::Json => serde_json::from_str::<serde_json::Value>(&existing)
+        McpFormat::Json | McpFormat::VscodeJson => read_mcp_json(&existing, &layout.mcp_format)
             .ok()
             .and_then(|root| {
-                let servers = root.get("mcpServers")?.as_object()?;
+                let servers = root
+                    .get(if layout.mcp_format == McpFormat::VscodeJson {
+                        "servers"
+                    } else {
+                        "mcpServers"
+                    })?
+                    .as_object()?;
                 servers.get(screenpipe_json_key(servers)?).cloned()
             })
             .is_some_and(|entry| {
                 !entry.is_null()
-                    && (layout.name != "Runner"
+                    && (!matches!(layout.name, "Runner" | "VS Code")
                         || entry.get("type").and_then(|value| value.as_str()) == Some("stdio"))
             }),
         McpFormat::Toml => existing.lines().any(is_screenpipe_toml_table),
@@ -397,6 +409,7 @@ struct AgentLayout {
 #[derive(PartialEq)]
 enum McpFormat {
     Json,
+    VscodeJson,
     Yaml,
     Toml,
 }
@@ -459,6 +472,14 @@ fn detected_desktop_agents_in(home: &Path) -> Vec<DesktopDetectedAgent> {
             });
         }
     }
+    if vscode_config(home).parent().is_some_and(Path::is_dir) {
+        detected.push(DesktopDetectedAgent {
+            id: "vscode",
+            name: "VS Code",
+            mcp_target: "vscode",
+            skills_target: None,
+        });
+    }
     detected
 }
 
@@ -520,7 +541,7 @@ fn desktop_launch_config(
         args: vec!["x".to_string(), "screenpipe-mcp@latest".to_string()],
         env,
         transport: (agent.id == "openclaw").then_some("stdio".to_string()),
-        server_type: (agent.id == "runner").then_some("stdio".to_string()),
+        server_type: matches!(agent.id, "runner" | "vscode").then_some("stdio".to_string()),
     }
 }
 
@@ -529,10 +550,16 @@ fn desktop_mcp_ready(layout: &AgentLayout, launch: &McpLaunchConfig) -> bool {
         return false;
     };
     match layout.mcp_format {
-        McpFormat::Json => serde_json::from_str::<serde_json::Value>(&existing)
+        McpFormat::Json | McpFormat::VscodeJson => read_mcp_json(&existing, &layout.mcp_format)
             .ok()
             .and_then(|root| {
-                let servers = root.get("mcpServers")?.as_object()?;
+                let servers = root
+                    .get(if layout.mcp_format == McpFormat::VscodeJson {
+                        "servers"
+                    } else {
+                        "mcpServers"
+                    })?
+                    .as_object()?;
                 servers.get(screenpipe_json_key(servers)?).cloned()
             })
             .is_some_and(|entry| {
@@ -813,6 +840,13 @@ fn layout_in(target: &str, h: &Path) -> Result<AgentLayout> {
             mcp_path: h.join(".runner/mcp.json"),
             mcp_format: McpFormat::Json,
         },
+        "vscode" => AgentLayout {
+            client,
+            name: "VS Code",
+            skills_dir: None,
+            mcp_path: vscode_config(h),
+            mcp_format: McpFormat::VscodeJson,
+        },
         "windsurf" => AgentLayout {
             client,
             name: "Windsurf",
@@ -821,9 +855,110 @@ fn layout_in(target: &str, h: &Path) -> Result<AgentLayout> {
             mcp_format: McpFormat::Json,
         },
         other => anyhow::bail!(
-            "unknown agent target '{other}' (use: openclaw, hermes, claude-code, claude-desktop, codex, cursor, gemini, runner, windsurf)"
+            "unknown agent target '{other}' (use: openclaw, hermes, claude-code, claude-desktop, codex, cursor, gemini, runner, windsurf, vscode)"
         ),
     })
+}
+
+/// Default VS Code user profile; never create workspace configs or infer an
+/// install from ~/.vscode (which can contain extensions alone).
+fn vscode_config(home: &Path) -> PathBuf {
+    let config_dir = if dirs::home_dir().as_deref() == Some(home) {
+        dirs::config_dir()
+    } else {
+        None
+    }
+    .unwrap_or_else(|| {
+        if cfg!(target_os = "macos") {
+            home.join("Library/Application Support")
+        } else if cfg!(target_os = "windows") {
+            home.join("AppData/Roaming")
+        } else {
+            home.join(".config")
+        }
+    });
+    config_dir.join("Code/User/mcp.json")
+}
+
+fn parse_vscode_config(text: &str) -> Result<jsonc_parser::cst::CstRootNode> {
+    let root = jsonc_parser::cst::CstRootNode::parse(
+        text,
+        &jsonc_parser::ParseOptions {
+            allow_comments: true,
+            allow_trailing_commas: true,
+            allow_loose_object_property_names: false,
+            allow_missing_commas: false,
+            allow_single_quoted_strings: false,
+            allow_hexadecimal_numbers: false,
+            allow_unary_plus_numbers: false,
+        },
+    )?;
+    // A comment-only/empty file can be initialized, but never replace a scalar.
+    if root.value().is_some() && root.object_value().is_none() {
+        anyhow::bail!("config is not a JSON object");
+    }
+    Ok(root)
+}
+
+fn read_mcp_json(text: &str, format: &McpFormat) -> Result<serde_json::Value> {
+    if *format == McpFormat::VscodeJson {
+        Ok(parse_vscode_config(text)?
+            .to_serde_value()
+            .unwrap_or(serde_json::json!({})))
+    } else {
+        Ok(serde_json::from_str(text)?)
+    }
+}
+
+/// VS Code uses `servers`, not `mcpServers`, and accepts JSONC. Edit only the
+/// owned entry so comments, inputs, sandbox rules and other servers survive.
+fn update_vscode_mcp(path: &Path, launch: Option<&McpLaunchConfig>) -> Result<()> {
+    use jsonc_parser::cst::CstInputValue as Input;
+    let existing = read_config_text(path)?;
+    if existing.is_none() && launch.is_none() {
+        return Ok(());
+    }
+    let root = parse_vscode_config(existing.as_deref().unwrap_or("{}"))
+        .with_context(|| format!("{} is not valid JSON; fix or remove it", path.display()))?;
+    let obj = root
+        .object_value_or_create()
+        .context("config is not a JSON object")?;
+    let servers = obj
+        .object_value_or_create("servers")
+        .context("servers is present but not an object")?;
+    let mut removed = false;
+    for prop in servers.properties() {
+        if prop
+            .decoded_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("screenpipe"))
+        {
+            prop.remove();
+            removed = true;
+        }
+    }
+    if let Some(launch) = launch {
+        servers.append(
+            "screenpipe",
+            Input::Object(vec![
+                ("type".into(), "stdio".into()),
+                ("command".into(), launch.command.clone().into()),
+                ("args".into(), launch.args.clone().into()),
+                (
+                    "env".into(),
+                    Input::Object(
+                        launch
+                            .env
+                            .iter()
+                            .map(|(key, value)| (key.clone(), value.clone().into()))
+                            .collect(),
+                    ),
+                ),
+            ]),
+        );
+    } else if !removed {
+        return Ok(());
+    }
+    replace_config(path, existing.as_deref(), &root.to_string())
 }
 
 /// Claude Desktop's MCP config path (the desktop app is macOS/Windows only).
@@ -990,6 +1125,11 @@ fn setup(target: &str, api_url: &str) -> Result<()> {
     }
 
     match l.mcp_format {
+        McpFormat::VscodeJson => {
+            let mut launch = cli_launch_config(remote, api_url);
+            launch.server_type = Some("stdio".to_string());
+            update_vscode_mcp(&l.mcp_path, Some(&launch))?;
+        }
         McpFormat::Json if target == "runner" => {
             let mut launch = cli_launch_config(remote, api_url);
             launch.server_type = Some("stdio".to_string());
@@ -1086,6 +1226,7 @@ fn remove(target: &str) -> Result<()> {
     }
 
     match l.mcp_format {
+        McpFormat::VscodeJson => update_vscode_mcp(&l.mcp_path, None)?,
         McpFormat::Json => remove_mcp_json(&l.mcp_path)?,
         McpFormat::Toml => remove_mcp_toml(&l.mcp_path)?,
         McpFormat::Yaml => remove_mcp_yaml(&l.mcp_path)?,
@@ -1298,6 +1439,7 @@ fn cli_launch_config(remote: bool, api_url: &str) -> McpLaunchConfig {
 
 fn merge_mcp_launch(layout: &AgentLayout, launch: &McpLaunchConfig) -> Result<()> {
     match layout.mcp_format {
+        McpFormat::VscodeJson => update_vscode_mcp(&layout.mcp_path, Some(launch)),
         McpFormat::Json => merge_mcp_json_launch(&layout.mcp_path, launch),
         McpFormat::Yaml => merge_mcp_yaml_launch(&layout.mcp_path, launch),
         McpFormat::Toml => merge_mcp_toml_launch(&layout.mcp_path, launch),
@@ -1547,6 +1689,128 @@ fn merge_mcp_toml_launch(path: &Path, launch: &McpLaunchConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_vscode_background_jsonc_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let config = vscode_config(home);
+        let bun = home.join("bundled bun");
+        let mut reconciler = DesktopAgentReconciler::default();
+        let opts = BTreeSet::new();
+        assert_eq!(
+            reconciler
+                .reconcile(home, &bun, Some("test-key"), "http://localhost:3039", &opts)
+                .detected,
+            0
+        );
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config,
+            r#"{
+  // keep my servers
+  "servers": { "existing": { "type": "http", "url": "https://example.com" }, },
+  "inputs": [{ "id": "token", "type": "promptString" }],
+  "sandbox": { "network": { "allowedDomains": ["example.com"] } },
+}"#,
+        )
+        .unwrap();
+        let report =
+            reconciler.reconcile(home, &bun, Some("test-key"), "http://localhost:3039", &opts);
+        assert_eq!(report.connected, 1, "{:?}", report.failures);
+        let written = std::fs::read_to_string(&config).unwrap();
+        assert!(written.contains("// keep my servers"));
+        let root = read_mcp_json(&written, &McpFormat::VscodeJson).unwrap();
+        assert!(root.get("mcpServers").is_none());
+        assert_eq!(root["servers"]["existing"]["url"], "https://example.com");
+        assert_eq!(root["inputs"][0]["id"], "token");
+        assert_eq!(
+            root["sandbox"]["network"]["allowedDomains"][0],
+            "example.com"
+        );
+        let entry = &root["servers"]["screenpipe"];
+        assert_eq!(entry["type"], "stdio");
+        assert_eq!(entry["command"], bun.to_string_lossy().as_ref());
+        assert_eq!(entry["env"]["SCREENPIPE_LOCAL_API_KEY"], "test-key");
+        assert_eq!(entry["env"]["SCREENPIPE_API_URL"], "http://localhost:3039");
+        assert_eq!(entry["env"]["SCREENPIPE_MCP_CLIENT"], "vscode");
+        let report =
+            reconciler.reconcile(home, &bun, Some("test-key"), "http://localhost:3039", &opts);
+        assert_eq!(report.already_connected, 1);
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), written);
+        let restarted = DesktopAgentReconciler::default().reconcile(
+            home, &bun, Some("test-key"), "http://localhost:3039", &opts,
+        );
+        assert_eq!(restarted.already_connected, 1);
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), written);
+        update_vscode_mcp(&config, None).unwrap();
+        let opts = BTreeSet::from(["vscode".to_string()]);
+        assert_eq!(
+            reconciler
+                .reconcile(home, &bun, None, "http://localhost:3030", &opts)
+                .opted_out,
+            1
+        );
+        let disconnected = std::fs::read_to_string(&config).unwrap();
+        assert!(!disconnected.contains("screenpipe"));
+        assert!(disconnected.contains("// keep my servers"));
+        assert_eq!(
+            reconciler
+                .reconcile(home, &bun, None, "http://localhost:3030", &BTreeSet::new())
+                .connected,
+            1
+        );
+    }
+
+    #[test]
+    fn test_vscode_refuses_invalid_configs_without_modifying_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = vscode_config(dir.path());
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let launch = cli_launch_config(false, "http://localhost:3030");
+        for original in [
+            "[]",
+            "null",
+            r#"{"servers": []}"#,
+            r#"{"servers": null}"#,
+            r#"{"servers": { broken }}"#,
+            r#"{"servers": {} "inputs": []}"#,
+        ] {
+            std::fs::write(&config, original).unwrap();
+            assert!(
+                update_vscode_mcp(&config, Some(&launch)).is_err(),
+                "{original}"
+            );
+            assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn test_vscode_cli_setup_and_remove_preserve_other_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = vscode_config(dir.path());
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config,
+            r#"{"servers":{"Screenpipe":{"command":"old"},"other":{"type":"http"}}}"#,
+        )
+        .unwrap();
+        assert!(detected_agents_in(dir.path())
+            .iter()
+            .any(|agent| agent.target == "vscode"));
+        let layout = layout_in("vscode", dir.path()).unwrap();
+        merge_mcp_launch(&layout, &cli_launch_config(false, "http://localhost:3030")).unwrap();
+        assert!(is_agent_setup_in("vscode", dir.path()));
+        let root = read_mcp_json(
+            &std::fs::read_to_string(&config).unwrap(),
+            &McpFormat::VscodeJson,
+        )
+        .unwrap();
+        assert_eq!(root["servers"].as_object().unwrap().len(), 2);
+        update_vscode_mcp(&config, None).unwrap();
+        assert!(!is_agent_setup_in("vscode", dir.path()));
+        assert!(std::fs::read_to_string(&config).unwrap().contains("other"));
+    }
 
     #[test]
     fn test_host_port() {

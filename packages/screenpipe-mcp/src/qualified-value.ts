@@ -4,7 +4,7 @@
 
 const CLIENTS = [
   "claude", "chatgpt", "codex", "cursor", "gemini", "openclaw",
-  "hermes", "runner", "windsurf", "grok", "grokbot",
+  "hermes", "runner", "windsurf", "vscode", "grok", "grokbot",
 ] as const;
 export type McpClient = (typeof CLIENTS)[number] | "unknown";
 

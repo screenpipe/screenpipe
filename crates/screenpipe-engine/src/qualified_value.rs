@@ -18,6 +18,7 @@ pub(crate) enum AgentClient {
     Hermes,
     Runner,
     Windsurf,
+    Vscode,
     Grok,
     Grokbot,
     #[default]
@@ -42,6 +43,7 @@ impl AgentClient {
             Self::Hermes => "hermes",
             Self::Runner => "runner",
             Self::Windsurf => "windsurf",
+            Self::Vscode => "vscode",
             Self::Grok => "grok",
             Self::Grokbot => "grokbot",
             Self::Unknown => "unknown",
@@ -181,7 +183,7 @@ mod tests {
     fn api_and_mcp_share_fixed_app_identifiers() {
         for name in [
             "claude", "chatgpt", "codex", "cursor", "gemini", "openclaw", "hermes", "runner",
-            "windsurf", "grok", "grokbot",
+            "windsurf", "vscode", "grok", "grokbot",
         ] {
             let client = AgentClient::from_name(name);
             let api = api_outcome_properties(ApiOutcomeKind::SearchResult, client);

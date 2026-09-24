@@ -27,7 +27,7 @@ use tracing::{info, warn};
 
 pub(crate) const AI_TOOL_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
-const AI_TOOL_AUTO_CONNECT_TARGETS: [&str; 10] = [
+const AI_TOOL_AUTO_CONNECT_TARGETS: [&str; 11] = [
     "claude",
     "claude-code",
     "codex",
@@ -37,6 +37,7 @@ const AI_TOOL_AUTO_CONNECT_TARGETS: [&str; 10] = [
     "hermes",
     "runner",
     "windsurf",
+    "vscode",
     "grokbot",
 ];
 
@@ -1836,6 +1837,10 @@ mod tests {
             ai_tool_auto_connect_opt_outs_in(&root),
             BTreeSet::from(["claude-code".to_string()])
         );
+        set_ai_tool_auto_connect_opt_out_in(&root, "vscode", true).unwrap();
+        assert!(ai_tool_auto_connect_opt_outs_in(&root).contains("vscode"));
+        set_ai_tool_auto_connect_opt_out_in(&root, "vscode", false).unwrap();
+        assert!(!ai_tool_auto_connect_opt_outs_in(&root).contains("vscode"));
         assert!(set_ai_tool_auto_connect_opt_out_in(&root, "../escape", true).is_err());
         let _ = std::fs::remove_dir_all(root);
     }
