@@ -36,6 +36,7 @@ import { WORKFLOW_TOOLS, readWorkflowTool, frameAutomationContent, inputEventCon
 import { PKG_VERSION } from "./version";
 import { formatForElementPurpose } from "./element-format";
 import { buildActivitySummaryResult } from "./activity-summary-tool";
+import { buildEvidencePayload, EVIDENCE_OUTPUT_SCHEMA } from "./evidence-contract";
 import {
   localContextDayStarts,
   normalizeTime,
@@ -386,6 +387,7 @@ const TOOLS: Tool[] = [
         },
       },
     },
+    outputSchema: EVIDENCE_OUTPUT_SCHEMA,
   },
   {
     name: "synced-devices",
@@ -1626,6 +1628,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 text: "No results found. Try: broader terms, different content_type, or wider time range.",
               },
             ],
+            // The tool declares an outputSchema, so SDK clients reject a
+            // non-error result without structuredContent, empty ones included.
+            structuredContent: buildEvidencePayload([], pagination),
           };
         }
 
@@ -1725,7 +1730,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           contentItems.push({ type: "image", data: img.data, mimeType: "image/png" });
         }
 
-        return { content: contentItems };
+        return {
+          content: contentItems,
+          // Same cap as the text above; frames stay in `content` only.
+          structuredContent: buildEvidencePayload(results, pagination, {
+            truncate: (text) => truncateMiddle(text, effectiveCap),
+          }),
+        };
       }
 
       case "list-meetings": {
