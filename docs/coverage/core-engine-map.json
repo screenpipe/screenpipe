@@ -1250,6 +1250,7 @@
         "src/incognito/mod.rs",
         "src/incognito/titles.rs",
         "src/lib.rs",
+        "src/platform/retained_tree.rs",
         "src/scroll.rs",
         "src/tree/app_version.rs",
         "src/tree/cache.rs",
