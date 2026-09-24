@@ -112,7 +112,7 @@ commits: `28e5c247`
 - [ ] **specific monitor IDs setting** — with specific IDs configured, only those monitors are recorded. unplugging a non-configured monitor has no effect.
 - [ ] **resolution change (e.g., clamshell mode)** — closing MacBook lid with external monitor. recording continues on external.
 - [ ] **queue stats after unplug** — check logs. no queue stats for disconnected monitor after disconnect.
-- [ ] **--use-all-monitors flag override** — Verify that the `--use-all-monitors` CLI flag correctly overrides tier-based defaults (e.g., if a tier defaults to a single monitor, the flag should still enable all monitors). (`bd5b94328`)
+- [ ] **Monitor defaults and CLI overrides** — Fresh installs enable all monitors on every device tier. Verify that saved monitor choices are preserved, `--use-all-monitors` enables all monitors, and `--monitor-id` records only the selected monitors. (`bd5b94328`)
 
 ### 4. audio device handling
 

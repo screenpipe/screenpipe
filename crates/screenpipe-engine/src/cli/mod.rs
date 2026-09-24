@@ -511,9 +511,8 @@ pub struct RecordArgs {
     #[arg(short = 'm', long)]
     pub monitor_id: Vec<u32>,
 
-    /// Automatically record all monitors. Fresh low/mid-tier installs use the
-    /// primary monitor unless this flag is explicitly set. Ignored when
-    /// `--monitor-id` is passed.
+    /// Automatically record all monitors (enabled by default on every device tier).
+    /// Ignored when `--monitor-id` is passed.
     #[arg(long, action = ArgAction::Set, num_args = 0..=1, default_value_t = true, default_missing_value = "true")]
     pub use_all_monitors: bool,
 
@@ -2749,10 +2748,8 @@ mod tests {
                     "balanced"
                 }
             );
-            assert_eq!(settings.use_all_monitors, tier == DeviceTier::High);
-            if tier != DeviceTier::High {
-                assert_eq!(settings.monitor_ids, ["default"]);
-            }
+            assert!(settings.use_all_monitors);
+            assert!(settings.monitor_ids.is_empty());
         }
     }
 
