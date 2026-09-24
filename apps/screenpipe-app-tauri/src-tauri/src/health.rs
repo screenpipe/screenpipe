@@ -1366,6 +1366,62 @@ fn paused_monitor_devices(
         .collect()
 }
 
+/// Required fields fail parsing instead of silently inventing monitor 0.
+#[derive(Debug, Deserialize)]
+struct TrayVisionDevice {
+    id: u32,
+    name: String,
+    user_disabled: bool,
+}
+
+fn recording_monitor_devices(devices: &[TrayVisionDevice]) -> Option<Vec<DeviceInfo>> {
+    if devices.is_empty() {
+        return None; // Manager absent is not itself proof of an intentional pause.
+    }
+    Some(
+        devices
+            .iter()
+            .map(|device| DeviceInfo {
+                name: device.name.clone(),
+                kind: DeviceKind::Monitor,
+                active: !device.user_disabled,
+                last_seen_secs_ago: 0,
+                monitor_id: Some(device.id),
+            })
+            .collect(),
+    )
+}
+
+/// Keep known selected identities on transient failures, but label their state
+/// unknown and remove toggles. Never carry forward a stale "recording" claim.
+fn monitor_tray_observation(
+    observed: Option<Vec<DeviceInfo>>,
+    last_confirmed: &mut Vec<DeviceInfo>,
+) -> Vec<DeviceInfo> {
+    if let Some(rows) = observed {
+        *last_confirmed = rows.clone();
+        return rows;
+    }
+    if last_confirmed.is_empty() {
+        return vec![DeviceInfo {
+            name: "Displays (status unavailable)".into(),
+            kind: DeviceKind::Monitor,
+            active: false,
+            last_seen_secs_ago: 0,
+            monitor_id: None,
+        }];
+    }
+    last_confirmed
+        .iter()
+        .map(|device| DeviceInfo {
+            name: format!("{} (status unavailable)", device.name),
+            active: false,
+            monitor_id: None,
+            ..device.clone()
+        })
+        .collect()
+}
+
 /// How many consecutive failed checks before showing a notification.
 /// At 1-second polling, 90 = 90 seconds of sustained failure.
 pub(crate) const CAPTURE_STALL_THRESHOLD: u32 = 90;
@@ -1428,6 +1484,7 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
         std::collections::VecDeque::new();
 
     tokio::spawn(async move {
+        let mut last_confirmed_monitors = Vec::new();
         loop {
             interval.tick().await;
 
@@ -1627,75 +1684,62 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
                 }
             }
 
-            let mut has_vision_devices = false;
-            // Per-monitor vision status — replaces health-derived monitor rows when
-            // available so the tray can toggle individual displays.
-            match api
-                .apply_auth(reqwest::Client::new().get(api.url("/vision/device/status")))
+            // A failed/invalid status response is unknown, never evidence of pause.
+            // Bound the request so a wedged endpoint cannot stall all tray updates.
+            let vision_status = match api
+                .apply_auth(client.get(api.url("/vision/device/status")))
+                .timeout(Duration::from_secs(2))
                 .send()
                 .await
             {
                 Ok(res) if res.status().is_success() => {
-                    if let Ok(devs) = res.json::<Vec<serde_json::Value>>().await {
-                        if devs.is_empty() {
-                            set_vision_device_status(Vec::new());
-                        } else {
-                            has_vision_devices = true;
-                            devices.retain(|d| d.kind != DeviceKind::Monitor);
-                            let mut vision_entries = Vec::new();
-                            for d in &devs {
-                                let id = d["id"].as_u64().unwrap_or(0) as u32;
-                                let name = d["name"].as_str().unwrap_or("").to_string();
-                                let user_disabled = d["user_disabled"].as_bool().unwrap_or(false);
-                                vision_entries.push(VisionDeviceEntry { id, user_disabled });
-                                devices.push(DeviceInfo {
-                                    name,
-                                    kind: DeviceKind::Monitor,
-                                    active: !user_disabled,
-                                    last_seen_secs_ago: 0,
-                                    monitor_id: Some(id),
-                                });
-                            }
-                            set_vision_device_status(vision_entries);
-                        }
-                    } else {
-                        set_vision_device_status(Vec::new());
-                    }
+                    res.json::<Vec<TrayVisionDevice>>().await.ok()
                 }
-                _ => {
-                    set_vision_device_status(Vec::new());
-                }
-            }
-
-            // /vision/device/status is already filtered by the engine, including
-            // stable IDs and its stale-selection fallback. Filtering its display
-            // labels again hides valid Windows selections (\\.\DISPLAYn != Display n).
-            // During global pause the manager returns no rows; /health still lists
-            // every physical display. Resolve the saved selection against inventory
-            // and show read-only, inactive rows instead of implying extra recording.
-            if !has_vision_devices {
-                devices.retain(|d| d.kind != DeviceKind::Monitor);
+                _ => None,
+            };
+            let mut observed = vision_status.as_deref().and_then(recording_monitor_devices);
+            // Only an explicit intentional pause can use inventory as inactive rows.
+            if vision_status.as_ref().is_some_and(Vec::is_empty)
+                && matches!(
+                    status,
+                    RecordingStatus::Paused | RecordingStatus::ScheduledPause
+                )
+            {
                 if let Ok(Some(store)) = crate::store::SettingsStore::get(&app) {
-                    if !store.recording.disable_vision {
-                        if let Ok(res) = api
-                            .apply_auth(client.get(api.url("/vision/list")))
-                            .timeout(Duration::from_secs(2))
-                            .send()
-                            .await
-                        {
-                            if res.status().is_success() {
-                                if let Ok(inventory) = res.json::<Vec<TrayMonitorInventory>>().await {
-                                    devices.extend(paused_monitor_devices(
-                                        &inventory,
-                                        &store.recording.monitor_ids,
-                                        store.recording.use_all_monitors,
-                                    ));
-                                }
+                    if store.recording.disable_vision {
+                        observed = Some(Vec::new());
+                    } else if let Ok(res) = api
+                        .apply_auth(client.get(api.url("/vision/list")))
+                        .timeout(Duration::from_secs(2))
+                        .send()
+                        .await
+                    {
+                        if res.status().is_success() {
+                            if let Ok(inventory) = res.json::<Vec<TrayMonitorInventory>>().await {
+                                observed = Some(paused_monitor_devices(
+                                    &inventory,
+                                    &store.recording.monitor_ids,
+                                    store.recording.use_all_monitors,
+                                ));
                             }
                         }
                     }
                 }
             }
+            let monitor_rows = monitor_tray_observation(observed, &mut last_confirmed_monitors);
+            set_vision_device_status(
+                monitor_rows
+                    .iter()
+                    .filter_map(|row| {
+                        row.monitor_id.map(|id| VisionDeviceEntry {
+                            id,
+                            user_disabled: !row.active,
+                        })
+                    })
+                    .collect(),
+            );
+            devices.retain(|device| device.kind != DeviceKind::Monitor);
+            devices.extend(monitor_rows);
 
             // Poll the HD controller state for the tray's menu item.
             // 503 is normal (vision disabled / older engine) — keep last known.
@@ -2202,6 +2246,62 @@ async fn check_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tray_monitor_status_failure_and_recovery_preserve_identity_without_false_pause() {
+        let mut confirmed = Vec::new();
+        let payload = r#"[{"id":73,"name":"Display 73 (1280x720)","user_disabled":false}]"#;
+        let devices: Vec<TrayVisionDevice> = serde_json::from_str(payload).unwrap();
+        let running = monitor_tray_observation(recording_monitor_devices(&devices), &mut confirmed);
+        assert!(running[0].active);
+        assert_eq!(running[0].monitor_id, Some(73));
+        // Transport errors, non-2xx, invalid JSON and inventory failures all
+        // yield None in the poller. Repeated errors cannot duplicate the suffix.
+        for _ in 0..3 {
+            let unknown = monitor_tray_observation(None, &mut confirmed);
+            assert_eq!(
+                unknown[0].name,
+                "Display 73 (1280x720) (status unavailable)"
+            );
+            assert!(!unknown[0].active);
+            assert_eq!(unknown[0].monitor_id, None);
+            assert_eq!(confirmed, running);
+        }
+        let recovered =
+            monitor_tray_observation(recording_monitor_devices(&devices), &mut confirmed);
+        assert_eq!(recovered, running);
+    }
+
+    #[test]
+    fn tray_monitor_empty_or_invalid_response_cannot_claim_pause() {
+        assert!(recording_monitor_devices(&[]).is_none());
+        for malformed in [
+            r#"[{}]"#,
+            r#"[{"id":73,"name":"Display 73"}]"#,
+            r#"[{"id":"73","name":"Display 73","user_disabled":false}]"#,
+            "not JSON",
+        ] {
+            assert!(serde_json::from_str::<Vec<TrayVisionDevice>>(malformed).is_err());
+        }
+        let rows = monitor_tray_observation(None, &mut Vec::new());
+        assert_eq!(rows[0].name, "Displays (status unavailable)");
+        assert_eq!(rows[0].monitor_id, None);
+    }
+
+    #[test]
+    fn tray_monitor_confirmed_pause_inventory_failure_and_disabled_vision() {
+        let mut confirmed = Vec::new();
+        let paused = paused_monitor_devices(&tray_monitor_inventory(), &["default".into()], false);
+        let rows = monitor_tray_observation(Some(paused), &mut confirmed);
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].active);
+        assert!(!rows[0].name.contains("unavailable"));
+        let unavailable = monitor_tray_observation(None, &mut confirmed);
+        assert!(unavailable[0].name.contains("status unavailable"));
+        assert_eq!(unavailable[0].monitor_id, None);
+        assert!(monitor_tray_observation(Some(Vec::new()), &mut confirmed).is_empty());
+        assert!(confirmed.is_empty());
+    }
 
     fn tray_monitor_inventory() -> Vec<TrayMonitorInventory> {
         vec![
