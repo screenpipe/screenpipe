@@ -6,13 +6,16 @@ import { invokeWindows as invoke } from "../e2e/helpers/tauri";
 const g = globalThis as any;
 const savedBrowser = g.browser;
 const savedInternals = g.__TAURI_INTERNALS__;
+const savedTauri = g.__TAURI__;
 afterAll(() => {
   g.browser = savedBrowser;
   g.__TAURI_INTERNALS__ = savedInternals;
+  g.__TAURI__ = savedTauri;
   delete g.__screenpipeE2EInvokes;
 });
 beforeEach(() => {
   delete g.__screenpipeE2EInvokes;
+  g.__TAURI__ = undefined;
   g.__TAURI_INTERNALS__ = { invoke: async () => "native result" };
   g.browser = {
     getTimeouts: async () => ({ script: 30 }),

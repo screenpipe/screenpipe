@@ -90,7 +90,8 @@ test("repairs Cargo locks in dependent workspaces after a shared manifest change
   f.ok(["bash", helper, base]);
   expect(f.ok(["git", "diff", "--name-only"]).split("\n")).toEqual(["Cargo.lock", "consumer/Cargo.lock"]);
   f.ok(["bash", "scripts/regenerate-locks.sh", "--check"]);
-});
+// Cold Cargo/rustc probes across two workspaces exceeded Bun's default 5s on CI.
+}, 30_000);
 
 test("propagates a dependency resolver failure", () => {
   const f = bunFixture();
