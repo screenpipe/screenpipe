@@ -2,7 +2,8 @@
 // https://screenpipe.com
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
-const state = vi.hoisted(() => ({ flag: undefined as boolean | undefined, pathname: "/home", fetch: vi.fn() }));
+const state = vi.hoisted(() => ({ flag: undefined as boolean | undefined, pathname: "/home", fetch: vi.fn(), connected: false }));
+vi.mock("@/lib/hooks/use-health-check", () => ({ useHealthCheck: () => ({health: state.connected ? {status:"healthy"} : null, isServerDown: !state.connected}) }));
 vi.mock("next/navigation", () => ({ usePathname: () => state.pathname }));
 vi.mock("posthog-js/react", () => ({ useFeatureFlagEnabled: () => state.flag }));
 vi.mock("posthog-js", () => ({ default: { isFeatureEnabled: () => state.flag } }));
@@ -11,7 +12,7 @@ import { ProductSwitcher } from "./product-switcher";
 import { WorkflowsRolloutSync } from "./rollout-sync";
 import { isWorkflowsRolloutEnabled } from "@/lib/workflows/rollout";
 import { enableWorkflowTask, startWorkflowJob } from "@/lib/workflows/scheduled-discovery";
-beforeEach(() => { state.flag = undefined; state.pathname = "/home"; state.fetch.mockReset().mockResolvedValue(new Response("{}")); });
+beforeEach(() => { state.flag = undefined; state.connected = false; state.pathname = "/home"; state.fetch.mockReset().mockResolvedValue(new Response("{}")); });
 it("fails closed until an explicit boolean true", () => {
   for (const flag of [undefined, null, false, "true", "test", 1]) expect(isWorkflowsRolloutEnabled(flag)).toBe(false);
   expect(isWorkflowsRolloutEnabled(true)).toBe(true);
@@ -94,4 +95,21 @@ it("reasserts resolved access after the engine restarts and stops on unmount", a
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
     expect(state.fetch).toHaveBeenCalledTimes(2);
   } finally { vi.useRealTimers(); }
+});
+
+it("resynchronizes immediately when a slow backend becomes reachable", async () => {
+  state.flag = true;
+  state.fetch.mockRejectedValueOnce(new Error("connection refused"));
+  const view = render(<WorkflowsRolloutSync />);
+  await act(async () => {});
+  expect(state.fetch).toHaveBeenCalledTimes(1);
+  state.connected = true;
+  view.rerender(<WorkflowsRolloutSync />);
+  await waitFor(() => expect(state.fetch).toHaveBeenCalledTimes(2));
+  expect(JSON.parse(state.fetch.mock.calls[1][1].body)).toEqual({enabled:true});
+  state.flag = undefined;
+  view.rerender(<WorkflowsRolloutSync />);
+  state.connected = false; view.rerender(<WorkflowsRolloutSync />);
+  state.connected = true; view.rerender(<WorkflowsRolloutSync />);
+  expect(state.fetch).toHaveBeenCalledTimes(2);
 });

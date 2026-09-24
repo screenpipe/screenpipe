@@ -15,6 +15,8 @@ import { ProductSwitcher, type ProductMode } from "./product-switcher";
 import { ComposerDictationControl } from "@/components/chat/standalone/composer-dictation-control";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useWorkflowsRolloutEnabled } from "@/lib/workflows/rollout";
+import { WorkflowTasksPrompt } from "./workflow-tasks-prompt";
+import { fixtureWorkflowTasks } from "@/lib/dev/workflow-tasks-fixture";
 import { WorkflowAccess } from "./workflow-access";
 
 function WorkflowDictation(props: WorkflowComposerAccessoryProps) {
@@ -67,7 +69,7 @@ export function IntegratedWorkflows({ active, fullscreen = false, onModeChange, 
       />}
 
       <WorkflowsApp onAnalysisUnavailable={() => setAccessRequested(true)} analysisUnavailableReason={analysisUnavailableReason} composerAccessory={composerAccessory} fullscreen={fullscreen} onShareWorkflow={openShare} workflowAgentActions={workflowAgentActions} platform={platform} active={active} storageKey={null}
-        statusNotice={platform.managesAnalysis ? <WorkflowAccess requested={accessRequested} onRequestChange={setAccessRequested} active={active} onAccessChange={setAnalysisUnavailableReason} /> : undefined}
+        toolbarAccessory={platform.managesAnalysis ? <WorkflowAccess requested={accessRequested} onRequestChange={setAccessRequested} active={active} onAccessChange={setAnalysisUnavailableReason} /> : process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock" ? <WorkflowTasksPrompt active={active} tasks={fixtureWorkflowTasks} /> : undefined}
         recordingStatus={recordingStatus} navigationFooter={navigationFooter}
         navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />} />
     </TooltipProvider>

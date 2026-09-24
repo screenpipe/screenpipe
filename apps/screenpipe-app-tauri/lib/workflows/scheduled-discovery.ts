@@ -31,14 +31,27 @@ export interface WorkflowTaskSetup {
 }
 
 export async function loadWorkflowTaskSetup(): Promise<WorkflowTaskSetup> {
-  await ensureWorkflowTask();
-  const tasks = [];
-  for (const name of WORKFLOW_TASKS) {
-    const { data } = await request(`/pipes/${name}`);
-    if (typeof data?.config?.enabled !== "boolean") throw new Error("Could not read the workflow task settings.");
-    tasks.push({ name, title: data.config.title || name, enabled: data.config.enabled });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const tasks = [];
+    for (const name of WORKFLOW_TASKS) {
+      const response = await localFetch(`/pipes/${name}`, { signal: controller.signal });
+      // Inspection never installs or enables tasks. Missing roles are off;
+      // explicit enable installs the disabled templates before opting in.
+      if (response.status === 404) {
+        tasks.push({ name, title: name, enabled: false });
+        continue;
+      }
+      if (!response.ok) throw new Error("Could not read the workflow task settings.");
+      const { data } = await response.json();
+      if (typeof data?.config?.enabled !== "boolean") throw new Error("Could not read the workflow task settings.");
+      tasks.push({ name, title: data.config.title || name, enabled: data.config.enabled });
+    }
+    return { enabled: tasks.every(task => task.enabled), title: "Keep your workflows current", schedule: "Hourly discovery, with evidence review and maintenance", tasks };
+  } finally {
+    clearTimeout(timeout);
   }
-  return { enabled: tasks.every(task => task.enabled), title: "Keep your workflows current", schedule: "Hourly discovery, with evidence review and maintenance", tasks };
 }
 
 // Only the explicit enable action opts in. Scheduling stays in the Pipe harness.
@@ -59,6 +72,22 @@ export async function enableWorkflowTask() {
   for (const task of [...WORKFLOW_TASKS].reverse()) await request(`/pipes/${task}/enable`, { enabled: true });
   const setup = await loadWorkflowTaskSetup();
   if (!setup.enabled) throw new Error("Some workflow tasks could not be enabled.");
+}
+
+/** Disable every role even if one request fails. Never grant access to turn off. */
+export async function disableWorkflowTasks() {
+  const results = await Promise.allSettled(WORKFLOW_TASKS.map(async task => {
+    const response = await localFetch(`/pipes/${task}/enable`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+    // A missing task cannot be scheduled. Do not install it just to disable it.
+    if (response.status === 404) return;
+    const value = await response.json();
+    if (!response.ok || value.error) throw new Error("Could not turn off all workflow tasks.");
+  }));
+  const failed = results.find(result => result.status === "rejected");
+  if (failed?.status === "rejected") throw failed.reason;
 }
 
 export async function loadScheduledCatalog(signal?: AbortSignal): Promise<WorkflowAnalysis | null> {
@@ -154,7 +183,7 @@ export async function startWorkflowJob(): Promise<WorkflowAnalysisJob> {
   requireWorkflowsRollout();
   await syncWorkflowsRollout(true);
   const setup = await loadWorkflowTaskSetup();
-  if (!setup.enabled) throw new Error("Enable workflow tasks before updating. Open Workflows again to review setup.");
+  if (!setup.enabled) throw new Error("Enable workflow tasks with Automatic updates before updating.");
   const tasks = await latestTasks();
   const running = tasks.find(item => ["running", "queued"].includes(item.execution?.status));
   if (running) return getWorkflowJob(`${running.task}:${running.execution.id}`);

@@ -381,6 +381,7 @@ function AppShell({
   navigationFooter,
   recordingStatus,
   modelControl,
+  toolbarAccessory,
   startWindowDrag,
   fullscreen,
   openCommandPalette,
@@ -403,6 +404,7 @@ function AppShell({
   navigationFooter?: WorkflowsAppProps["navigationFooter"];
   recordingStatus?: React.ReactNode;
   modelControl?: React.ReactNode;
+  toolbarAccessory?: React.ReactNode;
   startWindowDrag?: () => Promise<void> | void;
   fullscreen: boolean;
   openCommandPalette: () => void;
@@ -509,6 +511,7 @@ function AppShell({
             </select>
           </label>}
           {view === "time" && <div className={styles.profilePeriod}><CalendarRange size={13} /><span>{WORKFLOW_CATALOG_DAYS}-day profile</span></div>}
+          {toolbarAccessory && <div className={styles.toolbarAccessory}>{toolbarAccessory}</div>}
           {modelControl}
           {recordingStatus ?? <Pill tone={runtime?.recording ? "green" : "plain"}><span className={styles.liveDot} />{statusLabel}</Pill>}
           {assistant && !assistantDocked && assistantMode === "sidebar" && <button className={styles.panelToggle} data-workflows-assistant-toggle
@@ -1294,7 +1297,7 @@ function PrivacyView({ runtime }: { runtime: WorkflowRuntime | null }) {
   </>;
 }
 
-export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, fullscreen = false, navigationBrand, composerAccessory, recordingStatus, statusNotice, analysisUnavailableReason, onAnalysisUnavailable, navigationFooter, onShareWorkflow, workflowAgentActions }: WorkflowsAppProps) {
+export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, fullscreen = false, navigationBrand, composerAccessory, recordingStatus, statusNotice, toolbarAccessory, analysisUnavailableReason, onAnalysisUnavailable, navigationFooter, onShareWorkflow, workflowAgentActions }: WorkflowsAppProps) {
   const uiLanguage = useLocale();
   const ui = useGT();
   const shortcuts = useSidebarShortcuts();
@@ -1678,7 +1681,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   }
 
   return <>
-    <AppShell modelControl={platform.modelPreference ? <WorkflowModelControl preference={platform.modelPreference} /> : undefined} composerAccessory={composerAccessory} active={active} fullscreen={fullscreen} navigationFooter={navigationFooter} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={filters.query} setQuery={(query) => setFilters((current) => ({ ...current, query }))} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: ui("Context"), profile: workProfile } : { key: "workflows", title: ui("Your workflows"), catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{statusNotice}{content}</AppShell>
+    <AppShell toolbarAccessory={toolbarAccessory} modelControl={platform.modelPreference ? <WorkflowModelControl preference={platform.modelPreference} /> : undefined} composerAccessory={composerAccessory} active={active} fullscreen={fullscreen} navigationFooter={navigationFooter} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={filters.query} setQuery={(query) => setFilters((current) => ({ ...current, query }))} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: ui("Context"), profile: workProfile } : { key: "workflows", title: ui("Your workflows"), catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{statusNotice}{content}</AppShell>
     <CommandPalette open={active && commandPaletteOpen} commands={paletteCommands} close={() => setCommandPaletteOpen(false)} />
   </>;
 }

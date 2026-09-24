@@ -9,6 +9,7 @@ import { workflowAccess } from "@/lib/workflows/access";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { WorkflowTasksPrompt } from "./workflow-tasks-prompt";
+import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { useGT } from "gt-react";
 import { useUiLocale } from "@/lib/i18n/provider";
 
@@ -16,6 +17,8 @@ import { useUiLocale } from "@/lib/i18n/provider";
 export function WorkflowAccess({ active, requested = false, onRequestChange, onAccessChange }: { active: boolean; requested?: boolean; onRequestChange?: (open: boolean) => void; onAccessChange?: (reason: string | undefined) => void }) {
 
   const query = useUsageStatusQuery(active);
+  const { health, isServerDown } = useHealthCheck();
+  const backendReady = !!health && !isServerDown;
   const router = useRouter();
   const [mode, setMode] = useState<"intelligent" | "private">("intelligent");
   useEffect(() => {
@@ -28,9 +31,9 @@ export function WorkflowAccess({ active, requested = false, onRequestChange, onA
   const reason = query.isLoading ? "Checking workflow access…" : access.state === "ready" ? undefined : access.message;
   useEffect(() => { onAccessChange?.(reason); }, [onAccessChange, reason]);
   useEffect(() => { if (requested && access.state === "ready") onRequestChange?.(false); }, [requested, access.state, onRequestChange]);
-  if (!active || query.isLoading) return null;
-  if (access.state === "ready") return <WorkflowTasksPrompt active={active} />;
-  return <WorkflowAccessNotice open={requested} onOpenChange={onRequestChange} access={access} refreshing={query.isRefreshing} onRetry={() => void query.refresh()} onAccount={() => router.push("/settings?section=account")} onUsage={() => router.push("/settings?section=usage")} />;
+  if (!active) return null;
+  return <><WorkflowTasksPrompt active={active} backendReady={backendReady} canEnable={!query.isLoading && access.state === "ready"} onEnableUnavailable={() => onRequestChange?.(true)} />
+    <WorkflowAccessNotice open={requested} onOpenChange={onRequestChange} access={access} refreshing={query.isRefreshing} onRetry={() => void query.refresh()} onAccount={() => router.push("/settings?section=account")} onUsage={() => router.push("/settings?section=usage")} /></>;
 }
 
 export function WorkflowAccessNotice({ access, open = false, onOpenChange, refreshing = false, onRetry, onAccount, onUsage }: {

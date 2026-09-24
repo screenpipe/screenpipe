@@ -2,7 +2,7 @@
 // https://screenpipe.com
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { localFetch } from "@/lib/api";
-import { WORKFLOW_TASKS, stopWorkflowJob, ensureWorkflowTask, enableWorkflowTask, loadWorkflowTaskSetup, getWorkflowJob, startWorkflowJob, saveWorkflowCorrections, saveWorkflowFeedback, loadScheduledCatalog } from "./scheduled-discovery";
+import { WORKFLOW_TASKS, disableWorkflowTasks, stopWorkflowJob, ensureWorkflowTask, enableWorkflowTask, loadWorkflowTaskSetup, getWorkflowJob, startWorkflowJob, saveWorkflowCorrections, saveWorkflowFeedback, loadScheduledCatalog } from "./scheduled-discovery";
 import { fixtureWorkflowAnalysis } from "@screenpipe/workflows-ui/fixture";
 vi.mock("@/lib/api", () => ({localFetch:vi.fn()}));
 vi.mock("@/lib/workflows/rollout", () => ({requireWorkflowsRollout:vi.fn(),syncWorkflowsRollout:vi.fn().mockResolvedValue(undefined)}));
@@ -195,4 +195,50 @@ it("uses the persisted update cycle across agent handoffs, resume and completion
   expect(await getWorkflowJob("workflow-review:2")).toMatchObject({ status: "complete", cycleId: "cycle-a" });
   ws.cycle.id = "cycle-b";
   expect(await getWorkflowJob("workflow-review:2")).toMatchObject({ cycleId: "cycle-b" });
+});
+
+
+describe("workflow schedule group", () => {
+  it("reads existing settings without installing or requiring a new access grant", async () => {
+    await loadWorkflowTaskSetup();
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(WORKFLOW_TASKS.map(task => `/pipes/${task}`));
+  });
+  it("turns off only the four workflow schedules without stopping a manual run", async () => {
+    await disableWorkflowTasks();
+    expect([...enabled.values()]).toEqual([false,false,false,false]);
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(WORKFLOW_TASKS.map(task => `/pipes/${task}/enable`));
+  });
+  it("tries all four when a disable fails and reports the partial result", async () => {
+    const original = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (path, init) => String(path) === "/pipes/workflow-review/enable"
+      ? response({error:"offline"},503) : original(path,init));
+    await expect(disableWorkflowTasks()).rejects.toThrow("Could not turn off");
+    expect([...enabled.values()]).toEqual([false,false,true,false]);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+  it("does not install missing tasks to turn them off", async () => {
+    fetchMock.mockResolvedValue(response({error:"missing"},404));
+    await disableWorkflowTasks();
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+});
+
+it("treats missing schedules as off without writing on a settings read", async () => {
+  fetchMock.mockResolvedValue(response({error:"missing"},404));
+  const setup = await loadWorkflowTaskSetup();
+  expect(setup.enabled).toBe(false);
+  expect(setup.tasks).toHaveLength(4);
+  expect(fetchMock.mock.calls.every(([, init]) => !init?.method)).toBe(true);
+});
+it("bounds stalled schedule reads so the UI can retry", async () => {
+  vi.useFakeTimers();
+  try {
+    fetchMock.mockImplementation((_path, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    }));
+    const pending = expect(loadWorkflowTaskSetup()).rejects.toMatchObject({name:"AbortError"});
+    await vi.advanceTimersByTimeAsync(10_000);
+    await pending;
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
 });

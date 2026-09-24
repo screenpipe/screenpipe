@@ -1078,3 +1078,11 @@
 .quietRefreshControls .runActivity { left: 0; right: auto; }
 @media (max-width: 640px) { .quietCatalogHeader { gap: 10px 12px; } .quietCatalogHeader h1 { font-size: 25px; } }
 @media (pointer: coarse) { .quietIconButton { width: 44px; height: 44px; } .quietRefreshControls .runToggle { min-height: 44px; } }
+
+/* Keep host schedule controls alongside the model without crushing search. */
+.toolbarAccessory { flex: 0 0 auto; }
+@media (max-width: 680px) {
+  .topbar:has(.toolbarAccessory) { height: auto; min-height: 96px; flex-wrap: wrap; row-gap: 14px; padding-top: 10px; padding-bottom: 16px; }
+  .topbar:has(.toolbarAccessory) .search { flex: 1 1 calc(100% - 52px); min-width: 0; }
+  .toolbarAccessory { margin-right: auto; }
+}

@@ -50,6 +50,19 @@ SCREENPIPE_WEB_SCENARIO=empty bun run dev:web
 SCREENPIPE_WEB_SCENARIO=backend-error bun run dev:web
 ```
 
+The Workflows mode includes a persisted, fictional schedule group for checking
+Automatic updates without running agents. Use `workflowScheduleState=saving`,
+`failure`, or `unavailable` in the URL for those states. With this mock server
+running, install the `apps/screenpipe-workflows-web` browser-test dependencies and
+run this from the repository root:
+
+```sh
+WORKFLOW_SCHEDULE_URL=http://127.0.0.1:1420 bun apps/screenpipe-workflows-web/scripts/eval-schedule-toggle.mjs
+```
+
+ The check exercises the real Chat/Workflows switcher, consent, persistence,
+keyboard control, partial-save recovery and narrow layouts with fictional data.
+
 The default `ready` state also seeds a stateful Live View and canvas document.
 Edits such as changing the time range or layout mode are preserved for the
 current browser session, so Live View UI work does not need the Rust backend.
