@@ -2529,29 +2529,28 @@ impl RenderRecheck {
 #[cfg(any(target_os = "windows", test))]
 #[derive(Default)]
 struct RenderStability {
-    previous: Option<u64>,
     equal_samples: u8,
 }
 #[cfg(any(target_os = "windows", test))]
 impl RenderStability {
-    fn observe(&mut self, signature: u64) -> bool {
-        self.equal_samples = if self.previous == Some(signature) {
+    fn observe_equal(&mut self, same_pixels: bool) -> bool {
+        self.equal_samples = if same_pixels {
             self.equal_samples.saturating_add(1)
         } else {
             0
         };
-        self.previous = Some(signature);
         self.equal_samples >= 2
     }
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn render_signature(image: &image::DynamicImage) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hash = std::collections::hash_map::DefaultHasher::new();
-    (image.width(), image.height(), image.color()).hash(&mut hash);
-    image.as_bytes().hash(&mut hash);
-    hash.finish()
+fn same_render(left: &image::DynamicImage, right: &image::DynamicImage) -> bool {
+    // Compare the already-owned buffers directly. No allocation, extra hashing
+    // pass, sampling blind spots or hash collision can hide a changed pixel.
+    left.width() == right.width()
+        && left.height() == right.height()
+        && left.color() == right.color()
+        && left.as_bytes() == right.as_bytes()
 }
 
 /// Verify the tree's actual target, not only the foreground at two instants.
@@ -2588,11 +2587,7 @@ where
         }
         match tokio::time::timeout(remaining, sample()).await {
             Ok(Ok(after)) => {
-                if image.width() == after.width()
-                    && image.height() == after.height()
-                    && image.color() == after.color()
-                    && image.as_bytes() == after.as_bytes()
-                {
+                if same_render(image, &after) {
                     matching_samples += 1;
                     if matching_samples >= 3 {
                         return true;
@@ -2671,7 +2666,6 @@ async fn settle_windows_frame<G: FnMut() -> bool>(
 ) -> (image::DynamicImage, bool) {
     let deadline = Instant::now() + Duration::from_millis(600);
     let mut stability = RenderStability::default();
-    stability.observe(render_signature(&image));
     loop {
         tokio::time::sleep(Duration::from_millis(60)).await;
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -2685,7 +2679,7 @@ async fn settle_windows_frame<G: FnMut() -> bool>(
         .await
         {
             Ok(Ok(next)) => {
-                let stable = stability.observe(render_signature(&next));
+                let stable = stability.observe_equal(same_render(&image, &next));
                 image = next;
                 if stable {
                     return (image, true);
@@ -4664,35 +4658,73 @@ mod tests {
     }
 
     #[test]
-    fn window_render_settling_requires_repeated_equal_pixels_and_resets_on_change() {
-        let mut state = RenderStability::default();
-        for signature in [1, 2, 3, 3, 4, 4] {
-            assert!(!state.observe(signature), "animation is not settled");
-        }
-        assert!(state.observe(4));
-        assert!(
-            !state.observe(5),
-            "a new paint invalidates the settled observation"
-        );
-        assert!(!state.observe(5));
-        assert!(state.observe(5));
+    fn render_comparison_catches_last_pixel_and_pixel_format_changes_at_4k() {
+        use image::GenericImage;
+        let original = image::DynamicImage::new_rgba8(3840, 2160);
+        let mut changed = original.clone();
+        assert!(same_render(&original, &changed));
+        changed.put_pixel(3839, 2159, image::Rgba([0, 0, 1, 0]));
+        assert!(!same_render(&original, &changed));
+        assert!(!same_render(
+            &original,
+            &image::DynamicImage::new_rgb8(3840, 2160)
+        ));
     }
 
     #[test]
-    fn window_render_signature_detects_pixels_and_dimensions_without_tree_text() {
+    #[ignore = "manual optimized microbenchmark; not a whole-app performance claim"]
+    fn render_comparison_4k_benchmark() {
+        use std::{
+            hash::{Hash, Hasher},
+            hint::black_box,
+        };
+        let first = image::DynamicImage::new_rgba8(3840, 2160);
+        let second = first.clone();
+        let iterations = 100;
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            black_box(first.as_bytes()).hash(&mut hash);
+            black_box(hash.finish());
+        }
+        let hash_us = start.elapsed().as_micros();
+        let start = Instant::now();
+        for _ in 0..iterations {
+            assert!(black_box(same_render(
+                black_box(&first),
+                black_box(&second)
+            )));
+        }
+        println!("render_compare_benchmark iterations={iterations} dimensions=3840x2160 old_hash_us={hash_us} exact_compare_us={}", start.elapsed().as_micros());
+    }
+
+    #[test]
+    fn window_render_settling_requires_repeated_equal_pixels_and_resets_on_change() {
+        let mut state = RenderStability::default();
+        for equal in [false, false, false, true, false, true] {
+            assert!(!state.observe_equal(equal), "animation is not settled");
+        }
+        assert!(state.observe_equal(true));
+        assert!(
+            !state.observe_equal(false),
+            "a new paint invalidates the settled observation"
+        );
+        assert!(!state.observe_equal(true));
+        assert!(state.observe_equal(true));
+    }
+
+    #[test]
+    fn window_render_comparison_detects_pixels_and_dimensions_without_tree_text() {
         let original = image::DynamicImage::new_rgba8(10, 10);
         let mut repainted = original.clone();
         use image::GenericImage;
         repainted.put_pixel(7, 7, image::Rgba([255, 255, 255, 255]));
-        assert_ne!(render_signature(&original), render_signature(&repainted));
-        assert_ne!(
-            render_signature(&original),
-            render_signature(&image::DynamicImage::new_rgba8(5, 20))
-        );
-        assert_eq!(
-            render_signature(&repainted),
-            render_signature(&repainted.clone())
-        );
+        assert!(!same_render(&original, &repainted));
+        assert!(!same_render(
+            &original,
+            &image::DynamicImage::new_rgba8(5, 20)
+        ));
+        assert!(same_render(&repainted, &repainted.clone()));
     }
 
     #[cfg(target_os = "windows")]
