@@ -308,6 +308,7 @@ jobs:
       env:
         SCREENPIPE_E2E_WEBDRIVER_PORT: "4448"
         SCREENPIPE_FOCUS_PORT: "11448"
+        SCREENPIPE_PORT: "11438"
         RECORD_VIDEO: "true"
         SCREENPIPE_E2E_SEED: "onboarding,no-audio"
       run: |
