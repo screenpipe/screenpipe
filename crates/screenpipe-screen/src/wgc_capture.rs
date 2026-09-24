@@ -623,6 +623,8 @@ impl PersistentCapture {
                 slot.pool_size,
                 content_size
             );
+            // Release the retained old-size delivery before resizing its pool.
+            slot.pending_frame = None;
             let recreate = create_winrt_device(&d3d.dxgi).and_then(|device| {
                 frame_pool
                     .Recreate(
@@ -1108,7 +1110,18 @@ mod tests {
                 .save(std::path::Path::new(&dir).join("initial.png"))
                 .unwrap();
         }
-        assert_eq!(&first.get_pixel(160, 160).0[..3], &dark);
+        // WGC color conversion can shift a system gray by a few levels. The
+        // fixture tests a dark/light repaint, not ICC/HDR color calibration.
+        let color_matches = |actual: [u8; 4], expected: [u8; 3]| {
+            actual[..3]
+                .iter()
+                .zip(expected)
+                .all(|(a, e)| a.abs_diff(e) <= 16)
+        };
+        assert!(
+            color_matches(first.get_pixel(160, 160).0, dark),
+            "fixture opening paint is not visible"
+        );
         for (style, expected) in [(WHITE_RECT, light), (BLACK_RECT, dark), (WHITE_RECT, light)] {
             let before = capture.stats();
             unsafe {
@@ -1137,9 +1150,8 @@ mod tests {
             let image = capture
                 .get_latest_image_streaming(Duration::from_millis(200))
                 .unwrap();
-            assert_eq!(
-                &image.get_pixel(160, 160).0[..3],
-                &expected,
+            assert!(
+                color_matches(image.get_pixel(160, 160).0, expected),
                 "settling returned stale pixels after the final repaint"
             );
             assert_eq!(
