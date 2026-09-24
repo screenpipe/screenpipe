@@ -212,6 +212,52 @@ impl TranscriptionEngine {
         languages: Vec<Language>,
         vocabulary: Vec<VocabularyEntry>,
     ) -> Result<Self> {
+        let requested = config.clone();
+        let model_generation =
+            screenpipe_core::health_diagnostics::begin_transcription_model(&config.to_string());
+        let mut observed_status = "disabled";
+        let mut observed_path = None;
+        let result = Self::new_observed(
+            config,
+            deepgram_config,
+            openai_compatible_config,
+            languages,
+            vocabulary,
+            model_generation,
+            &mut observed_status,
+            &mut observed_path,
+        )
+        .await;
+        let status = match &result {
+            Ok(Self::Disabled) => observed_status,
+            Ok(Self::Deepgram { .. } | Self::OpenAICompatible { .. }) => "not_required",
+            Ok(_) => "ready",
+            Err(_) => "load_failed",
+        };
+        if status != "downloading" {
+            screenpipe_core::health_diagnostics::transcription_model_state(
+                model_generation,
+                status,
+                observed_path,
+                result.as_ref().err().map(ToString::to_string).or_else(|| {
+                    (status == "unsupported").then(|| format!("{} requires AVX2", requested))
+                }),
+            );
+        }
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn new_observed(
+        config: Arc<AudioTranscriptionEngine>,
+        deepgram_config: Option<DeepgramTranscriptionConfig>,
+        openai_compatible_config: Option<crate::transcription::stt::OpenAICompatibleConfig>,
+        languages: Vec<Language>,
+        vocabulary: Vec<VocabularyEntry>,
+        model_generation: u64,
+        observed_status: &mut &'static str,
+        observed_path: &mut Option<std::path::PathBuf>,
+    ) -> Result<Self> {
         // Whisper (ggml) and Qwen3 (antirez kernels) are statically compiled
         // with AVX2 on Windows/Linux x64 release builds — initializing them on
         // a CPU without AVX2 raises STATUS_ILLEGAL_INSTRUCTION (kills the
@@ -235,6 +281,7 @@ impl TranscriptionEngine {
             } else {
                 tracing::debug!("{msg}");
             }
+            *observed_status = "unsupported";
             return Ok(Self::Disabled);
         }
 
@@ -307,6 +354,13 @@ impl TranscriptionEngine {
                             warn!(
                                 "qwen3-asr weights not in Hugging Face cache yet; transcription disabled until download completes"
                             );
+                            *observed_status = "downloading";
+                            screenpipe_core::health_diagnostics::transcription_model_state(
+                                model_generation,
+                                "downloading",
+                                None,
+                                None,
+                            );
                             audiopipe::Model::spawn_pretrained_download(MODEL_NAME.to_string());
                             Ok(Self::Disabled)
                         }
@@ -354,6 +408,13 @@ impl TranscriptionEngine {
                             warn!(
                                 "parakeet-mlx weights not in Hugging Face cache yet; transcription disabled until download completes"
                             );
+                            *observed_status = "downloading";
+                            screenpipe_core::health_diagnostics::transcription_model_state(
+                                model_generation,
+                                "downloading",
+                                None,
+                                None,
+                            );
                             audiopipe::Model::spawn_pretrained_download(MODEL_NAME.to_string());
                             Ok(Self::Disabled)
                         }
@@ -380,6 +441,13 @@ impl TranscriptionEngine {
                         Err(e) if e.is_model_not_cached() => {
                             warn!(
                                 "parakeet weights not in Hugging Face cache yet; transcription disabled until download completes"
+                            );
+                            *observed_status = "downloading";
+                            screenpipe_core::health_diagnostics::transcription_model_state(
+                                model_generation,
+                                "downloading",
+                                None,
+                                None,
                             );
                             audiopipe::Model::spawn_pretrained_download(MODEL_NAME.to_string());
                             Ok(Self::Disabled)
@@ -424,6 +492,13 @@ impl TranscriptionEngine {
                             warn!(
                                 "parakeet-mlx weights not in Hugging Face cache yet; transcription disabled until download completes"
                             );
+                            *observed_status = "downloading";
+                            screenpipe_core::health_diagnostics::transcription_model_state(
+                                model_generation,
+                                "downloading",
+                                None,
+                                None,
+                            );
                             audiopipe::Model::spawn_pretrained_download(MODEL_NAME.to_string());
                             Ok(Self::Disabled)
                         }
@@ -448,6 +523,13 @@ impl TranscriptionEngine {
                             "whisper model is not available locally yet for {:?}; audio transcription disabled until download completes",
                             config
                         );
+                        *observed_status = "downloading";
+                        screenpipe_core::health_diagnostics::transcription_model_state(
+                            model_generation,
+                            "downloading",
+                            None,
+                            None,
+                        );
                         let config_for_download = config.clone();
                         tokio::spawn(async move {
                             match tokio::task::spawn_blocking(move || {
@@ -456,21 +538,42 @@ impl TranscriptionEngine {
                             .await
                             {
                                 Ok(Ok(path)) => {
+                                    screenpipe_core::health_diagnostics::transcription_model_state(
+                                        model_generation,
+                                        "downloaded",
+                                        Some(path.clone()),
+                                        None,
+                                    );
                                     info!("whisper model downloaded in background: {:?}", path)
                                 }
                                 Ok(Err(error)) => {
+                                    screenpipe_core::health_diagnostics::transcription_model_state(
+                                        model_generation,
+                                        "download_failed",
+                                        None,
+                                        Some(error.to_string()),
+                                    );
                                     warn!("whisper background download failed: {}", error)
                                 }
-                                Err(join_error) => warn!(
-                                    "whisper background download task panicked: {}",
-                                    join_error
-                                ),
+                                Err(join_error) => {
+                                    screenpipe_core::health_diagnostics::transcription_model_state(
+                                        model_generation,
+                                        "download_failed",
+                                        None,
+                                        Some(join_error.to_string()),
+                                    );
+                                    warn!(
+                                        "whisper background download task panicked: {}",
+                                        join_error
+                                    );
+                                }
                             }
                         });
                         return Ok(Self::Disabled);
                     }
                 };
 
+                *observed_path = Some(quantized_path.clone());
                 info!("whisper model available: {:?}", quantized_path);
 
                 let Some(context) =

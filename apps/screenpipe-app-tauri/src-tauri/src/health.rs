@@ -109,6 +109,7 @@ fn now_epoch() -> u64 {
 }
 
 pub fn set_boot_phase(phase: &str, message: Option<&str>) {
+    screenpipe_core::health_diagnostics::startup_phase(phase);
     let mut guard = BOOT_PHASE.write().unwrap_or_else(|e| e.into_inner());
     // Don't reset since_epoch if the phase is unchanged (no-op writes)
     if guard.phase != phase {
@@ -125,6 +126,7 @@ pub fn set_boot_phase(phase: &str, message: Option<&str>) {
 }
 
 pub fn set_boot_error(err: &str) {
+    screenpipe_core::health_diagnostics::startup_failure("unknown", err, None);
     let mut guard = BOOT_PHASE.write().unwrap_or_else(|e| e.into_inner());
     guard.phase = "error".to_string();
     guard.error = Some(err.to_string());

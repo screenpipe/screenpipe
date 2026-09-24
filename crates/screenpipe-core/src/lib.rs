@@ -35,6 +35,7 @@ pub mod display_topology;
 // cycle via screenpipe-secrets). Re-exported here as the canonical path.
 pub use screenpipe_cpu_features as cpu_features;
 pub mod ffmpeg;
+pub mod health_diagnostics;
 pub mod memories;
 // Single source of truth for CREATE_NO_WINDOW. Spawning a console program from
 // the GUI-subsystem app flashes a terminal on Windows unless every call site

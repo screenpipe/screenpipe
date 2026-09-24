@@ -527,6 +527,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     };
+    screenpipe_core::health_diagnostics::begin_startup(&local_data_dir);
     let local_data_dir_clone = local_data_dir.clone();
 
     // One-time, TTY-only equivalent of the desktop onboarding's "connect all
@@ -861,6 +862,13 @@ async fn main() -> anyhow::Result<()> {
         }));
     }
 
+    screenpipe_core::health_diagnostics::configure_media_required(
+        !config.disable_audio
+            || !config.disable_snapshot_compaction
+            || (!config.disable_vision
+                && config.hd_recording_default
+                    == screenpipe_engine::high_fps_controller::DefaultMode::Always),
+    );
     // Only require ffmpeg when audio recording is enabled. Vision-only recording
     // should not attempt network installs (important for offline / locked-down
     // Windows environments).
@@ -873,10 +881,22 @@ async fn main() -> anyhow::Result<()> {
                 eprintln!(
                     "ffmpeg not found and installation failed. please install ffmpeg manually."
                 );
+                screenpipe_core::health_diagnostics::startup_failure(
+                    "ffmpeg_missing",
+                    "ffmpeg not found and installation failed",
+                    Some(1),
+                );
                 std::process::exit(1);
             }
         }
+        screenpipe_core::health_diagnostics::preflight("ffmpeg", "ok", None, None);
     } else {
+        screenpipe_core::health_diagnostics::preflight(
+            "ffmpeg",
+            "not_checked",
+            Some("audio disabled; discovery deferred until a media pipeline needs it".into()),
+            None,
+        );
         debug!("audio disabled; skipping ffmpeg preflight");
     }
 
@@ -947,6 +967,11 @@ async fn main() -> anyhow::Result<()> {
                 if start.elapsed() > timeout {
                     eprintln!("timed out waiting for permissions.");
                     if !permissions::preflight_check(need_screen, need_audio) {
+                        screenpipe_core::health_diagnostics::startup_failure(
+                            "permission_denied",
+                            "required screen or microphone permission was not granted",
+                            Some(1),
+                        );
                         std::process::exit(1);
                     }
                     break;
@@ -975,12 +1000,22 @@ async fn main() -> anyhow::Result<()> {
         #[cfg(not(target_os = "macos"))]
         {
             if !permissions::preflight_check(need_screen, need_audio) {
+                screenpipe_core::health_diagnostics::startup_failure(
+                    "permission_denied",
+                    "required recording permission was not granted",
+                    Some(1),
+                );
                 std::process::exit(1);
             }
         }
     }
 
     if !is_local_ipv4_port_free(config.port) {
+        screenpipe_core::health_diagnostics::startup_failure(
+            "port_in_use",
+            "configured server port is already in use",
+            None,
+        );
         error!(
             "you're likely already running screenpipe instance in a different environment, e.g. terminal/ide, close it and restart or use different port"
         );
@@ -1019,6 +1054,7 @@ async fn main() -> anyhow::Result<()> {
     // This helps track users who may have screen capture issues due to old macOS
     analytics::check_macos_version();
 
+    screenpipe_core::health_diagnostics::startup_phase("migrating_database");
     let database_path =
         screenpipe_db::storage::resolve_database_path(&local_data_dir.join("db.sqlite"))?;
     let (db, startup_guard) = loop {
@@ -1146,6 +1182,7 @@ async fn main() -> anyhow::Result<()> {
         Some(detector)
     };
 
+    screenpipe_core::health_diagnostics::startup_phase("building_audio");
     let mut audio_manager_builder = config.to_audio_manager_builder(
         PathBuf::from(output_path_clone.clone().to_string()),
         audio_devices,
@@ -1197,6 +1234,7 @@ async fn main() -> anyhow::Result<()> {
             Arc::new(manager)
         }
         Err(e) => {
+            screenpipe_core::health_diagnostics::startup_failure("unknown", &e.to_string(), None);
             error!("{e}");
             return Ok(());
         }
@@ -1516,6 +1554,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Initialize pipe manager
+    screenpipe_core::health_diagnostics::startup_phase("starting_pipes");
     let pipes_dir = local_data_dir.join("pipes");
     std::fs::create_dir_all(&pipes_dir).ok();
 
@@ -1992,7 +2031,22 @@ async fn main() -> anyhow::Result<()> {
     // mDNS behavior from SCServer::start.
     let router = server.try_create_router().await?;
     let server_address = SocketAddr::new(IpAddr::V4(config.listen_address), config.port);
-    let listener = screenpipe_engine::server::bind_listener(server_address).await?;
+    let listener = screenpipe_engine::server::bind_listener(server_address)
+        .await
+        .map_err(|error| {
+            screenpipe_core::health_diagnostics::startup_failure(
+                if error.kind() == std::io::ErrorKind::AddrInUse {
+                    "port_in_use"
+                } else {
+                    "unknown"
+                },
+                &error.to_string(),
+                None,
+            );
+            error
+        })?;
+    screenpipe_core::health_diagnostics::preflight("server_port", "ok", None, None);
+    screenpipe_core::health_diagnostics::startup_phase("ready");
     drop(startup_guard);
     info!("Server listening on {}", server_address);
     if server.advertise_mdns {

@@ -1344,6 +1344,7 @@
       "crate": "screenpipe-a11y",
       "files": [
         "src/incognito/windows.rs",
+        "src/platform/retained_tree.rs",
         "src/platform/windows.rs",
         "src/platform/windows_uia.rs",
         "src/platform/windows_uia_tests.rs",

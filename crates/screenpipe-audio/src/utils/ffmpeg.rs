@@ -19,6 +19,25 @@ fn encode_single_audio(
     output_path: &Path,
     overwrite_reserved_path: bool,
 ) -> anyhow::Result<()> {
+    let operation = screenpipe_core::health_diagnostics::MediaOperation::start("audio");
+    let result = encode_single_audio_observed(
+        data,
+        sample_rate,
+        channels,
+        output_path,
+        overwrite_reserved_path,
+    );
+    operation.finish(&result);
+    result
+}
+
+fn encode_single_audio_observed(
+    data: &[u8],
+    sample_rate: u32,
+    channels: u16,
+    output_path: &Path,
+    overwrite_reserved_path: bool,
+) -> anyhow::Result<()> {
     debug!("Starting FFmpeg process");
 
     // SCREENPIPE-CLI-T0 / T5: the previous `.expect("Failed to spawn FFmpeg
