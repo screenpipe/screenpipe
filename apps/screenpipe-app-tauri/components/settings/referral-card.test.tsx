@@ -4,6 +4,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -67,6 +68,7 @@ describe("ReferralCard", () => {
     render(<ReferralCard />);
 
     expect(await screen.findByDisplayValue(referral.link)).toBeInTheDocument();
+    expect(screen.getByText("Give 10% off. Get a free month.")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       "https://screenpipe.com/api/referral?email=paid%2Btest%40screenpipe.com",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -101,7 +103,7 @@ describe("ReferralCard", () => {
     render(<ReferralCard />);
 
     expect(
-      await screen.findByText("No referral link found"),
+      await screen.findByText("Your invite link is temporarily unavailable"),
     ).toBeInTheDocument();
     expect(screen.queryByDisplayValue(/REF-/i)).not.toBeInTheDocument();
     expect(clearSession).not.toHaveBeenCalled();
@@ -119,12 +121,12 @@ describe("ReferralCard", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       render(<ReferralCard />);
-      await screen.findByText("No referral link found");
+      await screen.findByText("Your invite link is temporarily unavailable");
       expect(screen.getByText("Signed in as paid@example.com")).toBeInTheDocument();
       expect(screen.queryByText(/first paid plan|trial does not/i)).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Check again" }));
       expect(await screen.findByDisplayValue(referral.link)).toBeInTheDocument();
-      expect(screen.queryByText("No referral link found")).not.toBeInTheDocument();
+      expect(screen.queryByText("Your invite link is temporarily unavailable")).not.toBeInTheDocument();
       expect(fetchMock).toHaveBeenCalledTimes(2);
     },
   );
@@ -142,6 +144,21 @@ describe("ReferralCard", () => {
     expect(mocks.openUrl).toHaveBeenCalledWith(
       "mailto:support@screenpi.pe?subject=Missing%20referral%20link",
     );
+  });
+
+  it("does not replace the current account's link with a late missing-link response", async () => {
+    let finishOldRequest!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn()
+      .mockImplementationOnce(() => new Promise<Response>(resolve => { finishOldRequest = resolve; }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(referral), { status: 200 })));
+    mocks.user = { email: "first@example.com", token: "token-1" };
+    const { rerender } = render(<ReferralCard />);
+    mocks.user = { email: "second@example.com", token: "token-2" };
+    rerender(<ReferralCard />);
+    await screen.findByDisplayValue(referral.link);
+    await act(async () => finishOldRequest(new Response("{}", { status: 404 })));
+    expect(screen.getByDisplayValue(referral.link)).toBeInTheDocument();
+    expect(screen.queryByText("Your invite link is temporarily unavailable")).not.toBeInTheDocument();
   });
 
   it("shows a retry path when referral loading fails", async () => {

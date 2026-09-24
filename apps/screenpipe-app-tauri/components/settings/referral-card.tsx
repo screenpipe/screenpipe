@@ -60,6 +60,7 @@ export function ReferralCard() {
             signal: controller.signal,
           },
         );
+        if (controller.signal.aborted) return;
         if (res.status === 404) {
           setReferral(null);
           setNoCode(true);
@@ -86,7 +87,7 @@ export function ReferralCard() {
         console.error("referral fetch error:", error);
         setReferral(null);
         setNoCode(false);
-        setLoadError("couldn't load your referral link");
+        setLoadError("Could not prepare your invite link. Please try again.");
         setLoadedForEmail(userEmail);
       } finally {
         if (!controller.signal.aborted) setLoading(false);
@@ -105,7 +106,7 @@ export function ReferralCard() {
           <h3 className="text-lg font-semibold">Refer a friend</h3>
         </div>
         <p className="mb-4 text-sm text-muted-foreground">
-          Sign in to view your referral link
+          Give a friend 10% off and get a free month when they subscribe. Sign in to get your invite link.
         </p>
         <Button
           variant="outline"
@@ -192,7 +193,7 @@ export function ReferralCard() {
           <Gift className="h-5 w-5 text-muted-foreground" />
           <h3 className="text-lg font-semibold">Refer a friend</h3>
         </div>
-        <p className="text-sm text-muted-foreground">Loading referral info...</p>
+        <p className="text-sm text-muted-foreground">Preparing your invite link...</p>
       </Card>
     );
   }
@@ -225,13 +226,13 @@ export function ReferralCard() {
           <Gift className="h-5 w-5 text-muted-foreground" />
           <h3 className="text-lg font-semibold">Refer a friend</h3>
         </div>
-        <p className="mb-1 text-sm font-medium">No referral link found</p>
+        <p className="mb-1 text-sm font-medium">Your invite link is temporarily unavailable</p>
         <p className="mb-3 break-words text-sm text-muted-foreground">
           Signed in as {userEmail}
         </p>
         <p className="mb-4 text-sm text-muted-foreground">
-          Try checking again. If you have already paid and still have no link,
-          contact support so we can check your account.
+          You do not need a paid plan to invite friends. Try again, or contact
+          support if your link still does not appear.
         </p>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -269,15 +270,20 @@ export function ReferralCard() {
 
   return (
     <Card className="p-5">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
         <div className="flex items-center gap-2">
           <Gift className="h-5 w-5 text-primary" />
-          <h3 className="text-lg font-semibold">Refer a friend</h3>
+          <h3 className="text-lg font-semibold">Give 10% off. Get a free month.</h3>
         </div>
         <Badge variant="secondary" className="rounded-none font-mono text-xs">
-          {referral.redemptions} / {referral.maxRedemptions} used
+          {referral.rewardsEarned} / {referral.maxRedemptions} rewards earned
         </Badge>
       </div>
+
+      <p className="mb-4 text-sm text-muted-foreground">
+        Your friend gets 10% off their first payment. You get one month free
+        when they subscribe. You can invite friends on any plan, including free.
+      </p>
 
       {/* Referral link + copy */}
       <div className="flex items-center gap-2 mb-4">
@@ -286,8 +292,8 @@ export function ReferralCard() {
           value={referral.link}
           className="font-mono text-sm"
         />
-        <Button variant="outline" size="icon" onClick={handleCopy}>
-          <span className="sr-only">Copy referral link</span>
+        <Button variant="outline" size="sm" className="shrink-0 gap-2" aria-label={copied ? "Referral link copied" : "Copy referral link"} onClick={handleCopy}>
+          <span>{copied ? "Copied" : "Copy link"}</span>
           {copied ? (
             <Check className="h-4 w-4 text-foreground" />
           ) : (
@@ -296,22 +302,9 @@ export function ReferralCard() {
         </Button>
       </div>
 
-      {/* How it works */}
-      <div className="space-y-1.5 text-sm text-muted-foreground mb-4">
-        <p className="font-medium text-foreground text-xs normal-case tracking-wide">How it works</p>
-        <div className="flex items-center gap-2">
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center border border-border bg-muted font-mono text-xs">1</span>
-          share your invite link
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center border border-border bg-muted font-mono text-xs">2</span>
-          they sign up and get <span className="font-medium text-foreground">10% off</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center border border-border bg-muted font-mono text-xs">3</span>
-          you get <span className="font-medium text-foreground">1 month free</span> when they subscribe
-        </div>
-      </div>
+      <p className="mb-4 text-xs text-muted-foreground">
+        Earn up to {referral.maxRedemptions} free months. Discounts cannot be combined.
+      </p>
 
       {/* Email invite */}
       <div className="flex items-center gap-2 pt-3 border-t border-border/50">
