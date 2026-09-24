@@ -1045,7 +1045,8 @@ mod tests {
         use windows::core::w;
         use windows::Win32::Foundation::{HINSTANCE, HWND};
         use windows::Win32::Graphics::Gdi::{
-            RedrawWindow, RDW_ERASE, RDW_INVALIDATE, RDW_UPDATENOW,
+            GetSysColor, RedrawWindow, COLOR_WINDOW, COLOR_WINDOWFRAME, RDW_ERASE, RDW_INVALIDATE,
+            RDW_UPDATENOW,
         };
         use windows::Win32::UI::WindowsAndMessaging::{
             CreateWindowExW, DestroyWindow, SetWindowLongPtrW, GWL_STYLE, HMENU, WINDOW_STYLE,
@@ -1093,10 +1094,22 @@ mod tests {
                 RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW,
             );
         }
+        // Let the newly shown fixture finish its own DWM opening transition.
+        // STATIC rectangles use system colors, which are theme-dependent.
+        std::thread::sleep(Duration::from_millis(400));
+        let rgb = |color: u32| [color as u8, (color >> 8) as u8, (color >> 16) as u8];
+        let dark = rgb(unsafe { GetSysColor(COLOR_WINDOWFRAME) });
+        let light = rgb(unsafe { GetSysColor(COLOR_WINDOW) });
+        assert_ne!(dark, light, "fixture colors must be distinct");
         let mut capture = PersistentCapture::new(monitor.id().unwrap()).unwrap();
         let first = capture.get_latest_image(Duration::from_secs(2)).unwrap();
-        assert_eq!(&first.get_pixel(160, 160).0[..3], &[0, 0, 0]);
-        for (style, expected) in [(WHITE_RECT, 255), (BLACK_RECT, 0), (WHITE_RECT, 255)] {
+        if let Ok(dir) = std::env::var("SCREENPIPE_WGC_TEST_OUTPUT") {
+            first
+                .save(std::path::Path::new(&dir).join("initial.png"))
+                .unwrap();
+        }
+        assert_eq!(&first.get_pixel(160, 160).0[..3], &dark);
+        for (style, expected) in [(WHITE_RECT, light), (BLACK_RECT, dark), (WHITE_RECT, light)] {
             let before = capture.stats();
             unsafe {
                 SetWindowLongPtrW(
@@ -1126,7 +1139,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 &image.get_pixel(160, 160).0[..3],
-                &[expected; 3],
+                &expected,
                 "settling returned stale pixels after the final repaint"
             );
             assert_eq!(
