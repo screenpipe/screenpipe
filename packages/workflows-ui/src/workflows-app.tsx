@@ -1662,7 +1662,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
       setAnalysis(updated);
     } : undefined} />; break;
     case "bottlenecks": content = <BottlenecksView workflows={workflows} openWorkflow={openWorkflow} />; break;
-    case "profile": content = workProfile ? <ProfileView contextDiscovery={platform.contextDiscovery} fillContext={platform.fillContext} profile={workProfile} workspaceView={workspaceProfile} saving={contextProfile.status === "saving"} saved={contextProfile.status === "saved"} error={contextProfile.error} update={contextProfile.update} retry={contextProfile.retry} /> : <div className={styles.contextPage}><h1>Context</h1>{contextProfile.error ? <p role="alert">{contextProfile.error} <button type="button" onClick={contextProfile.retry}>Retry</button></p> : <p role="status">Loading context…</p>}</div>; break;
+    case "profile": content = null; break;
     case "evidence": content = <EvidenceView workflows={workflows} openWorkflow={openWorkflow} runtime={runtime} />; break;
     case "privacy": content = <PrivacyView runtime={runtime} />; break;
   }
@@ -1678,7 +1678,13 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   }
 
   return <>
-    <AppShell modelControl={platform.modelPreference ? <WorkflowModelControl preference={platform.modelPreference} /> : undefined} composerAccessory={composerAccessory} active={active} fullscreen={fullscreen} navigationFooter={navigationFooter} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={filters.query} setQuery={(query) => setFilters((current) => ({ ...current, query }))} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: ui("Context"), profile: workProfile } : { key: "workflows", title: ui("Your workflows"), catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{statusNotice}{content}</AppShell>
+    <AppShell modelControl={platform.modelPreference ? <WorkflowModelControl preference={platform.modelPreference} /> : undefined} composerAccessory={composerAccessory} active={active} fullscreen={fullscreen} navigationFooter={navigationFooter} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={filters.query} setQuery={(query) => setFilters((current) => ({ ...current, query }))} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: ui("Context"), profile: workProfile } : { key: "workflows", title: ui("Your workflows"), catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{statusNotice}
+      {/* Keep drafts, imports and the active fill alive when navigating away.
+          A different scope must tear down the old request before accepting fields. */}
+      <div key={`${activeScope?.kind ?? "personal"}:${activeScope?.id ?? ""}`} hidden={view !== "profile"}>
+        {workProfile ? <ProfileView contextDiscovery={platform.contextDiscovery} fillContext={platform.fillContext} profile={workProfile} workspaceView={workspaceProfile} saving={contextProfile.status === "saving"} saved={contextProfile.status === "saved"} error={contextProfile.error} update={contextProfile.update} retry={contextProfile.retry} /> : view === "profile" ? <div className={styles.contextPage}><h1>Context</h1>{contextProfile.error ? <p role="alert">{contextProfile.error} <button type="button" onClick={contextProfile.retry}>Retry</button></p> : <p role="status">Loading context…</p>}</div> : null}
+      </div>
+      {content}</AppShell>
     <CommandPalette open={active && commandPaletteOpen} commands={paletteCommands} close={() => setCommandPaletteOpen(false)} />
   </>;
 }
