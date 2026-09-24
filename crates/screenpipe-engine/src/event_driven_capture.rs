@@ -2572,6 +2572,7 @@ where
     Fut: std::future::Future<Output = anyhow::Result<image::DynamicImage>>,
 {
     let deadline = Instant::now() + budget;
+    let mut matching_samples = 0;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -2584,7 +2585,12 @@ where
                     && image.color() == after.color()
                     && image.as_bytes() == after.as_bytes()
                 {
-                    return true;
+                    matching_samples += 1;
+                    if matching_samples >= 2 {
+                        return true;
+                    }
+                } else {
+                    matching_samples = 0;
                 }
             }
             _ => return false,
@@ -3643,13 +3649,19 @@ async fn do_capture(
     #[cfg(target_os = "windows")]
     let render_stable_before_walk = render_stable;
     #[cfg(target_os = "windows")]
-    if needs_settle && render_stable && tree_snapshot.is_some() {
-        // UIA may outlast a caret blink. A single different sample is not proof
-        // of a content transition: give periodic paint a bounded opportunity to
-        // return to the exact pre-walk pixels. No pixels are exempted. A real
-        // page change that never matches still detaches AX and uses OCR.
+    if monitor_hosts_focus
+        && !screenshot_disabled
+        && !skip_pixels_for_unknown_exclusions
+        && render_stable
+        && tree_snapshot.is_some()
+    {
+        // Every focused AX/pixel pair needs post-walk evidence, even when its
+        // HWND was settled earlier. Require two fresh compositor deliveries:
+        // streaming-cache equality can otherwise accept pre-edit pixels before
+        // a pending repaint arrives. Preserve the bounded caret-phase retry;
+        // timeouts/changed content detach AX and use the actual image's OCR.
         render_stable = confirm_render(&image, Duration::from_millis(650), || {
-            params.monitor.capture_image_while_settling()
+            params.monitor.capture_image_for_coherence()
         })
         .await;
     }
@@ -4351,13 +4363,34 @@ mod tests {
             })
             .await
         );
-        assert_eq!(calls, 2);
+        assert_eq!(calls, 3);
         assert!(
             !confirm_render(&before, Duration::from_millis(80), || std::future::ready(
                 Ok(blink.clone())
             ))
             .await
         );
+    }
+
+    #[tokio::test]
+    async fn render_confirmation_does_not_accept_a_single_matching_sample() {
+        use image::GenericImage;
+        let before = image::DynamicImage::new_rgba8(12, 12);
+        let mut painted_edit = before.clone();
+        painted_edit.put_pixel(3, 4, image::Rgba([255, 255, 255, 255]));
+        let mut calls = 0;
+        assert!(
+            !confirm_render(&before, Duration::from_millis(150), || {
+                calls += 1;
+                std::future::ready(Ok(if calls == 1 {
+                    before.clone()
+                } else {
+                    painted_edit.clone()
+                }))
+            })
+            .await
+        );
+        assert!(calls >= 2, "one matching sample cannot establish stability");
     }
 
     #[tokio::test]
