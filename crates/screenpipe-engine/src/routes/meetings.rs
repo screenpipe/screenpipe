@@ -584,6 +584,9 @@ pub(crate) async fn get_meeting_summary_status_handler(
 
     let execution = found.as_ref().map(|(snapshot, _, _)| snapshot);
     let state_value = resolve_summary_state(&SummaryStatusInputs {
+        has_saved_summary: crate::meeting_summary::notes::note_has_summary_section(
+            meeting.note.as_deref().unwrap_or(""),
+        ),
         auto_summary_enabled: enabled,
         meeting_end,
         latest_input_at,
@@ -600,8 +603,18 @@ pub(crate) async fn get_meeting_summary_status_handler(
         execution_status: found
             .as_ref()
             .map(|(snapshot, _, _)| snapshot.status.clone()),
-        error_type: found.as_ref().and_then(|(_, kind, _)| kind.clone()),
-        error_message: found.as_ref().and_then(|(_, _, message)| message.clone()),
+        error_type: found.as_ref().and_then(|(execution, kind, _)| {
+            kind.clone().or_else(|| {
+                (state_value == SummaryState::Failed && execution.status == "completed")
+                    .then(|| "summary_not_saved".to_string())
+            })
+        }),
+        error_message: found.as_ref().and_then(|(execution, _, message)| {
+            message.clone().or_else(|| {
+                (state_value == SummaryState::Failed && execution.status == "completed")
+                    .then(|| "The run finished without saving a meeting summary.".to_string())
+            })
+        }),
     }))
 }
 
@@ -718,10 +731,12 @@ pub(crate) async fn save_meeting_summary_handler(
     Path(id): Path<i64>,
     axum::Json(body): axum::Json<SaveMeetingSummaryRequest>,
 ) -> Result<JsonResponse<MeetingRecord>, (StatusCode, JsonResponse<Value>)> {
-    if body.summary.trim().is_empty() {
+    if !crate::meeting_summary::notes::summary_has_content(&body.summary) {
         return Err((
             StatusCode::BAD_REQUEST,
-            JsonResponse(json!({"error": "summary must not be empty"})),
+            JsonResponse(
+                json!({"error": "summary must contain meeting content, not an empty result or failure message"}),
+            ),
         ));
     }
     crate::meeting_summary::notes::save_meeting_summary(

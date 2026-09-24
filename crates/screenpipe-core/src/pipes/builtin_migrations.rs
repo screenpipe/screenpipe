@@ -282,6 +282,9 @@ if your summary is worth saving, append it to the meeting note (and refresh the 
 
 replace `<EXISTING_NOTE>` with the meeting's current `note` field (empty string if none) so you don't overwrite the user's work; just append your summary under a `## Summary` heading. for the title: if the current title is missing, generic ("untitled", "meeting", just the app name) or doesn't capture what actually happened, replace it with a 5-8 word plain-english title (no quotes, no "meeting about…" prefix) — otherwise omit the field so a user-set title is left alone. if there's nothing useful to summarize (empty transcript, irrelevant audio), say so out loud and skip the PUT — don't write a placeholder."#;
 
+const LEGACY_MEETING_AUDIO_FETCH: &str = r###"  curl -s -G -H "$A" --data-urlencode "start_time=$S" --data-urlencode "end_time=$E" \
+    -d content_type=audio -d limit=500 "http://localhost:3030/search" -o /tmp/audio.json &"###;
+
 /// Swaps for `meeting-summary`, oldest defect first.
 fn meeting_summary_swaps() -> Vec<FragmentSwap> {
     let mut swaps = vec![
@@ -522,6 +525,31 @@ fn meeting_summary_swaps() -> Vec<FragmentSwap> {
         if let Some(new) = replacement {
             swaps.push(FragmentSwap { why, old, new });
         }
+    }
+
+    // Apply narrow replacements after whole-section legacy migrations.
+    if let Some(fetch) = section_between(
+        bundled_prompt("meeting-summary").unwrap_or(""),
+        "  # Use the same meeting-scoped transcript",
+        "  (curl -sf -G",
+    ) {
+        swaps.push(FragmentSwap {
+            why:
+                "use the meeting transcript instead of missing live speech in general audio search",
+            old: LEGACY_MEETING_AUDIO_FETCH,
+            new: fetch.trim_end(),
+        });
+    }
+    if let Some(rule) = section_between(
+        bundled_prompt("meeting-summary").unwrap_or(""),
+        "summarize what happened: key topics, decisions, action items.",
+        " and parsed data first",
+    ) {
+        swaps.push(FragmentSwap {
+            why: "do not reject readable meeting speech because screen evidence is unrelated",
+            old: "summarize what happened: key topics, decisions, action items. use accessibility",
+            new: rule,
+        });
     }
 
     swaps
@@ -1627,7 +1655,8 @@ replace `<EXISTING_NOTE>` with the meeting's current `note` field (empty string 
 
         // Primary reads are batched, backgrounded, and joined.
         assert!(body.contains("pull everything the summary needs in ONE command"));
-        assert!(body.contains("-o /tmp/audio.json &"));
+        assert!(body.contains("/meetings/$ID/transcript"));
+        assert!(body.contains("  fi) &"));
         assert!(body.contains("content_type=accessibility"));
         assert!(body.contains("content_type=parsed"));
         assert!(body.contains("> /tmp/a11.json) &"));

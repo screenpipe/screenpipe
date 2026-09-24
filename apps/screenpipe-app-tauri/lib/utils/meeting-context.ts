@@ -35,6 +35,7 @@ export interface AudioSegment {
 export interface MeetingAudioChunk {
   audioChunkId: number;
   audioFilePath: string;
+  audioStartTimeSecs?: number | null;
   speakerId: number | null;
   sessionSpeakerId?: string | null;
   speakerName: string;
@@ -58,6 +59,7 @@ interface MeetingTranscriptSegment {
   audioTranscriptionId?: number | null;
   audioChunkId?: number | null;
   audioFilePath?: string | null;
+  audioStartTimeSecs?: number | null;
   speakerId?: number | null;
   sessionSpeakerId?: string | null;
   speakerName?: string | null;
@@ -856,6 +858,7 @@ interface SearchAudioItem {
     transcription?: string;
     timestamp?: string;
     file_path?: string;
+    start_time?: number | null;
     device?: string;
     device_type?: string;
     speaker?: { id?: number; name?: string } | null;
@@ -904,6 +907,7 @@ export async function fetchMeetingAudio(
         out.push({
           audioChunkId: id,
           audioFilePath: c.file_path,
+          audioStartTimeSecs: c.start_time,
           speakerId: c.speaker?.id ?? null,
           sessionSpeakerId: null,
           // Mic rows show "me" only until someone is actually assigned —
@@ -924,6 +928,27 @@ export async function fetchMeetingAudio(
     }
   }
   return mergeMeetingAudioChunks(routedRows, out, cap);
+}
+
+export function isTranscriptEcho(input: string, output: string): boolean {
+  const words = (text: string) => text.toLowerCase().split(/\s+/)
+    .map(word => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")).filter(Boolean);
+  const a = words(input), b = words(output);
+  return a.length >= 6 && b.some((_, index) =>
+    a.every((word, offset) => b[index + offset] === word));
+}
+
+function filterMeetingEchoes(chunks: MeetingAudioChunk[]): MeetingAudioChunk[] {
+  return chunks.filter((chunk, index) => {
+    if (!chunk.isInput) return true;
+    const time = timestampMs(chunk.timestamp);
+    let first = index;
+    while (first > 0 && timestampMs(chunks[first - 1].timestamp) >= time - 6000) first--;
+    for (let i = first; i < chunks.length && timestampMs(chunks[i].timestamp) <= time + 6000; i++) {
+      if (!chunks[i].isInput && isTranscriptEcho(chunk.transcription, chunks[i].transcription)) return false;
+    }
+    return true;
+  });
 }
 
 export function mergeMeetingAudioChunks(
@@ -956,7 +981,7 @@ export function mergeMeetingAudioChunks(
     if (out.length >= cap) break;
   }
 
-  return out;
+  return filterMeetingEchoes(out);
 }
 
 async function fetchRoutedMeetingTranscript(
@@ -982,6 +1007,7 @@ async function fetchRoutedMeetingTranscript(
               ? segment.audioChunkId
               : -segment.id,
           audioFilePath: segment.audioFilePath ?? "",
+          audioStartTimeSecs: segment.audioStartTimeSecs,
           speakerId: segment.speakerId ?? null,
           sessionSpeakerId: segment.sessionSpeakerId ?? null,
           // The endpoint only returns a name for mic rows once a real speaker

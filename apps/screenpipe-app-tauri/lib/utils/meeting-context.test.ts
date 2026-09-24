@@ -10,6 +10,7 @@ import {
   extractImageDataUrlsFromMarkdown,
   extractPipePromptBody,
   mergeMeetingAudioChunks,
+  isTranscriptEcho,
   type MeetingAudioChunk,
   type MeetingContext,
 } from "./meeting-context";
@@ -210,5 +211,23 @@ describe("mergeMeetingAudioChunks", () => {
     const merged = mergeMeetingAudioChunks([first, second], [], 100);
 
     expect(merged).toHaveLength(2);
+  });
+});
+
+
+describe("cross-device echo regression", () => {
+  it("keeps negations and short replies while recognizing a long repeated phrase", () => {
+    const output = "We should send the revised proposal on Tuesday.";
+    expect(isTranscriptEcho("we should send the revised proposal on Tuesday", output)).toBe(true);
+    expect(isTranscriptEcho("We should NOT send the revised proposal on Tuesday", output)).toBe(false);
+    expect(isTranscriptEcho("Yes", "Yes")).toBe(false);
+  });
+  it("applies echo suppression after reopening without removing stored source objects", () => {
+    const output = chunk({transcription: "We should send the revised proposal on Tuesday.", timestamp: "2026-06-04T15:00:00Z"});
+    const echo = chunk({audioChunkId: 2, isInput: true, deviceType: "input", transcription: output.transcription, timestamp: "2026-06-04T15:00:02Z"});
+    const reply = {...echo, audioChunkId: 3, transcription: "We should NOT send the revised proposal on Tuesday"};
+    const merged = mergeMeetingAudioChunks([output, echo, reply], [], 100);
+    expect(merged.map(row => row.audioChunkId)).toEqual([1, 3]);
+    expect(echo.transcription).toBe(output.transcription);
   });
 });

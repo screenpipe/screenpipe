@@ -1713,8 +1713,10 @@ export function NoteView({
     }
     if (visibleSummaryLifecycle.kind === "completed") {
       return {
-        title: ui("Summary ready"),
-        detail: ui("saved to this meeting note"),
+        title: extractMeetingSummary(note) ? ui("Summary ready") : ui("Summary needs attention"),
+        detail: extractMeetingSummary(note)
+          ? ui("saved to this meeting note")
+          : ui("The run finished without saving a meeting summary."),
       };
     }
     if (visibleSummaryLifecycle.kind === "failed") {

@@ -347,7 +347,7 @@ describe("SpeakerParagraph render isolation", () => {
     ).toEqual([gap, routedLive]);
   });
 
-  it("suppresses short microphone echoes of clean system audio", () => {
+  it("preserves ambiguous short replies even when both streams say the same word", () => {
     const output = {
       key: "output:1",
       itemId: "1",
@@ -373,7 +373,7 @@ describe("SpeakerParagraph render isolation", () => {
 
     expect(
       filterLiveCrossDeviceEchoes([], [output, inputEcho, actualNearbySpeaker]),
-    ).toEqual([output, actualNearbySpeaker]);
+    ).toEqual([output, inputEcho, actualNearbySpeaker]);
   });
 
   it("suppresses a short cached live suffix already present in its saved row", () => {

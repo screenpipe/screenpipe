@@ -47,6 +47,9 @@ results and `cargo llvm-cov` data on top when judging release confidence.
 | windows | 32 | 3524 | 151 | 2961.3 | 21 | 11 | 100% |
 | macos | 31 | 3563 | 126 | 2958.9 | 22 | 11 | 100% |
 | linux | 28 | 3120 | 126 | 2593.8 | 20 | 11 | 100% |
+| windows | 31 | 3531 | 151 | 2967.1 | 21 | 11 | 100% |
+| macos | 31 | 3576 | 126 | 2968.9 | 22 | 11 | 100% |
+| linux | 28 | 3133 | 126 | 2603.8 | 20 | 11 | 100% |
 
 ## Refresh
 

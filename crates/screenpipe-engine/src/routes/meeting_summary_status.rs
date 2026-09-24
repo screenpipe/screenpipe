@@ -67,6 +67,8 @@ pub struct ExecutionSnapshot {
 /// Everything the decision needs, so the rule stays pure and testable.
 #[derive(Debug, Clone)]
 pub struct SummaryStatusInputs<'a> {
+    /// A completed agent run alone is not proof that a summary was saved.
+    pub has_saved_summary: bool,
     /// The Pipe exists, is enabled, and still lists `meeting_ended`.
     pub auto_summary_enabled: bool,
     /// None while the meeting is still live.
@@ -107,7 +109,12 @@ pub fn resolve_summary_state(inputs: &SummaryStatusInputs<'_>) -> SummaryState {
     // off. `auto_summary_enabled` is reported separately for the copy that
     // describes what will happen next time.
     if let Some(execution) = inputs.execution {
-        return state_for_execution(&execution.status);
+        let state = state_for_execution(&execution.status);
+        return if state == SummaryState::Ready && !inputs.has_saved_summary {
+            SummaryState::Failed
+        } else {
+            state
+        };
     }
     if !inputs.auto_summary_enabled {
         return SummaryState::Off;
@@ -139,6 +146,7 @@ mod tests {
 
     fn inputs<'a>(execution: Option<&'a ExecutionSnapshot>) -> SummaryStatusInputs<'a> {
         SummaryStatusInputs {
+            has_saved_summary: true,
             auto_summary_enabled: true,
             meeting_end: Some(at(0)),
             latest_input_at: Some(at(0)),
@@ -146,6 +154,19 @@ mod tests {
             claimed: false,
             now: at(10),
         }
+    }
+
+    #[test]
+    fn completed_run_without_saved_summary_is_not_ready() {
+        let execution = ExecutionSnapshot {
+            id: 1,
+            status: "completed".into(),
+        };
+        let mut i = inputs(Some(&execution));
+        i.has_saved_summary = false;
+        assert_eq!(resolve_summary_state(&i), SummaryState::Failed);
+        i.has_saved_summary = true;
+        assert_eq!(resolve_summary_state(&i), SummaryState::Ready);
     }
 
     #[test]

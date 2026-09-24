@@ -37,13 +37,13 @@ export const MEETING_READING_COLUMN_CLASS = "w-full";
 // had accumulated several bordered 36px squares that each read as important as
 // the title or the primary action, which is what made the surface feel busy.
 export const MEETING_QUIET_CONTROL_CLASS =
-  "rounded-none border-0 bg-transparent text-muted-foreground transition-colors hover:bg-transparent hover:text-foreground focus-visible:text-foreground";
+  "rounded-md border-0 bg-transparent text-muted-foreground transition-colors hover:bg-transparent hover:text-foreground focus-visible:text-foreground";
 
 // Actions that sit on the tab rule share the tabs' own geometry so the row
 // reads as one band instead of a strip of floating boxes. Shared with the note
 // view now that the meeting actions live here rather than in a footer.
 export const MEETING_RULE_ACTION_CLASS =
-  "flex h-11 shrink-0 items-center gap-2 border-l border-border font-mono text-[11px] normal-case tracking-[0.12em] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-foreground disabled:text-muted-foreground/50 disabled:hover:bg-transparent";
+  "flex h-9 my-1 shrink-0 items-center gap-2 rounded-md font-mono text-[11px] normal-case tracking-[0.12em] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:z-10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-foreground disabled:text-muted-foreground/50 disabled:hover:bg-transparent";
 
 const MEETING_TABS: ReadonlyArray<{
   value: MeetingWorkspaceTab;
@@ -87,7 +87,7 @@ export function MeetingWorkspaceTabs({
       role="tablist"
       aria-label={ui("Meeting workspace")}
       className={cn(
-        "flex min-w-0 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+        "flex min-w-0 items-stretch gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         !trailing && "border-b border-border",
       )}
     >
@@ -123,7 +123,7 @@ export function MeetingWorkspaceTabs({
               }
             }}
             className={cn(
-              "relative flex h-11 shrink-0 items-center gap-2 border-r border-border px-4 font-mono text-[11px] normal-case tracking-[0.12em] text-muted-foreground transition-colors focus-visible:z-10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-foreground sm:min-w-32 sm:justify-center",
+              "relative my-1 flex h-9 shrink-0 items-center gap-2 rounded-md px-4 font-mono text-[11px] normal-case tracking-[0.12em] text-muted-foreground transition-colors focus-visible:z-10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-foreground sm:min-w-32 sm:justify-center",
               selected && "bg-foreground text-background",
               !selected && "hover:bg-muted hover:text-foreground",
             )}
@@ -167,7 +167,15 @@ export function extractMeetingSummary(markdown: string): string | null {
   if (!latest) return null;
 
   const body = markdown.slice(latest.index + latest[0].length).trim();
-  return body || null;
+  // A refusal is an error outcome, even when an older run saved it under
+  // the Summary heading. Match the server's narrow failure-prefix check.
+  const normalized = body.toLowerCase().replace(/’/g, "'");
+  const failurePrefixes = [
+    "i couldn't produce a reliable summary", "i could not produce a reliable summary",
+    "i couldn't summarize", "i could not summarize", "i can't summarize", "i cannot summarize",
+    "unable to summarize this meeting", "no speech was captured", "no transcript was available",
+  ];
+  return body && !failurePrefixes.some((prefix) => normalized.startsWith(prefix)) ? body : null;
 }
 
 /**
@@ -246,7 +254,7 @@ export function MeetingSummarySurface({
 
   const ui = useGT();
   const savedSummary = extractMeetingSummary(note);
-  const liveSummary = streamedSummary?.trim() || null;
+  const liveSummary = extractMeetingSummary(`## Summary\n${streamedSummary ?? ""}`);
   // A Pipe run completes immediately after its final message, while the
   // meeting-note PUT from that message can still be reaching the API. Keep
   // the draft that was already on screen through that handoff instead of
@@ -304,7 +312,7 @@ export function MeetingSummarySurface({
                 type="button"
                 onClick={onGenerate}
                 disabled={!canGenerate}
-                className="h-9 shrink-0 border border-foreground bg-foreground px-3 font-mono text-[10px] normal-case tracking-[0.12em] text-background transition-colors hover:bg-background hover:text-foreground disabled:border-border disabled:bg-muted disabled:text-muted-foreground"
+                className="h-9 shrink-0 rounded-md border border-foreground bg-foreground px-3 font-mono text-[10px] normal-case tracking-[0.12em] text-background transition-colors hover:bg-background hover:text-foreground disabled:border-border disabled:bg-muted disabled:text-muted-foreground"
               >
                 {state === "attention"
                   ? ui("Retry")
@@ -320,7 +328,7 @@ export function MeetingSummarySurface({
           <div
             role="alert"
             data-testid="meeting-summary-recovery"
-            className="mb-8 border border-border bg-muted/30 p-5"
+            className="mb-8 rounded-lg border border-border bg-muted/30 p-5"
           >
             <div className="flex items-start gap-3">
               <AlertTriangle
@@ -340,7 +348,7 @@ export function MeetingSummarySurface({
                       type="button"
                       data-testid="meeting-summary-upgrade-button"
                       onClick={attention.upgrade.onSelect}
-                      className="h-9 border border-foreground bg-foreground px-3 font-mono text-[10px] normal-case tracking-[0.12em] text-background transition-colors hover:bg-background hover:text-foreground"
+                      className="h-9 rounded-md border border-foreground bg-foreground px-3 font-mono text-[10px] normal-case tracking-[0.12em] text-background transition-colors hover:bg-background hover:text-foreground"
                     >
                       {attention.upgrade.label}
                     </button>
@@ -352,7 +360,7 @@ export function MeetingSummarySurface({
                           type="button"
                           data-testid="meeting-summary-change-model"
                           disabled={attention.model.saving}
-                          className="flex h-9 items-center gap-2 border border-border bg-background px-3 font-mono text-[10px] normal-case tracking-[0.12em] text-foreground transition-colors hover:border-foreground disabled:text-muted-foreground"
+                          className="flex h-9 items-center gap-2 rounded-md border border-border bg-background px-3 font-mono text-[10px] normal-case tracking-[0.12em] text-foreground transition-colors hover:border-foreground disabled:text-muted-foreground"
                         >
                           {attention.model.saving
                             ? ui("Changing model")

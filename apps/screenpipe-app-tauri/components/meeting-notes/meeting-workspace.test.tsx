@@ -17,6 +17,13 @@ import {
   stopMeetingAndOpenSummary,
 } from "./meeting-workspace";
 
+it("does not treat a saved refusal as a usable summary", () => {
+  const note = "## Summary\nI couldn't produce a reliable summary for this meeting. The recorded evidence appears mismatched.";
+  expect(extractMeetingSummary(note)).toBeNull();
+  expect(meetingSummarySaveIsVisible("", note, true)).toBe(false);
+  expect(preferredMeetingWorkspaceTab(note)).toBe("notes");
+});
+
 describe("preferred meeting workspace tab", () => {
   it("opens a completed meeting on its saved outcome", () => {
     expect(
@@ -98,7 +105,7 @@ describe("secondary control treatment", () => {
   });
 
   it("keeps the app's square geometry", () => {
-    expect(MEETING_QUIET_CONTROL_CLASS).toMatch(/\brounded-none\b/);
+    expect(MEETING_QUIET_CONTROL_CLASS).toMatch(/\brounded-md\b/);
   });
 });
 

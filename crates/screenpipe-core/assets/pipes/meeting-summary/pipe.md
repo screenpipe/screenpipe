@@ -56,8 +56,15 @@ step 1 — pull everything the summary needs in ONE command. the scheduler names
   S=$(bun -e 'const d=await Bun.file("/tmp/m.json").json();process.stdout.write(String(d.meeting_start??""))')
   E=$(bun -e 'const d=await Bun.file("/tmp/m.json").json();process.stdout.write(String(d.meeting_end??""))')
   # screen evidence priority: accessibility and parsed first; OCR only if neither has useful rows
-  curl -s -G -H "$A" --data-urlencode "start_time=$S" --data-urlencode "end_time=$E" \
-    -d content_type=audio -d limit=500 "http://localhost:3030/search" -o /tmp/audio.json &
+  # Use the same meeting-scoped transcript the user sees; a general audio search can miss live segments.
+  # Retry transient HTTP failures at most twice. Never widen to another meeting or client.
+  (curl -sf --retry 2 --retry-delay 1 --max-time 20 -H "$A" \
+    "http://localhost:3030/meetings/$ID/transcript" -o /tmp/meeting-transcript.json || printf 'null' > /tmp/meeting-transcript.json
+  if ! bun -e 'const rows=await Bun.file("/tmp/meeting-transcript.json").json();if(!Array.isArray(rows)||!rows.some(r=>String(r.transcript??"").trim()))process.exit(1);await Bun.write("/tmp/audio.json",JSON.stringify({data:rows.map(r=>({type:"Audio",content:{transcription:r.transcript,timestamp:r.capturedAt,device_type:r.deviceType,speaker:{id:r.speakerId,name:r.speakerName},speaker_label:r.speakerName,chunk_id:r.audioChunkId}}))}))'; then
+    curl -sf --retry 2 --retry-delay 1 --max-time 20 -G -H "$A" \
+      --data-urlencode "start_time=$S" --data-urlencode "end_time=$E" \
+      -d content_type=audio -d limit=500 "http://localhost:3030/search" -o /tmp/audio.json || printf '{"data":[],"fetch_failed":true}' > /tmp/audio.json
+  fi) &
   (curl -sf -G -H "$A" --data-urlencode "start_time=$S" --data-urlencode "end_time=$E" \
     -d content_type=accessibility -d on_screen=true -d limit=150 -d offset=0 \
     "http://localhost:3030/search" -o /tmp/a11.json || printf '{"data":[]}' > /tmp/a11.json) &
@@ -87,7 +94,7 @@ step 2 — render the transcript and screen text compactly in ONE more command, 
   bun -e 'const d=await Bun.file("/tmp/parsed.json").json(),seen=new Set;let n=0;for(const r of d.data??[]){const c=r?.content??{};if(!String(c.text??"").length&&!(c.items?.length??0)&&!(c.actors?.length??0))continue;const line=JSON.stringify({timestamp:c.timestamp,app_name:c.app_name,window_name:c.window_name,text:c.text,actors:c.actors,items:c.items});if(!seen.has(line)){seen.add(line);console.log(line);if(++n===60)break}}'
   bun -e 'const d=await Bun.file("/tmp/ocr.json").json(),seen=new Set;let n=0;for(const r of d.data??[]){const c=r?.content??{},text=String(c.text??"");if(!text)continue;const line=`${c.timestamp??""} [OCR fallback] ${text}`.replace(/\s+/g," ").trim();if(!seen.has(line)){seen.add(line);console.log(line);if(++n===60)break}}'
 
-summarize what happened: key topics, decisions, action items. use accessibility and parsed data first for anything the transcript misses — shared slides, docs, code, demos, and participant labels. `/tmp/ocr.json` contains rows only when both preferred sources were unavailable or empty; use those rows as the fallback, never as an extra source when accessibility or parsed data worked.
+summarize what happened: key topics, decisions, action items. The meeting-scoped transcript is the primary evidence. Unrelated screen text or a calendar invitation must not invalidate readable speech. Collapse repeated/echoed utterances without discarding the underlying discussion. Never mix neighboring meetings or clients. If every audio fetch failed, report a retrieval failure instead of claiming there was no transcript. If the retrieved transcript really has no useful speech, stop without saving; never put a refusal or failure message under `## Summary` just to make the result nonempty. use accessibility and parsed data first for anything the transcript misses — shared slides, docs, code, demos, and participant labels. `/tmp/ocr.json` contains rows only when both preferred sources were unavailable or empty; use those rows as the fallback, never as an extra source when accessibility or parsed data worked.
 
 step 2c — skip this step by default; it costs several round trips. only when the transcript and preferred screen data leave a *specific* visual question unanswered, use the cloud media (video/audio) model for that question — diagrams, charts, whiteboards, slide figures, UI demos, or screen-shared video. choose up to 4 representative `frame_id` values already returned by parsed data, or by the OCR fallback when both preferred sources were unavailable, fetch those still images with `GET /frames/<frame_id>`, and send them as `image_url[]` to `POST /v1/chat/completions` with `"model": "gemma4-e4b"`. NEVER call `POST /export` or run ffmpeg for a routine meeting summary; a full media export requires an explicit user request. if there is no returned `frame_id`, or the cloud-media block is absent or returns `503 cloud_token_missing`, skip visual analysis and summarize from the transcript plus the screen data already fetched.
 

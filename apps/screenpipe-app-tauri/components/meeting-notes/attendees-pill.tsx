@@ -36,7 +36,7 @@ function Initial({ name }: { name: string }) {
 
   const ch = name.trim().charAt(0).toUpperCase() || "?";
   return (
-    <span className="flex h-5 w-5 shrink-0 items-center justify-center border border-border bg-foreground/[0.04] text-[10px] font-medium">
+    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-border bg-foreground/[0.04] text-[10px] font-medium">
       {ch}
     </span>
   );
@@ -198,7 +198,7 @@ export function AttendeesPill({ value, count, onChange }: AttendeesPillProps) {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex h-7 items-center gap-1.5 border border-border bg-background px-2.5 text-xs text-muted-foreground transition-colors hover:border-foreground hover:text-foreground data-[state=open]:border-foreground data-[state=open]:text-foreground"
+          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs text-muted-foreground transition-colors hover:border-foreground hover:text-foreground data-[state=open]:border-foreground data-[state=open]:text-foreground"
         >
           <Users className="h-3.5 w-3.5" />
           {count === 0
@@ -296,7 +296,7 @@ export function AttendeesPill({ value, count, onChange }: AttendeesPillProps) {
                 <span
                   key={name}
                   title={name}
-                  className="inline-flex items-center gap-1 border border-border bg-foreground/[0.04] py-0.5 pl-1 pr-1 text-xs"
+                  className="inline-flex items-center gap-1 rounded-sm border border-border bg-foreground/[0.04] py-0.5 pl-1 pr-1 text-xs"
                 >
                   <Initial name={name} />
                   <span className="max-w-[140px] truncate">{name}</span>

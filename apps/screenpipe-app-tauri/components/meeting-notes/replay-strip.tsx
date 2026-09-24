@@ -530,7 +530,7 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
         </button>
       </div>
 
-      <div className="border border-border bg-muted/10">
+      <div className="overflow-hidden rounded-lg border border-border bg-muted/10">
         {/* Big active frame */}
         <div className="relative aspect-video bg-background flex flex-col overflow-hidden border-b border-border">
           <div
@@ -569,7 +569,7 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
               aria-label={
                 isPlaying ? ui("Pause silent replay") : ui("Play silent replay")
               }
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center border border-white/30 transition-colors duration-150 hover:border-white hover:bg-white hover:text-black focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/30 transition-colors duration-150 hover:border-white hover:bg-white hover:text-black focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none"
             >
               {isPlaying ? (
                 <Pause className="h-3.5 w-3.5 fill-current" />
@@ -609,7 +609,7 @@ export function ReplayStrip({ meetingId, segments, timeRange }: ReplayStripProps
               onClick={cyclePlaybackRate}
               disabled={!canPlay}
               aria-label={ui("Playback speed {value1}x", { value1: playbackRate })}
-              className="h-7 min-w-8 border border-white/25 px-1.5 font-mono text-[10px] tabular-nums text-white/80 transition-colors duration-150 hover:border-white hover:bg-white hover:text-black focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none"
+              className="h-7 min-w-8 rounded-md border border-white/25 px-1.5 font-mono text-[10px] tabular-nums text-white/80 transition-colors duration-150 hover:border-white hover:bg-white hover:text-black focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none"
             >
               {playbackRate}x
             </button>

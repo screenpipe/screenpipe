@@ -127,13 +127,13 @@ async fn run_stream(
         .await
         .context("failed to connect to Deepgram live websocket")?;
     let (mut write, mut read) = ws.split();
-    let latest_audio_ms = Arc::new(AtomicU64::new(0));
+    let stream_start_ms = Arc::new(AtomicU64::new(0));
 
     let read_config = config.clone();
     let read_device_name = device_name.clone();
     let read_device_type = device_type.clone();
     let read_stream_id = stream_id.clone();
-    let reader_latest_audio_ms = latest_audio_ms.clone();
+    let reader_stream_start_ms = stream_start_ms.clone();
     let reader = tokio::spawn(async move {
         while let Some(message) = read.next().await {
             match message {
@@ -144,7 +144,7 @@ async fn run_stream(
                         &read_config,
                         &read_device_name,
                         &read_device_type,
-                        &reader_latest_audio_ms,
+                        &reader_stream_start_ms,
                         &text,
                     );
                 }
@@ -171,11 +171,17 @@ async fn run_stream(
                 let Some(frame) = maybe_frame else {
                     break;
                 };
-                latest_audio_ms.store(frame.captured_at_unix_ms, Ordering::Relaxed);
+
                 let audio = encode_frame(&frame, &mut resampler)?;
                 if audio.is_empty() {
                     continue;
                 }
+                // Frame timestamps are captured after draining the recorder buffer.
+                let frame_duration_ms = frame.samples.len() as u64 * 1000
+                    / u64::from(frame.sample_rate.max(1)) / u64::from(frame.channels.max(1));
+                let frame_start_ms = frame.captured_at_unix_ms.saturating_sub(frame_duration_ms);
+                let _ = stream_start_ms.compare_exchange(0, frame_start_ms,
+                    Ordering::Relaxed, Ordering::Relaxed);
                 write
                     .send(Message::Binary(audio))
                     .await
@@ -316,7 +322,7 @@ fn handle_server_event(
     config: &MeetingStreamingConfig,
     device_name: &str,
     device_type: &str,
-    latest_audio_ms: &AtomicU64,
+    stream_start_ms: &AtomicU64,
     raw: &str,
 ) {
     let Ok(value) = serde_json::from_str::<Value>(raw) else {
@@ -331,7 +337,7 @@ fn handle_server_event(
             config,
             device_name,
             device_type,
-            latest_audio_ms,
+            stream_start_ms,
             &value,
         ),
         Some("Error") => {
@@ -353,7 +359,7 @@ fn handle_results_event(
     config: &MeetingStreamingConfig,
     device_name: &str,
     device_type: &str,
-    latest_audio_ms: &AtomicU64,
+    stream_start_ms: &AtomicU64,
     value: &Value,
 ) {
     let transcript = value
@@ -374,7 +380,8 @@ fn handle_results_event(
             .and_then(Value::as_bool)
             .unwrap_or(false);
     let item_id = item_id(stream_id, value);
-    let captured_at = latest_audio_time(latest_audio_ms);
+    let captured_at =
+        result_capture_time(stream_start_ms, value.get("start").and_then(Value::as_f64));
 
     if is_final {
         let turns = speaker_turns(value);
@@ -406,7 +413,9 @@ fn handle_results_event(
                     turn_item_id,
                     Some(format!("speaker {}", turn.speaker + 1)),
                     turn.transcript,
-                    captured_at + chrono::Duration::milliseconds(index as i64),
+                    turn.start_secs
+                        .map(|start| result_capture_time(stream_start_ms, Some(start)))
+                        .unwrap_or(captured_at),
                 );
             }
         }
@@ -459,10 +468,11 @@ fn emit_final(
     let _ = screenpipe_events::send_event("meeting_transcript_final", event);
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 struct DeepgramSpeakerTurn {
     speaker: i64,
     transcript: String,
+    start_secs: Option<f64>,
 }
 
 /// Preserve Deepgram's consecutive per-word speaker runs instead of assigning
@@ -498,6 +508,7 @@ fn speaker_turns(value: &Value) -> Vec<DeepgramSpeakerTurn> {
         } else {
             turns.push(DeepgramSpeakerTurn {
                 speaker,
+                start_secs: word.get("start").and_then(Value::as_f64),
                 transcript: text.to_string(),
             });
         }
@@ -505,12 +516,18 @@ fn speaker_turns(value: &Value) -> Vec<DeepgramSpeakerTurn> {
     turns
 }
 
-fn latest_audio_time(latest_audio_ms: &AtomicU64) -> DateTime<Utc> {
-    let ms = latest_audio_ms.load(Ordering::Relaxed);
+fn result_capture_time(stream_start_ms: &AtomicU64, start_secs: Option<f64>) -> DateTime<Utc> {
+    let ms = stream_start_ms.load(Ordering::Relaxed);
     if ms == 0 {
         return Utc::now();
     }
-    DateTime::<Utc>::from_timestamp_millis(ms as i64).unwrap_or_else(Utc::now)
+    let offset = start_secs
+        .filter(|s| s.is_finite() && *s >= 0.0)
+        .unwrap_or(0.0);
+    DateTime::<Utc>::from_timestamp_millis(
+        (ms as i64).saturating_add((offset * 1000.0).round() as i64),
+    )
+    .unwrap_or_else(Utc::now)
 }
 
 fn item_id(stream_id: &str, value: &Value) -> String {
@@ -555,6 +572,25 @@ fn device_type_label(device_type: &DeviceType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_time_survives_late_results_and_keeps_real_turn_gaps() {
+        let start = AtomicU64::new(1_800_000_000_000);
+        assert_eq!(
+            result_capture_time(&start, Some(8.25)).timestamp_millis(),
+            1_800_000_008_250
+        );
+        let turns = speaker_turns(&json!({"channel":{"alternatives":[{"words":[
+            {"word":"first", "speaker":0, "start":8.25},
+            {"word":"reply", "speaker":1, "start":16.5}
+        ]}]}}));
+        assert_eq!(turns[0].start_secs, Some(8.25));
+        assert_eq!(turns[1].start_secs, Some(16.5));
+        assert_eq!(
+            result_capture_time(&start, turns[1].start_secs).timestamp_millis(),
+            1_800_000_016_500
+        );
+    }
 
     #[test]
     fn reconnects_cannot_reuse_provider_item_ids() {
@@ -607,14 +643,17 @@ mod tests {
             vec![
                 DeepgramSpeakerTurn {
                     speaker: 0,
+                    start_secs: None,
                     transcript: "Hello, there.".to_string(),
                 },
                 DeepgramSpeakerTurn {
                     speaker: 1,
+                    start_secs: None,
                     transcript: "Hi!".to_string(),
                 },
                 DeepgramSpeakerTurn {
                     speaker: 0,
+                    start_secs: None,
                     transcript: "Yes.".to_string(),
                 },
             ]
