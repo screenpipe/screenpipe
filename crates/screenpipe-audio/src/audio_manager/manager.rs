@@ -66,6 +66,7 @@ use crate::{
 };
 
 use chrono::{DateTime, Utc};
+use oasgen::OaSchema;
 use serde::{Deserialize, Serialize};
 
 /// Rate-limiter for the "Error processing audio" log.
@@ -166,6 +167,158 @@ pub(crate) fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn run_reconciliation_worker(
+    db: Arc<DatabaseManager>,
+    engine_ref: Arc<RwLock<Option<TranscriptionEngine>>>,
+    on_insert: Option<crate::transcription::AudioInsertCallback>,
+    options_ref: Arc<RwLock<AudioManagerOptions>>,
+    segmentation_manager: Arc<SegmentationManager>,
+    output_path: Option<std::path::PathBuf>,
+    metrics: Arc<AudioPipelineMetrics>,
+    meeting_detector: Option<Arc<MeetingDetector>>,
+    wakeup: Arc<Notify>,
+    status: Arc<std::sync::RwLock<ReconciliationWorkerSnapshot>>,
+    cancellation: Arc<AtomicBool>,
+) {
+    tokio::select! {
+        _ = tokio::time::sleep(RECONCILIATION_IDLE_INTERVAL) => {}
+        _ = wakeup.notified() => {}
+    }
+    let mut consecutive_full_sweeps = 0usize;
+    loop {
+        let swept = AssertUnwindSafe(async {
+            if let Some(detector) = &meeting_detector {
+                detector.check_grace_period().await;
+                if detector.is_in_audio_session() {
+                    if let Ok(mut snapshot) = status.write() {
+                        snapshot.state = ReconciliationWorkerState::WaitingForMeetingEnd;
+                    }
+                    debug!("reconciliation: skipping background sweep during active audio session");
+                    return false;
+                }
+            }
+
+            // The engine is Arc-backed. Never retain this shared read guard
+            // across synchronous native inference.
+            let transcription_engine = engine_ref.read().await.clone();
+            if let Some(transcription_engine) = transcription_engine {
+                if let Ok(mut snapshot) = status.write() {
+                    snapshot.state = ReconciliationWorkerState::Processing;
+                }
+                let options = options_ref.read().await;
+                let audio_engine = options.transcription_engine.clone();
+                let batch_max_duration_secs = options.batch_max_duration_secs;
+                drop(options);
+
+                let sweep = super::reconciliation::reconcile_untranscribed(
+                    &db,
+                    &transcription_engine,
+                    on_insert.as_ref(),
+                    audio_engine,
+                    Some(segmentation_manager.clone()),
+                    output_path.as_deref(),
+                    batch_max_duration_secs,
+                    Some(metrics.clone()),
+                    Some(cancellation.clone()),
+                )
+                .await;
+                let count = sweep.processed_chunks;
+                for _ in 0..count {
+                    metrics.record_segment_batch_processed();
+                }
+                if let Ok(mut snapshot) = status.write() {
+                    snapshot.processed_chunks =
+                        snapshot.processed_chunks.saturating_add(count as u64);
+                    if count > 0 {
+                        snapshot.last_progress_at = Some(now_ms() / 1000);
+                    }
+                    if let Some(failure) = sweep.failure {
+                        snapshot.state = ReconciliationWorkerState::Failed;
+                        snapshot.last_failure_at = Some(now_ms() / 1000);
+                        snapshot.last_failure = Some(failure);
+                    } else {
+                        snapshot.state = ReconciliationWorkerState::Waiting;
+                    }
+                }
+                if count > 0 {
+                    info!("reconciliation: transcribed {} orphaned chunks", count);
+                }
+                return sweep.hit_candidate_limit;
+            }
+            false
+        })
+        .catch_unwind()
+        .await;
+        let swept_full_batch = match swept {
+            Ok(full) => full,
+            Err(panic) => {
+                let reason = panic
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("unknown cause");
+                error!(
+                    "reconciliation: sweep panicked, worker continues: {}",
+                    reason
+                );
+                if let Ok(mut snapshot) = status.write() {
+                    snapshot.state = ReconciliationWorkerState::Failed;
+                    snapshot.last_failure_at = Some(now_ms() / 1000);
+                    snapshot.last_failure = Some(format!("worker sweep panicked: {reason}"));
+                }
+                false
+            }
+        };
+
+        if swept_full_batch && consecutive_full_sweeps + 1 < MAX_IMMEDIATE_RECONCILIATION_SWEEPS {
+            consecutive_full_sweeps += 1;
+            info!("reconciliation: sweep hit the chunk cap; continuing backlog drain immediately");
+            tokio::task::yield_now().await;
+            continue;
+        }
+
+        consecutive_full_sweeps = 0;
+        tokio::select! {
+            _ = tokio::time::sleep(RECONCILIATION_IDLE_INTERVAL) => {}
+            _ = wakeup.notified() => {}
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, OaSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReconciliationWorkerState {
+    Stopped,
+    Waiting,
+    WaitingForMeetingEnd,
+    Processing,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, OaSchema, PartialEq, Eq)]
+pub struct ReconciliationWorkerSnapshot {
+    pub state: ReconciliationWorkerState,
+    pub engine: String,
+    pub processed_chunks: u64,
+    pub last_progress_at: Option<u64>,
+    pub last_failure_at: Option<u64>,
+    pub last_failure: Option<String>,
+}
+
+impl Default for ReconciliationWorkerSnapshot {
+    fn default() -> Self {
+        Self {
+            state: ReconciliationWorkerState::Stopped,
+            engine: "unknown".into(),
+            processed_chunks: 0,
+            last_progress_at: None,
+            last_failure_at: None,
+            last_failure: None,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AudioManager {
     /// Liveness token for `Drop`. Every field below is shared (`Arc`), so a
@@ -226,6 +379,8 @@ pub struct AudioManager {
     engine_builds: EngineBuildCoordinator,
     /// Handle to the reconciliation background task so we can abort it on shutdown.
     reconciliation_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
+    reconciliation_cancellation: Arc<RwLock<Option<Arc<AtomicBool>>>>,
+    reconciliation_status: Arc<std::sync::RwLock<ReconciliationWorkerSnapshot>>,
     /// Wakes the background reconciliation task when a foreground sweep fills
     /// its 50-chunk cap, so a meeting backlog keeps draining immediately.
     reconciliation_wakeup: Arc<Notify>,
@@ -450,6 +605,10 @@ impl AudioManager {
             engine: Arc::new(RwLock::new(None)),
             engine_builds: EngineBuildCoordinator::new(),
             reconciliation_handle: Arc::new(RwLock::new(None)),
+            reconciliation_cancellation: Arc::new(RwLock::new(None)),
+            reconciliation_status: Arc::new(std::sync::RwLock::new(
+                ReconciliationWorkerSnapshot::default(),
+            )),
             reconciliation_wakeup: Arc::new(Notify::new()),
             drm_stopped_devices: Arc::new(RwLock::new(Vec::new())),
             user_disabled_devices: Arc::new(RwLock::new(HashSet::new())),
@@ -475,6 +634,13 @@ impl AudioManager {
         {
             self.stop_internal().await?;
         }
+
+        // A stopped capture intentionally leaves its backlog worker alive. A
+        // configuration replacement is different: the old worker owns the old
+        // detector/output/engine and must finish cancellation before those are
+        // replaced. This also releases any engine read guard before we take the
+        // engine-build gate below.
+        self.stop_reconciliation_worker().await;
 
         let deepgram_status = match &options.deepgram_config {
             Some(c) if c.is_ready() => format!(
@@ -575,6 +741,7 @@ impl AudioManager {
 
         // Spawn reconciliation sweep for orphaned audio chunks (batch mode only)
         if self.options.read().await.transcription_mode == TranscriptionMode::Batch {
+            self.stop_reconciliation_worker().await;
             let db = self.db.clone();
             let engine_ref = self.engine.clone();
             let on_insert_bg = self.on_transcription_insert.clone();
@@ -584,96 +751,27 @@ impl AudioManager {
             let metrics_bg = self.metrics.clone();
             let meeting_detector_bg = self.meeting_detector().await;
             let reconciliation_wakeup = self.reconciliation_wakeup.clone();
-            let handle = tokio::spawn(async move {
-                // Wait for model load + initial recordings, unless a foreground
-                // session-end sweep tells us its 50-chunk cap left more work.
-                tokio::select! {
-                    _ = tokio::time::sleep(RECONCILIATION_IDLE_INTERVAL) => {}
-                    _ = reconciliation_wakeup.notified() => {}
-                }
-                let mut consecutive_full_sweeps = 0usize;
-                loop {
-                    // Contain a panic inside a sweep so it cannot kill this
-                    // long-lived worker (issue #3498: a single panic used to
-                    // stop the loop permanently, silently piling up pending
-                    // chunks until the app was restarted). The sweep stays on
-                    // this task, so shutdown still cancels an in-flight sweep at
-                    // its next await. The locks it holds are tokio::sync locks,
-                    // which do not poison, so a caught panic releases them
-                    // cleanly.
-                    let swept = AssertUnwindSafe(async {
-                        if let Some(detector) = &meeting_detector_bg {
-                            detector.check_grace_period().await;
-                            if detector.is_in_audio_session() {
-                                debug!(
-                                    "reconciliation: skipping background sweep during active audio session"
-                                );
-                                return false;
-                            }
-                        }
-
-                        let engine_guard = engine_ref.read().await;
-                        if let Some(ref transcription_engine) = *engine_guard {
-                            let opts = options_ref.read().await;
-                            let audio_engine = opts.transcription_engine.clone();
-                            let batch_max_dur = opts.batch_max_duration_secs;
-                            drop(opts);
-
-                            let sweep = super::reconciliation::reconcile_untranscribed(
-                                &db,
-                                transcription_engine,
-                                on_insert_bg.as_ref(),
-                                audio_engine,
-                                Some(seg_mgr.clone()),
-                                output_path_bg.as_deref(),
-                                batch_max_dur,
-                                Some(metrics_bg.clone()),
-                            )
-                            .await;
-                            let count = sweep.processed_chunks;
-                            if count > 0 {
-                                info!("reconciliation: transcribed {} orphaned chunks", count);
-                            }
-                            return sweep.hit_candidate_limit;
-                        }
-                        false
-                    })
-                    .catch_unwind()
-                    .await;
-                    let swept_full_batch = match swept {
-                        Ok(full) => full,
-                        Err(panic) => {
-                            let reason = panic
-                                .downcast_ref::<&str>()
-                                .copied()
-                                .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
-                                .unwrap_or("unknown cause");
-                            error!(
-                                "reconciliation: sweep panicked, worker continues: {}",
-                                reason
-                            );
-                            false
-                        }
-                    };
-
-                    if swept_full_batch
-                        && consecutive_full_sweeps + 1 < MAX_IMMEDIATE_RECONCILIATION_SWEEPS
-                    {
-                        consecutive_full_sweeps += 1;
-                        info!(
-                            "reconciliation: sweep hit the chunk cap; continuing backlog drain immediately"
-                        );
-                        tokio::task::yield_now().await;
-                        continue;
-                    }
-
-                    consecutive_full_sweeps = 0;
-                    tokio::select! {
-                        _ = tokio::time::sleep(RECONCILIATION_IDLE_INTERVAL) => {}
-                        _ = reconciliation_wakeup.notified() => {}
-                    }
-                }
-            });
+            let reconciliation_status = self.reconciliation_status.clone();
+            let cancellation = Arc::new(AtomicBool::new(false));
+            *self.reconciliation_cancellation.write().await = Some(cancellation.clone());
+            let engine_label = self.options.read().await.transcription_engine.to_string();
+            if let Ok(mut status) = reconciliation_status.write() {
+                status.state = ReconciliationWorkerState::Waiting;
+                status.engine = engine_label;
+            }
+            let handle = tokio::spawn(run_reconciliation_worker(
+                db,
+                engine_ref,
+                on_insert_bg,
+                options_ref,
+                seg_mgr,
+                output_path_bg,
+                metrics_bg,
+                meeting_detector_bg,
+                reconciliation_wakeup,
+                reconciliation_status,
+                cancellation,
+            ));
             *self.reconciliation_handle.write().await = Some(handle);
         }
 
@@ -694,6 +792,26 @@ impl AudioManager {
         info!("audio manager started");
 
         Ok(())
+    }
+
+    async fn stop_reconciliation_worker(&self) {
+        if let Some(cancellation) = self.reconciliation_cancellation.write().await.take() {
+            cancellation.store(true, Ordering::Release);
+        }
+        if let Some(handle) = self.reconciliation_handle.write().await.take() {
+            handle.abort();
+            let _ = handle.await;
+        }
+        if let Ok(mut status) = self.reconciliation_status.write() {
+            status.state = ReconciliationWorkerState::Stopped;
+        }
+    }
+
+    pub fn reconciliation_worker_snapshot(&self) -> ReconciliationWorkerSnapshot {
+        self.reconciliation_status
+            .read()
+            .map(|status| status.clone())
+            .unwrap_or_default()
     }
 
     pub async fn restart(&self) -> Result<()> {
@@ -1374,7 +1492,6 @@ impl AudioManager {
         let meeting_detector = self.meeting_detector().await;
         let meeting_audio_tap = self.meeting_audio_tap.clone();
         let db = self.db.clone();
-        let on_insert_session = self.on_transcription_insert.clone();
         let reconciliation_wakeup = self.reconciliation_wakeup.clone();
         // Session streams (Meeting Tap, piggyback mic) bypass the meetings-only
         // drop gate below — they exist only during a meeting by construction.
@@ -1642,32 +1759,14 @@ impl AudioManager {
                                 .is_some_and(|t| t.elapsed().as_secs() >= max_deferral_secs);
 
                         if session_just_ended {
-                            // Reconcile: session ended or deferral cap reached
+                            // The owned background worker performs reconciliation.
+                            // Never run synchronous local inference on this receiver:
+                            // it is the recording persistence consumer, and blocking it
+                            // here can lose newly captured audio during a model switch.
                             had_deferred_segments = false;
                             deferral_started = None;
-                            info!(
-                                "batch mode: audio session ended, transcribing accumulated audio"
-                            );
-                            let data_dir = output_path.as_deref();
-                            let sweep = super::reconciliation::reconcile_untranscribed(
-                                &db,
-                                &engine,
-                                on_insert_session.as_ref(),
-                                audio_transcription_engine.clone(),
-                                Some(segmentation_manager.clone()),
-                                data_dir,
-                                batch_max_duration_secs,
-                                Some(metrics.clone()),
-                            )
-                            .await;
-                            let count = sweep.processed_chunks;
-                            for _ in 0..count {
-                                metrics.record_segment_batch_processed();
-                            }
-                            if sweep.hit_candidate_limit {
-                                reconciliation_wakeup.notify_one();
-                            }
-                            info!("batch mode: transcribed {} chunks", count);
+                            info!("batch mode: audio session ended, waking backlog worker");
+                            reconciliation_wakeup.notify_one();
                         } else if now_in_session {
                             if deferral_started.is_none() {
                                 deferral_started = Some(std::time::Instant::now());
@@ -1788,9 +1887,7 @@ impl AudioManager {
 
         // Abort reconciliation first — it holds an engine read-lock during transcription,
         // so it must be cancelled before we drop the engine to avoid use-after-free.
-        if let Some(handle) = self.reconciliation_handle.write().await.take() {
-            handle.abort();
-        }
+        self.stop_reconciliation_worker().await;
 
         let rec = self.recording_handles.clone();
         let recording = self.recording_receiver_handle.clone();
@@ -2519,12 +2616,19 @@ impl Drop for AudioManager {
         let recording = self.recording_receiver_handle.clone();
         let transcript = self.transcription_receiver_handle.clone();
         let reconciliation = self.reconciliation_handle.clone();
+        let reconciliation_cancellation = self.reconciliation_cancellation.clone();
         let device_manager = self.device_manager.clone();
 
         tokio::spawn(async move {
-            // Abort reconciliation first to stop MLX usage before engine is dropped
+            // Signal native local inference before aborting its Tokio wrapper.
+            // Awaiting retains ownership until synchronous work has exited, so
+            // no stale DB write can race teardown.
+            if let Some(cancellation) = reconciliation_cancellation.write().await.take() {
+                cancellation.store(true, Ordering::Release);
+            }
             if let Some(handle) = reconciliation.write().await.take() {
                 handle.abort();
+                let _ = handle.await;
             }
             let _ = stop_device_monitor().await;
             let _ = device_manager.stop_all_devices().await;
@@ -2550,6 +2654,413 @@ mod tests {
         Arc,
     };
     use tokio::sync::{Barrier, Notify, Semaphore};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "wall-clock regression exercises the production 120-second idle fallback"]
+    async fn owned_worker_drains_past_chunk_cap_after_meeting_ends_without_callbacks() {
+        use crate::transcription::deepgram::DeepgramTranscriptionConfig;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tracing::instrument::WithSubscriber;
+
+        let trace_dispatch =
+            std::env::var_os("SCREENPIPE_TEST_AUDIO_TRACE_PATH").map(|trace_path| {
+                tracing::Dispatch::new(
+                    tracing_subscriber::fmt()
+                        .with_ansi(false)
+                        .with_writer(std::fs::File::create(trace_path).unwrap())
+                        .finish(),
+                )
+            });
+        let test = async {
+            let temp = tempfile::tempdir().unwrap();
+            let db = Arc::new(
+                DatabaseManager::new(
+                    &temp.path().join("db.sqlite").to_string_lossy(),
+                    Default::default(),
+                )
+                .await
+                .unwrap(),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}/v1/listen", listener.local_addr().unwrap());
+            let provider_failing = Arc::new(AtomicBool::new(false));
+            let provider_requests = Arc::new(AtomicUsize::new(0));
+            let server_failing = provider_failing.clone();
+            let server_requests = provider_requests.clone();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    server_requests.fetch_add(1, Ordering::AcqRel);
+                    let mut request = Vec::new();
+                    loop {
+                        let mut buffer = [0u8; 4096];
+                        let count = stream.read(&mut buffer).await.unwrap();
+                        if count == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&buffer[..count]);
+                        if let Some(end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                            let headers = String::from_utf8_lossy(&request[..end]).to_lowercase();
+                            let length = headers
+                                .lines()
+                                .find_map(|line| line.strip_prefix("content-length:"))
+                                .and_then(|value| value.trim().parse::<usize>().ok())
+                                .unwrap_or(0);
+                            if request.len() >= end + 4 + length {
+                                break;
+                            }
+                        }
+                    }
+                    let (status, body) = if server_failing.load(Ordering::Acquire) {
+                        (
+                            "503 Service Unavailable",
+                            r#"{"error":"test provider unavailable"}"#,
+                        )
+                    } else {
+                        (
+                            "200 OK",
+                            r#"{"results":{"channels":[{"alternatives":[{"transcript":"worker transcript"}]}]}}"#,
+                        )
+                    };
+                    let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                }
+            });
+            let deepgram = DeepgramTranscriptionConfig {
+                endpoint,
+                auth_token: "fixture-token".into(),
+                auth_header_prefix: "Token",
+            };
+            let mut options = AudioManagerOptions {
+                is_disabled: true,
+                transcription_engine: Arc::new(AudioTranscriptionEngine::Deepgram),
+                transcription_mode: TranscriptionMode::Batch,
+                deepgram_config: Some(deepgram.clone()),
+                output_path: Some(temp.path().to_path_buf()),
+                ..Default::default()
+            };
+            let manager = AudioManager::new(options.clone(), db.clone())
+                .await
+                .unwrap();
+            let runtime = TranscriptionEngine::Deepgram {
+                config: deepgram,
+                languages: vec![],
+                vocabulary: vec![],
+            };
+            *manager.engine.write().await = Some(runtime);
+            *manager.options.write().await = options.clone();
+            let meeting_detector = Arc::new(MeetingDetector::new());
+            meeting_detector.set_v2_in_meeting(true);
+            let captured_at = Utc::now() - chrono::Duration::hours(1);
+            for index in 0..51 {
+                let path = temp
+                    .path()
+                    .join(format!("Cap Test (input)_2026-09-23_00-{index:02}-00.wav"));
+                let samples: Vec<f32> = (0..1_600)
+                    .map(|sample| (sample as f32 * 0.1).sin() * 0.1)
+                    .collect();
+                crate::utils::ffmpeg::write_audio_to_file(&samples, 16_000, &path, false).unwrap();
+                db.get_or_insert_audio_chunk(
+                    &path.to_string_lossy(),
+                    Some(captured_at + chrono::Duration::seconds(index * 30)),
+                )
+                .await
+                .unwrap();
+            }
+
+            let cancellation = Arc::new(AtomicBool::new(false));
+            let worker_future = run_reconciliation_worker(
+                db.clone(),
+                manager.engine.clone(),
+                None,
+                manager.options.clone(),
+                manager.segmentation_manager.clone(),
+                options.output_path.take(),
+                manager.metrics.clone(),
+                Some(meeting_detector.clone()),
+                manager.reconciliation_wakeup.clone(),
+                manager.reconciliation_status.clone(),
+                cancellation.clone(),
+            );
+            let worker = if let Some(dispatch) = trace_dispatch.clone() {
+                tokio::spawn(worker_future.with_subscriber(dispatch))
+            } else {
+                tokio::spawn(worker_future)
+            };
+            manager.reconciliation_wakeup.notify_one();
+
+            tokio::time::timeout(Duration::from_secs(15), async {
+                loop {
+                    let snapshot = manager.reconciliation_worker_snapshot();
+                    if snapshot.state == ReconciliationWorkerState::WaitingForMeetingEnd {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            })
+            .await
+            .expect("worker defers the saved backlog during an active meeting");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert_eq!(
+                provider_requests.load(Ordering::Acquire),
+                0,
+                "active-meeting deferral must not call the transcription provider"
+            );
+            assert_eq!(
+                db.get_reconciliation_candidate_chunks(
+                    Utc::now() - chrono::Duration::days(7),
+                    Utc::now() - chrono::Duration::minutes(10),
+                    100,
+                )
+                .await
+                .unwrap()
+                .len(),
+                51,
+                "active-meeting deferral retains the complete backlog"
+            );
+
+            meeting_detector.set_v2_in_meeting(false);
+
+            tokio::time::timeout(Duration::from_secs(180), async {
+                loop {
+                    let candidates = db
+                        .get_reconciliation_candidate_chunks(
+                            Utc::now() - chrono::Duration::days(7),
+                            Utc::now() - chrono::Duration::minutes(10),
+                            100,
+                        )
+                        .await
+                        .unwrap();
+                    if candidates.is_empty() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            })
+            .await
+            .expect(
+                "120-second idle fallback drains the capped continuation without audio callbacks",
+            );
+            let recovered = manager.reconciliation_worker_snapshot();
+            assert_eq!(recovered.state, ReconciliationWorkerState::Waiting);
+            assert_eq!(recovered.processed_chunks, 51);
+            assert!(recovered.last_progress_at.is_some());
+
+            let failure_path = temp
+                .path()
+                .join("Provider Failure (input)_2026-09-23_01-00-00.wav");
+            let failure_samples: Vec<f32> = (0..1_600)
+                .map(|sample| (sample as f32 * 0.1).sin() * 0.1)
+                .collect();
+            crate::utils::ffmpeg::write_audio_to_file(
+                &failure_samples,
+                16_000,
+                &failure_path,
+                false,
+            )
+            .unwrap();
+            db.get_or_insert_audio_chunk(&failure_path.to_string_lossy(), Some(captured_at))
+                .await
+                .unwrap();
+            provider_failing.store(true, Ordering::Release);
+            manager.reconciliation_wakeup.notify_one();
+            tokio::time::timeout(Duration::from_secs(15), async {
+                loop {
+                    let snapshot = manager.reconciliation_worker_snapshot();
+                    if snapshot.state == ReconciliationWorkerState::Failed {
+                        let failure = snapshot.last_failure.expect("technical failure detail");
+                        assert!(failure.contains("503 Service Unavailable"));
+                        assert!(!failure.contains("fixture-token"));
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            })
+            .await
+            .expect("worker reports provider failure");
+            assert_eq!(
+                db.get_reconciliation_candidate_chunks(
+                    Utc::now() - chrono::Duration::days(7),
+                    Utc::now() - chrono::Duration::minutes(10),
+                    100,
+                )
+                .await
+                .unwrap()
+                .len(),
+                1,
+                "provider failure retains the saved chunk"
+            );
+            provider_failing.store(false, Ordering::Release);
+            manager.reconciliation_wakeup.notify_one();
+            tokio::time::timeout(Duration::from_secs(15), async {
+                loop {
+                    if manager.reconciliation_worker_snapshot().processed_chunks == 52 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            })
+            .await
+            .expect("worker recovers the provider-failed chunk");
+            cancellation.store(true, Ordering::Release);
+            worker.abort();
+            let _ = worker.await;
+            server.abort();
+        };
+        test.await;
+    }
+
+    #[tokio::test]
+    async fn apply_options_cancels_retained_worker_before_engine_invalidation() {
+        let db = Arc::new(
+            DatabaseManager::new("sqlite::memory:", Default::default())
+                .await
+                .unwrap(),
+        );
+        let manager = AudioManager::new(
+            AudioManagerOptions {
+                is_disabled: true,
+                ..Default::default()
+            },
+            db,
+        )
+        .await
+        .unwrap();
+
+        let engine = manager.engine.clone();
+        let entered = Arc::new(Notify::new());
+        let entered_task = entered.clone();
+        let handle = tokio::spawn(async move {
+            let _guard = engine.read().await;
+            entered_task.notify_one();
+            std::future::pending::<()>().await;
+        });
+        *manager.reconciliation_handle.write().await = Some(handle);
+        entered.notified().await;
+
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            manager.apply_options(AudioManagerOptions {
+                is_disabled: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("engine replacement must not wait on a retained worker")
+        .unwrap();
+
+        assert!(manager.reconciliation_handle.read().await.is_none());
+        assert_eq!(
+            manager.reconciliation_worker_snapshot().state,
+            ReconciliationWorkerState::Stopped
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn apply_options_cancels_and_owns_non_yielding_reconciliation_work() {
+        let db = Arc::new(
+            DatabaseManager::new("sqlite::memory:", Default::default())
+                .await
+                .unwrap(),
+        );
+        let manager = AudioManager::new(
+            AudioManagerOptions {
+                is_disabled: true,
+                ..Default::default()
+            },
+            db,
+        )
+        .await
+        .unwrap();
+
+        let cancellation = Arc::new(AtomicBool::new(false));
+        *manager.reconciliation_cancellation.write().await = Some(cancellation.clone());
+        let engine = manager.engine.clone();
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let exited = Arc::new(AtomicBool::new(false));
+        let task_entered = entered.clone();
+        let task_exited = exited.clone();
+        let handle = tokio::spawn(async move {
+            // This mirrors the production ownership boundary: clone the engine
+            // out of the slot, then enter native work with no Tokio yield point.
+            let _owned_engine = engine.read().await.clone();
+            task_entered.wait();
+            while !cancellation.load(Ordering::Acquire) {
+                std::hint::spin_loop();
+            }
+            task_exited.store(true, Ordering::Release);
+        });
+        *manager.reconciliation_handle.write().await = Some(handle);
+        entered.wait();
+
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            manager.apply_options(AudioManagerOptions {
+                is_disabled: true,
+                transcription_engine: Arc::new(AudioTranscriptionEngine::Deepgram),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("configuration replacement must cooperatively stop synchronous work")
+        .unwrap();
+
+        assert!(exited.load(Ordering::Acquire));
+        assert!(manager.reconciliation_handle.read().await.is_none());
+        assert!(manager.reconciliation_cancellation.read().await.is_none());
+        assert!(manager.engine.read().await.is_none());
+        assert_eq!(
+            manager.options.read().await.transcription_engine.as_ref(),
+            &AudioTranscriptionEngine::Deepgram
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn last_owner_drop_signals_and_awaits_non_yielding_reconciliation_work() {
+        let db = Arc::new(
+            DatabaseManager::new("sqlite::memory:", Default::default())
+                .await
+                .unwrap(),
+        );
+        let manager = AudioManager::new(
+            AudioManagerOptions {
+                is_disabled: true,
+                ..Default::default()
+            },
+            db,
+        )
+        .await
+        .unwrap();
+        let handle_slot = manager.reconciliation_handle.clone();
+        let cancellation_slot = manager.reconciliation_cancellation.clone();
+        let cancellation = Arc::new(AtomicBool::new(false));
+        *cancellation_slot.write().await = Some(cancellation.clone());
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let exited = Arc::new(AtomicBool::new(false));
+        let task_entered = entered.clone();
+        let task_exited = exited.clone();
+        *handle_slot.write().await = Some(tokio::spawn(async move {
+            task_entered.wait();
+            while !cancellation.load(Ordering::Acquire) {
+                std::hint::spin_loop();
+            }
+            task_exited.store(true, Ordering::Release);
+        }));
+        entered.wait();
+
+        drop(manager);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !exited.load(Ordering::Acquire) || handle_slot.read().await.is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("last-owner teardown must cooperatively join native work");
+        assert!(cancellation_slot.read().await.is_none());
+    }
 
     #[tokio::test]
     async fn explicit_resume_cannot_report_success_when_meetings_only_gate_skips_start() {

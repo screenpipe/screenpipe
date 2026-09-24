@@ -136,6 +136,18 @@ export function createMockHealth(scenario: BrowserDevScenario = "ready") {
     ui_status: "ok",
     message: "browser development mock is ready",
     monitors: scenario === "empty" ? [] : ["Browser dev display (1440x900)"],
+    audio_pipeline: scenario === "empty" ? null : {
+      pending_transcription_segments: 3,
+      oldest_pending_transcription_at: new Date(Date.now() - 32 * 60_000).toISOString(),
+      reconciliation_worker: {
+        state: "failed",
+        engine: "whisper-large-v3-turbo",
+        processed_chunks: 48,
+        last_progress_at: Math.floor(Date.now() / 1000) - 75,
+        last_failure_at: Math.floor(Date.now() / 1000) - 30,
+        last_failure: "HTTP 503 Service Unavailable",
+      },
+    },
   };
 }
 
@@ -235,6 +247,40 @@ export function mockLocalApiResponse(
 
   if (url.pathname === "/health") {
     return Response.json(createMockHealth(scenario));
+  }
+  if (url.pathname === "/audio/reconciliation/backlog") {
+    return Response.json({
+      pending: 3,
+      items: [
+        {
+          audio_chunk_id: 5101,
+          captured_at: new Date(Date.now() - 32 * 60_000).toISOString(),
+          age_seconds: 32 * 60,
+          file_path: "C:\\mock-audio\\Meeting microphone_2026-09-23_08-00-00.wav",
+          file_size_bytes: 384000,
+          likely_empty: false,
+          status: "ready",
+        },
+        {
+          audio_chunk_id: 5102,
+          captured_at: new Date(Date.now() - 21 * 60_000).toISOString(),
+          age_seconds: 21 * 60,
+          file_path: "C:\\mock-audio\\System audio_2026-09-23_08-11-00.wav",
+          file_size_bytes: 512000,
+          likely_empty: false,
+          status: "ready",
+        },
+        {
+          audio_chunk_id: 5103,
+          captured_at: new Date(Date.now() - 12 * 60_000).toISOString(),
+          age_seconds: 12 * 60,
+          file_path: "C:\\mock-audio\\Meeting microphone_2026-09-23_08-20-00.wav",
+          file_size_bytes: 96000,
+          likely_empty: true,
+          status: "quiet",
+        },
+      ],
+    });
   }
   // Sharing fixtures are synthetic but connected, so the meeting preview can
   // exercise the same ranked app stack and review dialog as the desktop app.

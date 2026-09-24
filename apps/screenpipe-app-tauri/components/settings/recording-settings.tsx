@@ -325,6 +325,14 @@ type AudioPipelineSnapshot = {
   pending_transcription_segments?: number;
   oldest_pending_transcription_at?: string | null;
   transcription_paused?: boolean;
+  reconciliation_worker?: {
+    state: "stopped" | "waiting" | "waiting_for_meeting_end" | "processing" | "failed";
+    engine: string;
+    processed_chunks: number;
+    last_progress_at?: number | null;
+    last_failure_at?: number | null;
+    last_failure?: string | null;
+  } | null;
 };
 
 const formatBacklogAge = (timestamp?: string | null) => {
@@ -462,13 +470,17 @@ function BackgroundTranscriptionDialog({
 
   const pending = audioPipeline?.pending_transcription_segments ?? 0;
   const visiblePending = pendingTotal ?? pending;
-  const workerState = audioPipeline?.batch_paused_reason
-    ? audioPipeline.batch_paused_reason
-    : audioPipeline?.transcription_paused
-      ? "paused"
-      : audioPipeline
-        ? "running"
-        : "waiting";
+  const worker = audioPipeline?.reconciliation_worker;
+  const workerState = worker?.state
+    ? worker.state.replaceAll("_", " ")
+    : "status unknown";
+  const workerDetail = worker?.state === "failed"
+    ? `${worker.last_failure ?? "transcription failed"}${worker.last_failure_at ? ` · ${formatBacklogAge(new Date(worker.last_failure_at * 1000).toISOString())} ago` : ""}`
+    : worker?.last_progress_at
+      ? `${worker.processed_chunks.toLocaleString(uiLocale)} processed · last progress ${formatBacklogAge(new Date(worker.last_progress_at * 1000).toISOString())} ago`
+      : worker?.state === "waiting_for_meeting_end"
+        ? "Waiting until the active meeting ends"
+        : null;
 
   const clearPreviewSrc = useCallback(() => {
     if (previewSrcRef.current) {
@@ -781,6 +793,14 @@ function BackgroundTranscriptionDialog({
             <Badge variant="outline" className="mt-0.5 shrink-0 rounded-none font-mono text-[10px]">
               Worker {workerState}
             </Badge>
+          </div>
+
+          <div className="shrink-0 border border-border px-2 py-1.5 text-xs">
+            <span className="text-muted-foreground">Background engine</span>{" "}
+            <span className="font-mono">{worker?.engine ?? "unknown"}</span>
+            {workerDetail && (
+              <span className="ml-2 text-muted-foreground">{workerDetail}</span>
+            )}
           </div>
 
           <div className="grid shrink-0 grid-cols-2 gap-2 text-xs sm:grid-cols-4">

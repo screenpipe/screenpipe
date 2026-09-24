@@ -6,6 +6,10 @@ use super::detect_language;
 use crate::transcription::VocabularyEntry;
 use anyhow::Result;
 use screenpipe_core::Language;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tracing::debug;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperState};
 
@@ -60,6 +64,16 @@ pub async fn process_with_whisper(
     whisper_state: &mut WhisperState,
     vocabulary: &[VocabularyEntry],
 ) -> Result<String> {
+    process_with_whisper_cancellable(audio, languages, whisper_state, vocabulary, None).await
+}
+
+pub(crate) async fn process_with_whisper_cancellable(
+    audio: &[f32],
+    languages: Vec<Language>,
+    whisper_state: &mut WhisperState,
+    vocabulary: &[VocabularyEntry],
+    cancellation: Option<Arc<AtomicBool>>,
+) -> Result<String> {
     // Pre-check: if audio energy is too low, skip transcription entirely.
     // Whisper hallucinates on silence/near-silence (e.g. "Thank you.", "So, let's go.")
     // and its internal no_speech_prob is unreliable (reports 0.0 on pure silence).
@@ -72,7 +86,7 @@ pub async fn process_with_whisper(
         return Ok(String::new());
     }
 
-    transcribe_sync(audio, languages, whisper_state, vocabulary)
+    transcribe_sync(audio, languages, whisper_state, vocabulary, cancellation)
 }
 
 /// Sync body of [`process_with_whisper`]. Deliberately NOT async: the
@@ -84,6 +98,7 @@ fn transcribe_sync(
     languages: Vec<Language>,
     whisper_state: &mut WhisperState,
     vocabulary: &[VocabularyEntry],
+    cancellation: Option<Arc<AtomicBool>>,
 ) -> Result<String> {
     // Yield to foreground apps for the duration of the mel/lang/inference
     // compute below; restored when the guard drops at function exit.
@@ -114,6 +129,12 @@ fn transcribe_sync(
     params.set_entropy_thold(2.4);
     // Log-probability threshold: low-confidence segments are dropped
     params.set_logprob_thold(-2.0);
+
+    if let Some(cancellation) = cancellation {
+        let callback: Box<dyn FnMut() -> bool> =
+            Box::new(move || cancellation.load(Ordering::Acquire));
+        params.set_abort_callback_safe::<_, Box<dyn FnMut() -> bool>>(Some(callback));
+    }
 
     whisper_state.pcm_to_mel(&audio, 2)?;
     let (_, lang_tokens) = whisper_state.lang_detect(0, 2)?;

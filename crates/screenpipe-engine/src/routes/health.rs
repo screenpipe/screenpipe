@@ -18,6 +18,7 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, warn};
 
 use screenpipe_audio::audio_manager::builder::{AudioCaptureMode, TranscriptionMode};
+use screenpipe_audio::audio_manager::ReconciliationWorkerSnapshot;
 use screenpipe_audio::core::engine::AudioTranscriptionEngine;
 
 use crate::recording_coverage::{coverage_snapshot, CoverageSnapshot};
@@ -856,6 +857,9 @@ pub struct AudioPipelineHealthInfo {
     pub segments_batch_processed: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub batch_paused_reason: Option<String>,
+    /// Authoritative background worker state. Missing on older servers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reconciliation_worker: Option<ReconciliationWorkerSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_transcription_segments: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1960,7 +1964,8 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
                 } else {
                     None
                 },
-                batch_paused_reason: None, // populated by idle detector if available
+                batch_paused_reason: None,
+                reconciliation_worker: Some(state.audio_manager.reconciliation_worker_snapshot()),
                 pending_transcription_segments,
                 oldest_pending_transcription_at,
                 meeting_detected,

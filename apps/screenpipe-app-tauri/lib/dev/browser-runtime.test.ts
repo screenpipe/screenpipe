@@ -66,6 +66,13 @@ describe("browser development runtime", () => {
     });
   });
 
+  it("returns array-shaped capture devices for recording settings", () => {
+    const invoke = createBrowserIpcMock({ mode: "mock", apiPort: 3030 });
+
+    expect(invoke("get_audio_devices")).toEqual([]);
+    expect(invoke("get_monitors")).toEqual([]);
+  });
+
   it("provides imported skills for composer design review", () => {
     const invoke = createBrowserIpcMock({ mode: "mock", apiPort: 3030 });
 

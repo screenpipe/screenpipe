@@ -8,7 +8,7 @@ use crate::transcription::deepgram::batch::{
 };
 use crate::transcription::deepgram::DeepgramTranscriptionConfig;
 use crate::transcription::openai_compatible::batch::transcribe_with_openai_compatible;
-use crate::transcription::whisper::batch::process_with_whisper;
+use crate::transcription::whisper::batch::process_with_whisper_cancellable;
 use crate::transcription::whisper::model::{
     create_whisper_context_parameters, create_whisper_context_parameters_with_gpu,
     download_whisper_model, get_cached_whisper_model_path,
@@ -18,11 +18,25 @@ use anyhow::{anyhow, Result};
 use reqwest::Client;
 use screenpipe_core::Language;
 use std::path::PathBuf;
-use std::sync::Arc;
 #[cfg(any(feature = "qwen3-asr", feature = "parakeet", feature = "parakeet-mlx"))]
 use std::sync::Mutex as StdMutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tracing::{error, info, warn};
 use whisper_rs::{WhisperContext, WhisperState};
+
+#[derive(Debug)]
+pub(crate) struct TranscriptionCancelled;
+
+impl std::fmt::Display for TranscriptionCancelled {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("transcription cancelled")
+    }
+}
+
+impl std::error::Error for TranscriptionCancelled {}
 
 async fn load_whisper_context_with_cpu_fallback(
     model_path: PathBuf,
@@ -668,6 +682,17 @@ impl TranscriptionSession {
         sample_rate: u32,
         device: &str,
     ) -> Result<TranscriptionOutput> {
+        self.transcribe_detailed_with_cancellation(audio, sample_rate, device, None)
+            .await
+    }
+
+    pub(crate) async fn transcribe_detailed_with_cancellation(
+        &mut self,
+        audio: &[f32],
+        sample_rate: u32,
+        device: &str,
+        cancellation: Option<Arc<AtomicBool>>,
+    ) -> Result<TranscriptionOutput> {
         match self {
             Self::Deepgram {
                 config,
@@ -707,7 +732,7 @@ impl TranscriptionSession {
                 }
             }
             _ => self
-                .transcribe(audio, sample_rate, device)
+                .transcribe_with_cancellation(audio, sample_rate, device, cancellation)
                 .await
                 .map(TranscriptionOutput::plain),
         }
@@ -719,6 +744,17 @@ impl TranscriptionSession {
         audio: &[f32],
         sample_rate: u32,
         device: &str,
+    ) -> Result<String> {
+        self.transcribe_with_cancellation(audio, sample_rate, device, None)
+            .await
+    }
+
+    async fn transcribe_with_cancellation(
+        &mut self,
+        audio: &[f32],
+        sample_rate: u32,
+        device: &str,
+        cancellation: Option<Arc<AtomicBool>>,
     ) -> Result<String> {
         let transcription = match self {
             Self::Disabled => Ok(String::new()),
@@ -913,7 +949,24 @@ impl TranscriptionSession {
                 languages,
                 vocabulary,
                 ..
-            } => process_with_whisper(audio, languages.clone(), state, vocabulary).await,
+            } => {
+                let result = process_with_whisper_cancellable(
+                    audio,
+                    languages.clone(),
+                    state,
+                    vocabulary,
+                    cancellation.clone(),
+                )
+                .await;
+                if cancellation
+                    .as_ref()
+                    .is_some_and(|signal| signal.load(Ordering::Acquire))
+                {
+                    Err(TranscriptionCancelled.into())
+                } else {
+                    result
+                }
+            }
 
             Self::OpenAICompatible {
                 endpoint,
@@ -984,6 +1037,55 @@ impl TranscriptionSession {
 #[cfg(test)]
 mod merge_keyterms_tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "downloads and runs the real cached Whisper model"]
+    async fn real_whisper_inference_observes_cooperative_cancellation() {
+        let config = Arc::new(AudioTranscriptionEngine::WhisperTinyQuantized);
+        tokio::task::spawn_blocking({
+            let config = config.clone();
+            move || download_whisper_model(config)
+        })
+        .await
+        .expect("model download task")
+        .expect("Whisper model available");
+
+        let engine = TranscriptionEngine::new(config, None, None, vec![Language::English], vec![])
+            .await
+            .expect("Whisper engine");
+        let mut session = engine.create_session().expect("Whisper session");
+        // Ten minutes of non-silent audio is intentionally much longer than
+        // this test's bound when decoded normally, keeping native full()
+        // active when the cancellation signal arrives.
+        let audio: Vec<f32> = (0..16_000 * 600)
+            .map(|index| ((index as f32 * 0.071).sin() * 0.2) + 0.03)
+            .collect();
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let cancel_from_thread = cancellation.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            cancel_from_thread.store(true, Ordering::Release);
+        });
+
+        let started = std::time::Instant::now();
+        let error = session
+            .transcribe_detailed_with_cancellation(
+                &audio,
+                16_000,
+                "cancellation-test",
+                Some(cancellation),
+            )
+            .await
+            .expect_err("native Whisper inference must report cancellation");
+
+        assert!(error.downcast_ref::<TranscriptionCancelled>().is_some());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "native cancellation exceeded the engine-switch bound: {:?}",
+            started.elapsed()
+        );
+    }
 
     fn v(word: &str) -> VocabularyEntry {
         VocabularyEntry {

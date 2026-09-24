@@ -890,6 +890,8 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
       case "get_installed_browsers":
       case "get_missing_permissions":
       case "pi_pending":
+      case "get_audio_devices":
+      case "get_monitors":
         return [];
       case "pi_list_extension_packages":
         return piExtensionPackages.map((pkg) => ({ ...pkg }));
