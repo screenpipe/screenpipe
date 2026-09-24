@@ -53,15 +53,19 @@ export async function invokeWindows<T>(cmd: string, args?: object): Promise<Invo
   }, id, cmd, args ?? {});
   try {
     let result: InvokeResult<T> | undefined;
+    let replaced = false;
     await browser.waitUntil(async () => {
       const state = await browser.execute((id: string) => {
         const entry = (globalThis as any).__screenpipeE2EInvokes?.[id];
         return { present: !!entry, result: entry?.result ?? null };
       }, id);
-      if (!state.present) throw new Error(`${cmd}: invoking webview was replaced`);
+      // waitUntil retries condition errors. Stop polling before reporting a
+      // replaced document so this does not wait out the script timeout.
+      if (!state.present) { replaced = true; return true; }
       result = state.result ?? undefined;
       return result !== undefined;
     }, { timeout: script ?? 30_000, interval: 100, timeoutMsg: `${cmd}: native invocation timed out` });
+    if (replaced) throw new Error(`${cmd}: invoking webview was replaced`);
     return result!;
   } finally {
     await browser.execute((id: string) => {

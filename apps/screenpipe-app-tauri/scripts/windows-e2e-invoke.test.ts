@@ -23,7 +23,9 @@ beforeEach(() => {
     executeAsync: () => { throw new Error("broken per-label async handler used"); },
     waitUntil: async (condition: () => Promise<boolean>, options: { timeout: number; timeoutMsg: string }) => {
       const deadline = Date.now() + options.timeout;
-      while (!(await condition())) {
+      while (true) {
+        // Match WebdriverIO: errors inside a condition are retried.
+        try { if (await condition()) return; } catch {}
         if (Date.now() >= deadline) throw new Error(options.timeoutMsg);
         await new Promise(resolve => setTimeout(resolve, 1));
       }
