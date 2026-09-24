@@ -593,10 +593,20 @@ async function updateVscodeMcp(mcp?: McpCommand): Promise<void> {
   const keys = Object.keys(servers ?? {}).filter((key) => key.toLowerCase() === "screenpipe");
   if (!mcp && !keys.length) return;
   const options = { formattingOptions: { insertSpaces: true, tabSize: 2 } };
-  for (const key of keys) {
+  // Preserve user-owned server options, including sandboxEnabled and cwd.
+  const primary = keys[0] ?? "screenpipe";
+  for (const key of mcp ? keys.slice(1) : keys) {
     text = applyEdits(text, modify(text, ["servers", key], undefined, options));
   }
-  if (mcp) text = applyEdits(text, modify(text, ["servers", "screenpipe"], { type: "stdio", ...mcp }, options));
+  if (mcp) {
+    const previous = servers?.[primary];
+    if (!previous || typeof previous !== "object" || Array.isArray(previous)) {
+      text = applyEdits(text, modify(text, ["servers", primary], {}, options));
+    }
+    for (const [key, value] of Object.entries({ type: "stdio", ...mcp })) {
+      text = applyEdits(text, modify(text, ["servers", primary, key], value, options));
+    }
+  }
   await replaceConfig(path, text);
 }
 

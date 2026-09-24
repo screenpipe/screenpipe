@@ -516,7 +516,7 @@ describe("VS Code MCP", () => {
     fsMock.files.set(path.slice(0, -"/mcp.json".length), "");
     const original = `{
       // keep this comment
-      "servers": { "other": { "type": "http", "url": "https://example.com" }, },
+      "servers": { "screenpipe": { "command": "old", "sandboxEnabled": true, "cwd": "/project" }, "other": { "type": "http", "url": "https://example.com" }, },
       "inputs": [{ "id": "token" }],
     }`;
     fsMock.files.set(path, original);
@@ -531,6 +531,8 @@ describe("VS Code MCP", () => {
     expect(config.servers.other.url).toBe("https://example.com");
     expect(config.inputs).toEqual([{ id: "token" }]);
     expect(config.mcpServers).toBeUndefined();
+    expect(config.servers.screenpipe.sandboxEnabled).toBe(true);
+    expect(config.servers.screenpipe.cwd).toBe("/project");
     expect(config.servers.screenpipe).toMatchObject({ type: "stdio", command: "/app/bun", env: { SCREENPIPE_LOCAL_API_KEY: "sp-test", SCREENPIPE_MCP_CLIENT: "vscode", SCREENPIPE_API_URL: "http://localhost:3030" } });
     expect(backupsOf(path).map((p) => fsMock.files.get(p))).toContain(original);
     expect(tauriMock.setAiToolAutoConnectOptOut).toHaveBeenCalledWith("vscode", false);

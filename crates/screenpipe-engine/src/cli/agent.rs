@@ -926,37 +926,53 @@ fn update_vscode_mcp(path: &Path, launch: Option<&McpLaunchConfig>) -> Result<()
     let servers = obj
         .object_value_or_create("servers")
         .context("servers is present but not an object")?;
-    let mut removed = false;
-    for prop in servers.properties() {
-        if prop
-            .decoded_name()
-            .is_some_and(|name| name.eq_ignore_ascii_case("screenpipe"))
-        {
-            prop.remove();
-            removed = true;
-        }
-    }
+    let matching: Vec<_> = servers
+        .properties()
+        .into_iter()
+        .filter(|prop| {
+            prop.decoded_name()
+                .is_some_and(|name| name.eq_ignore_ascii_case("screenpipe"))
+        })
+        .collect();
     if let Some(launch) = launch {
-        servers.append(
-            "screenpipe",
-            Input::Object(vec![
-                ("type".into(), "stdio".into()),
-                ("command".into(), launch.command.clone().into()),
-                ("args".into(), launch.args.clone().into()),
-                (
-                    "env".into(),
-                    Input::Object(
-                        launch
-                            .env
-                            .iter()
-                            .map(|(key, value)| (key.clone(), value.clone().into()))
-                            .collect(),
-                    ),
+        // Keep server-specific user options such as sandboxEnabled and cwd.
+        // Only the launch fields belong to Screenpipe's automatic setup.
+        let entry = if let Some(prop) = matching.first() {
+            prop.object_value_or_set()
+        } else {
+            servers.object_value_or_set("screenpipe")
+        };
+        for duplicate in matching.into_iter().skip(1) {
+            duplicate.remove();
+        }
+        for (key, value) in [
+            ("type", Input::from("stdio")),
+            ("command", launch.command.clone().into()),
+            ("args", launch.args.clone().into()),
+            (
+                "env",
+                Input::Object(
+                    launch
+                        .env
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone().into()))
+                        .collect(),
                 ),
-            ]),
-        );
-    } else if !removed {
-        return Ok(());
+            ),
+        ] {
+            if let Some(prop) = entry.get(key) {
+                prop.set_value(value);
+            } else {
+                entry.append(key, value);
+            }
+        }
+    } else {
+        if matching.is_empty() {
+            return Ok(());
+        }
+        for prop in matching {
+            prop.remove();
+        }
     }
     replace_config(path, existing.as_deref(), &root.to_string())
 }
@@ -1792,7 +1808,7 @@ mod tests {
         std::fs::create_dir_all(config.parent().unwrap()).unwrap();
         std::fs::write(
             &config,
-            r#"{"servers":{"Screenpipe":{"command":"old"},"other":{"type":"http"}}}"#,
+            r#"{"servers":{"Screenpipe":{"command":"old","sandboxEnabled":true,"cwd":"/project"},"other":{"type":"http"}}}"#,
         )
         .unwrap();
         assert!(detected_agents_in(dir.path())
@@ -1807,6 +1823,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(root["servers"].as_object().unwrap().len(), 2);
+        assert_eq!(root["servers"]["Screenpipe"]["sandboxEnabled"], true);
+        assert_eq!(root["servers"]["Screenpipe"]["cwd"], "/project");
         update_vscode_mcp(&config, None).unwrap();
         assert!(!is_agent_setup_in("vscode", dir.path()));
         assert!(std::fs::read_to_string(&config).unwrap().contains("other"));
