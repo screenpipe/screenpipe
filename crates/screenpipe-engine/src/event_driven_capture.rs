@@ -313,6 +313,10 @@ pub(crate) struct CaptureParams<'a> {
     pub settled_window: &'a std::sync::atomic::AtomicUsize,
     #[cfg(target_os = "windows")]
     pub render_recheck_needed: &'a AtomicBool,
+    #[cfg(target_os = "windows")]
+    pub power_profile_rx: Option<watch::Receiver<PowerProfile>>,
+    #[cfg(target_os = "windows")]
+    pub stop_signal: &'a AtomicBool,
     pub db: &'a DatabaseManager,
     pub monitor: &'a SafeMonitor,
     pub monitor_id: u32,
@@ -1169,6 +1173,10 @@ pub(crate) async fn event_driven_capture_loop(
         settled_window: &settled_window,
         #[cfg(target_os = "windows")]
         render_recheck_needed: &render_recheck_needed,
+        #[cfg(target_os = "windows")]
+        power_profile_rx: power_profile_rx.clone(),
+        #[cfg(target_os = "windows")]
+        stop_signal: &stop_signal,
         db: &db,
         monitor: &monitor,
         monitor_id,
@@ -2602,10 +2610,64 @@ where
     }
 }
 
+/// A privacy/pause transition during an awaited compositor read invalidates
+/// that sample. Checking on both sides also avoids starting work while paused.
+#[cfg(any(target_os = "windows", test))]
+async fn guarded_render_sample<F, Fut, G>(
+    sample: F,
+    mut permitted: G,
+) -> Result<image::DynamicImage>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<image::DynamicImage>>,
+    G: FnMut() -> bool,
+{
+    anyhow::ensure!(permitted(), "capture privacy or pause gate changed");
+    let image = sample().await?;
+    anyhow::ensure!(permitted(), "capture privacy or pause gate changed");
+    Ok(image)
+}
+
 #[cfg(target_os = "windows")]
-async fn settle_windows_frame(
+fn windows_capture_still_permitted(params: &CaptureParams<'_>, was_focused: bool) -> bool {
+    if params.stop_signal.load(Ordering::Relaxed)
+        || crate::sleep_monitor::screen_is_locked()
+        || params
+            .power_profile_rx
+            .as_ref()
+            .is_some_and(|rx| rx.borrow().capture_paused)
+        || crate::schedule_monitor::schedule_paused()
+        || crate::drm_detector::drm_content_paused()
+    {
+        return false;
+    }
+    if !was_focused && !crate::focus_tracker::foreground_window_is_on_monitor(params.monitor) {
+        return true;
+    }
+    let metadata = get_focused_metadata_lightweight();
+    match metadata {
+        Some(metadata) => {
+            !metadata.app_name.as_deref().is_some_and(is_lock_screen_app)
+                && !resolved_window_matches_privacy_filters(
+                    params.tree_walker_config.ignore_incognito_windows,
+                    true,
+                    &params.ignored_patterns,
+                    metadata.app_name.as_deref(),
+                    metadata.window_name.as_deref(),
+                )
+        }
+        None => {
+            !params.tree_walker_config.ignore_incognito_windows
+                && params.ignored_patterns.is_empty()
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+async fn settle_windows_frame<G: FnMut() -> bool>(
     monitor: &SafeMonitor,
     mut image: image::DynamicImage,
+    mut permitted: G,
 ) -> (image::DynamicImage, bool) {
     let deadline = Instant::now() + Duration::from_millis(600);
     let mut stability = RenderStability::default();
@@ -2616,7 +2678,12 @@ async fn settle_windows_frame(
         if remaining.is_zero() {
             break;
         }
-        match tokio::time::timeout(remaining, monitor.capture_image_while_settling()).await {
+        match tokio::time::timeout(
+            remaining,
+            guarded_render_sample(|| monitor.capture_image_while_settling(), &mut permitted),
+        )
+        .await
+        {
             Ok(Ok(next)) => {
                 let stable = stability.observe(render_signature(&next));
                 image = next;
@@ -3310,6 +3377,17 @@ async fn do_capture(
     #[cfg(target_os = "windows")]
     let mut render_stable = !needs_settle;
 
+    #[cfg(target_os = "windows")]
+    let privacy_changed = AtomicBool::new(false);
+    #[cfg(target_os = "windows")]
+    let permitted = || {
+        let allowed = windows_capture_still_permitted(params, monitor_hosts_focus);
+        if !allowed {
+            privacy_changed.store(true, Ordering::Relaxed);
+        }
+        allowed
+    };
+
     let image = if screenshot_disabled || skip_pixels_for_unknown_exclusions {
         debug!(
             "screenshot capture skipped for monitor {} (trigger={})",
@@ -3328,7 +3406,7 @@ async fn do_capture(
         );
         #[cfg(target_os = "windows")]
         let image = if needs_settle {
-            let (image, stable) = settle_windows_frame(params.monitor, image).await;
+            let (image, stable) = settle_windows_frame(params.monitor, image, permitted).await;
             render_stable = stable;
             image
         } else {
@@ -3663,7 +3741,7 @@ async fn do_capture(
         // Changed content must settle back to the exact pre-walk pixels within
         // the bounded budget, otherwise detach AX and use this image's OCR.
         render_stable = confirm_render(&image, Duration::from_millis(650), || {
-            params.monitor.capture_image_while_settling()
+            guarded_render_sample(|| params.monitor.capture_image_while_settling(), permitted)
         })
         .await;
     }
@@ -3739,6 +3817,19 @@ async fn do_capture(
                 });
             }
         }
+    }
+
+    // Extra compositor waits must not widen the window in which an exclusion
+    // or pause can be missed. A denied sample remains denied even if focus
+    // returns to an allowed app before the walk finishes.
+    #[cfg(target_os = "windows")]
+    if !screenshot_disabled && (!permitted() || privacy_changed.load(Ordering::Relaxed)) {
+        return Ok(CaptureOutput {
+            result: None,
+            image,
+            elements_deduped: false,
+            corrupt: None,
+        });
     }
 
     // Content dedup: skip capture if accessibility text hasn't changed.
@@ -4337,6 +4428,63 @@ fn is_frame_corrupt(image: &image::DynamicImage) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn render_sample_rechecks_privacy_after_await_and_never_reads_while_paused() {
+        use std::sync::atomic::AtomicUsize;
+        let reads = AtomicUsize::new(0);
+        let allowed = AtomicBool::new(false);
+        let sample = || async {
+            reads.fetch_add(1, Ordering::Relaxed);
+            allowed.store(false, Ordering::Relaxed); // Private window / pause arrives mid-read.
+            Ok(image::DynamicImage::new_rgba8(2, 2))
+        };
+        assert!(
+            guarded_render_sample(sample, || allowed.load(Ordering::Relaxed))
+                .await
+                .is_err()
+        );
+        assert_eq!(reads.load(Ordering::Relaxed), 0);
+        allowed.store(true, Ordering::Relaxed);
+        assert!(
+            guarded_render_sample(sample, || allowed.load(Ordering::Relaxed))
+                .await
+                .is_err()
+        );
+        assert_eq!(reads.load(Ordering::Relaxed), 1);
+        allowed.store(true, Ordering::Relaxed);
+        assert!(guarded_render_sample(
+            || async { Ok(image::DynamicImage::new_rgba8(2, 2)) },
+            || allowed.load(Ordering::Relaxed)
+        )
+        .await
+        .is_ok());
+    }
+
+    #[tokio::test]
+    async fn render_confirmation_animation_and_resolution_changes_are_bounded() {
+        use image::GenericImage;
+        let before = image::DynamicImage::new_rgba8(64, 36);
+        let mut calls = 0;
+        let start = Instant::now();
+        assert!(
+            !confirm_render(&before, Duration::from_millis(150), || {
+                calls += 1;
+                let mut changed = before.clone();
+                changed.put_pixel(calls % 64, 0, image::Rgba([255, 0, 0, 255]));
+                std::future::ready(Ok(changed))
+            })
+            .await
+        );
+        assert!(calls <= 4, "animation cannot create unbounded reads");
+        assert!(start.elapsed() < Duration::from_secs(1));
+        assert!(
+            !confirm_render(&before, Duration::from_millis(75), || std::future::ready(
+                Ok(image::DynamicImage::new_rgba8(36, 64))
+            ))
+            .await
+        );
+    }
 
     #[test]
     fn window_identity_rejects_switch_away_and_back_during_tree_walk() {
