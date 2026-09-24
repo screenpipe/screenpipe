@@ -14,6 +14,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import { screenpipeWebUrl } from "@/lib/web-url";
 import { useGT } from "gt-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 
 interface ReferralData {
@@ -104,7 +105,7 @@ export function ReferralCard() {
           <h3 className="text-lg font-semibold">Refer a friend</h3>
         </div>
         <p className="mb-4 text-sm text-muted-foreground">
-          Sign in to view your referral eligibility and invite link
+          Sign in to view your referral link
         </p>
         <Button
           variant="outline"
@@ -224,10 +225,42 @@ export function ReferralCard() {
           <Gift className="h-5 w-5 text-muted-foreground" />
           <h3 className="text-lg font-semibold">Refer a friend</h3>
         </div>
-        <p className="text-sm text-muted-foreground">
-          Referral links unlock after your first paid plan starts. The free
-          Business trial does not create a referral code.
+        <p className="mb-1 text-sm font-medium">No referral link found</p>
+        <p className="mb-3 break-words text-sm text-muted-foreground">
+          Signed in as {userEmail}
         </p>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Try checking again. If you have already paid and still have no link,
+          contact support so we can check your account.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setReloadCount((count) => count + 1)}
+          >
+            Check again
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={async () => {
+              try {
+                await openUrl(
+                  "mailto:support@screenpi.pe?subject=Missing%20referral%20link",
+                );
+              } catch {
+                toast({
+                  title: ui("Could not open your email app"),
+                  description: ui("Email support@screenpi.pe for help with your referral link."),
+                  variant: "destructive",
+                });
+              }
+            }}
+          >
+            Contact support
+          </Button>
+        </div>
       </Card>
     );
   }

@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   copyTextToClipboard: vi.fn().mockResolvedValue(undefined),
   openLoginWindow: vi.fn().mockResolvedValue(undefined),
   toast: vi.fn(),
+  openUrl: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/lib/hooks/use-settings", () => ({
@@ -28,6 +29,8 @@ vi.mock("@/lib/utils/tauri", () => ({
     openLoginWindow: mocks.openLoginWindow,
   },
 }));
+
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: mocks.openUrl }));
 
 vi.mock("@/components/ui/use-toast", () => ({ toast: mocks.toast }));
 
@@ -98,11 +101,47 @@ describe("ReferralCard", () => {
     render(<ReferralCard />);
 
     expect(
-      await screen.findByText(/free Business trial does not create a referral code/i),
+      await screen.findByText("No referral link found"),
     ).toBeInTheDocument();
     expect(screen.queryByDisplayValue(/REF-/i)).not.toBeInTheDocument();
     expect(clearSession).not.toHaveBeenCalled();
     expect(mocks.user?.token).toBe("token-1");
+  });
+
+
+  it.each(["no referral code found", "user not found"])(
+    "recovers from %s without assuming the user needs to pay",
+    async (error) => {
+      mocks.user = { email: "paid@example.com", token: "token-1" };
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify({ error }), { status: 404 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify(referral), { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<ReferralCard />);
+      await screen.findByText("No referral link found");
+      expect(screen.getByText("Signed in as paid@example.com")).toBeInTheDocument();
+      expect(screen.queryByText(/first paid plan|trial does not/i)).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+      expect(await screen.findByDisplayValue(referral.link)).toBeInTheDocument();
+      expect(screen.queryByText("No referral link found")).not.toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("opens a support email and provides a fallback if the mail app cannot open", async () => {
+    mocks.user = { email: "paid@example.com", token: "token-1" };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 404 })));
+    mocks.openUrl.mockRejectedValueOnce(new Error("no email handler"));
+    render(<ReferralCard />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Contact support" }));
+    await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ description: "Email support@screenpi.pe for help with your referral link." }),
+    ));
+    expect(mocks.openUrl).toHaveBeenCalledWith(
+      "mailto:support@screenpi.pe?subject=Missing%20referral%20link",
+    );
   });
 
   it("shows a retry path when referral loading fails", async () => {

@@ -222,7 +222,7 @@ function SettingsContent() {
       items: [
         { id: "account" as const, label: gt("Account"), icon: <User className="h-4 w-4" /> },
         { id: "team" as const, label: gt("Team"), icon: <Users className="h-4 w-4" /> },
-        { id: "referral" as const, label: gt("Get free month"), icon: <Gift className="h-4 w-4" /> },
+        { id: "referral" as const, label: gt("Refer a friend"), icon: <Gift className="h-4 w-4" /> },
       ].filter((s) => !isSectionHidden(s.id)),
     },
     {
