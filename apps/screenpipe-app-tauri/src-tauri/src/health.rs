@@ -1374,6 +1374,26 @@ struct TrayVisionDevice {
     user_disabled: bool,
 }
 
+async fn fetch_tray_vision_status(
+    request: reqwest::RequestBuilder,
+) -> Option<Vec<TrayVisionDevice>> {
+    match request.timeout(Duration::from_secs(2)).send().await {
+        Ok(response) if response.status().is_success() => response.json().await.ok(),
+        _ => None,
+    }
+}
+
+fn should_use_paused_inventory(
+    devices: Option<&[TrayVisionDevice]>,
+    status: RecordingStatus,
+) -> bool {
+    devices.is_some_and(<[TrayVisionDevice]>::is_empty)
+        && matches!(
+            status,
+            RecordingStatus::Paused | RecordingStatus::ScheduledPause
+        )
+}
+
 fn recording_monitor_devices(devices: &[TrayVisionDevice]) -> Option<Vec<DeviceInfo>> {
     if devices.is_empty() {
         return None; // Manager absent is not itself proof of an intentional pause.
@@ -1686,25 +1706,13 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
 
             // A failed/invalid status response is unknown, never evidence of pause.
             // Bound the request so a wedged endpoint cannot stall all tray updates.
-            let vision_status = match api
-                .apply_auth(client.get(api.url("/vision/device/status")))
-                .timeout(Duration::from_secs(2))
-                .send()
-                .await
-            {
-                Ok(res) if res.status().is_success() => {
-                    res.json::<Vec<TrayVisionDevice>>().await.ok()
-                }
-                _ => None,
-            };
+            let vision_status = fetch_tray_vision_status(
+                api.apply_auth(client.get(api.url("/vision/device/status"))),
+            )
+            .await;
             let mut observed = vision_status.as_deref().and_then(recording_monitor_devices);
             // Only an explicit intentional pause can use inventory as inactive rows.
-            if vision_status.as_ref().is_some_and(Vec::is_empty)
-                && matches!(
-                    status,
-                    RecordingStatus::Paused | RecordingStatus::ScheduledPause
-                )
-            {
+            if should_use_paused_inventory(vision_status.as_deref(), status) {
                 if let Ok(Some(store)) = crate::store::SettingsStore::get(&app) {
                     if store.recording.disable_vision {
                         observed = Some(Vec::new());
@@ -2246,6 +2254,74 @@ async fn check_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn tray_monitor_http_errors_malformed_bodies_and_timeout_are_unknown() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (status, body, delay, known) in [
+            (200, "[]", false, true),
+            (503, "[]", false, false),
+            (200, "not JSON", false, false),
+            (200, "[{}]", false, false),
+            (200, "[]", true, false),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 4096];
+                let _ = socket.read(&mut request).await.unwrap();
+                if delay {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+                let response = format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                let _ = socket.write_all(response.as_bytes()).await;
+            });
+            let start = Instant::now();
+            let observed = fetch_tray_vision_status(
+                reqwest::Client::new().get(format!("http://{address}/vision/device/status")),
+            )
+            .await;
+            assert_eq!(
+                observed.is_some(),
+                known,
+                "status={status}, body={body}, delay={delay}"
+            );
+            assert!(
+                start.elapsed() < Duration::from_secs(4),
+                "failed endpoint stalled health polling"
+            );
+            if !known {
+                assert!(!should_use_paused_inventory(
+                    observed.as_deref(),
+                    RecordingStatus::Paused
+                ));
+            }
+            server.abort();
+        }
+    }
+
+    #[test]
+    fn tray_monitor_requires_both_confirmed_pause_and_successful_empty_status() {
+        for status in [
+            RecordingStatus::Starting,
+            RecordingStatus::Recording,
+            RecordingStatus::Stopped,
+            RecordingStatus::Error,
+        ] {
+            assert!(!should_use_paused_inventory(Some(&[]), status));
+        }
+        for status in [RecordingStatus::Paused, RecordingStatus::ScheduledPause] {
+            assert!(should_use_paused_inventory(Some(&[]), status));
+            assert!(!should_use_paused_inventory(None, status));
+            let devices = vec![TrayVisionDevice {
+                id: 42,
+                name: "Display 42".into(),
+                user_disabled: true,
+            }];
+            assert!(!should_use_paused_inventory(Some(&devices), status));
+        }
+    }
 
     #[test]
     fn tray_monitor_status_failure_and_recovery_preserve_identity_without_false_pause() {
