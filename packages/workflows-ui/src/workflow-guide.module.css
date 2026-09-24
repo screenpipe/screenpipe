@@ -34,6 +34,7 @@
 }
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
@@ -46,6 +47,7 @@
 }
 .toolbar > div {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
 }
@@ -53,21 +55,23 @@
   color: var(--muted, #777b70);
   font-size: 12px;
 }
-.guide .iconButton {
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  flex-shrink: 0;
+.guide .actionButton {
+  min-height: 34px;
+  padding: 6px 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  white-space: nowrap;
 }
-.guide .iconButton:hover,
-.guide .iconButton[aria-pressed="true"] {
+.guide .actionButton:hover {
   background: var(--soft, #f1f2ec);
-  border-color: var(--muted, #777b70);
+  color: var(--ink);
 }
 .saveStatus {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  padding: 0 8px;
 }
 .srOnly {
   position: absolute;
@@ -254,8 +258,8 @@
   pointer-events: none;
   transition: opacity 150ms ease;
 }
-.stepHeading:hover .grip,
-.stepHeading:hover .controls,
+.step:hover .grip,
+.step:hover .controls,
 .step:focus-within .grip,
 .step:focus-within .controls,
 .controls[open],
@@ -492,11 +496,19 @@
 }
 @media (max-width: 650px) {
   .toolbar {
-    align-items: flex-start;
-    flex-direction: column;
+    gap: 8px;
   }
   .toolbar > div {
-    flex-wrap: wrap;
+    margin-left: auto;
+    gap: 4px;
+  }
+  .guide .grip {
+    left: 0;
+    z-index: 1;
+  }
+  .step:hover .number,
+  .step:focus-within .number {
+    opacity: 0;
   }
 
   .stepBody {
@@ -550,5 +562,11 @@
   .controls,
   .step figure button {
     transition: none;
+  }
+}
+
+@media (hover: none) and (max-width: 650px) {
+  .step .number {
+    opacity: 0;
   }
 }

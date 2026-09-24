@@ -133,6 +133,12 @@ export function WorkflowGuide({
   function moveStep(from: number, to: number) {
     const current = latest.current;
     if (!current || from === to || to < 0 || to >= current.steps.length) return;
+    root.current
+      ?.querySelectorAll<HTMLDetailsElement>("details[data-step-actions][open]")
+      .forEach((menu) => {
+        menu.open = false;
+        menu.querySelector("summary")?.focus();
+      });
     const steps = [...current.steps];
     const [step] = steps.splice(from, 1);
     steps.splice(to, 0, step);
@@ -212,7 +218,13 @@ export function WorkflowGuide({
                 ) : saved ? (
                   <Check size={16} aria-hidden="true" />
                 ) : null}
-                <span className={styles.srOnly}>{saved}</span>
+                <span aria-label={saved}>
+                  {saved === "Saving…"
+                    ? ui("Saving…")
+                    : saved
+                      ? ui("Saved")
+                      : ""}
+                </span>
               </>
             )}
           </span>
@@ -229,7 +241,7 @@ export function WorkflowGuide({
             <>
               {platform.openWeb && (
                 <button
-                  className={styles.iconButton}
+                  className={styles.actionButton}
                   aria-label={ui("Open web editor")}
                   title={ui("Open web editor")}
                   onClick={() => {
@@ -237,11 +249,12 @@ export function WorkflowGuide({
                     setWebError("");
                   }}
                 >
-                  <ExternalLink size={18} aria-hidden="true" />
+                  <ExternalLink size={16} aria-hidden="true" />
+                  {ui("Open on web")}
                 </button>
               )}
               <button
-                className={styles.iconButton}
+                className={styles.actionButton}
                 aria-label={ui("Export SOP")}
                 title={ui("Export SOP")}
                 onClick={() => {
@@ -250,7 +263,8 @@ export function WorkflowGuide({
                   dialog.current?.showModal();
                 }}
               >
-                <Download size={18} aria-hidden="true" />
+                <Download size={16} aria-hidden="true" />
+                {ui("Export")}
               </button>
             </>
           )}
@@ -507,6 +521,13 @@ export function WorkflowGuide({
                                 ...draft,
                                 steps: draft.steps.filter((_, j) => j !== i),
                               });
+                              requestAnimationFrame(() =>
+                                root.current
+                                  ?.querySelector<HTMLTextAreaElement>(
+                                    `#guide-step-${Math.min(i, draft.steps.length - 2)} textarea`,
+                                  )
+                                  ?.focus(),
+                              );
                             }}
                           >
                             <Trash2 size={14} />

@@ -15,7 +15,10 @@ fs.mkdirSync(out, { recursive: true });
     });
     page.setDefaultTimeout(20000);
     const errors = [];
-    page.on("pageerror", (e) => { errors.push(e.message); console.error("Browser error:", e.stack); });
+    page.on("pageerror", (e) => {
+      errors.push(e.message);
+      console.error("Browser error:", e.stack);
+    });
     async function dismiss() {
       await page
         .getByRole("button", { name: "Do later", exact: true })
@@ -58,6 +61,18 @@ fs.mkdirSync(out, { recursive: true });
       if (await minimize.isVisible()) await minimize.click();
     }
     await open();
+    assert.equal(
+      await page
+        .getByRole("button", { name: "Open web editor", exact: true })
+        .innerText(),
+      "Open on web",
+    );
+    assert.equal(
+      await page
+        .getByRole("button", { name: "Export SOP", exact: true })
+        .innerText(),
+      "Export",
+    );
     const title = page.getByRole("textbox", { name: "SOP title", exact: true });
     assert.equal(
       await page.getByRole("button", { name: "Edit SOP", exact: true }).count(),
@@ -83,7 +98,17 @@ fs.mkdirSync(out, { recursive: true });
     await snap("after-hover");
     await page.getByLabel("Step 1 actions", { exact: true }).click();
     await snap("after-menu");
-    await page.keyboard.press("Escape");
+    await page
+      .getByRole("button", { name: "Move step 1 down", exact: true })
+      .click();
+    assert.equal(
+      await page.locator("details[data-step-actions][open]").count(),
+      0,
+    );
+    await page
+      .getByRole("button", { name: "Reorder step 2", exact: true })
+      .focus();
+    await page.keyboard.press("Alt+ArrowUp");
     await grip.focus();
     await page.keyboard.press("Alt+ArrowDown");
     assert.equal(
@@ -223,6 +248,12 @@ fs.mkdirSync(out, { recursive: true });
         "Title wraps without clipping",
       );
     }
+    await page.getByLabel("Step 1 title", { exact: true }).hover();
+    const narrowGrip = await grip.boundingBox();
+    assert(narrowGrip.x >= 0, "Drag handle stays inside a narrow window");
+    await page.getByLabel("Step 1 actions", { exact: true }).click();
+    await snap("after-narrow-controls");
+    await page.keyboard.press("Escape");
     // Regression: the main workflow editor shares the inline field and drag styles.
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page
@@ -232,6 +263,14 @@ fs.mkdirSync(out, { recursive: true });
       name: "Workflow title",
       exact: true,
     });
+    await page.mouse.move(900, 150);
+    await snap("workflow-toolbar");
+    assert.equal(
+      await page
+        .getByRole("button", { name: "Create SOP", exact: true })
+        .innerText(),
+      "Create SOP",
+    );
     await workflowTitle.fill("Research synthesis updated");
     await page
       .getByRole("status", { name: "Save status", exact: true })
