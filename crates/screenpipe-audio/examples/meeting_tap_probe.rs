@@ -52,7 +52,8 @@ async fn main() -> anyhow::Result<()> {
          ctrl-c to stop.\n"
     );
 
-    let (tx, mut rx) = broadcast::channel::<Vec<f32>>(2048);
+    let tx = screenpipe_audio::core::captured_audio::CaptureSender::new(2048);
+    let mut rx = tx.subscribe();
     let is_running = Arc::new(AtomicBool::new(true));
     let is_disconnected = Arc::new(AtomicBool::new(false));
 
@@ -96,7 +97,7 @@ async fn main() -> anyhow::Result<()> {
         };
         match received {
             Ok(chunk) => {
-                for s in &chunk {
+                for s in chunk.iter() {
                     let a = s.abs();
                     if a > window_peak {
                         window_peak = a;

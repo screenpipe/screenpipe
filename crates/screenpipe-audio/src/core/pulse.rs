@@ -7,6 +7,7 @@
 //! Uses `libpulse-binding` for device introspection and `libpulse-simple-binding`
 //! for blocking PCM capture. Works transparently with PipeWire via `pipewire-pulse`.
 
+use crate::core::captured_audio::CaptureSender;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -15,7 +16,6 @@ use libpulse_binding as pulse;
 use libpulse_binding::mainloop::standard::Mainloop;
 use libpulse_binding::proplist::properties::DEVICE_BUS;
 use libpulse_simple_binding::Simple;
-use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
 use super::device::{AudioDevice, DeviceType};
@@ -418,7 +418,7 @@ fn create_pulse_record_stream(
 pub fn spawn_pulse_capture_thread(
     device: AudioDevice,
     config: AudioStreamConfig,
-    tx: broadcast::Sender<Vec<f32>>,
+    tx: CaptureSender,
     is_running: Arc<AtomicBool>,
     is_disconnected: Arc<AtomicBool>,
 ) -> Result<tokio::task::JoinHandle<()>> {

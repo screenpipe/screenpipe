@@ -17,11 +17,12 @@ use crate::{
     core::{device::DeviceType, get_device_capture_time_exact, update_device_capture_time},
     meeting_streaming::{MeetingAudioFrame, MeetingAudioTap},
     metrics::AudioPipelineMetrics,
-    utils::audio::StreamResampler,
     AudioInput,
 };
 
 use super::aec::SonoraAecProcessor;
+use super::aec_input::AecInput;
+use super::captured_audio::CapturedAudio;
 use super::source_buffer::SourceBuffer;
 use super::AudioStream;
 
@@ -178,6 +179,28 @@ fn meeting_frame_from_recorder_output(
     )
 }
 
+fn append_aec_output(
+    frames: Vec<(Vec<f32>, Vec<f32>, u64)>,
+    collected: &mut Vec<f32>,
+    stream: &AudioStream,
+    tap: &Option<MeetingAudioTap>,
+) {
+    for (mic, _, stamp) in frames {
+        collected.extend_from_slice(&mic);
+        if let Some(tap) = tap {
+            if tap.is_active() && !mic.is_empty() {
+                tap.send(MeetingAudioFrame::new(
+                    Arc::new(mic),
+                    &stream.device,
+                    16000,
+                    1,
+                    stamp,
+                ));
+            }
+        }
+    }
+}
+
 /// Recording always uses 30s segments. Both batch and realtime modes record identically.
 /// The batch vs realtime distinction is in the processing layer (manager.rs):
 /// - Realtime: transcribe immediately after each segment
@@ -200,17 +223,22 @@ pub async fn run_record_and_transcribe(
         let mut receiver = audio_stream.subscribe().await;
         let mic_sample_rate = audio_stream.device_config.sample_rate().0;
 
-        let mut mic_resampler = StreamResampler::new(mic_sample_rate, 16000)?;
+        let mut mic_resampler = AecInput::new(mic_sample_rate)?;
         let mut aec_processor = SonoraAecProcessor::new();
 
-        let mut speaker_receiver: Option<broadcast::Receiver<Vec<f32>>> = None;
-        let mut speaker_resampler: Option<StreamResampler> = None;
-
-        let mut mic_sample_counter: u64 = 0;
-        let mut speaker_sample_counter: u64 = 0;
-
-        let mic_start_time = now_epoch_millis();
-        let mut speaker_start_time: Option<u64> = None;
+        let mut speaker_receiver: Option<broadcast::Receiver<CapturedAudio>> = None;
+        let mut speaker_resampler: Option<AecInput> = None;
+        let mut reference_stream: Option<Arc<AudioStream>> = None;
+        let mut reference_poll = tokio::time::interval(Duration::from_millis(250));
+        reference_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut default_output = if device_manager.is_some() {
+            crate::core::device::default_output_device().await.ok()
+        } else {
+            None
+        };
+        let mut mic_discontinuity = false;
+        let mut default_refresh = Instant::now();
+        let mut capture_error = None;
 
         const TARGET_SAMPLE_RATE: u32 = 16000;
         const OVERLAP_SECONDS: usize = 2;
@@ -255,25 +283,10 @@ pub async fn run_record_and_transcribe(
                 ));
             }
 
-            // Dynamic subscription to default speaker stream
-            if speaker_receiver.is_none() {
-                if let Some(ref dm) = device_manager {
-                    if let Ok(default_output) = crate::core::device::default_output_device().await {
-                        if let Some(stream) = dm.stream(&default_output) {
-                            speaker_receiver = Some(stream.subscribe().await);
-                            let speaker_rate = stream.device_config.sample_rate().0;
-                            speaker_resampler = Some(StreamResampler::new(speaker_rate, 16000)?);
-                            speaker_start_time = Some(now_epoch_millis());
-                            info!(
-                                "AEC: Dynamically subscribed to speaker stream: {} ({} Hz) for reference",
-                                default_output, speaker_rate
-                            );
-                        }
-                    }
-                }
-            }
-
-            while collected_audio.len() < max_samples && is_running.load(Ordering::Relaxed) {
+            while collected_audio.len() < max_samples
+                && is_running.load(Ordering::Relaxed)
+                && !audio_stream.is_disconnected.load(Ordering::Relaxed)
+            {
                 tokio::select! {
                     // Receive mic chunk
                     mic_res = receiver.recv() => {
@@ -285,78 +298,97 @@ pub async fn run_record_and_transcribe(
                                     update_device_capture_time(&device_name);
                                 }
 
-                                // Hardware-clock aligned capture timestamp
-                                let ts = mic_start_time + ((mic_sample_counter as f64 * 1000.0) / mic_sample_rate as f64) as u64;
-                                let chunk_len = chunk.len();
-
-                                match mic_resampler.process(&chunk) {
-                                    Ok(resampled) => {
-                                        aec_processor.push_mic(&resampled, ts);
-                                    }
-                                    Err(e) => {
-                                        error!("AEC: Mic resampling error: {:?}", e);
-                                    }
+                                let ts = chunk.start_timestamp_ms(mic_sample_rate);
+                                if mic_discontinuity || mic_resampler.discontinuity(ts) {
+                                    mic_discontinuity = false;
+                                    let (tail, stamp) = mic_resampler.finish()?;
+                                    aec_processor.push_mic(&tail, stamp);
+                                    append_aec_output(aec_processor.finish(), &mut collected_audio, &audio_stream, &live_audio_tap);
+                                    aec_processor.reset_reference();
+                                    mic_resampler = AecInput::new(mic_sample_rate)?;
                                 }
-                                mic_sample_counter += chunk_len as u64;
+                                let (resampled, ts) = mic_resampler.push(&chunk, ts)?;
+                                aec_processor.push_mic(&resampled, ts);
                             }
                             Err(broadcast::error::RecvError::Lagged(n)) => {
                                 metrics.record_chunks_lagged(n);
                                 debug!("AEC: Mic channel lagged by {} messages", n);
+                                mic_discontinuity = true;
                             }
                             Err(e) => {
                                 error!("AEC: Error receiving mic data: {}", e);
-                                return Err(anyhow!("Mic stream error: {}", e));
+                                capture_error = Some(anyhow!("Mic stream error: {}", e));
+                                break;
                             }
                         }
                     }
-                    // Receive speaker chunk (if subscribed)
-                    Some(speaker_res) = async {
-                        if let Some(ref mut rx) = speaker_receiver {
-                            rx.recv().await.ok()
-                        } else {
-                            None
+                    // Re-evaluate within a segment, including same-name stream replacement.
+                    _ = reference_poll.tick() => {
+                        if device_manager.is_some() && default_refresh.elapsed() >= Duration::from_secs(2) {
+                            default_output = crate::core::device::default_output_device().await.ok();
+                            default_refresh = Instant::now();
+                        }
+                        let candidate = device_manager.as_ref().and_then(|dm| dm.aec_reference(default_output.as_ref()));
+                        let changed = match (&reference_stream, &candidate) {
+                            (Some(old), Some(new)) => !Arc::ptr_eq(old, new),
+                            (None, None) => false,
+                            _ => true,
+                        };
+                        if changed {
+                            speaker_receiver = match &candidate {
+                                Some(stream) => Some(stream.subscribe().await),
+                                None => None,
+                            };
+                            speaker_resampler = candidate.as_ref().map(|s| AecInput::new(s.device_config.sample_rate().0)).transpose()?;
+                            aec_processor.reset_reference();
+                            info!("AEC: reference changed to {:?}", candidate.as_ref().map(|s| s.device.to_string()));
+                            reference_stream = candidate;
+                        }
+                    }
+                    speaker_res = async {
+                        match &mut speaker_receiver {
+                            Some(rx) => rx.recv().await,
+                            None => std::future::pending().await,
                         }
                     } => {
-                        let speaker_rate = speaker_resampler.as_ref().unwrap().from_sample_rate();
-                        let start_ts = speaker_start_time.unwrap_or(mic_start_time);
-                        let ts = start_ts + ((speaker_sample_counter as f64 * 1000.0) / speaker_rate as f64) as u64;
-                        let chunk_len = speaker_res.len();
-
-                        if let Some(ref mut resampler) = speaker_resampler {
-                            match resampler.process(&speaker_res) {
-                                Ok(resampled) => {
-                                    aec_processor.push_speaker(&resampled, ts);
-                                }
-                                Err(e) => {
-                                    error!("AEC: Speaker resampling error: {:?}", e);
+                        match speaker_res {
+                            Ok(chunk) => {
+                                if let Some(resampler) = &mut speaker_resampler {
+                                    let ts = chunk.start_timestamp_ms(resampler.rate());
+                                    if resampler.discontinuity(ts) {
+                                        *resampler = AecInput::new(resampler.rate())?;
+                                        aec_processor.reset_reference();
+                                    }
+                                    let (resampled, stamp) = resampler.push(&chunk, ts)?;
+                                    aec_processor.push_speaker(&resampled, stamp);
                                 }
                             }
+                            Err(broadcast::error::RecvError::Lagged(n)) => {
+                                warn!("AEC: reference lagged by {} chunks; resetting render history", n);
+                                if let Some(resampler) = &mut speaker_resampler {
+                                    *resampler = AecInput::new(resampler.rate())?;
+                                }
+                                aec_processor.reset_reference();
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
+                                speaker_receiver = None;
+                                speaker_resampler = None;
+                                reference_stream = None;
+                                aec_processor.reset_reference();
+                            }
                         }
-                        speaker_sample_counter += chunk_len as u64;
                     }
                     // Timeout to prevent hanging when silent
                     _ = tokio::time::sleep(Duration::from_millis(50)) => {}
                 }
 
                 // Pull processed frames from AEC processor
-                let processed = aec_processor.process();
-                for (cleaned_mic, _speaker_frame, timestamp_ms) in processed {
-                    collected_audio.extend_from_slice(&cleaned_mic);
-
-                    // Send to live meeting streaming if active
-                    if let Some(ref tap) = live_audio_tap {
-                        if tap.is_active() && !cleaned_mic.is_empty() {
-                            let frame = MeetingAudioFrame::new(
-                                Arc::new(cleaned_mic),
-                                &audio_stream.device,
-                                16000,
-                                1,
-                                timestamp_ms,
-                            );
-                            tap.send(frame);
-                        }
-                    }
-                }
+                append_aec_output(
+                    aec_processor.process(),
+                    &mut collected_audio,
+                    &audio_stream,
+                    &live_audio_tap,
+                );
 
                 // Periodically log diagnostics (every 10 seconds)
                 if last_diagnostics_time.elapsed() >= Duration::from_secs(10) {
@@ -377,7 +409,7 @@ pub async fn run_record_and_transcribe(
                 }
             }
 
-            if !is_running.load(Ordering::Relaxed) {
+            if !is_running.load(Ordering::Relaxed) || capture_error.is_some() {
                 break;
             }
 
@@ -396,6 +428,15 @@ pub async fn run_record_and_transcribe(
             segment_start_time = now_epoch_secs();
         }
 
+        let (tail, stamp) = mic_resampler.finish()?;
+        aec_processor.push_mic(&tail, stamp);
+        append_aec_output(
+            aec_processor.finish(),
+            &mut collected_audio,
+            &audio_stream,
+            &live_audio_tap,
+        );
+
         // Flush remaining audio on exit
         if let Err(e) = flush_audio(
             &mut collected_audio,
@@ -413,6 +454,9 @@ pub async fn run_record_and_transcribe(
             warn!("AEC: Final mic flush failed for {}: {}", device_name, e);
         }
 
+        if let Some(error) = capture_error {
+            return Err(error);
+        }
         if audio_stream.is_disconnected.load(Ordering::Relaxed) {
             info!("AEC: Stopped recording for {} (disconnected)", device_name);
             Err(anyhow::anyhow!("device {} disconnected", device_name))
@@ -571,7 +615,7 @@ pub async fn run_record_and_transcribe(
 }
 
 async fn recv_audio_chunk(
-    receiver: &mut broadcast::Receiver<Vec<f32>>,
+    receiver: &mut broadcast::Receiver<CapturedAudio>,
     audio_stream: &Arc<AudioStream>,
     device_name: &str,
     metrics: &Arc<AudioPipelineMetrics>,
@@ -599,7 +643,7 @@ async fn recv_audio_chunk(
                 // topology so a later silence can be classified as dead-anchor
                 // vs nothing-playing (#3901).
                 note_output_topology_if_flowing(audio_stream, sck_watchdog);
-                return Ok(Some(chunk));
+                return Ok(Some(chunk.samples));
             }
 
             // Silent buffer. Only declare the stream hijacked if we had
@@ -629,7 +673,7 @@ async fn recv_audio_chunk(
             // Pass the silent buffer through; downstream VAD will drop it.
             // Keeping it in the pipeline preserves segment timing alignment
             // (every recv represents real OS frames, even if empty).
-            Ok(Some(chunk))
+            Ok(Some(chunk.samples))
         }
         Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
             // The recorder fell behind the capture broadcast and the OS frames
@@ -1021,16 +1065,83 @@ mod tests {
 
     #[tokio::test]
     async fn stopped_aec_recorder_flushes_processed_tail_once() {
-        let samples = vec![0.25; 3_200];
-        let (_, segments) = run_stopped_recorder(samples, Duration::from_secs(30), true).await;
-        assert_eq!(segments.len(), 1);
-        assert_eq!(segments[0].sample_rate, 16_000);
-        assert!(!segments[0].data.is_empty());
-        assert_eq!(
-            segments[0].data.len() % crate::core::aec::FRAME_SIZE_10MS,
-            0
+        for len in [1, 177, 3200, 24000] {
+            let samples = vec![0.25; len];
+            let (_, segments) =
+                run_stopped_recorder(samples.clone(), Duration::from_secs(30), true).await;
+            assert_eq!(segments.len(), 1);
+            assert_eq!(segments[0].sample_rate, 16_000);
+            assert_eq!(segments[0].data.as_ref(), &samples);
+        }
+    }
+
+    #[tokio::test]
+    async fn aec_recorder_rebinds_meeting_reference_within_a_segment() {
+        use crate::device::device_manager::DeviceManager;
+        let dm = Arc::new(DeviceManager::new(false, false, false).await.unwrap());
+        let (mic, tx) = AudioStream::from_sender_for_test(
+            Arc::new(AudioDevice::new("AEC test mic".into(), DeviceType::Input)),
+            16000,
+            1,
         );
-        assert!(segments[0].data.len() <= 3_200);
+        let (whisper_tx, whisper_rx) = crossbeam::channel::bounded(4);
+        let running = Arc::new(AtomicBool::new(true));
+        let task = tokio::spawn(run_record_and_transcribe(
+            Arc::new(mic),
+            Duration::from_secs(30),
+            Arc::new(whisper_tx),
+            running.clone(),
+            Arc::new(AudioPipelineMetrics::new()),
+            None,
+            Some(dm.clone()),
+            true,
+        ));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while tx.receiver_count() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let mut previous: Option<Arc<super::super::captured_audio::CaptureSender>> = None;
+        for rate in [48000, 16000, 44100] {
+            let (reference, render_tx) = AudioStream::from_sender_for_test(
+                Arc::new(AudioDevice::new("Meeting Tap".into(), DeviceType::Output)),
+                rate,
+                1,
+            );
+            dm.register_test_stream(Arc::new(reference));
+            // Must bind without waiting for the 30s segment to fill, even when
+            // the replacement has the same device name and a different rate.
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while render_tx.receiver_count() == 0 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("AEC did not follow active Meeting Tap");
+            if let Some(old) = previous {
+                assert_eq!(old.receiver_count(), 0);
+            }
+            for _ in 0..5 {
+                render_tx.send(vec![0.1; rate as usize / 100]).unwrap();
+                tx.send(vec![0.05; 160]).unwrap();
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            previous = Some(render_tx);
+        }
+        running.store(false, Ordering::Relaxed);
+        tx.send(Vec::new()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let segments: Vec<_> = whisper_rx.try_iter().collect();
+        assert_eq!(segments.iter().map(|s| s.data.len()).sum::<usize>(), 2400);
+        assert!(segments
+            .iter()
+            .all(|s| s.data.iter().all(|v| v.is_finite())));
     }
 
     #[tokio::test]
