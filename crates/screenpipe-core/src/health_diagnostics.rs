@@ -78,6 +78,7 @@ pub struct ProcessSnapshot {
 pub struct FfmpegSnapshot {
     #[serde(flatten)]
     pub binary: Component,
+    pub version_probe_error: Option<String>,
     pub install_in_progress: bool,
     pub install_retry_after: Option<i64>,
     pub last_spawn_error: Option<String>,
@@ -128,7 +129,7 @@ impl Default for Startup {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct State {
     ffmpeg: FfmpegSnapshot,
     ffprobe: Component,
@@ -145,6 +146,9 @@ struct State {
     media_failures: BTreeMap<String, (i64, String)>,
 }
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| Mutex::new(State::default()));
+// Only startup writers acquire this lock. Media instrumentation and health reads
+// never wait for checkpoint I/O. Lock order is STARTUP_WRITER then STATE.
+static STARTUP_WRITER: Mutex<()> = Mutex::new(());
 fn state() -> std::sync::MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -162,6 +166,8 @@ pub fn binary_resolved(path: &Path, source: &str, probe: Option<PathBuf>) {
     s.ffmpeg.binary.source = source.into();
     s.ffmpeg.binary.status = "ok".into();
     s.ffmpeg.binary.error = None;
+    s.ffmpeg.binary.error_at = None;
+    s.ffmpeg.version_probe_error = None;
     s.ffmpeg.install_in_progress = false;
     s.ffmpeg.install_retry_after = None;
     s.ffprobe.status = if probe.is_some() { "ok" } else { "missing" }.into();
@@ -173,11 +179,9 @@ pub fn binary_version(path: &Path, version: Option<String>, error: Option<String
         return;
     }
     s.ffmpeg.binary.version = version;
-    s.ffmpeg.binary.error = error;
-    if s.ffmpeg.binary.error.is_some() {
-        s.ffmpeg.binary.status = "spawn_failing".into();
-        s.ffmpeg.binary.error_at = Some(now());
-    }
+    // A metadata probe timeout does not establish a recording failure. Actual
+    // encode failures are tracked separately and cannot be cleared by this probe.
+    s.ffmpeg.version_probe_error = error;
 }
 pub fn binary_installing() {
     let mut s = state();
@@ -187,7 +191,7 @@ pub fn binary_installing() {
 pub fn binary_install_failed(error: &str, retry_secs: i64) {
     let mut s = state();
     s.ffmpeg.binary.status = "install_failed".into();
-    s.ffmpeg.binary.error = Some(error.into());
+    s.ffmpeg.binary.error = Some(bounded_detail(error));
     s.ffmpeg.binary.error_at = Some(now());
     s.ffmpeg.install_in_progress = false;
     s.ffmpeg.install_retry_after = Some(now() + retry_secs);
@@ -212,10 +216,22 @@ impl MediaOperation {
         Self { kind }
     }
     pub fn finish<T, E: std::fmt::Display>(&self, result: &Result<T, E>) {
-        let mut s = state();
+        // Error formatting may run arbitrary Display code; keep it outside the
+        // shared lock, along with clock access.
+        let error = result
+            .as_ref()
+            .err()
+            .map(|e| bounded_detail(&e.to_string()));
         let at = now();
+        let mut s = state();
         if self.kind == "audio" {
-            s.audio_completions.retain(|(t, _)| at - t < 60);
+            while s
+                .audio_completions
+                .front()
+                .is_some_and(|(t, _)| at - t >= 60)
+            {
+                s.audio_completions.pop_front();
+            }
             if s.audio_completions.len() == 4096 {
                 s.audio_completions.pop_front();
             }
@@ -227,14 +243,9 @@ impl MediaOperation {
                 if self.kind == "hd" {
                     s.last_hd_success = Some(at);
                 }
-                if s.ffmpeg.binary.status == "spawn_failing" {
-                    s.ffmpeg.binary.status = "ok".into();
-                    s.ffmpeg.binary.error = None;
-                    s.ffmpeg.binary.error_at = None;
-                }
             }
-            Err(e) => {
-                let error: String = e.to_string().chars().take(2048).collect();
+            Err(_) => {
+                let error = error.unwrap_or_default();
                 s.ffmpeg.last_spawn_error = Some(error.clone());
                 s.ffmpeg.last_spawn_error_at = Some(at);
                 s.media_failures.insert(self.kind.into(), (at, error));
@@ -296,7 +307,7 @@ pub fn transcription_model_state(
     c.status = status.into();
     c.path = path;
     c.error_at = error.as_ref().map(|_| now());
-    c.error = error;
+    c.error = error.map(|s| bounded_detail(&s));
 }
 
 pub fn component_state(
@@ -316,7 +327,7 @@ pub fn component_state(
     c.status = status.into();
     c.path = path;
     c.error_at = error.as_ref().map(|_| now());
-    c.error = error;
+    c.error = error.map(|s| bounded_detail(&s));
 }
 
 fn write_startup(path: &Path, snapshot: &Startup) -> std::io::Result<()> {
@@ -326,11 +337,35 @@ fn write_startup(path: &Path, snapshot: &Startup) -> std::io::Result<()> {
     f.persist(path).map_err(|e| e.error)?;
     Ok(())
 }
-fn persist(s: &mut State) {
-    if let Some(path) = &s.startup_path {
-        let ok = write_startup(path, &s.startup).is_ok();
-        s.startup.environment.data_dir_writable = Some(ok);
+fn update_startup(update: impl FnOnce(&mut State) -> bool) {
+    update_startup_with_writer(update, write_startup);
+}
+
+fn update_startup_with_writer(
+    update: impl FnOnce(&mut State) -> bool,
+    write: impl FnOnce(&Path, &Startup) -> std::io::Result<()>,
+) {
+    // Serialize mutations as well as writes so an older phase cannot overwrite
+    // a newer checkpoint. Never retain STATE across disk I/O or serialization.
+    let _writer = STARTUP_WRITER.lock().unwrap_or_else(|e| e.into_inner());
+    let checkpoint = {
+        let mut s = state();
+        if !update(&mut s) {
+            return;
+        }
+        s.startup_path.clone().map(|path| (path, s.startup.clone()))
+    };
+    if let Some((path, mut startup)) = checkpoint {
+        // A successfully persisted checkpoint should report its own write as
+        // successful, including the first write after a disk error.
+        startup.environment.data_dir_writable = Some(true);
+        let ok = write(&path, &startup).is_ok();
+        state().startup.environment.data_dir_writable = Some(ok);
     }
+}
+
+fn bounded_detail(detail: &str) -> String {
+    detail.chars().take(2048).collect()
 }
 fn recover_startup(previous: Option<Startup>) -> Option<FailedStart> {
     previous.and_then(|p| {
@@ -353,82 +388,90 @@ pub fn begin_startup(data_dir: &Path) {
     let previous = std::fs::File::open(&path)
         .ok()
         .and_then(|f| serde_json::from_reader(f).ok());
-    let mut s = state();
-    s.models.clear();
-    s.runtime.clear();
-    s.model_generation += 1;
-    s.media_failures.clear();
-    s.startup = Startup {
-        phase: "starting".into(),
-        engine_started_at: Some(now()),
-        last_failed_start: recover_startup(previous),
-        ..Startup::default()
+    let environment = Environment {
+        data_dir_writable: None,
+        path_has_ffmpeg: Some(which::which("ffmpeg").is_ok()),
+        env_overrides: [
+            "SCREENPIPE_FFMPEG_PATH",
+            "ORT_DYLIB_PATH",
+            "HF_HOME",
+            "HF_HUB_CACHE",
+        ]
+        .into_iter()
+        .filter(|name| std::env::var_os(name).is_some())
+        .map(String::from)
+        .collect(),
     };
-    s.startup.environment.path_has_ffmpeg = Some(which::which("ffmpeg").is_ok());
-    s.startup.environment.env_overrides = [
-        "SCREENPIPE_FFMPEG_PATH",
-        "ORT_DYLIB_PATH",
-        "HF_HOME",
-        "HF_HUB_CACHE",
-    ]
-    .into_iter()
-    .filter(|name| std::env::var_os(name).is_some())
-    .map(String::from)
-    .collect();
-    s.startup.environment.data_dir_writable = Some(true);
-    s.startup_path = Some(path);
-    persist(&mut s);
+    update_startup(|s| {
+        s.models.clear();
+        s.runtime.clear();
+        s.model_generation += 1;
+        s.media_failures.clear();
+        s.startup = Startup {
+            phase: "starting".into(),
+            engine_started_at: Some(now()),
+            last_failed_start: recover_startup(previous),
+            environment,
+            ..Startup::default()
+        };
+        s.startup_path = Some(path);
+        true
+    });
 }
 pub fn startup_phase(phase: &str) {
-    let mut s = state();
-    if s.startup.phase == phase {
-        return;
-    }
-    let completed = match (s.startup.phase.as_str(), phase) {
-        ("migrating_database", "building_audio") => Some("database"),
-        ("building_audio", "starting_pipes") => Some("audio_initialization"),
-        ("starting_pipes", "ready") => Some("server_start"),
-        _ => None,
-    };
-    if let Some(check) = completed {
-        s.startup.preflight.retain(|p| p.check != check);
-        s.startup.preflight.push(Preflight {
-            check: check.into(),
-            result: "ok".into(),
-            detail: None,
-            remedy: None,
-        });
-    }
-    s.startup.phase = phase.into();
-    s.startup.phase_since = now();
-    persist(&mut s);
+    update_startup(|s| {
+        if s.startup.phase == phase {
+            return false;
+        }
+        let completed = match (s.startup.phase.as_str(), phase) {
+            ("migrating_database", "building_audio") => Some("database"),
+            ("building_audio", "starting_pipes") => Some("audio_initialization"),
+            ("starting_pipes", "ready") => Some("server_start"),
+            _ => None,
+        };
+        if let Some(check) = completed {
+            s.startup.preflight.retain(|p| p.check != check);
+            s.startup.preflight.push(Preflight {
+                check: check.into(),
+                result: "ok".into(),
+                detail: None,
+                remedy: None,
+            });
+        }
+        s.startup.phase = phase.into();
+        s.startup.phase_since = now();
+        true
+    });
 }
 pub fn startup_failure(reason: &str, detail: &str, exit_code: Option<i32>) {
-    let mut s = state();
-    if matches!(s.startup.phase.as_str(), "idle" | "ready" | "error") {
-        return;
-    }
-    s.startup.last_failed_start = Some(FailedStart {
-        at: now(),
-        phase: s.startup.phase.clone(),
-        reason: reason.into(),
-        detail: detail.chars().take(2048).collect(),
-        exit_code,
+    let detail = bounded_detail(detail);
+    update_startup(|s| {
+        if matches!(s.startup.phase.as_str(), "idle" | "ready" | "error") {
+            return false;
+        }
+        s.startup.last_failed_start = Some(FailedStart {
+            at: now(),
+            phase: s.startup.phase.clone(),
+            reason: reason.into(),
+            detail,
+            exit_code,
+        });
+        s.startup.phase = "error".into();
+        s.startup.phase_since = now();
+        true
     });
-    s.startup.phase = "error".into();
-    s.startup.phase_since = now();
-    persist(&mut s);
 }
 pub fn preflight(check: &str, result: &str, detail: Option<String>, remedy: Option<String>) {
-    let mut s = state();
-    s.startup.preflight.retain(|v| v.check != check);
-    s.startup.preflight.push(Preflight {
-        check: check.into(),
-        result: result.into(),
-        detail,
-        remedy,
+    update_startup(|s| {
+        s.startup.preflight.retain(|v| v.check != check);
+        s.startup.preflight.push(Preflight {
+            check: check.into(),
+            result: result.into(),
+            detail: detail.map(|s| bounded_detail(&s)),
+            remedy,
+        });
+        true
     });
-    persist(&mut s);
 }
 
 #[derive(Clone, Serialize)]
@@ -439,34 +482,45 @@ pub struct Diagnostics {
     pub unhealthy_reasons: Vec<Fault>,
 }
 pub fn snapshot(audio_disabled: bool) -> Diagnostics {
-    snapshot_from(&state(), audio_disabled)
+    let observed = state().clone();
+    snapshot_from(&observed, audio_disabled)
 }
 
 fn snapshot_from(s: &State, audio_disabled: bool) -> Diagnostics {
+    let at = now();
     let mut ffmpeg = s.ffmpeg.clone();
     ffmpeg.processes.compaction_running = s.compactions > 0;
     ffmpeg.processes.audio_encodes_last_minute = s
         .audio_completions
         .iter()
-        .filter(|(t, _)| now() - t < 60)
+        .filter(|(t, _)| at - t < 60)
         .count() as u64;
     ffmpeg.processes.audio_encode_failures_last_minute = s
         .audio_completions
         .iter()
-        .filter(|(t, failed)| *failed && now() - t < 60)
+        .filter(|(t, failed)| *failed && at - t < 60)
         .count() as u64;
-    if s.media_failures
+    if let Some((failed_at, error)) = s
+        .media_failures
         .iter()
-        .any(|(kind, (at, _))| now() - at < 180 && !(audio_disabled && kind == "audio"))
+        .filter(|(kind, (failed_at, _))| {
+            at - failed_at < 180 && !(audio_disabled && *kind == "audio")
+        })
+        .map(|(_, failure)| failure)
+        .max_by_key(|(failed_at, _)| *failed_at)
     {
         ffmpeg.binary.status = "spawn_failing".into();
+        ffmpeg.binary.error = Some(error.clone());
+        ffmpeg.binary.error_at = Some(*failed_at);
     }
     if ffmpeg
         .processes
         .last_stall_at
-        .is_some_and(|t| now() - t < 180 && s.last_hd_success.is_none_or(|success| success < t))
+        .is_some_and(|t| at - t < 180 && s.last_hd_success.is_none_or(|success| success < t))
     {
         ffmpeg.binary.status = "stalled".into();
+        ffmpeg.binary.error = Some("HD encoder write timed out".into());
+        ffmpeg.binary.error_at = ffmpeg.processes.last_stall_at;
     }
     if s.media_required == Some(false) {
         ffmpeg.binary.status = "not_required".into();
@@ -495,22 +549,24 @@ fn snapshot_from(s: &State, audio_disabled: bool) -> Diagnostics {
     }
     let mut faults = vec![];
     // Unknown and first-run downloading are observations, not proven failures.
-    for (name, c) in
-        std::iter::once(("ffmpeg", &ffmpeg.binary)).chain(std::iter::once(("ffprobe", &ffprobe)))
-    {
+    // ffprobe discovery is metadata only. Its absence does not establish that
+    // any enabled recording pipeline is failing.
+    for (name, c) in [("ffmpeg", &ffmpeg.binary)] {
         if matches!(
             c.status.as_str(),
             "missing" | "install_failed" | "spawn_failing" | "stalled"
         ) {
-            faults.push(Fault::new(
+            let mut fault = Fault::new(
                 "dependencies",
                 &format!("{name}_{}", c.status),
                 c.error
                     .as_deref()
                     .or(ffmpeg.last_spawn_error.as_deref())
                     .unwrap_or("media dependency unavailable"),
-                "Install or repair the bundled ffmpeg/ffprobe pair, then retry recording.",
-            ));
+                "Install or repair the bundled ffmpeg, then retry recording.",
+            );
+            fault.since = c.error_at.or(ffmpeg.last_spawn_error_at);
+            faults.push(fault);
         }
     }
     for (group, components) in [("dependencies", &models), ("runtime", &runtime)] {
@@ -570,8 +626,12 @@ fn snapshot_from(s: &State, audio_disabled: bool) -> Diagnostics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Tests using process-global observations must not race each other.
+    static GLOBAL_TEST: Mutex<()> = Mutex::new(());
     #[test]
     fn health_diagnostics_process_guards_release_and_recover_per_pipeline() {
+        let _test = GLOBAL_TEST.lock().unwrap();
+        *state() = State::default();
         let operation = MediaOperation::start("audio");
         operation.finish::<(), _>(&Err("synthetic spawn failure"));
         assert_eq!(
@@ -613,6 +673,144 @@ mod tests {
     }
 
     #[test]
+    fn health_diagnostics_slow_checkpoint_does_not_block_media_or_health() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let _test = GLOBAL_TEST.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        *state() = State::default();
+        begin_startup(dir.path());
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            update_startup_with_writer(
+                |s| {
+                    s.startup.phase = "building_audio".into();
+                    true
+                },
+                |path, checkpoint| {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                    write_startup(path, checkpoint)
+                },
+            );
+        });
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let (done_tx, done_rx) = mpsc::channel();
+        let media = std::thread::spawn(move || {
+            for _ in 0..100 {
+                let op = MediaOperation::start("audio");
+                op.finish::<_, &str>(&Ok(()));
+                drop(op);
+                assert_eq!(snapshot(false).startup.phase, "building_audio");
+            }
+            done_tx.send(()).unwrap();
+        });
+        // On the old implementation this times out until the disk writer is
+        // released. Always release it before asserting, so a regression cannot
+        // leave a hung test process.
+        let completed_while_disk_blocked = done_rx.recv_timeout(Duration::from_secs(2));
+        release_tx.send(()).unwrap();
+        writer.join().unwrap();
+        media.join().unwrap();
+        assert!(completed_while_disk_blocked.is_ok());
+        startup_phase("ready");
+        let persisted: Startup = serde_json::from_reader(
+            std::fs::File::open(dir.path().join("health-startup.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(persisted.phase, "ready");
+        assert_eq!(
+            snapshot(false).dependencies["ffmpeg"]["processes"]["audio_encodes_running"],
+            0
+        );
+        *state() = State::default();
+    }
+
+    #[test]
+    fn health_diagnostics_checkpoint_failure_is_observed_and_recovers() {
+        let _test = GLOBAL_TEST.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        *state() = State::default();
+        begin_startup(dir.path());
+        update_startup_with_writer(
+            |_| true,
+            |_, _| Err(std::io::Error::other("disk unavailable")),
+        );
+        assert_eq!(
+            snapshot(false).startup.environment.data_dir_writable,
+            Some(false)
+        );
+        let op = MediaOperation::start("audio");
+        op.finish::<_, &str>(&Ok(()));
+        drop(op);
+        startup_phase("ready");
+        assert_eq!(
+            snapshot(false).startup.environment.data_dir_writable,
+            Some(true)
+        );
+        *state() = State::default();
+    }
+
+    #[test]
+    fn health_diagnostics_optional_probe_failure_does_not_degrade_recording() {
+        let _test = GLOBAL_TEST.lock().unwrap();
+        *state() = State::default();
+        let path = Path::new("test-ffmpeg");
+        binary_resolved(path, "path", None);
+        binary_version(path, None, Some("probe timeout".into()));
+        let observation = snapshot(false);
+        assert_eq!(observation.dependencies["ffmpeg"]["status"], "ok");
+        assert_eq!(observation.dependencies["ffprobe"]["status"], "missing");
+        assert_eq!(
+            observation.dependencies["ffmpeg"]["version_probe_error"],
+            "probe timeout"
+        );
+        assert!(observation.unhealthy_reasons.is_empty());
+        let op = MediaOperation::start("audio");
+        op.finish::<(), _>(&Err("actual encode failure"));
+        binary_version(path, Some("7.0".into()), None);
+        assert!(snapshot(false)
+            .unhealthy_reasons
+            .iter()
+            .any(|f| f.code == "ffmpeg_spawn_failing"));
+        op.finish::<_, &str>(&Ok(()));
+        drop(op);
+        assert!(snapshot(false).unhealthy_reasons.is_empty());
+        *state() = State::default();
+    }
+
+    #[test]
+    #[ignore = "manual timing eval; run with --ignored --nocapture"]
+    fn health_diagnostics_lifecycle_latency_eval() {
+        use std::time::Instant;
+        let _test = GLOBAL_TEST.lock().unwrap();
+        *state() = State::default();
+        let mut timings = Vec::with_capacity(20_000);
+        for i in 0..20_000 {
+            let started = Instant::now();
+            let op = MediaOperation::start("audio");
+            op.finish::<_, &str>(&Ok(()));
+            drop(op);
+            timings.push(started.elapsed().as_nanos());
+            if i % 100 == 0 {
+                std::hint::black_box(snapshot(false));
+            }
+        }
+        timings.sort_unstable();
+        let started = Instant::now();
+        for _ in 0..1000 {
+            std::hint::black_box(snapshot(false));
+        }
+        eprintln!("diagnostics lifecycle n=20000 p50_ns={} p95_ns={} p99_ns={}; full_snapshot_mean_us={:.2}; retained_events={}",
+            timings[10_000], timings[19_000], timings[19_800],
+            started.elapsed().as_secs_f64() * 1000.0, state().audio_completions.len());
+        assert_eq!(state().audio_completions.len(), 4096);
+        assert_eq!(state().ffmpeg.processes.audio_encodes_running, 0);
+        *state() = State::default();
+    }
+
+    #[test]
     fn health_diagnostics_downloads_and_unknowns_are_not_faults() {
         let mut s = State::default();
         s.models.insert(
@@ -631,6 +829,56 @@ mod tests {
         assert!(snapshot_from(&s, true).unhealthy_reasons.is_empty());
         s.models.get_mut("transcription").unwrap().status = "ready".into();
         assert!(snapshot_from(&s, false).unhealthy_reasons.is_empty());
+    }
+
+    #[test]
+    fn health_diagnostics_dependency_status_matrix() {
+        for (status, fault) in [
+            ("unknown", false),
+            ("ok", false),
+            ("installing", false),
+            ("missing", true),
+            ("install_failed", true),
+        ] {
+            let mut s = State::default();
+            s.ffmpeg.binary.status = status.into();
+            s.ffmpeg.binary.error_at = Some(42);
+            let observation = snapshot_from(&s, false);
+            assert_eq!(!observation.unhealthy_reasons.is_empty(), fault, "{status}");
+            if fault {
+                assert_eq!(observation.unhealthy_reasons[0].since, Some(42));
+            }
+            s.media_required = Some(false);
+            assert!(snapshot_from(&s, false).unhealthy_reasons.is_empty());
+        }
+        for (status, fault) in [
+            ("unknown", false),
+            ("initializing", false),
+            ("downloading", false),
+            ("downloaded", false),
+            ("ready", false),
+            ("not_required", false),
+            ("load_failed", true),
+            ("download_failed", true),
+            ("init_timed_out", true),
+            ("unsupported", true),
+        ] {
+            let mut s = State::default();
+            s.models.insert(
+                "transcription".into(),
+                Component {
+                    status: status.into(),
+                    error_at: Some(42),
+                    ..Component::default()
+                },
+            );
+            let observation = snapshot_from(&s, false);
+            assert_eq!(!observation.unhealthy_reasons.is_empty(), fault, "{status}");
+            if fault {
+                assert_eq!(observation.unhealthy_reasons[0].since, Some(42));
+            }
+            assert!(snapshot_from(&s, true).unhealthy_reasons.is_empty());
+        }
     }
 
     #[test]

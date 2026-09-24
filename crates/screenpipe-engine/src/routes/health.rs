@@ -2659,6 +2659,40 @@ mod tests {
     }
 
     #[test]
+    fn health_diagnostics_intentional_idle_states_remain_healthy() {
+        for audio in ["ok", "disabled", "no_input_device", "waiting_for_meeting"] {
+            for vision in ["ok", "disabled"] {
+                let mut response = dummy_response("healthy");
+                response.audio_status = audio.into();
+                response.frame_status = vision.into();
+                add_health_reasons(&mut response);
+                assert_eq!(response.status, "healthy", "{audio}/{vision}");
+                assert_eq!(response.status_code, 200);
+                assert!(response.unhealthy_reasons.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn health_diagnostics_observed_dependency_fault_changes_status_only() {
+        let mut response = dummy_response("healthy");
+        let original = response.clone();
+        response.unhealthy_reasons.push(json!({
+            "subsystem": "dependencies", "code": "ffmpeg_spawn_failing",
+            "severity": "warning", "detail": "encode failed", "remedy": "repair ffmpeg", "since": 42
+        }));
+        add_health_reasons(&mut response);
+        assert_eq!(response.status, "degraded");
+        assert_eq!(response.status_code, 503);
+        assert_eq!(response.message, original.message);
+        assert_eq!(response.verbose_instructions, original.verbose_instructions);
+        assert_eq!(response.audio_status, original.audio_status);
+        assert_eq!(response.frame_status, original.frame_status);
+        assert_eq!(response.unhealthy_reasons.len(), 1);
+        assert_eq!(response.unhealthy_reasons[0]["since"], 42);
+    }
+
+    #[test]
     fn health_diagnostics_legacy_responses_deserialize() {
         let mut value = serde_json::to_value(dummy_response("healthy")).unwrap();
         for key in ["dependencies", "runtime", "startup", "unhealthy_reasons"] {
