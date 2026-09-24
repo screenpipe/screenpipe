@@ -915,10 +915,11 @@
 .contextHeader h1 { margin: 0; font-size: 26px; font-weight: 650; letter-spacing: -.03em; }
 .contextHeader p { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .contextComposer { margin-bottom: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); overflow: hidden; }
-.contextWebsite { display: flex; align-items: center; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
-.contextWebsite span { flex-shrink: 0; font-size: 12px; color: var(--muted); }
-.contextWebsite input { width: 100%; min-width: 0; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 13px; outline-offset: 4px; }
-.contextComposer > textarea { display: block; width: 100%; min-height: 100px; padding: 16px; border: 0; resize: vertical; color: var(--ink); background: transparent; font: inherit; font-size: 13px; line-height: 1.6; outline-offset: -3px; }
+.contextWebsite { display: flex; flex-direction: column; gap: 10px; padding: 20px; border-bottom: 1px solid var(--line); }
+.contextWebsite span { font-size: 15px; font-weight: 600; color: var(--ink); }
+.contextWebsite input { width: 100%; min-width: 0; min-height: 48px; padding: 12px 14px; border: 1px solid var(--muted); border-radius: 6px; background: var(--paper); color: var(--ink); font: inherit; font-size: 16px; }
+.contextWebsite input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.contextComposer > textarea { display: block; width: 100%; min-height: 64px; padding: 16px; border: 0; resize: vertical; color: var(--ink); background: transparent; font: inherit; font-size: 13px; line-height: 1.6; outline-offset: -3px; }
 .contextToolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; }
 .contextToolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; }
 .contextToolbar .contextFillButton { border-color: var(--ink); background: var(--ink); color: var(--panel); }

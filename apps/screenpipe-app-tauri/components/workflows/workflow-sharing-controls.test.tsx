@@ -66,11 +66,18 @@ describe("sharing consent UI", () => {
     await waitFor(() => expect(requests.some(r => r.method === "DELETE")).toBe(true));
     expect(f.settings.workflowSharing).toBeNull();
   });
-  it("hides the optional entry control when rollout is unavailable", async () => {
-    remote.available = false;
-    render(<WorkflowSharingControls compact />);
-    await waitFor(() => expect(requests.length).toBe(1));
-    expect(screen.queryByRole("switch")).toBeNull();
+  it.each(["unavailable", "managed", "notice mismatch"])("keeps %s sharing visible without saving a choice", async reason => {
+    if (reason === "unavailable") remote.available = false;
+    if (reason === "managed") f.managed = true;
+    if (reason === "notice mismatch") remote.noticeVersion = "different-version";
+    const done = vi.fn();
+    render(<WorkflowSharingControls compact onDone={done} />);
+    expect(await screen.findByText("Sharing is not available for this account.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Allow sharing" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Not now" })).toBeEnabled();
+    expect(done).not.toHaveBeenCalled();
+    expect(f.update).not.toHaveBeenCalled();
+    expect(requests.every(r => r.method === "GET")).toBe(true);
   });
   it("does not enable sharing for managed deployments", async () => {
     f.managed = true; render(<WorkflowSharingControls />);

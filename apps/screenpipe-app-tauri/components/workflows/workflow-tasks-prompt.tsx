@@ -42,7 +42,6 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady
   const failedIntent = useRef<boolean | null>(null);
   failedIntent.current = failedTarget;
 
-  const close = useCallback(() => setOpen(false), []);
   const finishSharing = useCallback(() => {
     const account = current.current.user?.id;
     if (account) void updateSettings({ workflowSharingPromptSeen: { ...current.current.workflowSharingPromptSeen, [account]: SHARING_NOTICE_VERSION } }).catch(() => {});
@@ -64,9 +63,9 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady
     let timer: ReturnType<typeof setTimeout> | undefined;
     let attempts = 0;
     let offeredSharing = false;
-    setOpen(false);
+    // Recorder reconnects refresh task status, not an open consent decision.
+    if (!active) { setOpen(false); setStep("tasks"); }
     setSetup(null);
-    setStep("tasks");
     setError("");
     async function load() {
       if (loading || enabling.current || cancelled) return;
@@ -162,7 +161,7 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady
       if (enabling.current || busy) return;
       if (!value && step === "sharing") finishSharing(); else setOpen(value);
     }}>
-    <DialogContent onOpenAutoFocus={event => { event.preventDefault(); title.current?.focus(); }} style={{
+    <DialogContent onInteractOutside={event => event.preventDefault()} onOpenAutoFocus={event => { event.preventDefault(); title.current?.focus(); }} style={{
       "--foreground": "0 0% 9%", "--background": "0 0% 100%", "--muted-foreground": "80 4% 42%",
       "--border": "70 10% 85%", "--primary": "0 0% 9%", "--primary-foreground": "0 0% 100%",
       "--accent": "70 10% 95%", "--accent-foreground": "0 0% 9%",
@@ -176,7 +175,7 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady
           {step === "tasks" ? "Discover workflows and keep them accurate with automatic updates." : "Share new Workflows chats to improve workflows and train Screenpipe’s own AI models. Never external providers’ models."}
         </DialogDescription>
       </DialogHeader>
-      {step === "sharing" ? <WorkflowSharingControls compact onDone={finishSharing} onUnavailable={close} onBusyChange={setBusy} /> : <>
+      {step === "sharing" ? <WorkflowSharingControls compact onDone={finishSharing} onBusyChange={setBusy} /> : <>
         {setup && <div className="flex items-center gap-3 rounded-lg border p-4">
           <Clock3 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           <div className="min-w-0"><p className="text-sm font-medium">{setup.title}</p><p className="text-xs text-muted-foreground">{setup.schedule} · While Screenpipe is open</p></div>

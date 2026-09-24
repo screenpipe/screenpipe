@@ -93,6 +93,36 @@ describe("workflow schedule control", () => {
     await waitFor(() => expect(f.settings.workflowSharingPromptSeen["fixture-user"]).toBe("2026-09-23"));
     expect(tasks.enable).not.toHaveBeenCalled(); expect(tasks.disable).not.toHaveBeenCalled();
   });
+  it("keeps sharing open across recorder disconnect and reconnect until explicitly closed", async () => {
+    f.settings.workflowSharingPromptSeen = {};
+    const tasks = service();
+    const view = render(<WorkflowTasksPrompt active tasks={tasks} />);
+    await loaded(); await enable();
+    expect(await screen.findByRole("dialog", { name: "Help improve Screenpipe" })).toBeVisible();
+    view.rerender(<WorkflowTasksPrompt active backendReady={false} tasks={tasks} />);
+    expect(screen.getByRole("dialog", { name: "Help improve Screenpipe" })).toBeVisible();
+    view.rerender(<WorkflowTasksPrompt active backendReady tasks={tasks} />);
+    expect(screen.getByRole("dialog", { name: "Help improve Screenpipe" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(f.settings.workflowSharingPromptSeen["fixture-user"]).toBe("2026-09-23");
+  });
+  it("ignores outside clicks on both consent steps without recording a choice", async () => {
+    f.settings.workflowSharingPromptSeen = {};
+    const tasks = service(); render(<WorkflowTasksPrompt active tasks={tasks} />); await loaded();
+    fireEvent.click(toggle());
+    // Radix registers outside-pointer handling after the opening event.
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+    fireEvent.pointerDown(document.querySelector("[data-modal-overlay]")!, { pointerType: "mouse", button: 0 });
+    expect(screen.getByRole("dialog", { name: "Keep your workflows up to date?" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Enable automatic updates" }));
+    expect(await screen.findByText("Skip sharing")).toBeVisible();
+    fireEvent.pointerDown(document.querySelector("[data-modal-overlay]")!, { pointerType: "mouse", button: 0 });
+    expect(screen.getByRole("dialog", { name: "Help improve Screenpipe" })).toBeVisible();
+    expect(f.update).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
   it("waits for backend readiness and recovers on reconnect without clicking retry", async () => {
     const tasks = service([true,true,true,true]);
     const view = render(<WorkflowTasksPrompt active backendReady={false} tasks={tasks} />);
