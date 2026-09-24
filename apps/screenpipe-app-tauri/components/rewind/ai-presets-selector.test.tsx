@@ -118,11 +118,8 @@ vi.mock("@/lib/utils/tauri", () => ({
     chatgptOauthLogout: vi.fn(async () => ({ status: "ok", data: true })),
   },
 }));
-vi.mock("sonner", () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
-}));
-
 import { AIProviderConfig, AIPresetsSelector } from "./ai-presets-selector";
+import { Toaster } from "@/components/ui/toaster";
 import { commands } from "@/lib/utils/tauri";
 import { tauriFetchWithDeadline } from "@/lib/http/tauri-fetch";
 
@@ -534,6 +531,49 @@ describe("AIPresetsSelector preset deletion", () => {
     expect(mocks.updateSettings).toHaveBeenCalledWith({
       aiPresets: [{ ...localPreset, defaultPreset: true }],
     });
+  });
+
+  it("shows the app toast after removing a preset", async () => {
+    mocks.settings.current = {
+      aiPresets: [originalPreset, localPreset],
+      user: { token: "test-token", cloud_subscribed: true },
+    };
+    render(
+      <>
+        <AIPresetsSelector compact showModelOnly />
+        <Toaster />
+      </>,
+    );
+
+    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete original" }));
+
+    expect(await screen.findByTestId("toast-success")).toHaveTextContent(
+      "Preset removed",
+    );
+  });
+
+  it("shows a destructive app toast when removal cannot be saved", async () => {
+    mocks.settings.current = {
+      aiPresets: [originalPreset, localPreset],
+      user: { token: "test-token", cloud_subscribed: true },
+    };
+    mocks.updateSettings.mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+    render(
+      <>
+        <AIPresetsSelector compact showModelOnly />
+        <Toaster />
+      </>,
+    );
+
+    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete original" }));
+
+    const toast = await screen.findByTestId("toast-error");
+    expect(toast).toHaveTextContent("Cannot delete preset");
+    expect(toast).toHaveTextContent("disk full");
   });
 
   it("does not offer deletion for the sole remaining preset", () => {

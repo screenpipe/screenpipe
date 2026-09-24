@@ -5,7 +5,7 @@
 
 import { useState } from "react";
 import { Loader2, SlidersHorizontal } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/use-toast";
 import { Switch } from "@/components/ui/switch";
 import {
   ComposerSettingsPopover,
@@ -244,8 +244,10 @@ export function AcpConfigSelector({
     try {
       await action();
     } catch (error) {
-      toast.error(ui("Could not change {value1}", { value1: label.toLowerCase() }), {
+      toast({
+        title: ui("Could not change {value1}", { value1: label.toLowerCase() }),
         description: String(error),
+        variant: "destructive",
       });
     } finally {
       setPendingId(null);

@@ -41,7 +41,11 @@ fn create_session_with_embedding_ep<P: AsRef<Path>>(
     // degrades to an error and the caller falls back (diarization off) instead
     // of bricking startup. See `utils::ort_watchdog`.
     crate::utils::ort_watchdog::run_with_timeout(
-        "ort session init",
+        if embedding_ep {
+            "speaker_embedding"
+        } else {
+            "speaker_segmentation"
+        },
         crate::utils::ort_watchdog::ORT_INIT_TIMEOUT,
         move || {
             catch_panic_into_error("ort session init", || {

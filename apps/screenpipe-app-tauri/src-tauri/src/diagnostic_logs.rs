@@ -221,6 +221,35 @@ async fn build_bundle(files: &[LogFile]) -> String {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn audio_pending_failure_survives_rotation_collection_and_redaction() {
+        // The audio regression compares this fixture with the real failed
+        // completion path, including the originating SQLite error.
+        let diagnostic = include_str!(
+            "../../../../crates/screenpipe-audio/tests/fixtures/audio-pending-recovery-diagnostic.txt"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("screenpipe-app.2026-09-23.log");
+        tokio::fs::write(&current, diagnostic).await.unwrap();
+        tokio::fs::rename(&current, dir.path().join("screenpipe-app.2026-09-23.1.log"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            &current,
+            "INFO recorder restarted\nINFO contact=private-person@example.com\n",
+        )
+        .await
+        .unwrap();
+        let report = collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+            .await
+            .unwrap();
+        assert!(report.contains("audio remains pending for recovery"));
+        assert!(report.contains("outcome=\"silent\""));
+        assert!(report.contains("attempted to acquire a connection on a closed pool"));
+        assert!(report.contains("recorder restarted"));
+        assert!(!report.contains("private-person@example.com"));
+    }
+
     #[cfg(windows)]
     #[tokio::test]
     async fn settings_access_recovery_survives_rotation_and_redaction_without_private_data() {

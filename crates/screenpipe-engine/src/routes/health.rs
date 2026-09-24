@@ -645,6 +645,16 @@ pub struct MonitorInfo {
 pub struct HealthCheckResponse {
     pub status: String,
     pub status_code: u16,
+    /// Cached observations. Health polling never installs or probes dependencies.
+    #[serde(default)]
+    pub dependencies: serde_json::Value,
+    #[serde(default)]
+    pub runtime: serde_json::Value,
+    #[serde(default)]
+    pub startup: serde_json::Value,
+    /// Stable causes and remedies; legacy message text is retained unchanged.
+    #[serde(default)]
+    pub unhealthy_reasons: Vec<serde_json::Value>,
     pub last_frame_timestamp: Option<chrono::DateTime<Utc>>,
     pub last_audio_timestamp: Option<chrono::DateTime<Utc>>,
     pub frame_status: String,
@@ -984,6 +994,12 @@ fn degraded_response() -> HealthCheckResponse {
     HealthCheckResponse {
         status: "degraded".to_string(),
         status_code: 503,
+        dependencies: json!({"status": "unknown"}),
+        runtime: json!({"status": "unknown"}),
+        startup: json!({"phase": "unknown"}),
+        unhealthy_reasons: vec![
+            json!({"subsystem": "startup", "code": "health_snapshot_timeout", "severity": "warning", "detail": "health snapshot timed out", "remedy": "Retry the health request and inspect the engine log if it persists.", "since": null}),
+        ],
         last_frame_timestamp: None,
         last_audio_timestamp: None,
         frame_status: "unknown".to_string(),
@@ -1846,7 +1862,16 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
     // so remote monitoring can see degradation and engine-restart requests.
     let wqh = state.db.write_queue_health();
 
-    HealthCheckResponse {
+    let diagnostics = screenpipe_core::health_diagnostics::snapshot(state.audio_disabled);
+    let mut response = HealthCheckResponse {
+        dependencies: diagnostics.dependencies,
+        runtime: diagnostics.runtime,
+        startup: serde_json::to_value(diagnostics.startup).unwrap_or_default(),
+        unhealthy_reasons: diagnostics
+            .unhealthy_reasons
+            .into_iter()
+            .map(|f| serde_json::to_value(f).unwrap_or_default())
+            .collect(),
         status: overall_status.to_string(),
         status_code,
         last_frame_timestamp: last_frame,
@@ -1989,6 +2014,118 @@ async fn health_check_inner(state: &Arc<AppState>) -> HealthCheckResponse {
         schedule_paused: crate::schedule_monitor::schedule_paused(),
         hostname: hostname::get().ok().and_then(|h| h.into_string().ok()),
         version: Some(env!("CARGO_PKG_VERSION").to_string()),
+    };
+    add_health_reasons(&mut response);
+    response
+}
+
+/// Derive faults from the same typed state as the legacy response, never by
+/// parsing its human-readable message. This also covers timeout fallback above.
+fn add_health_reasons(response: &mut HealthCheckResponse) {
+    let mut add = |subsystem: &str, code: &str, detail: &str, remedy: &str| {
+        response
+            .unhealthy_reasons
+            .push(json!({"subsystem": subsystem, "code": code,
+            "severity": "warning", "detail": detail, "remedy": remedy, "since": null}));
+    };
+    if !matches!(response.frame_status.as_str(), "ok" | "disabled") {
+        add("vision", &format!("vision_{}", response.vision_reason), &response.frame_status,
+            "Inspect vision_reason and capture permissions; check selected displays and the capture loop.");
+    } else if matches!(
+        response.vision_reason.as_str(),
+        "permission_denied" | "capture_stalled" | "not_started" | "ocr_unavailable"
+    ) {
+        add(
+            "vision",
+            &format!("vision_{}", response.vision_reason),
+            &response.vision_reason,
+            "Inspect capture permissions and the local OCR installation.",
+        );
+    }
+    if !matches!(
+        response.audio_status.as_str(),
+        "ok" | "disabled" | "no_input_device" | "waiting_for_meeting"
+    ) {
+        add(
+            "audio",
+            &format!("audio_{}", response.audio_status),
+            &response.audio_status,
+            "Check selected audio devices, permissions, and the transcription engine.",
+        );
+    }
+    if response.write_queue_degraded {
+        add(
+            "database",
+            "write_queue_degraded",
+            "database writer reported repeated failures",
+            "Check free disk space and the database write error in the engine log.",
+        );
+    }
+    if response.vision_db_write_stalled {
+        add(
+            "vision",
+            "vision_write_stalled",
+            "vision persistence is stalled",
+            "Inspect capture loop and database pipeline counters.",
+        );
+    }
+    if response.audio_db_write_stalled {
+        add(
+            "audio",
+            "transcription_write_stalled",
+            "audio transcription persistence is stalled",
+            "Inspect the transcription engine and pending segment backlog.",
+        );
+    }
+    if let Some(p) = &response.pipeline {
+        if response.status == "degraded" && p.frame_drop_rate > 0.5 && p.uptime_secs > 120.0 {
+            add(
+                "vision",
+                "frame_drop_rate_high",
+                "capture frames are being dropped",
+                "Inspect capture pipeline errors and database latency.",
+            );
+        }
+        if response.status == "degraded" && p.avg_db_latency_ms > 10_000.0 && p.uptime_secs > 120.0
+        {
+            add(
+                "database",
+                "write_latency_high",
+                "vision database writes are slow",
+                "Inspect disk latency and database lock contention.",
+            );
+        }
+    }
+    if let Some(p) = &response.audio_pipeline {
+        if response.status == "degraded" && p.chunks_channel_full > 0 && p.uptime_secs > 120.0 {
+            add(
+                "audio",
+                "transcription_queue_full",
+                "transcription queue dropped audio chunks",
+                "Inspect transcription throughput and engine errors.",
+            );
+        }
+    }
+    if response
+        .ui_recorder
+        .as_ref()
+        .is_some_and(|ui| ui.configured && !ui.running)
+    {
+        add(
+            "ui_recorder",
+            "ui_recorder_not_running",
+            "UI capture is configured but not running",
+            "Check accessibility/input monitoring permissions and UI recorder startup errors.",
+        );
+    }
+    // Preserve the contract even if a future degradation condition has not yet
+    // received its own code; tests require every degraded response to explain it.
+    if response.status == "degraded" && response.unhealthy_reasons.is_empty() {
+        response.unhealthy_reasons.push(json!({"subsystem":"startup", "code":"pipeline_degraded", "severity":"warning", "detail":"a recording pipeline is degraded", "remedy":"Inspect the detailed pipeline counters and engine log.", "since":null}));
+    }
+    if !response.unhealthy_reasons.is_empty() {
+        response.status = "degraded".into();
+        response.status_code = 503;
     }
 }
 
@@ -2503,9 +2640,86 @@ mod tests {
         );
     }
 
+    #[test]
+    fn health_diagnostics_preserve_legacy_messages_and_explain_faults() {
+        let mut response = dummy_response("healthy");
+        let old_message = response.message.clone();
+        add_health_reasons(&mut response);
+        assert!(response.unhealthy_reasons.is_empty());
+        assert_eq!(response.status, "healthy");
+        response.write_queue_degraded = true;
+        add_health_reasons(&mut response);
+        assert_eq!(response.status, "degraded");
+        assert_eq!(response.status_code, 503);
+        assert_eq!(response.message, old_message);
+        assert_eq!(
+            response.unhealthy_reasons[0]["code"],
+            "write_queue_degraded"
+        );
+    }
+
+    #[test]
+    fn health_diagnostics_intentional_idle_states_remain_healthy() {
+        for audio in ["ok", "disabled", "no_input_device", "waiting_for_meeting"] {
+            for vision in ["ok", "disabled"] {
+                let mut response = dummy_response("healthy");
+                response.audio_status = audio.into();
+                response.frame_status = vision.into();
+                add_health_reasons(&mut response);
+                assert_eq!(response.status, "healthy", "{audio}/{vision}");
+                assert_eq!(response.status_code, 200);
+                assert!(response.unhealthy_reasons.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn health_diagnostics_observed_dependency_fault_changes_status_only() {
+        let mut response = dummy_response("healthy");
+        let original = response.clone();
+        response.unhealthy_reasons.push(json!({
+            "subsystem": "dependencies", "code": "ffmpeg_spawn_failing",
+            "severity": "warning", "detail": "encode failed", "remedy": "repair ffmpeg", "since": 42
+        }));
+        add_health_reasons(&mut response);
+        assert_eq!(response.status, "degraded");
+        assert_eq!(response.status_code, 503);
+        assert_eq!(response.message, original.message);
+        assert_eq!(response.verbose_instructions, original.verbose_instructions);
+        assert_eq!(response.audio_status, original.audio_status);
+        assert_eq!(response.frame_status, original.frame_status);
+        assert_eq!(response.unhealthy_reasons.len(), 1);
+        assert_eq!(response.unhealthy_reasons[0]["since"], 42);
+    }
+
+    #[test]
+    fn health_diagnostics_legacy_responses_deserialize() {
+        let mut value = serde_json::to_value(dummy_response("healthy")).unwrap();
+        for key in ["dependencies", "runtime", "startup", "unhealthy_reasons"] {
+            value.as_object_mut().unwrap().remove(key);
+        }
+        let response: HealthCheckResponse = serde_json::from_value(value).unwrap();
+        assert!(response.unhealthy_reasons.is_empty());
+    }
+
+    #[test]
+    fn health_diagnostics_timeout_and_unknown_degradation_have_reasons() {
+        assert_eq!(
+            degraded_response().unhealthy_reasons[0]["code"],
+            "health_snapshot_timeout"
+        );
+        let mut response = dummy_response("degraded");
+        add_health_reasons(&mut response);
+        assert!(!response.unhealthy_reasons.is_empty());
+    }
+
     fn dummy_response(status: &str) -> HealthCheckResponse {
         HealthCheckResponse {
             status: status.to_string(),
+            dependencies: json!({}),
+            runtime: json!({}),
+            startup: json!({}),
+            unhealthy_reasons: vec![],
             status_code: 200,
             last_frame_timestamp: None,
             last_audio_timestamp: None,

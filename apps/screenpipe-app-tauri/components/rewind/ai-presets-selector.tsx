@@ -74,7 +74,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/use-toast";
 import {
   Tooltip,
   TooltipContent,
@@ -614,7 +614,7 @@ export function AIProviderConfig({
     e.preventDefault();
 
     if (!selectedProvider) {
-      toast.error(ui("Choose an AI before continuing"));
+      toast({ title: ui("Choose an AI before continuing"), variant: "destructive" });
       return;
     }
 
@@ -623,14 +623,16 @@ export function AIProviderConfig({
     }
 
     if (Object.keys(connectionFieldErrors).length > 0) {
-      toast.error(ui("Fix the connection fields"), {
+      toast({
+        title: ui("Fix the connection fields"),
         description: Object.values(connectionFieldErrors)[0],
+        variant: "destructive",
       });
       return;
     }
 
     if (connectionTestRequired && !connectionTestPassed) {
-      toast.error(ui("Test the connection before saving"));
+      toast({ title: ui("Test the connection before saving"), variant: "destructive" });
       return;
     }
 
@@ -1554,7 +1556,8 @@ export const AIPresetsSelector = ({
           onPresetSaved?.(nextPreset);
         }
 
-        toast.success(ui("Preset changed"), {
+        toast({
+          title: ui("Preset changed"),
           description: ui("Switched to {value1} ({value2})", { value1: nextPreset.id, value2: nextPreset.model }),
         });
       }
@@ -1566,22 +1569,28 @@ export const AIPresetsSelector = ({
 
   const handleSavePreset = (preset: Partial<AIPreset>) => {
     if (!canManageEmployeePresets) {
-      toast.error(ui("Managed by your organization"), {
+      toast({
+        title: ui("Managed by your organization"),
         description: ui("Your admin controls which AI presets are available"),
+        variant: "destructive",
       });
       return;
     }
 
     if (!preset.id) {
-      toast.error(ui("Please enter a name for this preset"), {
+      toast({
+        title: ui("Please enter a name for this preset"),
         description: ui("Name is required"),
+        variant: "destructive",
       });
       return;
     }
 
     if (!settings?.aiPresets) {
-      toast.error(ui("Error"), {
+      toast({
+        title: ui("Error"),
         description: ui("Settings not initialized"),
+        variant: "destructive",
       });
       return;
     }
@@ -1601,8 +1610,10 @@ export const AIPresetsSelector = ({
         );
 
         if (existingPreset) {
-          toast.error(ui("Name already exists"), {
+          toast({
+            title: ui("Name already exists"),
             description: ui("Please choose a different name"),
+            variant: "destructive",
           });
           return;
         }
@@ -1618,7 +1629,8 @@ export const AIPresetsSelector = ({
           ],
         });
 
-        toast.success(ui("Preset copied"), {
+        toast({
+          title: ui("Preset copied"),
           description: ui("New preset has been created from copy"),
         });
       } else {
@@ -1641,7 +1653,8 @@ export const AIPresetsSelector = ({
           });
         }
 
-        toast.success(ui("Preset updated"), {
+        toast({
+          title: ui("Preset updated"),
           description: ui("Your changes have been saved"),
         });
       }
@@ -1652,8 +1665,10 @@ export const AIPresetsSelector = ({
       );
 
       if (existingPreset) {
-        toast.error(ui("Name already exists"), {
+        toast({
+          title: ui("Name already exists"),
           description: ui("Please choose a different name"),
+          variant: "destructive",
         });
         return;
       }
@@ -1683,7 +1698,8 @@ export const AIPresetsSelector = ({
         });
       }
 
-      toast.success(ui("Preset created"), {
+      toast({
+        title: ui("Preset created"),
         description: ui("New preset has been added"),
       });
     }
@@ -1715,8 +1731,10 @@ export const AIPresetsSelector = ({
 
   const handleDuplicatePreset = (preset: AIPreset) => {
     if (!canManageEmployeePresets || isEnterpriseManagedPreset(preset)) {
-      toast.error(ui("Managed by your organization"), {
+      toast({
+        title: ui("Managed by your organization"),
         description: ui("Your admin controls which AI presets are available"),
+        variant: "destructive",
       });
       return;
     }
@@ -1738,8 +1756,10 @@ export const AIPresetsSelector = ({
 
   const handleEditPreset = (preset: AIPreset) => {
     if (!canManageEmployeePresets || isEnterpriseManagedPreset(preset)) {
-      toast.error(ui("Managed by your organization"), {
+      toast({
+        title: ui("Managed by your organization"),
         description: ui("Your admin controls which AI presets are available"),
+        variant: "destructive",
       });
       return;
     }
@@ -1752,8 +1772,10 @@ export const AIPresetsSelector = ({
     if (!settings?.aiPresets) return;
     if (preset.defaultPreset) return;
     if (isManagedDeployment && aiPresetPolicy.lock_default_preset) {
-      toast.error(ui("Default preset is locked"), {
+      toast({
+        title: ui("Default preset is locked"),
         description: ui("Your admin controls the default AI preset"),
+        variant: "destructive",
       });
       return;
     }
@@ -1772,7 +1794,8 @@ export const AIPresetsSelector = ({
       onPresetSaved(preset);
     }
 
-    toast.success(ui("Default preset updated"), {
+    toast({
+      title: ui("Default preset updated"),
       description: ui("{value1} is now the default preset", { value1: preset.id }),
     });
   };
@@ -1780,15 +1803,19 @@ export const AIPresetsSelector = ({
   const handleRemovePreset = async (preset: AIPreset) => {
     if (!settings?.aiPresets) return;
     if (!canManageEmployeePresets || isEnterpriseManagedPreset(preset)) {
-      toast.error(ui("Managed by your organization"), {
+      toast({
+        title: ui("Managed by your organization"),
         description: ui("Your admin controls which AI presets are available"),
+        variant: "destructive",
       });
       return;
     }
 
     if (settings.aiPresets.length <= 1) {
-      toast.error(ui("Cannot delete preset"), {
+      toast({
+        title: ui("Cannot delete preset"),
         description: ui("At least one AI preset is required"),
+        variant: "destructive",
       });
       return;
     }
@@ -1801,12 +1828,15 @@ export const AIPresetsSelector = ({
     }
     try {
       await updateSettings({ aiPresets: updatedPresets });
-      toast.success(ui("Preset removed"), {
+      toast({
+        title: ui("Preset removed"),
         description: ui("{value1} has been removed", { value1: preset.id }),
       });
     } catch (error) {
-      toast.error(ui("Cannot delete preset"), {
+      toast({
+        title: ui("Cannot delete preset"),
         description: error instanceof Error ? error.message : ui("Preset changes could not be saved"),
+        variant: "destructive",
       });
     }
   };
@@ -2119,7 +2149,8 @@ export const AIPresetsSelector = ({
 
                           onPresetSaved?.(preset);
 
-                          toast.success(ui("Preset selected"), {
+                          toast({
+                            title: ui("Preset selected"),
                             description: ui("{value1} is now active", { value1: preset.id }),
                           });
                         }

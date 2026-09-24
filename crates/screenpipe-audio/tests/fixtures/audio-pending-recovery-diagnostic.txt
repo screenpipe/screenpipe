@@ -1,0 +1,1 @@
+WARN audio processing outcome could not be saved; audio remains pending for recovery outcome="silent" cause=attempted to acquire a connection on a closed pool

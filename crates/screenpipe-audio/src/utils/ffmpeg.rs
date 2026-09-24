@@ -19,6 +19,25 @@ fn encode_single_audio(
     output_path: &Path,
     overwrite_reserved_path: bool,
 ) -> anyhow::Result<()> {
+    let operation = screenpipe_core::health_diagnostics::MediaOperation::start("audio");
+    let result = encode_single_audio_inner(
+        data,
+        sample_rate,
+        channels,
+        output_path,
+        overwrite_reserved_path,
+    );
+    operation.finish(&result);
+    result
+}
+
+fn encode_single_audio_inner(
+    data: &[u8],
+    sample_rate: u32,
+    channels: u16,
+    output_path: &Path,
+    overwrite_reserved_path: bool,
+) -> anyhow::Result<()> {
     debug!("Starting FFmpeg process");
 
     // SCREENPIPE-CLI-T0 / T5: the previous `.expect("Failed to spawn FFmpeg
@@ -281,6 +300,63 @@ pub fn write_audio_to_file(
 mod path_tests {
     use super::{reserve_new_file_path_with_timestamp, write_audio_to_new_file};
     use chrono::TimeZone;
+
+    /// Compare identical real encodes with/without the diagnostics wrapper.
+    /// Synthetic PCM avoids microphone access and private recordings. Alternate
+    /// order to reduce warm-cache/thermal bias; compare decoded PCM, not only
+    /// file existence. This is a local timing sample, not a CI timing gate.
+    #[test]
+    #[ignore = "requires ffmpeg; manual encode/output/performance eval"]
+    fn health_diagnostics_audio_encode_eval() {
+        use super::{encode_single_audio, encode_single_audio_inner};
+        use std::time::Instant;
+        let ffmpeg = screenpipe_core::find_ffmpeg_path().expect("ffmpeg required for eval");
+        let dir = tempfile::tempdir().unwrap();
+        let pcm: Vec<u8> = (0..160_000)
+            .flat_map(|i| {
+                let sample = (i as f32 * 440.0 * std::f32::consts::TAU / 16_000.0).sin() * 0.2;
+                sample.to_le_bytes()
+            })
+            .collect();
+        let mut baseline = vec![];
+        let mut observed = vec![];
+        for round in 0..22 {
+            let mut decoded = vec![];
+            for index in 0..2 {
+                let instrumented = (round + index) % 2 == 0;
+                let path = dir.path().join(format!("{round}-{index}.mp4"));
+                let started = Instant::now();
+                if instrumented {
+                    encode_single_audio(&pcm, 16_000, 1, &path, false).unwrap();
+                } else {
+                    encode_single_audio_inner(&pcm, 16_000, 1, &path, false).unwrap();
+                }
+                let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+                if round >= 2 {
+                    if instrumented {
+                        observed.push(elapsed);
+                    } else {
+                        baseline.push(elapsed);
+                    }
+                }
+                let output = screenpipe_core::ffmpeg_cmd(&ffmpeg)
+                    .args(["-v", "error", "-i"])
+                    .arg(&path)
+                    .args(["-f", "f32le", "-acodec", "pcm_f32le", "pipe:1"])
+                    .output()
+                    .unwrap();
+                assert!(output.status.success());
+                assert!(output.stdout.len() >= pcm.len());
+                decoded.push(output.stdout);
+            }
+            assert_eq!(decoded[0], decoded[1], "diagnostics changed decoded audio");
+        }
+        baseline.sort_by(f64::total_cmp);
+        observed.sort_by(f64::total_cmp);
+        eprintln!("10s PCM, 20 pairs: baseline median_ms={:.3} p95_ms={:.3}; observed median_ms={:.3} p95_ms={:.3}; median_delta_pct={:.2}; all 22 decoded pairs identical",
+            baseline[10], baseline[18], observed[10], observed[18],
+            (observed[10] / baseline[10] - 1.0) * 100.0);
+    }
 
     #[test]
     fn reserves_distinct_paths_for_same_device_and_second() {

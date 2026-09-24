@@ -13,7 +13,7 @@ import {
   ShieldCheck,
   type LucideProps,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -349,8 +349,10 @@ export function AcpPermissionSelector({
       }
       setOpen(false);
     } catch (error) {
-      toast.error(ui("Could not change {value1} permissions", { value1: agentName.toLowerCase() }), {
+      toast({
+        title: ui("Could not change {value1} permissions", { value1: agentName.toLowerCase() }),
         description: String(error),
+        variant: "destructive",
       });
     } finally {
       setPendingValue(null);

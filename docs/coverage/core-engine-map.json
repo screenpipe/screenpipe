@@ -853,6 +853,7 @@
         "src/transcription/deepgram/batch.rs",
         "src/transcription/deepgram/mod.rs",
         "src/transcription/engine.rs",
+        "src/transcription/handle_new_transcript.rs",
         "src/transcription/openai_compatible/batch.rs",
         "src/transcription/transcription_result.rs",
         "src/transcription/whisper/batch.rs",
@@ -1344,6 +1345,7 @@
       "crate": "screenpipe-a11y",
       "files": [
         "src/incognito/windows.rs",
+        "src/platform/retained_tree.rs",
         "src/platform/windows.rs",
         "src/platform/windows_uia.rs",
         "src/platform/windows_uia_tests.rs",

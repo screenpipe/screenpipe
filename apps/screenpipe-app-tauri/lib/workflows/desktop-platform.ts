@@ -26,6 +26,7 @@ import {
 } from "./disk-storage";
 
 import { ensureWorkflowTask, startWorkflowJob, getWorkflowJob, latestWorkflowJob, stopWorkflowJob, loadScheduledCatalog, saveWorkflowCorrections, saveWorkflowEdits } from "./scheduled-discovery";
+import { loadWorkflowScreenshot } from "./source-screenshot";
 
 const WORK_PROFILE_KEY = "screenpipe-workflows:work-profile:v1";
 const BROWSER_ANALYSIS_KEY = "screenpipe-workflows:last-analysis-v2";
@@ -121,6 +122,7 @@ async function saveWorkProfile(profile: WorkProfile) {
 
 export const desktopWorkflowsPlatform: WorkflowsPlatform = {
   modelPreference: workflowModelPreference,
+  ...(!browserPreview ? { loadWorkflowScreenshot } : {}),
   ...(!browserPreview ? { loadWorkflowRecording: async (timestamp: string, app: string) => {
     const media = await invoke<WorkflowRecording | null>("load_workflow_recording", { timestamp, appName: app });
     if (!media) return null;

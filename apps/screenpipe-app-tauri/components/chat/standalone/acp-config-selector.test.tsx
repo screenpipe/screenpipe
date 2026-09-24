@@ -19,6 +19,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { AcpConfigSelector } from "./acp-config-selector";
+import { Toaster } from "@/components/ui/toaster";
 import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 import type { AIPreset } from "@/lib/utils/tauri";
 
@@ -417,6 +418,30 @@ describe("ACP config trigger", () => {
         null,
       ),
     );
+  });
+
+  it("shows an error toast when the live session rejects a change", async () => {
+    seedSession([modelOption("sonnet")]);
+    mocks.setConfigOption.mockResolvedValue({
+      status: "error",
+      error: "adapter rejected model",
+    });
+
+    render(
+      <>
+        <AcpConfigSelector sessionId={SESSION} agentId="claude-acp" />
+        <Toaster />
+      </>,
+    );
+
+    fireEvent.click(screen.getByTestId("acp-config-trigger"));
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "opus" },
+    });
+
+    const toast = await screen.findByTestId("toast-error");
+    expect(toast).toHaveTextContent("Could not change model");
+    expect(toast).toHaveTextContent("adapter rejected model");
   });
 
   it("keeps a two-value effort axis visible as a select", () => {

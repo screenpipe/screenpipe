@@ -352,6 +352,14 @@ impl ServerCore {
         workflow_catalog_dir: Option<std::path::PathBuf>,
         runtime_lifetime: tokio::sync::oneshot::Sender<()>,
     ) -> Result<Self, String> {
+        screenpipe_core::health_diagnostics::begin_startup(&config.data_dir);
+        screenpipe_core::health_diagnostics::configure_media_required(
+            !config.disable_audio
+                || !config.disable_snapshot_compaction
+                || (!config.disable_vision
+                    && config.hd_recording_default
+                        == screenpipe_engine::high_fps_controller::DefaultMode::Always),
+        );
         info!("Starting server core on port {}", config.port);
         crate::health::set_boot_phase("starting", Some("starting server"));
         let ai_gateway_url = crate::config::screenpipe_ai_gateway_url()?;

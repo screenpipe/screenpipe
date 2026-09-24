@@ -573,109 +573,9 @@ impl AudioManager {
             }
         }
 
-        // Spawn reconciliation sweep for orphaned audio chunks (batch mode only)
-        if self.options.read().await.transcription_mode == TranscriptionMode::Batch {
-            let db = self.db.clone();
-            let engine_ref = self.engine.clone();
-            let on_insert_bg = self.on_transcription_insert.clone();
-            let options_ref = self.options.clone();
-            let seg_mgr = self.segmentation_manager.clone();
-            let output_path_bg = self.options.read().await.output_path.clone();
-            let metrics_bg = self.metrics.clone();
-            let meeting_detector_bg = self.meeting_detector().await;
-            let reconciliation_wakeup = self.reconciliation_wakeup.clone();
-            let handle = tokio::spawn(async move {
-                // Wait for model load + initial recordings, unless a foreground
-                // session-end sweep tells us its 50-chunk cap left more work.
-                tokio::select! {
-                    _ = tokio::time::sleep(RECONCILIATION_IDLE_INTERVAL) => {}
-                    _ = reconciliation_wakeup.notified() => {}
-                }
-                let mut consecutive_full_sweeps = 0usize;
-                loop {
-                    // Contain a panic inside a sweep so it cannot kill this
-                    // long-lived worker (issue #3498: a single panic used to
-                    // stop the loop permanently, silently piling up pending
-                    // chunks until the app was restarted). The sweep stays on
-                    // this task, so shutdown still cancels an in-flight sweep at
-                    // its next await. The locks it holds are tokio::sync locks,
-                    // which do not poison, so a caught panic releases them
-                    // cleanly.
-                    let swept = AssertUnwindSafe(async {
-                        if let Some(detector) = &meeting_detector_bg {
-                            detector.check_grace_period().await;
-                            if detector.is_in_audio_session() {
-                                debug!(
-                                    "reconciliation: skipping background sweep during active audio session"
-                                );
-                                return false;
-                            }
-                        }
-
-                        let engine_guard = engine_ref.read().await;
-                        if let Some(ref transcription_engine) = *engine_guard {
-                            let opts = options_ref.read().await;
-                            let audio_engine = opts.transcription_engine.clone();
-                            let batch_max_dur = opts.batch_max_duration_secs;
-                            drop(opts);
-
-                            let sweep = super::reconciliation::reconcile_untranscribed(
-                                &db,
-                                transcription_engine,
-                                on_insert_bg.as_ref(),
-                                audio_engine,
-                                Some(seg_mgr.clone()),
-                                output_path_bg.as_deref(),
-                                batch_max_dur,
-                                Some(metrics_bg.clone()),
-                            )
-                            .await;
-                            let count = sweep.processed_chunks;
-                            if count > 0 {
-                                info!("reconciliation: transcribed {} orphaned chunks", count);
-                            }
-                            return sweep.hit_candidate_limit;
-                        }
-                        false
-                    })
-                    .catch_unwind()
-                    .await;
-                    let swept_full_batch = match swept {
-                        Ok(full) => full,
-                        Err(panic) => {
-                            let reason = panic
-                                .downcast_ref::<&str>()
-                                .copied()
-                                .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
-                                .unwrap_or("unknown cause");
-                            error!(
-                                "reconciliation: sweep panicked, worker continues: {}",
-                                reason
-                            );
-                            false
-                        }
-                    };
-
-                    if swept_full_batch
-                        && consecutive_full_sweeps + 1 < MAX_IMMEDIATE_RECONCILIATION_SWEEPS
-                    {
-                        consecutive_full_sweeps += 1;
-                        info!(
-                            "reconciliation: sweep hit the chunk cap; continuing backlog drain immediately"
-                        );
-                        tokio::task::yield_now().await;
-                        continue;
-                    }
-
-                    consecutive_full_sweeps = 0;
-                    tokio::select! {
-                        _ = tokio::time::sleep(RECONCILIATION_IDLE_INTERVAL) => {}
-                        _ = reconciliation_wakeup.notified() => {}
-                    }
-                }
-            });
-            *self.reconciliation_handle.write().await = Some(handle);
-        }
+        // Durable pending chunks exist in both realtime and batch mode: silence,
+        // provider failures, or interrupted writes must recover after restart.
+        *self.reconciliation_handle.write().await = Some(self.start_reconciliation_handler().await);
 
         start_device_monitor(self_arc.clone(), self.device_manager.clone()).await?;
 
@@ -696,6 +596,110 @@ impl AudioManager {
         Ok(())
     }
 
+    async fn start_reconciliation_handler(&self) -> JoinHandle<()> {
+        let db = self.db.clone();
+        let engine_ref = self.engine.clone();
+        let on_insert_bg = self.on_transcription_insert.clone();
+        let options_ref = self.options.clone();
+        let seg_mgr = self.segmentation_manager.clone();
+        let output_path_bg = self.options.read().await.output_path.clone();
+        let metrics_bg = self.metrics.clone();
+        let meeting_detector_bg = self.meeting_detector().await;
+        let reconciliation_wakeup = self.reconciliation_wakeup.clone();
+        tokio::spawn(async move {
+            // Wait for model load + initial recordings, unless a foreground
+            // session-end sweep tells us its 50-chunk cap left more work.
+            tokio::select! {
+                _ = tokio::time::sleep(RECONCILIATION_IDLE_INTERVAL) => {}
+                _ = reconciliation_wakeup.notified() => {}
+            }
+            let mut consecutive_full_sweeps = 0usize;
+            loop {
+                // Contain a panic inside a sweep so it cannot kill this
+                // long-lived worker (issue #3498: a single panic used to
+                // stop the loop permanently, silently piling up pending
+                // chunks until the app was restarted). The sweep stays on
+                // this task, so shutdown still cancels an in-flight sweep at
+                // its next await. The locks it holds are tokio::sync locks,
+                // which do not poison, so a caught panic releases them
+                // cleanly.
+                let swept = AssertUnwindSafe(async {
+                    if let Some(detector) = &meeting_detector_bg {
+                        detector.check_grace_period().await;
+                        if detector.is_in_audio_session() {
+                            info!(
+                                "reconciliation: deferring background recovery during active audio session"
+                            );
+                            return false;
+                        }
+                    }
+
+                    let engine_guard = engine_ref.read().await;
+                    if let Some(ref transcription_engine) = *engine_guard {
+                        let opts = options_ref.read().await;
+                        let audio_engine = opts.transcription_engine.clone();
+                        let batch_max_dur = opts.batch_max_duration_secs;
+                        info!(mode = ?opts.transcription_mode, engine = %audio_engine, "reconciliation: starting pending audio recovery");
+                        drop(opts);
+
+                        let sweep = super::reconciliation::reconcile_untranscribed(
+                            &db,
+                            transcription_engine,
+                            on_insert_bg.as_ref(),
+                            audio_engine,
+                            Some(seg_mgr.clone()),
+                            output_path_bg.as_deref(),
+                            batch_max_dur,
+                            Some(metrics_bg.clone()),
+                        )
+                        .await;
+                        let count = sweep.processed_chunks;
+                        for _ in 0..count {
+                            metrics_bg.record_segment_batch_processed();
+                        }
+                        info!(processed_chunks = count, hit_candidate_limit = sweep.hit_candidate_limit, "reconciliation: pending audio recovery completed");
+                        return sweep.hit_candidate_limit;
+                    }
+                    false
+                })
+                .catch_unwind()
+                .await;
+                let swept_full_batch = match swept {
+                    Ok(full) => full,
+                    Err(panic) => {
+                        let reason = panic
+                            .downcast_ref::<&str>()
+                            .copied()
+                            .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                            .unwrap_or("unknown cause");
+                        error!(
+                            "reconciliation: sweep panicked, worker continues: {}",
+                            reason
+                        );
+                        false
+                    }
+                };
+
+                if swept_full_batch
+                    && consecutive_full_sweeps + 1 < MAX_IMMEDIATE_RECONCILIATION_SWEEPS
+                {
+                    consecutive_full_sweeps += 1;
+                    info!(
+                        "reconciliation: sweep hit the chunk cap; continuing backlog drain immediately"
+                    );
+                    tokio::task::yield_now().await;
+                    continue;
+                }
+
+                consecutive_full_sweeps = 0;
+                tokio::select! {
+                    _ = tokio::time::sleep(RECONCILIATION_IDLE_INTERVAL) => {}
+                    _ = reconciliation_wakeup.notified() => {}
+                }
+            }
+        })
+    }
+
     pub async fn restart(&self) -> Result<()> {
         self.stop_internal().await?;
         self.start_internal().await?;
@@ -705,6 +709,12 @@ impl AudioManager {
 
     async fn stop_internal(&self) -> Result<()> {
         *self.status.write().await = AudioManagerStatus::Stopped;
+
+        // Cancel recovery before a pause/restart can replace its handle or
+        // engine. Do not wait for native inference before stopping capture.
+        if let Some(handle) = self.reconciliation_handle.write().await.take() {
+            handle.abort();
+        }
 
         stop_device_monitor().await?;
 
@@ -1694,6 +1704,7 @@ impl AudioManager {
                                 metrics.clone(),
                                 persisted_file_path.clone(),
                                 filter_music,
+                                &db,
                             )
                             .await
                             {
@@ -1715,6 +1726,7 @@ impl AudioManager {
                             metrics.clone(),
                             persisted_file_path.clone(),
                             filter_music,
+                            &db,
                         )
                         .await
                         {
@@ -1736,6 +1748,7 @@ impl AudioManager {
                         metrics.clone(),
                         persisted_file_path.clone(),
                         filter_music,
+                        &db,
                     )
                     .await
                     {
@@ -1785,12 +1798,6 @@ impl AudioManager {
 
     pub async fn shutdown(&self) -> Result<()> {
         self.stop().await?;
-
-        // Abort reconciliation first — it holds an engine read-lock during transcription,
-        // so it must be cancelled before we drop the engine to avoid use-after-free.
-        if let Some(handle) = self.reconciliation_handle.write().await.take() {
-            handle.abort();
-        }
 
         let rec = self.recording_handles.clone();
         let recording = self.recording_receiver_handle.clone();
@@ -2550,6 +2557,155 @@ mod tests {
         Arc,
     };
     use tokio::sync::{Barrier, Notify, Semaphore};
+
+    #[tokio::test]
+    async fn pending_cloud_audio_recovers_in_both_modes_after_failure_and_restart() {
+        use crate::transcription::deepgram::DeepgramTranscriptionConfig;
+        use crate::utils::ffmpeg::write_audio_to_file;
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+        for mode in [TranscriptionMode::Realtime, TranscriptionMode::Batch] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = Arc::new(
+                DatabaseManager::new(
+                    dir.path().join("db.sqlite").to_str().unwrap(),
+                    Default::default(),
+                )
+                .await
+                .unwrap(),
+            );
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(403).set_body_string("test account denied"))
+                .mount(&server)
+                .await;
+            let cloud = DeepgramTranscriptionConfig {
+                endpoint: format!("{}/v1/listen", server.uri()),
+                auth_token: "test".into(),
+                auth_header_prefix: "Bearer",
+            };
+            let detector = Arc::new(MeetingDetector::new());
+            let manager = AudioManager::new(
+                AudioManagerOptions {
+                    is_disabled: true, // No physical capture or model download in this test.
+                    transcription_mode: mode.clone(),
+                    transcription_engine: Arc::new(AudioTranscriptionEngine::Deepgram),
+                    deepgram_config: Some(cloud.clone()),
+                    output_path: Some(dir.path().to_path_buf()),
+                    meeting_detector: Some(detector.clone()),
+                    ..Default::default()
+                },
+                db.clone(),
+            )
+            .await
+            .unwrap();
+            *manager.engine.write().await = Some(TranscriptionEngine::Deepgram {
+                config: cloud,
+                languages: vec![],
+                vocabulary: vec![],
+            });
+            let path = dir.path().join("Mic (input)_2026-09-23_10-00-00.mp4");
+            let samples: Vec<f32> = (0..16000).map(|n| (n as f32 * 0.1).sin() * 0.1).collect();
+            write_audio_to_file(&samples, 16000, &path, false).unwrap();
+            let retained = std::fs::read(&path).unwrap();
+            let captured = chrono::Utc::now() - chrono::Duration::hours(1);
+            let id = db
+                .insert_audio_chunk(path.to_str().unwrap(), Some(captured))
+                .await
+                .unwrap();
+
+            // Foreground meetings keep priority even in realtime mode.
+            detector.set_v2_in_meeting(true);
+            let worker = manager.start_reconciliation_handler().await;
+            let cancellation = worker.abort_handle();
+            *manager.reconciliation_handle.write().await = Some(worker);
+            manager.reconciliation_wakeup.notify_one();
+            tokio::task::yield_now().await;
+            assert!(server.received_requests().await.unwrap().is_empty());
+            detector.set_v2_in_meeting(false);
+            manager.reconciliation_wakeup.notify_one();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while manager.metrics.snapshot().transcription_errors == 0 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            manager.stop_internal().await.unwrap();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while !cancellation.is_finished() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("pause must cancel background recovery");
+            assert!(manager.reconciliation_handle.read().await.is_none());
+            assert_eq!(std::fs::read(&path).unwrap(), retained);
+            let pending = db
+                .get_reconciliation_candidate_chunks(
+                    captured - chrono::Duration::seconds(1),
+                    chrono::Utc::now(),
+                    50,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                pending.len(),
+                1,
+                "provider failure must retain a recoverable chunk"
+            );
+
+            // New durable recording remains admissible during backlog recovery.
+            let fresh = dir.path().join("Mic (input)_2026-09-23_11-00-00.mp4");
+            server.reset().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "results": {"channels": [{"alternatives": [{"transcript": "recovered durable audio"}]}]}
+                })).set_delay(Duration::from_secs(1)))
+                .mount(&server).await;
+            // Restart the worker against the same durable pending records.
+            let worker = manager.start_reconciliation_handler().await;
+            *manager.reconciliation_handle.write().await = Some(worker);
+            manager.reconciliation_wakeup.notify_one();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while server.received_requests().await.unwrap().is_empty() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let capture_started = std::time::Instant::now();
+            write_audio_to_file(&samples, 16000, &fresh, false).unwrap();
+            let fresh_id = db
+                .insert_audio_chunk(fresh.to_str().unwrap(), Some(chrono::Utc::now()))
+                .await
+                .unwrap();
+            assert!(db.audio_chunk_exists(fresh_id).await.unwrap());
+            assert_eq!(manager.metrics.snapshot().segments_batch_processed, 0);
+            eprintln!(
+                "{mode:?}: durable capture during cloud recovery took {:?}",
+                capture_started.elapsed()
+            );
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while manager.metrics.snapshot().segments_batch_processed == 0 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            manager.stop_internal().await.unwrap();
+            assert_eq!(db.count_audio_transcriptions(id).await.unwrap(), 1);
+            assert_eq!(std::fs::read(&path).unwrap(), retained);
+            assert!(fresh.exists());
+            assert_eq!(
+                db.count_audio_transcriptions(fresh_id).await.unwrap(),
+                0,
+                "fresh capture must not be retranscribed by recovery"
+            );
+            assert_eq!(server.received_requests().await.unwrap().len(), 1);
+            db.close().await;
+        }
+    }
 
     #[tokio::test]
     async fn explicit_resume_cannot_report_success_when_meetings_only_gate_skips_start() {

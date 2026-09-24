@@ -278,6 +278,7 @@ pub async fn process_audio_input(
     metrics: Arc<AudioPipelineMetrics>,
     pre_written_path: Option<String>,
     filter_music: bool,
+    db: &screenpipe_db::DatabaseManager,
 ) -> Result<()> {
     // capture_timestamp is set when audio enters the channel. Used for both
     // file naming and DB storage so audio appears at the correct timeline position,
@@ -315,7 +316,18 @@ pub async fn process_audio_input(
     metrics.record_vad_result(speech_ratio_ok, speech_ratio);
 
     if !speech_ratio_ok {
-        // Audio is already persisted to disk by the caller — just skip transcription
+        // The caller already persisted this chunk as pending. Complete it even
+        // though VAD intentionally skips STT, without counting a provider call.
+        if let Some(path) =
+            pre_written_path.filter(|_| !matches!(session, TranscriptionSession::Disabled))
+        {
+            super::handle_new_transcript::finish_without_text(
+                db,
+                &path,
+                screenpipe_db::ChunkOutcome::Silent,
+            )
+            .await;
+        }
         return Ok(());
     }
 
@@ -338,6 +350,12 @@ pub async fn process_audio_input(
         })?;
         new_file_path
     };
+
+    // Disabled (including model-load fallback) is not a successful empty STT
+    // result. Retain the persisted audio for a later enabled engine to recover.
+    if matches!(session, TranscriptionSession::Disabled) {
+        return Ok(());
+    }
 
     while let Some(segment) = segments.recv().await {
         let path = file_path.clone();
