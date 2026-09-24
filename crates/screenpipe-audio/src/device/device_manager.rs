@@ -196,6 +196,27 @@ impl DeviceManager {
         self.streams.get(device).map(|s| s.value().clone())
     }
 
+    /// Reuse the render stream already authorized for capture. Meeting Tap
+    /// replaces System Audio during piggyback; never start extra capture here.
+    pub fn aec_reference(&self, default: Option<&AudioDevice>) -> Option<Arc<AudioStream>> {
+        let meeting = AudioDevice {
+            name: "Meeting Tap".into(),
+            device_type: crate::core::device::DeviceType::Output,
+        };
+        let selected = [&meeting].into_iter().chain(default).find_map(|device| {
+            self.stream(device)
+                .filter(|s| self.is_running(device) && !s.is_disconnected.load(Ordering::Relaxed))
+        });
+        selected
+    }
+
+    #[cfg(test)]
+    pub(crate) fn register_test_stream(&self, stream: Arc<AudioStream>) {
+        self.states
+            .insert((*stream.device).clone(), Arc::new(AtomicBool::new(true)));
+        self.streams.insert((*stream.device).clone(), stream);
+    }
+
     pub fn is_running(&self, device: &AudioDevice) -> bool {
         self.states
             .get(device)
@@ -259,6 +280,41 @@ mod tests {
     use super::*;
     use crate::core::device::DeviceType;
     use crate::core::stream::AudioStream;
+
+    #[tokio::test]
+    async fn aec_reference_follows_meeting_replacement_and_falls_back() {
+        let dm = DeviceManager::new(false, false, false).await.unwrap();
+        let output = AudioDevice::new("System Audio".into(), DeviceType::Output);
+        let (system, _) = AudioStream::from_sender_for_test(Arc::new(output.clone()), 48000, 1);
+        let system = Arc::new(system);
+        dm.register_test_stream(system.clone());
+        assert!(Arc::ptr_eq(
+            &dm.aec_reference(Some(&output)).unwrap(),
+            &system
+        ));
+        let meeting = AudioDevice::new("Meeting Tap".into(), DeviceType::Output);
+        let (first, _) = AudioStream::from_sender_for_test(Arc::new(meeting.clone()), 48000, 1);
+        let first = Arc::new(first);
+        dm.register_test_stream(first.clone());
+        assert!(Arc::ptr_eq(
+            &dm.aec_reference(Some(&output)).unwrap(),
+            &first
+        ));
+        let (second, _) = AudioStream::from_sender_for_test(Arc::new(meeting), 16000, 1);
+        let second = Arc::new(second);
+        dm.register_test_stream(second.clone());
+        assert!(Arc::ptr_eq(
+            &dm.aec_reference(Some(&output)).unwrap(),
+            &second
+        ));
+        second.is_disconnected.store(true, Ordering::Relaxed);
+        assert!(Arc::ptr_eq(
+            &dm.aec_reference(Some(&output)).unwrap(),
+            &system
+        ));
+        system.is_disconnected.store(true, Ordering::Relaxed);
+        assert!(dm.aec_reference(Some(&output)).is_none());
+    }
 
     #[test]
     fn process_resolved_meeting_devices_bypass_inventory_validation() {

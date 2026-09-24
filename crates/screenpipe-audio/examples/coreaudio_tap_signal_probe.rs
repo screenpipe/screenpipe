@@ -36,7 +36,8 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(60);
 
-    let (tx, mut rx) = broadcast::channel::<Vec<f32>>(4096);
+    let tx = screenpipe_audio::core::captured_audio::CaptureSender::new(4096);
+    let mut rx = tx.subscribe();
     let is_running = Arc::new(AtomicBool::new(true));
     let is_disconnected = Arc::new(AtomicBool::new(false));
     let (config, handle) = screenpipe_audio::core::process_tap::spawn_process_tap_capture(

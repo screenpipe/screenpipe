@@ -24,6 +24,7 @@
 //! available separately via `spawn_process_tap_capture`, which is explicitly
 //! system-wide by design (the Windows counterpart to the macOS global tap).
 
+use crate::core::captured_audio::CaptureSender;
 use anyhow::{anyhow, Result};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -35,7 +36,6 @@ use std::sync::{
 };
 use std::time::Duration;
 use sysinfo::{Pid, PidExt, ProcessExt, ProcessRefreshKind, System, SystemExt};
-use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 use windows::core::{implement, IUnknown, Interface, HRESULT, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
@@ -124,7 +124,7 @@ pub fn is_process_tap_available() -> bool {
 /// themselves rather than have it happen silently underneath a meeting-only
 /// request.
 pub fn spawn_process_tap_capture(
-    tx: broadcast::Sender<Vec<f32>>,
+    tx: CaptureSender,
     _is_running: Arc<AtomicBool>,
     is_disconnected: Arc<AtomicBool>,
 ) -> Result<(AudioStreamConfig, tokio::task::JoinHandle<()>)> {
@@ -145,7 +145,7 @@ pub fn spawn_process_tap_capture(
 /// `spawn_process_tap_capture`.
 pub fn spawn_process_tap_capture_for_pids(
     pids: Vec<i32>,
-    tx: broadcast::Sender<Vec<f32>>,
+    tx: CaptureSender,
     _is_running: Arc<AtomicBool>,
     is_disconnected: Arc<AtomicBool>,
 ) -> Result<(AudioStreamConfig, tokio::task::JoinHandle<()>)> {
@@ -301,7 +301,7 @@ struct WasapiLoopbackCapture {
 }
 
 fn spawn_wasapi_loopback(
-    tx: broadcast::Sender<Vec<f32>>,
+    tx: CaptureSender,
     is_disconnected: Arc<AtomicBool>,
     source: LoopbackSource,
 ) -> Result<(AudioStreamConfig, tokio::task::JoinHandle<()>)> {
@@ -594,7 +594,7 @@ fn wait_for_disconnect(is_disconnected: &AtomicBool, duration: Duration) -> bool
 // exit, endpoint change, wait/drain failures, external disconnects.
 fn run_capture_loop(
     capture: &mut WasapiLoopbackCapture,
-    tx: &broadcast::Sender<Vec<f32>>,
+    tx: &CaptureSender,
     is_disconnected: &Arc<AtomicBool>,
     label: &str,
     target_watch: Option<&TargetProcessWatch>,
@@ -645,10 +645,7 @@ fn run_capture_loop(
     CaptureExit::Disconnected
 }
 
-unsafe fn drain_capture_packets(
-    capture: &WasapiLoopbackCapture,
-    tx: &broadcast::Sender<Vec<f32>>,
-) -> Result<()> {
+unsafe fn drain_capture_packets(capture: &WasapiLoopbackCapture, tx: &CaptureSender) -> Result<()> {
     loop {
         let frames = capture
             .capture_client

@@ -8,7 +8,7 @@ use sonora::{
     AudioProcessing, Config, StreamConfig,
 };
 use std::collections::VecDeque;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 pub const AEC_SAMPLE_RATE: u32 = 16000;
 pub const FRAME_SIZE_10MS: usize = 160; // 10ms at 16kHz
@@ -151,148 +151,42 @@ impl SonoraAecProcessor {
     pub fn process(&mut self) -> Vec<(Vec<f32>, Vec<f32>, u64)> {
         let mut output = Vec::new();
 
-        // Keep at most 1 second queued. AEC needs a recent far-end reference,
-        // but stale audio is worse than bypassing.
-        const MAX_QUEUE_SAMPLES: usize = AEC_SAMPLE_RATE as usize;
-        const MAX_MIC_WAIT_WITHOUT_SPEAKER_SAMPLES: usize = AEC_SAMPLE_RATE as usize / 10;
-
-        if self.speaker_queue.len() > MAX_QUEUE_SAMPLES {
-            let dropped_samples = self.speaker_queue.len() - MAX_QUEUE_SAMPLES;
-            self.speaker_queue.drain(..dropped_samples);
-            if let Some(ref mut ts) = self.speaker_start_timestamp_ms {
-                *ts += (dropped_samples as f64 * 1000.0 / AEC_SAMPLE_RATE as f64) as u64;
-            }
-            self.dropped_count += (dropped_samples / FRAME_SIZE_10MS) as u64;
-        }
-
-        if self.mic_queue.is_empty() || self.mic_start_timestamp_ms.is_none() {
-            self.bypass_mode = false;
-            return output;
-        }
-
-        if self.mic_queue.len() > MAX_QUEUE_SAMPLES {
-            let dropped_samples = self.mic_queue.len() - MAX_QUEUE_SAMPLES;
-            self.mic_queue.drain(..dropped_samples);
-            if let Some(ref mut ts) = self.mic_start_timestamp_ms {
-                *ts += (dropped_samples as f64 * 1000.0 / AEC_SAMPLE_RATE as f64) as u64;
-            }
-            self.dropped_count += (dropped_samples / FRAME_SIZE_10MS) as u64;
-        }
-
-        if self.speaker_start_timestamp_ms.is_none() || self.speaker_queue.is_empty() {
-            if self.mic_queue.len() < MAX_MIC_WAIT_WITHOUT_SPEAKER_SAMPLES {
-                self.bypass_mode = false;
-                return output;
-            }
-
-            // We have mic data but no speaker data yet.
-            // Process mic frames in bypass mode (apply NS and AGC2) so we don't introduce lag.
-            self.bypass_mode = true;
-            while self.mic_queue.len() >= FRAME_SIZE_10MS {
-                let mic_start = self.mic_start_timestamp_ms.unwrap();
-                let mic_frame: Vec<f32> = self.mic_queue.drain(..FRAME_SIZE_10MS).collect();
-                self.mic_start_timestamp_ms = Some(mic_start + 10);
-
-                let mut cleaned_mic = vec![0.0; FRAME_SIZE_10MS];
-                let silent_reference = vec![0.0; FRAME_SIZE_10MS];
-
-                let _ = self.apm.process_render_f32(
-                    &[&silent_reference],
-                    &mut [&mut vec![0.0; FRAME_SIZE_10MS]],
-                );
-                let _ = self.apm.set_stream_delay_ms(0);
-                if let Err(e) = self
-                    .apm
-                    .process_capture_f32(&[&mic_frame], &mut [&mut cleaned_mic])
-                {
-                    error!("AEC: Sonora process_capture error (bypass): {:?}", e);
-                    cleaned_mic = mic_frame.clone();
-                }
-
-                self.processed_count += 1;
-                self.bypass_count += 1;
-                output.push((cleaned_mic, vec![0.0; FRAME_SIZE_10MS], mic_start));
-            }
-            return output;
-        }
-
+        // Keep a bounded 200ms microphone look-behind for async delivery jitter.
+        // An alignment/budget decision must never discard microphone samples.
+        const MAX_WAIT_SAMPLES: usize = AEC_SAMPLE_RATE as usize / 5;
         while self.mic_queue.len() >= FRAME_SIZE_10MS {
-            if self.speaker_queue.is_empty() {
-                self.speaker_start_timestamp_ms = None;
-                break;
-            }
-
             let mic_start = self.mic_start_timestamp_ms.unwrap();
-            let speaker_start = self.speaker_start_timestamp_ms.unwrap();
-
-            let drift = mic_start as i64 - speaker_start as i64;
-
-            // Alignment threshold: 10ms (160 samples)
-            const ALIGN_THRESHOLD_MS: i64 = 10;
-
-            if drift > ALIGN_THRESHOLD_MS {
-                // Speaker is ahead of mic (speaker_start is older/earlier than mic_start).
-                // We must drain the older speaker samples to align.
-                let samples_to_drain =
-                    (((drift as f64) * AEC_SAMPLE_RATE as f64) / 1000.0) as usize;
-                let drain_amount = samples_to_drain.min(self.speaker_queue.len());
-                if drain_amount > 0 {
-                    self.speaker_queue.drain(..drain_amount);
-                    let new_speaker_start = speaker_start
-                        + ((drain_amount as f64 * 1000.0) / AEC_SAMPLE_RATE as f64) as u64;
-                    self.speaker_start_timestamp_ms = Some(new_speaker_start);
-                    self.dropped_count += (drain_amount / FRAME_SIZE_10MS) as u64;
-                }
-
-                if self.speaker_queue.is_empty() {
-                    self.speaker_start_timestamp_ms = None;
-                    break; // Wait for more speaker data
-                }
-                continue;
-            } else if drift < -ALIGN_THRESHOLD_MS {
-                // Mic is ahead of speaker (mic_start is older/earlier than speaker_start).
-                // This means the speaker stream is newer. Preserve the far-end reference and
-                // drop stale mic samples toward speaker time rather than resetting speaker AEC.
-                let gap = -drift;
-                let target_gap_ms = ALIGN_THRESHOLD_MS;
-                let samples_to_drain =
-                    (((gap - target_gap_ms) as f64 * AEC_SAMPLE_RATE as f64) / 1000.0) as usize;
-                let drain_amount = samples_to_drain.min(self.mic_queue.len());
-
-                if drain_amount > 0 {
-                    self.mic_queue.drain(..drain_amount);
-                    self.mic_start_timestamp_ms = Some(
-                        mic_start
-                            + ((drain_amount as f64 * 1000.0) / AEC_SAMPLE_RATE as f64) as u64,
-                    );
-                    self.dropped_count += (drain_amount / FRAME_SIZE_10MS) as u64;
-                    if gap > 100 {
-                        debug!(
-                            "AEC: Large negative drift ({}ms). Dropped {} stale mic samples to preserve speaker reference.",
-                            gap, drain_amount
-                        );
-                    }
-                }
-
-                if self.mic_queue.is_empty() {
+            if self.speaker_queue.len() < FRAME_SIZE_10MS {
+                if self.mic_queue.len() <= MAX_WAIT_SAMPLES {
                     break;
                 }
+                self.speaker_underflow_count += 1;
+                output.push(self.bypass_frame(FRAME_SIZE_10MS));
+                continue;
+            }
+            let speaker_start = self.speaker_start_timestamp_ms.unwrap();
+            let drift = mic_start as i64 - speaker_start as i64;
+            if drift > 10 {
+                // Feed older render frames into AEC history: they may contain
+                // precisely the speech that is now echoing in the microphone.
+                let speaker: Vec<_> = self.speaker_queue.drain(..FRAME_SIZE_10MS).collect();
+                let mut scratch = [0.0; FRAME_SIZE_10MS];
+                let _ = self
+                    .apm
+                    .process_render_f32(&[&speaker], &mut [&mut scratch]);
+                self.speaker_start_timestamp_ms = Some(speaker_start + 10);
+                continue;
+            } else if drift < -10 {
+                // Reference starts later than capture. Preserve earlier speech
+                // unchanged until timestamps overlap, without AGC boosting echo.
+                output.push(self.bypass_frame(FRAME_SIZE_10MS));
                 continue;
             }
 
             self.bypass_mode = false;
 
             let mic_frame: Vec<f32> = self.mic_queue.drain(..FRAME_SIZE_10MS).collect();
-            let speaker_frame: Vec<f32> = if self.speaker_queue.len() >= FRAME_SIZE_10MS {
-                self.speaker_queue.drain(..FRAME_SIZE_10MS).collect()
-            } else {
-                self.speaker_underflow_count += 1;
-                let mut frame: Vec<f32> = self.speaker_queue.drain(..).collect();
-                frame.resize(FRAME_SIZE_10MS, 0.0);
-                debug_assert_eq!(frame.len(), FRAME_SIZE_10MS);
-                self.speaker_start_timestamp_ms = None;
-                frame
-            };
+            let speaker_frame: Vec<f32> = self.speaker_queue.drain(..FRAME_SIZE_10MS).collect();
 
             // Update start timestamps
             self.mic_start_timestamp_ms = Some(mic_start + 10);
@@ -328,7 +222,66 @@ impl SonoraAecProcessor {
             output.push((cleaned_mic, speaker_frame, mic_start));
         }
 
+        // With no microphone, bound render-only history. Never trim a matched
+        // burst before processing it or microphone audio would lose its reference.
+        let excess = self
+            .speaker_queue
+            .len()
+            .saturating_sub(AEC_SAMPLE_RATE as usize);
+        let excess = excess / FRAME_SIZE_10MS * FRAME_SIZE_10MS;
+        if excess > 0 {
+            self.speaker_queue.drain(..excess);
+            if let Some(ts) = &mut self.speaker_start_timestamp_ms {
+                *ts += (excess / FRAME_SIZE_10MS * 10) as u64;
+            }
+            self.dropped_count += (excess / FRAME_SIZE_10MS) as u64;
+        }
         output
+    }
+
+    fn bypass_frame(&mut self, len: usize) -> (Vec<f32>, Vec<f32>, u64) {
+        let timestamp = self.mic_start_timestamp_ms.unwrap();
+        let mic = self.mic_queue.drain(..len).collect();
+        self.mic_start_timestamp_ms =
+            Some(timestamp + (len as u64 * 1000 / AEC_SAMPLE_RATE as u64));
+        self.processed_count += 1;
+        self.bypass_count += 1;
+        self.bypass_mode = true;
+        (mic, vec![0.0; len], timestamp)
+    }
+
+    /// Drain the bounded wait and partial frame when capture ends. Calling this
+    /// twice is safe. Missing reference means raw audio, never fabricated silence.
+    pub fn finish(&mut self) -> Vec<(Vec<f32>, Vec<f32>, u64)> {
+        let mut output = self.process();
+        while !self.mic_queue.is_empty() {
+            output.push(self.bypass_frame(self.mic_queue.len().min(FRAME_SIZE_10MS)));
+        }
+        output
+    }
+
+    /// A changed or lagged render stream cannot share the old filter history.
+    /// Preserve pending microphone audio for alignment against the new reference.
+    pub fn reset_reference(&mut self) {
+        let mic = std::mem::take(&mut self.mic_queue);
+        let timestamp = self.mic_start_timestamp_ms;
+        let counts = (
+            self.processed_count,
+            self.aligned_count,
+            self.bypass_count,
+            self.speaker_underflow_count,
+            self.dropped_count,
+        );
+        self.reset();
+        self.mic_queue = mic;
+        self.mic_start_timestamp_ms = timestamp;
+        (
+            self.processed_count,
+            self.aligned_count,
+            self.bypass_count,
+            self.speaker_underflow_count,
+            self.dropped_count,
+        ) = counts;
     }
 
     /// Retrieve diagnostic metrics of the AEC stage
@@ -356,5 +309,79 @@ impl SonoraAecProcessor {
 impl Default for SonoraAecProcessor {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+    #[test]
+    fn capture_burst_is_preserved_while_waiting_for_reference() {
+        let mut p = SonoraAecProcessor::new();
+        let mic = vec![0.1; 1600];
+        p.push_mic(&mic, 1000);
+        assert!(
+            p.process().is_empty(),
+            "100ms delivery jitter must wait for reference"
+        );
+        p.push_speaker(&vec![0.2; 1600], 1000);
+        let output = p.process();
+        assert_eq!(output.iter().map(|f| f.0.len()).sum::<usize>(), mic.len());
+        assert_eq!(p.diagnostics().bypass_frames, 0);
+    }
+    #[test]
+    fn long_aligned_burst_never_discards_microphone_samples() {
+        let mut p = SonoraAecProcessor::new();
+        p.push_mic(&vec![0.1; 24000], 1000);
+        p.push_speaker(&vec![0.2; 24000], 1000);
+        assert_eq!(p.process().iter().map(|f| f.0.len()).sum::<usize>(), 24000);
+    }
+    #[test]
+    fn future_reference_preserves_earlier_microphone_audio() {
+        let mut p = SonoraAecProcessor::new();
+        p.push_mic(&vec![0.1; 8000], 1000);
+        p.push_speaker(&vec![0.2; 160], 1500);
+        assert_eq!(p.process().iter().map(|f| f.0.len()).sum::<usize>(), 8000);
+    }
+    #[test]
+    fn missing_reference_and_shutdown_preserve_every_sample_unchanged() {
+        let mut p = SonoraAecProcessor::new();
+        let expected: Vec<_> = (0..12347).map(|i| (i as f32 * 0.13).sin() * 0.2).collect();
+        let mut output = Vec::new();
+        for (n, chunk) in expected.chunks(137).enumerate() {
+            p.push_mic(chunk, 1000 + n as u64 * 137 * 1000 / 16000);
+            output.extend(p.process().into_iter().flat_map(|f| f.0));
+            assert!(p.diagnostics().mic_buffer_depth_ms <= 210.0);
+        }
+        output.extend(p.finish().into_iter().flat_map(|f| f.0));
+        assert_eq!(output, expected);
+        assert!(p.finish().is_empty());
+    }
+    #[test]
+    fn reference_reset_retains_pending_microphone_tail() {
+        let mut p = SonoraAecProcessor::new();
+        p.push_mic(&[0.125; 177], 1000);
+        p.reset_reference();
+        let out = p.finish();
+        assert_eq!(
+            out.iter().flat_map(|f| f.0.clone()).collect::<Vec<_>>(),
+            vec![0.125; 177]
+        );
+        assert_eq!(out[0].2, 1000);
+        assert_eq!(p.diagnostics().dropped_frames, 0);
+    }
+    #[test]
+    fn microphone_first_jitter_does_not_bypass_any_frames() {
+        let mut p = SonoraAecProcessor::new();
+        let mut count = 0;
+        for tick in 0..30 {
+            p.push_mic(&[0.05; 1600], 1000 + tick * 100);
+            count += p.process().iter().map(|f| f.0.len()).sum::<usize>();
+            p.push_speaker(&[0.02; 1600], 1000 + tick * 100);
+            count += p.process().iter().map(|f| f.0.len()).sum::<usize>();
+        }
+        assert_eq!(count, 48000);
+        assert_eq!(p.diagnostics().bypass_frames, 0);
+        assert_eq!(p.diagnostics().dropped_frames, 0);
     }
 }

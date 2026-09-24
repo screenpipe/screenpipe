@@ -26,6 +26,7 @@ use tracing::{error, info, warn};
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
 use crate::utils::audio::audio_to_mono;
 
+use super::captured_audio::{CaptureSender, CapturedAudio};
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
 use super::device::get_cpal_device_and_config;
 use super::device::AudioDevice;
@@ -76,7 +77,7 @@ impl From<&cpal::SupportedStreamConfig> for AudioStreamConfig {
 pub struct AudioStream {
     pub device: Arc<AudioDevice>,
     pub device_config: AudioStreamConfig,
-    transmitter: Arc<tokio::sync::broadcast::Sender<Vec<f32>>>,
+    transmitter: Arc<CaptureSender>,
     stream_control: mpsc::Sender<StreamControl>,
     stream_thread: Option<Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>>,
     pub is_disconnected: Arc<AtomicBool>,
@@ -155,7 +156,7 @@ impl AudioStream {
         )]
         tap_pids: Option<Vec<i32>>,
     ) -> Result<Self> {
-        let (tx, _) = broadcast::channel::<Vec<f32>>(1000);
+        let tx = CaptureSender::new(1000);
         let tx_clone = tx.clone();
         let is_disconnected = Arc::new(AtomicBool::new(false));
         let (stream_control_tx, stream_control_rx) = mpsc::channel();
@@ -303,7 +304,7 @@ impl AudioStream {
     #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
     async fn start_cpal_stream(
         device: &Arc<AudioDevice>,
-        tx: broadcast::Sender<Vec<f32>>,
+        tx: CaptureSender,
         stream_control_rx: mpsc::Receiver<StreamControl>,
         is_running: &Arc<AtomicBool>,
         is_disconnected: &Arc<AtomicBool>,
@@ -384,7 +385,7 @@ impl AudioStream {
     async fn spawn_audio_thread(
         device: cpal::Device,
         config: cpal::SupportedStreamConfig,
-        tx: broadcast::Sender<Vec<f32>>,
+        tx: CaptureSender,
         stream_control_rx: mpsc::Receiver<StreamControl>,
         channels: u16,
         is_running_weak: std::sync::Weak<AtomicBool>,
@@ -395,9 +396,9 @@ impl AudioStream {
     ) -> Result<tokio::task::JoinHandle<()>> {
         let device_name = device.name()?;
         #[cfg(target_os = "macos")]
-        let use_vpio = macos_input_vpio;
+        let mut use_vpio = macos_input_vpio;
         #[cfg(target_os = "windows")]
-        let use_aec = windows_input_aec;
+        let mut use_aec = windows_input_aec;
 
         Ok(tokio::task::spawn_blocking(move || {
             // Primary attempt: the "best" config get_cpal_device_and_config
@@ -479,6 +480,7 @@ impl AudioStream {
                                                     "AEC disabled as last resort for {} — mic works but echo cancellation is off",
                                                     device_name
                                                 );
+                                                use_aec = false;
                                                 Some(s)
                                             }
                                             Err(no_aec_err) => {
@@ -541,7 +543,10 @@ impl AudioStream {
                         windows_input_aec,
                         false,
                     ) {
-                        Ok(s) => Some(s),
+                        Ok(s) => {
+                            use_vpio = false;
+                            Some(s)
+                        }
                         Err(fallback_err) => {
                             error!(
                                 "HAL fallback also failed for {} after VPIO error: {} (VPIO error: {})",
@@ -603,7 +608,7 @@ impl AudioStream {
         }))
     }
 
-    pub async fn subscribe(&self) -> broadcast::Receiver<Vec<f32>> {
+    pub async fn subscribe(&self) -> broadcast::Receiver<CapturedAudio> {
         self.transmitter.subscribe()
     }
 
@@ -675,8 +680,8 @@ impl AudioStream {
         device: Arc<AudioDevice>,
         sample_rate: u32,
         channels: u16,
-    ) -> (Self, Arc<broadcast::Sender<Vec<f32>>>) {
-        let (tx, _) = broadcast::channel::<Vec<f32>>(1000);
+    ) -> (Self, Arc<CaptureSender>) {
+        let tx = CaptureSender::new(1000);
         let tx_arc = Arc::new(tx);
         let (stream_control_tx, _rx) = mpsc::channel();
         let stream = AudioStream {
@@ -719,7 +724,7 @@ impl AudioStream {
         // 1000-deep buffer matches `from_device`. Keeping the receiver
         // unsubscribed at construction time mirrors cpal: the stream isn't
         // started until subscribe(); use `start_wav_playback` below.
-        let (tx, _) = broadcast::channel::<Vec<f32>>(1000);
+        let tx = CaptureSender::new(1000);
         let tx_clone = tx.clone();
         let (stream_control_tx, _rx) = mpsc::channel();
         let is_disconnected = Arc::new(AtomicBool::new(false));
@@ -855,7 +860,7 @@ fn build_input_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
     channels: u16,
-    tx: broadcast::Sender<Vec<f32>>,
+    tx: CaptureSender,
     error_callback: impl FnMut(CpalError) + Send + 'static,
     windows_input_aec: bool,
     macos_input_vpio: bool,

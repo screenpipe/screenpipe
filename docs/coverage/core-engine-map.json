@@ -855,6 +855,7 @@
         "src/transcription/engine.rs",
         "src/transcription/handle_new_transcript.rs",
         "src/transcription/openai_compatible/batch.rs",
+        "src/transcription/parakeet_windows.rs",
         "src/transcription/transcription_result.rs",
         "src/transcription/whisper/batch.rs",
         "src/transcription/whisper/detect_language.rs",
@@ -892,6 +893,9 @@
       "files": [
         "src/audio_manager/device_monitor.rs",
         "src/audio_manager/manager.rs",
+        "src/core/aec.rs",
+        "src/core/aec_input.rs",
+        "src/core/captured_audio.rs",
         "src/core/device.rs",
         "src/core/device_detection.rs",
         "src/core/e2e_ghost_word_silent_room.rs",
@@ -923,7 +927,7 @@
       "criticality": "high",
       "confidence": "strong",
       "kind": "mixed",
-      "notes": "Device monitor, device manager, stream buffering, source lag, audio metrics, Bluetooth gap/hallucination regressions, and cross-platform process-tap watchdog counters (process_tap.rs split into src/core/process_tap/ modules)."
+      "notes": "Device monitor, device manager, stream buffering, source lag, audio metrics, Bluetooth gap/hallucination regressions, and cross-platform process-tap watchdog counters (process_tap.rs split into src/core/process_tap/ modules). Software AEC regression cases cover delivery jitter, lossless bypass and shutdown, resampling tails, capture timestamps, and active render-stream replacement."
     },
     {
       "id": "audio-platform-output-capture",
