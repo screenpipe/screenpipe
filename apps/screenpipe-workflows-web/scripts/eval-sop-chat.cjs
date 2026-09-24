@@ -28,7 +28,7 @@ const assert = require("node:assert/strict"),
   await p.getByRole("button", { name: "Minimize chat", exact: true }).click();
   await p.screenshot({ path: dir + "/desktop-document.png" });
   assert.equal(
-    await p.locator('article[aria-label="SOP document"] h1').innerText(),
+    await p.getByRole("textbox", { name: "SOP title", exact: true }).inputValue(),
     "Research synthesis",
   );
   await p.reload();

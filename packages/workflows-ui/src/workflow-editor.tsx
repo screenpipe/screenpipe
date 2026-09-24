@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 "use client";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -19,56 +19,11 @@ import {
   type WorkflowEdit,
   type StageEdit,
 } from "./workflow-edits";
-import { WorkflowRichText } from "./rich-text";
+import { InlineText } from "./inline-text";
 import styles from "./workflow-editor.module.css";
 
-function Text({
-  label,
-  value,
-  onChange,
-  title = false,
-  placeholder = label,
-  rich = false,
-}: {
-  label: string;
-  value: string;
-  onChange: (text: string) => void;
-  title?: boolean;
-  placeholder?: string;
-  rich?: boolean;
-}) {
-  const ref = useRef<HTMLTextAreaElement>(null);
-  useLayoutEffect(() => {
-    const field = ref.current;
-    if (!field) return;
-    const resize = () => {
-      field.style.height = "0px";
-      field.style.height = `${field.scrollHeight}px`;
-    };
-    resize();
-    let width = field.clientWidth;
-    const observer = new ResizeObserver(() => {
-      if (field.clientWidth !== width) {
-        width = field.clientWidth;
-        resize();
-      }
-    });
-    observer.observe(field);
-    return () => observer.disconnect();
-  }, [value]);
-  if (rich) return <WorkflowRichText label={label} value={value} onChange={onChange} placeholder={placeholder} maxLength={8000} />;
-  return (
-    <textarea
-      ref={ref}
-      rows={1}
-      aria-label={label}
-      placeholder={placeholder}
-      className={title ? styles.title : undefined}
-      value={value}
-      maxLength={8000}
-      onChange={(e) => onChange(e.target.value)}
-    />
-  );
+function Text(props: Parameters<typeof InlineText>[0] & { title?: boolean }) {
+  return <InlineText {...props} className={props.title ? styles.title : undefined} />;
 }
 
 type EditorStage = Omit<StageEdit, "procedure"> & { key: string; procedure: (StageEdit["procedure"][number] & { key: string })[] };

@@ -2,6 +2,7 @@
 // https://screenpipe.com
 "use client";
 import type { ReactNode } from "react";
+import { InlineText } from "./inline-text";
 import { WorkflowRichText } from "./rich-text";
 import styles from "./sop-document.module.css";
 
@@ -26,12 +27,12 @@ export function SopDocument({
       <header className={styles.heading}>
         <p className={styles.kind}>Standard operating procedure</p>
         {onTitleChange ? (
-          <input
+          <InlineText
             className={styles.title}
-            aria-label="SOP title"
+            label="SOP title"
             maxLength={300}
             value={title}
-            onChange={(event) => onTitleChange(event.target.value)}
+            onChange={onTitleChange}
           />
         ) : (
           <h1 className={styles.title}>{title}</h1>

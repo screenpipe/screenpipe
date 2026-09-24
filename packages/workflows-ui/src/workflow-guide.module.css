@@ -37,8 +37,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 0 24px;
-  border-bottom: 1px solid var(--line, #dfe1d9);
+  padding: 0 0 12px;
 }
 .toolbar > button {
   border: 0;
@@ -86,12 +85,14 @@
   grid-template-columns: 205px minmax(0, 820px);
   gap: 48px;
   justify-content: center;
-  padding-top: 38px;
+  padding-top: 24px;
+  padding-bottom: 64px;
 }
 .outline {
   align-self: start;
   position: sticky;
-  top: 25px;
+  top: 24px;
+  padding-top: 28px;
 }
 .eyebrow {
   font-size: 10px;
@@ -160,72 +161,62 @@
   font-size: 11px;
 }
 .section {
-  padding: 22px 26px;
-  background: var(--soft, #f1f2ec);
-  border: 1px solid var(--line, #dfe1d9);
-  border-radius: 9px;
-  margin: 20px 0;
-  scroll-margin-top: 25px;
+  margin: 28px 0;
+  scroll-margin-top: 24px;
 }
 .section h2 {
-  margin: 0 0 12px;
-  font-size: 16px;
-  letter-spacing: -0.02em;
-}
-.section ul {
-  margin: 0;
-  padding-left: 19px;
-  line-height: 1.9;
+  margin: 0 0 8px 5px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
 }
 .muted {
-  color: var(--muted, #777b70);
-  font-size: 13px;
-  line-height: 1.65;
-  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 10px 5px;
 }
 .steps {
-  margin-top: 30px;
+  margin: 32px 0 0;
 }
 .step {
-  padding: 26px 0;
-  border-top: 1px solid var(--line, #dfe1d9);
-  scroll-margin-top: 25px;
+  position: relative;
+  margin: 0 0 32px;
+  scroll-margin-top: 24px;
+}
+.step.drop {
+  box-shadow: 0 -2px 0 var(--ink);
 }
 .stepHeading {
-  display: flex;
-  gap: 13px;
-  align-items: center;
-}
-.stepHeading h2 {
-  font-size: 19px;
-  letter-spacing: -0.025em;
-  margin: 0;
-  flex: 1;
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 28px;
+  align-items: start;
+  gap: 4px;
 }
 .number {
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--ink, #171815);
-  color: var(--panel, #fff);
-  flex-shrink: 0;
+  padding-top: 8px;
+  color: var(--muted);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
-.step p {
-  line-height: 1.75;
-  margin: 15px 0;
-  white-space: pre-wrap;
+.guide .stepTitle {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.4;
+}
+.stepBody {
+  margin: 6px 32px 0;
 }
 .step figure {
-  margin: 20px 0;
+  margin: 16px 5px;
   position: relative;
 }
 .step img {
   display: block;
   width: 100%;
-  border: 1px solid var(--line, #dfe1d9);
+  border: 1px solid var(--line);
   border-radius: 8px;
 }
 .step figure button {
@@ -233,24 +224,135 @@
   bottom: 12px;
   right: 12px;
 }
-.stepTools {
-  display: flex;
-  gap: 4px;
+.guide .grip {
+  -webkit-user-drag: element;
+  position: absolute;
+  left: -28px;
+  top: 3px;
+  padding: 4px;
+  min-height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: grab;
 }
-.stepTools button {
-  min-height: 30px;
-  padding: 6px;
+.guide .grip:active {
+  cursor: grabbing;
 }
-.result {
+.step::before {
+  content: "";
+  position: absolute;
+  left: -28px;
+  top: 0;
+  bottom: 0;
+  width: 28px;
+}
+.grip,
+.controls,
+.step figure button {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+}
+.stepHeading:hover .grip,
+.stepHeading:hover .controls,
+.step:focus-within .grip,
+.step:focus-within .controls,
+.controls[open],
+.step figure:hover button,
+.step figure:focus-within button {
+  opacity: 1;
+  pointer-events: auto;
+}
+.controls {
+  position: relative;
+  margin-top: 4px;
+}
+.controls > summary {
   display: flex;
   align-items: center;
-  gap: 9px;
-  color: var(--muted, #777b70);
-  font-size: 13px;
+  justify-content: center;
+  list-style: none;
+  min-height: 28px;
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
 }
-label.result {
+.controls > summary::-webkit-details-marker {
+  display: none;
+}
+.controls > summary:hover {
+  background: var(--soft);
+}
+.controls > summary:focus-visible {
+  outline: 2px solid var(--muted);
+  outline-offset: 2px;
+}
+.stepTools {
+  position: absolute;
+  right: 0;
+  top: 30px;
+  z-index: 5;
+  width: 150px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 4px 12px #0000000d;
+}
+.stepTools button {
+  width: 100%;
+  justify-content: flex-start;
+  border: 0;
+  min-height: 32px;
+  background: transparent;
+  font-size: 12px;
+}
+.stepTools button:hover {
+  background: var(--soft);
+}
+.result {
+  margin: 12px 0 0;
+  color: var(--muted);
+}
+.result > span {
   display: block;
-  margin-top: 18px;
+  padding-left: 5px;
+  font-size: 11px;
+}
+.guide .addStep {
+  margin: 0 0 8px 32px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 4px 5px;
+}
+.guide .addStep:hover {
+  background: var(--soft);
+  color: var(--ink);
+}
+.guide textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  resize: none;
+  overflow: hidden;
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 3px 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.65;
+}
+.guide textarea:focus-visible {
+  outline: none;
+  border-color: var(--muted);
+}
+.guide textarea::placeholder {
+  color: var(--muted);
 }
 .imageReview {
   border: 1px solid var(--line, #dfe1d9);
@@ -273,28 +375,6 @@ label.result {
   border-top: 1px solid var(--line, #dfe1d9);
   border-bottom: 1px solid var(--line, #dfe1d9);
   border-radius: 0;
-}
-.guide input:not([type="checkbox"]),
-.guide textarea {
-  display: block;
-  width: 100%;
-  box-sizing: border-box;
-  background: var(--panel, #fff);
-  color: var(--ink, #171815);
-  border: 1px solid var(--line, #dfe1d9);
-  border-radius: 6px;
-  padding: 12px;
-  margin: 8px 0;
-  font: inherit;
-  line-height: 1.6;
-}
-.guide textarea {
-  min-height: 92px;
-  resize: vertical;
-}
-.guide input[aria-label="Guide title"] {
-  font-size: 28px;
-  font-weight: 600;
 }
 .empty {
   max-width: 650px;
@@ -419,19 +499,56 @@ label.result {
     flex-wrap: wrap;
   }
 
-  .section {
-    padding: 18px;
+  .stepBody {
+    margin-right: 0;
   }
   .stepHeading {
-    flex-wrap: wrap;
+    grid-template-columns: 24px minmax(0, 1fr) 28px;
   }
-  .stepTools {
-    margin-left: auto;
+  .number {
+    font-size: 11px;
+  }
+  .guide .stepTitle {
+    font-size: 17px;
   }
   .phases {
     gap: 12px;
   }
   .empty {
     margin: 40px auto;
+  }
+}
+
+.guide {
+  container-type: inline-size;
+  container-name: sop-guide;
+}
+.dialogActions {
+  margin-top: 24px;
+  flex-wrap: wrap;
+  justify-content: flex-end !important;
+  gap: 12px;
+}
+@container sop-guide (max-width: 1050px) {
+  .layout {
+    grid-template-columns: minmax(0, 780px);
+  }
+  .outline {
+    display: none;
+  }
+}
+@media (hover: none) {
+  .grip,
+  .controls,
+  .step figure button {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .grip,
+  .controls,
+  .step figure button {
+    transition: none;
   }
 }

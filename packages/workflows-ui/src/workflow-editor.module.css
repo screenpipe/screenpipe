@@ -46,7 +46,8 @@
 .number { padding-top: 7px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .step .title { font-family: var(--heading-font); min-width: 0; font-size: 17px; font-weight: 550; line-height: 1.4; }
 .step > textarea, .step > div[data-testid="procedure-markdown"] { width: calc(100% - 24px); margin-left: 24px; }
-.editor .grip { cursor: grab; color: var(--muted); }
+.editor .grip {
+  -webkit-user-drag: element; cursor: grab; color: var(--muted); }
 .editor .grip:active { cursor: grabbing; }
 .stepTop > .grip { position: absolute; left: -30px; top: 0; }
 .controls { position: relative; }

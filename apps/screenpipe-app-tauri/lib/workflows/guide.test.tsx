@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 import React, { useMemo, useState } from "react";
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from "vitest";
 import {
   render,
   screen,
@@ -78,6 +78,21 @@ const guide: Guide = {
   completion: ["Sources are linked"],
   questions: ["Who reviews this?"],
 };
+// jsdom lacks native dialog methods; actual modal behavior is covered in the browser eval.
+const originalShow = HTMLDialogElement.prototype.showModal;
+const originalClose = HTMLDialogElement.prototype.close;
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.removeAttribute("open");
+  };
+});
+afterAll(() => {
+  HTMLDialogElement.prototype.showModal = originalShow;
+  HTMLDialogElement.prototype.close = originalClose;
+});
 afterEach(cleanup);
 describe("guide contracts and export", () => {
   it("rejects invented source stages and another workflow identity", () => {
@@ -197,9 +212,8 @@ describe("guide editor", () => {
         close={() => {}}
       />,
     );
-    await screen.findByRole("heading", { name: "Research guide" });
+    await screen.findByRole("textbox", { name: "SOP title" });
     expect(platform.generate).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Edit SOP" }));
     fireEvent.change(screen.getByLabelText("SOP title"), {
       target: { value: "Team research handbook" },
     });
@@ -208,11 +222,76 @@ describe("guide editor", () => {
         expect.objectContaining({ title: "Team research handbook" }),
       ),
     );
+    fireEvent.click(screen.getByLabelText("Step 2 actions"));
     fireEvent.click(screen.getByRole("button", { name: "Move step 2 up" }));
     await waitFor(() =>
       expect(platform.save.mock.calls.at(-1)?.[0].steps[0].title).toBe(
         "Review",
       ),
+    );
+  });
+  it("edits in place and reorders complete steps from the keyboard", async () => {
+    const platform = host();
+    render(
+      <WorkflowGuide
+        workflow={workflow}
+        platform={platform}
+        close={() => {}}
+      />,
+    );
+    await screen.findByRole("textbox", { name: "SOP title" });
+    expect(screen.queryByRole("button", { name: "Edit SOP" })).toBeNull();
+    fireEvent.change(screen.getByLabelText("Step 1 title"), {
+      target: { value: "Find the original sources" },
+    });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Reorder step 1" }), {
+      key: "ArrowDown",
+      altKey: true,
+    });
+    await waitFor(() =>
+      expect(platform.save.mock.calls.at(-1)?.[0].steps[1]).toEqual({
+        ...guide.steps[0],
+        title: "Find the original sources",
+      }),
+    );
+    expect(screen.getByLabelText("Step 2 title")).toHaveValue(
+      "Find the original sources",
+    );
+    expect(screen.getByLabelText("Step 2 instructions")).toHaveTextContent(
+      "Gather the documents.",
+    );
+    fireEvent.change(screen.getByLabelText("Step 2 expected result"), {
+      target: { value: "Original sources ready" },
+    });
+    await waitFor(() =>
+      expect(platform.save.mock.calls.at(-1)?.[0].steps[1].expectedResult).toBe(
+        "Original sources ready",
+      ),
+    );
+  });
+  it("keeps inline edits available after a save failure and retries the latest draft", async () => {
+    const platform = host();
+    platform.save.mockRejectedValueOnce(new Error("disk full"));
+    render(
+      <WorkflowGuide
+        workflow={workflow}
+        platform={platform}
+        close={() => {}}
+      />,
+    );
+    fireEvent.change(await screen.findByLabelText("Guide summary"), {
+      target: { value: "Keep my revision" },
+    });
+    const retry = await screen.findByRole("button", { name: "Retry save" });
+    expect(screen.getByLabelText("Guide summary")).toHaveValue(
+      "Keep my revision",
+    );
+    fireEvent.click(retry);
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Retry save" })).toBeNull(),
+    );
+    expect(platform.save.mock.calls.at(-1)?.[0].summary).toBe(
+      "Keep my revision",
     );
   });
   it("lets an older saved SOP review and include a local screenshot without regenerating", async () => {
@@ -225,7 +304,7 @@ describe("guide editor", () => {
     const view = render(
       <WorkflowGuide workflow={w} platform={platform} close={() => {}} />,
     );
-    await screen.findByRole("heading", { name: "Research guide" });
+    await screen.findByRole("textbox", { name: "SOP title" });
     expect(screen.queryByRole("img")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Review screenshot" }));
     const preview = screen.getByRole("img", {
@@ -252,7 +331,6 @@ describe("guide editor", () => {
     );
     await screen.findByRole("img", { name: "Source for Collect sources" });
     expect(platform.generate).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Edit SOP" }));
     fireEvent.click(screen.getByRole("button", { name: "Remove screenshot" }));
     await waitFor(() =>
       expect(platform.save.mock.calls.at(-1)![0].steps[0].includeImage).toBe(
@@ -283,7 +361,7 @@ describe("guide editor", () => {
     render(
       <WorkflowGuide workflow={workflow} platform={host()} close={() => {}} />,
     );
-    await screen.findByRole("heading", { name: "Research guide" });
+    await screen.findByRole("textbox", { name: "SOP title" });
     document.getElementById("guide-completion")!.scrollIntoView = scroll;
     const event = new MouseEvent("click", { bubbles: true, cancelable: true });
     screen
@@ -311,7 +389,7 @@ describe("guide editor", () => {
       "Your saved guide could not be opened. Its files are unchanged.",
     );
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    await screen.findByRole("heading", { name: "Research guide" });
+    await screen.findByRole("textbox", { name: "SOP title" });
     expect(platform.generate).not.toHaveBeenCalled();
   });
   it("aborts generation on exit and ignores late results", async () => {
@@ -356,7 +434,7 @@ describe("guide editor", () => {
     fireEvent.click(screen.getByRole("button", { name: /Try again|Retry/ }));
     await screen.findByText("Saved your SOP on this device. Review its steps on the page.");
     expect(platform.generate).toHaveBeenCalledTimes(2);
-    await screen.findByRole("heading", { name: "Research guide" });
+    await screen.findByRole("textbox", { name: "SOP title" });
   });
 });
 
@@ -407,7 +485,7 @@ describe("SOP assistant and web editor", () => {
     fireEvent.change(await screen.findByRole("textbox", { name: "Ask Screenpipe" }), { target: { value: "Shorten the title" } });
     await waitFor(() => expect(screen.getByLabelText("Send message")).toBeEnabled());
     fireEvent.click(screen.getByLabelText("Send message"));
-    expect(await screen.findByRole("heading", { name: "Shorter research SOP" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "SOP title" })).toHaveValue("Shorter research SOP"));
     await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ title: "Shorter research SOP" })));
     fireEvent.click(screen.getByLabelText("Minimize chat"));
     fireEvent.click(screen.getByRole("button", { name: "Ask Screenpipe" }));

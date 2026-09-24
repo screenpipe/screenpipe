@@ -12,7 +12,8 @@ import {
   ExternalLink,
   ImageOff,
   Loader2,
-  Pencil,
+  GripVertical,
+  MoreHorizontal,
   Plus,
   Trash2,
   X,
@@ -26,6 +27,7 @@ import {
   type WorkflowGuide as Guide,
 } from "./guide";
 import { WorkflowRichText } from "./rich-text";
+import { InlineText } from "./inline-text";
 import { SopDocument } from "./sop-document";
 import { GuideAssistant } from "./guide-assistant";
 import styles from "./workflow-guide.module.css";
@@ -49,11 +51,15 @@ export function WorkflowGuide({
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
-  const [editing, setEditing] = useState(false);
+  const [dragOver, setDragOver] = useState<number | null>(null);
+  const [announcement, setAnnouncement] = useState("");
+  const dragging = useRef<number | null>(null);
+  const stepKeys = useRef<string[]>([]);
+  const root = useRef<HTMLDivElement>(null);
   const [images, setImages] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [openingWeb, setOpeningWeb] = useState(false);
-  const [webReview, setWebReview] = useState(false);
+  const webDialog = useRef<HTMLDialogElement>(null);
   const [webError, setWebError] = useState("");
   const [exportError, setExportError] = useState("");
   const dialog = useRef<HTMLDialogElement>(null);
@@ -87,6 +93,7 @@ export function WorkflowGuide({
       const existing = await platform.load(workflow);
       if (version !== loadVersion.current) return;
       if (existing) {
+        stepKeys.current = existing.steps.map(() => crypto.randomUUID());
         latest.current = existing;
         setDraft(existing);
         setSaved("Saved on this device");
@@ -123,6 +130,41 @@ export function WorkflowGuide({
       ?.scrollIntoView({ block: "start" });
   }
   const stale = draft && draft.sourceRevision !== (workflow.revision ?? 0);
+  function moveStep(from: number, to: number) {
+    const current = latest.current;
+    if (!current || from === to || to < 0 || to >= current.steps.length) return;
+    const steps = [...current.steps];
+    const [step] = steps.splice(from, 1);
+    steps.splice(to, 0, step);
+    const [key] = stepKeys.current.splice(from, 1);
+    stepKeys.current.splice(to, 0, key);
+    update({ ...current, steps });
+    setAnnouncement(`Step moved to position ${to + 1}`);
+  }
+  function changeStep(index: number, patch: Partial<Guide["steps"][number]>) {
+    const current = latest.current;
+    if (current)
+      update({
+        ...current,
+        steps: current.steps.map((step, i) =>
+          i === index ? { ...step, ...patch } : step,
+        ),
+      });
+  }
+  useEffect(() => {
+    const dismiss = (event: PointerEvent) => {
+      root.current
+        ?.querySelectorAll<HTMLDetailsElement>(
+          "details[data-step-actions][open]",
+        )
+        .forEach((menu) => {
+          if (event.target instanceof Node && !menu.contains(event.target))
+            menu.open = false;
+        });
+    };
+    document.addEventListener("pointerdown", dismiss);
+    return () => document.removeEventListener("pointerdown", dismiss);
+  }, []);
   function lines(
     label: string,
     key: "prerequisites" | "exceptions" | "completion" | "questions",
@@ -132,29 +174,20 @@ export function WorkflowGuide({
     return (
       <section className={styles.section} id={`guide-${key}`}>
         <h2>{label}</h2>
-        {editing ? (
-          <textarea
-            aria-label={label}
-            placeholder={placeholder}
-            value={draft[key].join("\n")}
-            onChange={(e) =>
-              update({ ...draft, [key]: e.target.value.split("\n") })
-            }
-          />
-        ) : draft[key].filter(Boolean).length ? (
-          <ul>
-            {draft[key].filter(Boolean).map((line, i) => (
-              <li key={i}>{line}</li>
-            ))}
-          </ul>
-        ) : (
-          <p className={styles.muted}>{placeholder}</p>
-        )}
+        <InlineText
+          label={label}
+          placeholder={placeholder}
+          value={draft[key].join("\n")}
+          onChange={(text) => update({ ...draft, [key]: text.split("\n") })}
+        />
       </section>
     );
   }
   return (
-    <div className={styles.guide}>
+    <div ref={root} className={styles.guide}>
+      <span role="status" className={styles.srOnly}>
+        {announcement}
+      </span>
       <header className={styles.toolbar}>
         <button
           onClick={() => {
@@ -200,26 +233,13 @@ export function WorkflowGuide({
                   aria-label={ui("Open web editor")}
                   title={ui("Open web editor")}
                   onClick={() => {
-                    setWebReview(true);
+                    webDialog.current?.showModal();
                     setWebError("");
                   }}
                 >
                   <ExternalLink size={18} aria-hidden="true" />
                 </button>
               )}
-              <button
-                className={styles.iconButton}
-                aria-label={editing ? ui("Done editing") : ui("Edit SOP")}
-                title={editing ? ui("Done editing") : ui("Edit SOP")}
-                aria-pressed={editing}
-                onClick={() => setEditing(!editing)}
-              >
-                {editing ? (
-                  <Check size={18} aria-hidden="true" />
-                ) : (
-                  <Pencil size={18} aria-hidden="true" />
-                )}
-              </button>
               <button
                 className={styles.iconButton}
                 aria-label={ui("Export SOP")}
@@ -245,31 +265,53 @@ export function WorkflowGuide({
           update={async (next) => {
             await persist(next);
             if (!mounted.current) return;
+            stepKeys.current = next.steps.map(() => crypto.randomUUID());
             latest.current = next;
             setDraft(next);
           }}
         />
       )}
-      {draft && webReview && (
-        <section
-          className={styles.section}
-          aria-label={ui("Open SOP on the web")}
-        >
-          <h2>Open your SOP on the web</h2>
-          <p>
-            Save the reviewed SOP text to your Screenpipe account to edit and
-            share it. Recordings and screenshots stay on this device. Existing
-            web edits are preserved when you reopen.
-          </p>
-          {webError && <p role="alert">{webError}</p>}
+      <dialog
+        ref={webDialog}
+        className={styles.exportDialog}
+        aria-labelledby="sop-web-title"
+        onCancel={(event) => {
+          if (openingWeb) event.preventDefault();
+        }}
+      >
+        <div>
+          <h2 id="sop-web-title">Open SOP on the web</h2>
+          <button
+            aria-label="Close web editor confirmation"
+            disabled={openingWeb}
+            onClick={() => webDialog.current?.close()}
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <p>
+          Save this SOP’s text to your Screenpipe account to edit and share it.
+          Recordings and screenshots stay on this device. Existing web edits are
+          preserved.
+        </p>
+        {webError && <p role="alert">{webError}</p>}
+        <div className={styles.dialogActions}>
           <button
             disabled={openingWeb}
+            onClick={() => webDialog.current?.close()}
+          >
+            Cancel
+          </button>
+          <button
+            className={styles.primary}
+            disabled={openingWeb || !draft}
             onClick={async () => {
+              if (!draft) return;
               setOpeningWeb(true);
               setWebError("");
               try {
                 await platform.openWeb?.(draft);
-                setWebReview(false);
+                webDialog.current?.close();
               } catch (e) {
                 setWebError(
                   e instanceof Error ? e.message : "Could not open SOP",
@@ -281,11 +323,8 @@ export function WorkflowGuide({
           >
             {openingWeb ? ui("Opening…") : ui("Continue to web editor")}
           </button>
-          <button disabled={openingWeb} onClick={() => setWebReview(false)}>
-            Cancel
-          </button>
-        </section>
-      )}
+        </div>
+      </dialog>
       {!draft ? (
         <SopDocument title={workflow.title} subtitle="Draft for review">
           <p role="status">
@@ -299,7 +338,7 @@ export function WorkflowGuide({
       ) : (
         <div className={styles.layout}>
           <aside className={styles.outline}>
-            <p className={styles.eyebrow}>IN THIS GUIDE</p>
+            <p className={styles.eyebrow}>In this guide</p>
             <a onClick={jump} href="#guide-prerequisites">
               Before you start
             </a>
@@ -323,22 +362,14 @@ export function WorkflowGuide({
           </aside>
           <SopDocument
             title={draft.title}
-            onTitleChange={
-              editing ? (title) => update({ ...draft, title }) : undefined
-            }
+            onTitleChange={(title) => update({ ...draft, title })}
             subtitle={<>{draft.steps.length} steps · Draft for review</>}
           >
-            {editing ? (
-              <textarea
-                aria-label="Guide summary"
-                value={draft.summary}
-                onChange={(event) =>
-                  update({ ...draft, summary: event.target.value })
-                }
-              />
-            ) : (
-              <p>{draft.summary}</p>
-            )}
+            <InlineText
+              label="Guide summary"
+              value={draft.summary}
+              onChange={(summary) => update({ ...draft, summary })}
+            />
             {stale && (
               <p className={styles.notice}>
                 This workflow has changed since the SOP was drafted. Your edits
@@ -362,109 +393,148 @@ export function WorkflowGuide({
                   : null;
                 return (
                   <section
-                    className={styles.step}
-                    key={i}
+                    className={`${styles.step} ${dragOver === i ? styles.drop : ""}`}
+                    key={stepKeys.current[i] ?? i}
                     id={`guide-step-${i}`}
+                    onDragOverCapture={(event) => {
+                      if (dragging.current !== null) {
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "move";
+                        setDragOver(i);
+                      }
+                    }}
+                    onDragLeave={(event) => {
+                      if (
+                        !event.currentTarget.contains(
+                          event.relatedTarget as Node,
+                        )
+                      )
+                        setDragOver(null);
+                    }}
+                    onDropCapture={(event) => {
+                      if (dragging.current !== null) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        moveStep(dragging.current, i);
+                        dragging.current = null;
+                        setDragOver(null);
+                      }
+                    }}
                   >
                     <div className={styles.stepHeading}>
-                      <span className={styles.number}>{i + 1}</span>
-                      {editing ? (
-                        <input
-                          aria-label={ui("Step {value1} title", {
-                            value1: i + 1,
-                          })}
-                          value={step.title}
-                          onChange={(e) =>
-                            update({
-                              ...draft,
-                              steps: draft.steps.map((s, j) =>
-                                j === i ? { ...s, title: e.target.value } : s,
-                              ),
-                            })
+                      <button
+                        className={styles.grip}
+                        aria-label={`Reorder step ${i + 1}`}
+                        title="Drag to reorder. Use Alt + arrow keys to move."
+                        draggable
+                        onDragStart={(event) => {
+                          dragging.current = i;
+                          event.dataTransfer.effectAllowed = "move";
+                          event.dataTransfer.setData(
+                            "application/x-screenpipe-workflow",
+                            String(i),
+                          );
+                        }}
+                        onDragEnd={() => {
+                          dragging.current = null;
+                          setDragOver(null);
+                        }}
+                        onKeyDown={(event) => {
+                          if (
+                            event.altKey &&
+                            ["ArrowUp", "ArrowDown"].includes(event.key)
+                          ) {
+                            event.preventDefault();
+                            moveStep(i, i + (event.key === "ArrowUp" ? -1 : 1));
                           }
-                        />
-                      ) : (
-                        <h2>{step.title}</h2>
-                      )}
-                      {editing && (
+                        }}
+                      >
+                        <GripVertical size={16} />
+                      </button>
+                      <span className={styles.number}>
+                        {String(i + 1).padStart(2, "0")}
+                      </span>
+                      <InlineText
+                        className={styles.stepTitle}
+                        label={ui("Step {value1} title", { value1: i + 1 })}
+                        value={step.title}
+                        onChange={(title) => changeStep(i, { title })}
+                      />
+                      <details
+                        className={styles.controls}
+                        data-step-actions
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") {
+                            event.currentTarget.open = false;
+                            event.currentTarget
+                              .querySelector("summary")
+                              ?.focus();
+                          }
+                        }}
+                      >
+                        <summary aria-label={`Step ${i + 1} actions`}>
+                          <MoreHorizontal size={18} />
+                        </summary>
                         <div className={styles.stepTools}>
                           <button
                             aria-label={ui("Move step {value1} up", {
                               value1: i + 1,
                             })}
                             disabled={i === 0}
-                            onClick={() => {
-                              const steps = [...draft.steps];
-                              [steps[i - 1], steps[i]] = [
-                                steps[i],
-                                steps[i - 1],
-                              ];
-                              update({ ...draft, steps });
-                            }}
+                            onClick={() => moveStep(i, i - 1)}
                           >
                             <ArrowUp size={14} />
+                            Move up
                           </button>
                           <button
                             aria-label={ui("Move step {value1} down", {
                               value1: i + 1,
                             })}
                             disabled={i === draft.steps.length - 1}
-                            onClick={() => {
-                              const steps = [...draft.steps];
-                              [steps[i + 1], steps[i]] = [
-                                steps[i],
-                                steps[i + 1],
-                              ];
-                              update({ ...draft, steps });
-                            }}
+                            onClick={() => moveStep(i, i + 1)}
                           >
                             <ArrowDown size={14} />
+                            Move down
                           </button>
                           <button
                             aria-label={ui("Remove step {value1}", {
                               value1: i + 1,
                             })}
                             disabled={draft.steps.length === 1}
-                            onClick={() =>
+                            onClick={() => {
+                              stepKeys.current.splice(i, 1);
                               update({
                                 ...draft,
                                 steps: draft.steps.filter((_, j) => j !== i),
-                              })
-                            }
+                              });
+                            }}
                           >
                             <Trash2 size={14} />
+                            Delete step
                           </button>
                         </div>
-                      )}
+                      </details>
                     </div>
-                    <WorkflowRichText
-                      value={step.instruction}
-                      label={ui("Step {value1} instructions", {
-                        value1: i + 1,
-                      })}
-                      fullDocument
-                      onChange={
-                        editing
-                          ? (instruction) =>
-                              update({
-                                ...draft,
-                                steps: draft.steps.map((step, index) =>
-                                  index === i ? { ...step, instruction } : step,
-                                ),
-                              })
-                          : undefined
-                      }
-                    />
-                    {image ? (
-                      <figure>
-                        <img
-                          src={image}
-                          alt={ui("Source for {value1}", {
-                            value1: step.title,
-                          })}
-                          draggable={false}
-                        />
-                        {editing && (
+                    <div className={styles.stepBody}>
+                      <WorkflowRichText
+                        value={step.instruction}
+                        label={ui("Step {value1} instructions", {
+                          value1: i + 1,
+                        })}
+                        fullDocument
+                        onChange={(instruction) =>
+                          changeStep(i, { instruction })
+                        }
+                      />
+                      {image ? (
+                        <figure>
+                          <img
+                            src={image}
+                            alt={ui("Source for {value1}", {
+                              value1: step.title,
+                            })}
+                            draggable={false}
+                          />
                           <button
                             onClick={() =>
                               update({
@@ -478,75 +548,62 @@ export function WorkflowGuide({
                             <ImageOff size={14} />
                             Remove screenshot
                           </button>
-                        )}
-                      </figure>
-                    ) : source ? (
-                      <ScreenshotReview
-                        key={`${step.sourceStage}:${source.dataUrl}`}
-                        source={source}
-                        title={step.title}
-                        include={() => {
-                          update({
-                            ...draft,
-                            steps: draft.steps.map((s, j) =>
-                              j === i
-                                ? {
-                                    ...s,
-                                    includeImage: true,
-                                    imageReview: {
-                                      frameId: source.frameId,
-                                      timestamp: source.timestamp,
-                                    },
-                                  }
-                                : s,
-                            ),
-                          });
-                        }}
-                      />
-                    ) : (
-                      <p className={styles.muted}>
-                        {stale
-                          ? ui(
-                              "Source changed. Regenerate this SOP to review its screenshots.",
-                            )
-                          : ui("No captured screenshot for this step.")}
-                      </p>
-                    )}
-                    {editing ? (
-                      <label className={styles.result}>
-                        Expected result
-                        <input
-                          aria-label={ui("Step {value1} expected result", {
-                            value1: i + 1,
-                          })}
-                          value={step.expectedResult}
-                          onChange={(e) =>
+                        </figure>
+                      ) : source ? (
+                        <ScreenshotReview
+                          key={`${step.sourceStage}:${source.dataUrl}`}
+                          source={source}
+                          title={step.title}
+                          include={() => {
                             update({
                               ...draft,
                               steps: draft.steps.map((s, j) =>
                                 j === i
-                                  ? { ...s, expectedResult: e.target.value }
+                                  ? {
+                                      ...s,
+                                      includeImage: true,
+                                      imageReview: {
+                                        frameId: source.frameId,
+                                        timestamp: source.timestamp,
+                                      },
+                                    }
                                   : s,
                               ),
-                            })
+                            });
+                          }}
+                        />
+                      ) : (
+                        <p className={styles.muted}>
+                          {stale
+                            ? ui(
+                                "Source changed. Regenerate this SOP to review its screenshots.",
+                              )
+                            : ui("No captured screenshot for this step.")}
+                        </p>
+                      )}
+                      <div className={styles.result}>
+                        <span>Expected result</span>
+                        <InlineText
+                          label={ui("Step {value1} expected result", {
+                            value1: i + 1,
+                          })}
+                          placeholder="Add an expected result…"
+                          value={step.expectedResult}
+                          onChange={(expectedResult) =>
+                            changeStep(i, { expectedResult })
                           }
                         />
-                      </label>
-                    ) : (
-                      step.expectedResult && (
-                        <p className={styles.result}>
-                          <Check size={15} />
-                          {step.expectedResult}
-                        </p>
-                      )
-                    )}
+                      </div>
+                    </div>
                   </section>
                 );
               })}
             </div>
-            {editing && draft.steps.length < 40 && (
+            {draft.steps.length < 40 && (
               <button
-                onClick={() =>
+                className={styles.addStep}
+                onClick={() => {
+                  stepKeys.current.push(crypto.randomUUID());
                   update({
                     ...draft,
                     steps: [
@@ -559,8 +616,15 @@ export function WorkflowGuide({
                         includeImage: false,
                       },
                     ],
-                  })
-                }
+                  });
+                  requestAnimationFrame(() =>
+                    root.current
+                      ?.querySelector<HTMLTextAreaElement>(
+                        `#guide-step-${draft.steps.length} textarea`,
+                      )
+                      ?.focus(),
+                  );
+                }}
               >
                 <Plus size={15} />
                 Add step

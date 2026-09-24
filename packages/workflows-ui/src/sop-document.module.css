@@ -11,18 +11,18 @@
   overflow-wrap: anywhere;
 }
 .heading {
-  padding: 28px 0 32px;
-  margin-bottom: 24px;
-  border-bottom: 1px solid var(--line, #dfe1d9);
+  padding: 20px 0 16px;
+  margin-bottom: 12px;
 }
 .kind {
   font-size: 11px;
   letter-spacing: 0.06em;
   color: inherit;
   opacity: 0.55;
-  margin: 0 0 14px;
+  margin: 0 0 10px 5px;
 }
-.document .title {
+.document h1.title,
+.document textarea.title {
   font-family: inherit;
   font-size: clamp(26px, 3vw, 38px);
   font-weight: 600;
@@ -32,16 +32,19 @@
   width: 100%;
   background: transparent;
   color: inherit;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 4px;
-  padding: 0;
+  padding: 3px 5px;
+  box-sizing: border-box;
+  resize: none;
+  overflow: hidden;
 }
 .title:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 6px;
+  outline: none;
+  border-color: var(--muted, currentColor);
 }
 .subtitle {
-  margin-top: 18px;
+  margin: 12px 0 0 5px;
   font-size: 14px;
   opacity: 0.65;
 }
