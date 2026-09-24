@@ -23,7 +23,7 @@ use tauri::{AppHandle, Manager};
 use tokio::sync::Notify;
 use tracing::{debug, info};
 
-use crate::calendar::CalendarEventItem;
+use crate::calendar::{publish_calendar_events, CalendarEventItem, CalendarSource};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(60);
 /// Backed-off cadence while Google Calendar is not connected. Polling a
@@ -81,22 +81,21 @@ pub async fn start_google_calendar_publisher(app: AppHandle) {
     loop {
         if let Some((port, api_key)) = local_api_config(&app).await {
             match fetch_events(&client, port, api_key.as_deref()).await {
-                Ok(events) if !events.is_empty() => {
+                Ok(events) => {
                     interval = POLL_INTERVAL;
                     let count = events.len();
                     let items: Vec<CalendarEventItem> =
                         events.into_iter().map(into_calendar_event_item).collect();
-                    if let Err(e) = screenpipe_events::send_event("calendar_events", items) {
+                    if let Err(e) = publish_calendar_events(CalendarSource::Google, items) {
                         debug!("google calendar publisher: failed to send: {e}");
                     } else {
                         debug!("google calendar publisher: published {count} events");
                     }
                 }
-                Ok(_) => {
-                    interval = POLL_INTERVAL;
-                    debug!("google calendar publisher: no events in window");
-                }
                 Err(PublisherError::NotConnected) => {
+                    if let Err(e) = publish_calendar_events(CalendarSource::Google, Vec::new()) {
+                        debug!("google calendar publisher: failed to clear events: {e}");
+                    }
                     // Not connected is a stable state — back off hard instead
                     // of re-asking every minute. poke() (fired on OAuth
                     // connect) wakes us immediately.

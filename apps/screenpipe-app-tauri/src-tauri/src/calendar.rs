@@ -9,6 +9,9 @@
 //! to the event bus every 60s for meeting detection.
 //! All EventKit calls go through `spawn_blocking` (EKEventStore is !Send).
 
+mod snapshots;
+pub(crate) use snapshots::{publish_calendar_events, CalendarSource};
+
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tracing::{debug, error, info, warn};
@@ -356,7 +359,7 @@ pub async fn start_calendar_events_publisher() {
     loop {
         let items: Vec<CalendarEventItem> = collect_calendar_events().await;
 
-        if let Err(e) = screenpipe_events::send_event("calendar_events", items) {
+        if let Err(e) = publish_calendar_events(CalendarSource::Native, items) {
             debug!("calendar publisher: failed to send event: {}", e);
         }
 
