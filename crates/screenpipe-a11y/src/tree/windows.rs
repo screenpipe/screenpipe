@@ -718,6 +718,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             retained_work_pending,
             max_depth_reached: 0,
             window_bounds,
+            native_window_id: Some(hwnd.0 as usize),
         }))
     }
 }

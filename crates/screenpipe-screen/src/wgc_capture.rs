@@ -16,7 +16,9 @@
 //! - `get_latest_image()` publishes a monotonically increasing request generation.
 //!   `FrameArrived` keeps draining compositor frames, but only does a GPU-side
 //!   `CopyResource` when a request is pending. One copy can satisfy every caller that
-//!   was waiting at that instant. The expensive staging texture + `Map` + swizzle
+//!   was waiting at that instant. With no demand, retain only the latest delivery
+//!   until the next read, closing the replaced delivery without a GPU/CPU copy.
+//!   A final repaint must not disappear merely because the desktop then goes quiet. The expensive staging texture + `Map` + swizzle
 //!   work is likewise performed only for callers that actually want a frame.
 //! - The D3D11 device is shared across sessions but recreatable: it is validated with
 //!   `GetDeviceRemovedReason` on every session init and dropped from the cache when a
@@ -362,7 +364,20 @@ fn find_hmonitor(monitor_id: u32) -> Result<HMONITOR> {
         .ok_or_else(|| anyhow!("monitor {} not found for persistent capture", monitor_id))
 }
 
+/// Owns one frame-pool delivery. Closing the replaced delivery promptly keeps
+/// the two-buffer pool moving without copying every compositor update.
+struct PendingFrame(Direct3D11CaptureFrame);
+
+impl Drop for PendingFrame {
+    fn drop(&mut self) {
+        if let Err(error) = self.0.Close() {
+            tracing::debug!("Direct3D11CaptureFrame::Close failed: {error:?}");
+        }
+    }
+}
+
 struct LatestFrame {
+    pending_frame: Option<PendingFrame>,
     texture: Option<ID3D11Texture2D>,
     width: u32,
     height: u32,
@@ -430,6 +445,7 @@ impl PersistentCapture {
                 width: 0,
                 height: 0,
                 pool_size: (item_size.Width, item_size.Height),
+                pending_frame: None,
                 demand: CopyDemand::default(),
             }),
             Condvar::new(),
@@ -477,6 +493,7 @@ impl PersistentCapture {
                     // waiter mid-predicate-check can't miss the wakeup, then notify.
                     match closed_latest.0.lock() {
                         Ok(mut slot) => {
+                            slot.pending_frame = None;
                             slot.texture = None;
                             closed_flag.store(true, Ordering::Release);
                         }
@@ -563,11 +580,7 @@ impl PersistentCapture {
             .TryGetNextFrame()
             .map_err(|e| anyhow!("TryGetNextFrame failed: {}", e))?;
 
-        let stored = Self::store_frame(&frame, frame_pool, d3d, latest, closed, stats);
-
-        if let Err(e) = frame.Close() {
-            tracing::debug!("Direct3D11CaptureFrame::Close failed: {:?}", e);
-        }
+        let stored = Self::store_frame(PendingFrame(frame), frame_pool, d3d, latest, closed, stats);
 
         if stored? {
             latest.1.notify_all();
@@ -579,7 +592,7 @@ impl PersistentCapture {
     /// one-time "latest" texture creation. Returns whether a new frame was stored
     /// (false for stale-generation frames and pool-recreate transitions).
     fn store_frame(
-        frame: &Direct3D11CaptureFrame,
+        frame: PendingFrame,
         frame_pool: &Direct3D11CaptureFramePool,
         d3d: &Arc<D3dContext>,
         latest: &Arc<(Mutex<LatestFrame>, Condvar)>,
@@ -587,6 +600,7 @@ impl PersistentCapture {
         stats: &Arc<CaptureCounters>,
     ) -> Result<bool> {
         let content = frame
+            .0
             .ContentSize()
             .map_err(|e| anyhow!("ContentSize failed: {}", e))?;
         let content_size = (content.Width, content.Height);
@@ -595,6 +609,10 @@ impl PersistentCapture {
             .0
             .lock()
             .map_err(|_| anyhow!("latest frame mutex poisoned"))?;
+
+        if closed.load(Ordering::Acquire) {
+            return Ok(false);
+        }
 
         if content_size != slot.pool_size {
             // Display mode changed (resolution/scaling): recreate the pool at the new
@@ -605,6 +623,8 @@ impl PersistentCapture {
                 slot.pool_size,
                 content_size
             );
+            // Release the retained old-size delivery before resizing its pool.
+            slot.pending_frame = None;
             let recreate = create_winrt_device(&d3d.dxgi).and_then(|device| {
                 frame_pool
                     .Recreate(
@@ -620,6 +640,7 @@ impl PersistentCapture {
             });
             if let Err(e) = recreate {
                 // Fail-safe: force the reinit path rather than serving wrong-size frames.
+                slot.pending_frame = None;
                 slot.texture = None;
                 closed.store(true, Ordering::Release);
                 drop(slot);
@@ -627,6 +648,7 @@ impl PersistentCapture {
                 return Err(e);
             }
             slot.pool_size = content_size;
+            slot.pending_frame = None;
             slot.texture = None;
             slot.width = 0;
             slot.height = 0;
@@ -634,10 +656,27 @@ impl PersistentCapture {
             return Ok(false);
         }
 
-        let Some(request_generation) = slot.demand.pending_generation() else {
+        if slot.demand.pending_generation().is_none() {
+            // Keep the final repaint even if it arrives between screenshot
+            // requests. Waiting for a later repaint can otherwise serve stale
+            // cached pixels indefinitely once typing or animation stops.
+            slot.pending_frame = Some(frame);
             return Ok(false);
-        };
+        }
+        slot.pending_frame = None;
+        Self::copy_frame(&frame.0, d3d, &mut slot, stats)
+    }
 
+    fn copy_frame(
+        frame: &Direct3D11CaptureFrame,
+        d3d: &Arc<D3dContext>,
+        slot: &mut LatestFrame,
+        stats: &CaptureCounters,
+    ) -> Result<bool> {
+        let request_generation = slot
+            .demand
+            .pending_generation()
+            .expect("copy requires demand");
         let surface = frame
             .Surface()
             .map_err(|e| anyhow!("Direct3D11CaptureFrame::Surface failed: {}", e))?;
@@ -724,6 +763,15 @@ impl PersistentCapture {
         }
         let request_generation = slot.demand.request();
         self.stats.image_requests.fetch_add(1, Ordering::Relaxed);
+
+        if let Some(frame) = slot.pending_frame.take() {
+            // A streaming/settling read asks for the most recently delivered
+            // pixels, including a quiet final repaint. Fresh one-shot callers
+            // still require a delivery newer than their request.
+            if policy == FrameReadPolicy::CachedWhileRefreshing {
+                Self::copy_frame(&frame.0, &self.d3d, &mut slot, &self.stats)?;
+            }
+        }
 
         loop {
             // Closed takes precedence over any cached frame: a dead session must
@@ -846,6 +894,18 @@ impl PersistentCapture {
             return;
         }
 
+        // Drop the cached frame and mark closed under the frame mutex (no lost
+        // wakeups), then wake any waiter so it fails fast.
+        match self.latest.0.lock() {
+            Ok(mut slot) => {
+                slot.pending_frame = None;
+                slot.texture = None;
+                self.closed.store(true, Ordering::Release);
+            }
+            Err(_) => self.closed.store(true, Ordering::Release),
+        }
+        self.latest.1.notify_all();
+
         // Unregister handlers first so their captured Arcs (and the cached GPU
         // texture they reach) release promptly instead of riding on COM teardown.
         if let Err(e) = self.frame_pool.RemoveFrameArrived(self.frame_arrived_token) {
@@ -860,17 +920,6 @@ impl PersistentCapture {
         if let Err(e) = self.frame_pool.Close() {
             tracing::warn!("failed to close WGC frame pool: {:?}", e);
         }
-
-        // Drop the cached frame and mark closed under the frame mutex (no lost
-        // wakeups), then wake any waiter so it fails fast.
-        match self.latest.0.lock() {
-            Ok(mut slot) => {
-                slot.texture = None;
-                self.closed.store(true, Ordering::Release);
-            }
-            Err(_) => self.closed.store(true, Ordering::Release),
-        }
-        self.latest.1.notify_all();
 
         if let Ok(mut staging) = self.staging.lock() {
             *staging = None;
@@ -987,6 +1036,151 @@ mod tests {
         assert_eq!(demand.request(), u64::MAX);
         assert!(deliver_frame(&mut demand));
         assert!(demand.is_complete(u64::MAX));
+    }
+
+    /// The final paint can arrive when no screenshot is requested. The next
+    /// settling read must see it even when the desktop produces no later paint.
+    #[test]
+    #[ignore = "requires a live Windows console desktop with WGC"]
+    fn quiet_repaint_between_requests_is_not_lost() {
+        use image::GenericImageView;
+        use windows::core::w;
+        use windows::Win32::Foundation::{HINSTANCE, HWND};
+        use windows::Win32::Graphics::Gdi::{
+            GetSysColor, RedrawWindow, COLOR_WINDOW, COLOR_WINDOWFRAME, RDW_ERASE, RDW_INVALIDATE,
+            RDW_UPDATENOW,
+        };
+        use windows::Win32::UI::HiDpi::{
+            SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT,
+            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, SetWindowLongPtrW, GWL_STYLE, HMENU, WINDOW_STYLE,
+            WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+        };
+        // WGC returns physical pixels. Without this thread-local override,
+        // Windows scales the fixture coordinates on a 200% 4K desktop while
+        // the sampled pixel stays at (160, 160), outside the test rectangle.
+        // Restore the previous context even if an assertion panics.
+        struct DpiContext(DPI_AWARENESS_CONTEXT);
+        impl Drop for DpiContext {
+            fn drop(&mut self) {
+                unsafe {
+                    SetThreadDpiAwarenessContext(self.0);
+                }
+            }
+        }
+        let previous =
+            unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+        assert!(!previous.0.is_null(), "set physical fixture coordinates");
+        let _dpi_context = DpiContext(previous);
+        struct TestWindow(HWND);
+        impl Drop for TestWindow {
+            fn drop(&mut self) {
+                unsafe {
+                    let _ = DestroyWindow(self.0);
+                }
+            }
+        }
+        // STATIC SS_BLACKRECT / SS_WHITERECT. No custom window procedure,
+        // background input, clipboard, network or user profile is involved.
+        const BLACK_RECT: u32 = 4;
+        const WHITE_RECT: u32 = 6;
+        let monitor = XcapMonitor::all()
+            .unwrap()
+            .into_iter()
+            .find(|m| m.is_primary().unwrap_or(false))
+            .expect("no primary monitor");
+        let window = TestWindow(unsafe {
+            CreateWindowExW(
+                WS_EX_TOPMOST,
+                w!("STATIC"),
+                w!("WGC quiet repaint regression"),
+                WS_POPUP | WS_VISIBLE | WINDOW_STYLE(BLACK_RECT),
+                monitor.x().unwrap() + 100,
+                monitor.y().unwrap() + 100,
+                240,
+                180,
+                HWND::default(),
+                HMENU::default(),
+                HINSTANCE::default(),
+                None,
+            )
+            .expect("create test window")
+        });
+        unsafe {
+            let _ = RedrawWindow(
+                window.0,
+                None,
+                None,
+                RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW,
+            );
+        }
+        // Let the newly shown fixture finish its own DWM opening transition.
+        // STATIC rectangles use system colors, which are theme-dependent.
+        std::thread::sleep(Duration::from_millis(400));
+        let rgb = |color: u32| [color as u8, (color >> 8) as u8, (color >> 16) as u8];
+        let dark = rgb(unsafe { GetSysColor(COLOR_WINDOWFRAME) });
+        let light = rgb(unsafe { GetSysColor(COLOR_WINDOW) });
+        assert_ne!(dark, light, "fixture colors must be distinct");
+        let mut capture = PersistentCapture::new(monitor.id().unwrap()).unwrap();
+        let first = capture.get_latest_image(Duration::from_secs(2)).unwrap();
+        if let Ok(dir) = std::env::var("SCREENPIPE_WGC_TEST_OUTPUT") {
+            first
+                .save(std::path::Path::new(&dir).join("initial.png"))
+                .unwrap();
+        }
+        // WGC color conversion can shift a system gray by a few levels. The
+        // fixture tests a dark/light repaint, not ICC/HDR color calibration.
+        let color_matches = |actual: [u8; 4], expected: [u8; 3]| {
+            actual[..3]
+                .iter()
+                .zip(expected)
+                .all(|(a, e)| a.abs_diff(e) <= 16)
+        };
+        assert!(
+            color_matches(first.get_pixel(160, 160).0, dark),
+            "fixture opening paint is not visible"
+        );
+        for (style, expected) in [(WHITE_RECT, light), (BLACK_RECT, dark), (WHITE_RECT, light)] {
+            let before = capture.stats();
+            unsafe {
+                SetWindowLongPtrW(
+                    window.0,
+                    GWL_STYLE,
+                    (WS_POPUP.0 | WS_VISIBLE.0 | style) as isize,
+                );
+                let _ = RedrawWindow(
+                    window.0,
+                    None,
+                    None,
+                    RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW,
+                );
+            }
+            std::thread::sleep(Duration::from_millis(300));
+            let quiet = capture.stats();
+            assert!(
+                quiet.frame_arrivals > before.frame_arrivals,
+                "repaint was not delivered"
+            );
+            assert_eq!(
+                quiet.copy_submissions, before.copy_submissions,
+                "no-demand repaint must not copy GPU pixels"
+            );
+            let image = capture
+                .get_latest_image_streaming(Duration::from_millis(200))
+                .unwrap();
+            assert!(
+                color_matches(image.get_pixel(160, 160).0, expected),
+                "settling returned stale pixels after the final repaint"
+            );
+            assert_eq!(
+                capture.stats().copy_submissions,
+                before.copy_submissions + 1
+            );
+        }
+        capture.stop();
+        assert!(capture.latest.0.lock().unwrap().pending_frame.is_none());
     }
 
     /// Resolve the first monitor through xcap, exactly like production code in

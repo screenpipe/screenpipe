@@ -106,6 +106,32 @@ pub(crate) struct MonitorLivenessSnapshot {
     pub loop_stage_entered_ts: u64,
 }
 
+/// Geometry held by a running Windows capture loop, not a fresh inventory row.
+#[cfg(target_os = "windows")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MonitorGeometry {
+    name: String,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    primary: bool,
+}
+
+#[cfg(target_os = "windows")]
+impl MonitorGeometry {
+    fn from_monitor(monitor: &screenpipe_screen::monitor::SafeMonitor) -> Self {
+        Self {
+            name: monitor.name().to_owned(),
+            x: monitor.x(),
+            y: monitor.y(),
+            width: monitor.width(),
+            height: monitor.height(),
+            primary: monitor.is_primary(),
+        }
+    }
+}
+
 /// Manages vision recording across multiple monitors with dynamic detection
 pub struct VisionManager {
     config: VisionManagerConfig,
@@ -120,6 +146,10 @@ pub struct VisionManager {
     /// to upgrade the running task after SCK recovers.
     #[cfg(target_os = "macos")]
     monitor_sck_backends: Arc<DashMap<u32, bool>>,
+    /// Windows handles keep geometry for focus ownership and UIA normalization.
+    /// A mode/position change can preserve the runtime ID while invalidating it.
+    #[cfg(target_os = "windows")]
+    monitor_geometries: Arc<DashMap<u32, MonitorGeometry>>,
     /// Per-monitor pipeline heartbeat. Aggregate metrics remain in `config` for
     /// `/health`; these independent clocks are exclusively the recovery source
     /// so partial multi-display stalls are observable.
@@ -230,6 +260,8 @@ impl VisionManager {
             recording_tasks: Arc::new(DashMap::new()),
             #[cfg(target_os = "macos")]
             monitor_sck_backends: Arc::new(DashMap::new()),
+            #[cfg(target_os = "windows")]
+            monitor_geometries: Arc::new(DashMap::new()),
             monitor_liveness: Arc::new(DashMap::new()),
             hd_recording_tasks: Arc::new(DashMap::new()),
             trigger_tx,
@@ -574,6 +606,8 @@ impl VisionManager {
 
         #[cfg(target_os = "macos")]
         let uses_sck_backend = monitor.uses_sck_backend();
+        #[cfg(target_os = "windows")]
+        let geometry = MonitorGeometry::from_monitor(&monitor);
         let liveness = Arc::new(PipelineMetrics::new());
         let handle = self
             .start_event_driven_monitor(monitor_id, monitor, liveness.clone())
@@ -583,6 +617,8 @@ impl VisionManager {
         #[cfg(target_os = "macos")]
         self.monitor_sck_backends
             .insert(monitor_id, uses_sck_backend);
+        #[cfg(target_os = "windows")]
+        self.monitor_geometries.insert(monitor_id, geometry);
         self.recording_tasks.insert(monitor_id, handle);
 
         Ok(())
@@ -791,6 +827,8 @@ impl VisionManager {
         self.monitor_liveness.remove(&monitor_id);
         #[cfg(target_os = "macos")]
         self.monitor_sck_backends.remove(&monitor_id);
+        #[cfg(target_os = "windows")]
+        self.monitor_geometries.remove(&monitor_id);
         // Stop the HD recorder first. Aborting drops its ffmpeg stdin, which
         // sends EOF so ffmpeg finalizes the .mp4 (moov atom) on its own.
         if let Some((_, hd_handle)) = self.hd_recording_tasks.remove(&monitor_id) {
@@ -842,6 +880,8 @@ impl VisionManager {
             self.monitor_liveness.remove(id);
             #[cfg(target_os = "macos")]
             self.monitor_sck_backends.remove(id);
+            #[cfg(target_os = "windows")]
+            self.monitor_geometries.remove(id);
             if let Some((_, handle)) = self.recording_tasks.remove(id) {
                 // Await to clean up the JoinHandle and capture exit reason
                 match handle.await {
@@ -876,6 +916,18 @@ impl VisionManager {
         self.monitor_sck_backends
             .get(&monitor_id)
             .map(|entry| *entry.value())
+    }
+
+    /// A live mode/position change does not necessarily allocate a new HMONITOR.
+    /// Comparing IDs alone leaves focus matching and UIA bounds on the old mode.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn active_monitor_geometry_changed(
+        &self,
+        monitor: &screenpipe_screen::monitor::SafeMonitor,
+    ) -> bool {
+        self.monitor_geometries
+            .get(&monitor.id())
+            .is_some_and(|previous| *previous != MonitorGeometry::from_monitor(monitor))
     }
 
     /// Independent liveness for each active capture loop. Never derive this
@@ -1010,6 +1062,58 @@ mod tests {
     use screenpipe_core::Language;
     use screenpipe_db::DatabaseManager;
     use screenpipe_screen::PipelineMetrics;
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    #[ignore = "requires an interactive Windows display"]
+    async fn windows_monitor_geometry_refreshes_only_existing_stale_capture() {
+        let vm = make_vm_with_monitor_ids(vec![]).await;
+        let monitor = list_monitors()
+            .await
+            .into_iter()
+            .next()
+            .expect("interactive display");
+        assert!(!vm.active_monitor_geometry_changed(&monitor));
+        let current = MonitorGeometry::from_monitor(&monitor);
+        vm.monitor_geometries.insert(monitor.id(), current.clone());
+        assert!(!vm.active_monitor_geometry_changed(&monitor));
+        // Model an unchanged HMONITOR whose running task predates each change.
+        for variant in 0..5 {
+            let mut stale = current.clone();
+            match variant {
+                0 => stale.width += 1,
+                1 => stale.height += 1,
+                2 => stale.x -= 100,
+                3 => stale.y -= 100,
+                _ => stale.primary = !stale.primary,
+            }
+            vm.monitor_geometries.insert(monitor.id(), stale);
+            assert!(vm.active_monitor_geometry_changed(&monitor));
+        }
+        vm.stop_monitor(monitor.id()).await.unwrap();
+        assert!(!vm.active_monitor_geometry_changed(&monitor));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn windows_monitor_geometry_is_cleared_when_capture_stops() {
+        let vm = make_vm_with_monitor_ids(vec![]).await;
+        vm.monitor_geometries.insert(
+            42,
+            MonitorGeometry {
+                name: "display".into(),
+                x: 0,
+                y: 0,
+                width: 1280,
+                height: 720,
+                primary: true,
+            },
+        );
+        vm.stop_monitor(42).await.unwrap();
+        assert!(!vm.monitor_geometries.contains_key(&42));
+        // A paused/stopped device must not be revived by stale geometry alone.
+        assert!(vm.active_monitors().await.is_empty());
+    }
 
     async fn make_vm_with_options(
         monitor_ids: Vec<String>,

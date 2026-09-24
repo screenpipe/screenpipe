@@ -1405,6 +1405,7 @@ impl TreeWalkerPlatform for LinuxTreeWalker {
             retained_work_pending: false,
             max_depth_reached: state.max_depth_reached,
             window_bounds: None,
+            native_window_id: None,
         }))
     }
 }

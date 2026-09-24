@@ -42,6 +42,16 @@ impl SafeMonitor {
         self.capture_image_inner(false).await
     }
 
+    /// Inspect compositor settling after the caller has acquired a fresh frame.
+    /// WGC emits frames only when pixels change: waiting for another fresh frame
+    /// on a stable desktop times out and can unnecessarily tear down the session.
+    /// Reuse the current texture while requesting any subsequent repaint. RDP
+    /// keeps its request-scoped policy so this bounded probe cannot leave a
+    /// persistent capture session running on an otherwise idle remote desktop.
+    pub async fn capture_image_while_settling(&self) -> Result<DynamicImage> {
+        self.capture_image_inner(!Self::is_remote_session()).await
+    }
+
     /// Capture a frame as part of a sustained recording loop.
     ///
     /// Unlike one-shot [`Self::capture_image`] calls, an explicit streaming caller
@@ -443,6 +453,49 @@ mod tests {
             false, false
         ));
         assert!(!SafeMonitor::should_use_request_scoped_capture(false, true));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a live Windows console desktop with WGC"]
+    async fn console_settling_preserves_session_on_unchanged_desktop() {
+        assert!(
+            !SafeMonitor::is_remote_session(),
+            "console desktop required"
+        );
+        let monitor = get_default_monitor().await.expect("no monitor found");
+        let first = monitor.capture_image().await.expect("fresh capture failed");
+        let requests_before = monitor
+            .persistent_capture
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("WGC session required")
+            .stats()
+            .image_requests;
+        for _ in 0..3 {
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            let sample = monitor
+                .capture_image_while_settling()
+                .await
+                .expect("settling sample failed");
+            assert_eq!(
+                (sample.width(), sample.height()),
+                (first.width(), first.height())
+            );
+        }
+        let requests_after = monitor
+            .persistent_capture
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("settling must retain the WGC session")
+            .stats()
+            .image_requests;
+        assert_eq!(
+            requests_after,
+            requests_before + 3,
+            "an unchanged desktop must not time out and replace its WGC session"
+        );
     }
 
     #[tokio::test]

@@ -1799,8 +1799,34 @@ thread_local! {
     static APP_OBSERVER_STATE: std::cell::RefCell<Option<Box<AppObserverState>>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Timer ID for the safety-net periodic check.
-const APP_OBSERVER_TIMER_ID: usize = 1;
+/// A thread timer has an OS-allocated ID, not the requested window-timer ID.
+/// Keep that ID for dispatch and cleanup so a missed foreground hook cannot
+/// leave input attributed to an excluded app until the next focus change.
+struct AppObserverTimer(usize);
+
+impl AppObserverTimer {
+    fn new(interval_ms: u32) -> Self {
+        let id = unsafe { SetTimer(HWND::default(), 0, interval_ms, None) };
+        if id == 0 {
+            warn!("failed to install app observer fallback timer");
+        }
+        Self(id)
+    }
+
+    fn matches(&self, message: &MSG) -> bool {
+        self.0 != 0 && message.message == WM_TIMER && message.wParam.0 == self.0
+    }
+}
+
+impl Drop for AppObserverTimer {
+    fn drop(&mut self) {
+        if self.0 != 0 {
+            unsafe {
+                let _ = KillTimer(HWND::default(), self.0);
+            }
+        }
+    }
+}
 
 /// Process a foreground window change in the app observer.
 fn process_foreground_change(state: &mut AppObserverState) {
@@ -1973,7 +1999,7 @@ fn run_app_observer(
         );
 
         // Safety-net timer: re-check foreground every 2s in case a hook event was missed
-        SetTimer(HWND::default(), APP_OBSERVER_TIMER_ID, 2000, None);
+        let fallback_timer = AppObserverTimer::new(2000);
 
         // Process initial foreground window
         APP_OBSERVER_STATE.with(|state| {
@@ -1991,7 +2017,7 @@ fn run_app_observer(
             }
 
             // Handle timer messages as a safety-net foreground check
-            if msg.message == WM_TIMER && msg.wParam.0 == APP_OBSERVER_TIMER_ID {
+            if fallback_timer.matches(&msg) {
                 APP_OBSERVER_STATE.with(|state| {
                     if let Ok(mut guard) = state.try_borrow_mut() {
                         if let Some(ref mut s) = *guard {
@@ -2061,6 +2087,15 @@ pub fn get_focused_pid_fresh() -> Option<i32> {
         let mut pid = 0;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
         (pid != 0).then_some(pid as i32)
+    }
+}
+
+/// Foreground HWND, read without UIA. Unlike a PID, this distinguishes two
+/// windows owned by the same application during a capture.
+pub fn get_focused_window_id_fresh() -> Option<usize> {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        (!hwnd.is_invalid() && !is_transient_shell_window(hwnd)).then_some(hwnd.0 as usize)
     }
 }
 
@@ -2323,6 +2358,54 @@ fn get_process_name_uncached(pid: u32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_observer_dispatches_os_allocated_thread_timers() {
+        // Use real Windows timer messages on an isolated thread. Two distinct
+        // timers make the old hard-coded ID predicate insufficient regardless
+        // of which numeric IDs Windows happens to allocate.
+        thread::spawn(|| {
+            use windows::Win32::UI::WindowsAndMessaging::{PeekMessageW, PM_REMOVE};
+
+            let first = AppObserverTimer::new(10);
+            let second = AppObserverTimer::new(10);
+            assert_ne!(first.0, 0);
+            assert_ne!(second.0, 0);
+            assert_ne!(first.0, second.0);
+            let deadline = Instant::now() + std::time::Duration::from_secs(2);
+            let mut seen = [false; 2];
+            while Instant::now() < deadline && !seen.iter().all(|seen| *seen) {
+                let mut message = MSG::default();
+                while unsafe {
+                    PeekMessageW(&mut message, HWND::default(), WM_TIMER, WM_TIMER, PM_REMOVE)
+                }
+                .as_bool()
+                {
+                    if message.wParam.0 == first.0 {
+                        assert!(first.matches(&message));
+                        assert!(!second.matches(&message));
+                        seen[0] = true;
+                    }
+                    if message.wParam.0 == second.0 {
+                        assert!(second.matches(&message));
+                        assert!(!first.matches(&message));
+                        seen[1] = true;
+                    }
+                }
+                thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(
+                seen,
+                [true, true],
+                "both native fallback ticks must dispatch"
+            );
+            let unrelated = MSG::default();
+            assert!(!first.matches(&unrelated));
+            assert!(!AppObserverTimer(0).matches(&unrelated));
+        })
+        .join()
+        .expect("native timer test thread panicked");
+    }
 
     #[test]
     fn test_permission_check() {

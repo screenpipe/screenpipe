@@ -81,6 +81,10 @@ harness = false
 
 # Platform-specific dependencies
 
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+# Pixel-coordinate desktop fixtures must opt out of logical DPI virtualization.
+windows = { workspace = true, features = ["Win32_UI_HiDpi"] }
+
 # macOS: sck-rs for 12.3+ (ScreenCaptureKit), xcap as fallback for older versions
 [target.'cfg(target_os = "macos")'.dependencies]
 sck-rs = { git = "https://github.com/screenpipe/sck-rs" , rev = "758ee8b826763cba68da6eb3d204e8ba2d357109"}
