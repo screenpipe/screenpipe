@@ -52,29 +52,6 @@ impl SafeMonitor {
         self.capture_image_inner(!Self::is_remote_session()).await
     }
 
-    /// Read pixels delivered after an accessibility walk. Cached streaming
-    /// textures cannot prove that a newly read value was painted. A quiet
-    /// desktop may time out; preserve the session and let the caller detach AX
-    /// from this image instead of resetting WGC or trusting an old texture.
-    pub async fn capture_image_for_coherence(&self) -> Result<DynamicImage> {
-        if Self::is_remote_session() || self.persistent_capture_disabled.load(Ordering::Relaxed) {
-            return self.capture_image().await;
-        }
-        let persistent = self.persistent_capture.clone();
-        let monitor_id = self.monitor_id;
-        tokio::task::spawn_blocking(move || {
-            let guard = persistent
-                .lock()
-                .map_err(|e| anyhow::anyhow!("capture coherence mutex poisoned: {}", e))?;
-            if let Some(capture) = guard.as_ref() {
-                capture.get_latest_image(std::time::Duration::from_millis(200))
-            } else {
-                Self::per_frame_capture(monitor_id)
-            }
-        })
-        .await?
-    }
-
     /// Capture a frame as part of a sustained recording loop.
     ///
     /// Unlike one-shot [`Self::capture_image`] calls, an explicit streaming caller
@@ -506,12 +483,6 @@ mod tests {
                 (first.width(), first.height())
             );
         }
-        // Fresh coherence probes may time out on a static desktop. They must
-        // keep the same session, rather than reinitializing to manufacture a
-        // fresh frame or silently treating its cached texture as confirmation.
-        for _ in 0..2 {
-            let _ = monitor.capture_image_for_coherence().await;
-        }
         let requests_after = monitor
             .persistent_capture
             .lock()
@@ -522,7 +493,7 @@ mod tests {
             .image_requests;
         assert_eq!(
             requests_after,
-            requests_before + 5,
+            requests_before + 3,
             "an unchanged desktop must not time out and replace its WGC session"
         );
     }

@@ -2586,7 +2586,7 @@ where
                     && image.as_bytes() == after.as_bytes()
                 {
                     matching_samples += 1;
-                    if matching_samples >= 2 {
+                    if matching_samples >= 3 {
                         return true;
                     }
                 } else {
@@ -3656,12 +3656,14 @@ async fn do_capture(
         && tree_snapshot.is_some()
     {
         // Every focused AX/pixel pair needs post-walk evidence, even when its
-        // HWND was settled earlier. Require two fresh compositor deliveries:
-        // streaming-cache equality can otherwise accept pre-edit pixels before
-        // a pending repaint arrives. Preserve the bounded caret-phase retry;
-        // timeouts/changed content detach AX and use the actual image's OCR.
+        // HWND was settled earlier. Require three equal observations spaced
+        // across at least 120ms: accepting the first cached texture can race a
+        // pending repaint. Each streaming read requests refresh while retaining
+        // the current pixels on a quiet desktop, where WGC emits no new frame.
+        // Changed content must settle back to the exact pre-walk pixels within
+        // the bounded budget, otherwise detach AX and use this image's OCR.
         render_stable = confirm_render(&image, Duration::from_millis(650), || {
-            params.monitor.capture_image_for_coherence()
+            params.monitor.capture_image_while_settling()
         })
         .await;
     }
@@ -4363,7 +4365,7 @@ mod tests {
             })
             .await
         );
-        assert_eq!(calls, 3);
+        assert_eq!(calls, 4);
         assert!(
             !confirm_render(&before, Duration::from_millis(80), || std::future::ready(
                 Ok(blink.clone())
@@ -4373,7 +4375,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn render_confirmation_does_not_accept_a_single_matching_sample() {
+    async fn render_confirmation_waits_for_pending_repaint() {
         use image::GenericImage;
         let before = image::DynamicImage::new_rgba8(12, 12);
         let mut painted_edit = before.clone();
@@ -4382,7 +4384,7 @@ mod tests {
         assert!(
             !confirm_render(&before, Duration::from_millis(150), || {
                 calls += 1;
-                std::future::ready(Ok(if calls == 1 {
+                std::future::ready(Ok(if calls <= 2 {
                     before.clone()
                 } else {
                     painted_edit.clone()
@@ -4390,7 +4392,10 @@ mod tests {
             })
             .await
         );
-        assert!(calls >= 2, "one matching sample cannot establish stability");
+        assert!(
+            calls >= 3,
+            "initial cached samples cannot establish stability"
+        );
     }
 
     #[tokio::test]
