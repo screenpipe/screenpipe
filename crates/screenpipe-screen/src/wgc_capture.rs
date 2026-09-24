@@ -1050,10 +1050,30 @@ mod tests {
             GetSysColor, RedrawWindow, COLOR_WINDOW, COLOR_WINDOWFRAME, RDW_ERASE, RDW_INVALIDATE,
             RDW_UPDATENOW,
         };
+        use windows::Win32::UI::HiDpi::{
+            SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT,
+            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        };
         use windows::Win32::UI::WindowsAndMessaging::{
             CreateWindowExW, DestroyWindow, SetWindowLongPtrW, GWL_STYLE, HMENU, WINDOW_STYLE,
             WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
         };
+        // WGC returns physical pixels. Without this thread-local override,
+        // Windows scales the fixture coordinates on a 200% 4K desktop while
+        // the sampled pixel stays at (160, 160), outside the test rectangle.
+        // Restore the previous context even if an assertion panics.
+        struct DpiContext(DPI_AWARENESS_CONTEXT);
+        impl Drop for DpiContext {
+            fn drop(&mut self) {
+                unsafe {
+                    SetThreadDpiAwarenessContext(self.0);
+                }
+            }
+        }
+        let previous =
+            unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+        assert!(!previous.0.is_null(), "set physical fixture coordinates");
+        let _dpi_context = DpiContext(previous);
         struct TestWindow(HWND);
         impl Drop for TestWindow {
             fn drop(&mut self) {
