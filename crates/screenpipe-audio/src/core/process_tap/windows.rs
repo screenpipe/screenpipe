@@ -645,10 +645,7 @@ fn run_capture_loop(
     CaptureExit::Disconnected
 }
 
-unsafe fn drain_capture_packets(
-    capture: &WasapiLoopbackCapture,
-    tx: &CaptureSender,
-) -> Result<()> {
+unsafe fn drain_capture_packets(capture: &WasapiLoopbackCapture, tx: &CaptureSender) -> Result<()> {
     loop {
         let frames = capture
             .capture_client

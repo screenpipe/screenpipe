@@ -26,9 +26,9 @@ use tracing::{error, info, warn};
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
 use crate::utils::audio::audio_to_mono;
 
+use super::captured_audio::{CaptureSender, CapturedAudio};
 #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
 use super::device::get_cpal_device_and_config;
-use super::captured_audio::{CaptureSender, CapturedAudio};
 use super::device::AudioDevice;
 
 /// Backend-agnostic audio stream configuration.
