@@ -1755,7 +1755,11 @@ mod tests {
         assert_eq!(report.already_connected, 1);
         assert_eq!(std::fs::read_to_string(&config).unwrap(), written);
         let restarted = DesktopAgentReconciler::default().reconcile(
-            home, &bun, Some("test-key"), "http://localhost:3039", &opts,
+            home,
+            &bun,
+            Some("test-key"),
+            "http://localhost:3039",
+            &opts,
         );
         assert_eq!(restarted.already_connected, 1);
         assert_eq!(std::fs::read_to_string(&config).unwrap(), written);
