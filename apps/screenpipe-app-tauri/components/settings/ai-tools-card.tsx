@@ -11,7 +11,7 @@
 // explicit connect, and explicit removal surface.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Code2, Bot, Check, Loader2, Plus, RotateCw } from "lucide-react";
+import { Bot, Check, Loader2, Plus, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import posthog from "posthog-js";
 import { CursorLogo } from "./tool-logos";
@@ -138,7 +138,7 @@ function ToolIcon({ id }: { id: ConnectAllToolId }) {
     case "hermes":
       return <img src="/images/hermes.png" alt="" className={`${img} rounded`} />;
     case "vscode":
-      return <Code2 className={img} />;
+      return <img src="/images/vscode.svg" alt="" className={img} />;
     case "grokbot":
     case "runner":
       return <Bot className={img} />;
