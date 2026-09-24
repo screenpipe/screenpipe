@@ -184,7 +184,7 @@ async fn timing_survives_verified_publication_retries_and_disk_reload() {
     let (status,proposed)=post(&client,&base,json!({"task":"workflow-maintain","action":"propose","expected_revision":context["workspace"]["revision"],"payload":payload,"assignee":"workflow-review","note":"Two complete receipts found in the original source interval."})).await;
     assert_eq!(status, 200, "{proposed}");
     let context = get(&client, &base, "/workflows/workspace?task=workflow-review").await;
-    let publish = json!({"task":"workflow-review","action":"publish","expected_revision":context["workspace"]["revision"],"catalog_revision":context["catalogRevision"],"draft_id":proposed["draft_id"],"note":"Verified both boundaries against the captured sources."});
+    let mut publish = json!({"task":"workflow-review","action":"publish","expected_revision":context["workspace"]["revision"],"catalog_revision":context["catalogRevision"],"draft_id":proposed["draft_id"],"note":"Verified both boundaries against the captured sources."});
     // A fabricated timing boundary must fail without replacing the catalog.
     let before = tokio::fs::read(&path).await.unwrap();
     let mut invalid = publish.clone();
@@ -194,7 +194,24 @@ async fn timing_survives_verified_publication_retries_and_disk_reload() {
     invalid["payload"] = bad;
     let (status, error) = post(&client, &base, invalid).await;
     assert_eq!(status, 422, "{error}");
-    assert_eq!(before, tokio::fs::read(&path).await.unwrap());
+    // Verification persists an in-flight retry guard before awaiting source
+    // checks, then clears it on a definitive 422. Those two workspace revision
+    // changes are intentional; every other catalog/workspace field must survive.
+    let before: Value = serde_json::from_slice(&before).unwrap();
+    let after: Value = serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
+    let expected_workspace_revision = before["agentWorkspace"]["revision"].as_u64().unwrap() + 2;
+    assert_eq!(
+        after["agentWorkspace"]["revision"],
+        expected_workspace_revision
+    );
+    let mut expected = before;
+    expected["agentWorkspace"]["revision"] = json!(expected_workspace_revision);
+    assert_eq!(
+        expected, after,
+        "failed verification must preserve all published data and draft content"
+    );
+    // Retry against the current workspace, as a real client must after 422.
+    publish["expected_revision"] = after["agentWorkspace"]["revision"].clone();
     let (status, receipt) = post(&client, &base, publish.clone()).await;
     assert_eq!(status, 200, "{receipt}");
     let saved = get(&client, &base, "/workflows/catalog").await;
