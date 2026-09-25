@@ -6,6 +6,15 @@ credentials for this package.
 
 ---
 
+## 0.20.1 — installable plugins
+
+- Adds the local Claude Desktop installer with optional API URL/key settings.
+- Adds a portable cloud plugin for OpenAI/Codex and Claude, using the existing
+  Data Sync OAuth endpoint.
+- Builds and validates the installable artifacts before publishing any package.
+- Attaches the cloud ZIP alongside the existing MCPB download filename.
+- Public AI directories still require their own submission and review.
+
 ## 0.20.0 — workflow catalog access
 
 - Publishes `list-workflows` and `get-workflow` for the saved desktop Workflows catalog.
