@@ -86,10 +86,14 @@ pub fn main_label_for_mode(mode: &str) -> &'static str {
 ///   2. Headless mode has torn down every webview, or
 ///   3. the user opted into `hideDockIcon` in Settings → Display.
 ///
-/// The tray icon is unaffected in every case, so the app stays reachable. This
-/// is a single explicit call (on startup, window close, and when the user
-/// toggles the setting) — NOT the per-tick watchdog toggling that was removed
-/// for causing crashes; setting the policy once on a real event is safe.
+/// This function only sets the activation policy; it never creates a tray, so
+/// it cannot resurrect one. The tray stays reachable in the cases above because
+/// `tray::enforce_tray_visibility` keeps it unless enterprise tray suppression
+/// is explicitly on — see `is_tray_hidden` for why that is a separate, opt-in
+/// decision rather than a consequence of hidden UI. This is a single explicit
+/// call (on startup, window close, and when the user toggles the setting) — NOT
+/// the per-tick watchdog toggling that was removed for causing crashes; setting
+/// the policy once on a real event is safe.
 #[cfg(target_os = "macos")]
 pub fn reset_to_regular_and_refresh_tray(app: &AppHandle) {
     if !super::window_activation_allowed() {

@@ -2313,7 +2313,25 @@ async fn main() {
             // 1. Collect per-shortcut failures instead of aborting on the first one
             // 2. Emit a user-visible notification listing the conflicting shortcuts
             if app_ui_hidden {
-                info!("enterprise: hidden UI mode active, skipping global app shortcuts");
+                // With windows torn down, the tray is the only pause affordance.
+                // Only when the admin ALSO suppresses the tray does the app have
+                // no way to stop capture at all — and then the start/stop hotkeys
+                // are registered and routed natively, because the usual
+                // `shortcut-*-recording` emits have no webview listener here.
+                if crate::enterprise_policy::is_tray_hidden() {
+                    info!("enterprise: hidden UI and tray suppressed, registering recording control shortcuts only");
+                    let app_handle_clone = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        crate::shortcuts::reconcile_with_enterprise_policy(
+                            &app_handle_clone,
+                            true,
+                            true,
+                        )
+                        .await;
+                    });
+                } else {
+                    info!("enterprise: hidden UI mode active, skipping global app shortcuts");
+                }
             } else if headless_startup {
                 info!("headless: skipping global shortcuts while UI is dormant");
             } else {
