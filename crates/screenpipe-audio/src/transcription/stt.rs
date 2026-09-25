@@ -273,7 +273,7 @@ pub async fn process_audio_input(
     embedding_manager: Arc<StdMutex<EmbeddingManager>>,
     embedding_extractor: Option<Arc<StdMutex<EmbeddingExtractor>>>,
     output_path: &PathBuf,
-    output_sender: &crossbeam::channel::Sender<TranscriptionResult>,
+    output_sender: &flume::Sender<TranscriptionResult>,
     session: &mut TranscriptionSession,
     metrics: Arc<AudioPipelineMetrics>,
     pre_written_path: Option<String>,
@@ -369,7 +369,7 @@ pub async fn process_audio_input(
         )
         .await?;
 
-        if output_sender.send(transcription_result).is_err() {
+        if output_sender.send_async(transcription_result).await.is_err() {
             break;
         }
     }

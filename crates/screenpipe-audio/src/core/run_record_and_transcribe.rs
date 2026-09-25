@@ -185,7 +185,7 @@ fn meeting_frame_from_recorder_output(
 pub async fn run_record_and_transcribe(
     audio_stream: Arc<AudioStream>,
     duration: Duration,
-    whisper_sender: Arc<crossbeam::channel::Sender<AudioInput>>,
+    whisper_sender: Arc<flume::Sender<AudioInput>>,
     is_running: Arc<AtomicBool>,
     metrics: Arc<AudioPipelineMetrics>,
     live_audio_tap: Option<MeetingAudioTap>,
@@ -813,7 +813,7 @@ async fn flush_audio(
     overlap_samples: usize,
     capture_timestamp: u64,
     audio_stream: &Arc<AudioStream>,
-    whisper_sender: &Arc<crossbeam::channel::Sender<AudioInput>>,
+    whisper_sender: &Arc<flume::Sender<AudioInput>>,
     device_name: &str,
     metrics: &Arc<AudioPipelineMetrics>,
     aec_active: bool,
@@ -842,37 +842,38 @@ async fn flush_audio(
     let sample_count = send_data.len();
     let duration_seconds = sample_count as f64 / sample_rate as f64;
     let flush_kind = if final_flush { "final" } else { "regular" };
-    match whisper_sender.send_timeout(
-        AudioInput {
+    match tokio::time::timeout(
+        Duration::from_secs(30),
+        whisper_sender.send_async(AudioInput {
             data: Arc::new(send_data),
             device: audio_stream.device.clone(),
             sample_rate,
             channels: RECORDER_OUTPUT_CHANNELS,
             capture_timestamp,
-        },
-        Duration::from_secs(30),
-    ) {
-        Ok(_) => {
+        }),
+    )
+    .await
+    {
+        Ok(Ok(())) => {
             info!(
                 "audio recorder {} flush queued successfully for {}: samples={}, sample_rate={}Hz, duration={:.3}s, capture_timestamp={}",
                 flush_kind, device_name, sample_count, sample_rate, duration_seconds, capture_timestamp
             );
             metrics.record_chunk_sent();
         }
-        Err(e) => {
-            if e.is_disconnected() {
-                error!(
+        Ok(Err(_)) => {
+            error!(
                     "audio recorder {} flush queue failed for {}: samples={}, sample_rate={}Hz, duration={:.3}s, cause=whisper channel disconnected",
                     flush_kind, device_name, sample_count, sample_rate, duration_seconds
                 );
-                return Err(anyhow!("Whisper channel disconnected"));
-            } else if e.is_timeout() {
-                metrics.record_channel_full();
-                warn!(
+            return Err(anyhow!("Whisper channel disconnected"));
+        }
+        Err(_) => {
+            metrics.record_channel_full();
+            warn!(
                     "audio recorder {} flush queue failed for {}: samples={}, sample_rate={}Hz, duration={:.3}s, cause=whisper channel still full after 30s; dropping audio segment",
                     flush_kind, device_name, sample_count, sample_rate, duration_seconds
                 );
-            }
         }
     }
 
@@ -900,7 +901,7 @@ mod tests {
         ));
         let (audio_stream, tx) = AudioStream::from_sender_for_test(device, sample_rate, 1);
         let audio_stream = Arc::new(audio_stream);
-        let (whisper_tx, whisper_rx) = crossbeam::channel::bounded::<AudioInput>(8);
+        let (whisper_tx, whisper_rx) = flume::bounded::<AudioInput>(8);
         let is_running = Arc::new(AtomicBool::new(true));
         let metrics = Arc::new(AudioPipelineMetrics::new());
         let metrics_for_wait = metrics.clone();
@@ -1051,7 +1052,7 @@ mod tests {
             ));
             let (stream, _tx) = AudioStream::from_sender_for_test(device, 16_000, 1);
             let stream = Arc::new(stream);
-            let (success_sender, success_receiver) = crossbeam::channel::bounded::<AudioInput>(1);
+            let (success_sender, success_receiver) = flume::bounded::<AudioInput>(1);
             let mut final_fragment = vec![0.25; 16_000];
             flush_audio(
                 &mut final_fragment,
@@ -1068,7 +1069,7 @@ mod tests {
             .expect("final flush success");
             assert_eq!(success_receiver.recv().unwrap().data.len(), 16_000);
 
-            let (sender, receiver) = crossbeam::channel::bounded::<AudioInput>(1);
+            let (sender, receiver) = flume::bounded::<AudioInput>(1);
             drop(receiver);
             let mut retained = vec![0.5; 51_200];
             let error = flush_audio(
@@ -1088,6 +1089,58 @@ mod tests {
         }
         .with_subscriber(subscriber)
         .await;
+    }
+
+    #[tokio::test]
+    async fn full_recording_channel_yields_until_capture_can_be_queued() {
+        let device = Arc::new(AudioDevice::new(
+            "backpressure fixture".into(),
+            DeviceType::Input,
+        ));
+        let (stream, _capture) = AudioStream::from_sender_for_test(device.clone(), 16_000, 1);
+        let stream = Arc::new(stream);
+        let (sender, receiver) = flume::bounded(1);
+        sender
+            .send(AudioInput {
+                data: Arc::new(vec![0.1; 16_000]),
+                device,
+                sample_rate: 16_000,
+                channels: 1,
+                capture_timestamp: 1,
+            })
+            .unwrap();
+        let sender = Arc::new(sender);
+        let metrics = Arc::new(AudioPipelineMetrics::new());
+        let mut samples = vec![0.25; 16_000];
+        let flush = flush_audio(
+            &mut samples,
+            0,
+            2,
+            &stream,
+            &sender,
+            "backpressure fixture (input)",
+            &metrics,
+            false,
+            false,
+        );
+        let drain = async {
+            // This runs on the same thread as flush. A blocking send prevents
+            // the consumer from ever freeing the occupied bounded-channel slot.
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let first = receiver.recv_async().await.unwrap();
+            let next = receiver.recv_async().await.unwrap();
+            (first, next)
+        };
+        let (flushed, (first, next)) =
+            tokio::time::timeout(Duration::from_secs(1), async { tokio::join!(flush, drain) })
+                .await
+                .expect("full queue must yield to its consumer");
+        flushed.unwrap();
+        assert_eq!(first.capture_timestamp, 1);
+        assert_eq!(next.capture_timestamp, 2);
+        assert_eq!(*next.data, vec![0.25; 16_000]);
+        assert_eq!(metrics.snapshot().chunks_sent, 1);
+        assert_eq!(metrics.snapshot().chunks_channel_full, 0);
     }
 
     #[cfg(target_os = "windows")]
@@ -1248,7 +1301,7 @@ mod tests {
         meeting_tap.set_background_suppressed(true);
         let mut live_rx = meeting_tap.subscribe();
 
-        let (whisper_tx, whisper_rx) = crossbeam::channel::bounded::<AudioInput>(4);
+        let (whisper_tx, whisper_rx) = flume::bounded::<AudioInput>(4);
         let is_running = Arc::new(AtomicBool::new(true));
         let metrics = Arc::new(AudioPipelineMetrics::new());
 
@@ -1331,7 +1384,7 @@ mod tests {
         ));
         let (audio_stream, tx) = AudioStream::from_sender_for_test(device, sample_rate, 2);
         let audio_stream = Arc::new(audio_stream);
-        let (whisper_tx, whisper_rx) = crossbeam::channel::bounded::<AudioInput>(8);
+        let (whisper_tx, whisper_rx) = flume::bounded::<AudioInput>(8);
         let is_running = Arc::new(AtomicBool::new(true));
         let metrics = Arc::new(AudioPipelineMetrics::new());
 

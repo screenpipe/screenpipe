@@ -78,8 +78,8 @@ screenpipe-db = { path = "../screenpipe-db" }
 # failure it got instead of string-matching the Display output.
 sqlx = { workspace = true }
 
-# crossbeam
-crossbeam = { workspace = true }
+# Async-aware bounded channels shared by recording and transcription tasks.
+flume = { version = "0.11.1", default-features = false, features = ["async"] }
 dashmap = { workspace = true }
 
 # Directories

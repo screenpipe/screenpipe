@@ -60,7 +60,7 @@ pub(super) async fn finish_without_text(db: &DatabaseManager, path: &str, outcom
 
 pub async fn handle_new_transcript(
     db: Arc<DatabaseManager>,
-    transcription_receiver: Arc<crossbeam::channel::Receiver<TranscriptionResult>>,
+    transcription_receiver: Arc<flume::Receiver<TranscriptionResult>>,
     transcription_engine: Arc<AudioTranscriptionEngine>,
     diarization_mode: &'static str,
     use_pii_removal: bool,
@@ -82,7 +82,9 @@ pub async fn handle_new_transcript(
     // could incorrectly trim device B's content.
     let mut prev_transcript_by_device: HashMap<String, String> = HashMap::new();
     let mut prev_id_by_device: HashMap<String, i64> = HashMap::new();
-    while let Ok(mut transcription) = transcription_receiver.recv() {
+    // Never block a Tokio worker here: the previous DB write may have just
+    // woken the shared writer into this worker's non-stealable LIFO slot.
+    while let Ok(mut transcription) = transcription_receiver.recv_async().await {
         // Heartbeat: record that the consumer is alive and processing, even when
         // VAD filters everything. The health check uses this to distinguish
         // "silence, nothing to write" from "pipeline stalled, writes blocked".
@@ -288,6 +290,70 @@ mod tests {
         assert!(!emitted.contains("private-person"));
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn silent_completion_keeps_writer_live_and_idle_handler_abortable() {
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            DatabaseManager::new("sqlite::memory:", Default::default())
+                .await
+                .unwrap(),
+        );
+        let path = dir.path().join("silent.mp4").to_string_lossy().into_owned();
+        std::fs::write(&path, b"saved audio").unwrap();
+        let id = db.insert_audio_chunk(&path, None).await.unwrap();
+        let (tx, rx) = flume::bounded(1);
+        let mut handler = tokio::spawn(handle_new_transcript(
+            db.clone(),
+            Arc::new(rx),
+            Arc::new(AudioTranscriptionEngine::Deepgram),
+            "live",
+            false,
+            Arc::new(AudioPipelineMetrics::new()),
+            None,
+            dir.path().to_path_buf(),
+        ));
+        let completed = tokio::time::timeout(Duration::from_secs(2), async {
+            tx.send_async(result(
+                path.clone(),
+                chrono::Utc::now().timestamp() as u64,
+                Some(""),
+            ))
+            .await
+            .unwrap();
+            loop {
+                let status: String = sqlx::query_scalar(
+                    "SELECT transcription_status FROM audio_chunks WHERE id = ?",
+                )
+                .bind(id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+                if status == "silent" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            // The handler has returned its write permit and is waiting for the
+            // next transcript. Other capture writes must still reach SQLite.
+            db.insert_audio_chunk("next-capture.mp4", None)
+                .await
+                .unwrap();
+            handler.abort();
+            (&mut handler).await.unwrap_err().is_cancelled()
+        })
+        .await;
+        // Release a regressed synchronous recv before asserting or shutting down.
+        drop(tx);
+        if completed.is_err() {
+            handler.abort();
+            let _ = handler.await;
+        }
+        assert!(completed.expect("writer and idle cancellation must progress"));
+        assert_eq!(std::fs::read(path).unwrap(), b"saved audio");
+        db.close().await;
+    }
+
     #[tokio::test]
     async fn live_silence_and_duplicates_finish_without_losing_audio_or_masking_failure() {
         let dir = tempfile::tempdir().unwrap();
@@ -298,7 +364,7 @@ mod tests {
                 .unwrap(),
         );
         let captured = chrono::Utc::now() - chrono::Duration::minutes(15);
-        let (tx, rx) = crossbeam::channel::unbounded();
+        let (tx, rx) = flume::unbounded();
         let metrics = Arc::new(AudioPipelineMetrics::new());
         let cases = [
             (

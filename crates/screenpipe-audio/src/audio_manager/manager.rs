@@ -203,10 +203,10 @@ pub struct AudioManager {
     db: Arc<DatabaseManager>,
     vad_engine: Arc<Mutex<Box<dyn VadEngine + Send>>>,
     recording_handles: Arc<RecordingHandlesMap>,
-    recording_sender: Arc<crossbeam::channel::Sender<AudioInput>>,
-    recording_receiver: Arc<crossbeam::channel::Receiver<AudioInput>>,
-    transcription_receiver: Arc<crossbeam::channel::Receiver<TranscriptionResult>>,
-    transcription_sender: Arc<crossbeam::channel::Sender<TranscriptionResult>>,
+    recording_sender: Arc<flume::Sender<AudioInput>>,
+    recording_receiver: Arc<flume::Receiver<AudioInput>>,
+    transcription_receiver: Arc<flume::Receiver<TranscriptionResult>>,
+    transcription_sender: Arc<flume::Sender<TranscriptionResult>>,
     transcription_receiver_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
     meeting_streaming_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
     recording_receiver_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
@@ -409,9 +409,9 @@ impl AudioManager {
 
         let channel_config = &options.channel_config;
         let (recording_sender, recording_receiver) =
-            crossbeam::channel::bounded(channel_config.recording_capacity);
+            flume::bounded(channel_config.recording_capacity);
         let (transcription_sender, transcription_receiver) =
-            crossbeam::channel::bounded(channel_config.transcription_capacity);
+            flume::bounded(channel_config.transcription_capacity);
 
         let recording_handles = DashMap::new();
 
@@ -720,7 +720,7 @@ impl AudioManager {
 
         // Stop producers FIRST: abort per-device recording tasks and the OS audio streams.
         // This must happen before killing the consumer so any audio already queued in the
-        // crossbeam channel (including the final 30s flush) can still be drained.
+        // audio channel (including the final 30s flush) can still be drained.
         for pair in self.recording_handles.iter() {
             let handle = pair.value();
             handle.lock().await.abort();
@@ -1436,7 +1436,8 @@ impl AudioManager {
             );
             let mut deferral_started: Option<std::time::Instant> = None;
 
-            while let Ok(audio) = whisper_receiver.recv() {
+            // Waiting for capture must yield the worker and remain abortable.
+            while let Ok(audio) = whisper_receiver.recv_async().await {
                 metrics.record_chunk_received();
                 debug!("received audio from device: {:?}", audio.device.name);
 
@@ -2312,7 +2313,7 @@ impl AudioManager {
     /// transcription-receiver) are still alive. If either has finished
     /// (crashed / panicked), restart it using the existing `start_*` helpers.
     ///
-    /// The crossbeam channels are `Arc`-wrapped and survive handler restarts,
+    /// The audio channels are `Arc`-wrapped and survive handler restarts,
     /// so per-device recording tasks keep sending without interruption.
     pub async fn check_and_restart_central_handlers(&self) -> CentralHandlerRestartResult {
         let mut result = CentralHandlerRestartResult::default();
@@ -2568,6 +2569,101 @@ mod tests {
     use tokio::sync::{Barrier, Notify, Semaphore};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn idle_audio_handlers_cancel_and_restart_without_stealing_queued_capture() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            DatabaseManager::new("sqlite::memory:", Default::default())
+                .await
+                .unwrap(),
+        );
+        let manager = AudioManager::new(
+            AudioManagerOptions {
+                is_disabled: true,
+                output_path: Some(tmp.path().to_path_buf()),
+                transcription_engine: Arc::new(AudioTranscriptionEngine::WhisperTiny),
+                audio_capture_mode: AudioCaptureMode::Always,
+                ..Default::default()
+            },
+            db.clone(),
+        )
+        .await
+        .unwrap();
+        *manager.engine.write().await = Some(
+            crate::transcription::engine::unavailable_whisper_engine_for_test("test unavailable"),
+        );
+
+        // Exercise the real tasks with senders/receivers retained by the manager,
+        // as on pause/restart. Closing the channel must not be needed to abort.
+        for transcription in [false, true] {
+            let mut handler = if transcription {
+                manager
+                    .start_transcription_receiver_handler()
+                    .await
+                    .unwrap()
+            } else {
+                manager.start_audio_receiver_handler().await.unwrap()
+            };
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            handler.abort();
+            let stopped = tokio::time::timeout(Duration::from_secs(1), &mut handler).await;
+            if stopped.is_err() {
+                // Also terminate the old blocking implementation on a regression
+                // so test shutdown cannot hang on its occupied executor worker.
+                drop(manager);
+                let _ = tokio::time::timeout(Duration::from_secs(1), handler).await;
+                panic!("idle handler did not cancel (transcription={transcription})");
+            }
+            assert!(stopped.unwrap().unwrap_err().is_cancelled());
+        }
+
+        manager
+            .recording_sender
+            .send_async(AudioInput {
+                data: Arc::new(vec![0.01; 16_000]),
+                sample_rate: 16_000,
+                channels: 1,
+                device: Arc::new(AudioDevice::new("restart mic".into(), DeviceType::Input)),
+                capture_timestamp: chrono::Utc::now().timestamp() as u64,
+            })
+            .await
+            .unwrap();
+        let mut handler = manager.start_audio_receiver_handler().await.unwrap();
+        let persisted = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let path: Option<String> =
+                    sqlx::query_scalar("SELECT file_path FROM audio_chunks LIMIT 1")
+                        .fetch_optional(&db.pool)
+                        .await
+                        .unwrap();
+                if let Some(path) = path {
+                    break path;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        handler.abort();
+        let stopped = tokio::time::timeout(Duration::from_secs(1), &mut handler).await;
+        drop(manager);
+        if stopped.is_err() {
+            let _ = handler.await;
+        }
+        let path = persisted.expect("replacement handler must persist queued audio");
+        assert!(Path::new(&path).is_file());
+        assert_eq!(
+            db.count_audio_transcriptions(db.find_audio_chunk_id(&path).await.unwrap().unwrap())
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(
+            stopped.is_ok(),
+            "replacement must also remain abortable after persistence"
+        );
+        db.close().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unavailable_whisper_receiver_persists_audio_for_reconciliation_after_reopen() {
         let tmp = tempfile::tempdir().expect("temp output");
         let db_path = tmp.path().join("db.sqlite").to_string_lossy().into_owned();
@@ -2632,7 +2728,7 @@ mod tests {
         assert_eq!(transcript_count, 0);
 
         drop(sender);
-        drop(manager); // drops the final recording sender, allowing blocking recv to end
+        drop(manager); // drops the final recording sender, allowing the async receiver to end
         handler
             .await
             .expect("receiver shutdown after all senders closed");
