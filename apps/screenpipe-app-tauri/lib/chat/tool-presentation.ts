@@ -1092,3 +1092,40 @@ export function presentToolActivityStatus(
 
   return isGenerating ? "Preparing your answer" : "Working on your request";
 }
+
+/** A short file target, without exposing its parent directories in the transcript. */
+export function toolActivityFileName(tool: PresentableToolCall): string | undefined {
+  if (tool.subagent) return;
+  const name = tool.toolName.toLowerCase();
+  if (!["read", "read_file", "open_file", "edit", "write", "write_file", "apply_patch"].includes(name) && !["read", "edit"].includes(tool.kind ?? "")) return;
+  const args = tool.args ?? {};
+  const path = args.path ?? args.filePath ?? args.file_path ?? args.file ?? args.abs_path;
+  if (typeof path !== "string") return;
+  return path.split(/[\\/]/).filter(Boolean).at(-1);
+}
+
+/** Keep completed work descriptive. Counts describe calls, never successful writes inferred from elapsed time. */
+export function summarizeToolActivities(tools: PresentableToolCall[]): string {
+  const done = tools.filter(tool => !tool.isRunning && !tool.isError);
+  if (done.length === 0) return tools.some(tool => tool.isError) ? "Activity failed" : "Working";
+  const groups = new Map<string, { label: string; count: number; files: Set<string> }>();
+  for (const tool of done) {
+    const presentation = presentToolActivity(tool);
+    const file = toolActivityFileName(tool);
+    const key = `${presentation.icon}:${presentation.completedLabel}`;
+    const group = groups.get(key) ?? { label: presentation.completedLabel, count: 0, files: new Set<string>() };
+    group.count++;
+    // Count full paths, since distinct folders can contain the same filename.
+    if (file) group.files.add(String(tool.args?.path ?? tool.args?.filePath ?? tool.args?.file_path ?? tool.args?.file ?? tool.args?.abs_path));
+    groups.set(key, group);
+  }
+  const summaries = [...groups.values()].map(group => {
+    if (["Reviewed a file", "Updated files"].includes(group.label) && group.files.size) {
+      const verb = group.label === "Reviewed a file" ? "Read" : "Updated";
+      if (group.files.size === 1) return `${verb} ${[...group.files][0].split(/[\\/]/).at(-1)}`;
+      return `${verb} ${group.files.size} files`;
+    }
+    return group.count > 1 ? `${group.label} ×${group.count}` : group.label;
+  });
+  return summaries.join(" · ");
+}

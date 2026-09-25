@@ -345,12 +345,13 @@ describe("Chat tool activity progressive disclosure", function () {
           const summaries = Array.from(
             document.querySelectorAll('[data-testid="tool-activity-summary"]'),
           );
-          return summaries.at(-1)?.textContent?.includes("done in 31s") ?? false;
+          const text = summaries.at(-1)?.textContent ?? "";
+          return text.includes("Analyzed information") && text.includes("31s");
         })) as boolean,
       {
         timeout: t(8_000),
         interval: 100,
-        timeoutMsg: "completed activity never collapsed into a duration receipt",
+        timeoutMsg: "completed activity never showed its action and duration receipt",
       },
     );
     const summary = await lastSummary();

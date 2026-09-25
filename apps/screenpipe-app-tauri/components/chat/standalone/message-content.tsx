@@ -41,6 +41,8 @@ import {
   firstExternalWebTarget,
   presentToolActivity,
   presentToolActivityStatus,
+  summarizeToolActivities,
+  toolActivityFileName,
   presentMcpStartup,
   mcpScreenpipeCommand,
   type WebTargetPresentation,
@@ -1305,15 +1307,6 @@ function formatRunningWorkDuration(label: string, startedAtMs: number): string {
   return durationMs >= 1000 ? `${label} · ${formatDurationParts(durationMs)}` : label;
 }
 
-function completedWorkSummaryFromRunning(runningSummary: string): string {
-  const separator = " · ";
-  const separatorIndex = runningSummary.lastIndexOf(separator);
-  if (separatorIndex >= 0) {
-    return `Done in ${runningSummary.slice(separatorIndex + separator.length)}`;
-  }
-  return "done";
-}
-
 function friendlyCompletedSummary(summary?: string): string | undefined {
   if (!summary) return undefined;
   if (summary === "Worked") return "done";
@@ -1392,8 +1385,6 @@ function ToolActivityGroup({
 
   const [manualExpand, setManualExpand] = useState<boolean | null>(null);
   const [runningSummary, setRunningSummary] = useState("Working");
-  const [completedLiveSummary, setCompletedLiveSummary] = useState<string | null>(null);
-  const wasWorkingRef = useRef(false);
   const reduceMotion = useReducedMotion();
 
   const hasRunningTool = toolCalls.some((tc) => tc.isRunning);
@@ -1410,20 +1401,12 @@ function ToolActivityGroup({
   const runningLabel = waitingForApproval
     ? "Waiting for your approval"
     : presentToolActivityStatus(toolCalls, isGenerating);
-  const justCompletedSummary = !isWorking && wasWorkingRef.current
-    ? completedWorkSummaryFromRunning(runningSummary)
-    : null;
-  const summary = allDone
-    ? (
-        preferSummaryOverride && summaryOverride
-          ? friendlyCompletedSummary(summaryOverride)
-          : justCompletedSummary ||
-            completedLiveSummary ||
-            (completedDurationMs
-              ? `done in ${formatDurationParts(completedDurationMs)}`
-              : (friendlyCompletedSummary(summaryOverride) || "done"))
-      )
-    : "";
+  const summary = preferSummaryOverride && summaryOverride
+    ? friendlyCompletedSummary(summaryOverride)
+    : summarizeToolActivities(toolCalls);
+  const durationLabel = completedDurationMs
+    ? formatDurationParts(completedDurationMs)
+    : summaryOverride?.startsWith("Worked for ") ? summaryOverride.slice("Worked for ".length) : undefined;
   const summaryToolCall = [...toolCalls].reverse().find((toolCall) => toolCall.isRunning)
     ?? toolCalls[toolCalls.length - 1];
   const summaryIcon = waitingForApproval
@@ -1464,18 +1447,6 @@ function ToolActivityGroup({
     return () => window.clearInterval(id);
   }, [isWorking, runningLabel, startedAtMs, hasRunningTool, toolCalls]);
 
-  useEffect(() => {
-    if (isWorking) {
-      wasWorkingRef.current = true;
-      setCompletedLiveSummary(null);
-      return;
-    }
-    if (wasWorkingRef.current) {
-      setCompletedLiveSummary(completedWorkSummaryFromRunning(runningSummary));
-      wasWorkingRef.current = false;
-    }
-  }, [isWorking, runningSummary]);
-
   // Tool activity is progressively disclosed: one friendly status is visible
   // by default, and the user can expand a high-level activity list. Interactive
   // tools stay open because hiding a question would block the conversation.
@@ -1494,10 +1465,7 @@ function ToolActivityGroup({
 
   return (
     <div
-      className={cn(
-        "w-full min-w-0 self-stretch",
-        !hideSummary && "border border-border/70 bg-card/30",
-      )}
+      className="w-full min-w-0 self-stretch py-1"
       data-testid="tool-activity-widget"
       data-activity-state={widgetState}
     >
@@ -1509,18 +1477,18 @@ function ToolActivityGroup({
               summary + any failure count once idle. */}
           <button
             onClick={() => setManualExpand(isExpanded ? false : true)}
-            className="group flex w-full min-w-0 cursor-pointer items-center gap-2 px-2 py-1.5 text-left transition-colors duration-150 hover:bg-foreground/[0.035] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-signal disabled:cursor-default disabled:opacity-70 motion-reduce:transition-none"
+            className="group flex max-w-full min-w-0 cursor-pointer items-center gap-2 rounded-sm py-1 text-left transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-signal focus-visible:ring-offset-2 disabled:cursor-default disabled:opacity-70 motion-reduce:transition-none"
             data-testid="tool-activity-summary"
             aria-expanded={isExpanded}
             disabled={forceCollapsed || hasInteractiveTool}
           >
-            <ActivityIcon
+            {(isWorking || (hasError && !recoveredWithAnswer)) && <ActivityIcon
               kind={summaryIcon}
               state={widgetState}
               testId={isWorking ? "tool-activity-running-indicator" : undefined}
-            />
+            />}
             <span
-              className="truncate text-xs font-mono text-foreground/55 transition-colors duration-150 group-hover:text-foreground/80 motion-reduce:transition-none"
+              className="min-w-0 text-sm leading-5 text-muted-foreground [overflow-wrap:anywhere] transition-colors duration-150 group-hover:text-foreground motion-reduce:transition-none"
               aria-live="polite"
             >
               {isWorking ? (
@@ -1535,6 +1503,7 @@ function ToolActivityGroup({
               ) : (
                 <>
                   <WorkSummaryText text={summary || `${total} steps`} animateRunningDuration={false} />
+                  {durationLabel && !preferSummaryOverride && <span className="ml-2 text-xs tabular-nums text-muted-foreground/70">{durationLabel}</span>}
                   {hasError && !recoveredWithAnswer && (
                     <span className="ml-1.5 text-destructive">· {toolCalls.filter(tc => tc.isError).length} failed</span>
                   )}
@@ -1547,6 +1516,11 @@ function ToolActivityGroup({
               <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-foreground/30 group-hover:text-foreground/60 transition-colors duration-150" />
             ))}
           </button>
+          {hasRunningTool && summaryToolCall && toolActivityFileName(summaryToolCall) && (
+            <p className="mt-0.5 pl-6 font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]" data-testid="tool-activity-current-target">
+              {toolActivityFileName(summaryToolCall)}
+            </p>
+          )}
         </div>
       )}
 
@@ -1562,7 +1536,7 @@ function ToolActivityGroup({
             <div
               className={cn(
                 "pt-1",
-                hideSummary ? "pl-1" : "border-t border-border/60 px-2 pb-1 pt-2",
+                hideSummary ? "pl-1" : "border-l border-border/60 ml-1 pl-2 pb-1 pt-2",
               )}
               data-testid="tool-activity-list"
             >
@@ -1969,7 +1943,7 @@ export function MessageContent({
                 key={`tools-${group.key}`}
                 toolCalls={group.toolCalls}
                 defaultExpanded={false}
-                isGenerating={isGenerating && !message.workDurationMs}
+                isGenerating={isGenerating && groupIndex === displayGroups.length - 1 && !message.workDurationMs}
                 waitingForApproval={waitingForApproval}
                 preferSummaryOverride={Boolean(workSummaryOverride)}
                 summaryOverride={workSummaryOverride || (message.workDurationMs ? formatWorkDuration(message.workDurationMs) : undefined)}
@@ -1992,7 +1966,7 @@ export function MessageContent({
                 key={`work-${group.key}`}
                 toolCalls={group.toolCalls}
                 defaultExpanded={false}
-                isGenerating={isGenerating && !message.workDurationMs}
+                isGenerating={isGenerating && groupIndex === displayGroups.length - 1 && !message.workDurationMs}
                 waitingForApproval={waitingForApproval}
                 preferSummaryOverride={Boolean(workSummaryOverride)}
                 summaryOverride={workSummaryOverride || formatWorkDuration(durationMs)}
