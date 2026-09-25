@@ -430,6 +430,36 @@ describe("ChatTabStrip", () => {
     expect(screen.getByText("Ctrl+Shift+A")).toBeVisible();
   });
 
+  it("routes action shortcuts to the focused split composer without activating it", async () => {
+    const actions = useChatStore.getState().actions;
+    actions.upsert(record({ id: "chat-a", title: "primary" }));
+    actions.upsert(record({ id: "chat-b", title: "secondary" }));
+    actions.openChat("chat-a");
+    actions.setSplitChat("chat-b");
+    const onActivate = vi.fn();
+    render(<><ChatTabStrip activeId="chat-a" onActivate={onActivate} onNewChat={vi.fn()} /><section data-chat-pane-id="chat-b"><textarea aria-label="Secondary draft" /></section></>);
+    fireEvent.keyDown(screen.getByLabelText("Secondary draft"), { key: "p", code: "KeyP", ctrlKey: true, altKey: true });
+    await waitFor(() => expect(useChatStore.getState().sessions["chat-b"].pinned).toBe(true));
+    expect(useChatStore.getState().sessions["chat-a"].pinned).toBe(false);
+    expect(onActivate).not.toHaveBeenCalled();
+  });
+
+  it("closes the focused secondary pane on Ctrl+W and preserves its draft", () => {
+    const actions = useChatStore.getState().actions;
+    actions.upsert(record({ id: "chat-a", title: "primary" }));
+    actions.upsert(record({ id: "chat-b", title: "secondary", composerDraft: { input: "keep me", pastedImages: [], attachedDocs: [], pendingDocs: [] } }));
+    actions.openChat("chat-a");
+    actions.setSplitChat("chat-b");
+    const onActivate = vi.fn();
+    render(<><CloseTabOrWindowShortcut /><ChatTabStrip activeId="chat-a" onActivate={onActivate} onNewChat={vi.fn()} /><section data-chat-pane-id="chat-b"><textarea aria-label="Secondary draft" /></section></>);
+    screen.getByLabelText("Secondary draft").focus();
+    fireEvent.keyDown(window, { key: "w", code: "KeyW", ctrlKey: true });
+    expect(useChatStore.getState().openChatIds).toEqual(["chat-a"]);
+    expect(useChatStore.getState().sessions["chat-b"].composerDraft?.input).toBe("keep me");
+    expect(onActivate).not.toHaveBeenCalled();
+    expect(closeWindowMock).not.toHaveBeenCalled();
+  });
+
   it("starts a new chat on Ctrl+Shift+A when the last real tab is archived", async () => {
     const actions = useChatStore.getState().actions;
     actions.upsert(record({ id: "chat-a", title: "only" }));

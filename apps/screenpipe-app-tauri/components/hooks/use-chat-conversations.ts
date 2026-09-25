@@ -1324,22 +1324,6 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     if (sendDispatchInFlightRef) sendDispatchInFlightRef.current = false;
     setIsLoading(false);
     setIsStreaming(false);
-    // Composer state (text, images, docs) is scoped to the chat the user
-    // was composing in. Switching to another conversation must not carry
-    // any of it over — otherwise the user can send a draft into the wrong
-    // thread (or silently inject a PDF/image they thought belonged to the
-    // previous chat). Mirrors startNewConversation, which already clears
-    // the full composer on "+ new chat". The block below then restores
-    // the INCOMING chat's saved draft after switching — ChatGPT/Claude
-    // parity. The clear is intentional even with restore: if the
-    // incoming chat has no draft, we want a clean composer, not the
-    // outgoing chat's contents lingering for a frame.
-    setInput("");
-    if (inputRef.current) inputRef.current.style.height = "auto";
-    setPastedImages([]);
-    setAttachedDocs?.([]);
-    setPendingDocs?.([]);
-
     // Switch to this conversation's session. Pair the panel's ref
     // switch with `setCurrent` on the store so the router's
     // foreground/background skip logic flips at the same instant the
@@ -1571,6 +1555,13 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // do not let this older request overwrite the panel when it resumes.
     if (!isLatestRequest()) return;
 
+    // Keep the outgoing draft visible during async restoration. Replace it
+    // atomically with the incoming transcript/draft once this request wins.
+    setInput("");
+    if (inputRef.current) inputRef.current.style.height = "auto";
+    setPastedImages([]);
+    setAttachedDocs?.([]);
+    setPendingDocs?.([]);
     setMessages(messagesForPanel);
     setConversationId(conv.id);
     setShowHistory(false);
@@ -1582,7 +1573,9 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // there's no saved draft — the composer was just cleared above,
     // so we're either restoring a real draft or staying empty.
     // Only runs when value refs were wired by the caller.
-    const incomingDraft = store.sessions[conv.id]?.composerDraft;
+    // A visible split composer can change while disk/model restoration awaits.
+    // Read the current draft, never the pre-await store snapshot.
+    const incomingDraft = useChatStore.getState().sessions[conv.id]?.composerDraft;
     if (incomingDraft && inputValueRef) {
       if (incomingDraft.input) {
         setInput(incomingDraft.input);
@@ -1626,7 +1619,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
 
     // Emit the preset ID so the chat panel can restore the model selection.
     // This ensures the model selector reflects the preset used in this chat.
-    const presetId = persisted?.presetId ?? (conv as ChatConversation).presetId;
+    const presetId = persisted?.presetId ?? (conv as ChatConversation).presetId ?? useChatStore.getState().sessions[conv.id]?.presetId;
     if (presetId && isLatestRequest()) {
       try {
         await emit("chat-preset-restore", { presetId });

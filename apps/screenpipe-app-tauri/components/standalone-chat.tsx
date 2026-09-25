@@ -40,6 +40,7 @@ import { useIsFullscreen } from "@/lib/hooks/use-is-fullscreen";
 import { useChatFilePreview } from "@/lib/hooks/use-chat-file-preview";
 import { useChatInspector } from "@/lib/hooks/use-chat-inspector";
 import { ChatInspectorPopover } from "@/components/chat/chat-inspector";
+import { useSplitChatActions } from "@/components/chat/standalone/hooks/use-split-chat-actions";
 import { ChatSplitPane } from "@/components/chat/chat-split-pane";
 import { ChatActionsDropdown } from "@/components/chat/chat-action-menu";
 import { ChatTabStrip } from "@/components/chat/chat-tab-strip";
@@ -728,6 +729,21 @@ export function StandaloneChat({
   );
   const splitChatId = useChatStore((state) => state.splitChatId);
   const splitChatPosition = useChatStore((state) => state.splitChatPosition);
+  const [splitComposerFocused, setSplitComposerFocused] = useState(false);
+  useEffect(() => setSplitComposerFocused(false), [splitChatId]);
+  const paneTitle = useChatStore((state) => state.sessions[conversationId ?? ""]?.title);
+  const splitSession = useChatStore((state) => state.sessions[state.splitChatId ?? ""]);
+  const previousPaneIdRef = useRef(conversationId);
+  React.useLayoutEffect(() => {
+    const previousId = previousPaneIdRef.current;
+    previousPaneIdRef.current = conversationId;
+    const state = useChatStore.getState();
+    // The transport changes owner, not screen position. Commit the pair only
+    // once the incoming transcript and draft have actually been restored.
+    if (previousId && previousId !== conversationId && state.splitChatId === conversationId && state.openChatIds.includes(previousId) && state.sessions[previousId] && !state.sessions[previousId].hidden) {
+      state.actions.setSplitChat(previousId, state.splitChatPosition === "right" ? "left" : "right");
+    }
+  }, [conversationId]);
 
   // Single source of truth for the active chat id (#4719). The panel mints
   // `initialSessionIdRef` and seeds `conversationId` / `piSessionIdRef` from
@@ -2108,20 +2124,45 @@ export function StandaloneChat({
       if (temporarySideId && !targetBelongsToPair) {
         discardTemporarySideConversation(temporarySideId);
       }
-      // Promoting the secondary pane swaps the former primary into its place,
-      // keeping both transcripts visible while the single composer changes
-      // ownership cleanly.
-      if (store.splitChatId === id && conversationId && conversationId !== id) {
-        store.actions.setSplitChat(conversationId);
-      }
-      store.actions.setCurrent(id);
-      await emit("chat-load-conversation", {
-        conversationId: id,
-        targetWindow: "home",
+      const session = store.sessions[id];
+      if (!session || session.hidden || id === conversationId) return;
+      // Await the real restore, including model selection, before a split
+      // composer can send. Event delivery alone does not await its listeners.
+      await loadConversationRef.current({
+        id,
+        title: session.title,
+        messages: [],
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        presetId: session.presetId,
+        kind: session.kind,
+        pipeContext: session.pipeContext,
       });
     },
     [conversationId, discardTemporarySideConversation],
   );
+
+  const focusSplitComposer = useCallback(() => inputRef.current?.focus(), [inputRef]);
+  const reportSplitActionError = useCallback(() => {
+    toast({ title: ui("Could not complete this chat action"), description: ui("Your draft is still available. Try again."), variant: "destructive" });
+  }, [uiLanguage]);
+  const splitActions = useSplitChatActions({
+    conversationId,
+    activate: activateChatTab,
+    send: sendComposerMessage,
+    stop: handleStop,
+    canSend: Boolean(canSendChatMessage),
+    preparing: codingWorkspace.isLoading,
+    input,
+    focus: focusSplitComposer,
+    onError: reportSplitActionError,
+  });
+  const splitPolicy = continuousPipeChatPolicy({
+    conversationId: splitChatId,
+    pipes,
+    pipesLoaded: !pipesLoading && !pipesError,
+  });
+  const splitPreset = availableAiPresets.find((preset) => preset.id === splitSession?.presetId) ?? activePreset;
 
   const startDurableNewConversation = useCallback(async () => {
     const store = useChatStore.getState();
@@ -2230,7 +2271,7 @@ export function StandaloneChat({
             <ChatTabStrip
               activeId={conversationId}
               shortcutsEnabled={chatShortcutsEnabled}
-              onActivate={activateChatTab}
+              onActivate={(id) => activateChatTab(id).catch(reportSplitActionError)}
               onNewChat={startDurableNewConversation}
               onClose={discardTemporarySideConversation}
               renameConversation={renameConversation}
@@ -2296,7 +2337,13 @@ export function StandaloneChat({
       />
 
       <div className="flex-1 flex min-h-0" data-browser-panel-host>
-      <div className="relative flex-1 flex flex-col min-w-0" data-firstrun-target="messages">
+      <div className={cn("relative flex-1 basis-0 flex flex-col min-w-0", splitChatId && splitChatId !== conversationId && "min-w-[280px]")} data-firstrun-target="messages" data-chat-pane-id={conversationId}>
+      {splitChatId && splitChatId !== conversationId ? (
+        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border/50 px-3">
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-foreground" aria-hidden />
+          <span className="min-w-0 truncate text-xs font-medium">{paneTitle || ui("New chat")}</span>
+        </header>
+      ) : null}
       <ChatMainPane
         firstRunLearningEnabled={firstRunLearningEnabled}
         hideInlineHistory={hideInlineHistory}
@@ -2387,7 +2434,7 @@ export function StandaloneChat({
       />
 
       <ChatComposer
-        dictationEnabled={chatShortcutsEnabled}
+        dictationEnabled={chatShortcutsEnabled && !splitComposerFocused}
         jumpToLatest={{
           hasMessages: messages.length > 0,
           scrolledUp: isUserScrolledUp,
@@ -2439,7 +2486,7 @@ export function StandaloneChat({
             isLoading || isStreaming
               ? ui("Message will be queued...")
               : homeCardPromptPreview ?? undefined,
-          canChat: Boolean(canSendChatMessage) && !codingWorkspace.isLoading,
+          canChat: Boolean(canSendChatMessage) && !codingWorkspace.isLoading && !splitActions.pendingId,
           isLoading,
           isStreaming,
           isEmbedded,
@@ -2532,15 +2579,22 @@ export function StandaloneChat({
             try { localStorage.setItem("screenpipe_connect_banner_dismissed", "true"); } catch {}
           },
         }}
-        onStop={handleStop}
+        onStop={() => { if (!splitActions.pendingId) void handleStop(); }}
       />
       </div> {/* End of chat column */}
 
       {splitChatId && splitChatId !== conversationId ? (
         <ChatSplitPane
+          key={splitChatId}
           sessionId={splitChatId}
           side={splitChatPosition}
-          onPromote={activateChatTab}
+          onSend={(id) => void splitActions.run(id, "send")}
+          onStop={(id) => void splitActions.run(id, "stop")}
+          pending={splitActions.pendingId === splitChatId}
+          onComposerFocusChange={setSplitComposerFocused}
+          modelLabel={splitPreset?.model || splitPreset?.provider}
+          disabledReason={splitPolicy?.replyDisabledReason || (splitSession?.kind === "pipe-run" ? ui("This is an automation run. Open the chat controls to continue.") : undefined)}
+          onPromote={async (id) => { try { await activateChatTab(id); requestAnimationFrame(focusSplitComposer); } catch { reportSplitActionError(); } }}
           onClose={() => useChatStore.getState().actions.setSplitChat(null)}
         />
       ) : null}
@@ -2553,7 +2607,7 @@ export function StandaloneChat({
         outputs={inspectorOutputs}
         conversationId={conversationId}
         additionalReservedWidth={
-          splitChatId && splitChatId !== conversationId ? 320 : 0
+          splitChatId && splitChatId !== conversationId ? 280 : 0
         }
         // Session id the agent process runs under (the value tagged as the
         // navigation `owner` via x-screenpipe-session). Lets the sidebar reveal
