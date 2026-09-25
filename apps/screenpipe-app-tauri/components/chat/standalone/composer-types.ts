@@ -75,6 +75,7 @@ interface ComposerQueueProps {
 }
 
 export interface ComposerInputProps {
+  ariaLabel?: string;
   sectionRef: React.RefObject<HTMLDivElement>;
   inputRef: React.RefObject<HTMLTextAreaElement>;
   value: string;

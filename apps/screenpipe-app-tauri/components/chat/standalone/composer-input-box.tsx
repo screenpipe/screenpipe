@@ -61,6 +61,7 @@ export function ComposerInputBox({
           </>
         )}
         <ComposerTextArea
+          aria-label={input.ariaLabel}
           autoGrow={false}
           ref={input.inputRef}
           value={input.value}

@@ -30,6 +30,7 @@ import { useGT } from "gt-react";
 
 interface ComposerControlsRowProps {
   canChat: boolean;
+  pending?: boolean;
   filters: ComposerFiltersProps;
   modelControls: ComposerModelControlsProps;
   codingWorkspace: ComposerCodingWorkspaceProps;
@@ -45,6 +46,7 @@ interface ComposerControlsRowProps {
 
 export function ComposerControlsRow({
   canChat,
+  pending = false,
   filters,
   modelControls,
   codingWorkspace,
@@ -69,7 +71,7 @@ export function ComposerControlsRow({
     // Keep the row compact, but give primary controls a reliable 32px target.
     // It is supporting chrome under the input, not a second toolbar.
     <div
-      className="flex items-center gap-1.5 pt-2"
+      className="flex flex-wrap items-center gap-1.5 pt-2"
       data-firstrun-target="composer-controls"
     >
       <Popover
@@ -78,6 +80,7 @@ export function ComposerControlsRow({
       >
         <PopoverTrigger asChild>
           <Button
+            disabled={pending}
             type="button"
             size="icon"
             variant="ghost"
@@ -154,8 +157,8 @@ export function ComposerControlsRow({
         showModelOnly
         providerIconOnly={isAcp}
         containerClassName={cn(
-          "shrink-0 gap-0",
-          isAcp ? "w-8" : "w-[180px] max-w-[42vw] min-w-[120px]",
+          "shrink gap-0",
+          isAcp ? "w-8" : "w-[180px] max-w-[42%] min-w-[80px]",
         )}
         triggerClassName={cn(
           "h-8 rounded-md border border-transparent bg-transparent text-xs text-muted-foreground shadow-none transition-colors duration-150 hover:border-border hover:bg-muted/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-signal focus-visible:ring-offset-1 motion-reduce:transition-none",
@@ -226,14 +229,16 @@ export function ComposerControlsRow({
               : ui("Send")
         }
         aria-label={
-          sendButton.isStopMode
+          pending
+            ? ui("Preparing chat")
+            : sendButton.isStopMode
             ? ui("Stop reply")
             : sendButton.hasPendingDocs
               ? ui("Send disabled while attachment is extracting")
               : ui("Send message")
         }
       >
-        {sendButton.isStopMode ? (
+        {pending ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : sendButton.isStopMode ? (
           <Square className="h-4 w-4" />
         ) : sendButton.hasPendingDocs ? (
           <Loader2 className="h-4 w-4 animate-spin" />

@@ -312,9 +312,13 @@ export function ChatTabStrip({
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || event.isComposing || event.getModifierState?.("AltGraph") || hasOpenShortcutBlockingLayer() || renamingId) return;
       const action = CHAT_MENU_ACTIONS.find(id => bindings.match(event, id));
-      if (!action || !activeId || !tabs.some(tab => tab.id === activeId)) return;
+      const focusedPaneId = event.target instanceof Element
+        ? event.target.closest<HTMLElement>("[data-chat-pane-id]")?.dataset.chatPaneId
+        : undefined;
+      const targetId = focusedPaneId || activeId;
+      if (!action || !targetId || !tabs.some(tab => tab.id === targetId)) return;
       event.preventDefault();
-      void runAction(activeId, action);
+      void runAction(targetId, action);
     };
     const onAction = (event: Event) => {
       const request = (event as CustomEvent<ChatMenuRequest>).detail;
@@ -333,7 +337,9 @@ export function ChatTabStrip({
   useEffect(() => {
     if (!shortcutsEnabled) return;
     return registerChatTabCloser(() => {
+      const focusedPaneId = document.activeElement?.closest<HTMLElement>("[data-chat-pane-id]")?.dataset.chatPaneId;
       const id =
+        (focusedPaneId && tabs.some((tab) => tab.id === focusedPaneId) && focusedPaneId) ||
         (activeId && tabs.some((tab) => tab.id === activeId) && activeId) ||
         tabs[0]?.id;
       if (!id) return false;

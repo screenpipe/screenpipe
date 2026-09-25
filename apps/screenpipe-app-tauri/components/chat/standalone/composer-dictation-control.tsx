@@ -27,6 +27,7 @@ type ComposerDictationControlProps = {
   disabled: boolean;
   sessionId: string | null;
   isMac: boolean;
+  shortcutsEnabled?: boolean;
 };
 
 const HOLD_TO_TALK_MS = 500;
@@ -38,6 +39,7 @@ export function ComposerDictationControl({
   disabled,
   sessionId,
   isMac,
+  shortcutsEnabled,
 }: ComposerDictationControlProps) {
 
   const ui = useGT();
@@ -47,6 +49,7 @@ export function ComposerDictationControl({
     onValueChange,
     disabled,
     sessionId,
+    shortcutsEnabled,
   });
   const pressStartedAtRef = React.useRef(0);
   const pressBeganActiveRef = React.useRef(false);

@@ -59,10 +59,12 @@ export function useCodingWorkspace({
   conversationId,
   locked,
   projectDirectory,
+  registerE2eHooks = true,
 }: {
   conversationId: string | null;
   locked: boolean;
   projectDirectory?: string | null;
+  registerE2eHooks?: boolean;
 }) {
   const uiLanguage = useLocale();
   const ui = useGT();
@@ -323,7 +325,7 @@ export function useCodingWorkspace({
   );
 
   useEffect(() => {
-    if (process.env.NEXT_PUBLIC_SCREENPIPE_E2E !== "true") return;
+    if (!registerE2eHooks || process.env.NEXT_PUBLIC_SCREENPIPE_E2E !== "true") return;
     window.__e2eAttachCodingWorkspace = attachRepositoryPath;
     window.__e2ePrepareCodingWorkspace = (prompt, startingPath, router) =>
       prepareForPrompt(prompt, router, startingPath);
@@ -331,7 +333,7 @@ export function useCodingWorkspace({
       delete window.__e2eAttachCodingWorkspace;
       delete window.__e2ePrepareCodingWorkspace;
     };
-  }, [attachRepositoryPath, prepareForPrompt]);
+  }, [attachRepositoryPath, prepareForPrompt, registerE2eHooks]);
 
   return {
     workspace: currentWorkspace,

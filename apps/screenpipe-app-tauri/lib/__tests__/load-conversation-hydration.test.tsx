@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useRef } from "react";
+import { emit } from "@tauri-apps/api/event";
 
 const {
   loadConversationFile,
@@ -97,6 +98,8 @@ function useHarness() {
   const piStreamingTextRef = useRef("");
   const piMessageIdRef = useRef<string | null>(null);
   const piContentBlocksRef = useRef<any[]>([]);
+  const inputValueRef = useRef("outgoing draft");
+  const setInput = vi.fn();
   const setIsLoading = vi.fn();
   const setIsStreaming = vi.fn();
   const hook = useChatConversations({
@@ -109,7 +112,9 @@ function useHarness() {
       conversationIdRef.current =
         typeof next === "function" ? next(conversationIdRef.current) : next;
     }) as any,
-    setInput: vi.fn() as any,
+    setInput,
+    inputValueRef,
+    pastedImagesRef: useRef([]),
     inputRef: useRef<HTMLTextAreaElement | null>(null),
     isLoading: false,
     isStreaming: false,
@@ -127,6 +132,7 @@ function useHarness() {
   });
   return {
     hook,
+    setInput,
     messagesRef,
     piStreamingTextRef,
     piMessageIdRef,
@@ -158,6 +164,22 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe("direct conversation hydration", () => {
+  it("restores the latest split draft typed while disk loading, keeping the outgoing draft until commit", async () => {
+    seedStore([user], { composerDraft: { input: "old draft", pastedImages: [], attachedDocs: [], pendingDocs: [] } });
+    let resolve!: (value: ReturnType<typeof conversation>) => void;
+    loadConversationFile.mockReturnValueOnce(new Promise(r => { resolve = r; }));
+    const { result } = renderHook(() => useHarness());
+    let work!: Promise<void>;
+    await act(async () => {
+      work = result.current.hook.loadConversation(conversation([]) as any);
+      await vi.waitFor(() => expect(loadConversationFile).toHaveBeenCalled());
+    });
+    expect(result.current.setInput).not.toHaveBeenCalled();
+    useChatStore.getState().actions.setComposerDraft("chat-target", { input: "latest split draft", pastedImages: [], attachedDocs: [], pendingDocs: [] });
+    await act(async () => { resolve(conversation([user, completed])); await work; });
+    expect(result.current.setInput).toHaveBeenLastCalledWith("latest split draft");
+  });
+
   it("adopts a completed persisted reply over an unhydrated in-memory placeholder", async () => {
     seedStore([user, placeholder]);
     loadConversationFile.mockResolvedValueOnce(conversation([user, completed]));
@@ -176,6 +198,14 @@ describe("direct conversation hydration", () => {
     expect(useChatStore.getState().sessions["chat-target"].hydratedAt).toEqual(
       expect.any(Number),
     );
+  });
+
+  it("restores the latest per-chat model choice ahead of an older saved preset", async () => {
+    seedStore([user, completed], { presetId: "recent-choice" });
+    loadConversationFile.mockResolvedValueOnce({ ...conversation([user, completed]), presetId: "older-saved-choice" });
+    const { result } = renderHook(() => useHarness());
+    await act(async () => { await result.current.hook.loadConversation(conversation([]) as any); });
+    expect(emit).toHaveBeenCalledWith("chat-preset-restore", { presetId: "recent-choice" });
   });
 
   it("preserves a richer live reply when persisted state is older", async () => {

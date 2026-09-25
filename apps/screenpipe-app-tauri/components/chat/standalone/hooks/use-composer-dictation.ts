@@ -26,6 +26,7 @@ type UseComposerDictationOptions = {
   onValueChange: (value: string) => void;
   disabled: boolean;
   sessionId: string | null;
+  shortcutsEnabled?: boolean;
 };
 
 const MAX_RECORDING_MS = 5 * 60 * 1000;
@@ -69,6 +70,7 @@ export function useComposerDictation({
   onValueChange,
   disabled,
   sessionId,
+  shortcutsEnabled = true,
 }: UseComposerDictationOptions) {
   const ui = useGT();
   const { settings } = useSettings();
@@ -393,6 +395,10 @@ export function useComposerDictation({
 
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.repeat) return;
+      const targetPane = event.target instanceof Element ? event.target.closest("[data-chat-pane-id]") : null;
+      const ownPane = inputRef.current?.closest("[data-chat-pane-id]");
+      if (targetPane ? targetPane !== ownPane : !shortcutsEnabled) return;
       const modifier = event.metaKey || event.ctrlKey;
       if (
         event.key.toLowerCase() === "d" &&
@@ -429,7 +435,7 @@ export function useComposerDictation({
     };
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [cancel, disabled, finish, start]);
+  }, [cancel, disabled, finish, start, inputRef, shortcutsEnabled]);
 
   React.useEffect(() => {
     const handleVisibilityChange = () => {

@@ -35,23 +35,21 @@ describe("ChatSplitPane", () => {
     useChatStore.setState({ sessions: { "split-chat": session() } });
   });
 
-  it("renders the stored live transcript and promotes the pane", () => {
-    const onPromote = vi.fn();
-    render(<ChatSplitPane sessionId="split-chat" onPromote={onPromote} onClose={vi.fn()} />);
+  it("renders the stored live transcript and supplied composer", () => {
+    render(<ChatSplitPane sessionId="split-chat" onClose={vi.fn()} composer={<button>Dictate message</button>} />);
 
     expect(screen.getByText("question")).toBeInTheDocument();
     expect(screen.getByText("live answer")).toBeInTheDocument();
     expect(screen.getByLabelText("Working")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Work in live secondary" }));
-    expect(onPromote).toHaveBeenCalledWith("split-chat");
+    expect(screen.getByRole("button", { name: "Dictate message" })).toBeInTheDocument();
   });
 
   it("closes explicitly and handles an empty conversation", () => {
     useChatStore.setState({ sessions: { "split-chat": session({ status: "idle", messages: [] }) } });
     const onClose = vi.fn();
-    render(<ChatSplitPane sessionId="split-chat" onPromote={vi.fn()} onClose={onClose} />);
+    render(<ChatSplitPane sessionId="split-chat" onClose={onClose} composer={<button>Dictate message</button>} />);
 
-    expect(screen.getByText(/ready/)).toBeInTheDocument();
+    expect(screen.getByText("Start a conversation here.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close split view" }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -61,8 +59,8 @@ describe("ChatSplitPane", () => {
       <ChatSplitPane
         sessionId="split-chat"
         side="left"
-        onPromote={vi.fn()}
-        onClose={vi.fn()}
+
+        onClose={vi.fn()} composer={<button>Dictate message</button>}
       />,
     );
 
