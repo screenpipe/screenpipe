@@ -37,6 +37,7 @@ type PreviewState =
 
 export interface LinkPreviewAnchorProps extends React.AnchorHTMLAttributes<HTMLAnchorElement> {
   href: string;
+  disablePreview?: boolean;
 }
 
 function clearTimer(
@@ -176,7 +177,9 @@ export function LinkPreviewAnchor({
   children,
   className,
   href,
+  disablePreview = false,
   onBlur,
+  onContextMenu,
   onFocus,
   onPointerEnter,
   onPointerLeave,
@@ -201,7 +204,15 @@ export function LinkPreviewAnchor({
       ? { status: "loading" }
       : resolvedState;
 
+  useEffect(() => {
+    if (!disablePreview) return;
+    clearTimer(openTimer);
+    clearTimer(closeTimer);
+    setOpen(false);
+  }, [disablePreview]);
+
   const openSoon = () => {
+    if (disablePreview) return;
     clearTimer(closeTimer);
     if (open) return;
     clearTimer(openTimer);
@@ -275,17 +286,23 @@ export function LinkPreviewAnchor({
 
   if (!link) {
     return (
-      <a href={href} className={className} {...props}>
+      <a href={href} className={className} onContextMenu={onContextMenu} {...props}>
         {children}
       </a>
     );
   }
 
   return (
-    <PopoverPrimitive.Root open={open} onOpenChange={setOpen}>
+    <PopoverPrimitive.Root open={open && !disablePreview} onOpenChange={setOpen}>
       <PopoverPrimitive.Anchor asChild>
         <a
           href={href}
+          onContextMenu={(event) => {
+            clearTimer(openTimer);
+            clearTimer(closeTimer);
+            setOpen(false);
+            onContextMenu?.(event);
+          }}
           className={className}
           aria-describedby={open ? previewId : undefined}
           onBlur={(event) => {
@@ -295,7 +312,7 @@ export function LinkPreviewAnchor({
           onFocus={(event) => {
             clearTimer(openTimer);
             clearTimer(closeTimer);
-            setOpen(true);
+            if (!disablePreview) setOpen(true);
             onFocus?.(event);
           }}
           onPointerEnter={(event) => {

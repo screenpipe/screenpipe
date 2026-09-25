@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { SchedulePromptDialog } from "@/components/chat/schedule-prompt-dialog";
 import { AcpSignInDialog, type AcpSignInRequest } from "@/components/chat/standalone/acp-sign-in-dialog";
 import { acpAdapterInfo } from "@/lib/utils/preset-appearance";
+import { ChatLinkBrowserContext } from "@/components/chat/chat-web-link";
 import { BrowserSidebar } from "@/components/browser-sidebar";
 import { toast } from "@/components/ui/use-toast";
 import type { AIPreset, JsonValue } from "@/lib/utils/tauri";
@@ -2290,6 +2291,7 @@ export function StandaloneChat({
   }, [addSelectedTextToChat, conversationId, discardTemporarySideConversation, focusComposerAtEnd, setInput, startNewConversation, uiLanguage]);
 
   return (
+    <ChatLinkBrowserContext.Provider value={conversationId}>
     <div ref={dropRootRef} className={cn("flex flex-col bg-background", className ?? "h-screen")} data-testid="section-home">
       <StandaloneChatHeader
         className={className}
@@ -2683,5 +2685,6 @@ export function StandaloneChat({
       />
 
     </div>
+    </ChatLinkBrowserContext.Provider>
   );
 }

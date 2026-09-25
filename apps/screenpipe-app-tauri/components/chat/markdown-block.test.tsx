@@ -4,15 +4,24 @@
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ChatLinkBrowserContext } from "./chat-web-link";
 import { MarkdownBlock, stableStreamingMarkdownPrefix } from "./markdown-block";
 
 const {
   emitMock,
+  ownedBrowserNavigateMock,
+  openUrlMock,
+  copyTextToClipboardMock,
+  toastMock,
   openViewerWindowMock,
   setPendingNavigationMock,
   showWindowMock,
   routeNotificationDeeplinkMock,
 } = vi.hoisted(() => ({
+  ownedBrowserNavigateMock: vi.fn(async () => ({ status: "ok" as const, data: null })),
+  openUrlMock: vi.fn(async () => undefined),
+  copyTextToClipboardMock: vi.fn(async () => ({ status: "ok" as const, data: null })),
+  toastMock: vi.fn(),
   emitMock: vi.fn(async () => undefined),
   openViewerWindowMock: vi.fn(async (_path: string) => ({
     status: "ok" as const,
@@ -24,10 +33,15 @@ const {
 
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {
+    ownedBrowserNavigate: ownedBrowserNavigateMock,
+    copyTextToClipboard: copyTextToClipboardMock,
     openViewerWindow: openViewerWindowMock,
     showWindow: showWindowMock,
   },
 }));
+
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: openUrlMock }));
+vi.mock("@/components/ui/use-toast", () => ({ toast: toastMock }));
 
 vi.mock("@tauri-apps/api/event", () => ({
   emit: emitMock,
@@ -49,6 +63,86 @@ describe("MarkdownBlock", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
+  });
+
+
+  const webUrl = "https://example.com/docs#setup";
+  const renderWebLink = (owner: string | null = "chat-123") => render(
+    <ChatLinkBrowserContext.Provider value={owner}>
+      <MarkdownBlock text={`[Guide](${webUrl})`} isUser={false} />
+    </ChatLinkBrowserContext.Provider>,
+  );
+
+  it("reveals web links in the owning chat's side browser", async () => {
+    renderWebLink();
+    fireEvent.click(screen.getByRole("link", { name: "Guide" }));
+    await waitFor(() => expect(ownedBrowserNavigateMock).toHaveBeenCalledWith(webUrl, "chat-123", true));
+    expect(openUrlMock).not.toHaveBeenCalled();
+  });
+
+  it.each([{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }])("opens modified clicks externally (%j)", async (modifier) => {
+    renderWebLink();
+    fireEvent.click(screen.getByRole("link", { name: "Guide" }), modifier);
+    await waitFor(() => expect(openUrlMock).toHaveBeenCalledWith(webUrl));
+    expect(ownedBrowserNavigateMock).not.toHaveBeenCalled();
+  });
+
+  it("opens middle clicks externally without navigating the side browser", async () => {
+    renderWebLink();
+    fireEvent(screen.getByRole("link", { name: "Guide" }), new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }));
+    await waitFor(() => expect(openUrlMock).toHaveBeenCalledWith(webUrl));
+    expect(ownedBrowserNavigateMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps links external on surfaces without a side browser", async () => {
+    renderWebLink(null);
+    const link = screen.getByRole("link", { name: "Guide" });
+    fireEvent.click(link);
+    await waitFor(() => expect(openUrlMock).toHaveBeenCalledWith(webUrl));
+    fireEvent.contextMenu(link);
+    expect(screen.queryByRole("menuitem", { name: "Open in side browser" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Open in external browser" })).toBeInTheDocument();
+    expect(ownedBrowserNavigateMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["Open in side browser", "Open in external browser", "Copy link"])("supports the %s menu action", async (label) => {
+    renderWebLink();
+    fireEvent.contextMenu(screen.getByRole("link", { name: "Guide" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: label }));
+    if (label === "Copy link") {
+      await waitFor(() => expect(copyTextToClipboardMock).toHaveBeenCalledWith(webUrl));
+      expect(openUrlMock).not.toHaveBeenCalled();
+      expect(ownedBrowserNavigateMock).not.toHaveBeenCalled();
+    } else if (label === "Open in side browser") {
+      await waitFor(() => expect(ownedBrowserNavigateMock).toHaveBeenCalledWith(webUrl, "chat-123", true));
+      expect(openUrlMock).not.toHaveBeenCalled();
+    } else {
+      await waitFor(() => expect(openUrlMock).toHaveBeenCalledWith(webUrl));
+      expect(ownedBrowserNavigateMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it("supports the keyboard context menu without opening the URL", () => {
+    renderWebLink();
+    fireEvent.keyDown(screen.getByRole("link", { name: "Guide" }), { key: "F10", shiftKey: true });
+    expect(screen.getByRole("menuitem", { name: "Open in side browser" })).toBeInTheDocument();
+    expect(ownedBrowserNavigateMock).not.toHaveBeenCalled();
+    expect(openUrlMock).not.toHaveBeenCalled();
+  });
+
+  it("reports failed navigation without unexpectedly opening an external browser", async () => {
+    ownedBrowserNavigateMock.mockResolvedValueOnce({ status: "error", error: "unavailable" } as never);
+    renderWebLink();
+    fireEvent.click(screen.getByRole("link", { name: "Guide" }));
+    await waitFor(() => expect(toastMock).toHaveBeenCalledWith(expect.objectContaining({ variant: "destructive" })));
+    expect(openUrlMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the current conversation after switching chats", () => {
+    const { rerender } = renderWebLink();
+    rerender(<ChatLinkBrowserContext.Provider value="chat-456"><MarkdownBlock text={`[Guide](${webUrl})`} isUser={false} /></ChatLinkBrowserContext.Provider>);
+    fireEvent.click(screen.getByRole("link", { name: "Guide" }));
+    expect(ownedBrowserNavigateMock).toHaveBeenCalledWith(webUrl, "chat-456", true);
   });
 
   it("routes local viewer links to the in-chat preview callback instead of opening a viewer window", async () => {
@@ -83,6 +177,18 @@ describe("MarkdownBlock", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent(
       "screenpipe/screenpipe",
     );
+  });
+
+  it("closes link previews and prevents the transcript menu from opening over the link menu", async () => {
+    const transcriptMenu = vi.fn();
+    render(<div onContextMenu={transcriptMenu}><ChatLinkBrowserContext.Provider value="chat-123"><MarkdownBlock text="[Repository](https://github.com/screenpipe/screenpipe)" isUser={false} /></ChatLinkBrowserContext.Provider></div>);
+    const link = screen.getByRole("link", { name: "Repository" });
+    fireEvent.focus(link);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+    fireEvent.contextMenu(link);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
+    expect(screen.getByRole("menuitem", { name: "Copy link" })).toBeInTheDocument();
+    expect(transcriptMenu).not.toHaveBeenCalled();
   });
 
   it("keeps wide tables readable in a keyboard-scrollable container", () => {
