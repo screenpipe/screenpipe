@@ -13,6 +13,22 @@ import {
 import { screenpipeWebUrl } from "@/lib/web-url";
 import type { TeamEntry } from "@/lib/hooks/use-team-summary";
 
+type SeatQuote = {
+  quote_token: string;
+  team_name: string;
+  from: number;
+  to: number;
+  amount_due_today: number;
+  new_total: number;
+  currency: string;
+  interval: string;
+  interval_count: number;
+};
+const money = (amount: number, currency: string) =>
+  new Intl.NumberFormat(undefined, { style: "currency", currency }).format(
+    amount,
+  );
+
 type Result = { kind: "sent" | "error" | "uncertain"; message: string } | null;
 export function TeamInvitePopover({
   entry,
@@ -27,6 +43,8 @@ export function TeamInvitePopover({
 }) {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
+  const [quote, setQuote] = useState<SeatQuote | null>(null);
+  const [purchasing, setPurchasing] = useState(false);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<Result>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -41,8 +59,9 @@ export function TeamInvitePopover({
     [],
   );
 
-  async function invite(event: React.FormEvent) {
-    event.preventDefault();
+  async function invite(event?: React.FormEvent, purchase?: SeatQuote) {
+    event?.preventDefault();
+    if (quote && !purchase) return;
     if (!canInvite || pending.current || result?.kind === "uncertain") return;
     const recipient = email.trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
@@ -51,10 +70,47 @@ export function TeamInvitePopover({
     }
     const controller = new AbortController();
     pending.current = controller;
-    const timer = setTimeout(() => controller.abort(), 15000);
+    const timer = setTimeout(
+      () => controller.abort(),
+      purchase ? 45000 : 15000,
+    );
     setSending(true);
     setResult(null);
+    setPurchasing(Boolean(purchase));
+    setQuote(null);
+    let seatPurchased = false;
+    const endpoint = screenpipeWebUrl(
+      `/api/team/billing/add-seat?team_id=${encodeURIComponent(entry.teamId!)}`,
+      "https://screenpipe.com",
+    );
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    };
     try {
+      if (purchase) {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(purchase),
+          signal: controller.signal,
+        });
+        const data = await response.json();
+        if (pending.current !== controller || controller.signal.aborted) return;
+        if (!response.ok) {
+          setResult({
+            kind: "uncertain",
+            message:
+              data.error ||
+              "Check team billing on the web before trying again.",
+          });
+          return;
+        }
+        if (data.purchased !== true || data.seats !== purchase.to)
+          throw new Error("uncertain");
+        seatPurchased = true;
+        setPurchasing(false);
+      }
       const response = await fetch(
         screenpipeWebUrl(
           `/api/team/billing/seat-invite?team_id=${encodeURIComponent(entry.teamId!)}`,
@@ -73,6 +129,45 @@ export function TeamInvitePopover({
       const data = await response.json();
       if (pending.current !== controller || controller.signal.aborted) return;
       if (!response.ok) {
+        if (data.code === "NO_AVAILABLE_SEATS" && !purchase) {
+          const priceResponse = await fetch(endpoint, {
+            headers,
+            signal: controller.signal,
+          });
+          const price = await priceResponse.json();
+          if (pending.current !== controller || controller.signal.aborted)
+            return;
+          if (!priceResponse.ok) {
+            setResult({
+              kind: "error",
+              message: price.error || "Review seat pricing on the web.",
+            });
+          } else if (
+            typeof price.quote_token === "string" &&
+            Number.isFinite(price.amount_due_today) &&
+            Number.isFinite(price.new_total) &&
+            /^[a-z]{3}$/i.test(price.currency) &&
+            ["month", "year", "week", "day"].includes(price.interval) &&
+            price.to === price.from + 1 &&
+            price.interval_count > 0
+          ) {
+            setQuote(price);
+          } else
+            setResult({
+              kind: "error",
+              message:
+                "Could not verify seat pricing. Manage billing on the web.",
+            });
+          return;
+        }
+        if (seatPurchased) {
+          setResult({
+            kind: "uncertain",
+            message:
+              "The seat was purchased, but the invitation was not confirmed. Check invitations on the web; do not buy another seat.",
+          });
+          return;
+        }
         // A server error can occur after the invite was created. Never replay it.
         if (response.status >= 500) throw new Error("uncertain");
         setResult({
@@ -100,13 +195,16 @@ export function TeamInvitePopover({
         setResult({
           kind: "uncertain",
           message:
-            "We couldn’t confirm delivery. Check invitations on the web before sending again.",
+            purchase && !seatPurchased
+              ? "We couldn’t confirm the purchase. Check team billing on the web before trying again."
+              : "We couldn’t confirm delivery. Check invitations on the web before sending again.",
         });
     } finally {
       clearTimeout(timer);
       if (pending.current === controller) {
         pending.current = null;
         setSending(false);
+        setPurchasing(false);
       }
     }
   }
@@ -115,7 +213,7 @@ export function TeamInvitePopover({
     entry.kind === "signed-out"
       ? "Sign in on the web to invite your team."
       : entry.kind === "no-team"
-        ? "Set up your team on the web, then invite people here."
+        ? "Start a Business team on the web. Review the total for you and your teammate before paying. Your team pays; your teammate won’t need a card."
         : entry.kind === "enterprise"
           ? "Invite people through your organization’s member settings."
           : entry.kind === "unavailable"
@@ -168,7 +266,9 @@ export function TeamInvitePopover({
                   setEmail(event.target.value);
                   if (result?.kind !== "uncertain") setResult(null);
                 }}
-                disabled={sending || result?.kind === "uncertain"}
+                disabled={
+                  sending || Boolean(quote) || result?.kind === "uncertain"
+                }
                 className="h-9 min-w-0 flex-1 rounded-md border border-input bg-transparent px-2.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
               />
               <button
@@ -176,7 +276,10 @@ export function TeamInvitePopover({
                 aria-label="Send invitation"
                 title="Send invitation"
                 disabled={
-                  sending || !email.trim() || result?.kind === "uncertain"
+                  sending ||
+                  Boolean(quote) ||
+                  !email.trim() ||
+                  result?.kind === "uncertain"
                 }
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground disabled:opacity-40"
               >
@@ -189,14 +292,60 @@ export function TeamInvitePopover({
             </div>
             <p className="text-[11px] text-muted-foreground">
               {sending
-                ? "Sending invitation…"
-                : "Press Enter to invite · Uses an available team seat"}
+                ? purchasing
+                  ? "Adding the paid seat…"
+                  : "Sending invitation…"
+                : "Your team pays. Invites use an existing seat; adding a seat requires price confirmation."}
             </p>
           </form>
         ) : (
           <p className="text-xs leading-relaxed text-muted-foreground">
             {explanation}
           </p>
+        )}
+        {quote && (
+          <div
+            className="space-y-3 rounded-md border p-3"
+            aria-label="Confirm additional paid seat"
+          >
+            <p className="text-sm font-medium">Add a seat to {entry.label}</p>
+            <p className="text-xs text-muted-foreground">
+              {quote.from} → {quote.to} paid seats. Your teammate won’t need to
+              pay for this seat.
+            </p>
+            <dl className="space-y-1 text-xs">
+              <div className="flex justify-between gap-2">
+                <dt>Due now</dt>
+                <dd>{money(quote.amount_due_today, quote.currency)}</dd>
+              </div>
+              <div className="flex justify-between gap-2">
+                <dt>New recurring total</dt>
+                <dd>
+                  {money(quote.new_total, quote.currency)} /{" "}
+                  {quote.interval_count > 1 ? `${quote.interval_count} ` : ""}
+                  {quote.interval}
+                  {quote.interval_count > 1 ? "s" : ""}
+                </dd>
+              </div>
+            </dl>
+            <button
+              type="button"
+              className="w-full rounded-md bg-primary px-3 py-2 text-xs text-primary-foreground"
+              onClick={() => void invite(undefined, quote)}
+            >
+              Add seat and send invite
+            </button>
+            <button
+              type="button"
+              className="w-full text-xs text-muted-foreground"
+              onClick={() => {
+                setQuote(null);
+                input.current?.focus();
+              }}
+            >
+              Cancel
+            </button>
+          </div>
         )}
         {result && (
           <p
