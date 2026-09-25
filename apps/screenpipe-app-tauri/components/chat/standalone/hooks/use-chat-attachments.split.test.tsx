@@ -121,3 +121,64 @@ it("routes a window-level file drop to only the pane under the pointer", async (
   ).toHaveLength(1);
   expect(useChatStore.getState().sessions.a.composerDraft).toBeUndefined();
 });
+it("keeps a main-pane file with its original chat when the foreground changes", async () => {
+  let resolve!: (bytes: Uint8Array) => void;
+  mock.read.mockReturnValue(
+    new Promise<Uint8Array>((r) => {
+      resolve = r;
+    }),
+  );
+  mock.open.mockResolvedValue(["/notes.txt"]);
+  const sessionIdRef = { current: "a" as string | null };
+  const opts = { ...options("a"), draftSessionId: undefined, sessionIdRef };
+  const { result } = renderHook(() => useChatAttachments(opts));
+  let picking!: Promise<void>;
+  await act(async () => {
+    picking = result.current.handleFilePicker();
+  });
+  expect(result.current.pendingDocs).toHaveLength(1);
+  act(() => {
+    sessionIdRef.current = "b";
+    result.current.setAttachedDocs([]);
+    result.current.setPendingDocs([]);
+  });
+  await act(async () => {
+    resolve(new Uint8Array([1]));
+    await picking;
+  });
+  expect(
+    useChatStore.getState().sessions.a.composerDraft?.attachedDocs,
+  ).toHaveLength(1);
+  expect(
+    useChatStore.getState().sessions.a.composerDraft?.pendingDocs,
+  ).toHaveLength(0);
+  expect(useChatStore.getState().sessions.b.composerDraft).toBeUndefined();
+  expect(result.current.attachedDocs).toHaveLength(0);
+});
+
+it("keeps every file when several are dropped into the foreground in one event", async () => {
+  const opts = {
+    ...options("a"),
+    draftSessionId: undefined,
+    sessionIdRef: { current: "a" },
+  };
+  const { result } = renderHook(() => useChatAttachments(opts));
+  await act(async () => {
+    for (const listener of mock.listeners)
+      listener({
+        payload: {
+          type: "drop",
+          position: {
+            x: 50 * window.devicePixelRatio,
+            y: 50 * window.devicePixelRatio,
+          },
+          paths: ["/one.txt", "/two.txt"],
+        },
+      });
+  });
+  expect(result.current.attachedDocs.map((doc) => doc.name)).toEqual([
+    "one.txt",
+    "two.txt",
+  ]);
+  expect(result.current.pendingDocs).toHaveLength(0);
+});

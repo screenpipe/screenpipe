@@ -21,7 +21,8 @@ import {
   PASTED_TEXT_SHOW_IN_FIELD_MAX_CHARS,
 } from "@/lib/chat/large-context";
 import { toast } from "@/components/ui/use-toast";
-import { useSessionDraftField } from "./use-session-draft-field";
+import { useChatStore, type SessionDraft } from "@/lib/stores/chat-store";
+import { updateSessionDraftField, useSessionDraftField } from "./use-session-draft-field";
 import { useGT } from "gt-react";
 import { useUiLocale as useLocale } from "@/lib/i18n/provider";
 
@@ -31,6 +32,7 @@ export type PendingDoc = { id: string; name: string; ext: string };
 interface UseChatAttachmentsOptions {
   isEmbedded: boolean;
   draftSessionId?: string;
+  sessionIdRef?: React.MutableRefObject<string | null>;
   scopeDrops?: boolean;
   dropRootRef: React.RefObject<HTMLDivElement>;
   inputRef: React.RefObject<HTMLTextAreaElement>;
@@ -44,6 +46,7 @@ const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
 export function useChatAttachments({
   isEmbedded,
   draftSessionId,
+  sessionIdRef,
   scopeDrops = false,
   dropRootRef,
   inputRef,
@@ -74,6 +77,31 @@ export function useChatAttachments({
   const pendingDocsRef = useRef<PendingDoc[]>([]);
   useEffect(() => { pendingDocsRef.current = pendingDocs; }, [pendingDocs]);
 
+  // Freeze the owning chat before opening a dialog or reading a file. The
+  // foreground composer can be reused for another chat while this awaits.
+  const captureAttachmentWriters = useCallback(() => {
+    const owner = sessionIdRef?.current;
+    if (owner) {
+      const state = useChatStore.getState();
+      state.actions.setComposerDraft(owner, {
+        input: state.sessions[owner]?.composerDraft?.input ?? "",
+        pastedImages: pastedImagesRef.current,
+        attachedDocs: attachedDocsRef.current,
+        pendingDocs: pendingDocsRef.current,
+      });
+    }
+    const bind = <K extends keyof SessionDraft, T extends SessionDraft[K]>(key: K, setLocal: React.Dispatch<React.SetStateAction<T>>, latest: React.MutableRefObject<T>) => (update: React.SetStateAction<T>) => {
+      if (!owner) { setLocal(update); return; }
+      const value = updateSessionDraftField<K, T>(owner, key, update);
+      if (value !== undefined && sessionIdRef?.current === owner) { latest.current = value; setLocal(value); }
+    };
+    return {
+      images: bind("pastedImages", setPastedImages, pastedImagesRef),
+      docs: bind("attachedDocs", setAttachedDocs, attachedDocsRef),
+      pending: bind("pendingDocs", setPendingDocs, pendingDocsRef),
+    };
+  }, [sessionIdRef, setPastedImages, setAttachedDocs, setPendingDocs]);
+
   const resizeImage = useCallback((dataUrl: string): Promise<string> => {
     return new Promise((resolve) => {
       const img = new Image();
@@ -99,16 +127,17 @@ export function useChatAttachments({
 
   const processImageFile = useCallback((file: File) => {
     if (!file.type.startsWith("image/")) return;
+    const writers = captureAttachmentWriters();
     const reader = new FileReader();
     reader.onload = async (event) => {
       const base64 = event.target?.result as string;
       const resized = await resizeImage(base64);
-      setPastedImages((prev) => [...prev, resized]);
+      writers.images((prev) => [...prev, resized]);
     };
     reader.readAsDataURL(file);
-  }, [resizeImage, setPastedImages]);
+  }, [resizeImage, captureAttachmentWriters]);
 
-  const loadImageFromPath = useCallback(async (filePath: string) => {
+  const loadImageFromPath = useCallback(async (filePath: string, writers = captureAttachmentWriters()) => {
     const ext = filePath.split(".").pop()?.toLowerCase() || "";
     if (!IMAGE_EXTENSIONS.includes(ext)) return;
 
@@ -129,15 +158,16 @@ export function useChatAttachments({
         binary += String.fromCharCode(bytes[i]);
       }
       const resized = await resizeImage(`data:${mime};base64,${btoa(binary)}`);
-      setPastedImages((prev) => [...prev, resized]);
+      writers.images((prev) => [...prev, resized]);
     } catch (err) {
       console.error("failed to read dropped image:", err);
     }
-  }, [resizeImage, setPastedImages]);
+  }, [resizeImage, captureAttachmentWriters]);
 
   const extractAndAttach = useCallback(async (
     name: string,
     loadBytes: () => Promise<Uint8Array>,
+    writers = captureAttachmentWriters(),
   ) => {
     const ext = extFromName(name);
     if (!isSupportedDocExt(ext)) {
@@ -156,7 +186,7 @@ export function useChatAttachments({
     }
 
     const pendingId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    setPendingDocs((prev) => [...prev, { id: pendingId, name, ext }]);
+    writers.pending((prev) => [...prev, { id: pendingId, name, ext }]);
 
     try {
       const bytes = await loadBytes();
@@ -169,7 +199,7 @@ export function useChatAttachments({
         });
         return;
       }
-      setAttachedDocs((prev) =>
+      writers.docs((prev) =>
         prev.some((d) => d.name === name) ? prev : [...prev, doc]
       );
     } catch (err) {
@@ -180,14 +210,14 @@ export function useChatAttachments({
         variant: "destructive",
       });
     } finally {
-      setPendingDocs((prev) => prev.filter((p) => p.id !== pendingId));
+      writers.pending((prev) => prev.filter((p) => p.id !== pendingId));
     }
-  }, [uiLanguage, setAttachedDocs, setPendingDocs]);
+  }, [uiLanguage, captureAttachmentWriters]);
 
-  const loadDocFromPath = useCallback(async (filePath: string) => {
+  const loadDocFromPath = useCallback(async (filePath: string, writers = captureAttachmentWriters()) => {
     const name = filePath.split(/[\\/]/).pop() || filePath;
-    await extractAndAttach(name, () => readFile(filePath));
-  }, [extractAndAttach]);
+    await extractAndAttach(name, () => readFile(filePath), writers);
+  }, [extractAndAttach, captureAttachmentWriters]);
 
   const processDocFile = useCallback(async (file: File) => {
     const name = file.name || "pasted file";
@@ -225,6 +255,7 @@ export function useChatAttachments({
   }, [inputRef, setInput, setMentionFilter, setShowMentionDropdown, setAttachedDocs]);
 
   const handleFilePicker = useCallback(async () => {
+    const writers = captureAttachmentWriters();
     try {
       const selected = await openFileDialog({
         multiple: true,
@@ -238,15 +269,15 @@ export function useChatAttachments({
       const paths = Array.isArray(selected) ? selected : [selected];
       for (const path of paths) {
         if (IMAGE_EXTENSIONS.includes(extFromName(path))) {
-          await loadImageFromPath(path);
+          await loadImageFromPath(path, writers);
         } else {
-          await loadDocFromPath(path);
+          await loadDocFromPath(path, writers);
         }
       }
     } catch (err) {
       console.error("file picker error:", err);
     }
-  }, [loadDocFromPath, loadImageFromPath]);
+  }, [loadDocFromPath, loadImageFromPath, captureAttachmentWriters]);
 
   const handleDroppedPaths = useCallback((paths: string[]) => {
     for (const path of paths) {

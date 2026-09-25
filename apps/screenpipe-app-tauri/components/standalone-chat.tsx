@@ -550,6 +550,7 @@ export function StandaloneChat({
   // (e.g. a meeting note) that would otherwise also stage into the composer.
   const dropRootRef = useRef<HTMLDivElement>(null);
   const primaryPaneRef = useRef<HTMLDivElement>(null);
+  const attachmentSessionIdRef = useRef<string | null>(null);
 
   const {
     prefillContext,
@@ -580,6 +581,7 @@ export function StandaloneChat({
   } = useChatAttachments({
     isEmbedded,
     scopeDrops: true,
+    sessionIdRef: attachmentSessionIdRef,
     dropRootRef: primaryPaneRef,
     inputRef,
     setInput,
@@ -711,6 +713,7 @@ export function StandaloneChat({
   const [conversationId, setConversationId] = useState<string | null>(
     initialSessionIdRef.current,
   );
+  attachmentSessionIdRef.current = conversationId;
   const isTemporarySideConversation = useChatStore((state) =>
     conversationId
       ? isEphemeralSideConversation(state.sessions[conversationId])

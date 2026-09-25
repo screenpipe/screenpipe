@@ -127,6 +127,15 @@ try {
   assert.equal(await pane(left).getByText("split-notes.txt", { exact: true }).count(), 0);
   await pane(right).getByRole("button", { name: "Remove split-notes.txt", exact: true }).click();
   await page.getByRole("tab", { name: "Draft launch announcement", exact: true }).click();
+  // Repeat from the foreground composer: a late read must not follow it into
+  // the newly selected chat when React reuses that composer instance.
+  await pane(left).getByRole("button", { name: "Add attachments and filters", exact: true }).click();
+  await page.getByRole("button", { name: "Add photos & files", exact: true }).click();
+  await page.getByRole("tab", { name: "Investigate audio device switching", exact: true }).click();
+  await pane(left).getByRole("button", { name: "Remove split-notes.txt", exact: true }).waitFor();
+  assert.equal(await pane(right).getByText("split-notes.txt", { exact: true }).count(), 0);
+  await pane(left).getByRole("button", { name: "Remove split-notes.txt", exact: true }).click();
+  await page.getByRole("tab", { name: "Draft launch announcement", exact: true }).click();
   await page.evaluate(() => { window.__splitEval.delayFile = false; });
   await pane(right).getByRole("button", { name: "Add attachments and filters", exact: true }).click();
   await page.getByRole("button", { name: /^@today/ }).click();

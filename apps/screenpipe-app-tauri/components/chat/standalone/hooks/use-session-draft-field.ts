@@ -16,6 +16,18 @@ const EMPTY_DRAFT: SessionDraft = {
   pendingDocs: [],
 };
 
+export function updateSessionDraftField<
+  K extends keyof SessionDraft,
+  T extends SessionDraft[K],
+>(sessionId: string, key: K, update: SetStateAction<T>): T | undefined {
+  const state = useChatStore.getState();
+  if (!state.sessions[sessionId] || state.sessions[sessionId].hidden) return;
+  const draft = state.sessions[sessionId].composerDraft ?? EMPTY_DRAFT;
+  const value = typeof update === "function" ? update(draft[key] as T) : update;
+  state.actions.setComposerDraft(sessionId, { ...draft, [key]: value });
+  return value;
+}
+
 /** Scoped setters retain their owner across async file reads and pane changes. */
 export function useSessionDraftField<
   K extends keyof SessionDraft,
@@ -35,13 +47,7 @@ export function useSessionDraftField<
         setLocal(update);
         return;
       }
-      const state = useChatStore.getState();
-      if (!state.sessions[sessionId] || state.sessions[sessionId].hidden)
-        return;
-      const draft = state.sessions[sessionId].composerDraft ?? EMPTY_DRAFT;
-      const value =
-        typeof update === "function" ? update(draft[key] as T) : update;
-      state.actions.setComposerDraft(sessionId, { ...draft, [key]: value });
+      updateSessionDraftField<K, T>(sessionId, key, update);
     },
     [sessionId, key],
   );
