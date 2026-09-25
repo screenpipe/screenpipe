@@ -22,7 +22,6 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { isTranscriptEcho } from "@/lib/utils/meeting-context";
 import { MediaComponent } from "@/components/rewind/media";
 import { SpeakerAssignPopover } from "@/components/speaker-assign-popover";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
@@ -345,12 +344,11 @@ export function filterBackgroundCoveredByLiveFinals(
   });
 }
 
-/** Prefer clean system audio when the microphone hears the same nearby words. */
-export function filterLiveCrossDeviceEchoes(
+/** Hide cached live copies already present in saved rows of the same device. */
+export function filterLiveAlreadySaved(
   chunks: MeetingAudioChunk[],
   liveBlocks: LiveTranscriptBlock[],
 ): LiveTranscriptBlock[] {
-  const echoWindowMs = 6_000;
   const durableWindowMs = 15_000;
   const durableBlocks = chunks
     .map((chunk) => ({
@@ -360,12 +358,6 @@ export function filterLiveCrossDeviceEchoes(
       text: normalizeForDedupe(chunk.transcription ?? ""),
     }))
     .filter((block) => block.timestamp > 0 && block.text.length > 0);
-  const outputBlocks = liveBlocks
-    .filter((block) => block.deviceType.toLowerCase() === "output")
-    .map((block) => ({
-      timestamp: timestampMs(block.capturedAt),
-      words: normalizeForDedupe(block.text).split(" ").filter(Boolean),
-    }));
 
   return liveBlocks.filter((block) => {
     const normalized = normalizeForDedupe(block.text);
@@ -384,10 +376,6 @@ export function filterLiveCrossDeviceEchoes(
     );
     if (normalized && alreadyDurable) return false;
 
-    if (block.deviceType.toLowerCase() === "input") {
-      if (outputBlocks.some(output => Math.abs(output.timestamp - timestamp) <= echoWindowMs &&
-        isTranscriptEcho(block.text, output.words.join(" ")))) return false;
-    }
     return true;
   });
 }
@@ -791,7 +779,7 @@ export function TranscriptPanel({
     [authoritativeChunks],
   );
   const visibleLiveBlocks = useMemo(
-    () => filterLiveCrossDeviceEchoes(authoritativeChunks, liveBlocks),
+    () => filterLiveAlreadySaved(authoritativeChunks, liveBlocks),
     [authoritativeChunks, liveBlocks],
   );
   const visibleLiveSpeakerBlocks = useMemo(

@@ -930,27 +930,6 @@ export async function fetchMeetingAudio(
   return mergeMeetingAudioChunks(routedRows, out, cap);
 }
 
-export function isTranscriptEcho(input: string, output: string): boolean {
-  const words = (text: string) => text.toLowerCase().split(/\s+/)
-    .map(word => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")).filter(Boolean);
-  const a = words(input), b = words(output);
-  return a.length >= 6 && b.some((_, index) =>
-    a.every((word, offset) => b[index + offset] === word));
-}
-
-function filterMeetingEchoes(chunks: MeetingAudioChunk[]): MeetingAudioChunk[] {
-  return chunks.filter((chunk, index) => {
-    if (!chunk.isInput) return true;
-    const time = timestampMs(chunk.timestamp);
-    let first = index;
-    while (first > 0 && timestampMs(chunks[first - 1].timestamp) >= time - 6000) first--;
-    for (let i = first; i < chunks.length && timestampMs(chunks[i].timestamp) <= time + 6000; i++) {
-      if (!chunks[i].isInput && isTranscriptEcho(chunk.transcription, chunks[i].transcription)) return false;
-    }
-    return true;
-  });
-}
-
 export function mergeMeetingAudioChunks(
   liveRows: MeetingAudioChunk[],
   backgroundRows: MeetingAudioChunk[],
@@ -981,7 +960,7 @@ export function mergeMeetingAudioChunks(
     if (out.length >= cap) break;
   }
 
-  return filterMeetingEchoes(out);
+  return out;
 }
 
 async function fetchRoutedMeetingTranscript(

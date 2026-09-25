@@ -10,7 +10,6 @@ import {
   extractImageDataUrlsFromMarkdown,
   extractPipePromptBody,
   mergeMeetingAudioChunks,
-  isTranscriptEcho,
   type MeetingAudioChunk,
   type MeetingContext,
 } from "./meeting-context";
@@ -215,19 +214,13 @@ describe("mergeMeetingAudioChunks", () => {
 });
 
 
-describe("cross-device echo regression", () => {
-  it("keeps negations and short replies while recognizing a long repeated phrase", () => {
-    const output = "We should send the revised proposal on Tuesday.";
-    expect(isTranscriptEcho("we should send the revised proposal on Tuesday", output)).toBe(true);
-    expect(isTranscriptEcho("We should NOT send the revised proposal on Tuesday", output)).toBe(false);
-    expect(isTranscriptEcho("Yes", "Yes")).toBe(false);
-  });
-  it("applies echo suppression after reopening without removing stored source objects", () => {
-    const output = chunk({transcription: "We should send the revised proposal on Tuesday.", timestamp: "2026-06-04T15:00:00Z"});
-    const echo = chunk({audioChunkId: 2, isInput: true, deviceType: "input", transcription: output.transcription, timestamp: "2026-06-04T15:00:02Z"});
-    const reply = {...echo, audioChunkId: 3, transcription: "We should NOT send the revised proposal on Tuesday"};
-    const merged = mergeMeetingAudioChunks([output, echo, reply], [], 100);
-    expect(merged.map(row => row.audioChunkId)).toEqual([1, 3]);
-    expect(echo.transcription).toBe(output.transcription);
+describe("cross-device speech preservation", () => {
+  it.each([
+    ["Do not send the revised proposal on Tuesday.", "Send the revised proposal on Tuesday."],
+    ["The approved budget is twenty thousand dollars.", "The approved budget is twenty thousand dollars."],
+  ])("keeps both speakers after reopening: %s / %s", (remote, local) => {
+    const output = chunk({ transcription: remote, timestamp: "2026-06-04T15:00:00Z" });
+    const input = chunk({ audioChunkId: 2, isInput: true, deviceType: "input", transcription: local, timestamp: "2026-06-04T15:00:03Z" });
+    expect(mergeMeetingAudioChunks([output, input], [], 100)).toEqual([output, input]);
   });
 });

@@ -26,7 +26,7 @@ import {
   applyLiveFinal,
   coalesceFinalSpeakerRuns,
   filterBackgroundCoveredByLiveFinals,
-  filterLiveCrossDeviceEchoes,
+  filterLiveAlreadySaved,
   isSpeakerContinuation,
   liveBlockToSpeakerBlock,
   SpeakerParagraph,
@@ -347,7 +347,7 @@ describe("SpeakerParagraph render isolation", () => {
     ).toEqual([gap, routedLive]);
   });
 
-  it("preserves ambiguous short replies even when both streams say the same word", () => {
+  it.each(["What?", "The approved budget is twenty thousand dollars."])("preserves cross-device speech: %s", (text) => {
     const output = {
       key: "output:1",
       itemId: "1",
@@ -355,7 +355,7 @@ describe("SpeakerParagraph render isolation", () => {
       deviceType: "output",
       speakerName: "speaker 1",
       provider: "deepgram",
-      text: "What?",
+      text,
       capturedAt: "2026-07-29T19:00:00.000Z",
       final: true,
     };
@@ -372,7 +372,7 @@ describe("SpeakerParagraph render isolation", () => {
     };
 
     expect(
-      filterLiveCrossDeviceEchoes([], [output, inputEcho, actualNearbySpeaker]),
+      filterLiveAlreadySaved([], [output, inputEcho, actualNearbySpeaker]),
     ).toEqual([output, inputEcho, actualNearbySpeaker]);
   });
 
@@ -401,7 +401,7 @@ describe("SpeakerParagraph render isolation", () => {
       final: true,
     };
 
-    expect(filterLiveCrossDeviceEchoes([saved], [cachedSuffix])).toEqual([]);
+    expect(filterLiveAlreadySaved([saved], [cachedSuffix])).toEqual([]);
   });
 
   it("uses monochrome theme tokens instead of blue or purple speaker colors", () => {

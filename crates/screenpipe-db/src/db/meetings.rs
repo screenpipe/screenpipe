@@ -16,16 +16,6 @@ fn is_calendar_event_conflict(e: &SqlxError) -> bool {
             || msg.contains("idx_meetings_calendar_event_id"))
 }
 
-fn transcript_words(text: &str) -> Vec<String> {
-    text.split_whitespace()
-        .map(|word| {
-            word.trim_matches(|c: char| !c.is_alphanumeric())
-                .to_lowercase()
-        })
-        .filter(|word| !word.is_empty())
-        .collect()
-}
-
 impl DatabaseManager {
     // ── Meeting persistence ──────────────────────────────────────────
     //
@@ -1404,39 +1394,6 @@ impl DatabaseManager {
         .await?;
 
         self.resolve_live_segment_chunk_links(&mut rows).await?;
-        // Presentation-only suppression: retain all original rows for diagnosis.
-        // Only long, contiguous repetitions on the opposite capture direction
-        // qualify. Shared vocabulary, negations and short replies are not echo.
-        let outputs: Vec<_> = rows
-            .iter()
-            .filter(|r| r.device_type == "output")
-            .filter_map(|r| {
-                Some((
-                    DateTime::parse_from_rfc3339(&r.captured_at)
-                        .ok()?
-                        .timestamp_millis(),
-                    transcript_words(&r.transcript),
-                ))
-            })
-            .collect();
-        rows.retain(|row| {
-            if row.device_type != "input" {
-                return true;
-            }
-            let Ok(time) = DateTime::parse_from_rfc3339(&row.captured_at) else {
-                return true;
-            };
-            let words = transcript_words(&row.transcript);
-            if words.len() < 6 {
-                return true;
-            }
-            let ms = time.timestamp_millis();
-            let start = outputs.partition_point(|(t, _)| *t < ms - 6_000);
-            !outputs[start..]
-                .iter()
-                .take_while(|(t, _)| *t <= ms + 6_000)
-                .any(|(_, output)| output.windows(words.len()).any(|part| part == words))
-        });
         Ok(rows)
     }
 

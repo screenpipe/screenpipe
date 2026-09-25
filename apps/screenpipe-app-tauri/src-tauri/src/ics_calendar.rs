@@ -92,11 +92,45 @@ async fn fetch_and_parse_feed(
     }
 }
 
+/// Keep each active feed's last successful snapshot independently. A failed
+/// download must neither erase that feed nor freeze healthy feeds. Removed and
+/// disabled feeds disappear even when another feed is unavailable.
+#[derive(Default)]
+struct FeedSnapshots {
+    feeds: HashMap<String, Vec<CalendarEventItem>>,
+}
+
+impl FeedSnapshots {
+    fn refresh(
+        &mut self,
+        results: Vec<(String, Option<Vec<CalendarEventItem>>)>,
+    ) -> Vec<CalendarEventItem> {
+        self.feeds
+            .retain(|url, _| results.iter().any(|(active, _)| active == url));
+        for (url, events) in results {
+            if let Some(events) = events {
+                self.feeds.insert(url, events);
+            }
+        }
+        let mut unique = HashMap::new();
+        for events in self.feeds.values() {
+            for event in events {
+                unique.insert(event.id.clone(), event.clone());
+            }
+        }
+        unique.into_values().collect()
+    }
+}
+
 // ─── Background poller ──────────────────────────────────────────────────────
 
 pub async fn start_ics_calendar_poller(app: AppHandle) {
     info!("ics_calendar: poller started");
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("calendar HTTP client");
+    let mut snapshots = FeedSnapshots::default();
 
     loop {
         match IcsCalendarSettingsStore::get(&app) {
@@ -106,29 +140,19 @@ pub async fn start_ics_calendar_poller(app: AppHandle) {
                     .unwrap_or_default();
                 let fetches = futures::stream::iter(enabled_entries.into_iter().map(|entry| {
                     let client = client.clone();
-                    async move { fetch_and_parse_feed(&client, &entry, 1, 48).await }
+                    async move {
+                        let events = fetch_and_parse_feed(&client, &entry, 1, 48).await;
+                        (entry.url, events)
+                    }
                 }))
                 .buffer_unordered(10)
                 .collect::<Vec<_>>()
                 .await;
 
-                // A failed download is not an empty calendar. Wait for a
-                // complete refresh before replacing the ICS snapshot.
-                let complete_refresh: Option<Vec<_>> = fetches.into_iter().collect();
-                if let Some(feeds) = complete_refresh {
-                    let mut unique_events = HashMap::new();
-                    for events in feeds {
-                        for event in events {
-                            unique_events.insert(event.id.clone(), event);
-                        }
-                    }
-                    // An empty feed list (all disabled) is a successful refresh.
-                    if let Err(e) = publish_calendar_events(
-                        CalendarSource::Ics,
-                        unique_events.into_values().collect(),
-                    ) {
-                        debug!("ics_calendar: failed to send events: {}", e);
-                    }
+                if let Err(e) =
+                    publish_calendar_events(CalendarSource::Ics, snapshots.refresh(fetches))
+                {
+                    debug!("ics_calendar: failed to send events: {}", e);
                 }
             }
             Err(e) => debug!("ics_calendar: failed to read settings: {}", e),
@@ -232,6 +256,49 @@ pub async fn ics_calendar_get_upcoming(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partial_feed_failure_keeps_healthy_updates_and_removes_disabled_feeds() {
+        fn event(id: &str) -> CalendarEventItem {
+            CalendarEventItem {
+                id: id.into(),
+                title: id.into(),
+                start: "2026-09-25T10:00:00Z".into(),
+                end: "2026-09-25T11:00:00Z".into(),
+                start_display: String::new(),
+                end_display: String::new(),
+                attendees: vec![],
+                location: None,
+                meeting_url: None,
+                calendar_name: "fixture".into(),
+                is_all_day: false,
+                source: "ics".into(),
+            }
+        }
+        fn ids(events: Vec<CalendarEventItem>) -> Vec<String> {
+            let mut ids: Vec<_> = events.into_iter().map(|e| e.id).collect();
+            ids.sort();
+            ids
+        }
+        let mut snapshots = FeedSnapshots::default();
+        snapshots.refresh(vec![
+            ("a".into(), Some(vec![event("old-a")])),
+            ("b".into(), Some(vec![event("old-b")])),
+            ("disabled".into(), Some(vec![event("removed")])),
+        ]);
+        assert_eq!(
+            ids(snapshots.refresh(vec![
+                ("a".into(), Some(vec![event("new-a")])),
+                ("b".into(), None)
+            ])),
+            ["new-a", "old-b"]
+        );
+        assert_eq!(
+            ids(snapshots.refresh(vec![("a".into(), Some(vec![])), ("b".into(), None)])),
+            ["old-b"]
+        );
+        assert!(snapshots.refresh(vec![]).is_empty());
+    }
 
     #[tokio::test]
     async fn empty_feed_is_a_snapshot_but_http_failure_is_not() {

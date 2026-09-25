@@ -54,7 +54,7 @@ async fn late_live_turn_links_to_containing_chunk_and_seeks_within_it() {
 }
 
 #[tokio::test]
-async fn saved_transcript_removes_long_cross_device_echo_but_preserves_new_speech() {
+async fn saved_transcript_preserves_repetition_and_contradictions_across_devices() {
     let db = DatabaseManager::new("sqlite::memory:", Default::default())
         .await
         .unwrap();
@@ -71,21 +71,21 @@ async fn saved_transcript_removes_long_cross_device_echo_but_preserves_new_speec
             "a",
             "Meeting Tap",
             "output",
-            "We should send the revised proposal on Tuesday.",
+            "Do not send the revised proposal on Tuesday.",
             0,
         ),
         (
             "b",
             "Microphone",
             "input",
-            "we should send the revised proposal on Tuesday",
+            "Send the revised proposal on Tuesday.",
             2,
         ),
         (
             "c",
             "Microphone",
             "input",
-            "We should NOT send the revised proposal on Tuesday.",
+            "Do not send the revised proposal on Tuesday.",
             3,
         ),
         ("d", "Microphone", "input", "Yes", 4),
@@ -114,10 +114,12 @@ async fn saved_transcript_removes_long_cross_device_echo_but_preserves_new_speec
     let rows = db.list_meeting_transcript_segments(id).await.unwrap();
     assert_eq!(
         rows.len(),
-        4,
-        "hide only the adjacent long echo, never negations, short replies or later repetitions"
+        5,
+        "text alone cannot distinguish echo from disagreement or deliberate read-back"
     );
-    assert!(rows.iter().any(|r| r.transcript.contains("NOT")));
+    assert!(rows
+        .iter()
+        .any(|r| r.transcript == "Send the revised proposal on Tuesday."));
     assert_eq!(
         db.count_meeting_transcript_segments(id).await.unwrap(),
         5,

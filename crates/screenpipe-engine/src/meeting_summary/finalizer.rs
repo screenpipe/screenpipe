@@ -94,11 +94,37 @@ fn finished_after(finished_at: Option<&str>, cutoff: DateTime<Utc>) -> bool {
         .is_some_and(|t| t.with_timezone(&Utc) >= cutoff)
 }
 
+/// A resumed meeting must not inherit a completed run from its previous end.
+/// Modern keys carry the end timestamp (optionally followed by a retry suffix);
+/// legacy keys fall back to the run's start time, allowing SQLite's second precision.
+fn run_matches_meeting_end(run: &CompletedRun, meeting_end: &str) -> bool {
+    let Ok(end) = DateTime::parse_from_rfc3339(meeting_end) else {
+        return false;
+    };
+    if let Some((_, generation)) = run
+        .trigger_key
+        .as_deref()
+        .and_then(|key| key.split_once('@'))
+    {
+        let timestamp = DateTime::parse_from_rfc3339(generation).ok().or_else(|| {
+            generation
+                .rsplit_once(':')
+                .and_then(|(time, _)| DateTime::parse_from_rfc3339(time).ok())
+        });
+        return timestamp.is_some_and(|time| time == end);
+    }
+    finished_after(
+        run.started_at.as_deref(),
+        end.with_timezone(&Utc) - Duration::seconds(1),
+    )
+}
+
 #[derive(sqlx::FromRow)]
 struct CompletedRun {
     id: i64,
     trigger_key: Option<String>,
     stdout: Option<String>,
+    started_at: Option<String>,
     finished_at: Option<String>,
 }
 
@@ -108,7 +134,7 @@ async fn sweep_completed_runs(
     processed: &mut std::collections::HashSet<i64>,
 ) {
     let runs = sqlx::query_as::<_, CompletedRun>(
-        r#"SELECT id, trigger_key, stdout, finished_at
+        r#"SELECT id, trigger_key, stdout, started_at, finished_at
            FROM pipe_executions
            WHERE pipe_name = ?1
              AND trigger_event = 'meeting_ended'
@@ -137,7 +163,10 @@ async fn sweep_completed_runs(
         let Ok(meeting) = db.get_meeting_by_id(meeting_id).await else {
             continue;
         };
-        if meeting.meeting_end.is_none() {
+        let Some(end) = meeting.meeting_end.as_deref() else {
+            continue;
+        };
+        if !run_matches_meeting_end(&run, end) {
             continue;
         }
         if note_has_summary_section(meeting.note.as_deref().unwrap_or("")) {
@@ -504,9 +533,15 @@ mod db_tests {
         let (_dir, db) = test_db().await;
         let store = SqlitePipeStore::new(db.clone());
         let meeting_id = ended_meeting(&db).await;
+        let end = db
+            .get_meeting_by_id(meeting_id)
+            .await
+            .unwrap()
+            .meeting_end
+            .unwrap();
         completed_run(
             &store,
-            &format!("{}@2026-08-25T20:17:43.382Z", meeting_id),
+            &format!("{meeting_id}@{end}"),
             &agent_end_stdout("## Summary\nGeneration-keyed run body long enough to persist."),
         )
         .await;
@@ -520,6 +555,33 @@ mod db_tests {
             .note
             .unwrap();
         assert!(note.contains("Generation-keyed run body"));
+    }
+
+    #[tokio::test]
+    async fn sweep_does_not_restore_or_retry_a_previous_meeting_generation() {
+        let (_dir, db) = test_db().await;
+        let store = SqlitePipeStore::new(db.clone());
+        let id = ended_meeting(&db).await;
+        let old = (Utc::now() - Duration::minutes(5)).to_rfc3339();
+        let stale = completed_run(
+            &store,
+            &format!("{id}@{old}"),
+            &agent_end_stdout(
+                "## Summary\nThis stale summary belongs to the previous meeting end.",
+            ),
+        )
+        .await;
+        let empty = completed_run(&store, &format!("{id}@{old}:summary-recovery-1"), "").await;
+        sweep_completed_runs(&db, &mut std::collections::HashSet::new()).await;
+        assert!(db.get_meeting_by_id(id).await.unwrap().note.is_none());
+        assert_eq!(
+            execution_state(&db, stale).await,
+            ("completed".into(), None)
+        );
+        assert_eq!(
+            execution_state(&db, empty).await,
+            ("completed".into(), None)
+        );
     }
 
     /// No summary anywhere + no transcript → the run stops claiming success.
