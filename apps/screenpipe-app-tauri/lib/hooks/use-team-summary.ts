@@ -2,6 +2,7 @@
 // https://screenpipe.com
 
 import { useEffect, useState } from "react";
+import { useEnterpriseBuildStatus } from "@/lib/hooks/use-is-enterprise-build";
 import { screenpipeWebUrl } from "@/lib/web-url";
 
 export type TeamEntry = {
@@ -26,13 +27,15 @@ export function useTeamSummary({
   enterprise: boolean;
   orgName?: string | null;
 }): TeamEntry | undefined {
+  const build = useEnterpriseBuildStatus();
+  const consumerBuild = build.resolved && !build.error && !build.isEnterprise;
   const [result, setResult] = useState<{
     token: string;
     team: Summary;
     role?: string;
   } | null>(null);
   useEffect(() => {
-    if (!enabled || enterprise || !token) return;
+    if (!consumerBuild || !enabled || enterprise || !token) return;
     let disposed = false;
     let controller: AbortController | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -82,9 +85,9 @@ export function useTeamSummary({
       clearTimeout(timer);
       window.removeEventListener("focus", onFocus);
     };
-  }, [token, enabled, enterprise]);
+  }, [token, enabled, enterprise, consumerBuild]);
 
-  if (!enabled) return undefined;
+  if (!consumerBuild || !enabled) return undefined;
   if (enterprise)
     return {
       label: orgName?.trim() || "Your organization",
