@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite": "screenpipe-app-coding-agent-regressions",
-  "dataset_version": "2026-09-25.4",
+  "dataset_version": "2026-09-25.5",
   "suite_type": "regression",
   "owner": "screenpipe engineering",
   "policy": {
@@ -3388,6 +3388,46 @@
           "destination_path": "apps/screenpipe-app-tauri/node_modules"
         }
       ]
+    },
+    {
+      "id": "ai-gateway-background-request-preservation",
+      "name": "Preserve the complete request when recovering an exhausted background allowance",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "1c0a271403a4128a2238c355e5820b7f18c98eac"
+      },
+      "base_ref": "5eb2bd80952a7302f20f46f561abdbb136950f86",
+      "oracle_ref": "1c0a271403a4128a2238c355e5820b7f18c98eac",
+      "oracle_paths": [
+        "packages/ai-gateway/src/handlers/chat.ts",
+        "packages/ai-gateway/src/services/background-limit-fallback.ts",
+        "packages/ai-gateway/src/index.ts"
+      ],
+      "gate": "advisory",
+      "tags": [
+        "regression",
+        "background",
+        "allowance",
+        "request-integrity"
+      ],
+      "prompt": "An already-authorized background request exhausts its hosted allowance. Its recovery attempt can silently lose developer instructions, older context, tool descriptions and schema metadata, or most of its output budget. Repair the existing chat completion handler so an enabled, configured text-only recovery makes one alternate provider attempt with the complete message sequence, roles, tool-call associations, tool schemas, requested output budget, response format and other request options preserved. Do not mutate the caller request. Preserve the real provider response and streamed tool-call result. A model substitution is allowed; no particular private helper name or provider model is required. A successful primary needs no recovery. Disabled or unconfigured recovery and requests with images or files must retain the original allowance refusal without dropping input. If recovery is unavailable, preserve the original hosted_ai_allowance_exceeded 429 response. Ordinary requests-per-minute throttling must not activate allowance recovery; an empty message list must return 400 before provider work. Tests use the existing handler entrypoint with both legacy and current option spellings, synthetic provider and telemetry ports, and denied external network. Authorization and paid-plan HTTP dispatch, safety-refusal recovery policy, actual provider compatibility, concurrent spend accounting and model quality are outside this case. Add focused tests for the outcomes.",
+      "agent_timeout_seconds": 900,
+      "grader_dependency_links": [
+        {
+          "source_path": "packages/ai-gateway/node_modules",
+          "destination_path": "packages/ai-gateway/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/background-request.fixture.ts.txt",
+            "destination_path": "packages/ai-gateway/src/test/eval-background-request.test.ts"
+          }
+        ],
+        "command": "cd packages/ai-gateway && \"${BUN_BIN:-bun}\" test src/test/eval-background-request.test.ts"
+      }
     }
   ]
 }

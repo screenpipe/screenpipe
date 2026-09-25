@@ -201,7 +201,11 @@ default = ["pulseaudio"]
 metal = ["whisper-rs/metal", "audiopipe?/metal", "audiopipe?/coreml"]
 cuda = ["whisper-rs/cuda"]
 directml = ["audiopipe?/directml"]
-vulkan = ["audiopipe?/vulkan-ggml", "whisper-rs/vulkan"]
+# Windows Qwen and Parakeet use ONNX/DirectML. Enabling audiopipe's GGML
+# Vulkan backend also links a second native GGML implementation into the app;
+# its independently configured CPU backend can contain builder-host AVX-512
+# instructions. Keep Vulkan scoped to Whisper, the only product path using it.
+vulkan = ["whisper-rs/vulkan"]
 pulseaudio = ["dep:libpulse-binding", "dep:libpulse-simple-binding"]
 qwen3-asr = ["dep:audiopipe", "audiopipe?/qwen3-asr", "audiopipe?/qwen3-asr-antirez-blas"]
 parakeet = ["dep:audiopipe"]

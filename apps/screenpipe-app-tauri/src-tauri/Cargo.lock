@@ -11208,7 +11208,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-app"
-version = "2.7.73"
+version = "2.7.74"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -11335,6 +11335,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "webview2-com",
+ "whisper-rs",
  "windows 0.58.0",
  "windows-core 0.61.2",
  "windows-icons",

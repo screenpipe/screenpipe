@@ -52,6 +52,8 @@ mod icons;
 use crate::analytics::start_analytics;
 mod agent_event_emitter;
 mod audio_exclusions;
+#[cfg(all(test, target_os = "windows", feature = "vulkan"))]
+mod whisper_vulkan_tests;
 mod auth_token;
 mod brain_views;
 mod calendar;

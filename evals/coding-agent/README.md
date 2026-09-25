@@ -935,3 +935,7 @@ from intended behavior failures. Use the shared runner's `--verify` for the case
 ### Attachment owner handoff
 
 `app-attachment-owner-handoff` exercises the actual attachment hook and in-memory chat store across delayed file reads, pane unmount, foreground navigation, pointer-scoped drops, cancellation and read failure. Hidden/deleted owners stay absent and ordinary multiple-file attachment survives. Native file/dialog/extraction and locale ports are synthetic; this does not establish native delivery, disk persistence or full composer integration. Run `bun test evals/coding-agent/calibrate-attachment-owner.test.js` with the desktop test dependencies available. Historical verification and mutation calibration are not model trials or an isolation claim.
+
+### Background allowance request preservation
+
+`ai-gateway-background-request-preservation` drives the existing chat handler through synthetic provider ports. Thirteen outcomes preserve message roles, context, tool schemas, output budgets, response formats and streamed tool results during enabled allowance recovery, plus successful-primary and refusal behavior. Parent verification fails four intended outcomes and preserves nine; the historical fix passes thirteen. Run `bun test evals/coding-agent/calibrate-background-request.test.js`. Paid-plan HTTP admission, safety-refusal policy, actual provider compatibility, concurrent accounting, execution isolation and model performance remain separate. Fixtures and dependency links are installed only when grading starts.

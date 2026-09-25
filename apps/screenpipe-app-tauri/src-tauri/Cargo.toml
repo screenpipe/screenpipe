@@ -7,7 +7,7 @@ members = ["wer-dump-helper", "windows/persistence-supervisor", "release-router-
 
 [package]
 name = "screenpipe-app"
-version = "2.7.73"
+version = "2.7.74"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -347,6 +347,7 @@ minisign = "0.7"
 
 [target.'cfg(windows)'.dev-dependencies]
 audiopipe = { git = "https://github.com/EzraEllette/audiopipe.git", rev = "b099a2e589d0dc4d8f22e3e8351efea9e1a359ac", default-features = false, features = ["parakeet", "directml"] }
+whisper-rs = { git = "https://github.com/EzraEllette/whisper-rs.git", rev = "b649c3fccc8dcee4512c2778b049e64aa2d15978", features = ["tracing_backend"] }
 
 
 [package.metadata.cargo-machete]

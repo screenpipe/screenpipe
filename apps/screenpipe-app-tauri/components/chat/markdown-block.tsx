@@ -25,7 +25,7 @@ import { commands } from "@/lib/utils/tauri";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { cn } from "@/lib/utils";
 import { sanitizeToolCallXml } from "@/lib/utils/sanitize-tool-call-xml";
-import { LinkPreviewAnchor } from "@/components/chat/link-preview-anchor";
+import { ChatWebLink } from "@/components/chat/chat-web-link";
 import { useGT } from "gt-react";
 
 
@@ -210,7 +210,7 @@ export function MarkdownBlock({
 
           if (href?.startsWith("http://") || href?.startsWith("https://")) {
             return (
-              <LinkPreviewAnchor
+              <ChatWebLink
                 href={href}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -218,7 +218,7 @@ export function MarkdownBlock({
                 {...props}
               >
                 {children}
-              </LinkPreviewAnchor>
+              </ChatWebLink>
             );
           }
 
