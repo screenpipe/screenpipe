@@ -13,13 +13,14 @@ export const searchIndex: SettingsField[] = [
   { label: msg("Sign in to Screenpipe", {}), keywords: ["login", "log in", "sign in"] },
   { label: msg("Logout", {}), keywords: ["signout", "sign out", "log out"] },
   { label: msg("Screenpipe Business", {}), keywords: ["subscription", "billing", "plan", "pro", "business", "max", "ultra", "upgrade", "manage"] },
-  { label: msg("Data Sync", {}), keywords: ["allow data sync", "cloud", "account"] },
+  { label: msg("AI connections", {}), keywords: ["data sync", "allow data sync", "cloud", "account", "codex", "claude"] },
   { label: msg("Device name", {}), keywords: ["data sync", "hostname", "computer"] },
   { label: msg("Sync scheduled tasks across devices", {}), keywords: ["scheduled sync", "pipe sync", "sync"] },
   { label: msg("Memories sync across devices", {}), keywords: ["memories sync", "sync", "facts"] },
   { label: msg("Connection sync across devices", {}), keywords: ["connection sync", "sync", "slack", "notion"] },
   { label: msg("Restart remote sync", {}), keywords: ["reset sync", "older key", "new device", "decryption"] },
 ];
+import { AccountDataSyncCard } from "./account-data-sync-card";
 import { Button } from "@/components/ui/button";
 import { useSettings } from "@/lib/hooks/use-settings";
 import {
@@ -150,6 +151,10 @@ export function AccountSection() {
   const [showSyncKeyRecovery, setShowSyncKeyRecovery] = useState(false);
   const [checkoutBusy, setCheckoutBusy] = useState(false);
   const [dataSyncSaving, setDataSyncSaving] = useState(false);
+  const [dataSyncError, setDataSyncError] = useState<string | null>(null);
+  const [devicesLoading, setDevicesLoading] = useState(false);
+  const [devicesError, setDevicesError] = useState(false);
+  const [devicesRevision, setDevicesRevision] = useState(0);
   const [syncedDevices, setSyncedDevices] = useState<SyncedDevice[]>([]);
   const [upgradeSource, setUpgradeSource] = useState("app-account-section");
   const upgradeCardRef = useRef<HTMLDivElement>(null);
@@ -171,7 +176,9 @@ export function AccountSection() {
     !hasExpiringProfilePlan;
 
   const setDataSyncEnabled = async (checked: boolean) => {
+    if (dataSyncSaving) return false;
     setDataSyncSaving(true);
+    setDataSyncError(null);
     try {
       const token = await commands.getCloudToken();
       if (!token) throw new Error("sign in again to change data sync");
@@ -230,12 +237,15 @@ export function AccountSection() {
         dataSyncAccountId: checked ? accountId! : "",
         ...(checked ? { dataSyncEnabledAt: new Date().toISOString() } : {}),
       });
+      return true;
     } catch (error) {
+      setDataSyncError("Could not update syncing on this device. Try again.");
       toast({
         title: ui("Data sync was not changed"),
         description: error instanceof Error ? error.message : String(error),
         variant: "destructive",
       });
+      return false;
     } finally {
       setDataSyncSaving(false);
     }
@@ -270,22 +280,25 @@ export function AccountSection() {
     }
 
     let cancelled = false;
-    void commands.getCloudToken().then(async (token) => {
-      if (!token) return;
+    setDevicesLoading(true);
+    setDevicesError(false);
+    void (async () => {
+      const token = await commands.getCloudToken();
+      if (!token) throw new Error("not signed in");
       const response = await tauriFetchWithDeadline(`${DATA_SYNC_URL}/devices`, {
         headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => null);
-      if (!response?.ok || cancelled) return;
-      const body = await response.json().catch(() => null);
-      if (!cancelled && Array.isArray(body?.devices)) {
-        setSyncedDevices(body.devices);
-      }
+      });
+      if (!response.ok) throw new Error("devices unavailable");
+      const body = await response.json();
+      if (!Array.isArray(body?.devices)) throw new Error("devices unavailable");
+      if (!cancelled) setSyncedDevices(body.devices);
+    })().catch(() => {
+      if (!cancelled) setDevicesError(true);
+    }).finally(() => {
+      if (!cancelled) setDevicesLoading(false);
     });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [settings.dataSyncEnabled]);
+    return () => { cancelled = true; };
+  }, [settings.dataSyncEnabled, devicesRevision]);
   /** Capacity levels change an existing subscription, so they are proration on
    *  the web billing page rather than a new in-app checkout. */
   const openCapacityBilling = async (
@@ -1092,66 +1105,21 @@ export function AccountSection() {
       )}
 
       {canUseDataSync(appUser) && (
-        <Card className="p-4" data-testid="account-data-sync-setting">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between gap-6">
-              <div>
-                <p className="text-sm font-medium">Data Sync</p>
-                <p className="text-xs text-muted-foreground">
-                  Sync screenpipe data from this device to your account
-                </p>
-              </div>
-              <Switch
-                id="data-sync-toggle"
-                aria-label={ui("Data Sync")}
-                checked={settings.dataSyncEnabled ?? false}
-                disabled={dataSyncSaving}
-                onCheckedChange={(checked) => void setDataSyncEnabled(checked)}
-              />
-            </div>
-
-            {settings.dataSyncEnabled && (
-              <div className="space-y-2 border-t border-border/50 pt-4">
-                <Label htmlFor="data-sync-device-name">Device name</Label>
-                <Input
-                  id="data-sync-device-name"
-                  aria-label={ui("Device name")}
-                  maxLength={96}
-                  value={settings.dataSyncDeviceName ?? ""}
-                  onChange={(event) =>
-                    void updateSettings({
-                      dataSyncDeviceName: event.currentTarget.value,
-                    })
-                  }
-                />
-                <p className="text-xs text-muted-foreground">
-                  Synced data will be grouped under this name
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Ask Screenpipe: “What was I doing on {settings.dataSyncDeviceName || ui("this device")} this morning?”
-                </p>
-                <div className="space-y-1 pt-2">
-                  <p className="text-xs font-medium">Synced devices</p>
-                  {syncedDevices.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">
-                      This device will appear after its first upload
-                    </p>
-                  ) : (
-                    syncedDevices.map((device) => (
-                      <p
-                        className="text-xs text-muted-foreground"
-                        key={device.device_id}
-                      >
-                        {device.device_name} · last synced{" "}
-                        {new Date(device.last_synced_at).toLocaleString(uiLocale)}
-                      </p>
-                    ))
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </Card>
+        <AccountDataSyncCard
+          enabled={settings.dataSyncEnabled ?? false}
+          saving={dataSyncSaving}
+          error={dataSyncError}
+          onRetry={() => setDataSyncError(null)}
+          onEnabledChange={setDataSyncEnabled}
+          deviceName={settings.dataSyncDeviceName ?? ""}
+          onDeviceNameChange={(name) => void updateSettings({ dataSyncDeviceName: name })}
+          devices={syncedDevices}
+          devicesLoading={devicesLoading}
+          devicesError={devicesError}
+          onRetryDevices={() => setDevicesRevision((value) => value + 1)}
+          locale={uiLocale}
+          onOpenExternal={openExternalUrl}
+        />
       )}
     </div>
   );
