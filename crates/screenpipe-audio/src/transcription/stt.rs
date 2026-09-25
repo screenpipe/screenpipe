@@ -369,7 +369,11 @@ pub async fn process_audio_input(
         )
         .await?;
 
-        if output_sender.send_async(transcription_result).await.is_err() {
+        if output_sender
+            .send_async(transcription_result)
+            .await
+            .is_err()
+        {
             break;
         }
     }
