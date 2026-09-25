@@ -37,6 +37,28 @@ client names. HTTP MCP now reports successful searches through the same
 best-effort local telemetry endpoint as stdio MCP; empty/failed searches do not
 produce qualified-value events.
 
+## Installable plugins
+
+Build the local Claude Desktop extension and the cloud plugin from source:
+
+```sh
+cd packages/screenpipe-mcp
+bun install --frozen-lockfile
+bun run build:installers
+```
+
+- `installers/screenpipe-local.mcpb`: open in Claude Desktop's extension installer.
+  Bundles the server and its dependencies; Claude supplies Node. Keep Screenpipe
+  running. Includes an optional sensitive API key setting and API URL setting.
+- `installers/screenpipe-cloud.zip`: portable remote plugin with OpenAI/Codex and
+  Claude compatibility manifests. Requires Data Sync and OAuth sign-in; exposes
+  only synced device listing and search. See the [cloud setup guide](plugins/screenpipe-cloud/README.md).
+- `installers/SUBMISSION.md`: listing copy, endpoint, permissions guidance, and
+  acceptance cases for directory submission. Building does not publish a listing.
+
+The archive builder uses an explicit file allowlist, so local environment files,
+credentials, development dependencies, and source tests are not packaged.
+
 ## Installation
 
 ### Option 1: The screenpipe desktop app (Recommended)

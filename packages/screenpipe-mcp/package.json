@@ -18,7 +18,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "verify:pack": "node scripts/assert-pack-contents.js",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "build:installers": "bun scripts/build-installers.mjs"
   },
   "keywords": [
     "mcp",
@@ -33,11 +34,13 @@
   "author": "Screenpipe",
   "license": "SEE LICENSE IN LICENSE.md",
   "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@sentry/node": "^10.64.0",
     "@types/node": "^25.3.5",
-    "typescript": "^5.9.3",
+    "fflate": "0.8.2",
     "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   },
   "engines": {

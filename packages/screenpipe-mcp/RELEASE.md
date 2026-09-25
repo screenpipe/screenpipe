@@ -58,12 +58,21 @@ in the README):
 - Precedence step 3 needs the desktop app: it is the only writer of
   `gateway_url` into `~/.screenpipe/enterprise.json`, and only for a signed-in
   admin. On a server or CI box, set the env var or the flag by hand.
-- The `.mcpb` bundle's `manifest.json` has no `user_config`/`env` block, so the
-  Claude Desktop extension install has no UI for these variables.
+- The `.mcpb` bundle now exposes local API URL and key settings. Enterprise
+  token/gateway settings still use the existing environment or desktop config.
 - The `--http` transport still exposes `search_content` only; `team-*` is
   stdio-only.
 
 ---
+
+## Installable artifacts
+
+`bun run build:installers` builds the local Claude Desktop `.mcpb` and the
+portable cloud plugin ZIP from an explicit allowlist. The release workflow uses
+this same builder, preserves the existing `screenpipe-mcp.mcpb` download name,
+and attaches `screenpipe-cloud.zip`. PR CI uploads both tested installers as the
+`screenpipe-mcp-installers` artifact. Neither build nor PR CI publishes them to
+an AI app directory. Cloud OAuth acceptance and directory review remain separate.
 
 ## Before releasing
 
@@ -174,9 +183,7 @@ npx -y screenpipe-mcp@0.19.0
 - `server.json`'s two version fields are synced from `package.json` by CI at
   publish time but **never committed back**, so bump them in the same commit.
   `src/version.test.ts` fails if they disagree.
-- `manifest.json` intentionally stays at `0.0.0-injected-from-package-json`; CI
-  rewrites it during the run.
-- The workflow runs a bare `npm install` (no lockfile — `package-lock.json` is
-  gitignored, `bun.lock` is the source of truth and npm ignores it), so the
-  published build can resolve different transitive dependency versions than the
-  local verification did.
+- `manifest.json` intentionally stays at `0.0.0-injected-from-package-json`; the
+  installer builder stamps the package version into the staged manifest.
+- The workflow uses `bun install --frozen-lockfile`; the MCPB packer is pinned
+  in `devDependencies`, so CI and local builds use the same packaging version.
