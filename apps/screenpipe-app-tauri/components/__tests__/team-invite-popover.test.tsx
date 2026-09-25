@@ -186,7 +186,7 @@ describe("quick team invitation", () => {
   });
 });
 
-const seatQuote = { quote_token: "signed-fixture", team_name: "Example Studio", from: 1, to: 2, amount_due_today: 12, new_total: 100, currency: "usd", interval: "month", interval_count: 1 };
+const seatQuote = { quote_token: "signed-fixture", plan_name: "Business", unit_amount: 50, team_name: "Example Studio", from: 1, to: 2, amount_due_today: 12, new_total: 100, currency: "usd", interval: "month", interval_count: 1 };
 const fullSeat = () => reply({ code: "NO_AVAILABLE_SEATS", error: "No seats" }, 400);
 async function showPrice(fetcher: ReturnType<typeof vi.fn>) {
   vi.stubGlobal("fetch", fetcher);

@@ -16,6 +16,8 @@ import type { TeamEntry } from "@/lib/hooks/use-team-summary";
 type SeatQuote = {
   quote_token: string;
   team_name: string;
+  plan_name: string;
+  unit_amount: number;
   from: number;
   to: number;
   amount_due_today: number;
@@ -146,6 +148,9 @@ export function TeamInvitePopover({
             typeof price.quote_token === "string" &&
             Number.isFinite(price.amount_due_today) &&
             Number.isFinite(price.new_total) &&
+            Number.isFinite(price.unit_amount) &&
+            price.unit_amount >= 0 &&
+            price.plan_name === "Business" &&
             /^[a-z]{3}$/i.test(price.currency) &&
             ["month", "year", "week", "day"].includes(price.interval) &&
             price.to === price.from + 1 &&
@@ -315,6 +320,15 @@ export function TeamInvitePopover({
             </p>
             <dl className="space-y-1 text-xs">
               <div className="flex justify-between gap-2">
+                <dt>{quote.plan_name} seat</dt>
+                <dd>
+                  {money(quote.unit_amount, quote.currency)} /{" "}
+                  {quote.interval_count > 1 ? `${quote.interval_count} ` : ""}
+                  {quote.interval}
+                  {quote.interval_count > 1 ? "s" : ""}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-2">
                 <dt>Due now</dt>
                 <dd>{money(quote.amount_due_today, quote.currency)}</dd>
               </div>
@@ -328,6 +342,10 @@ export function TeamInvitePopover({
                 </dd>
               </div>
             </dl>
+            <p className="text-[11px] text-muted-foreground">
+              The seat rate is before tax and discounts. Due now includes
+              adjustments for the billing period, taxes and credits.
+            </p>
             <button
               type="button"
               className="w-full rounded-md bg-primary px-3 py-2 text-xs text-primary-foreground"
