@@ -1119,6 +1119,10 @@ export function AccountSection() {
           onRetryDevices={() => setDevicesRevision((value) => value + 1)}
           locale={uiLocale}
           onOpenExternal={openExternalUrl}
+          onConfigureClient={async (client) => {
+            const { installCloudMcp } = await import("@/lib/ai-tools-mcp");
+            await installCloudMcp(client);
+          }}
         />
       )}
     </div>

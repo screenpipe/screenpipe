@@ -32,6 +32,7 @@ import {
 import { isGrokBotDetected, grokBotConnection } from "@/lib/grokbot-connection";
 
 import { parse, modify, applyEdits, type ParseError } from "jsonc-parser";
+import { parse as parseToml } from "smol-toml";
 
 type McpCommand = { command: string; args: string[]; env?: Record<string, string> };
 
@@ -260,7 +261,7 @@ async function writeConfigAtomic(configPath: string, text: string): Promise<void
     await mkdir(dir, { recursive: true });
   }
   const tmpPath = `${configPath}.${Date.now()}.${Math.random().toString(36).slice(2, 10)}.tmp`;
-  await writeFile(tmpPath, new TextEncoder().encode(text));
+  await writeFile(tmpPath, new TextEncoder().encode(text), { mode: 0o600 });
   try {
     await rename(tmpPath, configPath);
   } catch (e) {
@@ -392,6 +393,111 @@ export async function installCodexMcp(): Promise<McpCommand> {
 
   await replaceConfig(configPath, next);
   return config;
+}
+
+/** Explicit cloud setup never needs a CLI and never replaces a local server. */
+export async function installCloudMcp(
+  target: "codex" | "claude-code",
+): Promise<void> {
+  const home = await homeDir();
+  const customHome = await commands.getEnv(
+    target === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR",
+  );
+  // A custom profile may be outside the app's filesystem scope. Let the
+  // user's own agent configure it rather than silently editing a default profile.
+  if (customHome)
+    throw new Error(
+      "Your AI uses a custom config location. Use the setup message in its chat instead.",
+    );
+  const detected =
+    target === "codex"
+      ? await exists(await join(home, ".codex"))
+      : await exists(await getClaudeCodeConfigPath());
+  if (!detected) {
+    throw new Error(
+      `Open ${target === "codex" ? "Codex" : "Claude Code"} once, then retry. You can also paste the setup message into its chat.`,
+    );
+  }
+  const configPath = await resolveConfigPath(
+    target === "codex"
+      ? await getCodexConfigPath()
+      : await getClaudeCodeConfigPath(),
+  );
+  const original = await readConfigText(configPath);
+  const existing = original ?? "";
+  const url = "https://screenpipe.com/api/user/data-sync/mcp";
+  let next: string;
+  try {
+    if (target === "codex") {
+      const config = parseToml(existing);
+      const servers = config.mcp_servers as Record<string, unknown> | undefined;
+      const current = servers?.["screenpipe-cloud"] as
+        | Record<string, unknown>
+        | undefined;
+      if (current) {
+        if (
+          current.url === url &&
+          current.enabled !== false &&
+          !current.command &&
+          !current.bearer_token_env_var &&
+          !current.http_headers &&
+          !current.env_http_headers
+        )
+          return;
+        throw new Error(
+          "An existing screenpipe-cloud entry needs review in Codex settings.",
+        );
+      }
+      next = `${existing}${existing.endsWith("\n") || !existing ? "" : "\n"}\n[mcp_servers.screenpipe-cloud]\nurl = "${url}"\nenabled = true\n`;
+      // Refuse unsupported inline/dotted layouts rather than damage a valid config.
+      parseToml(next);
+    } else {
+      const config = JSON.parse(existing || "{}");
+      if (!config || typeof config !== "object" || Array.isArray(config))
+        throw new Error("Invalid Claude Code config.");
+      const servers = config.mcpServers;
+      if (
+        servers !== undefined &&
+        (!servers || typeof servers !== "object" || Array.isArray(servers))
+      )
+        throw new Error("Invalid MCP config.");
+      const current = servers?.["screenpipe-cloud"];
+      if (current) {
+        if (
+          current.url === url &&
+          current.type === "http" &&
+          !current.headers &&
+          !current.command
+        )
+          return;
+        throw new Error(
+          "An existing screenpipe-cloud entry needs review in Claude Code.",
+        );
+      }
+      next = applyEdits(
+        existing || "{}",
+        modify(
+          existing || "{}",
+          ["mcpServers", "screenpipe-cloud"],
+          { type: "http", url },
+          { formattingOptions: { insertSpaces: true, tabSize: 2 } },
+        ),
+      );
+    }
+  } catch (error) {
+    throw new Error(
+      `Could not add the connection. Your config was not changed. ${error instanceof Error ? error.message : "Check the config in your AI app."}`,
+    );
+  }
+  await backupConfigIfExists(configPath);
+  if ((await readConfigText(configPath)) !== original) {
+    throw new Error(
+      "Your AI config changed during setup. Retry to use the latest version.",
+    );
+  }
+  await writeConfigAtomic(configPath, next);
+  if ((await readTextFile(configPath)) !== next)
+    throw new Error("Could not verify the saved connection. Retry setup.");
 }
 
 export async function uninstallClaudeMcp(): Promise<void> {

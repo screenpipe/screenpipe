@@ -23,6 +23,7 @@ const skillsMock = vi.hoisted(() => ({
 }));
 
 const tauriMock = vi.hoisted(() => ({
+  getEnv: vi.fn(async () => ""),
   resolveAiToolConfigPath: vi.fn<[string], Promise<
     { status: "ok"; data: string } | { status: "error"; error: string }
   >>(),
@@ -81,6 +82,7 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
 
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {
+    getEnv: tauriMock.getEnv,
     resolveAiToolConfigPath: tauriMock.resolveAiToolConfigPath,
     getLocalApiConfig: vi.fn(async () => ({ key: "sp-test", port: 3030, auth_enabled: true })),
     bunCheck: vi.fn(async () => ({
@@ -106,6 +108,7 @@ import {
   isVscodeMcpInstalled,
   isToolConfigHealthy,
   installCodexMcp,
+  installCloudMcp,
   uninstallCodexMcp,
   installCursorMcp,
   uninstallCursorMcp,
@@ -138,6 +141,7 @@ const tmpsOf = (path: string) =>
 
 beforeEach(() => {
   pathMock.home = "/Users/test";
+  tauriMock.getEnv.mockReset().mockResolvedValue("");
   tauriMock.resolveAiToolConfigPath.mockReset();
   tauriMock.resolveAiToolConfigPath.mockImplementation(async (path) => ({ status: "ok", data: path }));
   fsMock.files.clear();
@@ -554,5 +558,83 @@ describe("VS Code MCP", () => {
     fsMock.files.set(path, '{"servers":{"Screenpipe":{"type":"stdio"},"screenpipe":{"type":"stdio"},"other":{}}}');
     await uninstallVscodeMcp();
     expect(JSON.parse(fsMock.files.get(path)!).servers).toEqual({ other: {} });
+  });
+});
+
+
+describe("explicit cloud MCP setup without a CLI", () => {
+  const path = "/Users/test/.codex/config.toml";
+  const url = "https://screenpipe.com/api/user/data-sync/mcp";
+  it("preserves existing Codex text and local servers, backs up, and is idempotent", async () => {
+    fsMock.files.set("/Users/test/.codex", "");
+    const original =
+      '# personal settings\nmodel = "my-model"\n[mcp_servers.screenpipe]\ncommand = "local-server"\n';
+    fsMock.files.set(path, original);
+    await installCloudMcp("codex");
+    expect(fsMock.files.get(path)).toContain(original);
+    expect(fsMock.files.get(path)).toContain(
+      `[mcp_servers.screenpipe-cloud]\nurl = "${url}"`,
+    );
+    expect(backupsOf(path)).toHaveLength(1);
+    expect(fsMock.files.get(backupsOf(path)[0])).toBe(original);
+    const installed = fsMock.files.get(path);
+    await installCloudMcp("codex");
+    expect(fsMock.files.get(path)).toBe(installed);
+    expect(tmpsOf(path)).toHaveLength(0);
+  });
+  it.each([
+    "broken = [",
+    '[mcp_servers.screenpipe-cloud]\nurl = "https://other.test/mcp"',
+    '[mcp_servers.screenpipe-cloud]\nurl = "' + url + '"\nenabled = false',
+    'mcp_servers = { local = { command = "keep" } }',
+  ])(
+    "refuses invalid, conflicting, disabled, or incompatible configs untouched: %s",
+    async (original) => {
+      fsMock.files.set("/Users/test/.codex", "");
+      fsMock.files.set(path, original);
+      await expect(installCloudMcp("codex")).rejects.toThrow("was not changed");
+      expect(fsMock.files.get(path)).toBe(original);
+      expect(backupsOf(path)).toHaveLength(0);
+    },
+  );
+  it("does not create an AI installation when no app config exists", async () => {
+    await expect(installCloudMcp("codex")).rejects.toThrow("Open Codex once");
+    await expect(installCloudMcp("claude-code")).rejects.toThrow(
+      "Open Claude Code once",
+    );
+    expect(fsMock.files.size).toBe(0);
+  });
+  it("preserves Claude Code user settings and local MCP entry", async () => {
+    fsMock.files.set(
+      CLAUDE_CODE,
+      JSON.stringify({
+        theme: "dark",
+        mcpServers: { screenpipe: { command: "local" } },
+      }),
+    );
+    await installCloudMcp("claude-code");
+    expect(JSON.parse(fsMock.files.get(CLAUDE_CODE)!)).toEqual({
+      theme: "dark",
+      mcpServers: {
+        screenpipe: { command: "local" },
+        "screenpipe-cloud": { type: "http", url },
+      },
+    });
+    const installed = fsMock.files.get(CLAUDE_CODE);
+    await installCloudMcp("claude-code");
+    expect(fsMock.files.get(CLAUDE_CODE)).toBe(installed);
+  });
+  it("preserves an unreadable config instead of replacing it", async () => {
+    fsMock.files.set("/Users/test/.codex", "");
+    fsMock.unreadable.add(path);
+    await expect(installCloudMcp("codex")).rejects.toThrow("could not read");
+    expect(fsMock.files.has(path)).toBe(false);
+  });
+  it("does not edit a default profile when the app uses a custom config home", async () => {
+    tauriMock.getEnv.mockResolvedValue("/custom/profile");
+    await expect(installCloudMcp("codex")).rejects.toThrow(
+      "custom config location",
+    );
+    expect(fsMock.files.size).toBe(0);
   });
 });

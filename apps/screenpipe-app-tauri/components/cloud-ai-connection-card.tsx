@@ -3,7 +3,7 @@
 "use client";
 
 import { useState, useRef, type ReactNode } from "react";
-import { ArrowUpRight, Check, Copy, Loader2 } from "lucide-react";
+import { ArrowUpRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,11 +13,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-export const CLOUD_MCP_URL = "https://screenpipe.com/api/user/data-sync/mcp";
-export const CODEX_CLOUD_SETUP = `codex mcp add screenpipe-cloud --url ${CLOUD_MCP_URL} && codex mcp login screenpipe-cloud --scopes data-sync:read`;
+import {
+  CloudAiClientSetup,
+  CLOUD_MCP_URL,
+  CLAUDE_CONNECTORS_URL,
+  type CloudClient,
+} from "./cloud-ai-client-setup";
+export {
+  CLOUD_MCP_URL,
+  CODEX_CLOUD_SETUP,
+  CODEX_SETUP_PROMPT,
+} from "./cloud-ai-client-setup";
 export const CLOUD_EXAMPLE =
   "Use Screenpipe to find the decisions and next steps from my meetings today.";
-const CLAUDE_CONNECTORS_URL = "https://claude.ai/settings/connectors";
 
 type Props = {
   enabled: boolean;
@@ -27,6 +35,7 @@ type Props = {
   onEnable: () => Promise<boolean>;
   onRetry?: () => void;
   onOpenExternal?: (url: string) => Promise<void>;
+  onConfigureClient?: (client: CloudClient) => Promise<void>;
   device?: boolean;
   children?: ReactNode;
 };
@@ -41,6 +50,7 @@ export function CloudAiConnectionCard({
   onRetry,
   onOpenExternal,
   device,
+  onConfigureClient,
   children,
 }: Props) {
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -48,7 +58,49 @@ export function CloudAiConnectionCard({
   const [enabling, setEnabling] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const pending = busy || enabling;
+  const [configuring, setConfiguring] = useState<CloudClient | null>(null);
+  const [configured, setConfigured] = useState<
+    Partial<Record<CloudClient, boolean>>
+  >({});
+  const configLock = useRef(false);
+  const pending = busy || enabling || !!configuring;
+
+  async function configure(target: CloudClient) {
+    if (!onConfigureClient || configLock.current) return;
+    configLock.current = true;
+    setConfiguring(target);
+    setActionError(null);
+    try {
+      await onConfigureClient(target);
+      setConfigured((previous) => ({ ...previous, [target]: true }));
+    } catch (error) {
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : "Could not add the connection. Retry or use the setup message.",
+      );
+    } finally {
+      configLock.current = false;
+      setConfiguring(null);
+    }
+  }
+
+  function openClaude() {
+    setActionError(null);
+    // Open synchronously from the click so browser popup blockers do not treat
+    // the clipboard await as a lost user gesture. No account state is inferred.
+    const opened = onOpenExternal
+      ? onOpenExternal(CLAUDE_CONNECTORS_URL)
+      : Promise.resolve(
+          window.open(CLAUDE_CONNECTORS_URL, "_blank", "noopener,noreferrer"),
+        );
+    void opened.catch(() =>
+      setActionError(
+        "Could not open Claude. Use the link under Connection URL and help.",
+      ),
+    );
+    void copy(CLOUD_MCP_URL, "claude-url");
+  }
 
   async function copy(value: string, kind: string) {
     setActionError(null);
@@ -58,7 +110,7 @@ export function CloudAiConnectionCard({
       setCopied(kind);
     } catch {
       setActionError(
-        "Could not copy. Select the setup text and copy it manually.",
+        "Could not copy. Expand the setup message or connection URL below and copy it manually.",
       );
     }
   }
@@ -70,6 +122,8 @@ export function CloudAiConnectionCard({
     try {
       if (!(await onEnable()))
         setActionError("Cloud sync could not be enabled. Try again.");
+      else if (client === "Codex" && onConfigureClient)
+        await configure("codex");
     } catch {
       setActionError("Cloud sync could not be enabled. Try again.");
     } finally {
@@ -81,6 +135,8 @@ export function CloudAiConnectionCard({
     setClient(next);
     setCopied(null);
     setActionError(null);
+    if (next === "Codex" && enabled && onConfigureClient)
+      void configure("codex");
   }
 
   return (
@@ -105,12 +161,14 @@ export function CloudAiConnectionCard({
           {loading
             ? "Checking cloud sync…"
             : pending
-              ? "Saving…"
+              ? configuring
+                ? "Adding connection…"
+                : "Saving…"
               : error
                 ? "Sync needs attention"
                 : enabled
-                ? "Cloud sync on"
-                : "Cloud sync off"}
+                  ? "Cloud sync on"
+                  : "Cloud sync off"}
         </p>
       </div>
       <div className="space-y-2">
@@ -226,96 +284,16 @@ export function CloudAiConnectionCard({
             </div>
           ) : (
             <div className="space-y-5">
-              {client === "Codex" ? (
-                <div className="space-y-3">
-                  <p className="text-sm">
-                    Run this once in a terminal with Codex installed. Sign in to
-                    your Screenpipe account when the browser opens.
-                  </p>
-                  <Button
-                    type="button"
-                    className="w-full"
-                    onClick={() => void copy(CODEX_CLOUD_SETUP, "setup")}
-                  >
-                    {copied === "setup" ? (
-                      <Check className="mr-2 h-4 w-4" />
-                    ) : (
-                      <Copy className="mr-2 h-4 w-4" />
-                    )}
-                    {copied === "setup"
-                      ? "Setup command copied"
-                      : "Copy setup command"}
-                  </Button>
-                  <textarea
-                    aria-label="Codex setup command"
-                    readOnly
-                    rows={4}
-                    value={CODEX_CLOUD_SETUP}
-                    className="w-full resize-none rounded-md border bg-muted p-3 font-mono text-xs"
-                    onFocus={(event) => event.target.select()}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Uses a separate “screenpipe-cloud” connection and keeps your
-                    local Screenpipe connection.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <p className="text-sm">
-                    In Claude’s connectors, add a custom connector with this
-                    URL, then sign in to Screenpipe.
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      onClick={() => void copy(CLOUD_MCP_URL, "setup")}
-                    >
-                      {copied === "setup" ? (
-                        <Check className="mr-2 h-4 w-4" />
-                      ) : (
-                        <Copy className="mr-2 h-4 w-4" />
-                      )}
-                      {copied === "setup"
-                        ? "URL copied"
-                        : "Copy connection URL"}
-                    </Button>
-                    <Button variant="outline" asChild>
-                      <a
-                        href={CLAUDE_CONNECTORS_URL}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={
-                          onOpenExternal
-                            ? (event) => {
-                                event.preventDefault();
-                                void onOpenExternal(
-                                  CLAUDE_CONNECTORS_URL,
-                                ).catch(() =>
-                                  setActionError(
-                                    "Could not open Claude. Open claude.ai/settings/connectors in your browser.",
-                                  ),
-                                );
-                              }
-                            : undefined
-                        }
-                      >
-                        Open Claude <ArrowUpRight className="ml-2 h-4 w-4" />
-                      </a>
-                    </Button>
-                  </div>
-                  <input
-                    aria-label="Cloud MCP URL"
-                    readOnly
-                    value={CLOUD_MCP_URL}
-                    className="w-full rounded-md border bg-muted p-3 font-mono text-xs"
-                    onFocus={(event) => event.target.select()}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    On a team account, an owner may need to add the connector
-                    first.
-                  </p>
-                </div>
-              )}
+              <CloudAiClientSetup
+                client={client ?? "Codex"}
+                native={!!onConfigureClient}
+                configuring={configuring}
+                configured={configured}
+                copied={copied}
+                onConfigure={(target) => void configure(target)}
+                onCopy={(value, kind) => void copy(value, kind)}
+                onOpenClaude={openClaude}
+              />
               <div className="space-y-2 border-t pt-4">
                 <p className="text-sm font-medium">Then try it in {client}</p>
                 <p className="text-sm text-muted-foreground">{CLOUD_EXAMPLE}</p>

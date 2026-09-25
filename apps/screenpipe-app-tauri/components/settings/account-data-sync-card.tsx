@@ -23,6 +23,7 @@ type Props = {
   onRetryDevices: () => void;
   locale: string;
   onOpenExternal: (url: string) => Promise<void>;
+  onConfigureClient: (client: "codex" | "claude-code") => Promise<void>;
 };
 
 export function AccountDataSyncCard(props: Props) {
@@ -36,6 +37,7 @@ export function AccountDataSyncCard(props: Props) {
         onEnable={() => props.onEnabledChange(true)}
         onRetry={props.onRetry}
         onOpenExternal={props.onOpenExternal}
+        onConfigureClient={props.onConfigureClient}
         device
       >
         <div className="flex items-center justify-between gap-4">

@@ -34,3 +34,11 @@ The card reports saved sync state, not live transfer progress or verified client
 - [desktop-saving](desktop-saving.png)
 - [desktop-sync-on](desktop-sync-on.png)
 - [desktop-waiting-for-upload](desktop-waiting-for-upload.png)
+
+## Updated setup flow, September 25
+
+Recaptured after automatic desktop config setup and chat-message fallbacks. 28 images. Native writes and client authentication are fixture outcomes in these component screenshots; no live customer settings were changed. Native filesystem and OAuth end-to-end verification remain pending.
+
+- `components/cloud-ai-connection-card.tsx` SHA256 `1260d1c2260eff809e610c4405bc09428d4a57a852f7e5a34140a3c47bfbd03b`
+
+- `components/cloud-ai-client-setup.tsx` SHA256 `4f4ec8de4c79d755a2fb8a32a04980828c47a16a3e174143a6a873668dd9a913`

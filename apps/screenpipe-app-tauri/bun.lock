@@ -73,6 +73,7 @@
         "remark-gfm": "^4.0.1",
         "remark-math": "^6.0.0",
         "remark-parse": "^11.0.0",
+        "smol-toml": "1.8.0",
         "tailwind-merge": "^2.6.1",
         "tailwindcss-animate": "^1.0.7",
         "tauri-plugin-sentry-api": "^0.5.0",
