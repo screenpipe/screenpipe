@@ -210,6 +210,77 @@ pub async fn initialize_global_shortcuts(app: &AppHandle) -> Result<(), String> 
     apply_shortcuts(app, &config).await
 }
 
+/// Register ONLY the start/stop capture shortcuts, and route them through the
+/// native recording path rather than the normal `shortcut-*-recording` webview
+/// events.
+///
+/// Enterprise policy can leave the app with no tray and no windows. In that state
+/// the regular handlers are dead: `shortcut-start-recording` / `-stop-recording`
+/// are consumed by `deeplink-handler` and the home page, and every webview is
+/// destroyed, so the emit lands on nothing and the user cannot pause capture.
+/// The native path is authoritative and needs no webview, which keeps a working
+/// pause control in a fully surface-free deployment.
+pub async fn initialize_recording_control_shortcuts(app: &AppHandle) -> Result<(), String> {
+    let config = ShortcutConfig::from_store(app).await?;
+    let global_shortcut = app.global_shortcut();
+    if let Err(e) = global_shortcut.unregister_all() {
+        error!("failed to unregister all shortcuts for recording-only setup: {}", e);
+    }
+
+    register_shortcut(
+        app,
+        &config.start,
+        config.is_disabled("start_recording"),
+        |app| {
+            track_shortcut_used(app, "start_recording");
+            crate::tray::start_recording_native(app);
+        },
+    )
+    .await?;
+
+    register_shortcut(
+        app,
+        &config.stop,
+        config.is_disabled("stop_recording"),
+        |app| {
+            track_shortcut_used(app, "stop_recording");
+            crate::tray::stop_recording_native(app);
+        },
+    )
+    .await?;
+
+    info!("registered recording control shortcuts only (hidden UI mode)");
+    Ok(())
+}
+
+/// Reconcile the global shortcut set against enterprise policy.
+///
+/// Called at startup and on every enterprise-policy transition, so a policy that
+/// arrives after launch (or is later relaxed) converges on the same state.
+///
+/// - normal mode: the full shortcut set.
+/// - hidden UI, tray visible: nothing registered. The tray carries Pause, and
+///   registering hotkeys here would change behavior for existing deployments and
+///   risk colliding with another app's shortcut.
+/// - hidden UI, tray also suppressed: start/stop capture only, routed natively.
+///   This is the one state with no visible pause affordance at all, so it must
+///   not be left without one.
+pub async fn reconcile_with_enterprise_policy(app: &AppHandle, ui_hidden: bool, tray_hidden: bool) {
+    let result = if ui_hidden && tray_hidden {
+        info!("shortcuts: hidden UI with suppressed tray, recording controls only");
+        initialize_recording_control_shortcuts(app).await
+    } else if ui_hidden {
+        info!("shortcuts: hidden UI, tray retains pause, registering none");
+        Ok(())
+    } else {
+        initialize_global_shortcuts(app).await
+    };
+
+    if let Err(e) = result {
+        error!("failed to reconcile global shortcuts: {}", e);
+    }
+}
+
 async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(), String> {
     let global_shortcut = app.global_shortcut();
     if let Err(e) = global_shortcut.unregister_all() {

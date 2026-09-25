@@ -482,12 +482,46 @@ async fn tray_recording_action(app: &AppHandle) -> TrayRecordingAction {
 }
 
 fn toggle_recording_from_tray(app: &AppHandle) {
+    toggle_recording_native(app);
+}
+
+/// Toggle capture through the native path, independent of the tray icon and of
+/// any webview.
+///
+/// This is what keeps a pause control reachable when enterprise policy suppresses
+/// the tray. The tray's own Pause item routes to this same function, so removing
+/// the icon removes a menu entry — not the ability to stop recording. Safe to
+/// call with no tray present: the post-action tray rebuild is already a no-op
+/// when `tray_by_id` returns `None`.
+pub fn toggle_recording_native(app: &AppHandle) {
     cancel_pause_timer();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let action = tray_recording_action(&app).await;
         dispatch_tray_recording_action(app, action, None);
     });
+}
+
+/// Resume capture natively. Used by the hidden-UI shortcut path, where the
+/// `shortcut-start-recording` webview event has no listener to consume it.
+pub fn start_recording_native(app: &AppHandle) {
+    cancel_pause_timer();
+    dispatch_tray_recording_action(
+        app.clone(),
+        TrayRecordingAction::Start,
+        Some(("recording started", "screen recording has been initiated")),
+    );
+}
+
+/// Pause capture natively. This is the user-facing pause control when no tray
+/// icon and no window exists, so it must work with every webview destroyed.
+pub fn stop_recording_native(app: &AppHandle) {
+    cancel_pause_timer();
+    dispatch_tray_recording_action(
+        app.clone(),
+        TrayRecordingAction::Stop,
+        Some(("recording paused", "capture paused — pipes and search still available")),
+    );
 }
 
 #[cfg(feature = "e2e")]
@@ -502,6 +536,13 @@ pub(crate) async fn toggle_recording_from_harness(app: AppHandle) -> Result<(), 
 
 /// Immediately rebuild the tray menu (called from main thread after optimistic status set).
 pub(crate) fn force_tray_rebuild(app: &AppHandle) -> Result<()> {
+    // Reachable from the native recording path, which still runs when the tray is
+    // suppressed. Bail before prefetching menu data (a DB read) to build a menu
+    // that would be discarded by the `tray_by_id` check at the end anyway.
+    if tray_suppressed_by_policy() {
+        return Ok(());
+    }
+
     let update_item = UPDATE_MENU_ITEM
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -1035,10 +1076,132 @@ struct MenuState {
     all_capture_disabled: bool,
 }
 
+/// True when enterprise policy forbids the tray icon from existing at all.
+///
+/// The tray is created by Tauri config at launch, so suppressing it is an active
+/// removal rather than simply declining to build one — see [`remove_tray`].
+pub fn tray_suppressed_by_policy() -> bool {
+    crate::enterprise_policy::is_tray_hidden()
+}
+
+/// Remove the tray icon without recreating it.
+///
+/// Must run on the main thread: dropping an `NSStatusItem` from a tokio thread
+/// fires `NSStatusBar _removeStatusItem` off-thread and crashes, which is the
+/// same hazard `recreate_tray` guards against.
+pub fn remove_tray(app: &AppHandle) {
+    let app_for_thread = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::window::with_autorelease_pool(|| {
+                if app_for_thread.tray_by_id("screenpipe_main").is_none() {
+                    return;
+                }
+                info!("tray: removing icon (suppressed by enterprise policy)");
+                let _old = app_for_thread.remove_tray_by_id("screenpipe_main");
+                drop(_old);
+            });
+        })) {
+            let panic_msg = if let Some(s) = e.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                format!("{:?}", e)
+            };
+            error!("panic caught while removing tray icon: {}", panic_msg);
+        }
+    });
+}
+
+/// Re-assert the tray against the current enterprise policy.
+///
+/// Called on every policy reconciliation. Removing the tray is the easy half;
+/// restoring it needs `setup_tray` after the icon is rebuilt, because
+/// `recreate_tray` deliberately does not re-register click handlers (it assumes
+/// they survived an icon swap) and installs no poller. A tray that was fully
+/// removed has neither.
+///
+/// When the icon is missing we rebuild and install the menu inside a single main
+/// thread hop. `recreate_tray` only *schedules* its work, so calling it and then
+/// calling `setup_tray` from this thread would let the menu install look for an
+/// icon the scheduled closure has not built yet — `tray_by_id` returns `None` and
+/// `setup_tray` returns `Ok(())` having installed nothing, leaving a live icon
+/// with no menu for a full poll interval.
+pub fn enforce_tray_visibility(app: &AppHandle) {
+    if tray_suppressed_by_policy() {
+        remove_tray(app);
+        return;
+    }
+
+    let update_item = UPDATE_MENU_ITEM
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+
+    if app.tray_by_id("screenpipe_main").is_some() {
+        // Icon is already there; just make sure its menu and handlers are current.
+        if let Err(error) = setup_tray(app, update_item.as_ref()) {
+            error!("failed to reinstall tray menu: {error:#}");
+        }
+        return;
+    }
+
+    let app_for_thread = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Re-check on the main thread: the policy can flip again between the
+            // caller's check and this closure actually running.
+            if tray_suppressed_by_policy() {
+                return;
+            }
+            recreate_tray_on_main_thread(&app_for_thread);
+
+            // Only install if the rebuild actually produced an icon.
+            if app_for_thread.tray_by_id("screenpipe_main").is_none() {
+                error!("tray: rebuild produced no icon, skipping menu install");
+                return;
+            }
+
+            let update_item = UPDATE_MENU_ITEM
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if let Err(error) = setup_tray(&app_for_thread, update_item.as_ref()) {
+                error!("failed to reinstall tray menu: {error:#}");
+            }
+        }));
+
+        if let Err(e) = result {
+            let panic_msg = if let Some(s) = e.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                format!("{:?}", e)
+            };
+            error!("panic caught while restoring tray icon: {}", panic_msg);
+        }
+    });
+}
+
 pub fn setup_tray(app: &AppHandle, update_item: Option<&tauri::menu::MenuItem<Wry>>) -> Result<()> {
-    // Store update_item globally so recreate_tray can use it (None for enterprise)
+    // Store update_item globally so recreate_tray can use it (None for enterprise).
+    // Do this even when suppressed: `enforce_tray_visibility` needs the item to
+    // rebuild a full tray if the policy is later relaxed, and skipping the store
+    // would silently downgrade the restored tray.
     if let Ok(mut guard) = UPDATE_MENU_ITEM.lock() {
         *guard = update_item.cloned();
+    }
+
+    // An admin may suppress the tray outright. Tauri already built the icon
+    // from `tauri.conf.json`, so take it back down and install nothing: no
+    // menu, no click handlers, and no 5s poller rebuilding a menu for an icon
+    // the org removed.
+    if tray_suppressed_by_policy() {
+        info!("tray: suppressed by enterprise policy, skipping tray setup");
+        remove_tray(app);
+        return Ok(());
     }
 
     if let Some(main_tray) = app.tray_by_id("screenpipe_main") {
@@ -1100,6 +1263,101 @@ pub fn log_tray_position(app: &AppHandle) {
     }
 }
 
+/// Body of [`recreate_tray`]. **Must run on the main thread** — dropping or
+/// building an `NSStatusItem` off-thread crashes, the same hazard the
+/// `run_on_main_thread` wrapper in `recreate_tray` exists to avoid.
+///
+/// Split out from [`recreate_tray`] so a caller that must recreate *and then*
+/// install the menu can do both in one ordered hop. `recreate_tray` schedules,
+/// so following it with a `setup_tray` on the calling thread would race: the
+/// menu install would look for an icon that the scheduled closure has not built
+/// yet and silently no-op.
+#[allow(dead_code)] // reached only via the macOS/Windows tray paths
+fn recreate_tray_on_main_thread(app: &AppHandle) {
+    crate::window::with_autorelease_pool(|| {
+        // Never resurrect a tray the admin removed. recreate_tray runs on
+        // every enterprise-policy reconciliation and from the menu-refresh
+        // path, so without this guard a suppressed icon would reappear on
+        // the next poll. Take it down instead and stop.
+        if tray_suppressed_by_policy() {
+            if app.tray_by_id("screenpipe_main").is_some() {
+                info!("recreate_tray: suppressed by enterprise policy, removing instead");
+                let _old = app.remove_tray_by_id("screenpipe_main");
+                drop(_old);
+            }
+            return;
+        }
+
+        let update_item = match UPDATE_MENU_ITEM.lock() {
+            Ok(guard) => guard.clone(),
+            Err(_) => {
+                error!("failed to lock UPDATE_MENU_ITEM for tray recreation");
+                return;
+            }
+        };
+
+        // Remove the old tray icon (must be on main thread for NSStatusBar)
+        debug!("recreate_tray: removing old tray icon");
+        let _old = app.remove_tray_by_id("screenpipe_main");
+        // Drop the old tray icon explicitly on main thread
+        drop(_old);
+        debug!("recreate_tray: old tray removed, building new one");
+
+        // Create a new tray icon — macOS assigns it the rightmost position
+        let icon = match app.path().resolve(
+            "assets/screenpipe-logo-tray-white.png",
+            tauri::path::BaseDirectory::Resource,
+        ) {
+            Ok(path) => tauri::image::Image::from_path(path).ok(),
+            Err(_) => tauri::image::Image::from_path("assets/screenpipe-logo-tray-white.png").ok(),
+        };
+
+        let mut builder = TrayIconBuilder::<Wry>::with_id("screenpipe_main")
+            .icon_as_template(true)
+            .show_menu_on_left_click(!cfg!(target_os = "windows"));
+
+        if let Some(ref icon) = icon {
+            if icon.width() > 0 && icon.height() > 0 {
+                builder = builder.icon(icon.clone());
+            } else {
+                error!(
+                    "tray icon has zero dimensions ({}x{}), skipping",
+                    icon.width(),
+                    icon.height()
+                );
+            }
+        } else {
+            error!("failed to load tray icon for recreation");
+        }
+
+        debug!("recreate_tray: calling builder.build()");
+        match builder.build(app) {
+            Ok(new_tray) => {
+                debug!("recreate_tray: build succeeded, setting menu");
+                // Setup menu
+                let data = prefetch_tray_menu_data(app);
+                if let Ok(menu) = create_dynamic_menu(
+                    app,
+                    &MenuState::default(),
+                    update_item.as_ref(),
+                    &data,
+                ) {
+                    let _ = install_tray_menu(&new_tray, menu);
+                    clear_pending_tray_menu();
+                }
+                // NOTE: do NOT re-register click handlers here.
+                // The handler from setup_tray() is keyed by tray ID and persists
+                // across tray icon recreation. Re-registering causes double-firing.
+
+                info!("tray icon recreated at rightmost position");
+            }
+            Err(e) => {
+                error!("failed to recreate tray icon: {}", e);
+            }
+        }
+    }); // with_autorelease_pool
+}
+
 #[allow(dead_code)] // called only on macOS
 pub fn recreate_tray(app: &AppHandle) {
     let app_for_thread = app.clone();
@@ -1107,78 +1365,7 @@ pub fn recreate_tray(app: &AppHandle) {
     // across the FFI boundary (nounwind → abort). catch_unwind prevents this.
     let _ = app.run_on_main_thread(move || {
         if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::window::with_autorelease_pool(|| {
-                let app = app_for_thread;
-                let update_item = match UPDATE_MENU_ITEM.lock() {
-                    Ok(guard) => guard.clone(),
-                    Err(_) => {
-                        error!("failed to lock UPDATE_MENU_ITEM for tray recreation");
-                        return;
-                    }
-                };
-
-                // Remove the old tray icon (must be on main thread for NSStatusBar)
-                debug!("recreate_tray: removing old tray icon");
-                let _old = app.remove_tray_by_id("screenpipe_main");
-                // Drop the old tray icon explicitly on main thread
-                drop(_old);
-                debug!("recreate_tray: old tray removed, building new one");
-
-                // Create a new tray icon — macOS assigns it the rightmost position
-                let icon = match app.path().resolve(
-                    "assets/screenpipe-logo-tray-white.png",
-                    tauri::path::BaseDirectory::Resource,
-                ) {
-                    Ok(path) => tauri::image::Image::from_path(path).ok(),
-                    Err(_) => {
-                        tauri::image::Image::from_path("assets/screenpipe-logo-tray-white.png").ok()
-                    }
-                };
-
-                let mut builder = TrayIconBuilder::<Wry>::with_id("screenpipe_main")
-                    .icon_as_template(true)
-                    .show_menu_on_left_click(!cfg!(target_os = "windows"));
-
-                if let Some(ref icon) = icon {
-                    if icon.width() > 0 && icon.height() > 0 {
-                        builder = builder.icon(icon.clone());
-                    } else {
-                        error!(
-                            "tray icon has zero dimensions ({}x{}), skipping",
-                            icon.width(),
-                            icon.height()
-                        );
-                    }
-                } else {
-                    error!("failed to load tray icon for recreation");
-                }
-
-                debug!("recreate_tray: calling builder.build()");
-                match builder.build(&app) {
-                    Ok(new_tray) => {
-                        debug!("recreate_tray: build succeeded, setting menu");
-                        // Setup menu
-                        let data = prefetch_tray_menu_data(&app);
-                        if let Ok(menu) = create_dynamic_menu(
-                            &app,
-                            &MenuState::default(),
-                            update_item.as_ref(),
-                            &data,
-                        ) {
-                            let _ = install_tray_menu(&new_tray, menu);
-                            clear_pending_tray_menu();
-                        }
-                        // NOTE: do NOT re-register click handlers here.
-                        // The handler from setup_tray() is keyed by tray ID and persists
-                        // across tray icon recreation. Re-registering causes double-firing.
-
-                        info!("tray icon recreated at rightmost position");
-                    }
-                    Err(e) => {
-                        error!("failed to recreate tray icon: {}", e);
-                    }
-                }
-            }); // with_autorelease_pool
+            recreate_tray_on_main_thread(&app_for_thread);
         })) {
             // The panic hook already sent the panic message + backtrace to Sentry
             // (as a Fatal-level capture_message). Log here for local diagnostics.
@@ -2352,6 +2539,15 @@ pub(crate) async fn set_recording_status_from_harness(
 }
 
 pub fn setup_tray_menu_updater(app: AppHandle, update_item: Option<&tauri::menu::MenuItem<Wry>>) {
+    // Spawn exactly once per process. The tray can be removed and reinstalled
+    // when enterprise policy flips, and each reinstall re-enters setup_tray —
+    // without this guard every flip would leave another 5s poller running.
+    static POLLER_STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if POLLER_STARTED.set(()).is_err() {
+        debug!("tray menu updater already running, skipping duplicate spawn");
+        return;
+    }
+
     let update_item = update_item.cloned();
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
