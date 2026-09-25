@@ -64,7 +64,7 @@ export function ComposerSuggestions({
 
   if (expandedSurface) {
     return (
-      <div className="ph-no-capture flex min-w-0 items-center gap-1 overflow-hidden px-5 pt-1.5 sm:px-6">
+      <div className="ph-no-capture flex w-full min-w-0 items-stretch gap-2 px-5 pt-2 sm:px-6">
         {visibleSuggestions.map((suggestion, index) => (
           <SuggestionButton
             key={index}
@@ -83,21 +83,21 @@ export function ComposerSuggestions({
   }
 
   return (
-    <div className="ph-no-capture flex items-center gap-1 px-5 pt-1.5 sm:px-6">
+    <div className="ph-no-capture flex w-full min-w-0 items-center gap-2 px-5 pt-2 sm:px-6">
       <Popover open={compactOpen} onOpenChange={setCompactOpen}>
         <PopoverTrigger asChild>
           <button
             type="button"
-            className="ph-no-capture flex h-6 cursor-pointer items-center gap-1 border border-border/40 bg-card px-2 font-mono text-[10px] text-foreground/75 transition-colors duration-150 hover:border-foreground hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1"
+            className="ph-no-capture flex min-h-9 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md border border-border bg-card px-3 py-2 font-sans text-xs text-foreground/75 transition-colors duration-150 hover:border-foreground/30 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2"
             title={ui("Suggested prompts")}
           >
-            <Sparkles className="h-2.5 w-2.5" strokeWidth={1.5} />
-            <span>Suggestions</span>
-            <ChevronDown className="h-2.5 w-2.5" strokeWidth={1.5} />
+            <Sparkles className="h-3.5 w-3.5" strokeWidth={1.5} />
+            <span className="flex-1 text-left">{ui("Suggestions")}</span>
+            <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.5} />
           </button>
         </PopoverTrigger>
         <PopoverContent
-          className="ph-no-capture w-64 rounded-lg border-border/50 p-0.5 shadow-lg shadow-black/5"
+          className="ph-no-capture w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-2rem)] rounded-lg border-border p-1 shadow-lg shadow-black/5"
           align="start"
           side="top"
           sideOffset={6}
@@ -147,7 +147,7 @@ function SuggestionButton({
       <button
         type="button"
         onClick={() => onSendSuggestion(suggestion, position)}
-        className="ph-no-capture group flex items-start gap-1.5 px-2 py-1.5 text-left font-mono text-[10px] text-muted-foreground transition-colors duration-150 hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-inset"
+        className="ph-no-capture group flex min-h-9 w-full items-start gap-2 rounded-md px-2 py-2 text-left font-sans text-xs text-foreground/80 transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-inset"
         title={title}
         aria-label={suggestion.text}
       >
@@ -155,12 +155,12 @@ function SuggestionButton({
           <ConnectionToolIcon name={suggestion.connectionIcon} />
         ) : (
           <Sparkles
-            className="mt-0.5 h-2.5 w-2.5 shrink-0 text-muted-foreground/70 transition-colors duration-150 group-hover:text-background/70"
+            className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground"
             strokeWidth={1.5}
             aria-hidden
           />
         )}
-        <span className="line-clamp-2 leading-3.5">{suggestion.text}</span>
+        <span className="min-w-0 whitespace-normal leading-4 [overflow-wrap:anywhere]">{suggestion.text}</span>
       </button>
     );
   }
@@ -169,7 +169,7 @@ function SuggestionButton({
     <button
       type="button"
       onClick={() => onSendSuggestion(suggestion, position)}
-      className="ph-no-capture group inline-flex h-6 min-w-0 max-w-[240px] cursor-pointer items-center gap-1.5 border border-border/40 bg-card px-2 font-mono text-[10px] text-foreground/75 transition-colors duration-150 hover:border-foreground hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1"
+      className="ph-no-capture group flex min-h-9 min-w-0 flex-1 basis-0 cursor-pointer items-start gap-2 rounded-md border border-border bg-card px-3 py-2 text-left font-sans text-xs text-foreground/75 transition-colors duration-150 hover:border-foreground/30 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-2"
       title={title}
       aria-label={suggestion.text}
     >
@@ -177,12 +177,12 @@ function SuggestionButton({
         <ConnectionToolIcon name={suggestion.connectionIcon} />
       ) : (
         <Sparkles
-          className="h-2.5 w-2.5 shrink-0 text-muted-foreground/70 transition-colors duration-150 group-hover:text-background/70"
+          className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground"
           strokeWidth={1.5}
           aria-hidden
         />
       )}
-      <span className="truncate leading-3.5">{suggestion.text}</span>
+      <span className="min-w-0 whitespace-normal leading-4 [overflow-wrap:anywhere]">{suggestion.text}</span>
     </button>
   );
 }
@@ -203,23 +203,23 @@ function SuggestionActionButtons({
         type="button"
         onClick={onRefresh}
         disabled={isRefreshing}
-        className="flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center text-muted-foreground/40 transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground disabled:cursor-default disabled:opacity-30"
+        className="flex h-8 w-8 shrink-0 self-center cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground disabled:cursor-default disabled:opacity-30"
         title={ui("Refresh suggestions")}
         aria-label={ui("Refresh suggestions")}
       >
         <RefreshCw
-          className={`h-2.5 w-2.5 ${isRefreshing ? "animate-spin motion-reduce:animate-none" : ""}`}
+          className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin motion-reduce:animate-none" : ""}`}
           strokeWidth={1.5}
         />
       </button>
       <button
         type="button"
         onClick={onHide}
-        className="flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center text-muted-foreground/40 transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
+        className="flex h-8 w-8 shrink-0 self-center cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
         title={ui("Hide chat suggestions — re-enable in Settings → Display")}
         aria-label={ui("Hide chat suggestions")}
       >
-        <X className="h-2.5 w-2.5" strokeWidth={1.5} />
+        <X className="h-3.5 w-3.5" strokeWidth={1.5} />
       </button>
     </>
   );
