@@ -11,24 +11,16 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuShortcut,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { toast } from "@/components/ui/use-toast";
-import { chatConversationLink } from "@/lib/chat/conversation-link";
-import {
-  formatChatAsMarkdown,
-  type MarkdownCitationPlan,
-} from "@/lib/chat/markdown-export";
 import type { Message } from "@/lib/chat/types";
 import { isInjectedTitle } from "@/lib/chat-utils";
 import { registerChatTabCloser } from "@/lib/close-tab-shortcut";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import {
+  hasOpenShortcutBlockingLayer,
   inAppShortcutLabel,
-  matchesInAppShortcut,
 } from "@/lib/shortcuts";
 import {
   isEphemeralSideConversation,
@@ -36,28 +28,21 @@ import {
   useChatStore,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
-import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
 import { useGT } from "gt-react";
+import { ChatActionMenuItems, CHAT_MENU_ACTION_EVENT, CHAT_MENU_ACTIONS, CHAT_MENU_CLASS, handleChatMenuShortcut, useChatActionBindings, type ChatMenuAction, type ChatMenuRequest } from "./chat-action-menu";
+import { createConversationBranch } from "@/lib/chat/branch-conversation";
+import { sessionRecordFromMeta } from "@/lib/stores/chat-store";
 
 
 interface ChatTabStripProps {
+  shortcutsEnabled?: boolean;
   activeId: string | null;
   onActivate: (id: string) => void | Promise<void>;
   onNewChat: () => void | Promise<void>;
   onClose?: (id: string) => void | Promise<void>;
   renameConversation?: (id: string, title: string) => Promise<void> | void;
   archiveConversation?: (id: string) => Promise<void> | void;
-}
-
-const EMPTY_CITATION_PLAN: MarkdownCitationPlan = {
-  deferredMessageIds: new Set(),
-  aggregatedAfter: new Map(),
-};
-
-async function copyText(text: string, title: string) {
-  await commands.copyTextToClipboard(text);
-  toast({ title });
 }
 
 async function messagesForExport(session: SessionRecord): Promise<Message[]> {
@@ -123,6 +108,7 @@ function TabGlyphMark({
 
 export function ChatTabStrip({
   activeId,
+  shortcutsEnabled = true,
   onActivate,
   onNewChat,
   onClose,
@@ -166,7 +152,7 @@ export function ChatTabStrip({
   const actions = useChatActions();
   const { isMac } = usePlatform();
   const closeShortcut = inAppShortcutLabel("close_tab", isMac);
-  const archiveShortcut = inAppShortcutLabel("archive_chat", isMac);
+  const bindings = useChatActionBindings();
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const closingActiveIdRef = useRef<string | null>(null);
   const [contextMenuRevision, setContextMenuRevision] = useState(0);
@@ -290,24 +276,62 @@ export function ChatTabStrip({
     [archiveConversation, closeTab, sessions],
   );
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (!matchesInAppShortcut(event, "archive_chat", isMac)) return;
-      if (document.querySelector('[role="dialog"][data-state="open"]')) return;
-      if (renamingId) return;
-      const id =
-        (activeId && tabs.some((tab) => tab.id === activeId) && activeId) ||
-        tabs[0]?.id;
-      if (!id) return;
-      event.preventDefault();
-      event.stopPropagation();
+  const runAction = async (id: string, action: ChatMenuAction) => {
+    const session = sessions[id];
+    if (!session || isEphemeralSideConversation(session)) return;
+    closeContextMenu();
+    if (action === "rename_chat") {
+      setRenameDraft(visibleTabTitle(session));
+      setRenamingId(id);
+    } else if (action === "pin_chat") {
+      const next = !session.pinned;
+      actions.togglePinned(id);
+      try {
+        const { updateConversationFlags } = await import("@/lib/chat-storage");
+        await updateConversationFlags(id, { pinned: next });
+      } catch { toast({ title: ui("Couldn't save pin"), variant: "destructive" }); }
+    } else if (action === "archive_chat") {
       archiveTab(id);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [activeId, archiveTab, isMac, renamingId, tabs]);
+    } else if (session.messageCount > 0) {
+      try {
+        const { saveConversationFile, conversationMetaFromJson } = await import("@/lib/chat-storage");
+        const branch = createConversationBranch({ sourceId: id, title: session.title, messages: await messagesForExport(session) });
+        if (!branch) throw new Error("No messages to branch");
+        await saveConversationFile(branch);
+        const meta = conversationMetaFromJson(branch);
+        if (!meta) throw new Error("Invalid branch");
+        actions.upsert(sessionRecordFromMeta(meta));
+        actions.setMessages(branch.id, branch.messages as any);
+        await onActivate(branch.id);
+      } catch { toast({ title: ui("Couldn't branch chat"), variant: "destructive" }); }
+    }
+  };
 
   useEffect(() => {
+    if (!shortcutsEnabled) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.isComposing || event.getModifierState?.("AltGraph") || hasOpenShortcutBlockingLayer() || renamingId) return;
+      const action = CHAT_MENU_ACTIONS.find(id => bindings.match(event, id));
+      if (!action || !activeId || !tabs.some(tab => tab.id === activeId)) return;
+      event.preventDefault();
+      void runAction(activeId, action);
+    };
+    const onAction = (event: Event) => {
+      const request = (event as CustomEvent<ChatMenuRequest>).detail;
+      if (!request || !CHAT_MENU_ACTIONS.includes(request.action)) return;
+      const { id, action } = request;
+      if (tabs.some(tab => tab.id === id)) void runAction(id, action);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener(CHAT_MENU_ACTION_EVENT, onAction);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener(CHAT_MENU_ACTION_EVENT, onAction);
+    };
+  });
+
+  useEffect(() => {
+    if (!shortcutsEnabled) return;
     return registerChatTabCloser(() => {
       const id =
         (activeId && tabs.some((tab) => tab.id === activeId) && activeId) ||
@@ -316,7 +340,7 @@ export function ChatTabStrip({
       closeTab(id);
       return true;
     });
-  }, [activeId, closeTab, tabs]);
+  }, [activeId, closeTab, tabs, shortcutsEnabled]);
 
   return (
     <div
@@ -451,106 +475,11 @@ export function ChatTabStrip({
                   </button>
                 </div>
               </ContextMenuTrigger>
-              <ContextMenuContent className="w-52">
-                {!temporary ? (
-                  <>
-                    <ContextMenuItem
-                      onSelect={() => {
-                        closeContextMenu();
-                        const next = !session.pinned;
-                        actions.togglePinned(session.id);
-                        void import("@/lib/chat-storage").then(
-                          ({ updateConversationFlags }) =>
-                            updateConversationFlags(session.id, {
-                              pinned: next,
-                            }),
-                        );
-                      }}
-                    >
-                      {session.pinned ? ui("Unpin") : ui("Pin")}
-                    </ContextMenuItem>
-                    <ContextMenuItem
-                      onSelect={() => {
-                        closeContextMenu();
-                        setRenameDraft(title);
-                        setRenamingId(session.id);
-                      }}
-                    >
-                      Rename
-                    </ContextMenuItem>
-                    <ContextMenuSub>
-                      <ContextMenuSubTrigger>Copy</ContextMenuSubTrigger>
-                      <ContextMenuSubContent className="w-48">
-                        <ContextMenuItem
-                          onSelect={() => {
-                            closeContextMenu();
-                            void copyText(
-                              chatConversationLink(session.id),
-                              "copied chat link",
-                            );
-                          }}
-                        >
-                          Copy link
-                        </ContextMenuItem>
-                        <ContextMenuItem
-                          onSelect={() => {
-                            closeContextMenu();
-                            void (async () => {
-                              const messages = await messagesForExport(session);
-                              if (messages.length === 0) {
-                                toast({ title: ui("No messages to copy") });
-                                return;
-                              }
-                              await copyText(
-                                formatChatAsMarkdown(
-                                  messages,
-                                  EMPTY_CITATION_PLAN,
-                                ),
-                                "copied chat as markdown",
-                              );
-                            })();
-                          }}
-                        >
-                          Copy as Markdown
-                        </ContextMenuItem>
-                        <ContextMenuItem
-                          onSelect={() => {
-                            closeContextMenu();
-                            void copyText(session.id, "copied chat ID");
-                          }}
-                        >
-                          Copy chat ID
-                        </ContextMenuItem>
-                        {codingWorkspace ? (
-                          <ContextMenuItem
-                            onSelect={() => {
-                              closeContextMenu();
-                              void copyText(
-                                codingWorkspace.worktreePath,
-                                "copied worktree path",
-                              );
-                            }}
-                          >
-                            Copy worktree path
-                          </ContextMenuItem>
-                        ) : null}
-                      </ContextMenuSubContent>
-                    </ContextMenuSub>
-                    <ContextMenuSeparator />
-                    <ContextMenuItem
-                      onSelect={() => {
-                        closeContextMenu();
-                        archiveTab(session.id);
-                      }}
-                    >
-                      Archive
-                      <ContextMenuShortcut className="text-[10px] tracking-normal text-muted-foreground/55">
-                        {archiveShortcut}
-                      </ContextMenuShortcut>
-                    </ContextMenuItem>
-                    <ContextMenuSeparator />
-                  </>
-                ) : null}
+              <ContextMenuContent data-chat-actions-menu="" className={CHAT_MENU_CLASS} onKeyDown={handleChatMenuShortcut}>
+                {!temporary && <>
+                  <ChatActionMenuItems variant="context" session={session} onBeforeCopy={closeContextMenu} onAction={action => void runAction(session.id, action)} />
+                  <ContextMenuSeparator />
+                </>}
                 <ContextMenuItem
                   disabled={active || split || temporary}
                   onSelect={() => {

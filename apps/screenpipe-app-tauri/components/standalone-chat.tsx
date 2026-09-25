@@ -12,6 +12,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
 import {
   hasOpenShortcutBlockingLayer,
+  conflictsWithGlobalShortcut,
   inAppShortcutLabel,
   matchesInAppShortcut,
 } from "@/lib/shortcuts";
@@ -40,6 +41,7 @@ import { useChatFilePreview } from "@/lib/hooks/use-chat-file-preview";
 import { useChatInspector } from "@/lib/hooks/use-chat-inspector";
 import { ChatInspectorPopover } from "@/components/chat/chat-inspector";
 import { ChatSplitPane } from "@/components/chat/chat-split-pane";
+import { ChatActionsDropdown } from "@/components/chat/chat-action-menu";
 import { ChatTabStrip } from "@/components/chat/chat-tab-strip";
 import { useSqlAutocomplete, useTagAutocomplete } from "@/lib/hooks/use-sql-autocomplete";
 import { loadConversationFile } from "@/lib/chat-storage";
@@ -794,6 +796,8 @@ export function StandaloneChat({
   const sidePanelHasContent =
     (filePreview?.paths.length ?? 0) > 0 || browserPanelState.hasUrl;
   const sidePanelOpen = browserPanelState.open;
+  const rightPanelShortcut = conflictsWithGlobalShortcut("toggle_right_sidebar", isMac, settings)
+    ? "" : inAppShortcutLabel("toggle_right_sidebar", isMac);
   const inspectorHasContent =
     inspectorOutputs.length > 0 ||
     inspectorSources.length > 0;
@@ -807,16 +811,10 @@ export function StandaloneChat({
   }, [inspectorOpen, setInspectorOpen]);
 
   const toggleBrowserPanel = useCallback(() => {
-    if (sidePanelHasContent) {
-      window.dispatchEvent(
-        new CustomEvent("screenpipe:browser-sidebar-toggle", {
-          detail: { action: "toggle" },
-        }),
-      );
-    } else {
-      window.dispatchEvent(new CustomEvent("screenpipe:browser-sidebar-new-tab"));
-    }
-  }, [sidePanelHasContent]);
+    window.dispatchEvent(new CustomEvent("screenpipe:browser-sidebar-toggle", {
+      detail: { action: "toggle" },
+    }));
+  }, []);
 
   useEffect(() => {
     if (!chatShortcutsEnabled) return;
@@ -825,13 +823,14 @@ export function StandaloneChat({
         event.defaultPrevented || event.repeat || event.isComposing ||
         event.getModifierState?.("AltGraph") || hasOpenShortcutBlockingLayer()
       ) return;
-      if (!matchesInAppShortcut(event, "toggle_right_sidebar", isMac)) return;
+      if (conflictsWithGlobalShortcut("toggle_right_sidebar", isMac, settings) ||
+          !matchesInAppShortcut(event, "toggle_right_sidebar", isMac)) return;
       event.preventDefault();
       toggleBrowserPanel();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [chatShortcutsEnabled, isMac, toggleBrowserPanel]);
+  }, [chatShortcutsEnabled, isMac, settings, toggleBrowserPanel]);
 
   const handlePanelStateChange = useCallback(
     (nextState: { hasUrl: boolean; open: boolean }) => {
@@ -2230,6 +2229,7 @@ export function StandaloneChat({
           hideInlineHistory ? (
             <ChatTabStrip
               activeId={conversationId}
+              shortcutsEnabled={chatShortcutsEnabled}
               onActivate={activateChatTab}
               onNewChat={startDurableNewConversation}
               onClose={discardTemporarySideConversation}
@@ -2258,6 +2258,7 @@ export function StandaloneChat({
         onNewChat={startDurableNewConversation}
         rightActions={
           <div className="relative z-20 flex items-center gap-1">
+            {hideInlineHistory && <ChatActionsDropdown conversationId={conversationId} />}
             <ChatInspectorPopover
               open={inspectorOpen}
               onOpenChange={setInspectorOpen}
@@ -2278,9 +2279,9 @@ export function StandaloneChat({
                   "h-7 w-7",
                   sidePanelOpen && "bg-muted ring-2 ring-primary ring-offset-1 ring-offset-background",
                 )}
-                title={`${sidePanelHasContent ? ui("Toggle side panel") : ui("Open browser tab")} (${inAppShortcutLabel("toggle_right_sidebar", isMac)})`}
-                aria-keyshortcuts={isMac ? "Alt+Meta+B" : "Control+Alt+B"}
-                aria-label={sidePanelHasContent ? ui("Toggle side panel") : ui("Open browser tab")}
+                title={`${ui("Toggle right sidebar")}${rightPanelShortcut ? ` (${rightPanelShortcut})` : ""}`}
+                aria-keyshortcuts={rightPanelShortcut ? (isMac ? "Alt+Meta+B" : "Control+Alt+B") : undefined}
+                aria-label={ui("Toggle right sidebar")}
                 aria-pressed={sidePanelOpen}
               >
                 {sidePanelOpen ? (
@@ -2549,6 +2550,7 @@ export function StandaloneChat({
           state). The actual page is rendered by a Tauri WebviewWindow
           positioned over the placeholder div inside this component. */}
       <BrowserSidebar
+        outputs={inspectorOutputs}
         conversationId={conversationId}
         additionalReservedWidth={
           splitChatId && splitChatId !== conversationId ? 320 : 0

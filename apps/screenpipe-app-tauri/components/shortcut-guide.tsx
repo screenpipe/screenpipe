@@ -22,12 +22,13 @@ import {
   IN_APP_SHORTCUTS,
   OPEN_SHORTCUT_GUIDE_EVENT,
   globalShortcutHint,
+  conflictsWithGlobalShortcut,
   inAppShortcutLabel,
   matchesInAppShortcut,
   type InAppShortcutSection,
 } from "@/lib/shortcuts";
 import { useExperimentalFeaturesEnabled } from "@/lib/experimental-features";
-import { useMessages } from "gt-react";
+import { useGT, useMessages } from "gt-react";
 import { localizeDefinitions } from "@/lib/i18n/definitions";
 import { useUiLocale as useLocale } from "@/lib/i18n/provider";
 
@@ -54,6 +55,7 @@ export function ShortcutGuide({
   onOpenChange,
 }: ShortcutGuideProps = {}) {
   const uiLanguage = useLocale();
+  const ui = useGT();
 
   const uiMessages = useMessages();
   const { settings } = useSettings();
@@ -132,7 +134,7 @@ export function ShortcutGuide({
                         </p>
                       </div>
                       <ShortcutKeycap>
-                        {inAppShortcutLabel(item.id, isMac)}
+                        {["rename_chat", "pin_chat", "branch_chat", "archive_chat", "toggle_right_sidebar"].includes(item.id) && conflictsWithGlobalShortcut(item.id, isMac, settings) ? ui("Assigned globally") : inAppShortcutLabel(item.id, isMac)}
                       </ShortcutKeycap>
                     </div>
                   ))}

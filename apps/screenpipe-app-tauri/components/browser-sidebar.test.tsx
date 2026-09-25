@@ -167,6 +167,30 @@ describe("BrowserSidebar session access", () => {
     vi.unstubAllGlobals();
   });
 
+  it("opens useful destinations without creating a browser tab and resets on chat switch", async () => {
+    const view = render(<BrowserSidebar conversationId="chat-1" />);
+    await act(async () => { window.dispatchEvent(new CustomEvent("screenpipe:browser-sidebar-toggle")); });
+    expect(await screen.findByText("Keep your work close")).toBeVisible();
+    expect(mocks.ownedBrowserNavigate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", {name:/Files and outputs/}));
+    expect(screen.getByText("No files in this chat yet")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", {name:"Close right sidebar"}));
+    expect(screen.queryByText("No files in this chat yet")).toBeNull();
+    await act(async () => { window.dispatchEvent(new CustomEvent("screenpipe:browser-sidebar-toggle")); });
+    expect(await screen.findByText("Keep your work close")).toBeVisible();
+    view.rerender(<BrowserSidebar conversationId="chat-2" />);
+    expect(screen.queryByText("Keep your work close")).toBeNull();
+  });
+
+  it("lists this chat's output files and opens the selected path", async () => {
+    const open = vi.fn();
+    render(<BrowserSidebar conversationId="chat-1" outputs={[{id:"report",kind:"file",path:"/reports/weekly.md",title:"Weekly report"}]} onReplaceFilePreviewPath={open} />);
+    await act(async () => { window.dispatchEvent(new CustomEvent("screenpipe:browser-sidebar-toggle")); });
+    fireEvent.click(await screen.findByRole("button", {name:/Files and outputs/}));
+    fireEvent.click(screen.getByRole("button", {name:"Weekly report"}));
+    expect(open).toHaveBeenCalledWith("/reports/weekly.md");
+  });
+
   it("shows a session prompt emitted immediately after a replacement navigation", async () => {
     render(<BrowserSidebar conversationId="chat-1" />);
     expect(mocks.listeners.has("owned-browser:navigate")).toBe(true);

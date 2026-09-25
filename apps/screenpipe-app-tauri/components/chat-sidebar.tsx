@@ -52,6 +52,7 @@ import {
   GitBranch,
   LockKeyhole,
 } from "lucide-react";
+import { ChatActionMenuItems, CHAT_MENU_CLASS, handleChatMenuShortcut } from "@/components/chat/chat-action-menu";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { emit, listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
@@ -2855,13 +2856,6 @@ interface ChatRowProps {
 }
 
 /**
- * Single-letter shortcuts shown on the right of each menu row (anthropic-style).
- * Each maps to an item carrying `data-shortcut={key}`; pressing the key while a
- * row menu is open selects that item. Keep in sync with `RowMenuItems`.
- */
-const ROW_MENU_SHORTCUT_KEYS = ["p", "r", "b", "a", "d"] as const;
-
-/**
  * Press a shortcut letter while a menu is open to fire the matching item. We
  * forward Enter so radix runs its own onSelect + close — no second action path.
  */
@@ -2888,7 +2882,7 @@ function handleRecentsMenuShortcut(e: React.KeyboardEvent<HTMLElement>) {
 }
 
 function handleRowMenuShortcut(e: React.KeyboardEvent<HTMLElement>) {
-  handleMenuShortcut(e, ROW_MENU_SHORTCUT_KEYS);
+  handleChatMenuShortcut(e);
 }
 
 /**
@@ -2957,49 +2951,15 @@ function RowMenuItems({
   const { isMac } = usePlatform();
   const itemCls = "text-[11px] h-[30px] px-2 gap-2 rounded-sm focus:bg-muted/30";
   const groupItemCls = "min-w-0 text-[11px] h-[30px] px-2 rounded-sm whitespace-nowrap focus:bg-muted/30";
-  const shortcutCls = "text-[10px] tracking-normal text-muted-foreground/55";
-  return (
+    return (
     <>
-      <P.Item
-        data-shortcut="p"
-        className={itemCls}
-        onSelect={(e: Event) => {
-          e.stopPropagation();
-          void onTogglePin(session.id);
-        }}
-      >
-        <Pin className="h-3 w-3 text-muted-foreground" />
-        {session.pinned ? ui("Unpin") : ui("Pin")}
-        <P.Shortcut className={shortcutCls}>P</P.Shortcut>
-      </P.Item>
-      <P.Item
-        data-shortcut="r"
-        className={itemCls}
-        onSelect={(e: Event) => {
-          e.stopPropagation();
-          onRenameRequest(session.id);
-        }}
-      >
-        <Pencil className="h-3 w-3 text-muted-foreground" />
-        Rename
-        <P.Shortcut className={shortcutCls}>R</P.Shortcut>
-      </P.Item>
-      {onBranch && (
-        <P.Item
-          data-shortcut="b"
-          aria-keyshortcuts="B"
-          className={itemCls}
-          disabled={session.messageCount === 0}
-          onSelect={(e: Event) => {
-            e.stopPropagation();
-            void onBranch(session.id);
-          }}
-        >
-          <GitBranch className="h-3 w-3 text-muted-foreground" />
-          Branch in new chat
-          <P.Shortcut className={shortcutCls}>B</P.Shortcut>
-        </P.Item>
-      )}
+      <ChatActionMenuItems variant={variant} session={session} canBranch={Boolean(onBranch)} onAction={action => {
+        if (action === "rename_chat") onRenameRequest(session.id);
+        if (action === "pin_chat") void onTogglePin(session.id);
+        if (action === "branch_chat") void onBranch?.(session.id);
+        if (action === "archive_chat") void (session.hidden ? onUnarchive(session.id) : onArchive(session.id));
+      }} />
+      <P.Separator />
       {onMoveToGroup && existingGroups && (
         <P.Sub>
           <P.SubTrigger
@@ -3069,36 +3029,8 @@ function RowMenuItems({
           </P.SubContent>
         </P.Sub>
       )}
-      {!session.hidden ? (
-        <P.Item
-          data-shortcut="a"
-          className={itemCls}
-          onSelect={(e: Event) => {
-            e.stopPropagation();
-            void onArchive(session.id);
-          }}
-        >
-          <Archive className="h-3 w-3 text-muted-foreground" />
-          Archive
-          <P.Shortcut className={shortcutCls}>A</P.Shortcut>
-        </P.Item>
-      ) : (
-        <P.Item
-          data-shortcut="a"
-          className={itemCls}
-          onSelect={(e: Event) => {
-            e.stopPropagation();
-            void onUnarchive(session.id);
-          }}
-        >
-          <Undo2 className="h-3 w-3 text-muted-foreground" />
-          Unarchive
-          <P.Shortcut className={shortcutCls}>A</P.Shortcut>
-        </P.Item>
-      )}
       <P.Separator className="my-1 bg-border/70" />
       <P.Item
-        data-shortcut="d"
         className="text-[11px] h-[30px] px-2 gap-2 rounded-none text-destructive focus:text-destructive focus:bg-destructive/10"
         onSelect={(e: Event) => {
           e.stopPropagation();
@@ -3107,7 +3039,6 @@ function RowMenuItems({
       >
         <Trash2 className="h-3 w-3 text-destructive" />
         Delete
-        <P.Shortcut className={cn(shortcutCls, "text-destructive/60")}>D</P.Shortcut>
       </P.Item>
     </>
   );
@@ -3367,7 +3298,7 @@ export function SidebarChatRow({
               side="bottom"
               sideOffset={4}
               collisionPadding={8}
-              className="w-[156px] p-1 rounded-lg border border-border bg-background shadow-none"
+              className={CHAT_MENU_CLASS} data-chat-actions-menu=""
               onClick={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
               onKeyDown={handleRowMenuShortcut}
@@ -3381,7 +3312,7 @@ export function SidebarChatRow({
       </ContextMenuTrigger>
       {canShowActions && (
         <ContextMenuContent
-          className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
+          className={CHAT_MENU_CLASS} data-chat-actions-menu=""
           onKeyDown={handleRowMenuShortcut}
         >
           <RowMenuItems variant="context" session={session} {...rowMenuActions} />

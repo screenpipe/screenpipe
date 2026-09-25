@@ -9,7 +9,7 @@ import { Archive, MoreHorizontal, Pencil, Pin } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { Message } from "@/lib/chat/types";
 import { usePlatform } from "@/lib/hooks/use-platform";
-import { inAppShortcutLabel, matchesInAppShortcut } from "@/lib/shortcuts";
+import { useChatActionBindings } from "@/components/chat/chat-action-menu";
 import {
   isEphemeralSideConversation,
   useChatStore,
@@ -48,7 +48,8 @@ export function ChatTitleMenu({
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
   const { isMac } = usePlatform();
-  const archiveShortcut = inAppShortcutLabel("archive_chat", isMac);
+  const bindings = useChatActionBindings();
+  const archiveShortcut = bindings.label("archive_chat");
 
   // Title source order:
   //   1. The session's title from the chat-store (in-memory, freshest;
@@ -81,7 +82,8 @@ export function ChatTitleMenu({
   useEffect(() => {
     if (!canArchive || !conversationId) return;
     const onKey = (event: KeyboardEvent) => {
-      if (!matchesInAppShortcut(event, "archive_chat", isMac)) return;
+      if (event.defaultPrevented || event.repeat || event.isComposing) return;
+      if (!bindings.match(event, "archive_chat")) return;
       if (document.querySelector('[role="dialog"][data-state="open"]')) return;
       if (renaming) return;
       event.preventDefault();
@@ -93,6 +95,7 @@ export function ChatTitleMenu({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [
     archiveConversation,
+    bindings,
     canArchive,
     conversationId,
     isMac,

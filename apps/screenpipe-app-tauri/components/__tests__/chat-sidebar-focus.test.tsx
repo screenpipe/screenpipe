@@ -289,7 +289,7 @@ describe("menu letter shortcuts", () => {
 
     fireEvent.contextMenu(screen.getByTestId("chat-row-chat-focus-test"));
     const branchItem = await screen.findByText("Branch in new chat");
-    expect(branchItem.closest('[role="menuitem"]')).toHaveAttribute("data-shortcut", "b");
+    expect(branchItem.closest('[role="menuitem"]')).toHaveAttribute("data-chat-shortcut", "branch_chat");
 
     fireEvent.click(branchItem);
 

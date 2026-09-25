@@ -4,12 +4,16 @@
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChatActionsDropdown } from "@/components/chat/chat-action-menu";
 import { ChatTabStrip } from "@/components/chat/chat-tab-strip";
 import { CloseTabOrWindowShortcut } from "@/components/close-tab-or-window-shortcut";
 import { resetCloseShortcutForTests } from "@/lib/close-tab-shortcut";
 import { useChatStore, type SessionRecord } from "@/lib/stores/chat-store";
 
 const closeWindowMock = vi.fn(async () => undefined);
+const shortcutSettings = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
+vi.mock("@/lib/hooks/use-settings", () => ({ useOptionalSettings: () => ({ settings: shortcutSettings.current }) }));
+
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ close: closeWindowMock }),
@@ -78,6 +82,7 @@ function resetStore() {
 describe("ChatTabStrip", () => {
   beforeEach(() => {
     resetStore();
+    shortcutSettings.current = {};
     resetCloseShortcutForTests();
     closeWindowMock.mockClear();
     copyTextToClipboard.mockClear();
@@ -88,6 +93,65 @@ describe("ChatTabStrip", () => {
 
   afterEach(() => {
     resetCloseShortcutForTests();
+  });
+
+  it("renames and pins the active chat without a menu, with modifier guards", async () => {
+    useChatStore.getState().actions.upsert(record({ id: "chat-a" }));
+    const rename = vi.fn();
+    render(<ChatTabStrip activeId="chat-a" onActivate={vi.fn()} onNewChat={vi.fn()} renameConversation={rename} />);
+    fireEvent.keyDown(window, {key:"p"});
+    fireEvent.keyDown(window, {key:"p",code:"KeyP",ctrlKey:true,altKey:true,repeat:true});
+    fireEvent.keyDown(window, {key:"p",code:"KeyP",ctrlKey:true,altKey:true,isComposing:true});
+    expect(useChatStore.getState().sessions["chat-a"].pinned).toBe(false);
+    fireEvent.keyDown(window, {key:"p",code:"KeyP",ctrlKey:true,altKey:true});
+    expect(useChatStore.getState().sessions["chat-a"].pinned).toBe(true);
+    fireEvent.keyDown(window, {key:"r",code:"KeyR",ctrlKey:true,altKey:true});
+    const input = screen.getByRole("textbox", {name:"Rename first chat"});
+    fireEvent.change(input, {target:{value:"Updated title"}});
+    fireEvent.keyDown(input, {key:"Enter"});
+    await waitFor(() => expect(rename).toHaveBeenCalledWith("chat-a", "Updated title"));
+  });
+
+  it("does not dispatch through a hidden chat, dialog, or conflicting global shortcut", () => {
+    useChatStore.getState().actions.upsert(record({ id: "chat-a" }));
+    const props = {activeId:"chat-a", onActivate:vi.fn(), onNewChat:vi.fn()};
+    const view = render(<ChatTabStrip {...props} shortcutsEnabled={false} />);
+    const pin = () => fireEvent.keyDown(window, {key:"p",code:"KeyP",ctrlKey:true,altKey:true});
+    pin();
+    expect(useChatStore.getState().sessions["chat-a"].pinned).toBe(false);
+    shortcutSettings.current = {searchShortcut:"Control+Alt+P"};
+    view.rerender(<ChatTabStrip {...props} />);
+    pin();
+    expect(useChatStore.getState().sessions["chat-a"].pinned).toBe(false);
+    shortcutSettings.current = {};
+    view.rerender(<><ChatTabStrip {...props} /><div role="dialog" data-state="open" /></>);
+    pin();
+    expect(useChatStore.getState().sessions["chat-a"].pinned).toBe(false);
+  });
+
+  it("targets the right-clicked chat instead of the active chat when using a menu chord", async () => {
+    const actions = useChatStore.getState().actions;
+    actions.upsert(record({id:"chat-a",title:"first chat"}));
+    actions.upsert(record({id:"chat-b",title:"second chat"}));
+    actions.openChat("chat-b");
+    render(<ChatTabStrip activeId="chat-a" onActivate={vi.fn()} onNewChat={vi.fn()} />);
+    fireEvent.contextMenu(screen.getByRole("tab",{name:"second chat"}));
+    fireEvent.keyDown(await screen.findByRole("menu"), {key:"p",code:"KeyP",ctrlKey:true,altKey:true});
+    await waitFor(() => expect(useChatStore.getState().sessions["chat-b"].pinned).toBe(true));
+    expect(useChatStore.getState().sessions["chat-a"].pinned).toBe(false);
+  });
+
+  it("keeps the rename input focused after the header action menu closes", async () => {
+    useChatStore.getState().actions.upsert(record({id:"chat-a"}));
+    const rename = vi.fn();
+    render(<><ChatTabStrip activeId="chat-a" onActivate={vi.fn()} onNewChat={vi.fn()} renameConversation={rename} /><ChatActionsDropdown conversationId="chat-a" /></>);
+    fireEvent.pointerDown(screen.getByRole("button", {name:"Chat actions"}), {button:0, ctrlKey:false});
+    fireEvent.click(await screen.findByRole("menuitem", {name:/Rename/}));
+    const input = await screen.findByRole("textbox", {name:"Rename first chat"});
+    await waitFor(() => expect(input).toHaveFocus());
+    fireEvent.change(input,{target:{value:"Renamed from header"}});
+    fireEvent.keyDown(input,{key:"Enter"});
+    await waitFor(() => expect(rename).toHaveBeenCalledWith("chat-a","Renamed from header"));
   });
 
   it("renders the in-memory working set and activates another chat", () => {
@@ -281,7 +345,7 @@ describe("ChatTabStrip", () => {
     );
   });
 
-  it("archives the active tab on Ctrl+E and keeps the sibling open", async () => {
+  it("archives the active tab on Ctrl+Shift+A and keeps the sibling open", async () => {
     const actions = useChatStore.getState().actions;
     for (const [id, title] of [
       ["chat-a", "first"],
@@ -301,7 +365,7 @@ describe("ChatTabStrip", () => {
       />,
     );
 
-    fireEvent.keyDown(window, { key: "e", code: "KeyE", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "A", code: "KeyA", ctrlKey: true, shiftKey: true });
 
     await waitFor(() =>
       expect(archiveConversation).toHaveBeenCalledWith("chat-b"),
@@ -310,7 +374,7 @@ describe("ChatTabStrip", () => {
     expect(onActivate).toHaveBeenCalledWith("chat-a");
   });
 
-  it("closes an empty untitled draft on Ctrl+E instead of archiving it", async () => {
+  it("closes an empty untitled draft on Ctrl+Shift+A instead of archiving it", async () => {
     const actions = useChatStore.getState().actions;
     actions.upsert(
       record({
@@ -340,7 +404,7 @@ describe("ChatTabStrip", () => {
       />,
     );
 
-    fireEvent.keyDown(window, { key: "e", code: "KeyE", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "A", code: "KeyA", ctrlKey: true, shiftKey: true });
 
     expect(archiveConversation).not.toHaveBeenCalled();
     expect(useChatStore.getState().openChatIds).toEqual(["chat-a"]);
@@ -363,10 +427,10 @@ describe("ChatTabStrip", () => {
 
     fireEvent.contextMenu(screen.getByRole("tab", { name: "crm" }));
     expect(await screen.findByText("Archive")).toBeVisible();
-    expect(screen.getByText("Ctrl+E")).toBeVisible();
+    expect(screen.getByText("Ctrl+Shift+A")).toBeVisible();
   });
 
-  it("starts a new chat on Ctrl+E when the last real tab is archived", async () => {
+  it("starts a new chat on Ctrl+Shift+A when the last real tab is archived", async () => {
     const actions = useChatStore.getState().actions;
     actions.upsert(record({ id: "chat-a", title: "only" }));
     actions.openChat("chat-a");
@@ -381,7 +445,7 @@ describe("ChatTabStrip", () => {
       />,
     );
 
-    fireEvent.keyDown(window, { key: "e", code: "KeyE", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "A", code: "KeyA", ctrlKey: true, shiftKey: true });
 
     await waitFor(() =>
       expect(archiveConversation).toHaveBeenCalledWith("chat-a"),
@@ -591,7 +655,7 @@ describe("ChatTabStrip", () => {
         "screenpipe://chat/chat-a",
       ),
     );
-    expect(toast).toHaveBeenCalledWith({ title: "copied chat link" });
+    expect(toast).toHaveBeenCalledWith({ title: "Copied" });
   });
 
   it("copies the worktree path only when the chat has one", async () => {

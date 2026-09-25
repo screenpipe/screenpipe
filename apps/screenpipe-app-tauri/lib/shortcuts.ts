@@ -11,6 +11,9 @@ export type InAppShortcutId =
   | "new_chat"
   | "close_tab"
   | "archive_chat"
+  | "rename_chat"
+  | "pin_chat"
+  | "branch_chat"
   | "command_menu"
   | "shortcut_guide"
   | "toggle_sidebar"
@@ -46,6 +49,9 @@ export const IN_APP_SHORTCUTS: readonly InAppShortcutDefinition[] = [
     label: msg("Archive chat", {}),
     description: msg("Hide this conversation, stop the agent, and close the tab", {}),
   },
+  { id: "rename_chat", section: "chat", label: msg("Rename chat", {}), description: msg("Change the current chat title", {}) },
+  { id: "pin_chat", section: "chat", label: msg("Pin chat", {}), description: msg("Pin or unpin the current chat", {}) },
+  { id: "branch_chat", section: "chat", label: msg("Branch chat", {}), description: msg("Continue this conversation in a new chat", {}) },
   {
     id: "next_recent_chat",
     section: "chat",
@@ -132,7 +138,13 @@ export function inAppShortcutLabel(
     case "close_tab":
       return `${primary}W`;
     case "archive_chat":
-      return `${primary}E`;
+      return isMac ? "⇧⌘A" : "Ctrl+Shift+A";
+    case "rename_chat":
+      return isMac ? "⌥⌘R" : "Ctrl+Alt+R";
+    case "pin_chat":
+      return isMac ? "⌥⌘P" : "Ctrl+Alt+P";
+    case "branch_chat":
+      return isMac ? "⌥⌘F" : "Ctrl+Alt+F";
     case "command_menu":
       return `${primary}K`;
     case "shortcut_guide":
@@ -170,7 +182,13 @@ function specFor(id: InAppShortcutId, isMac: boolean): ShortcutSpec {
     case "close_tab":
       return { ...primary, key: "w", code: "KeyW" };
     case "archive_chat":
-      return { ...primary, key: "e", code: "KeyE" };
+      return { ...primary, shift: true, key: "a", code: "KeyA" };
+    case "rename_chat":
+      return { ...primary, alt: true, key: "r", code: "KeyR" };
+    case "pin_chat":
+      return { ...primary, alt: true, key: "p", code: "KeyP" };
+    case "branch_chat":
+      return { ...primary, alt: true, key: "f", code: "KeyF" };
     case "command_menu":
       return { ...primary, key: "k", code: "KeyK" };
     case "shortcut_guide":
@@ -242,4 +260,24 @@ export function dispatchOpenShortcutGuide(): void {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event(OPEN_SHORTCUT_GUIDE_EVENT));
   }
+}
+
+/** User-configured global bindings take precedence over in-app actions. */
+export function conflictsWithGlobalShortcut(
+  id: InAppShortcutId,
+  isMac: boolean,
+  settings: Record<string, unknown>,
+): boolean {
+  const spec = specFor(id, isMac);
+  const disabled = Array.isArray(settings.disabledShortcuts) ? settings.disabledShortcuts : [];
+  return Object.entries(settings).some(([name, value]) => {
+    if (!name.endsWith("Shortcut") || typeof value !== "string" || disabled.includes(name)) return false;
+    const parts = value.toLowerCase().split("+").map((part) => part.trim());
+    const has = (...aliases: string[]) => aliases.some((alias) => parts.includes(alias));
+    const primary = has("commandorcontrol", "cmdorctrl");
+    return parts.at(-1) === spec.key &&
+      (has("super", "meta", "command", "cmd") || (primary && isMac)) === spec.meta &&
+      (has("control", "ctrl") || (primary && !isMac)) === spec.ctrl &&
+      has("shift") === spec.shift && has("alt", "option") === spec.alt;
+  });
 }

@@ -2143,3 +2143,8 @@ export function useSettings(): SettingsContextType {
 	}
 	return context;
 }
+
+/** Optional access for reusable shortcut menus rendered outside the app shell. */
+export function useOptionalSettings(): SettingsContextType | undefined {
+  return useContext(SettingsContext);
+}

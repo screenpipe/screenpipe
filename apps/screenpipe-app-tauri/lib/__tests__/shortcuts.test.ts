@@ -4,6 +4,8 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  conflictsWithGlobalShortcut,
+  IN_APP_SHORTCUTS,
   globalShortcutHint,
   inAppShortcutLabel,
   matchesInAppShortcut,
@@ -18,8 +20,8 @@ describe("in-app shortcut registry", () => {
     expect(inAppShortcutLabel("new_chat", true)).toBe("⌘N");
     expect(inAppShortcutLabel("close_tab", true)).toBe("⌘W");
     expect(inAppShortcutLabel("close_tab", false)).toBe("Ctrl+W");
-    expect(inAppShortcutLabel("archive_chat", true)).toBe("⌘E");
-    expect(inAppShortcutLabel("archive_chat", false)).toBe("Ctrl+E");
+    expect(inAppShortcutLabel("archive_chat", true)).toBe("⇧⌘A");
+    expect(inAppShortcutLabel("archive_chat", false)).toBe("Ctrl+Shift+A");
     expect(inAppShortcutLabel("next_recent_chat", false)).toBe("Ctrl+Tab");
   });
 
@@ -59,24 +61,24 @@ describe("in-app shortcut registry", () => {
     ).toBe(false);
   });
 
-  it("matches Cmd+E on macOS and Ctrl+E elsewhere", () => {
+  it("matches Cmd+Shift+A on macOS and Ctrl+Shift+A elsewhere", () => {
     expect(
       matchesInAppShortcut(
-        keyEvent({ key: "e", code: "KeyE", metaKey: true }),
+        keyEvent({ key: "A", code: "KeyA", metaKey: true, shiftKey: true }),
         "archive_chat",
         true,
       ),
     ).toBe(true);
     expect(
       matchesInAppShortcut(
-        keyEvent({ key: "e", code: "KeyE", ctrlKey: true }),
+        keyEvent({ key: "A", code: "KeyA", ctrlKey: true, shiftKey: true }),
         "archive_chat",
         false,
       ),
     ).toBe(true);
     expect(
       matchesInAppShortcut(
-        keyEvent({ key: "e", code: "KeyE", metaKey: true }),
+        keyEvent({ key: "A", code: "KeyA", metaKey: true, shiftKey: true }),
         "close_tab",
         true,
       ),
@@ -113,5 +115,29 @@ describe("in-app shortcut registry", () => {
         true,
       ),
     ).toBe("");
+  });
+});
+
+describe("chat action shortcut conflicts", () => {
+  it("reserves configured global accelerators and respects disabled bindings", () => {
+    expect(conflictsWithGlobalShortcut("rename_chat", true, { searchShortcut: "Alt+Super+R" })).toBe(true);
+    expect(conflictsWithGlobalShortcut("rename_chat", true, { searchShortcut: "Alt+Super+R", disabledShortcuts: ["searchShortcut"] })).toBe(false);
+    expect(conflictsWithGlobalShortcut("archive_chat", false, { showChatShortcut: "Ctrl+Shift+A" })).toBe(true);
+  });
+  it("has distinct platform chords and avoids Screenpipe's default global shortcuts", () => {
+    const defaults = { showScreenpipeShortcut: "Control+Super+S", startRecordingShortcut: "Super+Alt+U", stopRecordingShortcut: "Super+Alt+X", startAudioShortcut: "Control+Super+A", stopAudioShortcut: "Control+Super+Z", showChatShortcut: "Control+Super+L", searchShortcut: "Control+Super+K", lockVaultShortcut: "Super+Shift+L" };
+    for (const mac of [true, false]) {
+      const labels = IN_APP_SHORTCUTS.map(item => inAppShortcutLabel(item.id, mac));
+      expect(new Set(labels).size).toBe(labels.length);
+      for (const id of ["rename_chat", "pin_chat", "branch_chat", "archive_chat"] as const) expect(conflictsWithGlobalShortcut(id, mac, defaults)).toBe(false);
+    }
+  });
+  it("never interprets plain letters or the old archive chord as chat actions", () => {
+    for (const id of ["rename_chat", "pin_chat", "branch_chat", "archive_chat"] as const) {
+      for (const key of ["r", "p", "f", "a", "e"]) {
+        expect(matchesInAppShortcut(keyEvent({key}), id, true)).toBe(false);
+        expect(matchesInAppShortcut(keyEvent({key, metaKey:true}), id, true)).toBe(false);
+      }
+    }
   });
 });

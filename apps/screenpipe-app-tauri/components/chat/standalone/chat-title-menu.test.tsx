@@ -107,7 +107,7 @@ describe("ChatTitleMenu", () => {
       screen.getByRole("button", { name: "Chat options for day recap" }),
     );
     expect(await screen.findByRole("button", { name: "Archive" })).toBeVisible();
-    expect(screen.getByText(/⌘E|Ctrl\+E/)).toBeVisible();
+    expect(screen.getByText(/⇧⌘A|Ctrl\+Shift\+A/)).toBeVisible();
   });
 
   it("renames the same conversation from the title-owned menu", async () => {

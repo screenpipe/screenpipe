@@ -5,7 +5,7 @@
 "use client";
 
 import React, { useEffect, useRef } from "react";
-import { FileText, Globe2, Loader2, Plus, X } from "lucide-react";
+import { Home, FileText, Globe2, Loader2, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useGT } from "gt-react";
 
@@ -31,6 +31,8 @@ export function rightPanelFileTabLabel(path: string): string {
 }
 
 interface RightPanelTabStripProps {
+  onHome?: () => void;
+  homeActive?: boolean;
   tabs: RightPanelTab[];
   activeTabId: string | null;
   onSelect: (tab: RightPanelTab) => void;
@@ -39,6 +41,8 @@ interface RightPanelTabStripProps {
 }
 
 export function RightPanelTabStrip({
+  onHome,
+  homeActive,
   tabs,
   activeTabId,
   onSelect,
@@ -85,6 +89,8 @@ export function RightPanelTabStrip({
       className="flex h-9 min-w-0 shrink-0 items-stretch border-b border-border/60 bg-muted/20 pl-2"
       data-testid="right-panel-tab-strip"
     >
+      {onHome && <button type="button" aria-label={ui("Side panel home")} aria-pressed={Boolean(homeActive)} title={ui("Side panel home")} onClick={onHome}
+        className={cn("flex w-8 shrink-0 items-center justify-center border-r border-border/45 text-muted-foreground hover:bg-background/60 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring", homeActive && "bg-background text-foreground")}><Home className="h-3.5 w-3.5" /></button>}
       <div
         className="flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         role="tablist"
