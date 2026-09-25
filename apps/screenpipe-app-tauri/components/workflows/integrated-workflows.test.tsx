@@ -48,6 +48,21 @@ it("keeps Settings and Help in the footer and opens workspace shortcuts from Hel
   expect(await screen.findByRole("dialog", { name: /command/i })).toBeVisible();
 });
 
+it("opens the team invite popover and web management from the Workflows footer", async () => {
+  const manageTeam = vi.fn();
+  render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null}
+    navigationFooter={({ openKeyboardShortcuts }) => <SidebarFooter
+      onSettings={vi.fn()} onHelp={vi.fn()} onKeyboardShortcuts={openKeyboardShortcuts}
+      teamEntry={{ kind: "team", label: "Example Studio", href: "https://screenpipe.com/team-dashboard?team_id=studio", teamId: "studio", canInvite: true }}
+      teamToken="fixture-only" onTeam={manageTeam} />} />);
+  fireEvent.click(screen.getByRole("button", { name: "Example Studio, team menu" }));
+  expect(await screen.findByRole("textbox", { name: "Teammate email" })).toHaveFocus();
+  expect(screen.getByRole("button", { name: "Send invitation" })).toBeDisabled();
+  expect(manageTeam).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Manage team on the web" }));
+  expect(manageTeam).toHaveBeenCalledOnce();
+});
+
 it("opens the existing sharing review from the selected workflow in the main app", async () => {
   window.history.replaceState(null, "", "/home?mode=workflows");
   render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
