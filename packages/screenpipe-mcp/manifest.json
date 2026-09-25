@@ -1,10 +1,10 @@
 {
   "manifest_version": "0.3",
   "name": "screenpipe",
-  "display_name": "Screenpipe",
+  "display_name": "Screenpipe Local",
   "version": "0.0.0-injected-from-package-json",
   "description": "Search your screen recordings and audio transcriptions with AI",
-  "long_description": "Screenpipe is a 24/7 screen and audio recorder that lets you search everything you've seen or heard. This extension connects Claude to your local screenpipe instance, enabling AI-powered search through your digital memory.",
+  "long_description": "Connect Claude Desktop to Screenpipe running on this computer. Search recordings and audio, retrieve meeting notes, and use the tools exposed by your local Screenpipe server. Requested results are shared with Claude. This local extension does not require Data Sync.",
   "author": {
     "name": "screenpipe",
     "url": "https://screenpi.pe"
@@ -22,7 +22,14 @@
     "entry_point": "dist/index.js",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/dist/index.js"]
+      "args": [
+        "${__dirname}/dist/index.js"
+      ],
+      "env": {
+        "SCREENPIPE_API_URL": "${user_config.api_url}",
+        "SCREENPIPE_LOCAL_API_KEY": "${user_config.api_key}",
+        "SCREENPIPE_MCP_CLIENT": "claude"
+      }
     }
   },
   "tools": [
@@ -52,14 +59,42 @@
     }
   ],
   "compatibility": {
-    "platforms": ["darwin", "win32", "linux"],
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
     "runtimes": {
       "node": ">=18.0.0"
     }
   },
-  "keywords": ["screen-recording", "ocr", "audio-transcription", "automation", "memory", "search"],
+  "keywords": [
+    "screen-recording",
+    "ocr",
+    "audio-transcription",
+    "automation",
+    "memory",
+    "search"
+  ],
   "privacy_policies": [
     "https://github.com/screenpipe/screenpipe/tree/main/packages/screenpipe-mcp#privacy-policy",
     "https://screenpi.pe/privacy"
-  ]
+  ],
+  "tools_generated": true,
+  "user_config": {
+    "api_url": {
+      "type": "string",
+      "title": "Screenpipe API URL",
+      "description": "Local Screenpipe API address. Keep the default unless you changed its port.",
+      "default": "http://127.0.0.1:3030",
+      "required": false
+    },
+    "api_key": {
+      "type": "string",
+      "title": "Local API key (optional)",
+      "description": "Leave blank to discover it through the Screenpipe CLI. If authentication fails, use the key returned by screenpipe auth token.",
+      "sensitive": true,
+      "required": false
+    }
+  }
 }

@@ -55,9 +55,11 @@ jobs:
         working-directory: packages/screenpipe-mcp
         run: bun install --frozen-lockfile
 
-      - name: Build
+      - name: Typecheck and test
         working-directory: packages/screenpipe-mcp
-        run: npm run build
+        run: |
+          bun run typecheck
+          bun run test
 
       - name: Bundle license
         working-directory: packages/screenpipe-mcp
@@ -74,6 +76,32 @@ jobs:
       - name: Verify the tarball is a gateway-capable build
         working-directory: packages/screenpipe-mcp
         run: npm run verify:pack
+
+      - name: Build installable MCP packages
+        working-directory: packages/screenpipe-mcp
+        run: |
+          bun run build:installers
+          # Preserve the existing download filename for Claude Desktop users.
+          cp installers/screenpipe-local.mcpb screenpipe-mcp.mcpb
+
+      # The .mcpb bundle is the Claude Desktop install path, and nobody has ever
+      # looked inside one (SCR-352 shipped with that as an explicitly unverified
+      # claim — the mcpb CLI is not installed on dev machines). dist/index.js
+      # `require`s ./team-config at startup, so a bundle without it is not
+      # merely missing the gateway knob, it is broken. Grep the whole archive
+      # rather than a fixed path so this stays correct if mcpb ever bundles or
+      # minifies. The listing is printed either way, so the release run is the
+      # evidence for "does the bundle carry the fix".
+      - name: Verify the mcpb bundle carries the gateway knob
+        working-directory: packages/screenpipe-mcp
+        run: |
+          unzip -l screenpipe-mcp.mcpb
+          if unzip -p screenpipe-mcp.mcpb | grep -q SCREENPIPE_TEAM_API_URL; then
+            echo "mcpb bundle contains the team API base override"
+          else
+            echo "::error::screenpipe-mcp.mcpb does not contain SCREENPIPE_TEAM_API_URL anywhere. The Claude Desktop bundle cannot reach a customer gateway, and dist/index.js requires ./team-config at startup. Check mcpb pack / manifest.json before releasing."
+            exit 1
+          fi
 
       # A version already on npm used to SKIP quietly and let the whole workflow
       # report success — so "Release MCP" could be re-run forever and change
@@ -131,39 +159,6 @@ jobs:
         working-directory: packages/screenpipe-mcp
         run: ./mcp-publisher publish
 
-      - name: Sync manifest.json version from package.json
-        working-directory: packages/screenpipe-mcp
-        run: |
-          VER=$(node -p "require('./package.json').version")
-          jq --arg v "$VER" '.version = $v' manifest.json > manifest.tmp && mv manifest.tmp manifest.json
-          echo "synced manifest.json version to $VER"
-
-      - name: Install mcpb CLI
-        run: npm install -g @anthropic-ai/mcpb
-
-      - name: Build mcpb bundle
-        working-directory: packages/screenpipe-mcp
-        run: mcpb pack
-
-      # The .mcpb bundle is the Claude Desktop install path, and nobody has ever
-      # looked inside one (SCR-352 shipped with that as an explicitly unverified
-      # claim — the mcpb CLI is not installed on dev machines). dist/index.js
-      # `require`s ./team-config at startup, so a bundle without it is not
-      # merely missing the gateway knob, it is broken. Grep the whole archive
-      # rather than a fixed path so this stays correct if mcpb ever bundles or
-      # minifies. The listing is printed either way, so the release run is the
-      # evidence for "does the bundle carry the fix".
-      - name: Verify the mcpb bundle carries the gateway knob
-        working-directory: packages/screenpipe-mcp
-        run: |
-          unzip -l screenpipe-mcp.mcpb
-          if unzip -p screenpipe-mcp.mcpb | grep -q SCREENPIPE_TEAM_API_URL; then
-            echo "mcpb bundle contains the team API base override"
-          else
-            echo "::error::screenpipe-mcp.mcpb does not contain SCREENPIPE_TEAM_API_URL anywhere. The Claude Desktop bundle cannot reach a customer gateway, and dist/index.js requires ./team-config at startup. Check mcpb pack / manifest.json before releasing."
-            exit 1
-          fi
-
       - name: Get version
         id: version
         working-directory: packages/screenpipe-mcp
@@ -188,5 +183,7 @@ jobs:
             --generate-notes \
             --prerelease \
             packages/screenpipe-mcp/screenpipe-mcp.mcpb \
+            packages/screenpipe-mcp/installers/screenpipe-cloud.zip \
             || gh release upload "$TAG" \
-            packages/screenpipe-mcp/screenpipe-mcp.mcpb --clobber
+            packages/screenpipe-mcp/screenpipe-mcp.mcpb \
+            packages/screenpipe-mcp/installers/screenpipe-cloud.zip --clobber
