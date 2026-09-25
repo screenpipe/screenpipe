@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useRef } from "react";
+import { emit } from "@tauri-apps/api/event";
 
 const {
   loadConversationFile,
@@ -197,6 +198,14 @@ describe("direct conversation hydration", () => {
     expect(useChatStore.getState().sessions["chat-target"].hydratedAt).toEqual(
       expect.any(Number),
     );
+  });
+
+  it("restores the latest per-chat model choice ahead of an older saved preset", async () => {
+    seedStore([user, completed], { presetId: "recent-choice" });
+    loadConversationFile.mockResolvedValueOnce({ ...conversation([user, completed]), presetId: "older-saved-choice" });
+    const { result } = renderHook(() => useHarness());
+    await act(async () => { await result.current.hook.loadConversation(conversation([]) as any); });
+    expect(emit).toHaveBeenCalledWith("chat-preset-restore", { presetId: "recent-choice" });
   });
 
   it("preserves a richer live reply when persisted state is older", async () => {

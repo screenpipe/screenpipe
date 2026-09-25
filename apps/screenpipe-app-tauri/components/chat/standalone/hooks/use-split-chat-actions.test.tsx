@@ -27,6 +27,17 @@ describe("split composer handoff", () => {
     expect(props.send).toHaveBeenCalledTimes(1);
     expect(props.focus).toHaveBeenCalledTimes(1);
   });
+  it("applies model controls with the restored target's handler", async () => {
+    const props = { ...options(), control: vi.fn() };
+    const { result, rerender } = renderHook(p => useSplitChatActions(p), { initialProps: props });
+    act(() => useChatStore.getState().actions.setCurrent("b"));
+    const nextControl = vi.fn();
+    await act(async () => { await result.current.run("b", { type: "reauthenticate" }); });
+    expect(props.control).not.toHaveBeenCalled();
+    rerender({ ...props, conversationId: "b", control: nextControl });
+    expect(nextControl).toHaveBeenCalledWith({ type: "reauthenticate" });
+    expect(props.control).not.toHaveBeenCalled();
+  });
   it("cancels when another chat wins navigation", async () => {
     const props = options();
     const { result } = renderHook(() => useSplitChatActions(props));

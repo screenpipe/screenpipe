@@ -108,6 +108,7 @@ export function AttachmentTray({
               </div>
               <button
                 type="button"
+                aria-label={ui("Remove {value1}", { value1: doc.name })}
                 onClick={() => onRemoveDoc(i)}
                 className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-md hover:bg-destructive/90"
               >
@@ -132,6 +133,7 @@ export function AttachmentTray({
             </button>
             <button
               type="button"
+              aria-label={ui("Remove image {value1}", { value1: i + 1 })}
               onClick={(e) => {
                 e.stopPropagation();
                 onRemoveImage(i);

@@ -6,15 +6,16 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import assert from "node:assert/strict";
 const output = process.env.SCREENPIPE_CHAT_UI_OUTPUT;
+const captureStates = process.env.SCREENPIPE_CHAT_UI_CAPTURE_STATES?.split(",");
 if (output) await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
 const errors = [];
-page.on("pageerror", error => errors.push(error.message));
+page.on("pageerror", error => { errors.push(error.message); console.error(error.message); });
 const pane = id => page.locator(`[data-chat-pane-id="${id}"]`);
 const input = id => pane(id).locator("textarea");
 const snap = async name => {
-  if (!output) return;
+  if (!output || (captureStates && !captureStates.includes(name))) return;
   await page.waitForTimeout(350);
   await page.screenshot({ path: path.join(output, `split-${name}.png`) });
 };
@@ -30,6 +31,7 @@ const waitCall = (cmd, id) => page.waitForFunction(({ cmd, id }) => window.__spl
 const left = "browser-chat-4", right = "browser-chat-3";
 try {
   await page.goto(`${process.env.SCREENPIPE_CHAT_UI_URL || "http://127.0.0.1:1420"}/home`, { timeout: 120000 });
+  await page.waitForFunction(() => document.documentElement.dataset.screenpipeWebDev === "mock", { timeout: 60000 });
   assert.equal(await page.locator("html").getAttribute("data-screenpipe-web-dev"), "mock");
   await page.getByRole("button", { name: "Do later", exact: true }).click();
   await page.getByRole("dialog").waitFor({ state: "hidden" });
@@ -51,6 +53,11 @@ try {
       }
       if (cmd === "plugin:fs|exists" && files.has(args.path)) return true;
       if (cmd === "plugin:fs|remove" && files.has(args.path)) { files.delete(args.path); return null; }
+      if (cmd === "plugin:dialog|open") return ["/mock/split-notes.txt"];
+      if (cmd === "plugin:fs|read_file" && args.path === "/mock/split-notes.txt") {
+        if (state.delayFile) await new Promise(r => setTimeout(r, 1500));
+        return new TextEncoder().encode("Synthetic notes for the right chat only.");
+      }
       if (cmd.startsWith("pi_")) state.calls.push({ cmd, args });
       if (state.delay && cmd === "plugin:fs|read_text_file" && String(args.path).includes("browser-chat-3")) await new Promise(r => setTimeout(r, 900));
       if (["plugin:fs|read_text_file", "plugin:fs|read_file"].includes(cmd)) {
@@ -84,7 +91,7 @@ try {
     };
     const rid = await invoke("plugin:store|get_store", { path: "/Users/screenpipe/.screenpipe/store.bin" });
     const [settings] = await invoke("plugin:store|get", { rid, key: "settings" });
-    await invoke("plugin:store|set", { rid, key: "settings", value: { ...settings, showChatSuggestions: false, aiPresets: [{ id: "split-fixture", model: "gpt-4o-mini", provider: "openai", url: "http://127.0.0.1:9999", apiKey: "synthetic-browser-fixture", prompt: "", defaultPreset: true, maxContextChars: 128000 }] } });
+    await invoke("plugin:store|set", { rid, key: "settings", value: { ...settings, showChatSuggestions: false, aiPresets: [{ id: "split-fixture", model: "gpt-4o-mini", provider: "openai", url: "http://127.0.0.1:9999", apiKey: "synthetic-browser-fixture", prompt: "", defaultPreset: true, maxContextChars: 128000 }, { id: "split-alternate", model: "gpt-4.1-mini", provider: "openai", url: "http://127.0.0.1:9999", apiKey: "synthetic-browser-fixture", prompt: "", defaultPreset: false, maxContextChars: 128000 }] } });
   });
   await page.getByRole("button", { name: /Investigate audio device switching/ }).first().click();
   await page.getByRole("tab", { name: "Investigate audio device switching", exact: true }).waitFor();
@@ -96,7 +103,76 @@ try {
   await input(left).fill("Keep the launch draft here.");
   await input(right).fill("Compare the two device changes.");
   assert.equal(await input(left).inputValue(), "Keep the launch draft here.");
+  for (const id of [left, right]) {
+    assert.equal(await pane(id).getByRole("button", { name: "Add attachments and filters", exact: true }).count(), 1);
+    assert.equal(await pane(id).getByRole("button", { name: /^Dictate message/ }).count(), 1);
+    assert.equal(await pane(id).getByRole("combobox").count(), 1);
+  }
   await snap("drafts-light");
+  await pane(right).getByRole("button", { name: "Add attachments and filters", exact: true }).click();
+  await page.getByRole("button", { name: "Add photos & files", exact: true }).waitFor();
+  await snap("add-menu");
+  await page.getByRole("button", { name: "Add photos & files", exact: true }).click();
+  await pane(right).getByText("split-notes.txt", { exact: true }).waitFor();
+  assert.equal(await pane(left).getByText("split-notes.txt", { exact: true }).count(), 0);
+  assert.equal(await input(left).inputValue(), "Keep the launch draft here.");
+  await snap("attachment");
+  await pane(right).getByRole("button", { name: "Remove split-notes.txt", exact: true }).click();
+  await page.evaluate(() => { window.__splitEval.delayFile = true; });
+  await pane(right).getByRole("button", { name: "Add attachments and filters", exact: true }).click();
+  await page.getByRole("button", { name: "Add photos & files", exact: true }).click();
+  await snap("attachment-loading");
+  await page.getByRole("tab", { name: "Investigate audio device switching", exact: true }).click();
+  await pane(right).getByRole("button", { name: "Remove split-notes.txt", exact: true }).waitFor();
+  assert.equal(await pane(left).getByText("split-notes.txt", { exact: true }).count(), 0);
+  await pane(right).getByRole("button", { name: "Remove split-notes.txt", exact: true }).click();
+  await page.getByRole("tab", { name: "Draft launch announcement", exact: true }).click();
+  await page.evaluate(() => { window.__splitEval.delayFile = false; });
+  await pane(right).getByRole("button", { name: "Add attachments and filters", exact: true }).click();
+  await page.getByRole("button", { name: /^@today/ }).click();
+  assert((await input(right).inputValue()).includes("@today"));
+  assert.equal(await input(left).inputValue(), "Keep the launch draft here.");
+  await snap("filter");
+  await page.keyboard.press("Escape");
+  await input(right).fill("Compare the two device changes.");
+  await pane(right).getByRole("combobox").click();
+  await snap("model-menu");
+  await page.keyboard.press("Escape");
+  // A deterministic in-memory microphone: no device capture or upload.
+  await page.evaluate(() => {
+    window.__splitEval.micRequests = 0;
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: async () => { window.__splitEval.micRequests++; if (window.__splitEval.micDenied) throw new DOMException("Synthetic denial", "NotAllowedError"); return { getTracks: () => [{ stop() {} }] }; } } });
+    window.AudioContext = undefined;
+    window.webkitAudioContext = undefined;
+    window.MediaRecorder = class {
+      static isTypeSupported() { return true; }
+      state = "inactive";
+      mimeType = "audio/webm";
+      start() { this.state = "recording"; }
+      stop() { this.state = "inactive"; this.ondataavailable?.({ data: new Blob(["synthetic audio"], { type: this.mimeType }) }); queueMicrotask(() => this.onstop?.()); }
+    };
+    const originalFetch = window.fetch;
+    window.fetch = async (url, options) => String(url).includes("/listen?")
+      ? new Response(JSON.stringify({ results: { channels: [{ alternatives: [{ transcript: "Dictated into the right chat." }] }] } }), { status: 200, headers: { "Content-Type": "application/json" } })
+      : originalFetch(url, options);
+  });
+  await input(right).focus();
+  await input(right).press("Meta+d");
+  await pane(right).getByTestId("composer-dictation-recording").waitFor();
+  assert.equal(await pane(left).getByTestId("composer-dictation-recording").count(), 0);
+  assert.equal(await page.evaluate(() => window.__splitEval.micRequests), 1);
+  await snap("dictation");
+  await pane(right).getByRole("button", { name: "Finish dictation", exact: true }).click();
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-chat-pane-id="browser-chat-3"] textarea')].some(node => node.value.includes("Dictated into the right chat.")));
+  assert.equal(await input(left).inputValue(), "Keep the launch draft here.");
+  await snap("dictated");
+  await page.evaluate(() => { window.__splitEval.micDenied = true; });
+  await pane(right).getByRole("button", { name: /^Dictate message/ }).click();
+  await pane(right).getByRole("alert").waitFor();
+  await snap("dictation-error");
+  await pane(right).getByRole("button", { name: "Dismiss dictation error", exact: true }).click();
+  await page.evaluate(() => { window.__splitEval.micDenied = false; });
+  await input(right).fill("Compare the two device changes.");
   await page.evaluate(() => { document.documentElement.classList.remove("light"); document.documentElement.classList.add("dark"); });
   await snap("drafts-dark");
   await page.evaluate(() => { document.documentElement.classList.remove("dark"); document.documentElement.classList.add("light"); });
@@ -123,10 +199,10 @@ try {
   await pane(left).getByText("The launch summary is ready. I am comparing the final wording with the release notes.", { exact: true }).waitFor();
   await snap("both-streaming");
   await input(left).fill("Keep the draft under 100 words.");
-  await pane(left).getByRole("button", { name: "Queue message", exact: true }).click();
+  await pane(left).getByRole("button", { name: "Send message", exact: true }).click();
   await waitCall("pi_queue_prompt", left);
   await snap("queued-left");
-  await pane(right).getByRole("button", { name: "Stop this chat", exact: true }).click();
+  await pane(right).getByRole("button", { name: "Stop reply", exact: true }).click();
   await page.waitForFunction(() => window.__splitEval.calls.some(c => ["pi_abort", "pi_abort_active"].includes(c.cmd) && c.args.sessionId === "browser-chat-3"));
   assert.equal(await page.evaluate(() => window.__splitEval.calls.filter(c => ["pi_abort", "pi_abort_active"].includes(c.cmd) && c.args.sessionId === "browser-chat-4").length), 0);
   await event(right, { type: "agent_end" });
@@ -166,6 +242,15 @@ try {
   await page.getByRole("textbox", { name: "Rename New chat", exact: true }).waitFor();
   await snap("focused-shortcut");
   await page.keyboard.press("Escape");
+  const newId = await page.getByTestId("chat-split-pane").getAttribute("data-chat-pane-id");
+  const oldLeft = await pane(left).boundingBox(), oldNew = await pane(newId).boundingBox();
+  await pane(newId).getByRole("combobox").click();
+  await page.getByRole("option").filter({ hasText: "split-alternate" }).click();
+  await page.waitForFunction(id => document.querySelector(`[data-chat-pane-id="${id}"] [role="combobox"]`)?.textContent.includes("gpt-4.1-mini"), newId);
+  assert((await pane(left).getByRole("combobox").innerText()).includes("gpt-4o-mini"));
+  assert(Math.abs((await pane(left).boundingBox()).x - oldLeft.x) < 2);
+  assert(Math.abs((await pane(newId).boundingBox()).x - oldNew.x) < 2);
+  await snap("different-models");
   assert.deepEqual(errors, []);
-  console.log("PASS: independent drafts, direct send, stable pane positions, concurrent streams, queue/stop isolation, close/reopen, error recovery, empty chat, focused shortcuts, light/dark/compact");
-} finally { await browser.close(); }
+  console.log("PASS: independent drafts, direct send, stable pane positions, concurrent streams, queue/stop isolation, close/reopen, error recovery, empty chat, focused shortcuts, shared toolbar, scoped files/filters/models/dictation, late extraction, light/dark/compact");
+} catch (error) { console.error((await page.locator("body").innerText()).slice(-4000)); throw error; } finally { await browser.close(); }

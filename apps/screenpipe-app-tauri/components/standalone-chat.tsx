@@ -41,6 +41,7 @@ import { useChatFilePreview } from "@/lib/hooks/use-chat-file-preview";
 import { useChatInspector } from "@/lib/hooks/use-chat-inspector";
 import { ChatInspectorPopover } from "@/components/chat/chat-inspector";
 import { useSplitChatActions } from "@/components/chat/standalone/hooks/use-split-chat-actions";
+import { SplitChatComposer } from "@/components/chat/standalone/split-chat-composer";
 import { ChatSplitPane } from "@/components/chat/chat-split-pane";
 import { ChatActionsDropdown } from "@/components/chat/chat-action-menu";
 import { ChatTabStrip } from "@/components/chat/chat-tab-strip";
@@ -548,6 +549,7 @@ export function StandaloneChat({
   // so we use this ref's visibility to ignore drops meant for another view
   // (e.g. a meeting note) that would otherwise also stage into the composer.
   const dropRootRef = useRef<HTMLDivElement>(null);
+  const primaryPaneRef = useRef<HTMLDivElement>(null);
 
   const {
     prefillContext,
@@ -577,7 +579,8 @@ export function StandaloneChat({
     showPastedTextInField,
   } = useChatAttachments({
     isEmbedded,
-    dropRootRef,
+    scopeDrops: true,
+    dropRootRef: primaryPaneRef,
     inputRef,
     setInput,
     setShowMentionDropdown,
@@ -729,10 +732,19 @@ export function StandaloneChat({
   );
   const splitChatId = useChatStore((state) => state.splitChatId);
   const splitChatPosition = useChatStore((state) => state.splitChatPosition);
-  const [splitComposerFocused, setSplitComposerFocused] = useState(false);
-  useEffect(() => setSplitComposerFocused(false), [splitChatId]);
   const paneTitle = useChatStore((state) => state.sessions[conversationId ?? ""]?.title);
   const splitSession = useChatStore((state) => state.sessions[state.splitChatId ?? ""]);
+  // A file read started in the secondary pane can finish after promotion.
+  // Keep that session's foreground attachment state in sync with the result.
+  useEffect(() => useChatStore.subscribe((state, previous) => {
+    if (!conversationId || state.currentId !== conversationId) return;
+    const next = state.sessions[conversationId]?.composerDraft;
+    const before = previous.sessions[conversationId]?.composerDraft;
+    if (!next || next === before) return;
+    if (next.pastedImages !== before?.pastedImages) setPastedImages(next.pastedImages as string[]);
+    if (next.attachedDocs !== before?.attachedDocs) setAttachedDocs(next.attachedDocs as typeof attachedDocs);
+    if (next.pendingDocs !== before?.pendingDocs) setPendingDocs(next.pendingDocs as typeof pendingDocs);
+  }), [conversationId, setPastedImages, setAttachedDocs, setPendingDocs]);
   const previousPaneIdRef = useRef(conversationId);
   React.useLayoutEffect(() => {
     const previousId = previousPaneIdRef.current;
@@ -2151,6 +2163,18 @@ export function StandaloneChat({
     activate: activateChatTab,
     send: sendComposerMessage,
     stop: handleStop,
+    control: (action) => {
+      switch (action.type) {
+        case "preset":
+          if (conversationId) useChatStore.getState().actions.patch(conversationId, { presetId: action.preset.id });
+          handleSetActivePreset(action.preset); handlePiRestart(action.preset); break;
+        case "acp": handleAcpConfigDefault(action.change); break;
+        case "reauthenticate": return handleReauthenticate();
+        case "command": return runComposerCommandRef.current?.(action.command);
+        case "steer": return steerMessage(action.text);
+        case "steer-queued": return steerQueuedPrompt(action.prompt);
+      }
+    },
     canSend: Boolean(canSendChatMessage),
     preparing: codingWorkspace.isLoading,
     input,
@@ -2337,11 +2361,11 @@ export function StandaloneChat({
       />
 
       <div className="flex-1 flex min-h-0" data-browser-panel-host>
-      <div className={cn("relative flex-1 basis-0 flex flex-col min-w-0", splitChatId && splitChatId !== conversationId && "min-w-[280px]")} data-firstrun-target="messages" data-chat-pane-id={conversationId}>
+      <div ref={primaryPaneRef} className={cn("relative flex-1 basis-0 flex flex-col min-w-0", splitChatId && splitChatId !== conversationId && "min-w-[280px]")} data-firstrun-target="messages" data-chat-pane-id={conversationId}>
       {splitChatId && splitChatId !== conversationId ? (
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border/50 px-3">
           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-foreground" aria-hidden />
-          <span className="min-w-0 truncate text-xs font-medium">{paneTitle || ui("New chat")}</span>
+          <span className="min-w-0 truncate text-xs font-medium">{paneTitle && paneTitle !== "untitled" ? paneTitle : ui("New chat")}</span>
         </header>
       ) : null}
       <ChatMainPane
@@ -2434,7 +2458,7 @@ export function StandaloneChat({
       />
 
       <ChatComposer
-        dictationEnabled={chatShortcutsEnabled && !splitComposerFocused}
+        dictationEnabled={chatShortcutsEnabled}
         jumpToLatest={{
           hasMessages: messages.length > 0,
           scrolledUp: isUserScrolledUp,
@@ -2588,13 +2612,26 @@ export function StandaloneChat({
           key={splitChatId}
           sessionId={splitChatId}
           side={splitChatPosition}
-          onSend={(id) => void splitActions.run(id, "send")}
-          onStop={(id) => void splitActions.run(id, "stop")}
           pending={splitActions.pendingId === splitChatId}
-          onComposerFocusChange={setSplitComposerFocused}
-          modelLabel={splitPreset?.model || splitPreset?.provider}
-          disabledReason={splitPolicy?.replyDisabledReason || (splitSession?.kind === "pipe-run" ? ui("This is an automation run. Open the chat controls to continue.") : undefined)}
-          onPromote={async (id) => { try { await activateChatTab(id); requestAnimationFrame(focusSplitComposer); } catch { reportSplitActionError(); } }}
+          composer={<SplitChatComposer
+            key={splitChatId} sessionId={splitChatId} title={splitSession?.title || ui("New chat")}
+            pending={!!splitActions.pendingId} isMac={isMac} isEmbedded={isEmbedded} enabled={chatShortcutsEnabled}
+            disabledReason={splitPolicy?.replyDisabledReason || (splitSession?.kind === "pipe-run" ? ui("This is an automation run. Open the chat to continue.") : undefined)}
+            onSend={id => void splitActions.run(id, "send")} onStop={id => void splitActions.run(id, "stop")}
+            onControl={(id, action) => void splitActions.run(id, action)}
+            onOpenConversation={id => openMentionConversationRef.current?.(id)}
+            onOpenImageViewer={(images, index) => imageViewerProps.onChange({ images, index })}
+            filterData={{ appTagMap, tagMentionSuggestions, staticMentionSuggestions: localizeDefinitions(STATIC_MENTION_SUGGESTIONS, uiMessages), appMentionSuggestions, allTagMentionSuggestions, tagMentionSections, appsLoading, tagsLoading, connections, isWindows }}
+            modelControls={{
+              settings: { ...settings, aiPresets: splitSession?.ephemeral ? filterEphemeralSideConversationPresets(availableAiPresets) : availableAiPresets },
+              activePreset: splitPreset, activePipeExecution: null, currentQueueSessionId: splitChatId,
+              // The shared selector calls onPresetSaved for both selection and edits.
+              onSelectPreset: () => {},
+              onPresetSaved: preset => { void splitActions.run(splitChatId, { type: "preset", preset }); },
+              onAcpConfigDefault: change => { void splitActions.run(splitChatId, { type: "acp", change }); },
+              onReauthenticate: () => { void splitActions.run(splitChatId, { type: "reauthenticate" }); },
+            }}
+          />}
           onClose={() => useChatStore.getState().actions.setSplitChat(null)}
         />
       ) : null}

@@ -21,6 +21,7 @@ import {
   PASTED_TEXT_SHOW_IN_FIELD_MAX_CHARS,
 } from "@/lib/chat/large-context";
 import { toast } from "@/components/ui/use-toast";
+import { useSessionDraftField } from "./use-session-draft-field";
 import { useGT } from "gt-react";
 import { useUiLocale as useLocale } from "@/lib/i18n/provider";
 
@@ -29,6 +30,8 @@ export type PendingDoc = { id: string; name: string; ext: string };
 
 interface UseChatAttachmentsOptions {
   isEmbedded: boolean;
+  draftSessionId?: string;
+  scopeDrops?: boolean;
   dropRootRef: React.RefObject<HTMLDivElement>;
   inputRef: React.RefObject<HTMLTextAreaElement>;
   setInput: React.Dispatch<React.SetStateAction<string>>;
@@ -40,6 +43,8 @@ const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"];
 
 export function useChatAttachments({
   isEmbedded,
+  draftSessionId,
+  scopeDrops = false,
   dropRootRef,
   inputRef,
   setInput,
@@ -49,12 +54,12 @@ export function useChatAttachments({
   const uiLanguage = useLocale();
   const ui = useGT();
   const [isDragging, setIsDragging] = useState(false);
-  const [pastedImages, setPastedImages] = useState<string[]>([]);
+  const [pastedImages, setPastedImages] = useSessionDraftField<"pastedImages", string[]>(draftSessionId, "pastedImages", []);
   // Mirror for the per-conversation draft snapshot — see inputValueRef.
   const pastedImagesRef = useRef<string[]>([]);
   useEffect(() => { pastedImagesRef.current = pastedImages; }, [pastedImages]);
 
-  const [attachedDocs, setAttachedDocs] = useState<ExtractedDoc[]>([]);
+  const [attachedDocs, setAttachedDocs] = useSessionDraftField<"attachedDocs", ExtractedDoc[]>(draftSessionId, "attachedDocs", []);
   // ref mirror so send paths read the latest docs without widening their deps arrays
   const attachedDocsRef = useRef<ExtractedDoc[]>([]);
   useEffect(() => { attachedDocsRef.current = attachedDocs; }, [attachedDocs]);
@@ -65,7 +70,7 @@ export function useChatAttachments({
   // between drop and extraction-complete sends the message without the
   // file attached. Name/ext are known up-front (from filename) so we can
   // show a real label, not a generic "loading…".
-  const [pendingDocs, setPendingDocs] = useState<PendingDoc[]>([]);
+  const [pendingDocs, setPendingDocs] = useSessionDraftField<"pendingDocs", PendingDoc[]>(draftSessionId, "pendingDocs", []);
   const pendingDocsRef = useRef<PendingDoc[]>([]);
   useEffect(() => { pendingDocsRef.current = pendingDocs; }, [pendingDocs]);
 
@@ -101,7 +106,7 @@ export function useChatAttachments({
       setPastedImages((prev) => [...prev, resized]);
     };
     reader.readAsDataURL(file);
-  }, [resizeImage]);
+  }, [resizeImage, setPastedImages]);
 
   const loadImageFromPath = useCallback(async (filePath: string) => {
     const ext = filePath.split(".").pop()?.toLowerCase() || "";
@@ -128,7 +133,7 @@ export function useChatAttachments({
     } catch (err) {
       console.error("failed to read dropped image:", err);
     }
-  }, [resizeImage]);
+  }, [resizeImage, setPastedImages]);
 
   const extractAndAttach = useCallback(async (
     name: string,
@@ -177,7 +182,7 @@ export function useChatAttachments({
     } finally {
       setPendingDocs((prev) => prev.filter((p) => p.id !== pendingId));
     }
-  }, [uiLanguage]);
+  }, [uiLanguage, setAttachedDocs, setPendingDocs]);
 
   const loadDocFromPath = useCallback(async (filePath: string) => {
     const name = filePath.split(/[\\/]/).pop() || filePath;
@@ -197,7 +202,7 @@ export function useChatAttachments({
       makePastedTextDoc(normalized, pastedTextDocName(prev)),
     ]);
     return true;
-  }, []);
+  }, [setAttachedDocs]);
 
   const showPastedTextInField = useCallback((doc: ExtractedDoc, index: number) => {
     if (doc.text.length > PASTED_TEXT_SHOW_IN_FIELD_MAX_CHARS) return;
@@ -217,7 +222,7 @@ export function useChatAttachments({
         inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 150)}px`;
       }
     }, 0);
-  }, [inputRef, setInput, setMentionFilter, setShowMentionDropdown]);
+  }, [inputRef, setInput, setMentionFilter, setShowMentionDropdown, setAttachedDocs]);
 
   const handleFilePicker = useCallback(async () => {
     try {
@@ -301,6 +306,15 @@ export function useChatAttachments({
       if (!dropRootRef.current || dropRootRef.current.offsetParent === null) {
         return;
       }
+      if (scopeDrops && "position" in event.payload) {
+        const rect = dropRootRef.current.getBoundingClientRect();
+        const x = event.payload.position.x / window.devicePixelRatio;
+        const y = event.payload.position.y / window.devicePixelRatio;
+        if (x < rect.left || x >= rect.right || y < rect.top || y >= rect.bottom) {
+          setIsDragging(false);
+          return;
+        }
+      }
       if (event.payload.type === "enter" || event.payload.type === "over") {
         setIsDragging(true);
       } else if (event.payload.type === "drop") {
@@ -315,7 +329,7 @@ export function useChatAttachments({
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [dropRootRef, handleDroppedPaths, isEmbedded, setIsDragging]);
+  }, [dropRootRef, handleDroppedPaths, isEmbedded, scopeDrops, setIsDragging]);
 
   return {
     isDragging,

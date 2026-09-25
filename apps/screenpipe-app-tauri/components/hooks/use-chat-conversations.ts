@@ -1288,6 +1288,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     //     the panel's mirrored copy back over the writer's accumulator
     //     would be a regression (lossy round-trip via React state).
     if (outgoingSid && store.sessions[outgoingSid]) {
+      const outgoingPresetId = getSelectedPreset()?.id;
+      if (outgoingPresetId) store.actions.patch(outgoingSid, { presetId: outgoingPresetId });
       const outgoingKind = store.sessions[outgoingSid].kind;
       if (outgoingKind !== "pipe-watch") {
         store.actions.snapshotSession(outgoingSid, {
@@ -1619,7 +1621,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
 
     // Emit the preset ID so the chat panel can restore the model selection.
     // This ensures the model selector reflects the preset used in this chat.
-    const presetId = persisted?.presetId ?? (conv as ChatConversation).presetId ?? useChatStore.getState().sessions[conv.id]?.presetId;
+    const presetId = useChatStore.getState().sessions[conv.id]?.presetId ?? persisted?.presetId ?? (conv as ChatConversation).presetId;
     if (presetId && isLatestRequest()) {
       try {
         await emit("chat-preset-restore", { presetId });
