@@ -2,6 +2,7 @@
 // https://screenpipe.com
 "use client";
 
+import { screenpipeWebUrl, PROD_WEB_BASE } from "@/lib/web-url";
 import { useState } from "react";
 import { CloudAiConnectionCard } from "@/components/cloud-ai-connection-card";
 import { Switch } from "@/components/ui/switch";
@@ -116,7 +117,7 @@ export function AccountDataSyncCard(props: Props) {
           className="h-auto p-0 text-xs"
           onClick={() =>
             void props
-              .onOpenExternal("https://screenpipe.com/account")
+              .onOpenExternal(screenpipeWebUrl("/account", PROD_WEB_BASE))
               .then(() => setOpenError(false))
               .catch(() => setOpenError(true))
           }

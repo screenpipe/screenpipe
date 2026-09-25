@@ -6,6 +6,7 @@
 // launch reconciliation in crates/screenpipe-engine/src/cli/agent.rs; this
 // module remains the explicit connect/remove surface in Settings.
 
+import { screenpipeWebUrl, PROD_WEB_BASE } from "@/lib/web-url";
 import { homeDir, configDir, join, dirname } from "@tauri-apps/api/path";
 import {
   readTextFile,
@@ -425,7 +426,7 @@ export async function installCloudMcp(
   );
   const original = await readConfigText(configPath);
   const existing = original ?? "";
-  const url = "https://screenpipe.com/api/user/data-sync/mcp";
+  const url = screenpipeWebUrl("/api/user/data-sync/mcp", PROD_WEB_BASE);
   let next: string;
   try {
     if (target === "codex") {

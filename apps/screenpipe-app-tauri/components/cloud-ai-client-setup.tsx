@@ -2,10 +2,11 @@
 // https://screenpipe.com
 "use client";
 
+import { screenpipeWebUrl, PROD_WEB_BASE } from "@/lib/web-url";
 import { Button } from "@/components/ui/button";
 
 export type CloudClient = "codex" | "claude-code";
-export const CLOUD_MCP_URL = "https://screenpipe.com/api/user/data-sync/mcp";
+export const CLOUD_MCP_URL = screenpipeWebUrl("/api/user/data-sync/mcp", PROD_WEB_BASE);
 export const CLAUDE_CONNECTORS_URL = "https://claude.ai/customize/connectors";
 export const CODEX_CLOUD_SETUP = `codex mcp add screenpipe-cloud --url ${CLOUD_MCP_URL} && codex mcp login screenpipe-cloud --scopes data-sync:read`;
 export const CODEX_SETUP_PROMPT = `Connect my local Codex app to Screenpipe Cloud at ${CLOUD_MCP_URL} using a separate MCP server named screenpipe-cloud. Preserve my existing servers and settings. Check for an existing connection first. If the Codex CLI is available, add the HTTP server and start OAuth login with the data-sync:read scope. If no CLI is installed, safely add [mcp_servers.screenpipe-cloud] with url = "${CLOUD_MCP_URL}" to my active Codex config (respect CODEX_HOME; otherwise ~/.codex/config.toml). Do not overwrite a conflicting entry or install software. Ask me to authenticate in Settings > MCP servers and reload if required. Never ask me to paste tokens into chat. Verify by listing my synced devices before saying it is connected. If you cannot access my local config, tell me to add this URL in my app's MCP settings.`;
