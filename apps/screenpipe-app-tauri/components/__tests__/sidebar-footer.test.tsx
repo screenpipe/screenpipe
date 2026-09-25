@@ -36,11 +36,13 @@ describe("SidebarFooter feedback button", () => {
 describe("SidebarFooter team entry", () => {
   it("opens the named team above Settings", () => {
     const onTeam = vi.fn();
-    renderFooter({ teamEntry: { label: "Example Studio" }, onTeam });
+    renderFooter({ teamEntry: { label: "Example Studio", href: "https://screenpipe.com/team-dashboard", kind: "team" }, onTeam });
     const entry = screen.getByTestId("nav-team");
     expect(entry.textContent).toBe("Example Studio");
     expect(entry.compareDocumentPosition(screen.getByTestId("nav-settings")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(entry);
+    expect(onTeam).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Manage team on the web" }));
     expect(onTeam).toHaveBeenCalledOnce();
   });
   it("does not show a hidden entry", () => {
@@ -49,7 +51,7 @@ describe("SidebarFooter team entry", () => {
   });
   it("disables team navigation under the trial lock", () => {
     const onTeam = vi.fn();
-    renderFooter({ teamEntry: { label: "Invite your team" }, onTeam, trialActivationLocked: true });
+    renderFooter({ teamEntry: { label: "Invite your team", href: "https://screenpipe.com/team-dashboard", kind: "no-team" }, onTeam, trialActivationLocked: true });
     fireEvent.click(screen.getByTestId("nav-team"));
     expect(onTeam).not.toHaveBeenCalled();
   });

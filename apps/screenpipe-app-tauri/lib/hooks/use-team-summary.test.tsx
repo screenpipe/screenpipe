@@ -27,6 +27,20 @@ describe("passive team identity", () => {
     });
     expect(fetcher.mock.calls[0][1].method).toBeUndefined();
   });
+  it.each([
+    ["admin", "team", true],
+    ["member", "team", false],
+    ["admin", "free", false],
+    ["admin", undefined, false],
+  ])("offers email invitations for role %s and plan %s: %s", async (role, plan, expected) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ team: { id: "studio", name: "Studio", plan }, role }),
+    }));
+    const { result } = renderHook(() => useTeamSummary(base));
+    await waitFor(() => expect(result.current?.kind).toBe("team"));
+    expect(result.current).toMatchObject({ teamId: "studio", canInvite: expected });
+  });
   it("shows invitation only after confirmed absent membership", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(reply(null)));
     const { result } = renderHook(() => useTeamSummary(base));
@@ -49,7 +63,7 @@ describe("passive team identity", () => {
     const enterprise = renderHook(() =>
       useTeamSummary({ ...base, enterprise: true, orgName: "Northstar" }),
     );
-    expect(enterprise.result.current).toEqual({
+    expect(enterprise.result.current).toMatchObject({
       label: "Northstar",
       href: "https://screenpipe.com/account/workspace?tab=team&view=members",
     });
