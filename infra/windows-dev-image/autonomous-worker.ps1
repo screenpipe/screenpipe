@@ -166,14 +166,14 @@ $($task.prompt)
 
 Execution contract:
 - Read and obey AGENTS.md and all applicable skills before editing.
-- Work only in $repository and make the smallest complete related change.
-- The durable target is a reusable Azure Windows dev image whose disposable VM owns agent execution, an interactive console desktop, native tests, video recording, evidence upload, branch push, and PR creation after a one-shot dispatch. It must continue if the dispatching computer disconnects or powers off.
+- Work in $repository and make the smallest complete change for the user request above. Work in a dependency repository only when that request explicitly authorizes it.
+- This disposable VM owns execution, native validation, recording, and delivery after dispatch; the dispatching computer may disconnect. The user request defines the task scope and acceptance criteria.
 - There must be no inbound RDP rule and no operator desktop session in the workflow.
 - Runtime OpenAI and GitHub credentials come only from managed identity plus Key Vault; never print, persist in source, or include them in evidence.
-- Copy the proven runtime scripts from C:\screenpipe-worker into infra/windows-dev-image when they are not already present, then make the image provisioning, dispatcher, canonical skill, and reference agree with the autonomous invariant. Retire contradictory RDP/host-import wording rather than adding parallel rules.
+- Do not change image provisioning, dispatch tooling, skills, or references unless needed for the requested task.
 - Use the immutable image and exact task blob model; do not clone or modify the release builder.
-- Run the narrowest relevant checks, including shell syntax, PowerShell parsing, skill validation, and git diff --check. Do not run raw Cargo for src-tauri.
-- Do not push or open the PR yourself; leave the intended changes committed and the worktree clean. The outer worker performs deterministic delivery after validation.
+- Run the narrowest checks that prove the requested behavior and git diff --check. Use the repository-supported wrappers for src-tauri, never raw Cargo or Tauri.
+- Leave the Screenpipe changes committed and the worktree clean; the outer worker pushes and opens its PR after validation. Follow the user request for separately authorized dependency PRs.
 - Finish with a concise summary and exact test results.
 "@
   $promptPath = Join-Path $workerRoot 'prompt.txt'
@@ -234,6 +234,10 @@ exit /b %ERRORLEVEL%
   $prBodyPath = Join-Path $resultRoot 'pr-body.md'
   @"
 $($task.prBody)
+
+## Task result and validation
+
+$(Get-Content -Raw $finalPath)
 
 ## Autonomous Windows proof
 
