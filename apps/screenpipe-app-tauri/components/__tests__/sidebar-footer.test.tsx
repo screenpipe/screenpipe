@@ -4,7 +4,7 @@
 
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarFooter } from "@/components/sidebar-footer";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";
@@ -30,5 +30,27 @@ describe("SidebarFooter feedback button", () => {
     renderFooter({ trialActivationLocked: true });
     fireEvent.click(screen.getByTestId("nav-feedback"));
     expect(useFeedbackStore.getState().open).toBe(false);
+  });
+});
+
+describe("SidebarFooter team entry", () => {
+  it("opens the named team above Settings", () => {
+    const onTeam = vi.fn();
+    renderFooter({ teamEntry: { label: "Example Studio" }, onTeam });
+    const entry = screen.getByTestId("nav-team");
+    expect(entry.textContent).toBe("Example Studio");
+    expect(entry.compareDocumentPosition(screen.getByTestId("nav-settings")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(entry);
+    expect(onTeam).toHaveBeenCalledOnce();
+  });
+  it("does not show a hidden entry", () => {
+    renderFooter();
+    expect(screen.queryByTestId("nav-team")).toBeNull();
+  });
+  it("disables team navigation under the trial lock", () => {
+    const onTeam = vi.fn();
+    renderFooter({ teamEntry: { label: "Invite your team" }, onTeam, trialActivationLocked: true });
+    fireEvent.click(screen.getByTestId("nav-team"));
+    expect(onTeam).not.toHaveBeenCalled();
   });
 });

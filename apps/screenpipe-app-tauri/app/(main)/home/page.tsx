@@ -111,7 +111,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { PlanExpirationNotice } from "@/components/plan-expiration-notice";
-import type { AppUser } from "@/lib/app-entitlement";
+import { getEnterpriseAccount, type AppUser } from "@/lib/app-entitlement";
+import { useTeamSummary } from "@/lib/hooks/use-team-summary";
 import { ONBOARDING_BRAIN_HANDOFF_EVENT } from "@/lib/live-views/onboarding-activation";
 import { ActivityLedger } from "@/components/activity-ledger";
 import { ShortcutKeycap } from "@/components/shortcut-keycap";
@@ -336,7 +337,21 @@ function HomeContent() {
     void updateSettings({ firstRunGuideDone: true });
   }, [updateSettings]);
 
-  const { isSectionHidden, isSettingLocked, isManagedDeployment, isManagedDeploymentResolved } = useManagedPolicy();
+  const { isSectionHidden, isSettingLocked, isManagedDeployment, isManagedDeploymentResolved, policy } = useManagedPolicy();
+  const enterpriseAccount = getEnterpriseAccount(settings.user);
+  const teamEntry = useTeamSummary({
+    token: settings.user?.token,
+    enabled: isSettingsLoaded && isManagedDeploymentResolved && !trialActivationLocked && !isSectionHidden("team") && !isSectionHidden("account"),
+    enterprise: isManagedDeployment || Boolean(enterpriseAccount?.team_id),
+    orgName: isManagedDeployment ? policy.orgName : enterpriseAccount?.org_name,
+  });
+  const openTeam = () => {
+    if (teamEntry) void openUrl(teamEntry.href).catch(() => toast({
+      title: "Could not open team page",
+      description: "Please try again.",
+      variant: "destructive",
+    }));
+  };
   const workflowsAvailable = workflowsRolloutEnabled && isManagedDeploymentResolved && !isManagedDeployment && !trialActivationLocked;
   const workflowsActive = workflowsAvailable && requestedMode === "workflows";
   useEffect(() => { if (workflowsActive) setWorkflowsVisited(true); }, [workflowsActive]);
@@ -1639,7 +1654,7 @@ function HomeContent() {
                 <div id="announcement-sidebar-slot" />
               </div>
 
-              <SidebarFooter onSettings={() => openSettings()} onHelp={() => { void setActiveSection("help"); }}
+              <SidebarFooter teamEntry={teamEntry} onTeam={openTeam} onSettings={() => openSettings()} onHelp={() => { void setActiveSection("help"); }}
                 isTranslucent={isTranslucent} hideHelp={isSectionHidden("help")} helpActive={activeSection === "help"} trialActivationLocked={trialActivationLocked} />
             </div>
           </AppSidebar>
@@ -1721,7 +1736,7 @@ function HomeContent() {
           </div>
 
           {workflowsAvailable && (workflowsActive || workflowsVisited) && <div className={cn("flex-1 min-w-0 h-full", !workflowsActive && "hidden")}><IntegratedWorkflows active={workflowsActive} fullscreen={isFullscreen} onModeChange={changeMode} recordingStatus={<RecordingStatus {...recordingStatusProps} />}
-            navigationFooter={({ openKeyboardShortcuts }) => <SidebarFooter onSettings={() => openSettings()}
+            navigationFooter={({ openKeyboardShortcuts }) => <SidebarFooter teamEntry={teamEntry} onTeam={openTeam} onSettings={() => openSettings()}
               onHelp={() => { void setActiveSection("help"); }} onKeyboardShortcuts={openKeyboardShortcuts}
               hideHelp={isSectionHidden("help")} trialActivationLocked={trialActivationLocked} />} /></div>}
           <WorkflowsHelpDialog open={workflowsActive && (activeSection === "help" || activeSection === "feedback") && !isSectionHidden("help")}
