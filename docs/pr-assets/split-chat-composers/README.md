@@ -11,3 +11,5 @@ All desktop images are 1440 × 1000. `compact.png` is 1000 × 780. The 24-image 
 Both panes use the shared input, attachment tray, utility menu, model/effort controls, usage indicator, dictation control, and queue display. The eval also verifies late file extraction after switching panes and dictation/shortcut isolation.
 
 Native WebKit, physical microphone permissions/capture, native file picking, and live provider/transcription execution remain unverified. Their existing adapters are mocked in browser evidence.
+
+The main light/dark and add-menu images were refreshed from source revision `5f6468df8de0cd96d36adcfbfec8c11a63d0d6d8` on September 25, 2026. The complete browser interaction eval passed again for this refresh.
