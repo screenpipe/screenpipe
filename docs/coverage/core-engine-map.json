@@ -886,6 +886,28 @@
       "notes": "Batch deferral, cleanup, language detection, result normalization, and real recording/transcription tests. Hardware/model-heavy tests are ignored by default. Also covers ffmpeg encode child reaping on error paths."
     },
     {
+      "id": "audio-windows-parakeet-provider",
+      "label": "Windows Parakeet execution provider selection",
+      "crate": "screenpipe-audio",
+      "files": [
+        "src/transcription/parakeet_windows.rs"
+      ],
+      "platforms": [
+        "windows"
+      ],
+      "layers": [
+        "audio",
+        "transcription"
+      ],
+      "flows": [
+        "audio-record-transcribe"
+      ],
+      "criticality": "high",
+      "confidence": "partial",
+      "kind": "unit",
+      "notes": "Registers existing CPU override, eligible adapter selection, DXGI ordinal, error fallback and adapter determinism tests. Windows-only; manifest registration does not verify execution on physical GPU hardware."
+    },
+    {
       "id": "audio-device-stream-health",
       "label": "Audio device, stream, and lag health",
       "crate": "screenpipe-audio",
