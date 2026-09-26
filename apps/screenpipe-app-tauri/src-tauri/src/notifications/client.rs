@@ -122,7 +122,7 @@ fn notification_payload(
     payload
 }
 
-async fn post_notification(payload: &serde_json::Value) -> Result<(), String> {
+pub(super) async fn post_notification(payload: &serde_json::Value) -> Result<(), String> {
     const ATTEMPTS: usize = 3;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))

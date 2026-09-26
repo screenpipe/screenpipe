@@ -65,3 +65,10 @@ describe("notification analytics properties", () => {
     });
   });
 });
+
+
+it("classifies workflow notifications without leaking their durable identity", () => {
+  const properties = notificationAnalyticsProperties({ id: "workflow-review:wf-private:3", type: "pipe" }, "bell");
+  expect(properties.notification_category).toBe("workflow_review");
+  expect(JSON.stringify(properties)).not.toContain("wf-private");
+});

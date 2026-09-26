@@ -2,9 +2,11 @@
 // https://screenpipe.com
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { HomeCardAgentActions } from "@/components/chat/home-card-agent-actions";
 import { ConnectedShareDialog } from "@/components/connected-share-dialog";
+import { WORKFLOW_REVIEW_EVENT, pendingWorkflowReview, workflowReviewOpened, type WorkflowReviewRequest } from "@/lib/workflows/notification";
 import { createWorkflowShareArtifact, type ConnectedShareArtifact, type ConnectedShareApp } from "@/lib/connected-share";
 import { ConnectionsSection } from "@/components/settings/connections-section";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -41,6 +43,26 @@ const platform = process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock"
   : desktopWorkflowsPlatform;
 export function IntegratedWorkflows({ active, fullscreen = false, onModeChange, recordingStatus, navigationFooter }: { active: boolean; fullscreen?: boolean; onModeChange: (mode: ProductMode) => void; recordingStatus: React.ReactNode; navigationFooter?: WorkflowsAppProps["navigationFooter"] }) {
   const enabled = useWorkflowsRolloutEnabled();
+  const [readyWorkflowIds, setReadyWorkflowIds] = useState<string[]>([]);
+  useTauriEvent<string[]>("workflow-review-ready", event => {
+    if (Array.isArray(event.payload)) setReadyWorkflowIds(event.payload.filter(id => typeof id === "string").slice(0, 100));
+  });
+  const [reviewRequest, setReviewRequest] = useState<WorkflowReviewRequest | undefined>(() => pendingWorkflowReview());
+  const handledReviews = useRef(new Set<string>());
+  useEffect(() => {
+    const receive = (event: Event) => {
+      const request = (event as CustomEvent<WorkflowReviewRequest>).detail;
+      if (!handledReviews.current.has(request.key)) setReviewRequest(request);
+    };
+    window.addEventListener(WORKFLOW_REVIEW_EVENT, receive);
+    return () => window.removeEventListener(WORKFLOW_REVIEW_EVENT, receive);
+  }, []);
+  const handleReview = useCallback((found: boolean) => {
+    if (!reviewRequest || handledReviews.current.has(reviewRequest.key)) return;
+    handledReviews.current.add(reviewRequest.key);
+    workflowReviewOpened(reviewRequest, found);
+    setReviewRequest(undefined);
+  }, [reviewRequest]);
   const [accessRequested, setAccessRequested] = useState(false);
   const [analysisUnavailableReason, setAnalysisUnavailableReason] = useState<string | undefined>(platform.managesAnalysis ? "Checking workflow access…" : undefined);
   const [shareArtifact, setShareArtifact] = useState<ConnectedShareArtifact | null>(null);
@@ -68,7 +90,7 @@ export function IntegratedWorkflows({ active, fullscreen = false, onModeChange, 
         onConnectionClose={closeConnections}
       />}
 
-      <WorkflowsApp onAnalysisUnavailable={() => setAccessRequested(true)} analysisUnavailableReason={analysisUnavailableReason} composerAccessory={composerAccessory} fullscreen={fullscreen} onShareWorkflow={openShare} workflowAgentActions={workflowAgentActions} platform={platform} active={active} storageKey={null}
+      <WorkflowsApp readyWorkflowIds={readyWorkflowIds} reviewRequest={reviewRequest} onReviewRequestHandled={handleReview} onAnalysisUnavailable={() => setAccessRequested(true)} analysisUnavailableReason={analysisUnavailableReason} composerAccessory={composerAccessory} fullscreen={fullscreen} onShareWorkflow={openShare} workflowAgentActions={workflowAgentActions} platform={platform} active={active} storageKey={null}
         toolbarAccessory={platform.managesAnalysis ? <WorkflowAccess requested={accessRequested} onRequestChange={setAccessRequested} active={active} onAccessChange={setAnalysisUnavailableReason} /> : process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock" ? <WorkflowTasksPrompt active={active} tasks={fixtureWorkflowTasks} /> : undefined}
         recordingStatus={recordingStatus} navigationFooter={navigationFooter}
         navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />} />

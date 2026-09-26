@@ -836,6 +836,10 @@ pub(crate) fn dispatch_notification_action(json: String) {
             return;
         }
 
+        if crate::notifications::workflow::open_review(app, &url) {
+            return;
+        }
+
         let is_in_app = url.starts_with("screenpipe://");
         let app_clone = app.clone();
         std::thread::spawn(move || {
@@ -954,6 +958,10 @@ pub(crate) fn dispatch_notification_action(json: String) {
         // Guard against senders putting a browser URL into "deeplink" or a
         // screenpipe:// URL into "link". We route on actual scheme, not on
         // the declared type, so a typo doesn't break the click.
+        if crate::notifications::workflow::open_review(app, &url) {
+            return;
+        }
+
         let is_in_app = url.starts_with("screenpipe://");
         let app_clone = app.clone();
         std::thread::spawn(move || {

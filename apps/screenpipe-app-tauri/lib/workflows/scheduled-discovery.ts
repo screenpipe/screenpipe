@@ -1,6 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
+import { trackWorkflowOutcome } from "./notification";
 import { requireWorkflowsRollout, syncWorkflowsRollout } from "./rollout";
 import { localFetch } from "@/lib/api";
 import type { WorkflowAnalysis, WorkflowAnalysisJob, WorkflowMap } from "@screenpipe/workflows-ui";
@@ -241,6 +242,7 @@ export async function saveWorkflowCorrections(analysis: WorkflowAnalysis) {
 export async function saveWorkflowFeedback(workflow: WorkflowMap, feedback: string) {
   if (!workflow.id) throw new Error("Refresh this workflow before sending feedback.");
   await request("/workflows/corrections", { id: workflow.id, correction: feedback });
+  trackWorkflowOutcome("workflow_feedback_saved", workflow.id);
 }
 
 /** Compare-and-save a scoped feedback refinement through the catalog writer. */
@@ -251,6 +253,7 @@ export async function applyWorkflowFeedback(workflow: WorkflowMap, learning: str
   const correction = prior.includes(note) ? prior : [prior, note].filter(Boolean).join("\n\n");
   const result = await request("/workflows/corrections", { id: workflow.id, correction, expected_revision: workflow.revision ?? 0, changes });
   if (!result.success || result.workflow?.id !== workflow.id) throw new Error("Could not verify the saved workflow refinement.");
+  trackWorkflowOutcome("workflow_feedback_saved", workflow.id);
   return result.workflow as WorkflowMap;
 }
 

@@ -708,7 +708,7 @@ function OverviewView({
   );
 }
 
-function WorkflowsView({ workflows, knownWorkflowCount, filters, setFilters, openWorkflow, analyze, analyzing, error, stop, updatedAt, checkedThrough, changes, job, subscribe, activityState, analysisUnavailableReason }: { activityState: WorkflowActivityState; analysisUnavailableReason?: string; workflows: WorkflowMap[]; knownWorkflowCount: number; filters: WorkflowFilters; setFilters: (filters: WorkflowFilters) => void; openWorkflow: (index: number) => void; analyze: () => void; analyzing: boolean; error: string; stop?: () => void; updatedAt?: string; checkedThrough?: string; changes?: { created: number; updated: number }; job?: WorkflowAnalysisJob | null; subscribe?: WorkflowsPlatform["subscribeAnalysisActivity"] }) {
+function WorkflowsView({ reviewIds, workflows, knownWorkflowCount, filters, setFilters, openWorkflow, analyze, analyzing, error, stop, updatedAt, checkedThrough, changes, job, subscribe, activityState, analysisUnavailableReason }: { reviewIds?: ReadonlySet<string>; activityState: WorkflowActivityState; analysisUnavailableReason?: string; workflows: WorkflowMap[]; knownWorkflowCount: number; filters: WorkflowFilters; setFilters: (filters: WorkflowFilters) => void; openWorkflow: (index: number) => void; analyze: () => void; analyzing: boolean; error: string; stop?: () => void; updatedAt?: string; checkedThrough?: string; changes?: { created: number; updated: number }; job?: WorkflowAnalysisJob | null; subscribe?: WorkflowsPlatform["subscribeAnalysisActivity"] }) {
   const ui = useGT();
   const filtersId = useId();
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -752,6 +752,7 @@ function WorkflowsView({ workflows, knownWorkflowCount, filters, setFilters, ope
               <p className={styles.cardDescription}>{workflow.description}</p>
               <div className={styles.cardFooter}>
                 <div className={styles.cardSummary}>
+                  {workflow.id && reviewIds?.has(workflow.id) && <><span className={styles.readyToReview}>{ui("Ready to review")}</span><span aria-hidden="true">·</span></>}
                   {workflow.stages.length} steps
                   {timing && <><span aria-hidden="true">·</span>{`${formatEstimatedMinutes(timing.averageMinutes)} / run · estimated`}</>}
                 </div>
@@ -1297,7 +1298,7 @@ function PrivacyView({ runtime }: { runtime: WorkflowRuntime | null }) {
   </>;
 }
 
-export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, fullscreen = false, navigationBrand, composerAccessory, recordingStatus, statusNotice, toolbarAccessory, analysisUnavailableReason, onAnalysisUnavailable, navigationFooter, onShareWorkflow, workflowAgentActions }: WorkflowsAppProps) {
+export function WorkflowsApp({ readyWorkflowIds, reviewRequest, onReviewRequestHandled, platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, fullscreen = false, navigationBrand, composerAccessory, recordingStatus, statusNotice, toolbarAccessory, analysisUnavailableReason, onAnalysisUnavailable, navigationFooter, onShareWorkflow, workflowAgentActions }: WorkflowsAppProps) {
   const uiLanguage = useLocale();
   const ui = useGT();
   const shortcuts = useSidebarShortcuts();
@@ -1314,6 +1315,8 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   const runActivity = useWorkflowRunActivity(analysisJob, active && analyzing, platform.subscribeAnalysisActivity);
   const [analysisError, setAnalysisError] = useState("");
   const [selectedWorkflow, setSelectedWorkflow] = useState(0);
+  const [reviewIds, setReviewIds] = useState<ReadonlySet<string>>(new Set());
+  const [reviewError, setReviewError] = useState("");
   const activityPeriod: WorkflowActivityPeriod = 0;
   const [filters, setFilters] = useState<WorkflowFilters>(defaultWorkflowFilters);
   const [view, setView] = useState<AppView>("workflows");
@@ -1341,8 +1344,29 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   const openWorkflow = useCallback((index: number) => {
     if (index < 0) return;
     setSelectedWorkflow(index);
+    setReviewIds(previous => { const next = new Set(previous); const id = workflows[index]?.id; if (id) next.delete(id); return next; });
     navigate("workflow");
-  }, [navigate]);
+  }, [navigate, workflows]);
+
+  useEffect(() => {
+    if (readyWorkflowIds?.length) setReviewIds(previous => new Set([...previous, ...readyWorkflowIds]));
+  }, [readyWorkflowIds]);
+
+  const handledReview = useRef<string | null>(null);
+  useEffect(() => {
+    if (!active || !catalogReady || catalogLoadError || !reviewRequest || handledReview.current === reviewRequest.key) return;
+    handledReview.current = reviewRequest.key;
+    setReviewError("");
+    setReviewIds(new Set(reviewRequest.workflowIds ?? []));
+    setFilters(defaultWorkflowFilters);
+    const index = reviewRequest.workflowId ? workflows.findIndex(w => w.id === reviewRequest.workflowId) : -1;
+    if (index >= 0) openWorkflow(index);
+    else {
+      navigate("workflows");
+      if (reviewRequest.workflowId) setReviewError("This workflow is no longer available. Your other workflows are shown below.");
+    }
+    onReviewRequestHandled?.(!reviewRequest.workflowId || index >= 0);
+  }, [active, catalogReady, catalogLoadError, reviewRequest, workflows, openWorkflow, navigate, onReviewRequestHandled]);
 
   const focusWorkflowSearch = useCallback(() => {
     navigate("workflows");
@@ -1643,7 +1667,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
   switch (view) {
     case "overview": content = <OverviewView analysis={analysis ? { ...analysis, analysis: { workflows } } : null} analyzing={analyzing} error={analysisError} analyze={() => void analyze()} openWorkflow={openWorkflow} navigate={navigate} knownWorkflowCount={knownWorkflows.length} activityPeriod={activityPeriod} runtime={runtime} workProfile={workProfile} refreshRuntime={refreshRuntime} openAccount={platform.openAccount} />; break;
     case "time": content = <TimeView analysis={analysis} analyze={() => void analyze()} analyzing={analyzing} workProfile={workProfile} lens={timeLens} setLens={setTimeLens} />; break;
-    case "workflows": content = <WorkflowsView activityState={runActivity} analysisUnavailableReason={onAnalysisUnavailable ? undefined : analysisUnavailableReason} workflows={workflows} knownWorkflowCount={knownWorkflows.length} filters={filters} setFilters={setFilters} openWorkflow={openWorkflow} analyze={() => void analyze()} analyzing={analyzing} error={analysisError} stop={platform.cancelAnalysisJob ? () => { void platform.cancelAnalysisJob!().catch(error => setAnalysisError(String(error))); } : undefined} updatedAt={analysis?.analyzedAt} checkedThrough={analysis?.checkedThrough} changes={analysis?.changes} job={analysisJob} subscribe={platform.subscribeAnalysisActivity} />; break;
+    case "workflows": content = <WorkflowsView reviewIds={reviewIds} activityState={runActivity} analysisUnavailableReason={onAnalysisUnavailable ? undefined : analysisUnavailableReason} workflows={workflows} knownWorkflowCount={knownWorkflows.length} filters={filters} setFilters={setFilters} openWorkflow={openWorkflow} analyze={() => void analyze()} analyzing={analyzing} error={analysisError || reviewError} stop={platform.cancelAnalysisJob ? () => { void platform.cancelAnalysisJob!().catch(error => setAnalysisError(String(error))); } : undefined} updatedAt={analysis?.analyzedAt} checkedThrough={analysis?.checkedThrough} changes={analysis?.changes} job={analysisJob} subscribe={platform.subscribeAnalysisActivity} />; break;
     case "workflow": content = <WorkflowDetail key={activeWorkflow?.id || activeWorkflow?.title} onShareWorkflow={onShareWorkflow} workflowAgentActions={workflowAgentActions} workflow={activeWorkflow} navigate={navigate} platform={platform} workProfile={workProfile} saveEdits={catalogReady && platform.saveWorkflowEdits && (!activeScope || activeScope.kind === "personal") ? async (draft) => {
       let saved: WorkflowMap;
       try { saved = await platform.saveWorkflowEdits!(draft); }
