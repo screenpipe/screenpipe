@@ -221,6 +221,7 @@ describe('/v1/chat/completions free-plan route policy', () => {
 		['voice query', 'POST', '/v1/voice/query'],
 		['text to speech', 'POST', '/v1/text-to-speech'],
 		['voice chat', 'POST', '/v1/voice/chat'],
+		['workflow live voice', 'POST', '/v1/workflow-voice'],
 		['Vertex messages', 'POST', '/v1/messages'],
 		['Anthropic messages', 'POST', '/anthropic/v1/messages'],
 		['Anthropic models', 'GET', '/anthropic/v1/models'],

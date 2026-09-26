@@ -1031,7 +1031,7 @@ function WorkflowDetail({ canSaveAnswers, composerAccessory, active, onAnswersSa
         </div>
         <div className={styles.flowEndpoint}><span>Ends with</span><strong>{workflow.outcome}</strong></div>
       </section>}
-      <WorkflowQuestions workflow={workflow} active={active} composerAccessory={composerAccessory} save={canSaveAnswers && platform.saveWorkflowAnswers ? async correction => {
+      <WorkflowQuestions workflow={workflow} active={active} voice={platform.questionnaireVoice} save={canSaveAnswers && platform.saveWorkflowAnswers ? async correction => {
         try {
           const saved = await platform.saveWorkflowAnswers!(workflow, correction);
           onAnswersSaved(saved); return saved;

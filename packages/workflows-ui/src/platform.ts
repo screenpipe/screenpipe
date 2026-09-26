@@ -39,6 +39,7 @@ export type WorkflowAnalysisJob = {
 
 export type WorkflowsPlatform = {
   /** Save reviewed answers through the existing revision-checked correction writer. */
+  questionnaireVoice?: import("./questionnaire-voice").QuestionnaireVoice;
   saveWorkflowAnswers?: (workflow: WorkflowMap, correction: string) => Promise<WorkflowMap>;
   saveWorkflowEdits?: (draft: import("./workflow-edits").WorkflowEdit) => Promise<WorkflowMap>;
   modelPreference?: import("./model-choice").WorkflowModelPreference;

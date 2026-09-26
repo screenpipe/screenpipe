@@ -1,5 +1,6 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
+import { desktopQuestionnaireVoice } from "./questionnaire-voice";
 import { workflowModelPreference } from "./model-choice";
 import { desktopGuides } from "./guides";
 
@@ -155,7 +156,7 @@ export const desktopWorkflowsPlatform: WorkflowsPlatform = {
   analyzeCapturedWork: (days, options) => analyzeCapturedWork(days, options?.workProfile),
   loadCapturedWork: (_days, options) => browserPreview ? loadSavedAnalysis() : loadScheduledCatalog(options?.signal),
   saveCapturedWork: (analysis) => browserPreview ? saveAnalysis(analysis) : saveWorkflowCorrections(analysis),
-  ...(!browserPreview ? { saveWorkflowEdits, saveWorkflowAnswers, managesAnalysis: true, ensureAnalysisTask: ensureWorkflowTask,
+  ...(!browserPreview ? { saveWorkflowEdits, saveWorkflowAnswers, questionnaireVoice: desktopQuestionnaireVoice, managesAnalysis: true, ensureAnalysisTask: ensureWorkflowTask,
     startAnalysisJob: startWorkflowJob, getAnalysisJob: getWorkflowJob,
     getLatestAnalysisJob: latestWorkflowJob, cancelAnalysisJob: stopWorkflowJob,
     subscribeAnalysisActivity: subscribeWorkflowActivity } : {}),

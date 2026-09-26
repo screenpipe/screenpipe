@@ -351,6 +351,22 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			}
 		}
 
+		// Personal Live voice uses the verified account, never a client-supplied owner.
+		// DELETE stays available after an entitlement change so a call can be closed.
+		if (path === '/v1/workflow-voice') {
+			if (!authResult.isValid || !authResult.userId || authResult.service) return addCorsHeaders(createErrorResponse(401, 'Sign in to use voice.'));
+			if (request.method !== 'DELETE') {
+				const gate = paidHostedAiRouteError(authResult);
+				if (gate) return gate;
+			}
+			const owner = env.RATE_LIMITER.idFromName(`workflow-voice:${authResult.userId}`);
+			const headers = new Headers(request.headers);
+			headers.set('x-voice-account', authResult.userId);
+			const response = await env.RATE_LIMITER.get(owner).fetch(new Request('https://internal/workflow-voice', { method: request.method, headers, body: request.body }));
+			response.headers.set('Cache-Control', 'no-store');
+			return addCorsHeaders(response);
+		}
+
 		// Usage status endpoint - returns current usage without incrementing
 		if (path === '/v1/usage' && request.method === 'GET') {
 			// Anonymous auth results deliberately carry an `unknown` account plan:

@@ -125,19 +125,3 @@ describe("ComposerDictationControl", () => {
     expect(mocks.start).not.toHaveBeenCalled();
   });
 });
-
-it("reports pending voice work so an enclosing answer form cannot save an unfinished transcript", () => {
-  const onBusyChange = vi.fn();
-  mocks.status = "recording";
-  const props = { inputValue: "", inputRef, onValueChange: vi.fn(), disabled: false, sessionId: "answer", isMac: true, onBusyChange };
-  const view = render(<ComposerDictationControl {...props} />);
-  expect(onBusyChange).toHaveBeenLastCalledWith(true);
-  mocks.status = "transcribing";
-  view.rerender(<ComposerDictationControl {...props} />);
-  expect(onBusyChange).toHaveBeenLastCalledWith(true);
-  mocks.status = "idle";
-  view.rerender(<ComposerDictationControl {...props} />);
-  expect(onBusyChange).toHaveBeenLastCalledWith(false);
-  view.unmount();
-  expect(onBusyChange).toHaveBeenLastCalledWith(false);
-});

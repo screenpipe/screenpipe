@@ -86,7 +86,5 @@ export type WorkflowComposerAccessoryProps = {
   onValueChange: (value: string) => void;
   disabled: boolean;
   sessionId: string;
-  shortcutsEnabled?: boolean;
-  onBusyChange?: (busy: boolean) => void;
 };
 export type WorkflowComposerAccessory = (props: WorkflowComposerAccessoryProps) => import("react").ReactNode;

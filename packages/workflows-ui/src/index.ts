@@ -25,3 +25,5 @@ export { guideMarkdown } from "./guide";
 export * from "./confidential-verification";
 
 export * from "./workflow-edits";
+
+export * from "./questionnaire-voice";

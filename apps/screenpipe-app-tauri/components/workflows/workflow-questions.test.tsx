@@ -1,11 +1,17 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
-import React, { useEffect } from "react";
+import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { WorkflowQuestions } from "../../../../packages/workflows-ui/src/workflow-questions";
 import { readWorkflowAnswers, writeWorkflowAnswers } from "../../../../packages/workflows-ui/src/workflow-answers";
-import type { WorkflowComposerAccessoryProps } from "../../../../packages/workflows-ui/src/assistant";
+import type { QuestionnaireVoice, VoiceState } from "../../../../packages/workflows-ui/src/questionnaire-voice";
+const live = vi.hoisted(() => ({ state: undefined as undefined | ((s: VoiceState) => void), transcript: undefined as undefined | ((s: string) => void), stop: vi.fn() }));
+vi.mock("../../../../packages/workflows-ui/src/questionnaire-voice", async original => ({ ...await original<object>(), QuestionnaireVoiceSession: class {
+ constructor(_adapter: unknown, state: (s: VoiceState) => void, transcript: (s: string) => void) { live.state = state; live.transcript = transcript; }
+ start() { live.state?.({ status: "listening", remaining: 120 }); }
+ stop() { live.stop(); live.state?.({ status: "stopped", remaining: 120 }); }
+} }));
 import { fixtureWorkflowAnalysis } from "@screenpipe/workflows-ui/fixture";
 const question = "Who reviews the synthesis?";
 const workflow = { ...fixtureWorkflowAnalysis.analysis.workflows[0], id: "wf-review", revision: 4, userCorrection: "Keep the reviewed step.", openQuestions: [question, question, "Where is it saved?"] };
@@ -23,7 +29,7 @@ it("preserves existing notes and old questions, replaces edited answers, and sup
 it("deduplicates generated questions and saves reviewed answers only on submit, restoring them on return", async () => {
   const save = vi.fn(async (userCorrection: string) => ({ ...workflow, revision: 5, userCorrection }));
   const view = render(<WorkflowQuestions workflow={workflow} save={save} />);
-  expect(screen.getAllByRole("textbox")).toHaveLength(2);
+  expect(screen.getAllByRole("textbox")).toHaveLength(3);
   fireEvent.change(screen.getByLabelText(question), { target: { value: "The project lead." } });
   expect(save).not.toHaveBeenCalled();
   fireEvent.submit(screen.getByRole("button", { name: "Save answers" }).closest("form")!);
@@ -53,24 +59,28 @@ it("keeps a failed draft, prevents duplicate submission, and permits retry", asy
   await screen.findByText("Answers saved for the next workflow update.");
 });
 
-function Voice(props: WorkflowComposerAccessoryProps) {
-  useEffect(() => { props.onBusyChange?.(true); return () => props.onBusyChange?.(false); }, [props.onBusyChange]);
-  return <button type="button" onClick={() => { props.onValueChange(props.inputValue + " Spoken answer."); props.onBusyChange?.(false); }}>Finish dictation</button>;
-}
-it("dictates only into the selected input, blocks save during voice, and unmounts voice when hidden", async () => {
+it("uses a section voice control, protects manual edits during inference, supports undo, and stops when hidden", async () => {
+  let resolve!: (value: any) => void;
+  const voice: QuestionnaireVoice = { connect: vi.fn(), disconnect: vi.fn(), fill: vi.fn(() => new Promise(yes => { resolve = yes; })) };
   const save = vi.fn(async (userCorrection: string) => ({ ...workflow, userCorrection }));
-  const props = { workflow, save, composerAccessory: (p: WorkflowComposerAccessoryProps) => <Voice {...p} /> };
-  const view = render(<WorkflowQuestions {...props} />);
-  fireEvent.change(screen.getByLabelText(question), { target: { value: "Typed answer." } });
-  fireEvent.focus(screen.getByLabelText(question));
+  const view = render(<WorkflowQuestions workflow={workflow} save={save} voice={voice} />);
+  const mic = screen.getByRole("button", { name: "Answer with voice" });
+  expect(mic.closest("form")).toBeNull();
+  fireEvent.click(mic);
+  live.transcript?.("The lead reviews it. It is saved in the shared drive.");
+  fireEvent.click(screen.getByRole("button", { name: "Stop recording" }));
+  await waitFor(() => expect(voice.fill).toHaveBeenCalled());
+  fireEvent.change(screen.getByLabelText(question), { target: { value: "Typed while filling" } });
   expect(screen.getByRole("button", { name: "Save answers" })).toBeDisabled();
-  fireEvent.click(screen.getByRole("button", { name: "Finish dictation" }));
-  expect(screen.getByLabelText(question)).toHaveValue("Typed answer. Spoken answer.");
-  expect(screen.getByLabelText("Where is it saved?")).toHaveValue("");
+  resolve([{ question, answer: "The lead", quote: "The lead reviews it." }, { question: "Where is it saved?", answer: "Shared drive", quote: "shared drive" }]);
+  await waitFor(() => expect(screen.getByLabelText("Where is it saved?")).toHaveValue("Shared drive"));
+  expect(screen.getByLabelText(question)).toHaveValue("Typed while filling");
   expect(save).not.toHaveBeenCalled();
-  view.rerender(<WorkflowQuestions {...props} active={false} />);
-  expect(screen.queryByRole("button", { name: "Finish dictation" })).not.toBeInTheDocument();
-  await waitFor(() => expect(screen.getByRole("button", { name: "Save answers" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Undo voice answer: Where is it saved?" }));
+  expect(screen.getByLabelText("Where is it saved?")).toHaveValue("");
+  view.rerender(<WorkflowQuestions workflow={workflow} save={save} voice={voice} active={false} />);
+  expect(live.stop).toHaveBeenCalled();
+  expect(screen.getByLabelText(question)).toHaveValue("Typed while filling");
 });
 
 it("keeps a local draft while receiving new saved answers and preserves untouched remote answers", async () => {
