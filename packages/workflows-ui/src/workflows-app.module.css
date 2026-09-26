@@ -461,6 +461,7 @@
 .cardFooter { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: 18px; }
 .cardSummary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
 .cardSummary span { opacity: .5; }
+.cardSummary .readyToReview { opacity: 1; color: var(--ink); font-weight: 500; }
 .cardActions { display: flex; align-items: center; margin-left: auto; }
 .cardOpen { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 28px; padding: 4px 0 4px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); font: inherit; font-size: 11px; font-weight: 550; white-space: nowrap; cursor: pointer; }
 .cardOpen::after { content: ""; position: absolute; inset: 0; border-radius: 8px; }

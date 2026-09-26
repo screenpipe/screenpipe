@@ -2,7 +2,7 @@
 // https://screenpipe.com
 
 import React from "react";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { RecordingStatus } from "@/components/recording-status";
 import { SidebarFooter } from "@/components/sidebar-footer";
@@ -13,7 +13,11 @@ vi.mock("@/lib/workflows/desktop-platform", async () => {
   return { desktopWorkflowsPlatform: {
     ...createFixtureWorkflowsPlatform(),
     // jsdom cannot rasterize the browser fixture's SVG screenshots.
-    loadCapturedWork: async () => structuredClone(fixtureWorkflowAnalysis),
+    loadCapturedWork: async () => {
+      const catalog = structuredClone(fixtureWorkflowAnalysis);
+      catalog.analysis.workflows.forEach((workflow, index) => { workflow.id = `wf-fixture-${index}`; });
+      return catalog;
+    },
   } };
 });
 vi.mock("@/components/connected-share-dialog", () => ({
@@ -125,4 +129,35 @@ it("opens quiet header filters and restores the catalog after clearing them", as
   expect(screen.queryByRole("button", { name: "Clear filters" })).not.toBeInTheDocument();
   fireEvent.click(filters);
   expect(screen.queryByRole("region", { name: "Workflow filters" })).not.toBeInTheDocument();
+});
+
+
+
+it("waits for the catalog then opens the exact workflow once across delivery retries", async () => {
+  sessionStorage.clear();
+  const posthog = (await import("posthog-js")).default;
+  vi.mocked(posthog.capture).mockClear();
+  const { rememberWorkflowReview } = await import("@/lib/workflows/notification");
+  const request = { key: "cold-start", workflowId: "wf-fixture-4" };
+  rememberWorkflowReview(request);
+  window.history.replaceState(null, "", "/home?mode=workflows");
+  render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
+  expect(await screen.findByRole("button", { name: "Create SOP" })).toBeVisible();
+  expect(screen.getByRole("textbox", { name: "Workflow title" })).toHaveValue("Research synthesis");
+  act(() => rememberWorkflowReview(request));
+  await waitFor(() => expect(vi.mocked(posthog.capture).mock.calls.filter(c => c[0] === "workflow_notification_opened")).toHaveLength(1));
+  expect(sessionStorage.getItem("screenpipe:workflow-review-request")).toBeNull();
+});
+
+it("recovers a removed workflow into the catalog without claiming it opened", async () => {
+  sessionStorage.clear();
+  const posthog = (await import("posthog-js")).default;
+  vi.mocked(posthog.capture).mockClear();
+  const { rememberWorkflowReview } = await import("@/lib/workflows/notification");
+  rememberWorkflowReview({ key: "missing", workflowId: "wf-missing" });
+  window.history.replaceState(null, "", "/home?mode=workflows");
+  render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
+  expect(await screen.findByText("This workflow is no longer available. Your other workflows are shown below.")).toBeVisible();
+  expect(screen.getByRole("heading", { name: "Your workflows" })).toBeVisible();
+  expect(posthog.capture).toHaveBeenCalledWith("workflow_notification_open_failed", expect.objectContaining({ reason: "workflow_unavailable" }));
 });

@@ -2296,6 +2296,7 @@ async fn main() {
             crate::disk_pressure_notifications::start(app_handle.clone());
             activity_history::start(app_handle.clone());
             first_run_summary::start(app_handle.clone());
+            notifications::workflow::start(app_handle.clone());
 
             // Background ChatGPT OAuth token refresh — keeps access tokens
             // fresh so the lazy path in get_valid_token() rarely needs to

@@ -136,6 +136,11 @@ export type WorkflowRecording = {
 };
 
 export type WorkflowsAppProps = {
+  /** Quiet in-app alternative to interrupting a focused workflow reader. */
+  readyWorkflowIds?: string[];
+  /** Host-owned request survives cold startup until the saved catalog loads. */
+  reviewRequest?: { key: string; workflowId?: string; workflowIds?: string[] };
+  onReviewRequestHandled?: (found: boolean) => void;
   platform: WorkflowsPlatform;
   initialAnalysis?: WorkflowAnalysis | null;
   storageKey?: string | null;

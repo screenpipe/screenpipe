@@ -1,5 +1,6 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
+import { trackWorkflowOutcome } from "./notification";
 import {
   guideKey,
   guideMarkdown,
@@ -67,7 +68,10 @@ export const desktopGuides: NonNullable<WorkflowsPlatform["guides"]> = {
     await open(screenpipeWebUrl(`/sops/${result.id}`, PROD_WEB_BASE));
   },
   load: (workflow) => loadGuideFromDisk(guideKey(workflow)),
-  save: saveGuideToDisk,
+  async save(guide) {
+    await saveGuideToDisk(guide);
+    trackWorkflowOutcome("workflow_sop_saved", guide.workflowKey);
+  },
   async generate(workflow, signal, progress) {
     await requireSopGenerationAccess(signal);
     const text = await runWorkflowAgent({
