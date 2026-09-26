@@ -37,6 +37,14 @@ client names. HTTP MCP now reports successful searches through the same
 best-effort local telemetry endpoint as stdio MCP; empty/failed searches do not
 produce qualified-value events.
 
+## Hermes and OpenClaw
+
+Build `installers/screenpipe-agent/` with `bun run build:installers` for a portable,
+read-only plugin with recorder setup, OS permission guidance, status, and source
+attribution. Screenpipe must remain running on the recording computer independently
+of the agent. See the [agent setup guide](plugins/screenpipe-agent/README.md) for
+installation, remote agents, app controls, and enterprise handoff.
+
 ## Installable plugins
 
 Build the local Claude Desktop extension and the cloud plugin from source:
@@ -160,7 +168,7 @@ Point any MCP client that supports HTTP transport at the `/mcp` endpoint:
 
 If your machines are on different networks, expose port 3031 via Tailscale, SSH tunnel, or similar — see the [OpenClaw integration guide](https://docs.screenpi.pe/openclaw) for detailed examples.
 
-> **Note:** The HTTP server currently exposes `search_content` only. The stdio server has the full tool set (export-video, list-meetings, activity-summary, search-elements, frame-context). We're working on bringing HTTP to full parity.
+> **Note:** The HTTP server exposes `search_content` and `screenpipe-status`. The stdio server has the full tool set (export-video, list-meetings, activity-summary, search-elements, frame-context). We're working on bringing HTTP to full parity.
 
 ### Option 4: From Source
 
@@ -259,7 +267,7 @@ error text on a missing token also prints the base currently in use.
 - Priority 3 is populated by the desktop app, which writes `gateway_url` from
   the org's policy poll. It needs an admin signed in on that machine; on a
   server or CI box use the env var or the flag.
-- The HTTP transport (`--http`) exposes `search_content` only; `team-*` tools are
+- The HTTP transport (`--http`) exposes `search_content` and `screenpipe-status`; `team-*` tools are
   stdio-only.
 - The `.mcpb` bundle (Claude Desktop extension install) has no UI for these
   variables — use the manual NPX config above for gateway orgs.

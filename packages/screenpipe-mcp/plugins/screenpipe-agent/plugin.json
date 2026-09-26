@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "screenpipe-agent",
+  "version": "0.1.0",
+  "description": "Give Hermes and OpenClaw context from your computer history. Requires the Screenpipe app running in the background.",
+  "author": {
+    "name": "Screenpipe",
+    "url": "https://screenpipe.com"
+  },
+  "homepage": "https://screenpipe.com",
+  "repository": "https://github.com/screenpipe/screenpipe",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": [
+    "screenpipe",
+    "hermes",
+    "openclaw",
+    "computer-history"
+  ]
+}

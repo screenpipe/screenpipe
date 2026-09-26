@@ -68,6 +68,25 @@ try {
     writeFileSync(target, bytes);
   }
   writeFileSync(path.join(output, "screenpipe-cloud.zip"), zipSync(cloudFiles));
+  // Portable local bundle for Hermes and OpenClaw; no runtime package download.
+  const agentManifest = JSON.parse(read("plugins/screenpipe-agent/plugin.json"));
+  agentManifest.version = pkg.version;
+  const agentFiles = {
+    "plugin.json": json(agentManifest),
+    "mcp.json": read("plugins/screenpipe-agent/mcp.json"),
+    "dist/index.js": read("dist/index.js"),
+    "skills/screenpipe/SKILL.md": read("plugins/screenpipe-agent/skills/screenpipe/SKILL.md"),
+    "README.md": read("plugins/screenpipe-agent/README.md"),
+    "LICENSE.md": license,
+  };
+  const agentDir = path.join(output, "screenpipe-agent");
+  rmSync(agentDir, { recursive: true, force: true });
+  for (const [file, bytes] of Object.entries(agentFiles)) {
+    const target = path.join(agentDir, file);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, bytes);
+  }
+  writeFileSync(path.join(output, "screenpipe-agent.zip"), zipSync(agentFiles));
   copyFileSync(path.join(root, "plugins/screenpipe-cloud/SUBMISSION.md"), path.join(output, "SUBMISSION.md"));
   console.log(`Installers written to ${output}`);
 } finally {
