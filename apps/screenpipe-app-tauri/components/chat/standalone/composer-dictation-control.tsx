@@ -28,6 +28,7 @@ type ComposerDictationControlProps = {
   sessionId: string | null;
   isMac: boolean;
   shortcutsEnabled?: boolean;
+  onBusyChange?: (busy: boolean) => void;
 };
 
 const HOLD_TO_TALK_MS = 500;
@@ -40,6 +41,7 @@ export function ComposerDictationControl({
   sessionId,
   isMac,
   shortcutsEnabled,
+  onBusyChange,
 }: ComposerDictationControlProps) {
 
   const ui = useGT();
@@ -51,6 +53,10 @@ export function ComposerDictationControl({
     sessionId,
     shortcutsEnabled,
   });
+  React.useEffect(() => {
+    onBusyChange?.(["requesting", "recording", "transcribing"].includes(dictation.status));
+    return () => onBusyChange?.(false);
+  }, [dictation.status, onBusyChange]);
   const pressStartedAtRef = React.useRef(0);
   const pressBeganActiveRef = React.useRef(false);
   const pointerCleanupRef = React.useRef<(() => void) | null>(null);

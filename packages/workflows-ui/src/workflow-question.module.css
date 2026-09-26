@@ -1,11 +1,16 @@
 /* screenpipe — AI that knows everything you've seen, said, or heard */
 /* https://screenpipe.com */
-.question { box-sizing: border-box; display: flex; align-items: flex-start; gap: 9px; width: 100%; padding: 9px 6px; border: 0; border-radius: 4px; background: transparent; color: var(--ink, #171914); font: inherit; font-size: 13px; line-height: 1.5; text-align: left; cursor: pointer; }
-.question span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.question svg { flex-shrink: 0; margin-top: 3px; color: var(--muted, #78786f); }
-.question:hover { background: var(--soft, #f1f2ed); }
-.question:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
-
-.question > svg:last-child { opacity: 0; }
-.question:hover > svg:last-child, .question:focus-visible > svg:last-child { opacity: 1; }
-@media (hover: none) { .question { min-height: 44px; } .question > svg:last-child { opacity: 1; } }
+.questions { max-width: 760px; }
+.hint { color: var(--muted); font-size: 13px; margin: 6px 0 24px; }
+.field { position: relative; margin: 0 0 24px; }
+.field label { display: block; font-size: 14px; line-height: 1.5; margin-bottom: 8px; }
+.field textarea { box-sizing: border-box; width: 100%; min-height: 112px; resize: vertical; padding: 12px 12px 44px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; font-size: 14px; line-height: 1.6; }
+.field textarea::placeholder { color: var(--muted); }
+.field textarea:focus { outline: 1px solid var(--ink); outline-offset: -1px; }
+.voice { --signal: 0 0% 20%; --signal-foreground: 0 0% 100%; position: absolute; right: 8px; bottom: 10px; display: flex; justify-content: flex-end; max-width: calc(100% - 16px); }
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.actions button { min-height: 36px; padding: 8px 14px; border-radius: 6px; background: var(--ink); color: var(--panel); font-size: 13px; }
+.actions button:disabled { opacity: .45; cursor: default; }
+.actions button:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.actions span, .error { font-size: 12px; color: var(--muted); }
+.error { color: var(--ink); }

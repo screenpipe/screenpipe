@@ -188,7 +188,15 @@ export function WorkflowEditor({ workflow, save, actions, renderSource }: {
     }
   }
   useEffect(() => {
-    if (!dirty && !saving && draft.expected_revision !== (workflow.revision ?? 0)) useLatest();
+    if (dirty || saving || draft.expected_revision === (workflow.revision ?? 0)) return;
+    const latest = workflowEdit(workflow);
+    if (JSON.stringify({ ...payload(draft), expected_revision: latest.expected_revision }) === JSON.stringify(latest)) {
+      // Answer reviews advance the revision without changing the document.
+      // Retain block keys so screenshots and playback do not remount or shift scroll.
+      const next = { ...draft, expected_revision: latest.expected_revision };
+      baseline.current = next; setInitial(next); update(next);
+      setHistory(previous => previous.map(entry => ({ ...entry, expected_revision: latest.expected_revision })));
+    } else useLatest();
   }, [workflow.revision, dirty, saving]);
   const flush = useRef(submit);
   flush.current = submit;

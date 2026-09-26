@@ -485,6 +485,16 @@ export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixt
       const value = restore(); await Promise.all(value.analysis.workflows.map(rasterizeFixture)); return structuredClone(value);
     },
     analyzeCapturedWork: async () => restore(),
+    saveWorkflowAnswers: async (target, correction) => {
+      restore();
+      const workflow = current.analysis.workflows.find(w => (w.id ?? w.title) === (target.id ?? target.title));
+      if (!workflow || (workflow.revision ?? 0) !== (target.revision ?? 0)) throw new Error("Workflow changed. Try again.");
+      const saved = { ...workflow, userCorrection: correction, revision: (workflow.revision ?? 0) + 1 };
+      const next = { ...current, analysis: { workflows: current.analysis.workflows.map(w => w === workflow ? saved : w) } };
+      localStorage.setItem(storageKey, JSON.stringify(next));
+      current = next;
+      return saved;
+    },
     saveWorkflowEdits: async (draft) => {
       restore();
       const workflow = current.analysis.workflows.find(w => (w.id ?? w.title) === draft.id);

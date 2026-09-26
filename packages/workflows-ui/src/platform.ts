@@ -38,6 +38,8 @@ export type WorkflowAnalysisJob = {
 };
 
 export type WorkflowsPlatform = {
+  /** Save reviewed answers through the existing revision-checked correction writer. */
+  saveWorkflowAnswers?: (workflow: WorkflowMap, correction: string) => Promise<WorkflowMap>;
   saveWorkflowEdits?: (draft: import("./workflow-edits").WorkflowEdit) => Promise<WorkflowMap>;
   modelPreference?: import("./model-choice").WorkflowModelPreference;
   /** The existing scheduled-task runtime owns reconciliation and persistence. */
