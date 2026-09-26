@@ -42,11 +42,13 @@ import {
   normalizeTimeFields,
 } from "./time-normalization";
 import { resolveScreenpipeApiBase } from "./api-base";
+import { AGENT_INSTRUCTIONS, STATUS_TOOL, READ_ONLY_TOOLS, screenpipeStatus, isLocalRecorder } from "./agent-lifecycle";
 
 initMcpTelemetry({ transport: "stdio" });
 
 // Parse command line arguments
 const args = process.argv.slice(2);
+const readOnly = args.includes("--read-only");
 let port = 3030;
 let host = "localhost";
 let baseOverride: string | undefined;
@@ -98,6 +100,8 @@ const SCREENPIPE_API = resolveScreenpipeApiBase({ baseOverride, host, port });
 async function discoverApiKey(): Promise<string> {
   const envKey = process.env.SCREENPIPE_LOCAL_API_KEY || process.env.SCREENPIPE_API_KEY;
   if (envKey) return envKey;
+  // Never discover this machine's credential for a different recorder.
+  if (!isLocalRecorder(SCREENPIPE_API)) return "";
 
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const os = require("os");
@@ -311,6 +315,7 @@ const server = new Server(
     version: PKG_VERSION,
   },
   {
+    instructions: AGENT_INSTRUCTIONS,
     capabilities: {
       tools: {},
       resources: {},
@@ -322,6 +327,7 @@ const server = new Server(
 // Tools
 // ---------------------------------------------------------------------------
 const TOOLS: Tool[] = [
+  STATUS_TOOL,
   ...WORKFLOW_TOOLS,
   {
     name: "search-content",
@@ -1064,7 +1070,7 @@ const SYNTHESIZED_KINDS = new Set(["sop", "skill", "trajectory", "memory", "work
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   const { token } = discoverTeamConfig(teamApiOverride);
   const tools = token ? [...TOOLS, ...TEAM_TOOLS] : TOOLS;
-  return { tools };
+  return { tools: readOnly ? tools.filter(tool => READ_ONLY_TOOLS.has(tool.name)) : tools };
 });
 
 // ---------------------------------------------------------------------------
@@ -1262,7 +1268,7 @@ class BackendDownError extends Error {
   constructor(public readonly cause: unknown) {
     super(
       `screenpipe backend not running on ${SCREENPIPE_API}. ` +
-        `Start it with \`screenpipe\` in a terminal, or open the screenpipe desktop app.`,
+        `Use screenpipe-status for setup guidance. Open the Screenpipe app on the recording computer and keep it running in the background. Connector installation does not start recording. Download: https://screenpipe.com/download`,
     );
     this.name = "BackendDownError";
   }
@@ -1400,7 +1406,11 @@ function screenTag(textSource: unknown): string {
 // Tool handlers
 // ---------------------------------------------------------------------------
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+  const { name, arguments: args = {} } = request.params;
+
+  if (readOnly && !READ_ONLY_TOOLS.has(name)) {
+    return { isError: true, content: [{ type: "text", text: "This Screenpipe connector is read-only. Manage recording, sharing, and automations in the Screenpipe app." }] };
+  }
 
   if (!args) {
     throw new Error("Missing arguments");
@@ -1653,7 +1663,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               `${tag} ${content.app_name || "?"} | ${content.window_name || "?"}\n` +
                 `${content.timestamp || ""}\n` +
                 `${truncateMiddle(content.text || "", effectiveCap)}` +
-                tagsStr
+                tagsStr +
+                (readOnly && isLocalRecorder(SCREENPIPE_API) && Number.isSafeInteger(content.frame_id) && content.frame_id > 0
+                  ? `\nSource: screenpipe://frame/${content.frame_id}` : "")
             );
             if (includeFrames && content.frame) {
               images.push({
@@ -1699,6 +1711,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const header =
+          (readOnly ? "From your Screenpipe history. Inspect sources in the Screenpipe app.\n" : "") +
           `Results: ${results.length}/${pagination.total || "?"}` +
           (pagination.total > results.length
             ? ` (use offset=${(pagination.offset || 0) + results.length} for more)`
@@ -2032,6 +2045,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [{ type: "text", text: JSON.stringify(feedback, null, 2) }],
         };
       }
+
+      case "screenpipe-status":
+        return await screenpipeStatus(SCREENPIPE_API, args, currentMcpClient());
 
       case "health-check": {
         const response = await callAPI("/health");
@@ -2456,7 +2472,7 @@ async function main() {
   console.error("[screenpipe-mcp] phase=connected transport=stdio");
   // Warm the API key in the background so the first tool call doesn't pay the
   // discovery latency. Never awaited here — key discovery must not gate attach.
-  void ensureApiKey();
+  if (!readOnly) void ensureApiKey();
 }
 
 main().catch(async (error) => {

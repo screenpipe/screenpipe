@@ -16,6 +16,9 @@ const root = path.resolve(__dirname, "..");
 const sandbox = mkdtempSync(path.join(tmpdir(), "screenpipe-installer-test-"));
 let local: Record<string, Uint8Array>;
 let cloud: Record<string, Uint8Array>;
+let agent: Record<string, Uint8Array>;
+const agentDir = path.join(sandbox, "agent");
+const requests: string[] = [];
 let api: Server;
 let baseUrl: string;
 let status = 200;
@@ -28,6 +31,12 @@ beforeAll(async () => {
   execFileSync("bun", ["run", "build:installers"], { cwd: root, timeout: 120_000, stdio: "inherit" });
   local = unzipSync(readFileSync(path.join(root, "installers/screenpipe-local.mcpb")));
   cloud = unzipSync(readFileSync(path.join(root, "installers/screenpipe-cloud.zip")));
+  agent = unzipSync(readFileSync(path.join(root, "installers/screenpipe-agent.zip")));
+  for (const [file, bytes] of Object.entries(agent)) {
+    const target = path.join(agentDir, file);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, bytes);
+  }
   for (const [file, bytes] of Object.entries(local)) {
     const target = path.join(sandbox, file);
     mkdirSync(path.dirname(target), { recursive: true });
@@ -35,6 +44,12 @@ beforeAll(async () => {
   }
   api = createServer((req, res) => {
     const url = new URL(req.url!, "http://localhost");
+    requests.push(url.pathname);
+    if (url.pathname === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "healthy", frame_status: "ok", audio_status: "ok", vision_reason: "ok" }));
+      return;
+    }
     if (url.pathname !== "/search") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end("{}");
@@ -139,5 +154,59 @@ describe("installable MCP artifacts", () => {
     expect(codex.mcpServers).toBe("./.mcp.json");
     expect(codex.interface.capabilities).toEqual(["Read"]);
     expect(cloud[codex.interface.logo.replace(/^\.\//, "")]).toBeDefined();
+  });
+});
+
+
+describe("portable Screenpipe agent bundle", () => {
+  it("ships only the runtime, identity, and discoverable skill, without credentials", () => {
+    expect(Object.keys(agent).sort()).toEqual([
+      "LICENSE.md", "README.md", "dist/index.js", "mcp.json", "plugin.json", "skills/screenpipe/SKILL.md",
+    ]);
+    expect(parse(agent, "mcp.json").$schema).toBe("https://agent-plugins.org/schemas/1.0.0/mcp.schema.json");
+    expect(parse(agent, "mcp.json").mcpServers.screenpipe.env).toBeUndefined();
+    expect(parse(agent, "plugin.json").version).toBe(JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).version);
+  });
+
+  it.each(["hermes", "openclaw"])("%s handshake exposes setup, retrieves attributed evidence, and rejects direct write calls", async (name) => {
+    status = 200;
+    const config = parse(agent, "mcp.json").mcpServers.screenpipe;
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: config.args.map((arg: string) => arg.replace("${PLUGIN_ROOT}", agentDir)),
+      cwd: agentDir, stderr: "pipe",
+      env: { PATH: "", NODE_PATH: "", SCREENPIPE_DISABLE_TELEMETRY: "1",
+        SCREENPIPE_API_URL: baseUrl, SCREENPIPE_LOCAL_API_KEY: "sp-installer-fixture",
+        SCREENPIPE_ENTERPRISE_TOKEN: "sk_ent_fixture", SCREENPIPE_TEAM_API_URL: baseUrl },
+    });
+    const client = new Client({ name, version: "1.0.0" });
+    try {
+      await client.connect(transport);
+      expect(client.getInstructions()).toContain("runs continuously in the background");
+      const names = (await client.listTools()).tools.map(t => t.name);
+      expect(names).toContain("screenpipe-status");
+      expect(names).toContain("activity-summary");
+      expect(names).toContain("get-workflow");
+      expect(names).not.toContain("team-search");
+      const count = requests.length;
+      for (const tool of ["control-recording", "create-pipe", "update-memory", "send-notification", "team-search", "export-video"]) {
+        expect(names).not.toContain(tool);
+        const denied = await client.callTool({ name: tool, arguments: {} });
+        expect(denied.isError).toBe(true);
+      }
+      expect(requests).toHaveLength(count);
+      const setup = await client.callTool({ name: "screenpipe-status", arguments: { intent: "setup" } });
+      const info = JSON.parse((setup.content as Array<{ text: string }>)[0].text);
+      expect(info.state).toBe("available");
+      expect(info.download).toContain(`utm_source=${name}`);
+      expect(info.data_notice).toContain("cloud provider");
+      expect(requests.slice(count)).toEqual(["/health"]);
+      const result = await client.callTool({ name: "search-content", arguments: { q: "synthetic", limit: 1 } });
+      expect(result.isError).not.toBe(true);
+      expect(JSON.stringify(result)).toContain("From your Screenpipe history");
+      expect(JSON.stringify(result)).toContain("synthetic installer evidence");
+      expect(JSON.stringify(result)).toContain("screenpipe://frame/1");
+      expect(seenAuth).toBe("Bearer sp-installer-fixture");
+    } finally { await client.close(); }
   });
 });

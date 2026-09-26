@@ -34,6 +34,9 @@ import { PKG_VERSION } from "./version";
 import { normalizeTimeFields } from "./time-normalization";
 import { createMcpQualifiedValueReporter, resolveMcpClient, type McpClient } from "./qualified-value";
 
+import { AGENT_INSTRUCTIONS, STATUS_TOOL, screenpipeStatus } from "./agent-lifecycle";
+import { resolveScreenpipeApiBase } from "./api-base";
+
 // ── CLI parsing ─────────────────────────────────────────────────────────
 
 export interface CliConfig {
@@ -150,6 +153,7 @@ function constantTimeEq(a: string, b: string): boolean {
 // ── Tool definitions ────────────────────────────────────────────────────
 
 const TOOLS = [
+  STATUS_TOOL,
   {
     name: "search_content",
     description:
@@ -197,15 +201,14 @@ const TOOLS = [
 function makeFetchAPI(screenpipePort: number, client: () => McpClient) {
   // Honor SCREENPIPE_API_URL so the HTTP MCP can also front a remote screenpipe
   // (set by `screenpipe agent setup --api-url`); falls back to the local port.
-  const base = (process.env.SCREENPIPE_API_URL || `http://localhost:${screenpipePort}`).replace(
-    /\/+$/,
-    "",
-  );
+  const base = resolveScreenpipeApiBase({ host: "localhost", port: screenpipePort });
   return async (endpoint: string, options: RequestInit = {}): Promise<Response> =>
     fetch(`${base}${endpoint}`, {
       ...options,
       headers: {
         "Content-Type": "application/json",
+        ...((process.env.SCREENPIPE_LOCAL_API_KEY || process.env.SCREENPIPE_API_KEY)
+          ? { Authorization: `Bearer ${process.env.SCREENPIPE_LOCAL_API_KEY || process.env.SCREENPIPE_API_KEY}` } : {}),
         "x-screenpipe-client": "mcp",
         "x-screenpipe-agent": client(),
         ...options.headers,
@@ -306,7 +309,7 @@ function createMcpServer(screenpipePort: number): Server {
   // had moved on, which is unusable for support triage.
   const s = new Server(
     { name: "screenpipe-http", version: PKG_VERSION },
-    { capabilities: { tools: {} } }
+    { capabilities: { tools: {} }, instructions: AGENT_INSTRUCTIONS }
   );
   // Resolve per session after initialize; one HTTP client's identity must
   // never carry over to another connected client.
@@ -320,7 +323,10 @@ function createMcpServer(screenpipePort: number): Server {
   s.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 
   s.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: args } = request.params;
+    const { name, arguments: args = {} } = request.params;
+    if (name === "screenpipe-status") return screenpipeStatus(
+      resolveScreenpipeApiBase({ host: "localhost", port: screenpipePort }), args, client(),
+    );
     if (!args) throw new Error("Missing arguments");
     if (name === "search_content") return handleSearchContent(fetchAPI, args, qualifiedValue);
     throw new Error(`Unknown tool: ${name}`);

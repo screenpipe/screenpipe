@@ -188,9 +188,13 @@ describe("buildHttpServer", () => {
   it("attributes retrievals per HTTP session and excludes empty or failed searches", async () => {
     const searches: Array<{ source: unknown; agent: unknown }> = [];
     const outcomes: unknown[] = [];
+    const auth: unknown[] = [];
     const api = createServer(async (request, response) => {
       response.setHeader("content-type", "application/json");
-      if (request.url?.startsWith("/search?")) {
+      if (request.url === "/health") {
+        response.end(JSON.stringify({ status: "healthy", frame_status: "ok", audio_status: "ok" }));
+      } else if (request.url?.startsWith("/search?")) {
+        auth.push(request.headers.authorization);
         searches.push({ source: request.headers["x-screenpipe-client"], agent: request.headers["x-screenpipe-agent"] });
         const q = new URL(request.url, "http://fixture").searchParams.get("q");
         if (q === "failed") response.statusCode = 500;
@@ -209,6 +213,7 @@ describe("buildHttpServer", () => {
     const apiPort = (api.address() as { port: number }).port;
     vi.stubEnv("SCREENPIPE_API_URL", `http://127.0.0.1:${apiPort}`);
     vi.stubEnv("SCREENPIPE_MCP_CLIENT", "");
+    vi.stubEnv("SCREENPIPE_LOCAL_API_KEY", "sp-http-fixture");
     const server = buildHttpServer({ mcpPort: 0, screenpipePort: apiPort, host: "127.0.0.1" });
     const clients: Client[] = [];
     try {
@@ -223,6 +228,10 @@ describe("buildHttpServer", () => {
         const result = await client.callTool({ name: "search_content", arguments: { q: "fixture" } });
         expect(result.isError).not.toBe(true);
       }));
+      expect(auth).toEqual(["Bearer sp-http-fixture", "Bearer sp-http-fixture", "Bearer sp-http-fixture"]);
+      expect(clients[0].getInstructions()).toContain("Screenpipe");
+      const status = await clients[0].callTool({ name: "screenpipe-status", arguments: {} });
+      expect(JSON.parse((status.content as Array<{ text: string }>)[0].text).state).toBe("available");
       expect(searches).toHaveLength(3);
       expect(searches).toEqual(expect.arrayContaining([
         { source: "mcp", agent: "chatgpt" },
