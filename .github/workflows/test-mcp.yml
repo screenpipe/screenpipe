@@ -72,6 +72,7 @@ jobs:
           path: |
             packages/screenpipe-mcp/installers/screenpipe-local.mcpb
             packages/screenpipe-mcp/installers/screenpipe-cloud.zip
+            packages/screenpipe-mcp/installers/screenpipe-agent.zip
             packages/screenpipe-mcp/installers/SUBMISSION.md
 
       - name: Pack contents include the gateway config module
