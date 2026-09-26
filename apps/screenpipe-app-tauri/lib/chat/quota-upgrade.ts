@@ -13,6 +13,7 @@ const listeners = new Set<() => void>();
 
 function publish(next: QuotaUpgradeAction | null): void {
   if (
+    currentAction?.kind === next?.kind &&
     currentAction?.requiredPlan === next?.requiredPlan &&
     currentAction?.upgradeUrl === next?.upgradeUrl &&
     currentAction?.resetsAt === next?.resetsAt

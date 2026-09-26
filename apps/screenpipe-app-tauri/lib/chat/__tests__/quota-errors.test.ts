@@ -260,7 +260,7 @@ describe("buildDailyLimitMessage", () => {
         required_plan: "business",
         upgrade_url: "https://screenpipe.com/account/billing",
       });
-      expect(parseQuotaUpgradeAction(error)?.requiredPlan).toBe("business");
+      expect(parseQuotaUpgradeAction(error)?.requiredPlan).toBe(errorCode === "trial_cost_limit_exceeded" ? null : "business");
       expect(buildDailyLimitMessage(error)).toContain("recovery option below");
     }
   });
@@ -516,5 +516,16 @@ describe("buildModelNotAllowedMessage", () => {
     );
     expect(msg).toContain("This model isn't available");
     expect(msg.length).toBeLessThan(300);
+  });
+});
+
+
+describe("trial recovery compatibility", () => {
+  it.each([null, "https://screenpipe.com/account/billing?target_plan=pro_max", "https://evil.example/pay"])("does not promote a trial error into a paid upgrade (%s)", (upgradeUrl) => {
+    const body = {error: "trial_cost_limit_exceeded", plan: "business", required_plan: "business_max", upgrade_url: upgradeUrl, resets_at: "2026-09-24T00:00:00Z"};
+    for (const error of [JSON.stringify(body), JSON.stringify({error: JSON.stringify(body)})]) {
+      expect(parseQuotaUpgradeAction(error)).toEqual({kind: "trial", requiredPlan: null, upgradeUrl: "https://screenpipe.com/account/billing", resetsAt: null});
+      expect(buildDailyLimitMessage(error)).not.toMatch(/Business Max|resets at/i);
+    }
   });
 });

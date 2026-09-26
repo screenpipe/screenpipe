@@ -8,6 +8,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { fetchAiGateway } from "@/lib/ai-gateway-url";
 import {
   validateQuotaUpgradeAction,
+  trialQuotaRecoveryAction,
   type QuotaUpgradeAction,
 } from "@/lib/chat/quota-errors";
 
@@ -40,6 +41,7 @@ export interface HostedAiAllowance {
 }
 
 export interface HostedAiUsage {
+  trial?: boolean;
   plan: string | null;
   allowance_managed_by?: "cloudflare";
   usage_as_of: string | null;
@@ -136,6 +138,7 @@ function parseHostedAiUsage(value: unknown): HostedAiUsage | undefined {
   if (!value || typeof value !== "object") return undefined;
   const candidate = value as {
     plan?: unknown;
+    trial?: unknown;
     allowance_managed_by?: unknown;
     usage_as_of?: unknown;
     allowances?: unknown;
@@ -152,6 +155,7 @@ function parseHostedAiUsage(value: unknown): HostedAiUsage | undefined {
           .filter((allowance): allowance is HostedAiAllowance => allowance !== null)
       : null;
   return {
+    trial: candidate.trial === true,
     plan: typeof candidate.plan === "string" ? candidate.plan : null,
     ...(cloudflareManaged ? { allowance_managed_by: "cloudflare" as const } : {}),
     usage_as_of:
@@ -162,7 +166,7 @@ function parseHostedAiUsage(value: unknown): HostedAiUsage | undefined {
           (model): model is string => typeof model === "string",
         )
       : [],
-    upgrade: validateQuotaUpgradeAction({
+    upgrade: candidate.trial === true ? trialQuotaRecoveryAction() : validateQuotaUpgradeAction({
       requiredPlan: candidate.required_plan,
       upgradeUrl: candidate.upgrade_url,
     }),

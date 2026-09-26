@@ -42,7 +42,7 @@ import {
 import { runDailySummaryWithPi } from "@/lib/daily-summary-pi";
 import {
 	presentQuotaError,
-	QUOTA_PLAN_LABELS,
+	quotaRecoveryLabel,
 	type QuotaErrorType,
 	type QuotaUpgradeAction,
 } from "@/lib/chat/quota-errors";
@@ -594,8 +594,7 @@ export function TimelineDailySummary({
 														void openExternalUrl(errorUpgrade.upgradeUrl)
 													}
 												>
-													Upgrade to{" "}
-													{QUOTA_PLAN_LABELS[errorUpgrade.requiredPlan]}
+													{quotaRecoveryLabel(errorUpgrade)}
 												</Button>
 												<Button
 													variant="outline"

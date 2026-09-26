@@ -96,11 +96,13 @@ export function UpgradeQuotaBanner({
     }
   }
 
-  const resets = cloudflareBlocked
+  const trialBlocked = blockedUpgrade?.kind === "trial" ||
+    (legacyCostBlocked && usage?.hosted_ai?.trial === true);
+  const resets = trialBlocked ? "" : cloudflareBlocked
     ? formatAllowanceReset(cloudflareAllowance.resets_at)
     : legacyCostBlocked
       ? ""
-      : formatResetTime(blockedUpgrade?.resetsAt ?? usage?.resets_at ?? "");
+      : formatResetTime(blockedUpgrade ? blockedUpgrade.resetsAt ?? "" : usage?.resets_at ?? "");
   const source = blockedUpgrade
     ? "ai-usage-limit-banner"
     : cloudflareBlocked
@@ -140,7 +142,9 @@ export function UpgradeQuotaBanner({
   const weeklyAllowance =
     cloudflareBlocked && cloudflareAllowance.window_seconds === 7 * 86_400;
   const frontierBlocked = cloudflareBlocked && cloudflareAllowance.lane === "frontier";
-  const blockedTitle = frontierBlocked
+  const blockedTitle = trialBlocked
+    ? "Trial AI allowance used"
+    : frontierBlocked
     ? "Frontier model limit reached"
     : weeklyAllowance
       ? "Weekly AI limit reached"
@@ -170,7 +174,12 @@ export function UpgradeQuotaBanner({
                 : ui("You're out of premium AI for today.")}
             </div>
             <div className="mt-0.5 text-muted-foreground">
-              {cloudflareBlocked ? (
+              {trialBlocked ? (
+                <>
+                  Your trial AI allowance does not reset daily. Manage your trial
+                  in billing, or switch to a local model or your own provider key.
+                </>
+              ) : cloudflareBlocked ? (
                 <>
                   {formatUsagePercent(cloudflareAllowance.used_percent)} used
                   {weeklyAllowance ? ui(" this week.") : "."}
@@ -211,7 +220,9 @@ export function UpgradeQuotaBanner({
               {/* Name where the click actually goes. A server-provided target
                   stays exact; a terminal or older response opens Account
                   without inventing a higher plan. */}
-              {requiredPlanLabel
+              {activeUpgrade?.kind === "trial"
+                ? ui("Manage trial")
+                : requiredPlanLabel
                 ? ui("Upgrade to {value1}", { value1: requiredPlanLabel })
                 : activeUpgrade
                   ? ui("See plans")

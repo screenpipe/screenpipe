@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
     usage: {
       hosted_ai: {
         plan: "business",
+        trial: false,
         allowance_managed_by: "cloudflare" as const,
         usage_as_of: new Date(Date.now() - 120_000).toISOString(),
         allowances: [
@@ -79,7 +80,15 @@ describe("UsagePopover", () => {
   afterEach(() => {
     mocks.query.usage.hosted_ai.allowances = originalAllowances;
     mocks.contextSnapshot = null;
+    mocks.query.usage.hosted_ai.trial = false;
     mocks.queryEnabled.mockClear();
+  });
+
+  it("identifies a trial in the usage panel header", async () => {
+    mocks.query.usage.hosted_ai.trial = true;
+    renderUsagePopover();
+    fireEvent.click(screen.getByRole("button", {name: "Screenpipe Cloud usage, 62% used"}));
+    expect(await screen.findByRole("button", {name: /screenpipe cloud usage · Business trial/i})).toBeTruthy();
   });
 
   it("opens on click and shows every Cloudflare window", async () => {

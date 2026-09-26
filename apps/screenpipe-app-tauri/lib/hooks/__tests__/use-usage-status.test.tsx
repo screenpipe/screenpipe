@@ -106,6 +106,20 @@ describe("useUsageStatus", () => {
     vi.stubGlobal("fetch", vi.fn());
   });
 
+  it("preserves trial status and replaces a paid-tier upsell with account management", async () => {
+    settingsState = {settings: {user: {token: "trial.jwt"}}, isSettingsLoaded: true};
+    const response = await usageResponse(false);
+    const body = await response.json();
+    body.hosted_ai.trial = true;
+    body.hosted_ai.plan = "business";
+    body.hosted_ai.required_plan = "business_max";
+    body.hosted_ai.upgrade_url = "https://screenpipe.com/account/billing?target_plan=pro_max";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ok: true, json: async () => body}));
+    const {result} = renderHook(() => useUsageStatusQuery(), {wrapper});
+    await waitFor(() => expect(result.current.usage?.hosted_ai?.trial).toBe(true));
+    expect(result.current.usage?.hosted_ai?.upgrade).toEqual({kind: "trial", requiredPlan: null, upgradeUrl: "https://screenpipe.com/account/billing", resetsAt: null});
+  });
+
   it("does not make an anonymous startup request before settings hydrate", () => {
     renderHook(() => useUsageStatus(), { wrapper });
     expect(fetch).not.toHaveBeenCalled();

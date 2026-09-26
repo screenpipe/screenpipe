@@ -5,10 +5,21 @@
 // Pure helpers for classifying and presenting AI quota / rate-limit errors.
 
 export type QuotaUpgradeAction = {
-  requiredPlan: "basic" | "business" | "business_max" | "business_ultra";
+  requiredPlan: "basic" | "business" | "business_max" | "business_ultra" | null;
+  kind?: "trial";
   upgradeUrl: string;
   resetsAt: string | null;
 };
+
+/** Opens account management only; never starts payment or targets a higher tier. */
+export function trialQuotaRecoveryAction(): QuotaUpgradeAction {
+  return {
+    kind: "trial",
+    requiredPlan: null,
+    upgradeUrl: "https://screenpipe.com/account/billing",
+    resetsAt: null,
+  };
+}
 
 export function validateQuotaUpgradeAction({
   requiredPlan: rawRequiredPlan,
@@ -149,6 +160,8 @@ export function parseQuotaUpgradeAction(
   errorStr: string,
 ): QuotaUpgradeAction | null {
   if (!isUpgradeLimitError(errorStr)) return null;
+  // Deployed gateways may attach a paid next-tier upsell to a trial cap.
+  if (costLimitWindow(errorStr) === "trial") return trialQuotaRecoveryAction();
   return validateQuotaUpgradeAction({
     requiredPlan: structuredString(errorStr, "required_plan"),
     upgradeUrl: structuredString(errorStr, "upgrade_url"),
@@ -182,7 +195,7 @@ export function buildModelNotAllowedMessage(errorStr: string): string {
     requiredPlan: structuredString(errorStr, "required_plan"),
     upgradeUrl: structuredString(errorStr, "upgrade_url"),
   });
-  if (upgrade) {
+  if (upgrade?.requiredPlan) {
     const plan = QUOTA_PLAN_LABELS[upgrade.requiredPlan];
     return `This model needs the ${plan} plan. Switch to Auto to keep going, or upgrade.`;
   }
@@ -254,8 +267,15 @@ export function buildDailyLimitMessage(errorStr: string): string {
   }
 }
 
+export function quotaRecoveryLabel(action: QuotaUpgradeAction): string {
+  if (action.kind === "trial") return "Manage trial";
+  return action.requiredPlan
+    ? `Upgrade to ${QUOTA_PLAN_LABELS[action.requiredPlan]}`
+    : "View plans";
+}
+
 export const QUOTA_PLAN_LABELS: Record<
-  QuotaUpgradeAction["requiredPlan"],
+  NonNullable<QuotaUpgradeAction["requiredPlan"]>,
   string
 > = {
   basic: "Basic",
@@ -276,7 +296,7 @@ export function quotaPlanLabel(plan: string | null | undefined): string | null {
   const normalized = plan.trim().toLowerCase();
   if (!normalized || normalized === "none") return null;
   if (normalized in QUOTA_PLAN_LABELS) {
-    return QUOTA_PLAN_LABELS[normalized as QuotaUpgradeAction["requiredPlan"]];
+    return QUOTA_PLAN_LABELS[normalized as NonNullable<QuotaUpgradeAction["requiredPlan"]>];
   }
   switch (normalized) {
     case "free":

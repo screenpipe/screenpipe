@@ -136,7 +136,7 @@ export function UsagePopover({
           {accountOnCloudAllowance && hosted && (
             <div className="border-t border-border pt-3.5">
               <UsageLimitsPanel
-                planLabel={plan}
+                planLabel={plan && hosted?.trial ? `${plan} trial` : plan}
                 // Meters only for a preset that actually spends the allowance.
                 // On any other preset the panel still names the plan and says
                 // where this one bills instead, rather than disappearing and
