@@ -378,6 +378,81 @@ describe("MarkdownBlock", () => {
     );
   });
 
+  describe.each([false, true])("raw HTML sanitization (isUser=%s)", (isUser) => {
+    const renderHtml = (text: string) =>
+      render(<MarkdownBlock text={text} isUser={isUser} />).container;
+
+    it.each([
+      ["iframe", `<iframe srcdoc="<h1>INJECTED</h1>"></iframe>`],
+      ["form", `<form action="https://example.com/collect"><input type="password" name="pw"></form>`],
+      ["meta refresh", `<meta http-equiv="refresh" content="0;url=https://example.com">`],
+      ["object", `<object data="https://example.com/x.swf"></object>`],
+      ["embed", `<embed src="https://example.com/x.swf">`],
+      ["style", `<style>body{background:#f00}</style>`],
+      ["base", `<base href="https://example.com/">`],
+    ])("does not create live %s elements", (_name, html) => {
+      const container = renderHtml(`before\n\n${html}\n\nafter`);
+      expect(
+        container.querySelector("iframe, form, meta, object, embed, style, base, input[type=password]"),
+      ).toBeNull();
+      expect(container.textContent).not.toContain("body{background");
+      expect(container).toHaveTextContent("before");
+      expect(container).toHaveTextContent("after");
+    });
+
+    it.each([
+      ["img onerror", `<img src=x onerror=alert(1)>`],
+      ["svg onload", `<svg onload=alert(1)><circle r=1></circle></svg>`],
+      ["script", `<script>alert(1)</script>`],
+    ])("drops %s before it reaches React", (_name, html) => {
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const container = renderHtml(html);
+      expect(container.querySelector("[onerror], [onload], svg, script")).toBeNull();
+      // React silently drops string handlers from the DOM, so the DOM alone
+      // cannot prove sanitization; its warning shows the handler got through.
+      expect(
+        consoleError.mock.calls.filter(([msg]) => String(msg).includes("listener to be a function")),
+      ).toEqual([]);
+      consoleError.mockRestore();
+    });
+
+    it("strips inline styles from allowed tags", () => {
+      const container = renderHtml(`<b style="position:fixed;inset:0">bold</b>`);
+      const bold = container.querySelector("b");
+      expect(bold).toHaveTextContent("bold");
+      expect(bold?.getAttribute("style")).toBeNull();
+    });
+
+    it("neutralizes javascript: URLs in raw HTML attributes", () => {
+      const container = renderHtml(
+        `<a href="javascript:alert(1)">click</a> <img src="https://example.com/x.png" longdesc="javascript:alert(1)">`,
+      );
+      expect(container.querySelector("a[href^='javascript']")).toBeNull();
+      expect(container.querySelector("img")?.getAttribute("longdesc")).toBeNull();
+    });
+
+    it("keeps safe formatting and collapsible details", () => {
+      const container = renderHtml(
+        `<details><summary>More</summary>\n\nhidden **body**\n\n</details>\n\n<kbd>Cmd</kbd> H<sub>2</sub>O x<sup>2</sup> <b>bold</b> <i>it</i> <u>u</u> <mark>m</mark> <small>s</small>`,
+      );
+      expect(container.querySelector("details summary")).toHaveTextContent("More");
+      expect(container.querySelector("details strong")).toHaveTextContent("body");
+      for (const tag of ["kbd", "sub", "sup", "b", "i", "u", "mark", "small"]) {
+        expect(container.querySelector(tag)).not.toBeNull();
+      }
+    });
+  });
+
+  it.each([
+    ["GFM footnote", "claim[^1]\n\n[^1]: source", "a[data-footnote-ref]"],
+    ["raw HTML anchor", `<a href="#sec">jump</a>\n\n<h2 id="sec">Sec</h2>`, "a"],
+  ])("keeps %s in-page links pointing at their targets", (_name, text, selector) => {
+    const { container } = render(<MarkdownBlock text={text} isUser={false} />);
+    const href = container.querySelector(selector)?.getAttribute("href") ?? "";
+    expect(href.startsWith("#user-content-")).toBe(true);
+    expect(container.querySelector(`[id="${href.slice(1)}"]`)).not.toBeNull();
+  });
+
   it("renders complete Markdown blocks immediately and keeps the unfinished tail cheap", () => {
     vi.useFakeTimers();
     const first = "## finding\n\n[artifact](https://example.com)";
