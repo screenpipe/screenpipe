@@ -6,7 +6,7 @@
 import { isCatalogConnectionError, CATALOG_CONNECT_NOTICE_MS, catalogRetryDelay } from "./catalog-loading";
 import { verifiedStageScreenshots } from "./screenshots";
 import { useNavigationWidth } from "./use-navigation-width";
-import { WorkflowQuestion } from "./workflow-question";
+import { WorkflowQuestions } from "./workflow-questions";
 import { WorkflowStepEvidence } from "./workflow-step-evidence";
 import { WorkflowEditor } from "./workflow-editor";
 import { retainNewerWorkflowEdits, type WorkflowEdit } from "./workflow-edits";
@@ -18,7 +18,7 @@ import { PageAssistantContext, type PageAssistant } from "./page-assistant";
 import { useWorkflowRunActivity, type WorkflowActivityState } from "./use-workflow-run-activity";
 import { WorkflowRunProgress } from "./workflow-run-progress";
 import { workflowTiming } from "./timing";
-import { CapturedMomentButton, WorkflowReplay } from "./workflow-replay";
+import { CapturedMomentButton } from "./workflow-replay";
 import type { AssistantContext, AssistantState } from "./assistant";
 
 import {
@@ -212,15 +212,6 @@ function formatEvidenceTimestamp(value: string) {
 
 function hasMeasuredDuration(workflow: WorkflowMap) {
   return workflow.durationSource === "measured-meeting" && workflow.totalMinutes > 0;
-}
-
-function TimingSourceButton({ timestamp, open }: { timestamp: string; open?: (url: string) => Promise<void> }) {
-  const [failed, setFailed] = useState(false);
-  if (!open) return null;
-  return <span><button type="button" onClick={() => {
-    setFailed(false);
-    void open(`screenpipe://timeline?timestamp=${encodeURIComponent(timestamp)}`).catch(() => setFailed(true));
-  }}>Open in Timeline</button>{failed && <span role="alert"> Could not open this moment.</span>}</span>;
 }
 
 function workflowDurationLabel(workflow: WorkflowMap) {
@@ -931,7 +922,7 @@ function screenDataNote(text: string): string {
     .replace(/(^|[.!?]\s+)screen data\b/g, "$1Screen data");
 }
 
-function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrection, saveEdits, onShareWorkflow, workflowAgentActions }: { workflow: WorkflowMap | null; navigate: (view: AppView) => void; platform: WorkflowsPlatform; workProfile: WorkProfile | null; saveCorrection?: (note: string) => Promise<void>; saveEdits?: (draft: WorkflowEdit) => Promise<WorkflowMap>; onShareWorkflow?: WorkflowsAppProps["onShareWorkflow"]; workflowAgentActions?: WorkflowsAppProps["workflowAgentActions"] }) {
+function WorkflowDetail({ canSaveAnswers, composerAccessory, active, onAnswersSaved, workflow, navigate, platform, workProfile, saveCorrection, saveEdits, onShareWorkflow, workflowAgentActions }: { canSaveAnswers: boolean; composerAccessory?: WorkflowsAppProps["composerAccessory"]; active: boolean; onAnswersSaved: (workflow: WorkflowMap) => void; workflow: WorkflowMap | null; navigate: (view: AppView) => void; platform: WorkflowsPlatform; workProfile: WorkProfile | null; saveCorrection?: (note: string) => Promise<void>; saveEdits?: (draft: WorkflowEdit) => Promise<WorkflowMap>; onShareWorkflow?: WorkflowsAppProps["onShareWorkflow"]; workflowAgentActions?: WorkflowsAppProps["workflowAgentActions"] }) {
   const ui = useGT();
   const [expandedStages, setExpandedStages] = useState<Set<number>>(() => new Set());
   const [guideOpen, setGuideOpen] = useState(false);
@@ -1004,7 +995,6 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
       </section>}
       <div className={styles.workflowNotes}>
       <p className={styles.workflowReviewState}>{workflow.userEditedAt ? ui("Edited by you · sources kept as references") : workflow.evidenceStatus === "supported-steps" ? ui("Source-backed steps · not execution-tested") : ui("Needs review")}</p>
-      <details className={styles.workflowQuality}><summary>Captured example</summary><WorkflowReplay key={`replay:${workflow.title}`} workflow={workflow} loadRecording={platform.loadWorkflowRecording} releaseRecording={platform.releaseWorkflowRecording} openCapturedMoment={platform.openCapturedMoment} /></details>
       {saveCorrection && !platform.assistant?.saveFeedback && <WorkflowCorrection key={`correction:${workflow.title}`} workflow={workflow} save={saveCorrection} />}
       {!saveEdits && <section className={styles.flowMap}>
         <div className={styles.flowMapHeader}><div><strong>Steps</strong></div><button onClick={() => setExpandedStages(allStagesOpen ? new Set() : new Set(workflow.stages.map((_, index) => index)))}>{allStagesOpen ? ui("Collapse all") : ui("Expand all")}</button></div>
@@ -1028,7 +1018,6 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
                     <p>{detail.text}</p>
                     {detail.quote && <details><summary>{detail.userEdited || stage.userEdited ? "Original reference" : "Source excerpt"} · {detail.app}</summary><blockquote>{detail.quote}</blockquote><small>{formatEvidenceTimestamp(detail.timestamp)} · {detail.userEdited || stage.userEdited ? "Edited instructions are not verified by this reference" : "Text match, not execution verification"}</small></details>}
                   </li>)}</ol> : <p>Step not yet verified.</p>}
-                  {!!stage.openQuestions?.length && <details className={styles.procedureQuestions}><summary>Unresolved details</summary><ul>{stage.openQuestions.map((question) => <li key={question}><WorkflowQuestion workflow={workflow} question={question} stage={stage.name} interactive={!!platform.assistant?.saveFeedback} /></li>)}</ul></details>}
                 </section>
                 {verifiedStageScreenshots(stage).map(screenshot => <div key={screenshot.frameId} className={styles.stageScreenshot}>
                   <>
@@ -1042,25 +1031,25 @@ function WorkflowDetail({ workflow, navigate, platform, workProfile, saveCorrect
         </div>
         <div className={styles.flowEndpoint}><span>Ends with</span><strong>{workflow.outcome}</strong></div>
       </section>}
-      {!!workflow.openQuestions?.length && <section aria-label={ui("Open questions")}><h2>Open questions</h2><div>{workflow.openQuestions.map((question, index) => <WorkflowQuestion key={`${index}:${question}`} workflow={workflow} question={question} interactive={!!platform.assistant?.saveFeedback} />)}</div></section>}
+      <WorkflowQuestions workflow={workflow} active={active} voice={platform.questionnaireVoice} save={canSaveAnswers && platform.saveWorkflowAnswers ? async correction => {
+        try {
+          const saved = await platform.saveWorkflowAnswers!(workflow, correction);
+          onAnswersSaved(saved); return saved;
+        } catch (error) {
+          if ((error as { status?: number })?.status === 409 && platform.loadCapturedWork) {
+            const latest = await platform.loadCapturedWork(WORKFLOW_CATALOG_DAYS);
+            const current = latest?.analysis.workflows.find(w => w.id === workflow.id);
+            if (current) onAnswersSaved(current);
+            throw new Error("This workflow changed while you were answering. Your draft is kept. Review it and save again.");
+          }
+          throw error;
+        }
+      } : undefined} />
       {!!workflow.variations.length && <section className={styles.panel}><h2>Variations</h2><ul className={styles.plainList}>{workflow.variations.map(item => <li key={item}>{item}</li>)}</ul></section>}
       {!!actionableFriction.length && <section><div className={styles.sectionHeading}><div><h2>Friction you can affect</h2></div></div><BottleneckList items={actionableFriction.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} /></section>}
       {!!constraints.length && <section><div className={styles.sectionHeading}><div><h2>External and required constraints</h2></div></div><BottleneckList items={constraints.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} numbered={false} /></section>}
-      <details className={styles.workflowQuality}>
-        <summary><div><strong>Evidence and limitations</strong><span>{workflow.quality.evidenceCount} references · {workflow.quality.distinctDays} observed days</span></div><ChevronDown size={14} /></summary>
-      <section className={styles.detailStats}>
-        <div><span>Coverage</span><strong>{workflow.frequency}</strong></div>
-        <div><span>App switches</span><strong>{workflow.appSwitches || ui("Not clear")}</strong></div>
-        <div><span>Evidence</span><strong>{workflow.quality.evidenceCount}</strong></div>
-        <div><span>Stage screenshots</span><strong>{workflow.quality.screenshotCount} · {workflow.quality.stageScreenshotCoverage}% of steps</strong></div>
-        <div><span>Source coverage</span><strong>{qualityLabel(workflow.quality.grade)}</strong></div>
-      </section>
-        <ul>{workflow.quality.reasons.map((reason) => <li key={reason}><CheckCircle2 size={12} />{screenDataNote(reason)}</li>)}</ul>
-        <p className={styles.panelEmpty}>These references show parts of the work. They may not show the full process or confirm it was completed.</p>
-        {!!workflow.captureSequence?.length && <section aria-label={ui("Ordered capture example")}><strong>Ordered capture example</strong><p className={styles.panelEmpty}>Check that these moments concern the same task. Time order alone does not establish this.</p><ol>{workflow.captureSequence.map((entry, index) => <li key={`${entry.timestamp}-${index}`}><details><summary>{workflow.stages[index]?.name} · {formatEvidenceTimestamp(entry.timestamp)} · {entry.app}</summary><p>{entry.detail}</p></details></li>)}</ol></section>}
-        {timing && <section aria-label={ui("Time per run")}><strong>Time per run</strong><p className={styles.panelEmpty}>{formatMinutes(timing.minMinutes)}–{formatMinutes(timing.maxMinutes)} across {ui("{count, plural, one {# run} other {# runs}}", { count: timing.sampleCount })}. Estimated elapsed time includes pauses; it is not active work time.</p><ol>{timing.runs.map(run => <li key={run.start.timestamp}><details><summary>{formatEvidenceTimestamp(run.start.timestamp)} · {formatMinutes((Date.parse(run.end.timestamp) - Date.parse(run.start.timestamp)) / 60_000)}</summary><p>{run.summary}</p>{(["start", "end"] as const).map(boundary => <div key={boundary}><strong>{boundary === "start" ? ui("Started") : ui("Finished")}</strong><p>{formatEvidenceTimestamp(run[boundary].timestamp)} · {run[boundary].app}</p><blockquote>{run[boundary].quote}</blockquote><TimingSourceButton timestamp={run[boundary].timestamp} open={platform.assistant?.openLink} /></div>)}</details></li>)}</ol></section>}
-        {!!workflow.limitations?.length && <ul>{workflow.limitations.map((limitation) => <li key={limitation}>{screenDataNote(limitation)}</li>)}</ul>}
-      </details>
+
+
       </div>
       {skillOpen && <WorkflowSkillDialog workflow={workflow} draft={skillDraft} generating={skillGenerating} saving={skillSaving} saved={skillSaved} preview={platform.skillInstallMode === "preview"} progress={skillProgress} error={skillError} update={setSkillDraft} retry={generateSkill} save={saveSkill} close={() => setSkillOpen(false)} />}
     </>
@@ -1644,7 +1633,7 @@ export function WorkflowsApp({ platform, initialAnalysis = null, storageKey = "s
     case "overview": content = <OverviewView analysis={analysis ? { ...analysis, analysis: { workflows } } : null} analyzing={analyzing} error={analysisError} analyze={() => void analyze()} openWorkflow={openWorkflow} navigate={navigate} knownWorkflowCount={knownWorkflows.length} activityPeriod={activityPeriod} runtime={runtime} workProfile={workProfile} refreshRuntime={refreshRuntime} openAccount={platform.openAccount} />; break;
     case "time": content = <TimeView analysis={analysis} analyze={() => void analyze()} analyzing={analyzing} workProfile={workProfile} lens={timeLens} setLens={setTimeLens} />; break;
     case "workflows": content = <WorkflowsView activityState={runActivity} analysisUnavailableReason={onAnalysisUnavailable ? undefined : analysisUnavailableReason} workflows={workflows} knownWorkflowCount={knownWorkflows.length} filters={filters} setFilters={setFilters} openWorkflow={openWorkflow} analyze={() => void analyze()} analyzing={analyzing} error={analysisError} stop={platform.cancelAnalysisJob ? () => { void platform.cancelAnalysisJob!().catch(error => setAnalysisError(String(error))); } : undefined} updatedAt={analysis?.analyzedAt} checkedThrough={analysis?.checkedThrough} changes={analysis?.changes} job={analysisJob} subscribe={platform.subscribeAnalysisActivity} />; break;
-    case "workflow": content = <WorkflowDetail key={activeWorkflow?.id || activeWorkflow?.title} onShareWorkflow={onShareWorkflow} workflowAgentActions={workflowAgentActions} workflow={activeWorkflow} navigate={navigate} platform={platform} workProfile={workProfile} saveEdits={catalogReady && platform.saveWorkflowEdits && (!activeScope || activeScope.kind === "personal") ? async (draft) => {
+    case "workflow": content = <WorkflowDetail canSaveAnswers={catalogReady && (!activeScope || activeScope.kind === "personal")} composerAccessory={composerAccessory} active={active} onAnswersSaved={saved => setAnalysis(current => current ? { ...current, analysis: { ...current.analysis, workflows: current.analysis.workflows.map(w => (w.id ?? w.title) === (saved.id ?? saved.title) && (saved.revision ?? 0) >= (w.revision ?? 0) ? saved : w) } } : current)} key={activeWorkflow?.id || activeWorkflow?.title} onShareWorkflow={onShareWorkflow} workflowAgentActions={workflowAgentActions} workflow={activeWorkflow} navigate={navigate} platform={platform} workProfile={workProfile} saveEdits={catalogReady && platform.saveWorkflowEdits && (!activeScope || activeScope.kind === "personal") ? async (draft) => {
       let saved: WorkflowMap;
       try { saved = await platform.saveWorkflowEdits!(draft); }
       catch (error) {

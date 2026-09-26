@@ -14,23 +14,21 @@
 .figure figcaption > span { min-width: 0; overflow-wrap: anywhere; }
 .links { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px 12px; font-size: 11px; color: var(--muted); }
 .links > button { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0; font-size: 11px; }
-.evidence summary { display: flex; align-items: center; gap: 6px; width: fit-content; min-height: 28px; list-style: none; cursor: pointer; font-size: 11px; color: var(--muted); }
-.evidence summary::-webkit-details-marker { display: none; }
-.evidence summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-.evidence details[open] > summary > svg { transform: rotate(180deg); }
-.questions { font-size: 12px; color: var(--muted); }
-.questions ul { margin: 0; padding: 0; list-style: none; line-height: 1.6; }
 .player { position: relative; padding-top: 22px; scroll-margin-top: 80px; }
 .player > section { margin: 0 0 8px; border-radius: 6px; }
 .player .close { position: absolute; right: 0; top: -6px; }
 @media (max-width: 560px) { .figure { max-width: 100%; } }
 
-/* Keep the step anchored while revealing recording and question details. */
+/* Reveal playback without competing with the step. */
 @media (prefers-reduced-motion: no-preference) {
-  .evidence summary > svg { transition: transform 150ms ease; }
   .zoom { transition: opacity 150ms ease; }
-  .questions[open] > ul, .player { animation: evidenceReveal 150ms ease-out; }
+  .player { animation: evidenceReveal 150ms ease-out; }
 }
 @keyframes evidenceReveal { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
 
-.figure figcaption > button { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; min-height: 28px; padding: 0; font-size: 11px; color: var(--muted); }
+
+.evidence .recording { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border-radius: 4px; color: var(--muted); flex-shrink: 0; }
+.evidence .recording:hover { background: var(--soft); color: var(--ink); }
+.evidence .recording:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
+.evidence .recording:disabled { opacity: .5; }
+@media (pointer: coarse) { .evidence .recording { width: 44px; height: 44px; } }

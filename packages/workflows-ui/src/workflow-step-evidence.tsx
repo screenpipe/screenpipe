@@ -3,10 +3,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Maximize2, Minimize2, Play, X } from "lucide-react";
+import { Loader2, Maximize2, Minimize2, Play, X } from "lucide-react";
 import type { WorkflowMap, WorkflowStage, WorkflowScreenshot } from "./model";
 import type { WorkflowsPlatform } from "./platform";
-import { WorkflowQuestion } from "./workflow-question";
 import { WorkflowReplay } from "./workflow-replay";
 import { verifiedStageScreenshots } from "./screenshots";
 import { useSourceScreenshot } from "./use-source-screenshot";
@@ -70,7 +69,7 @@ export function WorkflowStepEvidence({ workflow, stage, platform }: {
           <span className={styles.zoom}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</span>
         </button>
         <figcaption><span>{!capture.visualVerified ? "Source screenshot · " : ""}{capture.app} · {when(capture.timestamp)}</span>
-          {screenshots.length > 1 && (canReplay || platform.openCapturedMoment) && <button type="button" disabled={opening} onClick={() => void openRecording(capture)} aria-label={`${platform.openCapturedMoment ? "Open" : "View"} recording${suffix} for ${stage.name}`}><Play size={13} />{platform.openCapturedMoment ? "Open recording" : "View recording"}</button>}
+          {(canReplay || platform.openCapturedMoment) && <button className={styles.recording} title="Open recording" type="button" disabled={opening} onClick={() => void openRecording(capture)} aria-label={`${platform.openCapturedMoment ? "Open" : "View"} recording${suffix} for ${stage.name}`}>{opening ? <Loader2 size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}</button>}
         </figcaption>
       </figure>;
     })}
@@ -79,9 +78,8 @@ export function WorkflowStepEvidence({ workflow, stage, platform }: {
       <WorkflowReplay workflow={replay} loadRecording={platform.loadWorkflowRecording} releaseRecording={platform.releaseWorkflowRecording} openCapturedMoment={platform.openCapturedMoment} />
     </div>}
     <div className={styles.links}>
-      {screenshots.length <= 1 && (canReplay || (screenshot && platform.openCapturedMoment)) && !playing && <button type="button" disabled={opening} onClick={() => void openRecording()} aria-label={`${platform.openCapturedMoment ? "Open" : "View"} recording for ${stage.name}`}><Play size={13} />{opening ? "Opening…" : platform.openCapturedMoment ? "Open recording" : "View recording"}</button>}
+      {!screenshots.length && (canReplay || (screenshot && platform.openCapturedMoment)) && !playing && <button className={styles.recording} title="Open recording" type="button" disabled={opening} onClick={() => void openRecording()} aria-label={`${platform.openCapturedMoment ? "Open" : "View"} recording for ${stage.name}`}>{opening ? <Loader2 size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}</button>}
       {openError && <span role="alert">Could not open this capture. Try again.</span>}
     </div>
-    {!!stage.openQuestions?.length && <details className={styles.questions}><summary>Unresolved details<ChevronDown size={12} /></summary><ul>{stage.openQuestions.map(q => <li key={q}><WorkflowQuestion workflow={workflow} question={q} stage={stage.name} interactive={!!platform.assistant?.saveFeedback} /></li>)}</ul></details>}
   </section>;
 }

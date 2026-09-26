@@ -485,6 +485,31 @@ export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixt
       const value = restore(); await Promise.all(value.analysis.workflows.map(rasterizeFixture)); return structuredClone(value);
     },
     analyzeCapturedWork: async () => restore(),
+    // Explicit test transport. The maintained browser mock never contacts a real
+    // voice provider or pretends synthetic responses are a production session.
+    questionnaireVoice: {
+      connect: async (input, signal) => {
+        const response = await fetch("/__fixtures/workflow-voice", { method: "POST", body: JSON.stringify(input), signal });
+        if (!response.ok) throw new Error("Voice requires the desktop app. You can type in this preview.");
+        return response.json();
+      },
+      disconnect: async call_token => { await fetch("/__fixtures/workflow-voice", { method: "DELETE", body: JSON.stringify({ call_token }) }); },
+      fill: async (input, signal) => {
+        const response = await fetch("/__fixtures/workflow-voice-fill", { method: "POST", body: JSON.stringify(input), signal });
+        if (!response.ok) throw new Error("Could not fill answers. Your words are kept. Try again.");
+        return response.json();
+      },
+    },
+    saveWorkflowAnswers: async (target, correction) => {
+      restore();
+      const workflow = current.analysis.workflows.find(w => (w.id ?? w.title) === (target.id ?? target.title));
+      if (!workflow || (workflow.revision ?? 0) !== (target.revision ?? 0)) throw new Error("Workflow changed. Try again.");
+      const saved = { ...workflow, userCorrection: correction, revision: (workflow.revision ?? 0) + 1 };
+      const next = { ...current, analysis: { workflows: current.analysis.workflows.map(w => w === workflow ? saved : w) } };
+      localStorage.setItem(storageKey, JSON.stringify(next));
+      current = next;
+      return saved;
+    },
     saveWorkflowEdits: async (draft) => {
       restore();
       const workflow = current.analysis.workflows.find(w => (w.id ?? w.title) === draft.id);

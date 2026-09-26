@@ -26,7 +26,7 @@ describe("workflow elapsed timing", () => {
     expect(filterWorkflows([workflow, unknown], { ...defaultWorkflowFilters, duration: "medium" })).toEqual([workflow]);
     expect(filterWorkflows([unknown], { ...defaultWorkflowFilters, duration: "short" })).toEqual([]);
   });
-  it("shows average, single and unknown cards, with timing sources inside the map", async () => {
+  it("shows average, single and unknown cards without the removed evidence diagnostics", async () => {
     window.history.replaceState(null, "", "/home?mode=workflows");
     const openLink = vi.fn().mockResolvedValue(undefined);
     const platform = createFixtureWorkflowsPlatform();
@@ -43,11 +43,9 @@ describe("workflow elapsed timing", () => {
     expect(within(unknown).queryByText(/\/ run/)).not.toBeInTheDocument();
     fireEvent.click(within(card).getByRole("button", { name: "Open map" }));
     expect(screen.queryByText("Correct this workflow")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByText("Evidence and limitations"));
-    const evidence = screen.getByRole("region", { name: "Time per run" });
-    expect(evidence).toHaveTextContent("18m–30m across 3 runs");
-    fireEvent.click(within(evidence).getAllByText(/18m/).find(el => el.tagName === "SUMMARY")!);
-    fireEvent.click(within(evidence).getAllByRole("button", { name: "Open in Timeline" })[0]);
-    expect(openLink).toHaveBeenCalledWith(expect.stringContaining("screenpipe://timeline?timestamp="));
+    expect(screen.queryByText("Evidence and limitations")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Questions and feedback" })).toBeVisible();
+    // Removing diagnostic chrome must not discard the persisted run boundaries.
+    expect(workflowTiming(workflow.timing)).toMatchObject({ averageMinutes: 24, sampleCount: 3 });
   });
 });

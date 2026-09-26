@@ -259,3 +259,13 @@ export async function saveWorkflowEdits(draft: import("@screenpipe/workflows-ui"
   if (result.workflow?.id !== draft.id) throw new Error("The saved workflow could not be confirmed. Your draft is kept.");
   return result.workflow;
 }
+
+/** Keep concurrent catalog updates from overwriting an answer review. */
+export async function saveWorkflowAnswers(workflow: WorkflowMap, correction: string): Promise<WorkflowMap> {
+  if (!workflow.id) throw new Error("Refresh this workflow before saving answers.");
+  const result = await request("/workflows/corrections", {
+    id: workflow.id, correction, expected_revision: workflow.revision ?? 0, changes: {},
+  });
+  if (!result.success || result.workflow?.id !== workflow.id) throw new Error("Could not verify saved answers.");
+  return result.workflow as WorkflowMap;
+}

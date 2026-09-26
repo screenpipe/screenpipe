@@ -2,7 +2,7 @@
 // https://screenpipe.com
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { localFetch } from "@/lib/api";
-import { WORKFLOW_TASKS, disableWorkflowTasks, stopWorkflowJob, ensureWorkflowTask, enableWorkflowTask, loadWorkflowTaskSetup, getWorkflowJob, startWorkflowJob, saveWorkflowCorrections, saveWorkflowFeedback, loadScheduledCatalog } from "./scheduled-discovery";
+import { WORKFLOW_TASKS, disableWorkflowTasks, stopWorkflowJob, ensureWorkflowTask, enableWorkflowTask, loadWorkflowTaskSetup, getWorkflowJob, startWorkflowJob, saveWorkflowCorrections, saveWorkflowFeedback, saveWorkflowAnswers, loadScheduledCatalog } from "./scheduled-discovery";
 import { fixtureWorkflowAnalysis } from "@screenpipe/workflows-ui/fixture";
 vi.mock("@/lib/api", () => ({localFetch:vi.fn()}));
 vi.mock("@/lib/workflows/rollout", () => ({requireWorkflowsRollout:vi.fn(),syncWorkflowsRollout:vi.fn().mockResolvedValue(undefined)}));
@@ -242,3 +242,13 @@ it("bounds stalled schedule reads so the UI can retry", async () => {
     expect(vi.getTimerCount()).toBe(0);
   } finally { vi.useRealTimers(); }
 });
+
+ it("saves question answers with a revision guard through the existing correction writer", async () => {
+   const workflow = { ...fixtureWorkflowAnalysis.analysis.workflows[0], id: "wf-a", revision: 7 };
+   const saved = { ...workflow, revision: 8, userCorrection: "Reviewed answer" };
+   fetchMock.mockResolvedValueOnce(response({ success: true, workflow: saved }));
+   expect(await saveWorkflowAnswers(workflow, "Reviewed answer")).toEqual(saved);
+   expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ id: "wf-a", correction: "Reviewed answer", expected_revision: 7, changes: {} });
+   fetchMock.mockResolvedValueOnce(response({ error: "Workflow changed" }, 409));
+   await expect(saveWorkflowAnswers(workflow, "Another answer")).rejects.toMatchObject({ status: 409 });
+ });

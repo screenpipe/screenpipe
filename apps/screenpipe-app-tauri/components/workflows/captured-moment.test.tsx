@@ -8,6 +8,7 @@ import { desktopWorkflowsPlatform } from "@/lib/workflows/desktop-platform";
 import { invoke } from "@tauri-apps/api/core";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@/lib/workflows/questionnaire-voice", () => ({ desktopQuestionnaireVoice: {} }));
 vi.mock("@/lib/workflows/model-choice", () => ({ workflowModelPreference: {} }));
 vi.mock("@/lib/workflows/guides", () => ({ desktopGuides: {} }));
 vi.mock("@/lib/workflows/assistant", () => ({ desktopAssistant: {} }));
@@ -25,7 +26,7 @@ vi.mock("@/lib/workflows/disk-storage", () => ({
 vi.mock("@/lib/workflows/scheduled-discovery", () => ({
   ensureWorkflowTask: vi.fn(), startWorkflowJob: vi.fn(), getWorkflowJob: vi.fn(),
   latestWorkflowJob: vi.fn(), stopWorkflowJob: vi.fn(), loadScheduledCatalog: vi.fn(),
-  saveWorkflowCorrections: vi.fn(), saveWorkflowEdits: vi.fn(),
+  saveWorkflowCorrections: vi.fn(), saveWorkflowEdits: vi.fn(), saveWorkflowAnswers: vi.fn(),
 }));
 
 const timestamp = "2026-09-20T07:39:00-07:00";
