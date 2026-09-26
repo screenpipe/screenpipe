@@ -612,10 +612,17 @@ fn main() {
         .unwrap_or_else(|_| std::env::var("PROFILE").as_deref() == Ok("release"));
     println!("cargo:rerun-if-changed={}", generated.display());
     println!("cargo:rerun-if-changed={}", fallback.display());
-    let localization = std::fs::read(if enabled && generated.exists() { generated } else { fallback })
-        .expect("read localization snapshot");
-    std::fs::write(std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("localization.json"), localization)
-        .expect("embed localization snapshot");
+    let localization = std::fs::read(if enabled && generated.exists() {
+        generated
+    } else {
+        fallback
+    })
+    .expect("read localization snapshot");
+    std::fs::write(
+        std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("localization.json"),
+        localization,
+    )
+    .expect("embed localization snapshot");
     generate_and_validate_tauri_commands();
 
     ensure_frontend_dist();
@@ -1199,8 +1206,8 @@ fn find_onnxruntime_dylib(root: &std::path::Path) -> Option<std::path::PathBuf> 
 }
 
 /// Stage `PermissionFlow_PermissionFlow.bundle` into `src-tauri/` so Tauri
-/// bundles it into `Contents/Resources/`. Missing it crashes onboarding with
-/// `fatalError` on the first localized string in a shipped `.app`.
+/// bundles it into `Contents/Resources/`. Without it, permission-flow falls
+/// back to `Bundle.main` and the permissions UI loses its translations.
 ///
 /// Source path comes from `DEP_TAURI_PLUGIN_PERMISSION_FLOW_BUNDLE_DIR`,
 /// which the plugin's build.rs re-exports from upstream `permission-flow`
@@ -1216,9 +1223,10 @@ fn copy_permission_flow_bundle() {
         .unwrap_or_else(|_| panic!("DEP_TAURI_PLUGIN_PERMISSION_FLOW_BUNDLE_DIR not set"));
 
     // permission-flow predicts `<target arch>-apple-macosx/<PROFILE>/`, but
-    // swift-rs 1.0.7 builds for the HOST arch and picks its configuration from
+    // swift-rs builds for the HOST arch and picks its configuration from
     // cargo's DEBUG flag (`[profile.dev] debug = false` here ⇒ `release/`), so
-    // the predicted leaf is wrong for both segments. Search the actual
+    // the predicted leaf is wrong for both segments. Xcode 27's SwiftPM moves
+    // products again, to `[out/]Products/<Configuration>/`. Search the actual
     // SwiftPM package root instead of guessing.
     let bundle_src = if bundle_src.exists() {
         bundle_src
@@ -1226,16 +1234,7 @@ fn copy_permission_flow_bundle() {
         bundle_src
             .ancestors()
             .nth(3) // PermissionFlowShimFFI/
-            .and_then(|ffi| {
-                std::fs::read_dir(ffi).ok().and_then(|archs| {
-                    archs
-                        .flatten()
-                        .filter(|a| a.file_name().to_string_lossy().ends_with("-apple-macosx"))
-                        .flat_map(|a| std::fs::read_dir(a.path()).into_iter().flatten().flatten())
-                        .map(|cfg| cfg.path().join(bundle_name))
-                        .find(|p| p.exists())
-                })
-            })
+            .and_then(|ffi| find_permission_flow_bundle(ffi, bundle_name))
             .unwrap_or(bundle_src)
     };
 
@@ -1276,6 +1275,42 @@ fn copy_permission_flow_bundle() {
             bundle_dst.display()
         );
     }
+}
+
+/// Locate the SwiftPM resource bundle under swift-rs's package root across
+/// the layouts different toolchains emit: `<arch>-apple-macosx/<cfg>/` from
+/// the native build system, and `<cfg>/` or `[out/]Products/<cfg>/` from
+/// Xcode 27.
+#[cfg(target_os = "macos")]
+fn find_permission_flow_bundle(
+    ffi: &std::path::Path,
+    bundle_name: &str,
+) -> Option<std::path::PathBuf> {
+    let subdirs = |dir: &std::path::Path| -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect()
+    };
+    let mut cfg_dirs: Vec<std::path::PathBuf> = subdirs(ffi)
+        .into_iter()
+        .filter(|a| {
+            a.file_name()
+                .is_some_and(|n| n.to_string_lossy().ends_with("-apple-macosx"))
+        })
+        .flat_map(|a| subdirs(&a))
+        .collect();
+    cfg_dirs.extend(subdirs(ffi));
+    for products in [ffi.join("Products"), ffi.join("out").join("Products")] {
+        cfg_dirs.extend(subdirs(&products));
+    }
+    cfg_dirs
+        .into_iter()
+        .map(|cfg| cfg.join(bundle_name))
+        .find(|p| p.exists())
 }
 
 #[cfg(target_os = "macos")]
