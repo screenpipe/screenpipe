@@ -33,6 +33,7 @@ import {
 import { PKG_VERSION } from "./version";
 import { normalizeTimeFields } from "./time-normalization";
 import { createMcpQualifiedValueReporter, resolveMcpClient, type McpClient } from "./qualified-value";
+import { buildEvidencePayload, EVIDENCE_OUTPUT_SCHEMA } from "./evidence-contract";
 
 // ── CLI parsing ─────────────────────────────────────────────────────────
 
@@ -189,6 +190,7 @@ const TOOLS = [
         actor_id: { type: "integer", description: "With content_type='parsed', filter by resolved actor identity" },
       },
     },
+    outputSchema: EVIDENCE_OUTPUT_SCHEMA,
   },
 ];
 
@@ -242,6 +244,9 @@ async function handleSearchContent(
           text: "No results found. Try: broader search terms, different content_type, or wider time range.",
         },
       ],
+      // The tool declares an outputSchema, so SDK clients reject a
+      // non-error result without structuredContent, empty ones included.
+      structuredContent: buildEvidencePayload([], pagination),
     };
   }
 
@@ -292,6 +297,11 @@ async function handleSearchContent(
         text: header + "\n\n" + formattedResults.join("\n---\n"),
       },
     ],
+    // Only the result types the text above formats; HTTP never exposed
+    // Input or Memory results and structured output must not start to.
+    structuredContent: buildEvidencePayload(results, pagination, {
+      sourceTypes: ["screen", "audio", "accessibility", "parsed"],
+    }),
   };
 }
 
