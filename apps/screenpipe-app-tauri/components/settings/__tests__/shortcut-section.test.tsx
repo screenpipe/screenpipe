@@ -56,17 +56,17 @@ describe("ShortcutSection experimental rollout", () => {
     render(<ShortcutSection />);
 
     expect(screen.getByText("Keyboard shortcuts and hotkeys")).toBeVisible();
-    expect(screen.queryByText("in app")).toBeNull();
-    expect(screen.queryByText("next chat tab")).toBeNull();
-    expect(screen.getByText("toggle screenpipe overlay")).toBeVisible();
+    expect(screen.queryByText("In app")).toBeNull();
+    expect(screen.queryByText("Next chat tab")).toBeNull();
+    expect(screen.getByText("Toggle screenpipe overlay")).toBeVisible();
   });
 
   it("shows in-app navigation commands for experimental users", () => {
     mocks.experimentalEnabled = true;
     render(<ShortcutSection />);
 
-    expect(screen.getByText("in-app commands and global hotkeys")).toBeVisible();
-    expect(screen.getByText("in app")).toBeVisible();
-    expect(screen.getByText("next chat tab")).toBeVisible();
+    expect(screen.getByText("In-app commands and global hotkeys")).toBeVisible();
+    expect(screen.getByText("In app")).toBeVisible();
+    expect(screen.getByText("Next chat tab")).toBeVisible();
   });
 });

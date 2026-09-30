@@ -108,9 +108,9 @@ describe("UsagePopover", () => {
     const header = await screen.findByRole("button", {
       name: /screenpipe cloud usage · Business/i,
     });
-    expect(header.textContent).toContain("screenpipe cloud usage");
-    expect(header.querySelector(".lowercase")?.textContent).toBe(
-      "screenpipe cloud usage",
+    expect(header.textContent).toContain("Screenpipe cloud usage");
+    expect(header.querySelector(".normal-case")?.textContent).toBe(
+      "Screenpipe cloud usage",
     );
     // The plan is a product name and keeps its own casing.
     expect(header.textContent).toContain("Business");

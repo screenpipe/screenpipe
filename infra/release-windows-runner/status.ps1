@@ -11,6 +11,7 @@ $env:Path = "${env:ProgramFiles}\Git\cmd;${env:ProgramFiles}\Git\bin;${env:Progr
 $env:CARGO_HOME = [Environment]::GetEnvironmentVariable('CARGO_HOME', 'Machine')
 $env:RUSTUP_HOME = [Environment]::GetEnvironmentVariable('RUSTUP_HOME', 'Machine')
 $service = Get-Service 'actions.runner.*' -ErrorAction SilentlyContinue | Select-Object -First 1
+$runnerConfig = Get-Content 'C:\actions-runner\.runner' -Raw | ConvertFrom-Json
 $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='S:'"
 $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
 $vsComponent = if ($RunnerArchitecture -eq 'arm64') { 'Microsoft.VisualStudio.Component.VC.Tools.ARM64' } else { 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' }
@@ -38,6 +39,7 @@ $bootstrapTools = [ordered]@{
   computer = $env:COMPUTERNAME
   architecture = $RunnerArchitecture
   service = if ($service) { $service.Status.ToString() } else { 'missing' }
+  workDirectory = $runnerConfig.workFolder
   cacheFreeGiB = if ($disk) { [math]::Round($disk.FreeSpace / 1GB, 1) } else { 0 }
   cacheUsedGiB = if ($disk) { [math]::Round(($disk.Size - $disk.FreeSpace) / 1GB, 1) } else { 0 }
   allowedWorkflowRefs = [string[]] $allowedRefs

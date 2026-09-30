@@ -5,19 +5,25 @@
 
 import { Clock3, ListChecks } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useSettings } from "@/lib/hooks/use-settings";
 import type { SettingsField } from "./settings-search";
+import { useGT } from "gt-react";
+import { msg } from "gt-react";
+
 
 const DEFAULT_INTERVAL_MINUTES = 15;
 
 export const searchIndex: SettingsField[] = [
-  { label: "Enable activities", keywords: ["activity", "history", "automatic"] },
-  { label: "Interval", keywords: ["frequency", "cadence", "minutes", "schedule"] },
+  { label: msg("Enable activities", {}), keywords: ["activity", "history", "automatic"] },
+  { label: msg("Interval", {}), keywords: ["frequency", "cadence", "minutes", "schedule"] },
 ];
 
 export function ActivitiesSettings() {
+  const ui = useGT();
   const { settings, updateSettings } = useSettings();
+  const pause = settings.activitiesQuotaPause;
   const enabled = settings.activitiesEnabled ?? false;
   const intervalMinutes = settings.activitiesIntervalMinutes ?? DEFAULT_INTERVAL_MINUTES;
 
@@ -26,6 +32,19 @@ export function ActivitiesSettings() {
       <p className="text-sm text-muted-foreground">
         Control automatic activity summaries.
       </p>
+
+      {enabled && pause && (
+        <div role="status" className="space-y-2 border border-border p-4 text-xs text-muted-foreground">
+          <p>Automatic summaries are paused because your AI allowance is used up.</p>
+          <p>{pause.retry_at
+            ? ui("Next automatic check: {time}.", { time: new Date(pause.retry_at).toLocaleString() })
+            : ui("Change your AI provider or plan, then retry.")}</p>
+          <Button variant="outline" size="sm" onClick={() => updateSettings({
+            activitiesQuotaPause: null,
+            activitiesNextRunAt: new Date().toISOString(),
+          })}>Retry summaries</Button>
+        </div>
+      )}
 
       <div className="border border-border bg-card">
         <div className="flex items-center justify-between gap-6 px-4 py-3">
@@ -42,7 +61,7 @@ export function ActivitiesSettings() {
             data-testid="activities-enabled-toggle"
             checked={enabled}
             onCheckedChange={(checked) => updateSettings({ activitiesEnabled: checked })}
-            aria-label="Enable activities"
+            aria-label={ui("Enable activities")}
           />
         </div>
 
@@ -58,7 +77,7 @@ export function ActivitiesSettings() {
               </div>
             </div>
             <select
-              aria-label="Activity interval"
+              aria-label={ui("Activity interval")}
               value={intervalMinutes}
               disabled={!enabled}
               onChange={(event) =>

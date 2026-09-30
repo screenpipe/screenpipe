@@ -13,6 +13,9 @@ on:
     branches: [main]
     paths:
       - '**.rs'
+      # Core embeds these assets with include_str! and tests their contracts.
+      - 'crates/screenpipe-core/assets/**'
+      - 'apps/screenpipe-app-tauri/scripts/eval-pi-compaction.ts'
       - '**/Cargo.toml'
       - '**/Cargo.lock'
       - '.github/workflows/ci.yml'
@@ -20,6 +23,8 @@ on:
   pull_request:
     paths:
       - '**.rs'
+      - 'crates/screenpipe-core/assets/**'
+      - 'apps/screenpipe-app-tauri/scripts/eval-pi-compaction.ts'
       - '**/Cargo.toml'
       - '**/Cargo.lock'
       - '.github/workflows/ci.yml'
@@ -104,6 +109,9 @@ jobs:
       - name: Install dependencies
         run: .github/scripts/install_dependencies.sh
 
+      - name: Pi context compaction runtime eval (production Rust patcher)
+        run: bun apps/screenpipe-app-tauri/scripts/eval-pi-compaction.ts
+
       - name: Copy test image
         run: |
           mkdir -p target/debug/deps
@@ -178,6 +186,9 @@ jobs:
 
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Pi context compaction runtime eval (production Rust patcher)
+        run: bun apps/screenpipe-app-tauri/scripts/eval-pi-compaction.ts
 
       - name: Ensure 7-Zip is available
         shell: pwsh

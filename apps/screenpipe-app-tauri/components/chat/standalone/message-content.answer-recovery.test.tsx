@@ -7,6 +7,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { ContentBlock, Message } from "@/lib/chat/types";
 import { MessageContent } from "./message-content";
+import { buildContextOverflowMessage } from "@/lib/chat/provider-errors";
 
 function assistantMessage(id: string, contentBlocks: ContentBlock[]): Message {
   return {
@@ -29,6 +30,41 @@ const completedTool = (id: string): ContentBlock => ({
 });
 
 describe("MessageContent assistant answer recovery", () => {
+  it("shows the provider error after progress and completed tools", () => {
+    const error = buildContextOverflowMessage(
+      "400 request (33252 tokens) exceeds the available context size (32768 tokens), try increasing it",
+    );
+    const message = {
+      ...assistantMessage("m-context-overflow", [
+        { type: "text", text: "I'll look at the repo." },
+        completedTool("tool-search"),
+      ]),
+      content: error,
+      retryPrompt: "Explain this repo",
+    };
+
+    const { rerender } = render(<MessageContent message={message} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(error);
+    expect(screen.getByText("I'll look at the repo.")).toBeInTheDocument();
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(screen.queryByText(/^Done in /)).not.toBeInTheDocument();
+
+    // Non-retryable terminal failures use the existing Error: marker too.
+    rerender(<MessageContent message={{ ...message, content: `Error: ${error}`, retryPrompt: undefined }} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(error);
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  });
+
+  it("does not repeat an error already rendered as a text block", () => {
+    const error = "The provider request failed.";
+    render(<MessageContent message={{
+      ...assistantMessage("m-visible-error", [completedTool("tool-1"), { type: "text", text: error }]),
+      content: `Error: ${error}`,
+    }} />);
+    expect(screen.getAllByText(error)).toHaveLength(1);
+  });
+
   it("keeps every progress update visible when a completed turn ends on a tool", () => {
     const message = assistantMessage("m-recovered-answer", [
       { type: "text", text: "First I will inspect the files." },

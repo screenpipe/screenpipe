@@ -7,14 +7,36 @@ import {
   buildConnectedShareChatPrompt,
   createLiveViewShareArtifact,
   createMeetingShareArtifact,
+  createWorkflowShareArtifact,
   directShareConnections,
   rankedShareSuggestions,
   renderConnectedShareArtifact,
   shareConnectionAvailability,
 } from "@/lib/connected-share";
+import { fixtureWorkflowAnalysis } from "@screenpipe/workflows-ui/fixture";
 import type { BrainViewDefinition } from "@/lib/utils/tauri";
 
 describe("connected share artifacts", () => {
+  it("shares workflow steps without raw evidence, screenshots, or private profile data", () => {
+    const workflow = structuredClone(fixtureWorkflowAnalysis.analysis.workflows[0]);
+    workflow.description = "A reusable review. ![capture](data:image/png;base64,PRIVATE_IMAGE)";
+    workflow.stages[0].evidence = [{ excerpt: "PRIVATE_RAW_CAPTURE", filePath: "/private/recording.mp4" }] as any;
+    workflow.stages[0].screenshot = { dataUrl: "PRIVATE_SCREENSHOT" } as any;
+    workflow.stages[0].procedure = [{ kind: "action", text: "Review the draft", quote: "PRIVATE_SOURCE_QUOTE", timestamp: "private-time", app: "Docs" }];
+    workflow.openQuestions = ["Who approves the result?"];
+    const artifact = createWorkflowShareArtifact(workflow);
+    const markdown = renderConnectedShareArtifact(artifact, artifact.sections.map(section => section.id));
+    expect(artifact.surface).toBe("workflow");
+    expect(markdown).toContain("Review the draft");
+    expect(markdown).toContain("Who approves the result?");
+    expect(markdown).toContain("Needs review");
+    expect(markdown).not.toMatch(/PRIVATE_|data:image|private-time|recording.mp4/);
+    const overview = renderConnectedShareArtifact(artifact, ["overview"]);
+    expect(overview).toContain("A reusable review");
+    expect(overview).not.toContain("Review the draft");
+    expect(overview).not.toContain("Who approves the result?");
+  });
+
   it("shares meeting notes without private transcript or inline image data", () => {
     const artifact = createMeetingShareArtifact({
       id: 7,

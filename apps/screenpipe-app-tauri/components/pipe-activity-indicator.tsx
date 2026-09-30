@@ -7,6 +7,8 @@ import React from "react";
 import { AlertCircle, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LiveSignal } from "@/components/live-signal";
+import { useGT } from "gt-react";
+
 
 export type PipeActivityKind = "running" | "upcoming" | "idle" | "ok" | "error";
 
@@ -41,9 +43,9 @@ export function formatPipeCountdown(
   const ms = Date.parse(runAt) - now;
   if (Number.isNaN(ms) || ms <= 0) return null;
   const s = Math.floor(ms / 1000);
-  if (s < 60) return `in ${s}s`;
+  if (s < 60) return `In ${s}s`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `in ${m}m`;
+  if (m < 60) return `In ${m}m`;
   const h = Math.floor(m / 60);
   if (h < 24) {
     const remM = m - h * 60;
@@ -90,8 +92,9 @@ export function PipeActivityIndicator({
 }
 
 function PipeActivityIcon({ kind }: { kind: PipeActivityKind }) {
+  const ui = useGT();
   if (kind === "running") {
-    return <LiveSignal ariaLabel="running" />;
+    return <LiveSignal ariaLabel={ui("running")} />;
   }
 
   // "upcoming" intentionally renders no icon — the "in 4h" label already

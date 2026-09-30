@@ -12,6 +12,113 @@ pub const APP_EXE: &str = "screenpipe-app.exe";
 pub const RECHECK_SECONDS: u64 = 5;
 pub const POLICY_REFRESH_SECONDS: u64 = 5 * 60;
 pub const POLICY_DISABLED_FILE: &str = "policy-disabled";
+pub const UPDATE_REQUEST_DIR: &str = ".screenpipe\\persistence-update";
+pub const UPDATE_REQUEST_FILE: &str = "request.json";
+pub const UPDATE_PACKAGE_FILE: &str = "screenpipe-enterprise-persistent.exe";
+pub const UPDATE_SIGNATURE_FILE: &str = "screenpipe-enterprise-persistent.exe.sig";
+pub const RECOVERY_SUPERVISOR_FILE: &str = "recovery-supervisor.exe";
+pub const UPDATE_TRANSACTION_FILE: &str = "accepted-transaction.json";
+pub const UPDATE_RUNNER_READY_FILE: &str = "runner-ready";
+pub const UPDATE_RUNNER_ACK_FILE: &str = "runner-ready-observed";
+pub const UPDATE_RUNNER_STATE_FILE: &str = "runner.json";
+pub const UPDATE_FAILED_VERSION_FILE: &str = "failed-version";
+pub const UPDATE_SNAPSHOT_DIR: &str = "pre-update";
+pub const INSTALLED_STATE_FILE: &str = "installed-state.json";
+pub const MAX_UPDATE_ATTEMPTS: u8 = 3;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateRequest {
+    pub version: String,
+    pub package: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcceptedUpdateTransaction {
+    pub request: UpdateRequest,
+    pub attempts: u8,
+    pub snapshot_version: String,
+    pub app_sha256: String,
+    pub supervisor_sha256: String,
+    pub remover_sha256: String,
+    pub snapshot_files: Vec<SnapshotFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotFile {
+    pub path: String,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcceptedUpdateAction {
+    Install,
+    ReconcileInstalled,
+    ReconcileNewer,
+    RestoreSnapshot,
+    Exhausted,
+}
+
+pub fn accepted_update_action(
+    transaction: &AcceptedUpdateTransaction,
+    installed_version: Option<&str>,
+    installation_complete: bool,
+) -> Result<AcceptedUpdateAction, &'static str> {
+    let requested = semver::Version::parse(&transaction.request.version)
+        .map_err(|_| "requested version is invalid")?;
+    let Some(installed_version) = installed_version else {
+        return Ok(AcceptedUpdateAction::RestoreSnapshot);
+    };
+    let installed = match semver::Version::parse(installed_version) {
+        Ok(version) => version,
+        Err(_) => return Ok(AcceptedUpdateAction::RestoreSnapshot),
+    };
+    if installed > requested {
+        return Ok(AcceptedUpdateAction::ReconcileNewer);
+    }
+    if installed == requested && installation_complete {
+        return Ok(AcceptedUpdateAction::ReconcileInstalled);
+    }
+    if installed == requested {
+        return Ok(AcceptedUpdateAction::RestoreSnapshot);
+    }
+    if transaction.attempts >= MAX_UPDATE_ATTEMPTS {
+        return Ok(AcceptedUpdateAction::Exhausted);
+    }
+    Ok(AcceptedUpdateAction::Install)
+}
+
+pub fn validate_update_request(
+    request: &UpdateRequest,
+    installed_version: &str,
+    published_version: &str,
+    package_version: &str,
+) -> Result<(), &'static str> {
+    if request.package != UPDATE_PACKAGE_FILE || request.signature != UPDATE_SIGNATURE_FILE {
+        return Err("unexpected persistence update filenames");
+    }
+    let installed = semver::Version::parse(installed_version)
+        .map_err(|_| "installed version is not semantic versioning")?;
+    let requested =
+        semver::Version::parse(&request.version).map_err(|_| "requested version is invalid")?;
+    let published =
+        semver::Version::parse(published_version).map_err(|_| "published version is invalid")?;
+    let packaged =
+        semver::Version::parse(package_version).map_err(|_| "package version is invalid")?;
+    if requested <= installed {
+        return Err("requested version is not newer than the installed version");
+    }
+    if requested != published {
+        return Err("requested version is not the currently published version");
+    }
+    if requested != packaged {
+        return Err("requested version does not match the signed package version");
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaunchDecision {
@@ -32,6 +139,28 @@ pub enum LifecycleEvent {
     InstallSucceeded,
     PrepareUpgrade,
     Remove,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateRecoveryAction {
+    KeepInstalledService,
+    RestartRecoveryService,
+}
+
+pub fn update_recovery_action(service_running: bool) -> UpdateRecoveryAction {
+    if service_running {
+        UpdateRecoveryAction::KeepInstalledService
+    } else {
+        UpdateRecoveryAction::RestartRecoveryService
+    }
+}
+
+pub fn persistent_update_policy_allows(mode: Option<&str>, managed: bool) -> bool {
+    match mode {
+        Some("manual") | Some("mdm") => false,
+        Some("auto_detect") => !managed,
+        _ => true,
+    }
 }
 
 pub fn transition(state: PersistenceState, event: LifecycleEvent) -> PersistenceState {
@@ -182,5 +311,104 @@ mod tests {
             Path::new(r"C:\Program Files-tampered\screenpipe-app.exe"),
             root
         ));
+    }
+
+    #[test]
+    fn persistence_update_requires_fixed_names_newer_and_published_version() {
+        let request = UpdateRequest {
+            version: "2.8.0".into(),
+            package: UPDATE_PACKAGE_FILE.into(),
+            signature: UPDATE_SIGNATURE_FILE.into(),
+        };
+        assert_eq!(
+            validate_update_request(&request, "2.7.9", "2.8.0", "2.8.0"),
+            Ok(())
+        );
+        assert!(validate_update_request(&request, "2.8.0", "2.8.0", "2.8.0").is_err());
+        assert!(validate_update_request(&request, "2.7.9", "2.8.1", "2.8.0").is_err());
+        assert!(validate_update_request(&request, "2.7.9", "2.8.0", "2.7.8").is_err());
+    }
+
+    #[test]
+    fn persistence_update_rejects_attacker_selected_paths() {
+        let request = UpdateRequest {
+            version: "2.8.0".into(),
+            package: "..\\attacker.exe".into(),
+            signature: UPDATE_SIGNATURE_FILE.into(),
+        };
+        assert!(validate_update_request(&request, "2.7.9", "2.8.0", "2.8.0").is_err());
+    }
+
+    #[test]
+    fn interrupted_installer_restarts_recovery_service() {
+        assert_eq!(
+            update_recovery_action(false),
+            UpdateRecoveryAction::RestartRecoveryService
+        );
+        assert_eq!(
+            update_recovery_action(true),
+            UpdateRecoveryAction::KeepInstalledService
+        );
+    }
+
+    #[test]
+    fn privileged_update_gate_preserves_enterprise_update_policy() {
+        assert!(persistent_update_policy_allows(Some("screenpipe"), true));
+        assert!(persistent_update_policy_allows(Some("auto_detect"), false));
+        assert!(!persistent_update_policy_allows(Some("auto_detect"), true));
+        assert!(!persistent_update_policy_allows(Some("manual"), false));
+        assert!(!persistent_update_policy_allows(Some("mdm"), false));
+        assert!(persistent_update_policy_allows(None, false));
+    }
+
+    #[test]
+    fn accepted_transaction_is_idempotent_and_bounded() {
+        let request = UpdateRequest {
+            version: "2.8.0".into(),
+            package: UPDATE_PACKAGE_FILE.into(),
+            signature: UPDATE_SIGNATURE_FILE.into(),
+        };
+        let mut transaction = AcceptedUpdateTransaction {
+            request,
+            attempts: 0,
+            snapshot_version: "2.7.9".into(),
+            app_sha256: "a".into(),
+            supervisor_sha256: "b".into(),
+            remover_sha256: "c".into(),
+            snapshot_files: Vec::new(),
+        };
+        assert_eq!(
+            accepted_update_action(&transaction, Some("2.7.9"), true),
+            Ok(AcceptedUpdateAction::Install)
+        );
+        assert_eq!(
+            accepted_update_action(&transaction, Some("2.8.0"), true),
+            Ok(AcceptedUpdateAction::ReconcileInstalled)
+        );
+        assert_eq!(
+            accepted_update_action(&transaction, Some("2.9.0"), true),
+            Ok(AcceptedUpdateAction::ReconcileNewer)
+        );
+        assert_eq!(
+            accepted_update_action(&transaction, None, false),
+            Ok(AcceptedUpdateAction::RestoreSnapshot)
+        );
+        assert_eq!(
+            accepted_update_action(&transaction, Some("2.8.0"), false),
+            Ok(AcceptedUpdateAction::RestoreSnapshot)
+        );
+        transaction.attempts = MAX_UPDATE_ATTEMPTS;
+        assert_eq!(
+            accepted_update_action(&transaction, Some("2.8.0"), true),
+            Ok(AcceptedUpdateAction::ReconcileInstalled)
+        );
+        assert_eq!(
+            accepted_update_action(&transaction, Some("2.9.0"), true),
+            Ok(AcceptedUpdateAction::ReconcileNewer)
+        );
+        assert_eq!(
+            accepted_update_action(&transaction, Some("2.7.9"), true),
+            Ok(AcceptedUpdateAction::Exhausted)
+        );
     }
 }

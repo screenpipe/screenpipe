@@ -154,7 +154,7 @@ export function ChartFrame({
       {(spec.title || (legend && legend.length > 1)) && (
         <figcaption className="space-y-1.5">
           {spec.title && (
-            <div className="text-xs font-medium lowercase text-foreground">
+            <div className="text-xs font-medium normal-case text-foreground">
               {spec.title}
             </div>
           )}

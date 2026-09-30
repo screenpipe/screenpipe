@@ -72,15 +72,19 @@ describe("reduced motion", () => {
     expect(declarations.has("transition")).toBe(false);
   });
 
-  it("leaves iteration count alone so liveness indicators do not freeze", () => {
-    // A recording/loading indicator that stops on a frame reads as "stuck".
-    // Capping iterations to 1 would do exactly that, so the net must not.
-    const declarations = declarationsIn(universalBlock()!);
-    expect(declarations.has("animation-iteration-count")).toBe(false);
+  it("caps iterations so shortened infinite animations cannot flicker", () => {
+    // Keeping infinite repetition at 0.01ms turns reduced motion into flicker.
+    // One iteration still fires animationend for components awaiting completion.
+    const block = universalBlock()!;
+    const declarations = declarationsIn(block);
+    expect(declarations.get("animation-iteration-count")).toBe("1");
+    block.walkDecls("animation-iteration-count", (declaration) => {
+      expect(declaration.important).toBe(true);
+    });
   });
 
   it("keeps the per-component rules that supply meaningful static fallbacks", () => {
-    // The global net only shortens time. A component that needs to still *look*
+    // A component that needs to still *look*
     // live when frozen (the meeting listening stick collapses to scaleY(0.6))
     // carries its own rule, and those must survive.
     const selectors = reducedMotionBlocks().flatMap((block) => {

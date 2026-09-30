@@ -49,10 +49,10 @@ describe("Live View interactive list decisions", () => {
       screen.getByRole("button", { name: "done Send the customer recap" }),
     ).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "snooze Send the customer recap" }),
+      screen.getByRole("button", { name: "Snooze Send the customer recap" }),
     ).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "not right Send the customer recap" }),
+      screen.getByRole("button", { name: "Not right Send the customer recap" }),
     ).toBeDisabled();
   });
 
@@ -71,14 +71,14 @@ describe("Live View interactive list decisions", () => {
       screen.getByRole("button", { name: "done Send the customer recap" }),
     ).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "snooze Send the customer recap" }),
+      screen.getByRole("button", { name: "Snooze Send the customer recap" }),
     ).toHaveTextContent("Later");
     expect(
-      screen.getByRole("button", { name: "not right Send the customer recap" }),
+      screen.getByRole("button", { name: "Not right Send the customer recap" }),
     ).toHaveTextContent("Not right");
     expect(
       screen.getByRole("button", {
-        name: "send Send the customer recap to another app",
+        name: "Send Send the customer recap to another app",
       }),
     ).toHaveTextContent("Send…");
 
@@ -94,7 +94,7 @@ describe("Live View interactive list decisions", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "send Send the customer recap to another app",
+        name: "Send Send the customer recap to another app",
       }),
     );
     expect(onItemHandoff).toHaveBeenCalledWith(
@@ -107,7 +107,7 @@ describe("Live View interactive list decisions", () => {
     render(<LiveViewCard slot={interactiveSlot} onItemAction={onItemAction} />);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "snooze Send the customer recap" }),
+      screen.getByRole("button", { name: "Snooze Send the customer recap" }),
     );
     expect(await screen.findByText("Remind me")).toBeTruthy();
     expect(screen.getByRole("button", { name: "In 1 hour" })).toBeTruthy();
@@ -131,7 +131,7 @@ describe("Live View interactive list decisions", () => {
     render(<LiveViewCard slot={interactiveSlot} onItemAction={onItemAction} />);
 
     const notRight = screen.getByRole("button", {
-      name: "not right Send the customer recap",
+      name: "Not right Send the customer recap",
     });
     fireEvent.click(notRight);
     expect(notRight.getAttribute("aria-expanded")).toBe("true");
@@ -163,7 +163,7 @@ describe("Live View interactive list decisions", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "not right Send the customer recap" }),
+      screen.getByRole("button", { name: "Not right Send the customer recap" }),
     );
     fireEvent.click(await screen.findByText("Remove from inbox"));
     await waitFor(() =>
@@ -179,7 +179,7 @@ describe("Live View interactive list decisions", () => {
     render(<LiveViewCard slot={interactiveSlot} onItemAction={onItemAction} />);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "not right Send the customer recap" }),
+      screen.getByRole("button", { name: "Not right Send the customer recap" }),
     );
     fireEvent.click(await screen.findByText("Remove from inbox"));
     await waitFor(() => expect(onItemAction).toHaveBeenCalledOnce());
@@ -204,13 +204,13 @@ describe("Live View interactive list decisions", () => {
     };
     render(<LiveViewCard slot={handledSlot} onItemAction={onItemAction} />);
 
-    expect(screen.getByText("nothing needs attention")).toBeTruthy();
+    expect(screen.getByText("Nothing needs attention")).toBeTruthy();
     fireEvent.click(screen.getByText("1 handled · show"));
     const handled = screen.getByTestId("live-view-item-customer-recap");
     expect(handled.getAttribute("data-item-state")).toBe("dismissed");
     expect(screen.getByText("removed")).toBeTruthy();
     fireEvent.click(
-      screen.getByRole("button", { name: "reopen Send the customer recap" }),
+      screen.getByRole("button", { name: "Reopen Send the customer recap" }),
     );
     await waitFor(() =>
       expect(onItemAction).toHaveBeenCalledWith({

@@ -24,6 +24,13 @@ const body: RequestBody = {
 };
 
 describe('Cloudflare hosted-chat routing', () => {
+	it.each(['internal', 'super_admin'] as const)('preserves the %s allowance error without an upgrade offer', async (plan) => {
+		const response = allowanceErrorResponse(body, new HostedChatAllowanceExceededError({
+			user_id: 'synthetic', plan, lane: 'auto', workload: 'background',
+		}));
+		expect(response.status).toBe(429);
+		expect(await response.json()).toMatchObject({ required_plan: null, upgrade_url: null });
+	});
 	it.each(['combined', 'unknown'] as const)('treats a %s spend-limit error as terminal without provider cascade', async (limitScope) => {
 		const context = await buildHostedChatGatewayContext(basicAuth, body.model, 'interactive');
 		const attempts = mock(async () => {

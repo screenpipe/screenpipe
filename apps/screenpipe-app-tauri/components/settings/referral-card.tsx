@@ -13,6 +13,9 @@ import { toast } from "@/components/ui/use-toast";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { commands } from "@/lib/utils/tauri";
 import { screenpipeWebUrl } from "@/lib/web-url";
+import { useGT } from "gt-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+
 
 interface ReferralData {
   code: string;
@@ -23,6 +26,8 @@ interface ReferralData {
 }
 
 export function ReferralCard() {
+
+  const ui = useGT();
   const { settings } = useSettings();
   const [referral, setReferral] = useState<ReferralData | null>(null);
   const [noCode, setNoCode] = useState(false);
@@ -50,8 +55,12 @@ export function ReferralCard() {
             `/api/referral?email=${encodeURIComponent(userEmail)}`,
             "https://screenpipe.com",
           ),
-          { signal: controller.signal },
+          {
+            headers: { Authorization: `Bearer ${userToken}` },
+            signal: controller.signal,
+          },
         );
+        if (controller.signal.aborted) return;
         if (res.status === 404) {
           setReferral(null);
           setNoCode(true);
@@ -78,7 +87,7 @@ export function ReferralCard() {
         console.error("referral fetch error:", error);
         setReferral(null);
         setNoCode(false);
-        setLoadError("couldn't load your referral link");
+        setLoadError("Could not prepare your invite link. Please try again.");
         setLoadedForEmail(userEmail);
       } finally {
         if (!controller.signal.aborted) setLoading(false);
@@ -94,17 +103,17 @@ export function ReferralCard() {
       <Card className="p-5">
         <div className="mb-3 flex items-center gap-2">
           <Gift className="h-5 w-5 text-muted-foreground" />
-          <h3 className="text-lg font-semibold">refer a friend</h3>
+          <h3 className="text-lg font-semibold">Refer a friend</h3>
         </div>
         <p className="mb-4 text-sm text-muted-foreground">
-          sign in to view your referral eligibility and invite link
+          Give a friend 10% off and get a free month when they subscribe. Sign in to get your invite link.
         </p>
         <Button
           variant="outline"
           size="sm"
           onClick={() => commands.openLoginWindow(null, null)}
         >
-          sign in
+          Sign in
         </Button>
       </Card>
     );
@@ -115,11 +124,11 @@ export function ReferralCard() {
     try {
       await commands.copyTextToClipboard(referral.link);
       setCopied(true);
-      toast({ title: "referral link copied" });
+      toast({ title: ui("Referral link copied") });
       setTimeout(() => setCopied(false), 2000);
     } catch {
       toast({
-        title: "failed to copy",
+        title: ui("Failed to copy"),
         variant: "destructive",
       });
     }
@@ -151,11 +160,11 @@ export function ReferralCard() {
       }
 
       setEmail("");
-      toast({ title: "invite sent" });
+      toast({ title: ui("Invite sent") });
     } catch (error) {
       toast({
         title:
-          error instanceof Error ? error.message : "failed to send invite",
+          error instanceof Error ? error.message : ui("Failed to send invite"),
         variant: "destructive",
       });
     } finally {
@@ -168,10 +177,10 @@ export function ReferralCard() {
       <Card className="p-5">
         <div className="mb-2 flex items-center gap-2">
           <Gift className="h-5 w-5 text-muted-foreground" />
-          <h3 className="text-lg font-semibold">refer a friend</h3>
+          <h3 className="text-lg font-semibold">Refer a friend</h3>
         </div>
         <p className="text-sm text-muted-foreground">
-          your signed-in account has no email address
+          Your signed-in account has no email address
         </p>
       </Card>
     );
@@ -182,9 +191,9 @@ export function ReferralCard() {
       <Card className="p-5">
         <div className="flex items-center gap-2 mb-2">
           <Gift className="h-5 w-5 text-muted-foreground" />
-          <h3 className="text-lg font-semibold">refer a friend</h3>
+          <h3 className="text-lg font-semibold">Refer a friend</h3>
         </div>
-        <p className="text-sm text-muted-foreground">loading referral info...</p>
+        <p className="text-sm text-muted-foreground">Preparing your invite link...</p>
       </Card>
     );
   }
@@ -194,7 +203,7 @@ export function ReferralCard() {
       <Card className="p-5">
         <div className="mb-2 flex items-center gap-2">
           <Gift className="h-5 w-5 text-muted-foreground" />
-          <h3 className="text-lg font-semibold">refer a friend</h3>
+          <h3 className="text-lg font-semibold">Refer a friend</h3>
         </div>
         <p className="mb-4 text-sm text-muted-foreground">
           {loadError}
@@ -204,7 +213,7 @@ export function ReferralCard() {
           size="sm"
           onClick={() => setReloadCount((count) => count + 1)}
         >
-          try again
+          Try again
         </Button>
       </Card>
     );
@@ -215,12 +224,44 @@ export function ReferralCard() {
       <Card className="p-5">
         <div className="flex items-center gap-2 mb-2">
           <Gift className="h-5 w-5 text-muted-foreground" />
-          <h3 className="text-lg font-semibold">refer a friend</h3>
+          <h3 className="text-lg font-semibold">Refer a friend</h3>
         </div>
-        <p className="text-sm text-muted-foreground">
-          referral links unlock after your first paid plan starts. the free
-          Business trial does not create a referral code.
+        <p className="mb-1 text-sm font-medium">Your invite link is temporarily unavailable</p>
+        <p className="mb-3 break-words text-sm text-muted-foreground">
+          Signed in as {userEmail}
         </p>
+        <p className="mb-4 text-sm text-muted-foreground">
+          You do not need a paid plan to invite friends. Try again, or contact
+          support if your link still does not appear.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setReloadCount((count) => count + 1)}
+          >
+            Check again
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={async () => {
+              try {
+                await openUrl(
+                  "mailto:support@screenpi.pe?subject=Missing%20referral%20link",
+                );
+              } catch {
+                toast({
+                  title: ui("Could not open your email app"),
+                  description: ui("Email support@screenpi.pe for help with your referral link."),
+                  variant: "destructive",
+                });
+              }
+            }}
+          >
+            Contact support
+          </Button>
+        </div>
       </Card>
     );
   }
@@ -229,15 +270,20 @@ export function ReferralCard() {
 
   return (
     <Card className="p-5">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
         <div className="flex items-center gap-2">
           <Gift className="h-5 w-5 text-primary" />
-          <h3 className="text-lg font-semibold">refer a friend</h3>
+          <h3 className="text-lg font-semibold">Give 10% off. Get a free month.</h3>
         </div>
         <Badge variant="secondary" className="rounded-none font-mono text-xs">
-          {referral.redemptions} / {referral.maxRedemptions} used
+          {referral.rewardsEarned} / {referral.maxRedemptions} rewards earned
         </Badge>
       </div>
+
+      <p className="mb-4 text-sm text-muted-foreground">
+        Your friend gets 10% off their first payment. You get one month free
+        when they subscribe. You can invite friends on any plan, including free.
+      </p>
 
       {/* Referral link + copy */}
       <div className="flex items-center gap-2 mb-4">
@@ -246,8 +292,8 @@ export function ReferralCard() {
           value={referral.link}
           className="font-mono text-sm"
         />
-        <Button variant="outline" size="icon" onClick={handleCopy}>
-          <span className="sr-only">copy referral link</span>
+        <Button variant="outline" size="sm" className="shrink-0 gap-2" aria-label={copied ? "Referral link copied" : "Copy referral link"} onClick={handleCopy}>
+          <span>{copied ? "Copied" : "Copy link"}</span>
           {copied ? (
             <Check className="h-4 w-4 text-foreground" />
           ) : (
@@ -256,22 +302,9 @@ export function ReferralCard() {
         </Button>
       </div>
 
-      {/* How it works */}
-      <div className="space-y-1.5 text-sm text-muted-foreground mb-4">
-        <p className="font-medium text-foreground text-xs uppercase tracking-wide">how it works</p>
-        <div className="flex items-center gap-2">
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center border border-border bg-muted font-mono text-xs">1</span>
-          share your invite link
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center border border-border bg-muted font-mono text-xs">2</span>
-          they sign up and get <span className="font-medium text-foreground">10% off</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center border border-border bg-muted font-mono text-xs">3</span>
-          you get <span className="font-medium text-foreground">1 month free</span> when they subscribe
-        </div>
-      </div>
+      <p className="mb-4 text-xs text-muted-foreground">
+        Earn up to {referral.maxRedemptions} free months. Discounts cannot be combined.
+      </p>
 
       {/* Email invite */}
       <div className="flex items-center gap-2 pt-3 border-t border-border/50">
@@ -294,7 +327,7 @@ export function ReferralCard() {
           ) : (
             <Send className="h-4 w-4 mr-1.5" />
           )}
-          {sending ? "sending..." : "invite"}
+          {sending ? ui("Sending...") : ui("Invite")}
         </Button>
       </div>
     </Card>

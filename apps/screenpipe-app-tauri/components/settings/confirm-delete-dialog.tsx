@@ -44,7 +44,7 @@ export function ConfirmDeleteDialog({
           <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel data-testid="brain-cancel-delete-btn">cancel</AlertDialogCancel>
+          <AlertDialogCancel data-testid="brain-cancel-delete-btn">Cancel</AlertDialogCancel>
           <AlertDialogAction data-testid="brain-confirm-delete-btn" variant="destructive" onClick={onConfirm}>
             {confirmLabel}
           </AlertDialogAction>

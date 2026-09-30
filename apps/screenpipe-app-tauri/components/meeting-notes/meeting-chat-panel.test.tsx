@@ -126,7 +126,7 @@ describe("meeting chat panel", () => {
     setup();
     const panel = screen.getByTestId("meeting-chat-panel");
     expect(panel.tagName).toBe("ASIDE");
-    expect(panel).toHaveAttribute("aria-label", "ask about this meeting");
+    expect(panel).toHaveAttribute("aria-label", "Ask about this meeting");
   });
 
   it("costs the document no height", () => {
@@ -276,14 +276,14 @@ describe("meeting chat panel", () => {
     const noPreset = setup({ conditions: conditions({ hasPreset: false }) });
     expect(screen.getByTestId("meeting-chat-input")).toHaveAttribute(
       "placeholder",
-      "set up ai in settings",
+      "Set up AI in settings",
     );
     expect(screen.getByTestId("meeting-chat-input")).toBeDisabled();
     noPreset.unmount();
     setup({ conditions: conditions({ quotaExhausted: true }) });
     expect(screen.getByTestId("meeting-chat-input")).toHaveAttribute(
       "placeholder",
-      "ai limit reached",
+      "AI limit reached",
     );
   });
 
@@ -293,7 +293,7 @@ describe("meeting chat panel", () => {
     });
     expect(screen.getByTestId("meeting-chat-input")).toHaveAttribute(
       "placeholder",
-      "nothing recorded yet",
+      "Nothing recorded yet",
     );
   });
 
@@ -315,7 +315,7 @@ describe("meeting chat panel", () => {
     setup({ conditions: conditions({ refreshingAfterRetranscription: true }) });
     const input = screen.getByTestId("meeting-chat-input");
     expect(input).toBeDisabled();
-    expect(input).toHaveAttribute("placeholder", "refreshing…");
+    expect(input).toHaveAttribute("placeholder", "Refreshing…");
   });
 
   it("renders clock citations as controls back into the transcript", () => {
@@ -398,7 +398,7 @@ describe("meeting chat panel", () => {
     setup({
       turns: [{ id: "a", role: "assistant", text: "", done: true }],
     });
-    expect(screen.getByText("no answer")).toBeInTheDocument();
+    expect(screen.getByText("No answer")).toBeInTheDocument();
   });
 
   it("case 63: a failed turn offers retry", () => {
@@ -413,13 +413,13 @@ describe("meeting chat panel", () => {
         },
       ],
     });
-    fireEvent.click(screen.getByRole("button", { name: "retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(props.onRetry).toHaveBeenCalled();
   });
 
   it("case 98: the resize handle is reachable and operable by keyboard", () => {
     const { props } = setup({ storedWidth: 380 });
-    const handle = screen.getByRole("separator", { name: "resize conversation" });
+    const handle = screen.getByRole("separator", { name: "Resize conversation" });
     expect(handle).toHaveAttribute("tabIndex", "0");
     fireEvent.keyDown(handle, { key: "ArrowLeft" });
     expect(props.onWidthChange).toHaveBeenCalledWith(412);

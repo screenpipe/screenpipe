@@ -1111,7 +1111,7 @@ pub fn get_cloud_token() -> Option<String> {
     if let Some(token) = crate::auth_token::cached_cloud_token() {
         return Some(token);
     }
-    let path = screenpipe_core::paths::default_screenpipe_data_dir().join("auth.json");
+    let path = crate::config::app_data_dir().join("auth.json");
     let raw = std::fs::read_to_string(&path).ok()?;
     let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
     parsed
@@ -1164,6 +1164,7 @@ pub async fn set_cloud_token(
     // fallible secret-store write so the on-disk copies never outlive the
     // session even if persistence below fails.
     if should_clear_pi_auth {
+        state.deferred_account_start.cancel();
         if let Err(e) = crate::pi::clear_screenpipe_auth_token_files() {
             warn!("failed to clear pi screenpipe auth token: {}", e);
         }
@@ -1205,10 +1206,16 @@ pub async fn set_cloud_token(
     // Err so the frontend won't strip the last plaintext copy of a token it
     // couldn't durably save (the caller ignores the Result for session purposes;
     // only the save-and-strip path checks it).
-    crate::auth_token::store_cloud_token(normalized.as_deref())
+    let persistence_result = crate::auth_token::store_cloud_token(normalized.as_deref())
         .await
-        .map_err(|e| format!("failed to persist cloud token to secret store: {e}"))?;
-    Ok(())
+        .map_err(|e| format!("failed to persist cloud token to secret store: {e}"));
+    if !should_clear_pi_auth {
+        // `loadUser` calls this after saving verified account data. Both
+        // in-process token caches are now updated, even if persistence failed.
+        // Resume native startup without relying on a frontend gate transition.
+        crate::recording::resume_deferred_account_start(app.clone());
+    }
+    persistence_result
 }
 
 /// Persist the user's enterprise admin status, team API token, and the org's
@@ -2083,7 +2090,7 @@ pub async fn open_login_window(
             label.clone(),
             WebviewUrl::External(parsed_login_url),
         )
-        .title("sign in to screenpipe")
+        .title(crate::localization::ui_text("sign in to screenpipe"))
         .inner_size(460.0, 700.0)
         .focused_gated(true);
 
@@ -2169,7 +2176,7 @@ pub async fn open_google_calendar_auth_window(
     let parsed_url = auth_url.parse().map_err(|e| format!("invalid url: {e}"))?;
     let mut builder =
         WebviewWindowBuilder::new(&app_handle, label, WebviewUrl::External(parsed_url))
-            .title("connect google calendar")
+            .title(crate::localization::ui_text("connect google calendar"))
             .inner_size(500.0, 700.0)
             .focused_gated(true);
 
@@ -2766,33 +2773,193 @@ pub async fn get_onboarding_status(
     OnboardingStore::get(&app_handle).map(|o| o.unwrap_or_default())
 }
 
+// Preserve receipt identity on retry. The store cache may already contain
+// completion after a failed disk save, so emit after every successful save;
+// consumers can deduplicate retries by completion_id. Completion means saved
+// setup, not that the destination window opened successfully.
+fn mark_onboarding_completed(onboarding: &mut OnboardingStore) -> serde_json::Value {
+    if !onboarding.is_completed || onboarding.completed_at.is_none() {
+        onboarding.complete();
+    }
+    serde_json::json!({
+        "telemetry_schema_version": 2,
+        "owner": "native",
+        "completion_id": onboarding.completed_at,
+        "outcome": "saved",
+    })
+}
+
+fn onboarding_completion_failure(stage: &str, attempt_id: &str, error: &str) -> String {
+    let lower = error.to_lowercase();
+    let code = if lower.contains("permission denied") || lower.contains("access is denied")
+        || lower.contains("operation not permitted") {
+        "permission_denied"
+    } else if lower.contains("no space left") || lower.contains("disk full") {
+        "disk_full"
+    } else if lower.contains("deserialize") || lower.contains("invalid") {
+        "invalid_state"
+    } else {
+        "operation_failed"
+    };
+    let diagnostic = serde_json::json!({
+        "stage": stage, "attempt_id": attempt_id, "error_code": code,
+        "outcome": "retry_available"
+    });
+    // Error strings can contain paths or provider credentials. The fixed stage
+    // and cause are sufficient for support without retaining their raw text.
+    tracing::warn!("onboarding_completion_failed {}", diagnostic);
+    diagnostic.to_string()
+}
+
+#[cfg(test)]
+mod onboarding_receipt_tests {
+    use super::*;
+
+    #[test]
+    fn retry_after_a_failed_save_preserves_completion_time_and_receipt_identity() {
+        let mut onboarding = OnboardingStore::default();
+        let receipt = mark_onboarding_completed(&mut onboarding);
+        assert!(onboarding.is_completed);
+        let completed_at = onboarding.completed_at.clone();
+        assert_eq!(receipt["completion_id"], serde_json::json!(completed_at));
+        assert_eq!(mark_onboarding_completed(&mut onboarding), receipt);
+        assert_eq!(onboarding.completed_at, completed_at);
+    }
+
+    #[tokio::test]
+    async fn setup_failures_and_recovery_survive_rotation_and_support_redaction() {
+        let logs = tempfile::tempdir().unwrap();
+        let current = logs.path().join("screenpipe-app.2026-09-22.log");
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(std::fs::File::create(&current).unwrap())
+            .finish();
+        let events: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../lib/__tests__/fixtures/onboarding-support-events.json"
+        ))
+        .unwrap();
+        let attempt_id = "00000000-0000-4000-8000-000000000001";
+        tracing::subscriber::with_default(subscriber, || {
+            for event in &events {
+                let mut properties = event["properties"].clone();
+                properties["attempt_id"] = serde_json::json!(attempt_id);
+                write_browser_log(
+                    "warn".into(),
+                    format!("{} {}", event["event"].as_str().unwrap(), properties),
+                );
+            }
+            write_browser_log(
+                "warn".into(),
+                serde_json::json!({
+                    "event": "trial_activation_assignment_failed", "reason": "load_error",
+                    "stage": "waiting_for_fresh_response", "attempt_id": attempt_id,
+                    "response_count": 2, "elapsed_ms": 10, "identity_matches": true,
+                    "fallback_variant": "control", "outcome": "continue_setup"
+                })
+                .to_string(),
+            );
+            let error = onboarding_completion_failure(
+                "persist",
+                attempt_id,
+                "Operation not permitted: /private/person@example.com/token=secret",
+            );
+            assert!(!error.contains("secret"));
+            assert!(!error.contains("person@example.com"));
+        });
+        std::fs::rename(
+            &current,
+            logs.path().join("screenpipe-app.2026-09-22.1.log"),
+        )
+        .unwrap();
+        std::fs::write(
+            &current,
+            "onboarding_completion_persisted outcome=saved\ncontact=person@example.com\n",
+        )
+        .unwrap();
+        let report =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[logs.path().to_path_buf()])
+                .await
+                .unwrap();
+        for expected in [
+            "onboarding_default_setup_failed",
+            "speaker-reconciliation",
+            "skill-learning",
+            "free_pipe_limit_reached",
+            "configure",
+            "permission_denied",
+            "digital-clone",
+            "onboarding_connection_cta_failed",
+            "authorization_denied",
+            "oauth_connect",
+            "onboarding_completion_failed",
+            "permission_denied",
+            "retry_available",
+            attempt_id,
+            "onboarding_completion_persisted",
+            "trial_activation_assignment_failed",
+            "load_error",
+            "waiting_for_fresh_response",
+            "continue_setup",
+        ] {
+            assert!(report.contains(expected), "missing {expected}: {report}");
+        }
+        assert!(!report.contains("person@example.com"));
+        assert!(!report.contains("secret"));
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn complete_onboarding(app_handle: tauri::AppHandle) -> Result<(), String> {
-    // Update the persistent store
+    let attempt_id = uuid::Uuid::new_v4().to_string();
+    let mut receipt = None;
+    let mut persisted = None;
     OnboardingStore::update(&app_handle, |onboarding| {
-        onboarding.complete();
+        receipt = Some(mark_onboarding_completed(onboarding));
+        persisted = Some(onboarding.clone());
     })
-    .map_err(|e| e.to_string())?;
+    .map_err(|error| onboarding_completion_failure("persist", &attempt_id, &error))?;
 
-    // Update the managed state in memory
-    if let Some(managed_store) = app_handle.try_state::<OnboardingStore>() {
-        // Get the current state and create an updated version
-        let mut updated_store = managed_store.inner().clone();
-        updated_store.complete();
-        // Replace the managed state with the updated version
-        app_handle.manage(updated_store);
+    if let Some(persisted) = persisted {
+        app_handle.manage(persisted);
+    }
+    info!(
+        "onboarding_completion_persisted attempt_id={} receipt={}",
+        attempt_id,
+        receipt.as_ref().unwrap_or(&serde_json::Value::Null)
+    );
+    // Capture only after persistence succeeds. The task belongs to the native
+    // process and survives the onboarding webview being destroyed below.
+    if let (Some(properties), Some(analytics)) = (
+        receipt,
+        app_handle.try_state::<std::sync::Arc<AnalyticsManager>>(),
+    ) {
+        let analytics = std::sync::Arc::clone(&analytics);
+        tauri::async_runtime::spawn(async move {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                analytics.send_event("onboarding_completed", Some(properties)),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => tracing::warn!(%error, "onboarding completion receipt failed"),
+                Err(_) => tracing::warn!("onboarding completion receipt timed out"),
+            }
+        });
     }
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    close_window(app_handle.clone(), ShowRewindWindow::Onboarding).await?;
-    crate::first_run_summary::arm(&app_handle)?;
+    crate::first_run_summary::arm(&app_handle)
+        .map_err(|error| onboarding_completion_failure("arm_summary", &attempt_id, &error))?;
     let _ = refresh_tray_menu(app_handle.clone()).await;
 
     // Hidden UI applies to the main app, but incomplete onboarding remains
     // visible long enough to finish permissions. Once onboarding completes,
     // close that sole exemption without trying to open Home.
     if crate::enterprise_policy::is_app_ui_hidden() {
+        close_window(app_handle.clone(), ShowRewindWindow::Onboarding)
+            .await
+            .map_err(|error| onboarding_completion_failure("close_setup", &attempt_id, &error))?;
         info!("enterprise: onboarding completed; keeping main UI hidden");
         return Ok(());
     }
@@ -2807,7 +2974,13 @@ pub async fn complete_onboarding(app_handle: tauri::AppHandle) -> Result<(), Str
             page: Some("home".to_string()),
         },
     )
-    .await?;
+    .await
+    .map_err(|error| onboarding_completion_failure("open_home", &attempt_id, &error))?;
+
+    // Retain the retry UI until all fallible destination work succeeds.
+    close_window(app_handle.clone(), ShowRewindWindow::Onboarding)
+        .await
+        .map_err(|error| onboarding_completion_failure("close_setup", &attempt_id, &error))?;
 
     Ok(())
 }
@@ -2979,22 +3152,23 @@ pub async fn enable_keychain_encryption() -> Result<KeychainStatus, String> {
         "Keychain access denied or unavailable. Credentials will remain unencrypted.".to_string()
     })?;
 
-    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-    if let Err(e) = screenpipe_secrets::mark_encryption_enabled(&data_dir) {
-        tracing::warn!("failed to write .encrypt-store flag: {}", e);
-    }
+    for data_dir in crate::config::secret_store_dirs() {
+        if let Err(e) = screenpipe_secrets::mark_encryption_enabled(&data_dir) {
+            tracing::warn!("failed to write .encrypt-store flag: {}", e);
+        }
 
-    if let Ok(store) =
-        screenpipe_secrets::SecretStore::open_for_data_dir(&data_dir, Some(key)).await
-    {
-        match store.reencrypt_unencrypted_secrets(&key).await {
-            Ok(count) if count > 0 => {
-                tracing::info!("re-encrypted {} secrets after keychain opt-in", count);
+        if let Ok(store) =
+            screenpipe_secrets::SecretStore::open_for_data_dir(&data_dir, Some(key)).await
+        {
+            match store.reencrypt_unencrypted_secrets(&key).await {
+                Ok(count) if count > 0 => {
+                    tracing::info!("re-encrypted {} secrets after keychain opt-in", count);
+                }
+                Err(e) => {
+                    tracing::warn!("failed to re-encrypt secrets: {}", e);
+                }
+                _ => {}
             }
-            Err(e) => {
-                tracing::warn!("failed to re-encrypt secrets: {}", e);
-            }
-            _ => {}
         }
     }
 
@@ -3006,57 +3180,61 @@ pub async fn enable_keychain_encryption() -> Result<KeychainStatus, String> {
 #[tauri::command]
 #[specta::specta]
 pub async fn disable_keychain_encryption() -> Result<KeychainStatus, String> {
-    let data_dir = screenpipe_core::paths::default_screenpipe_data_dir();
-    let secrets_path = screenpipe_secrets::secrets_database_path(&data_dir);
+    let data_dirs = crate::config::secret_store_dirs();
+    for data_dir in &data_dirs {
+        let secrets_path = screenpipe_secrets::secrets_database_path(data_dir);
 
-    if secrets_path.exists() || data_dir.join("db.sqlite").exists() {
-        let plain_store = screenpipe_secrets::SecretStore::open_for_data_dir(&data_dir, None)
-            .await
-            .map_err(|e| format!("failed to open secret store: {e}"))?;
-        let encrypted_count = plain_store
-            .encrypted_secret_count()
-            .await
-            .map_err(|e| format!("failed to inspect encrypted secrets: {e}"))?;
+        if secrets_path.exists() || data_dir.join("db.sqlite").exists() {
+            let plain_store = screenpipe_secrets::SecretStore::open_for_data_dir(data_dir, None)
+                .await
+                .map_err(|e| format!("failed to open secret store: {e}"))?;
+            let encrypted_count = plain_store
+                .encrypted_secret_count()
+                .await
+                .map_err(|e| format!("failed to inspect encrypted secrets: {e}"))?;
 
-        if encrypted_count > 0 {
-            let key = match crate::secrets::get_key() {
-                crate::secrets::KeyResult::Found(key) => key,
-                crate::secrets::KeyResult::AccessDenied => {
-                    return Err(format!(
-                        "Cannot disable encryption yet: {encrypted_count} stored secret(s) are encrypted, but keychain access was denied."
-                    ));
-                }
-                crate::secrets::KeyResult::NotFound => {
-                    return Err(format!(
-                        "Cannot disable encryption yet: {encrypted_count} stored secret(s) are encrypted, but the keychain key was not found."
-                    ));
-                }
-                crate::secrets::KeyResult::Unavailable => {
-                    return Err(format!(
-                        "Cannot disable encryption yet: {encrypted_count} stored secret(s) are encrypted, but the keychain is unavailable."
-                    ));
-                }
-            };
+            if encrypted_count > 0 {
+                let key = match crate::secrets::get_key() {
+                    crate::secrets::KeyResult::Found(key) => key,
+                    crate::secrets::KeyResult::AccessDenied => {
+                        return Err(format!(
+                            "Cannot disable encryption yet: {encrypted_count} stored secret(s) are encrypted, but keychain access was denied."
+                        ));
+                    }
+                    crate::secrets::KeyResult::NotFound => {
+                        return Err(format!(
+                            "Cannot disable encryption yet: {encrypted_count} stored secret(s) are encrypted, but the keychain key was not found."
+                        ));
+                    }
+                    crate::secrets::KeyResult::Unavailable => {
+                        return Err(format!(
+                            "Cannot disable encryption yet: {encrypted_count} stored secret(s) are encrypted, but the keychain is unavailable."
+                        ));
+                    }
+                };
 
-            let encrypted_store =
-                screenpipe_secrets::SecretStore::open_for_data_dir(&data_dir, Some(key))
-                    .await
-                    .map_err(|e| format!("failed to open encrypted secret store: {e}"))?;
-            match encrypted_store.decrypt_encrypted_secrets().await {
-                Ok(count) => {
-                    tracing::info!("decrypted {} secrets before keychain opt-out", count);
-                }
-                Err(e) => {
-                    return Err(format!(
-                        "Cannot disable encryption until encrypted secrets are decrypted: {e}"
-                    ));
+                let encrypted_store =
+                    screenpipe_secrets::SecretStore::open_for_data_dir(data_dir, Some(key))
+                        .await
+                        .map_err(|e| format!("failed to open encrypted secret store: {e}"))?;
+                match encrypted_store.decrypt_encrypted_secrets().await {
+                    Ok(count) => {
+                        tracing::info!("decrypted {} secrets before keychain opt-out", count);
+                    }
+                    Err(e) => {
+                        return Err(format!(
+                            "Cannot disable encryption until encrypted secrets are decrypted: {e}"
+                        ));
+                    }
                 }
             }
         }
     }
 
-    screenpipe_secrets::mark_encryption_disabled(&data_dir)
-        .map_err(|e| format!("failed to remove .encrypt-store flag: {e}"))?;
+    for data_dir in &data_dirs {
+        screenpipe_secrets::mark_encryption_disabled(data_dir)
+            .map_err(|e| format!("failed to remove .encrypt-store flag: {e}"))?;
+    }
     if let Err(e) = crate::secrets::delete_key() {
         tracing::warn!("failed to delete keychain key on opt-out: {}", e);
     }

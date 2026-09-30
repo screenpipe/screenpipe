@@ -1,0 +1,34 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "screenpipe-cloud",
+  "version": "0.1.0",
+  "description": "Search your synced Screenpipe history across devices. Requires Data Sync.",
+  "author": { "name": "Screenpipe", "url": "https://screenpipe.com" },
+  "homepage": "https://screenpipe.com",
+  "repository": "https://github.com/screenpipe/screenpipe",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "keywords": ["screenpipe", "memory", "search", "data-sync"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Screenpipe Cloud",
+        "shortDescription": "Search your synced screen and audio history",
+        "longDescription": "Find recorded screen content, audio transcriptions, app data, and memories synced from your Screenpipe devices. Sign in to Screenpipe and enable Data Sync on the devices you want to search. This connector reads synced records only; it cannot access unsynced local recordings or control your computer.",
+        "developerName": "Screenpipe",
+        "category": "Productivity",
+        "capabilities": ["Read"],
+        "websiteURL": "https://screenpipe.com",
+        "privacyPolicyURL": "https://screenpipe.com/privacy",
+        "termsOfServiceURL": "https://screenpipe.com/terms",
+        "brandColor": "#000000",
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/icon.png",
+        "defaultPrompt": [
+          "Which of my Screenpipe devices have synced recently?",
+          "Find the pricing discussion from yesterday on my synced devices.",
+          "Find my recent project notes across my synced devices."
+        ]
+      }
+    }
+  }
+}

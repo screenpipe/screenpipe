@@ -13,6 +13,8 @@ The app release pipeline deliberately separates artifact preparation from public
 
 It has no route for updater pointers, enterprise publication state, GitHub tags, or GitHub releases. The service validates the version, target, filename, and scope before writing to R2.
 
+`Release App` builds consumer artifacts first, then dispatches `Release Enterprise` with the same validated commit and version. Before dispatch, it adds a pending `Enterprise artifacts` status to that release commit; enterprise completion changes it to success or failure. Consumer readiness remains independent, while a failed dispatch or missing/failed enterprise build cannot silently look complete. Dry runs use a separate status and preserve the no-upload setting. Manual `Release Enterprise` dispatch is retained for recovery, not as a separate step in a normal release.
+
 ## Only a human may publish
 
 Public publication includes any of the following:

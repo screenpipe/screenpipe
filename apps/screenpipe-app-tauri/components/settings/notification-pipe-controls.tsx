@@ -8,6 +8,8 @@ import { Switch } from "@/components/ui/switch";
 import { usePipes } from "@/lib/hooks/use-pipes";
 import { cn } from "@/lib/utils";
 import { Search, Star } from "lucide-react";
+import { useGT } from "gt-react";
+
 
 /**
  * Per-pipe notification controls. Renders one row per installed pipe with a
@@ -43,6 +45,8 @@ export function NotificationPipeControls({
   onAllowChange,
   disabled = false,
 }: NotificationPipeControlsProps) {
+
+  const ui = useGT();
   const { pipes, loading } = usePipes();
   const [query, setQuery] = React.useState("");
 
@@ -112,14 +116,14 @@ export function NotificationPipeControls({
 
   if (loading && pipeRows.length === 0) {
     return (
-      <p className="px-3 py-3 text-xs text-muted-foreground">loading scheduled tasks…</p>
+      <p className="px-3 py-3 text-xs text-muted-foreground">Loading scheduled tasks…</p>
     );
   }
 
   if (pipeRows.length === 0) {
     return (
       <div className="px-3 py-4 text-xs text-muted-foreground">
-        no scheduled tasks installed yet. install one from the Store and it&apos;ll
+        No scheduled tasks installed yet. Install one from the Store and it&apos;ll
         show up here.
       </div>
     );
@@ -130,8 +134,8 @@ export function NotificationPipeControls({
       <div className="flex items-center justify-between gap-2">
         <p className="text-[11px] text-muted-foreground">
           {mutedCount > 0
-            ? `${mutedCount} of ${pipeRows.length} muted`
-            : `${pipeRows.length} scheduled task${pipeRows.length === 1 ? "" : "s"} can notify you`}
+            ? ui("{value1} of {value2} muted", { value1: mutedCount, value2: pipeRows.length })
+            : ui("{count, plural, one {# scheduled task can notify you} other {# scheduled tasks can notify you}}", { count: pipeRows.length })}
           {vipCount > 0 && (
             <span className="text-muted-foreground/80">
               {" · "}
@@ -146,7 +150,7 @@ export function NotificationPipeControls({
             className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:pointer-events-none"
             onClick={() => onChange([])}
           >
-            unmute all
+            Unmute all
           </button>
         )}
       </div>
@@ -162,8 +166,8 @@ export function NotificationPipeControls({
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="filter scheduled tasks"
-            aria-label="filter scheduled tasks"
+            placeholder={ui("Filter scheduled tasks")}
+            aria-label={ui("Filter scheduled tasks")}
             disabled={disabled}
             className="w-full border border-border bg-transparent py-1.5 pl-8 pr-2.5 text-xs outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-foreground/30"
           />
@@ -173,7 +177,7 @@ export function NotificationPipeControls({
       <div className="divide-y divide-border border border-border">
         {filtered.length === 0 ? (
           <p className="px-3 py-3 text-center text-xs text-muted-foreground">
-            no scheduled tasks match &quot;{query}&quot;
+            No scheduled tasks match &quot;{query}&quot;
           </p>
         ) : (
           filtered.map((row) => {
@@ -199,11 +203,11 @@ export function NotificationPipeControls({
                       disabled={disabled}
                       aria-label={
                         isVip
-                          ? `stop always-notifying ${row.title}`
-                          : `always notify for ${row.title}`
+                          ? ui("Stop always-notifying {value1}", { value1: row.title })
+                          : ui("Always notify for {value1}", { value1: row.title })
                       }
                       aria-pressed={isVip}
-                      title="always notify, even while paused"
+                      title={ui("Always notify, even while paused")}
                       data-testid={`notification-pipe-vip-${row.name}`}
                       onClick={() => setVip(row.name, !isVip)}
                       className={cn(

@@ -10,6 +10,8 @@ import { Switch } from "@/components/ui/switch";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
+import { useGT } from "gt-react";
+
 
 type RemoteSupportStatus =
   | "checking"
@@ -30,7 +32,7 @@ function describeConsumerStatus(status: RemoteSupportStatus): StatusMessage {
   switch (status) {
     case "ready":
       return {
-        text: "Consent synced. Support can request one upload while this device is online.",
+        text: "Support access synced. Support can request one upload while this device is online.",
         className: "text-emerald-700",
       };
     case "uploading":
@@ -51,12 +53,12 @@ function describeConsumerStatus(status: RemoteSupportStatus): StatusMessage {
       };
     case "checking":
       return {
-        text: "Remote consent is enabled locally; checking the support connection.",
+        text: "Remote support access is enabled locally; checking the support connection.",
         className: "text-muted-foreground",
       };
     case "syncing":
       return {
-        text: "Confirming consent with support...",
+        text: "Confirming access with support...",
         className: "text-muted-foreground",
       };
     case "disabled":
@@ -68,6 +70,8 @@ function describeConsumerStatus(status: RemoteSupportStatus): StatusMessage {
 }
 
 export function RemoteSupportLogsCard() {
+
+  const ui = useGT();
   const { settings, updateSettings } = useSettings();
   const [remoteStatus, setRemoteStatus] =
     useState<RemoteSupportStatus>("checking");
@@ -80,7 +84,8 @@ export function RemoteSupportLogsCard() {
   const hasAccountConsent =
     settings.remoteLogCollectionEnabled === true &&
     currentUserId !== null &&
-    settings.remoteLogCollectionUserId === currentUserId;
+    (settings.remoteLogCollectionUserId == null ||
+      settings.remoteLogCollectionUserId === currentUserId);
   const enabled =
     isManagedDeploymentResolved &&
     (isManagedDeployment || hasAccountConsent);
@@ -121,7 +126,7 @@ export function RemoteSupportLogsCard() {
 
   return (
     <div className="space-y-2">
-      <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-1">
+      <h2 className="text-xs font-semibold text-muted-foreground normal-case tracking-wider px-1">
         Support access
       </h2>
       <Card className="border-border bg-card">
@@ -143,11 +148,11 @@ export function RemoteSupportLogsCard() {
                 <p className="text-xs text-muted-foreground mt-0.5 max-w-2xl">
                   {!isManagedDeploymentResolved
                     ? managedDeploymentResolutionError
-                      ? "Could not verify whether this device is managed. Remote log controls stay locked and will retry automatically."
-                      : "Checking whether remote log collection is managed by your organization..."
+                      ? ui("Could not verify whether this device is managed. Remote log controls stay locked and will retry automatically.")
+                      : ui("Checking whether remote log collection is managed by your organization...")
                     : isManagedDeployment
-                      ? "Your organization can request diagnostic logs from this managed device. Nothing is uploaded unless an administrator sends a request. Logs are filtered locally for common secrets and personal data, but automated filtering can miss secrets and logs can still contain names, file paths, URLs, and error messages. They go to your organization's configured support service, which controls retention. Screenshots, recordings, audio files, chat history, settings, and the timeline database are never included."
-                      : `Allow screenpipe support to request recent diagnostic logs from this device. Before upload, logs are filtered locally on this device for common secrets and personal data, but automated filtering can miss secrets and logs can still contain names, file paths, URLs, and error messages. Screenshots, recordings, audio files, chat history, settings, and the timeline database are never included. Nothing is uploaded unless support sends a short-lived request. You can turn this off at any time; previously shared diagnostics are deleted after 30 days.${requiresSignIn ? " Sign in to enable this." : ""}`}
+                      ? ui("Your organization can request diagnostic logs from this managed device. Nothing is uploaded unless an administrator sends a request. Logs are filtered locally for common secrets and personal data, but automated filtering can miss secrets and logs can still contain names, file paths, URLs, and error messages. They go to your organization's configured support service, which controls retention. Screenshots, recordings, audio files, chat history, settings, and the timeline database are never included.")
+                      : ui("Remote support logs are enabled by default. Screenpipe support can request recent diagnostic logs from this device. Before upload, logs are filtered locally on this device for common secrets and personal data, but automated filtering can miss secrets and logs can still contain names, file paths, URLs, and error messages. Screenshots, recordings, audio files, chat history, settings, and the timeline database are never included. Nothing is uploaded unless support sends a short-lived request. You can turn this off at any time; previously shared diagnostics are deleted after 30 days.{value1}", { value1: requiresSignIn ? " Sign in to enable this." : "" })}
                 </p>
                 {consumerStatus && (
                   <p className={`text-[11px] mt-1 ${consumerStatus.className}`}>
@@ -158,7 +163,7 @@ export function RemoteSupportLogsCard() {
             </div>
             <Switch
               id="remote-log-collection-toggle"
-              aria-label="Allow remote support logs"
+              aria-label={ui("Allow remote support logs")}
               data-testid="remote-log-collection-toggle"
               checked={enabled}
               disabled={

@@ -7,7 +7,8 @@ import { addCorsHeaders } from '../utils/cors';
 import { logModelOutcome } from '../services/model-health';
 import { isFrontierModel } from '../services/cost-tracker';
 import { isFlexEligible } from '../utils/latency';
-import { routeTier, routerArm, TIER_HEAD } from './difficulty-router';
+import { routerArm, TIER_HEAD } from './difficulty-router';
+import { pinAutoRoute, type AutoRouteScope, type PinnedAutoRoute } from '../services/auto-route';
 import { captureException } from '@sentry/cloudflare';
 import {
   HostedChatAllowanceExceededError,
@@ -21,7 +22,6 @@ import {
 } from '../services/cloudflare-ai-gateway';
 import { classifyCloudflareSpendLimitRule } from '../services/cloudflare-ai-gateway-usage';
 import {
-  BACKGROUND_FALLBACK_MODEL,
   SafetyRefusalError,
   isProviderQuotaOrBillingLimitError,
   isSafetyRefusalError,
@@ -35,14 +35,14 @@ import { getHostedAiCapacityUpgrade } from '../services/hosted-ai-policy';
 // Exported so tests can pin that every chain entry has a MODEL_PRICING match
 // (otherwise served-model cost rows fall into the unknown-model estimate).
 export const AUTO_WATERFALL = [
-  'gpt-5.6-luna',
+  'gpt-6-luna',
   'claude-sonnet-5',
   'gpt-5.4-mini',
 ];
 
 // Vision-capable models for requests containing images
 export const AUTO_WATERFALL_VISION = [
-  'gpt-5.6-luna',
+  'gpt-6-luna',
   'claude-sonnet-5',
   'gpt-5.4-mini',
 ];
@@ -50,7 +50,7 @@ export const AUTO_WATERFALL_VISION = [
 // Background waterfall — for pipes, summaries, and suggestions. All entries
 // support tools; the second entry crosses providers for outage resilience.
 export const AUTO_WATERFALL_BACKGROUND = [
-  'gpt-5.6-luna',
+  'gpt-6-luna',
   'claude-sonnet-5',
   'gpt-5.4-mini',
 ];
@@ -60,12 +60,13 @@ export const AUTO_WATERFALL_BACKGROUND = [
 // the difficulty router's premium tier heads. Keep this list and its attempt cap
 // in sync with the conservative reservation in free-chat-limit.ts.
 export const FREE_PREVIEW_WATERFALL = [
-  'gpt-5.6-luna',
+  'gpt-6-luna',
   'gpt-5.4-mini',
 ];
 export const FREE_PREVIEW_MAX_UPSTREAM_ATTEMPTS = 2;
 
 const NON_FRONTIER_FALLBACK_MODELS = new Set([
+  'gpt-6-luna',
   'gpt-5.6-luna',
   'gpt-5.4-mini',
   'gpt-5.4-nano',
@@ -91,6 +92,7 @@ function isGeminiModel(model: string): boolean {
 export const MODEL_FALLBACKS: Record<string, string[]> = {
   'claude-fable-5': ['claude-opus-5', 'claude-sonnet-5', 'gpt-5.4-mini'],
   'claude-opus-5': ['claude-sonnet-5', 'gpt-5.4-mini'],
+  'gpt-6-luna': ['claude-sonnet-5', 'gpt-5.4-mini'],
   'gpt-5.6-luna': ['claude-sonnet-5', 'gpt-5.4-mini'],
   'claude-sonnet-5': ['gpt-5.4-mini'],
   'gpt-5.4-mini': ['claude-sonnet-5'],
@@ -123,6 +125,8 @@ const USER_INPUT_TOO_LARGE_PATTERNS = [
   /maximum context length/i,
   /context length.*exceeded/i,
   /request payload size exceeds/i,
+  /input tokens exceed the configured limit/i,
+  /exceeds the available context size/i,
   // Vertex MaaS (glm-5 etc): "The input (325052 tokens) is longer than the
   // model's context length (202752 tokens)" — SCREENPIPE-AI-PROXY-C, 28 users.
   /longer than the model'?s context length/i,
@@ -143,6 +147,10 @@ const CLIENT_PAYLOAD_PATTERNS: Array<{ re: RegExp; message: string }> = [
   {
     re: /at least one message is required/i,
     message: 'The request must include at least one user or assistant message.',
+  },
+  {
+    re: /tool_calls.*array too long.*maximum length/i,
+    message: 'A message contains too many tool calls. Start a new chat or compact the conversation and try again.',
   },
 ];
 
@@ -319,7 +327,8 @@ async function tryModel(
         lane: error.allowance.lane,
         limitScope: error.allowance.limit_scope,
       });
-      logModelOutcome(env, { model, outcome: 'rate_limited' }).catch(() => {});
+      // Account policy rejected the request before the provider ran. This is
+      // observable above, but is not a provider-health failure.
       throw error;
     }
 
@@ -465,6 +474,7 @@ export async function runChain(
   maxAttempts: number = chain.length,
   gatewayContext?: HostedChatGatewayContext,
   attemptModel: typeof tryModel = tryModel,
+  beforeAttempt?: (model: string) => Promise<boolean>,
 ): Promise<{ response: Response; model: string } | { error: any; lastModel: string; limitError?: any }> {
   let lastError: any = null;
   let limitError: any = null;
@@ -472,6 +482,9 @@ export async function runChain(
   let lastModel = chain[0];
   for (const model of boundedModelChain(chain, maxAttempts)) {
     if (ctx === 'auto' && frontierPoolExhausted && isFrontierModel(model)) continue;
+    // State failures are terminal, outside the provider-error cascade: silently
+    // choosing another model would defeat the turn's cache/billing guarantee.
+    if (beforeAttempt && !await beforeAttempt(model)) continue;
     lastModel = model;
     try {
       const attemptGatewayContext = gatewayContext
@@ -522,7 +535,7 @@ export async function tryBackgroundFallback(
     // No gateway context: call the provider directly so the exhausted
     // Cloudflare spend limit cannot reject the rescue attempt too.
     const response = await attemptModel(
-      BACKGROUND_FALLBACK_MODEL,
+      fallbackBody.model,
       fallbackBody,
       env,
       'fallback',
@@ -531,11 +544,14 @@ export async function tryBackgroundFallback(
     );
     console.warn('background hosted AI request served by rescue model', {
       requestedModel: body.model,
-      fallbackModel: BACKGROUND_FALLBACK_MODEL,
+      fallbackModel: fallbackBody.model,
       reason: isSafetyRefusalError(error) ? 'safety_refusal' : 'allowance_or_quota',
     });
-    const tagged = addModelHeader(response, BACKGROUND_FALLBACK_MODEL);
-    tagged.headers.set('x-screenpipe-background-fallback', BACKGROUND_FALLBACK_MODEL);
+    const tagged = addModelHeader(response, fallbackBody.model);
+    tagged.headers.set('x-screenpipe-background-fallback', fallbackBody.model);
+    tagged.headers.set('x-screenpipe-background-fallback-reason',
+      isHostedChatAllowanceError(error) ? 'account_allowance'
+        : isSafetyRefusalError(error) ? 'safety_refusal' : 'allowance_or_quota');
     return addCorsHeaders(tagged);
   } catch (fallbackError: any) {
     console.error('background rescue fallback failed; preserving original response', {
@@ -799,7 +815,7 @@ function allowanceMessage(canUpgrade: boolean): string {
 
 /** Render the stable terminal contract Pi uses to avoid generic 429 retries. */
 export function allowanceErrorResponse(body: RequestBody, error: HostedChatAllowanceExceededError): Response {
-  const upgrade = error.allowance.plan === 'internal'
+  const upgrade = error.allowance.plan === 'internal' || error.allowance.plan === 'super_admin'
     ? null
     : getHostedAiCapacityUpgrade(error.allowance.plan);
   const payload = {
@@ -855,6 +871,7 @@ export async function handleChatCompletions(
     gatewayContext?: HostedChatGatewayContext;
     backgroundFallback?: boolean;
     safetyRefusalFallback?: boolean;
+    autoRouteScope?: AutoRouteScope;
   } = {},
 ): Promise<Response> {
   // A request with no messages at all can never complete: OpenAI would
@@ -885,7 +902,7 @@ export async function handleChatCompletions(
     isFrontierModel(body.model)
   ) {
     if (String((env as any)?.PIPE_FRONTIER_POLICY ?? 'downgrade').toLowerCase() === 'reject') {
-      return errorResponse(body, 403, `"${body.model}" (a frontier model) isn't available for scheduled pipes / background tasks. Use "auto", GPT-5.6 Luna, or GPT-5.4 mini.`);
+      return errorResponse(body, 403, `"${body.model}" (a frontier model) isn't available for scheduled pipes / background tasks. Use "auto", GPT-6 Luna, or GPT-5.4 mini.`);
     }
     const fallback = String((env as any)?.PIPE_FRONTIER_FALLBACK ?? 'auto');
     body = { ...body, model: fallback };
@@ -939,20 +956,26 @@ export async function handleChatCompletions(
     if (efficientOnly) {
       chain = efficientModelChain(chain);
     }
-    // Difficulty router (interactive text only). A/B by device: arm 'on' keeps
-    // trivial/normal requests on Luna and promotes hard requests to GPT-5.6 Sol;
-    // arm 'off' is the control baseline (chain unchanged = today's behavior). We tag
-    // router_tier on the response so the cost log can measure ON vs control.
     let routerTier: string | null = null;
-    if (!freePreview && !efficientOnly && !hasImages(body) && !useBackgroundChain) {
-      if (routerArm(deviceId, env) === 'on') {
-        const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
-        const tier = await routeTier(body.messages, env, { hasTools });
-        routerTier = tier;
-        if (tier !== 'normal') chain = [TIER_HEAD[tier], ...chain.filter((m) => m !== TIER_HEAD[tier])];
-      } else {
-        routerTier = 'control';
+    let pinned: PinnedAutoRoute | undefined;
+    if (!freePreview && !useBackgroundChain) {
+      const routerEnabled = routerArm(deviceId, env) === 'on';
+      routerTier = routerEnabled ? 'normal' : 'control';
+      if (options.autoRouteScope) {
+        try {
+          pinned = await pinAutoRoute(env, options.autoRouteScope, body, chain,
+            routerEnabled && !efficientOnly && !hasImages(body));
+        } catch {
+          return errorResponse(body, 503, 'Auto routing is temporarily unavailable. Please try again shortly.');
+        }
+        // Current entitlement/kill-switch gates always win over retained state.
+        chain = pinned.chain;
+        if (efficientOnly) chain = efficientModelChain(chain);
+        if (!routerEnabled) chain = chain.filter((model) => model !== TIER_HEAD.hard);
+        if (routerEnabled && !efficientOnly) routerTier = pinned.tier;
       }
+      // Legacy/no-session callers stay on Luna: never repeatedly guess frontier
+      // on requests that cannot be correlated into a stable logical turn.
     }
     const result = await runChain(
       chain,
@@ -962,6 +985,8 @@ export async function handleChatCompletions(
       flexEligible,
       freePreview ? FREE_PREVIEW_MAX_UPSTREAM_ATTEMPTS : chain.length,
       gatewayContext,
+      undefined,
+      pinned?.beforeAttempt,
     );
     if ('response' in result) {
       const resp = await finalizeProviderResponse(result.response, result.model);

@@ -10,9 +10,7 @@ import {
 	cloudflareSpendLimitRuleId,
 	gatewayProviderForModel,
 	getHostedChatGatewayConnection,
-	getHostedChatGatewayMode,
 	isCloudflareSpendLimitError,
-	shouldUseHostedChatGateway,
 	withHostedChatLane,
 } from '../services/cloudflare-ai-gateway';
 
@@ -28,14 +26,6 @@ function auth(overrides: Partial<AuthResult> = {}): AuthResult {
 }
 
 describe('Cloudflare hosted-chat metadata', () => {
-	it('defaults safely to legacy unless cloudflare is explicit', () => {
-		expect(getHostedChatGatewayMode({})).toBe('legacy');
-		expect(getHostedChatGatewayMode({ HOSTED_CHAT_GATEWAY_MODE: 'legacy' })).toBe('legacy');
-		expect(getHostedChatGatewayMode({ HOSTED_CHAT_GATEWAY_MODE: 'CLOUDFLARE' })).toBe('cloudflare');
-		expect(shouldUseHostedChatGateway({}, 'gpt-5.6-luna')).toBe(false);
-		expect(shouldUseHostedChatGateway({}, 'glm-5.3-flash-reap50-iq3m')).toBe(true);
-	});
-
 	it('hashes the account identity and sends only the five reviewed fields', async () => {
 		const first = await buildHostedChatGatewayContext(auth(), 'auto', 'interactive');
 		const second = await buildHostedChatGatewayContext(
@@ -93,7 +83,6 @@ describe('Cloudflare provider-native connection', () => {
 	it('uses the Workers binding, BYOK, metadata-only logs, and disables Gateway retries', async () => {
 		const calls: string[] = [];
 		const env = {
-			HOSTED_CHAT_GATEWAY_MODE: 'cloudflare',
 			CLOUDFLARE_AI_GATEWAY_ID: 'screenpipe-staging',
 			CLOUDFLARE_AI_GATEWAY_TOKEN: 'local-oauth-token',
 			AI: {
@@ -122,7 +111,6 @@ describe('Cloudflare provider-native connection', () => {
 
 	it('uses the explicit provider-native Gateway URL during local development', async () => {
 		const env = {
-			HOSTED_CHAT_GATEWAY_MODE: 'cloudflare',
 			CLOUDFLARE_AI_GATEWAY_ID: 'gateway-staging',
 			CLOUDFLARE_AI_GATEWAY_BASE_URL:
 				'https://gateway.ai.cloudflare.com/v1/account-id/gateway-staging/compat/chat/completions',
@@ -139,7 +127,6 @@ describe('Cloudflare provider-native connection', () => {
 	it('routes Screenpipe GLM through the custom provider with container auth instead of BYOK', async () => {
 		const calls: string[] = [];
 		const env = {
-			HOSTED_CHAT_GATEWAY_MODE: 'cloudflare',
 			CLOUDFLARE_AI_GATEWAY_ID: 'gateway-staging',
 			TINFOIL_GLM_API_KEY: 'glm-container-secret',
 			AI: {

@@ -14,6 +14,8 @@ import type { Options } from "react-markdown";
 import { cn } from "@/lib/utils";
 import { commands } from "@/lib/utils/tauri";
 import { SyntaxHighlighter } from "./prism-languages";
+import { useGT } from "gt-react";
+
 
 export { SyntaxHighlighter };
 
@@ -118,6 +120,7 @@ export function useSyntaxTheme() {
 const SETTLE_MS = 120;
 
 function useSettled(value: string, delayMs = SETTLE_MS): boolean {
+
   const [settled, setSettled] = useState(true);
   const previous = useRef(value);
 
@@ -165,6 +168,8 @@ export const MarkdownCodeBlock = React.memo(function MarkdownCodeBlock({
   language,
   className,
 }: MarkdownCodeBlockProps) {
+
+  const ui = useGT();
   const [copied, setCopied] = useState(false);
   const style = useSyntaxTheme();
   const settled = useSettled(value);
@@ -195,17 +200,17 @@ export const MarkdownCodeBlock = React.memo(function MarkdownCodeBlock({
         onClick={handleCopy}
         className={cn(
           "absolute right-1.5 top-1.5 z-10 inline-flex items-center gap-1 rounded-md",
-          "border border-border bg-background/90 px-2 py-1 text-[10px] font-mono uppercase tracking-wide",
+          "border border-border bg-background/90 px-2 py-1 text-[10px] font-mono normal-case tracking-wide",
           "text-muted-foreground shadow-sm transition-opacity",
           "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100",
           "group-focus-within:pointer-events-auto group-focus-within:opacity-100",
           "hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100",
         )}
-        aria-label={copied ? "Copied code" : "Copy code"}
-        title={copied ? "Copied" : "Copy"}
+        aria-label={copied ? ui("Copied code") : ui("Copy code")}
+        title={copied ? ui("Copied") : ui("Copy")}
       >
         {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-        <span>{copied ? "Copied" : "Copy"}</span>
+        <span>{copied ? ui("Copied") : ui("Copy")}</span>
       </button>
       <div className="overflow-x-auto">
         {settled ? (

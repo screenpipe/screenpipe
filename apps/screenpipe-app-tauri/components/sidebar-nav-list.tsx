@@ -61,6 +61,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import type { SidebarNavId } from "@/lib/utils/sidebar-nav-layout";
+import { useGT } from "gt-react";
+
 
 export type SidebarNavItem = {
   id: SidebarNavId;
@@ -194,6 +196,7 @@ function SortableRow({
   | "onSetHidden"
   | "onReset"
 >) {
+  const ui = useGT();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: item.id, disabled: item.disabled });
   const isActive = activeId === item.id;
@@ -303,7 +306,7 @@ function SortableRow({
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
-                aria-label={`${item.label} options`}
+                aria-label={ui("{section} options", { section: item.label })}
                 data-testid={`nav-${item.id}-options`}
                 onClick={(event) => event.stopPropagation()}
                 disabled={item.disabled}
@@ -337,14 +340,16 @@ export function SidebarCustomizationMenu({
   onSetHidden,
   onReset,
 }: SidebarCustomizationMenuProps) {
-  if (!canReset) return null;
+
+  const ui = useGT();
+  if (!canReset && hiddenItems.length === 0) return null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label="sidebar options"
-          title="sidebar options"
+          aria-label={ui("Sidebar options")}
+          title={ui("Sidebar options")}
           data-testid="sidebar-options"
           data-announcement-anchor="top-sidebar-options"
           className={cn(
@@ -369,15 +374,19 @@ export function SidebarCustomizationMenu({
             Show {hidden.label}
           </DropdownMenuItem>
         ))}
-        {hiddenItems.length > 0 && <DropdownMenuSeparator />}
-        <DropdownMenuItem
-          className={ITEM_CLS}
-          data-testid="sidebar-options-reset"
-          onSelect={onReset}
-        >
-          <RotateCcw />
-          Reset sidebar
-        </DropdownMenuItem>
+        {canReset && (
+          <>
+            {hiddenItems.length > 0 && <DropdownMenuSeparator />}
+            <DropdownMenuItem
+              className={ITEM_CLS}
+              data-testid="sidebar-options-reset"
+              onSelect={onReset}
+            >
+              <RotateCcw />
+              Reset sidebar
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -395,6 +404,7 @@ export function SidebarNavList({
   onSetHidden,
   onReset,
 }: SidebarNavListProps) {
+
   // 6px of travel before a drag starts, so an ordinary click still selects the
   // section instead of nudging it.
   const sensors = useSensors(

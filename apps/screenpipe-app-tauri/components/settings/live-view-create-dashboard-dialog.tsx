@@ -44,7 +44,7 @@ export function LiveViewCreateDashboardDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent
         data-testid="live-view-create-dashboard-dialog"
-        className="gap-0 rounded-none p-0 sm:max-w-2xl"
+        className="gap-0 rounded-lg p-0 sm:max-w-2xl"
         onEscapeKeyDown={(event) => {
           if (busy) event.preventDefault();
         }}
@@ -54,7 +54,7 @@ export function LiveViewCreateDashboardDialog({
       >
         <DialogHeader className="border-b border-border px-5 py-4 text-left">
           <DialogTitle className="flex items-center gap-2 text-base">
-            <LayoutDashboard className="h-4 w-4" /> new dashboard
+            <LayoutDashboard className="h-4 w-4" /> New dashboard
           </DialogTitle>
           <DialogDescription>
             Describe the outcome you want. AI will design the Blocks and connect
@@ -84,11 +84,11 @@ export function LiveViewCreateDashboardDialog({
             type="button"
             variant="ghost"
             size="sm"
-            className="h-8 rounded-none"
+            className="h-8 rounded-md"
             disabled={busy}
             onClick={onCreateBlank}
           >
-            start with a blank dashboard
+            Start with a blank dashboard
           </Button>
         </div>
       </DialogContent>

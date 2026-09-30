@@ -52,6 +52,9 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { pickPipePreset } from "@/lib/utils/pick-pipe-preset";
 import { cn } from "@/lib/utils";
 import { commands, type AIPreset } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 const SUMMARY_CACHE_PREFIX = "screenpipe:timeline-daily-summary:pi-v2:";
 export const TIMELINE_DISMISS_TOP_OVERLAY_EVENT =
@@ -139,6 +142,8 @@ export function TimelineDailySummary({
 	hideTrigger?: boolean;
 	openRequest?: number;
 }) {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
 	const { settings, updateSettings } = useSettings();
 	const [summary, setSummary] = useState("");
 	const [status, setStatus] = useState<SummaryStatus>("idle");
@@ -167,7 +172,7 @@ export function TimelineDailySummary({
 		() =>
 			isSameDay(currentDate, new Date())
 				? "Today"
-				: format(currentDate, "EEEE, MMMM d"),
+				: new Intl.DateTimeFormat(uiLocale, {"weekday":"long","month":"long","day":"numeric"}).format(currentDate),
 		[currentDate],
 	);
 
@@ -196,7 +201,7 @@ export function TimelineDailySummary({
 			if (!dailySummaryPreset) {
 				setPanelOpen(true);
 				setStatus("error");
-				setError("No AI model is configured. Choose one in Settings.");
+				setError(ui("No AI model is configured. Choose one in Settings."));
 				setErrorUpgrade(null);
 				return;
 			}
@@ -350,7 +355,7 @@ export function TimelineDailySummary({
 			setEnableDialogOpen(false);
 			setPanelOpen(true);
 			setStatus("error");
-			setError("Enhanced AI could not be turned on. Try again from Settings.");
+			setError(ui("Enhanced AI could not be turned on. Try again from Settings."));
 		} finally {
 			setIsEnabling(false);
 		}
@@ -492,11 +497,11 @@ export function TimelineDailySummary({
 								</div>
 								<div>
 									<div className="flex items-center gap-2">
-										<h2 className="font-mono text-sm font-semibold uppercase tracking-wide">
+										<h2 className="font-mono text-sm font-semibold normal-case tracking-wide">
 											Daily summary
 										</h2>
 										{isGenerating && (
-											<span className="flex items-center gap-1 font-mono text-[9px] uppercase tracking-[0.18em] text-foreground">
+											<span className="flex items-center gap-1 font-mono text-[9px] normal-case tracking-[0.18em] text-foreground">
 												<span className="h-1.5 w-1.5 animate-pulse bg-foreground" />
 												live
 											</span>
@@ -513,8 +518,8 @@ export function TimelineDailySummary({
 								className="p-1.5 text-muted-foreground transition-colors hover:bg-foreground hover:text-background"
 								aria-label={
 									isGenerating
-										? "Stop and close daily summary"
-										: "Close daily summary"
+										? ui("Stop and close daily summary")
+										: ui("Close daily summary")
 								}
 							>
 								<X className="h-4 w-4" />
@@ -558,7 +563,7 @@ export function TimelineDailySummary({
 
 							{summary && (
 								<div className="relative">
-									<MemoizedReactMarkdown className="prose prose-sm max-w-none break-words text-sm leading-relaxed dark:prose-invert prose-headings:font-mono prose-headings:text-xs prose-headings:uppercase prose-headings:tracking-wide prose-h3:mb-2 prose-h3:mt-5 prose-p:my-2 prose-li:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+									<MemoizedReactMarkdown className="prose prose-sm max-w-none break-words text-sm leading-relaxed dark:prose-invert prose-headings:font-mono prose-headings:text-xs prose-headings:normal-case prose-headings:tracking-wide prose-h3:mb-2 prose-h3:mt-5 prose-p:my-2 prose-li:my-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
 										{summary}
 									</MemoizedReactMarkdown>
 								</div>
@@ -566,10 +571,10 @@ export function TimelineDailySummary({
 
 							{status === "error" && (
 								<div className="border border-border bg-muted/40 p-4">
-									<p className="font-mono text-xs font-medium uppercase tracking-wide">
+									<p className="font-mono text-xs font-medium normal-case tracking-wide">
 										{error.startsWith("No recorded")
-											? "No activity found"
-											: "Couldn’t create summary"}
+											? ui("No activity found")
+											: ui("Couldn’t create summary")}
 									</p>
 									<p className="mt-2 text-sm text-muted-foreground">{error}</p>
 									{errorUpgrade?.resetsAt &&
@@ -626,7 +631,7 @@ export function TimelineDailySummary({
 										type="button"
 										onClick={copySummary}
 										className="p-2 text-muted-foreground transition-colors hover:bg-foreground hover:text-background"
-										aria-label="Copy daily summary"
+										aria-label={ui("Copy daily summary")}
 									>
 										{copied ? (
 											<Check className="h-3.5 w-3.5" />
@@ -638,7 +643,7 @@ export function TimelineDailySummary({
 										type="button"
 										onClick={() => void generate()}
 										className="p-2 text-muted-foreground transition-colors hover:bg-foreground hover:text-background"
-										aria-label="Regenerate daily summary"
+										aria-label={ui("Regenerate daily summary")}
 									>
 										<RefreshCw className="h-3.5 w-3.5" />
 									</button>
@@ -664,13 +669,13 @@ export function TimelineDailySummary({
 						</div>
 						<DialogTitle>
 							{userToken
-								? "turn on enhanced ai?"
-								: "sign in to use daily summaries"}
+								? ui("Turn on enhanced AI?")
+								: ui("Sign in to use daily summaries")}
 						</DialogTitle>
 						<DialogDescription>
 							{userToken
-								? `Generate an AI recap of ${dateLabel.toLowerCase()} directly over your timeline.`
-								: "Daily summaries use your Screenpipe account and the Screenpipe Cloud auto model."}
+								? ui("Generate an AI recap of {value1} directly over your timeline.", { value1: dateLabel.toLowerCase() })
+								: ui("Daily summaries use your Screenpipe account and the Screenpipe Cloud auto model.")}
 						</DialogDescription>
 					</DialogHeader>
 
@@ -715,7 +720,7 @@ export function TimelineDailySummary({
 							{isEnabling ? (
 								<Loader2 className="mr-2 h-4 w-4 animate-spin" />
 							) : null}
-							{userToken ? "Turn on and summarize" : "Sign in"}
+							{userToken ? ui("Turn on and summarize") : ui("Sign in")}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

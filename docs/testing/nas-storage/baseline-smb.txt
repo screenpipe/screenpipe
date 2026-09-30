@@ -1,0 +1,17 @@
+//guest:@192.168.64.1:1445/screenpipe on /Volumes/Screenpipe (smbfs, nodev, nosuid, noowners, mounted by admin)
+Filesystem                               Size    Used   Avail Capacity iused ifree %iused  Mounted on
+//guest:@192.168.64.1:1445/screenpipe   487Mi    36Mi   451Mi     8%     37k  462k    7%   /Volumes/Screenpipe
+
+running 1 test
+
+thread 'unsupported_volume_fails_before_conversion' (6328) panicked at crates/screenpipe-db/tests/in_place_migration.rs:12:10:
+called `Result::unwrap()` on an `Err` value: Protocol("failed to arm SQLite verification incident for /Volumes/Screenpipe/.tmpjUMu6q/db.sqlite: Operation not supported (os error 45)")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test unsupported_volume_fails_before_conversion ... FAILED
+
+failures:
+
+failures:
+    unsupported_volume_fails_before_conversion
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.04s

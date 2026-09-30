@@ -13,6 +13,7 @@ edition = { workspace = true }
 ignored = ["libsqlite3-sys"]
 
 [dependencies]
+screenpipe-fs = { path = "../screenpipe-fs" }
 specta = { workspace = true, optional = true }
 image = { workspace = true }
 reqwest = { workspace = true }

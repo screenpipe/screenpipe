@@ -4,6 +4,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useOnboarding } from "../use-onboarding";
+import { writeBrowserLogNow } from "@/lib/logging/browser-log";
 
 const localStorageMock = (() => {
   const values = new Map<string, string>();
@@ -42,6 +43,7 @@ vi.mock("posthog-js", () => ({
     capture: mocks.capture,
   },
 }));
+vi.mock("@/lib/logging/browser-log", () => ({ writeBrowserLogNow: vi.fn() }));
 
 vi.mock("@tauri-apps/api/event", () => ({
   emit: mocks.emit,
@@ -50,6 +52,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 describe("useOnboarding measurement", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.capture.mockReset();
     vi.stubGlobal("localStorage", localStorageMock);
     localStorage.clear();
     useOnboarding.setState({
@@ -63,9 +66,25 @@ describe("useOnboarding measurement", () => {
     });
   });
 
-  it("records completion only after the persisted command succeeds", async () => {
+  it("does not let failed telemetry strand native completion or its retry state", async () => {
+    mocks.capture.mockImplementation(() => { throw new Error("analytics unavailable"); });
+    mocks.completeOnboarding.mockResolvedValueOnce({ status: "error", error: "store unavailable" });
+    await expect(useOnboarding.getState().completeOnboarding({ method: "setup_finished" })).rejects.toThrow("store unavailable");
+    expect(useOnboarding.getState().isLoading).toBe(false);
+    expect(writeBrowserLogNow).toHaveBeenCalledWith("warn", expect.stringContaining("onboarding_completion_failed"));
+    mocks.completeOnboarding.mockResolvedValueOnce({ status: "ok" });
+    await useOnboarding.getState().completeOnboarding({ method: "setup_finished" });
+    expect(useOnboarding.getState().onboardingData.isCompleted).toBe(true);
+    expect(useOnboarding.getState().isLoading).toBe(false);
+  });
+
+  it("records intent before native completion closes the webview", async () => {
     localStorage.setItem("screenpipe:pipes-collapsed", "true");
-    mocks.completeOnboarding.mockResolvedValue({ status: "ok", data: null });
+    mocks.completeOnboarding.mockImplementationOnce(async () => {
+      expect(mocks.capture).toHaveBeenCalledWith("onboarding_completion_requested", expect.anything(), { send_instantly: true });
+      expect(mocks.capture.mock.calls.some(([event]) => event === "onboarding_completed")).toBe(false);
+      return { status: "ok", data: null };
+    });
 
     await useOnboarding.getState().completeOnboarding({
       method: "pipes_installed",
@@ -74,14 +93,14 @@ describe("useOnboarding measurement", () => {
     });
 
     expect(mocks.capture).toHaveBeenCalledWith(
-      "onboarding_completed",
+      "onboarding_completion_requested",
       {
+        attempt_id: expect.any(String),
         completion_method: "pipes_installed",
         pipe_count: 2,
         customized: false,
       },
-      // Unbatched: setup's webview is torn down immediately after this, so a
-      // queued event never flushes.
+      // Intent must leave before the native command can destroy this webview.
       { send_instantly: true },
     );
     expect(useOnboarding.getState().onboardingData.isCompleted).toBe(true);
@@ -117,7 +136,7 @@ describe("useOnboarding measurement", () => {
     );
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_completion_failed",
-      { completion_method: "pipe_step_skipped" },
+      expect.objectContaining({ completion_method: "pipe_step_skipped", attempt_id: expect.any(String), stage: "native_command", error_code: "ipc_error" }),
       { send_instantly: true },
     );
     expect(useOnboarding.getState().onboardingData.isCompleted).toBe(false);
@@ -151,8 +170,9 @@ describe("useOnboarding measurement", () => {
     });
     expect(mocks.emit).not.toHaveBeenCalledWith("first-run-guide-pending");
     expect(mocks.capture).toHaveBeenCalledWith(
-      "onboarding_completed",
+      "onboarding_completion_requested",
       {
+        attempt_id: expect.any(String),
         completion_method: "live_view_created",
         pipe_count: 2,
         customized: undefined,
@@ -179,8 +199,9 @@ describe("useOnboarding measurement", () => {
       url: "screenpipe://home?section=connections",
     });
     expect(mocks.capture).toHaveBeenCalledWith(
-      "onboarding_completed",
+      "onboarding_completion_requested",
       {
+        attempt_id: expect.any(String),
         completion_method: "ai_connections_selected",
         pipe_count: undefined,
         customized: undefined,

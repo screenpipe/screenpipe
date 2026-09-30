@@ -103,16 +103,16 @@ export function PlanExpirationNotice({
               {planName} plan ends in {dayLabel}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              manage your plan and billing on screenpipe.com
+              Manage your plan and billing on screenpipe.com
             </p>
           </div>
         </div>
         <button
           type="button"
           onClick={handleClick}
-          className="mt-4 flex w-full items-center justify-center gap-1.5 border border-foreground px-3 py-2 text-xs font-medium uppercase tracking-wide transition-colors duration-150 hover:bg-foreground hover:text-background"
+          className="mt-4 flex w-full items-center justify-center gap-1.5 border border-foreground px-3 py-2 text-xs font-medium normal-case tracking-wide transition-colors duration-150 hover:bg-foreground hover:text-background"
         >
-          manage subscription
+          Manage subscription
           <ArrowRight className="h-3.5 w-3.5" />
         </button>
       </div>

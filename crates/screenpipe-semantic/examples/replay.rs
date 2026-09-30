@@ -50,6 +50,9 @@ struct ReplayMetrics {
     output_text_bytes: usize,
     raw_json_bytes: usize,
     raw_json_tokens: usize,
+    /// Authored content is emitted only with an explicit diagnostic opt-in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    semantic_context: Option<String>,
     semantic_context_bytes: Option<usize>,
     semantic_context_tokens: Option<usize>,
     semantic_token_reduction_percent: Option<f64>,
@@ -61,7 +64,10 @@ struct ReplayMetrics {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.as_slice() == ["--jsonl"] {
-        return replay_jsonl();
+        return replay_jsonl(false);
+    }
+    if args.as_slice() == ["--jsonl", "--include-context"] {
+        return replay_jsonl(true);
     }
     let (app, content_hash) = parse_args(args)?;
     let mut input = String::new();
@@ -77,12 +83,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let nodes: Vec<CapturedAccessibilityNode> = serde_json::from_str(&input)?;
     let registry = builtin_parser_registry()?;
-    let metrics = replay_one(&registry, 0, 0, content_hash, app, nodes)?;
+    let metrics = replay_one(&registry, 0, 0, content_hash, app, nodes, false)?;
     println!("{}", serde_json::to_string_pretty(&metrics)?);
     Ok(())
 }
 
-fn replay_jsonl() -> Result<(), Box<dyn std::error::Error>> {
+fn replay_jsonl(include_context: bool) -> Result<(), Box<dyn std::error::Error>> {
     let registry = builtin_parser_registry()?;
     let stdin = std::io::stdin();
     let mut records = 0usize;
@@ -117,6 +123,7 @@ fn replay_jsonl() -> Result<(), Box<dyn std::error::Error>> {
             input.content_hash,
             input.app,
             input.nodes,
+            include_context,
         )?;
         println!("{}", serde_json::to_string(&metrics)?);
     }
@@ -130,6 +137,7 @@ fn replay_one(
     content_hash: u64,
     app: AppIdentity,
     nodes: Vec<CapturedAccessibilityNode>,
+    include_context: bool,
 ) -> Result<ReplayMetrics, Box<dyn std::error::Error>> {
     let raw_json = serde_json::to_string(&nodes)?;
     let raw_json_bytes = raw_json.len();
@@ -198,6 +206,7 @@ fn replay_one(
         output_text_bytes,
         raw_json_bytes,
         raw_json_tokens,
+        semantic_context: include_context.then_some(semantic_context).flatten(),
         semantic_context_bytes,
         semantic_context_tokens,
         semantic_token_reduction_percent,

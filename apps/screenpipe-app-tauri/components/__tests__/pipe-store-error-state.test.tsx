@@ -101,7 +101,7 @@ describe("pipe store error state", () => {
     fireEvent.click(screen.getByTestId("tab-discover"));
 
     await waitFor(() => {
-      expect(screen.getByText("couldn't load scheduled tasks")).toBeTruthy();
+      expect(screen.getByText("Couldn't load scheduled tasks")).toBeTruthy();
     });
     expect(screen.queryByText("No scheduled tasks found")).toBeNull();
     expect(mocks.cacheSet).not.toHaveBeenCalledWith(

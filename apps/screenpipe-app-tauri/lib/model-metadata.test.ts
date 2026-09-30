@@ -35,6 +35,25 @@ describe("model metadata resolution", () => {
     expect(resolveModelLimits("custom", "gpt-5.6-terra")).toBeNull();
   });
 
+  it("corrects saved hosted GLM limits without applying them to other deployments", () => {
+    const preset = {
+      provider: "screenpipe-cloud",
+      model: "glm-5.3-flash-reap50-iq3m",
+      maxContextChars: 512_000,
+      maxTokens: 16_384,
+    };
+    expect(applyResolvedModelLimits(preset)).toMatchObject({
+      maxContextChars: 131_072,
+      maxTokens: 8_192,
+    });
+    expect(resolveModelLimits("custom", preset.model)).toBeNull();
+    expect(resolveModelLimits("screenpipe-cloud", "glm-5")).toBeNull();
+    expect(resolveModelLimits(preset.provider, preset.model, {
+      context_window: 65_536,
+      max_output_tokens: 16_384,
+    })).toEqual({ contextWindow: 65_536, maxOutputTokens: 16_384 });
+  });
+
   it("uses provider discovery metadata when it is available", () => {
     expect(
       metadataFromDiscovery({

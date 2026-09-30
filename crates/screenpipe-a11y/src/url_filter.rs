@@ -11,6 +11,23 @@ pub use screenpipe_config::{DomainRule, UrlRule};
 use std::borrow::Cow;
 use url::Url;
 
+/// Browser name fragments shared by URL extraction and capture admission.
+/// Capability-based discovery of unlisted browsers is a separate concern.
+pub const BROWSER_NAMES: &[&str] = &[
+    "chrome", "chromium", "firefox", "safari", "edge", "brave", "arc", "vivaldi", "opera", "zen",
+    "comet", "epiphany", "helium",
+];
+
+/// Match without allocating a lowercase copy on each frame or input event.
+pub fn is_known_browser(app_name: &str) -> bool {
+    BROWSER_NAMES.iter().any(|name| {
+        app_name
+            .as_bytes()
+            .windows(name.len())
+            .any(|part| part.eq_ignore_ascii_case(name.as_bytes()))
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CompiledDomainRule {
     domain: String,
@@ -74,10 +91,35 @@ impl UrlPolicy {
         self.invalid_reason.as_deref()
     }
 
+    /// Apply URL rules to browsers, leaving native app admission to app/window
+    /// filters. An observed URL is also evidence of browser content, including
+    /// for an unlisted browser. Unknown app identity cannot bypass URL rules.
+    /// Browsers with an active policy require a usable URL even for blocklists:
+    /// title-only events must not leak a blocked page's title.
+    pub fn should_capture_window(&self, app_name: Option<&str>, url: Option<&str>) -> bool {
+        if self.invalid_reason.is_some() {
+            return false;
+        }
+        if !self.is_active() {
+            return true;
+        }
+        let browser_or_unknown = app_name
+            .filter(|name| !name.trim().is_empty())
+            .is_none_or(is_known_browser);
+        if !browser_or_unknown && url.is_none() {
+            return true;
+        }
+        self.evaluate_url(url, true)
+    }
+
     /// Return true only when the detected URL satisfies the complete policy.
     /// Missing/unsupported URLs are allowed for blocklist-only configurations
     /// and denied whenever an allowlist is active.
     pub fn should_capture(&self, detected_url: Option<&str>) -> bool {
+        self.evaluate_url(detected_url, false)
+    }
+
+    fn evaluate_url(&self, detected_url: Option<&str>, require_url: bool) -> bool {
         if self.invalid_reason.is_some() {
             return false;
         }
@@ -88,13 +130,14 @@ impl UrlPolicy {
             }
         }
 
-        let needs_strict_host = !self.ignored_rules.is_empty() || !self.included_rules.is_empty();
+        let needs_strict_host =
+            require_url || !self.ignored_rules.is_empty() || !self.included_rules.is_empty();
         if !needs_strict_host {
             return true;
         }
 
         let Some(host) = detected_url.and_then(parse_detected_hostname) else {
-            return self.included_rules.is_empty();
+            return !require_url && self.included_rules.is_empty();
         };
 
         if self.ignored_rules.iter().any(|rule| rule.matches(&host)) {
@@ -404,6 +447,31 @@ mod tests {
             "https://purchase.com",
             &normalized
         ));
+    }
+
+    #[test]
+    fn window_url_policy_preserves_native_apps_and_rejects_unverified_browsers() {
+        for policy in [
+            UrlPolicy::new(&[], &[rule("en.wikipedia.org", false, &[])]),
+            UrlPolicy::new(&[legacy("de.wikipedia.org")], &[]),
+            UrlPolicy::new(&[structured("de.wikipedia.org", true, &[])], &[]),
+        ] {
+            assert!(policy.should_capture_window(Some("Notepad"), None));
+            for app in [Some("Microsoft Edge"), Some("HELIUM.exe"), None, Some("")] {
+                for url in [None, Some(""), Some("edge://settings"), Some("invalid url")] {
+                    assert!(!policy.should_capture_window(app, url), "{app:?} {url:?}");
+                }
+                assert!(policy.should_capture_window(app, Some("https://en.wikipedia.org")));
+                assert!(!policy.should_capture_window(app, Some("https://de.wikipedia.org")));
+            }
+            // A URL extracted from an unlisted app must still be filtered.
+            assert!(!policy
+                .should_capture_window(Some("New Browser"), Some("https://de.wikipedia.org")));
+        }
+        let inactive = UrlPolicy::new(&[], &[]);
+        assert!(inactive.should_capture_window(Some("Chrome"), None));
+        let malformed = UrlPolicy::new(&[], &[rule("", false, &[])]);
+        assert!(!malformed.should_capture_window(Some("Notepad"), None));
     }
 
     #[test]

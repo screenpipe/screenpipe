@@ -184,3 +184,20 @@ describe("notification deeplink routing", () => {
     });
   });
 });
+
+
+describe("workflow review notification routing", () => {
+  it("opens Home and retries the same request while a cold window mounts", async () => {
+    const showWindowActivated = vi.fn(async () => ({ status: "ok" as const, data: null }));
+    const emitEvent = vi.fn(async () => undefined);
+    await routeNotificationDeeplink("screenpipe://workflows?workflow=wf-example", { showWindowActivated, emitEvent, sleepMs: async () => undefined });
+    expect(emitEvent).toHaveBeenCalledTimes(4);
+    const urls = emitEvent.mock.calls.map((call: any) => call[1].url);
+    expect(new Set(urls).size).toBe(1);
+    const params = new URL(urls[0], "http://localhost").searchParams;
+    expect(params.get("mode")).toBe("workflows");
+    expect(params.get("workflow")).toBe("wf-example");
+    expect(params.get("reviewRequest")).toBeTruthy();
+    expect(showWindowActivated).toHaveBeenCalledWith({ Home: { page: `home&${params}` } });
+  });
+});

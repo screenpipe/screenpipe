@@ -1,0 +1,123 @@
+--- a/dist/core/agent-session.js
++++ b/dist/core/agent-session.js
+@@ -1,3 +1,7 @@
++// screenpipe — AI that knows everything you've seen, said, or heard
++// https://screenpipe.com
++// screenpipe-context-compaction-v1
++const PROACTIVE_COMPACTION_PERCENT = 70;
+ /**
+  * AgentSession - Core abstraction for agent lifecycle and session management.
+  *
+@@ -279,10 +283,18 @@
+         this.agent.prepareNextTurnWithContext = async (turn, signal) => {
+             const previousSnapshot = await previousPrepareNextTurnWithContext?.(turn, signal);
+             const previousContext = previousSnapshot?.context ?? turn.context;
++            const messagesBefore = this.agent.state.messages;
++            // All tools in this step have finished. Compact here without aborting
++            // the agent, then hand the rebuilt context to the next model call.
++            if (!signal?.aborted && turn.message.stopReason === "toolUse") {
++                await this._checkCompaction(turn.message);
++            }
+             return {
+                 ...previousSnapshot,
+                 context: {
+                     ...previousContext,
++                    messages: this.agent.state.messages !== messagesBefore
++                        ? this.agent.state.messages : previousContext.messages,
+                     systemPrompt: this._systemPromptOverride ?? this._baseSystemPrompt,
+                     tools: this.agent.state.tools.slice(),
+                 },
+@@ -1374,7 +1386,7 @@
+             }
+             const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(this.model);
+             const pathEntries = this.sessionManager.getBranch();
+-            const settings = this.settingsManager.getCompactionSettings();
++            const settings = this._getContextCompactionSettings();
+             const preparation = prepareCompaction(pathEntries, settings);
+             if (!preparation) {
+                 // Check why we can't compact
+@@ -1495,6 +1507,31 @@
+     abortBranchSummary() {
+         this._branchSummaryAbortController?.abort();
+     }
++    _getContextCompactionSettings() {
++        const settings = this.settingsManager.getCompactionSettings();
++        const window = this.model?.contextWindow;
++        if (!window || window <= 0) return settings;
++        const messages = this.agent.state.messages;
++        const estimatedHistory = estimateMessagesTokens(messages);
++        const usage = estimateContextTokens(messages);
++        // Provider usage includes the prompt, tool schemas and tokenizer error.
++        // Keep the larger of that observed overhead and the current prompt estimate.
++        const promptTokens = Math.ceil(((this.systemPrompt?.length ?? 0)
++            + JSON.stringify(this.agent.state.tools.map(({ name, description, parameters }) =>
++                ({ name, description, parameters }))).length) / 4);
++        const overhead = Math.max(promptTokens, usage.tokens - estimatedHistory);
++        const outputTokens = Math.min(this.model.maxTokens ?? 0,
++            Math.floor(window * (1 - PROACTIVE_COMPACTION_PERCENT / 100)));
++        const available = Math.max(1, window - overhead - outputTokens);
++        // reserveTokens also sizes Pi's summary request. Allocate a quarter of
++        // the remaining room to that summary, and keep recent history in the rest.
++        const reserveTokens = Math.max(1, Math.min(settings.reserveTokens, Math.floor(available / 4)));
++        // A split turn can need both a history summary (0.8 * reserveTokens)
++        // and a turn-prefix summary (0.5 * reserveTokens).
++        const summaryTokens = Math.ceil(1.3 * reserveTokens);
++        return { ...settings, reserveTokens,
++            keepRecentTokens: Math.max(1, Math.min(settings.keepRecentTokens, available - summaryTokens)) };
++    }
+     /**
+      * Check if compaction is needed and run it.
+      * Called after agent_end and before prompt submission.
+@@ -1508,7 +1545,7 @@
+      * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
+      */
+     async _checkCompaction(assistantMessage, skipAbortedCheck = true) {
+-        const settings = this.settingsManager.getCompactionSettings();
++        const settings = this._getContextCompactionSettings();
+         if (!settings.enabled)
+             return false;
+         // Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
+@@ -1584,7 +1621,10 @@
+         else {
+             contextTokens = directContextTokens;
+         }
+-        if (shouldCompact(contextTokens, contextWindow, settings)) {
++        // Include tool results produced since the last model response.
++        contextTokens = Math.max(contextTokens, estimateContextTokens(this.agent.state.messages).tokens);
++        if (contextTokens >= contextWindow * PROACTIVE_COMPACTION_PERCENT / 100 ||
++            shouldCompact(contextTokens, contextWindow, settings)) {
+             return await this._runAutoCompaction("threshold", false);
+         }
+         return false;
+@@ -1593,10 +1633,12 @@
+      * Internal: Run auto-compaction with events.
+      */
+     async _runAutoCompaction(reason, willRetry) {
+-        const settings = this.settingsManager.getCompactionSettings();
++        const settings = this._getContextCompactionSettings();
+         let started = false;
++        const parentSignal = this.agent.signal;
++        const abortCompaction = () => this._autoCompactionAbortController?.abort();
+         try {
+-            if (!this.model) {
++            if (!this.model || parentSignal?.aborted) {
+                 return false;
+             }
+             const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(this.model);
+@@ -1607,6 +1649,8 @@
+             }
+             this._emit({ type: "compaction_start", reason });
+             this._autoCompactionAbortController = new AbortController();
++            parentSignal?.addEventListener("abort", abortCompaction, { once: true });
++            if (parentSignal?.aborted) this._autoCompactionAbortController.abort();
+             started = true;
+             let extensionCompaction;
+             let fromExtension = false;
+@@ -1725,6 +1769,7 @@
+             return false;
+         }
+         finally {
++            parentSignal?.removeEventListener("abort", abortCompaction);
+             this._autoCompactionAbortController = undefined;
+         }
+     }

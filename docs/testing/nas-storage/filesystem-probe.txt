@@ -1,0 +1,4 @@
+{"operation": "file_fsync", "result": "ok"}
+{"operation": "file_fullfsync", "errno": 45, "error": "[Errno 45] Operation not supported"}
+{"operation": "hole_punch", "errno": 45, "error": "[Errno 45] Operation not supported"}
+{"operation": "directory_fsync", "result": "ok"}

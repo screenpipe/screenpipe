@@ -70,7 +70,7 @@ describe("StandaloneChatHeader", () => {
     expect(screen.getByTestId("chat-tab-strip")).toBeInTheDocument();
     expect(screen.getByTestId("chat-header-tab-spacer")).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "chat options for crm" }),
+      screen.queryByRole("button", { name: "Chat options for crm" }),
     ).not.toBeInTheDocument();
   });
 
@@ -84,7 +84,7 @@ describe("StandaloneChatHeader", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "chat options for crm" }),
+      screen.getByRole("button", { name: "Chat options for crm" }),
     ).toBeInTheDocument();
     expect(
       screen.queryByTestId("chat-header-tab-spacer"),

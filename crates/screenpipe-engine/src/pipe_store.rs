@@ -93,12 +93,14 @@ impl PipeStore for SqlitePipeStore {
     async fn set_execution_running(&self, id: i64, pid: Option<u32>) -> Result<()> {
         use screenpipe_db::write_queue::PipeBindValue;
         let now = Utc::now().to_rfc3339();
+        // The PID watcher can arrive after cancellation or a fast completion.
+        // Terminal execution state must never be resurrected by that late write.
         self.db
             .pipe_execute_write_queued(
                 id,
                 r#"UPDATE pipe_executions
                SET status = 'running', pid = COALESCE(?, pid), started_at = COALESCE(started_at, ?)
-               WHERE id = ?"#,
+               WHERE id = ? AND status IN ('queued', 'running') AND finished_at IS NULL"#,
                 vec![
                     PipeBindValue::OptInt(pid.map(|p| p as i64)),
                     PipeBindValue::Text(now),
@@ -1264,6 +1266,55 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(state.consecutive_failures, 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn late_pid_does_not_resurrect_a_finished_execution() {
+        let (store, _tmp) = setup_test_store().await;
+        for terminal in ["completed", "cancelled", "failed", "timed_out"] {
+            for started in [false, true] {
+                let id = store
+                    .create_execution("late-pid", "manual", "auto", None)
+                    .await
+                    .unwrap();
+                if started {
+                    store.set_execution_running(id, None).await.unwrap();
+                }
+                store
+                    .finish_execution(
+                        id,
+                        terminal,
+                        "saved output",
+                        "",
+                        Some(0),
+                        Some(terminal),
+                        None,
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                let before = store
+                    .get_executions("late-pid", 1, None)
+                    .await
+                    .unwrap()
+                    .remove(0);
+                // Reproduce the actual ordering: finish before the spawn watcher
+                // persists its PID. Repeat to cover a delayed duplicate callback.
+                for _ in 0..2 {
+                    store.set_execution_running(id, Some(42)).await.unwrap();
+                }
+                let after = store
+                    .get_executions("late-pid", 1, None)
+                    .await
+                    .unwrap()
+                    .remove(0);
+                assert_eq!(after.status, terminal);
+                assert_eq!(after.finished_at, before.finished_at);
+                assert_eq!(after.error_type, before.error_type);
+                assert_eq!(after.stdout, before.stdout);
+                assert_eq!(after.pid, before.pid);
+            }
+        }
     }
 
     // -- Batch query tests ---------------------------------------------------

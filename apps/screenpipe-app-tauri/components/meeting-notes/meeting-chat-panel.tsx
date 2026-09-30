@@ -61,6 +61,9 @@ import {
   SUMMARY_SUGGESTION,
   type MeetingChatConditions,
 } from "./meeting-chat-state";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 export interface MeetingChatTurn {
   id: string;
@@ -145,6 +148,8 @@ export function MeetingChatPanel({
   storedWidth,
   onWidthChange,
 }: MeetingChatPanelProps) {
+
+  const ui = useGT();
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -258,7 +263,7 @@ export function MeetingChatPanel({
   return (
     <aside
       data-testid="meeting-chat-panel"
-      aria-label="ask about this meeting"
+      aria-label={ui("Ask about this meeting")}
       style={{ width }}
       // Absolute, always. Docking this in a column shrank the shell and slid
       // the centred reading column leftward on open, so the transcript jumped
@@ -270,7 +275,7 @@ export function MeetingChatPanel({
     >
       <div
         role="separator"
-        aria-label="resize conversation"
+        aria-label={ui("Resize conversation")}
         aria-orientation="vertical"
         tabIndex={0}
         onPointerDown={(event) => {
@@ -292,14 +297,14 @@ export function MeetingChatPanel({
 
       <div className="flex shrink-0 items-start justify-between gap-2 border-b border-border px-3 py-2">
         <div className="min-w-0">
-          <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-            ask this meeting
+          <p className="font-mono text-[10px] normal-case tracking-[0.14em] text-muted-foreground">
+            Ask this meeting
           </p>
           <p
             className="mt-0.5 truncate text-xs font-medium text-foreground"
-            title={meetingTitle || "untitled meeting"}
+            title={meetingTitle || ui("Untitled meeting")}
           >
-            {meetingTitle || "untitled meeting"}
+            {meetingTitle || ui("Untitled meeting")}
           </p>
           <p
             data-testid="meeting-chat-context"
@@ -314,9 +319,9 @@ export function MeetingChatPanel({
           size="icon"
           variant="ghost"
           data-testid="meeting-chat-close"
-          aria-label="close chat"
+          aria-label={ui("Close chat")}
           onClick={onClose}
-          className="h-6 w-6 rounded-none"
+          className="h-6 w-6 rounded-md"
         >
           <X className="h-3 w-3" />
         </Button>
@@ -374,7 +379,7 @@ export function MeetingChatPanel({
                   />
                   {/* Case 66: never render a blank finished turn. */}
                   {turn.done && !turn.text && !turn.error && (
-                    <span className="text-muted-foreground/70">no answer</span>
+                    <span className="text-muted-foreground/70">No answer</span>
                   )}
                   {turn.error && (
                     <span className="flex flex-wrap items-center gap-2 text-foreground">
@@ -382,9 +387,9 @@ export function MeetingChatPanel({
                       <button
                         type="button"
                         onClick={onRetry}
-                        className="border border-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] transition-colors hover:bg-muted"
+                        className="border border-border px-1.5 py-0.5 font-mono text-[10px] normal-case tracking-[0.08em] transition-colors hover:bg-muted"
                       >
-                        retry
+                        Retry
                       </button>
                     </span>
                   )}
@@ -409,13 +414,13 @@ export function MeetingChatPanel({
           value={draft}
           rows={1}
           disabled={!availability.enabled}
-          aria-label="ask about this meeting"
+          aria-label={ui("Ask about this meeting")}
           placeholder={availability.placeholder}
           onChange={(event) => onDraftChange(event.target.value)}
           onKeyDown={handleKeyDown}
           className={cn(
             "min-h-10 max-h-40 resize-none rounded-none border-0 bg-transparent px-0 py-2.5 text-[13px] shadow-none",
-            "placeholder:font-mono placeholder:text-[11px] placeholder:uppercase placeholder:tracking-[0.06em]",
+            "placeholder:font-mono placeholder:text-[11px] normal-case placeholder:tracking-[0.06em]",
             "focus-visible:ring-0 disabled:cursor-default disabled:opacity-100",
           )}
         />
@@ -458,8 +463,8 @@ export function MeetingChatPanel({
             size="icon"
             variant="ghost"
             data-testid="meeting-chat-send"
-            aria-label={conditions.turnInFlight ? "stop" : "send"}
-            title={conditions.turnInFlight ? "stop" : "send"}
+            aria-label={conditions.turnInFlight ? ui("Stop") : ui("Send")}
+            title={conditions.turnInFlight ? ui("Stop") : ui("Send")}
             disabled={
               conditions.turnInFlight ? false : !canSubmitTurn(draft, conditions)
             }
@@ -488,6 +493,8 @@ function MeetingTurnBody({
   window: CitationWindow | null;
   onCitationClick: (atMs: number) => void;
 }) {
+  const uiLanguage = useLocale();
+  const ui = useGT();
   const message = useMemo<Message>(
     () => ({
       id: turn.id,
@@ -520,10 +527,10 @@ function MeetingTurnBody({
           type="button"
           data-testid="meeting-chat-citation"
           data-at={at}
-          aria-label={`jump to transcript at ${new Date(at).toLocaleTimeString([], {
+          aria-label={ui("Jump to transcript at {value1}", { value1: new Date(at).toLocaleTimeString([], {
             hour: "numeric",
             minute: "2-digit",
-          })}`}
+          }) })}
           onClick={() => onCitationClick(at)}
           className="inline-flex whitespace-nowrap rounded-sm bg-muted/70 px-1 align-baseline font-mono text-[11px] text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground"
         >
@@ -531,7 +538,7 @@ function MeetingTurnBody({
         </button>
       );
     },
-    [onCitationClick],
+    [onCitationClick, uiLanguage],
   );
 
   return (

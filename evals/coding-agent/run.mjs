@@ -18,8 +18,20 @@ import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import process from "node:process";
+import { classifyGraderError } from "./grader-outcome.mjs";
 
 const HERE = dirname(new URL(import.meta.url).pathname);
+const sha256 = (body) => createHash("sha256").update(body).digest("hex");
+// Record these implementation bytes at startup, independently of --repo.
+// This is provenance, not an isolation or dependency/environment attestation.
+const harnessFiles = Object.fromEntries(["run.mjs", "grader-outcome.mjs"].map(
+  (path) => [path, sha256(readFileSync(join(HERE, path)))],
+));
+const HARNESS_PROVENANCE = {
+  schema_version: 1,
+  files: harnessFiles,
+  fingerprint: sha256(JSON.stringify(harnessFiles)),
+};
 let REPO = resolve(HERE, "../..");
 let MANIFEST = join(HERE, "cases.json");
 let EXTRACTION_SOURCE;
@@ -56,7 +68,7 @@ function parseArgs(argv) {
 function command(program, args, options = {}) {
   const result = spawnSync(program, args, {
     cwd: options.cwd ?? REPO,
-    encoding: options.encoding ?? "utf8",
+    encoding: options.encoding === undefined ? "utf8" : options.encoding,
     input: options.input,
     env: options.env ?? process.env,
     maxBuffer: MAX_BUFFER,
@@ -65,7 +77,8 @@ function command(program, args, options = {}) {
   return {
     status: result.status,
     signal: result.signal,
-    stdout: result.stdout?.toString() ?? "",
+    // An explicit null requests raw Git blob/patch bytes, including invalid UTF-8.
+    stdout: options.encoding === null ? (result.stdout ?? Buffer.alloc(0)) : (result.stdout?.toString() ?? ""),
     stderr: result.stderr?.toString() ?? "",
     error: result.error?.message ?? null,
   };
@@ -184,6 +197,7 @@ function extractBase(evalCase, workspace) {
   });
   mustRun("git", ["config", "user.email", "eval@screenpi.pe"], { cwd: workspace });
   mustRun("git", ["config", "user.name", "screenpipe eval harness"], { cwd: workspace });
+  return baseSha;
 }
 
 function linkDependencies(evalCase, workspace, field = "dependency_links") {
@@ -219,13 +233,16 @@ function applySavedCandidate(path, workspace) {
 }
 
 function materializeGraders(evalCase, workspace) {
+  const fixtures = [];
   for (const fixture of evalCase.grader.fixtures ?? []) {
     let body;
+    let sourceCommit;
     if (fixture.local_path) {
       body = readFileSync(join(dirname(MANIFEST), fixture.local_path));
     } else {
       const sourceRef = fixture.source_ref ?? evalCase.oracle_ref;
-      body = mustRun("git", ["show", `${sourceRef}:${fixture.source_path}`], {
+      sourceCommit = mustRun("git", ["rev-parse", `${sourceRef}^{commit}`]).stdout.trim();
+      body = mustRun("git", ["show", `${sourceCommit}:${fixture.source_path}`], {
         encoding: null,
       }).stdout;
     }
@@ -236,7 +253,23 @@ function materializeGraders(evalCase, workspace) {
     mkdirSync(dirname(destination), { recursive: true });
     writeFileSync(destination, Buffer.from(body));
     if (fixture.executable) chmodSync(destination, 0o755);
+    // Hash the same bytes we wrote, not a later read of mutable source files.
+    fixtures.push({
+      local_path: fixture.local_path,
+      source_path: fixture.source_path,
+      source_commit: sourceCommit,
+      destination_path: fixture.destination_path ?? fixture.source_path ?? fixture.local_path,
+      executable: Boolean(fixture.executable),
+      sha256: sha256(Buffer.from(body)),
+    });
   }
+  const provenance = {
+    schema_version: 1,
+    command_sha256: sha256(evalCase.grader.command),
+    timeout_seconds: evalCase.grader.timeout_seconds ?? 600,
+    fixtures,
+  };
+  return { ...provenance, fingerprint: sha256(JSON.stringify(provenance)) };
 }
 
 function renderAgentCommand(template, paths, evalCase) {
@@ -311,8 +344,10 @@ function runTrial(evalCase, mode, trial, options, runDir) {
 
   let agent = { status: 0, stdout: "", stderr: "", signal: null, error: null };
   const started = Date.now();
+  let graderProvenance;
+  let evaluationFingerprint;
   try {
-    extractBase(evalCase, workspace);
+    const baseCommit = extractBase(evalCase, workspace);
     linkDependencies(evalCase, workspace);
     if (mode === "oracle") applyOracle(evalCase, workspace);
     if (mode === "regrade") {
@@ -361,7 +396,14 @@ function runTrial(evalCase, mode, trial, options, runDir) {
     // Grader-only caches are withheld until the agent trajectory is complete,
     // so future build artifacts cannot leak information into the trial.
     linkDependencies(evalCase, workspace, "grader_dependency_links");
-    materializeGraders(evalCase, workspace);
+    graderProvenance = materializeGraders(evalCase, workspace);
+    evaluationFingerprint = sha256(JSON.stringify({
+      schema_version: 1,
+      case_definition_sha256: sha256(JSON.stringify(evalCase)),
+      base_commit: baseCommit,
+      harness: HARNESS_PROVENANCE.fingerprint,
+      grader: graderProvenance.fingerprint,
+    }));
     const grader = command("/bin/bash", ["-lc", evalCase.grader.command], {
       cwd: workspace,
       timeout: (evalCase.grader.timeout_seconds ?? 600) * 1_000,
@@ -370,8 +412,10 @@ function runTrial(evalCase, mode, trial, options, runDir) {
     writeFileSync(join(trialDir, "grader.stdout.log"), grader.stdout);
     writeFileSync(join(trialDir, "grader.stderr.log"), grader.stderr);
     const agentOk = !["agent", "regrade"].includes(mode) || (agent.status === 0 && !agent.error);
-    const passed = agentOk && grader.status === 0;
-    const outcome = !agentOk ? "error" : passed ? "pass" : "fail";
+    const graderErrorKind = classifyGraderError(grader);
+    const graderErrored = graderErrorKind !== null;
+    const passed = agentOk && !graderErrored && grader.status === 0;
+    const outcome = !agentOk || graderErrored ? "error" : passed ? "pass" : "fail";
     const result = {
       case_id: evalCase.id,
       trial,
@@ -382,7 +426,13 @@ function runTrial(evalCase, mode, trial, options, runDir) {
       agent_exit: agent.status,
       agent_usage: extractAgentUsage(agent.stdout),
       grader_exit: grader.status,
+      grader_signal: grader.signal,
+      grader_error: grader.error,
+      grader_error_kind: graderErrorKind,
       changed_files: candidate.changedFiles,
+      harness_provenance: HARNESS_PROVENANCE,
+      grader_provenance: graderProvenance,
+      evaluation_fingerprint: evaluationFingerprint,
       workspace: options.keep ? workspace : undefined,
     };
     writeFileSync(join(trialDir, "result.json"), JSON.stringify(result, null, 2));
@@ -396,6 +446,9 @@ function runTrial(evalCase, mode, trial, options, runDir) {
       outcome: "error",
       duration_ms: Date.now() - started,
       harness_error: error instanceof Error ? error.message : String(error),
+      harness_provenance: HARNESS_PROVENANCE,
+      grader_provenance: graderProvenance,
+      evaluation_fingerprint: evaluationFingerprint,
       workspace: options.keep ? workspace : undefined,
     };
     writeFileSync(join(trialDir, "result.json"), JSON.stringify(result, null, 2));
@@ -429,11 +482,24 @@ function summarize(manifest, mode, results, options, runDir) {
     release: release(),
     arch: arch(),
     node: process.version,
+    harness_fingerprint: HARNESS_PROVENANCE.fingerprint,
     repo_head: mustRun("git", ["rev-parse", "HEAD"]).stdout.trim(),
     agent_command: mode === "agent" ? options.agentCommand : undefined,
     candidate_patch: mode === "regrade" ? options.candidatePatch : undefined,
   };
+  const runtimeFingerprint = sha256(JSON.stringify(runtime));
+  const provenanceComplete = results.every((result) => Boolean(result.evaluation_fingerprint));
+  const evaluatedCases = [...new Set(results.map((result) =>
+    JSON.stringify([result.case_id, result.evaluation_fingerprint ?? null]),
+  ))].sort();
   const report = {
+    provenance_complete: provenanceComplete,
+    evaluation_fingerprint: provenanceComplete ? sha256(JSON.stringify({
+      schema_version: 1,
+      dataset_fingerprint: manifest.dataset_fingerprint,
+      runtime_fingerprint: runtimeFingerprint,
+      evaluated_cases: evaluatedCases,
+    })) : null,
     suite: manifest.suite,
     dataset_version: manifest.dataset_version,
     dataset_fingerprint: manifest.dataset_fingerprint,
@@ -441,7 +507,7 @@ function summarize(manifest, mode, results, options, runDir) {
     created_at: new Date().toISOString(),
     runtime: {
       ...runtime,
-      fingerprint: createHash("sha256").update(JSON.stringify(runtime)).digest("hex"),
+      fingerprint: runtimeFingerprint,
     },
     cases,
     trials: results,
@@ -487,7 +553,7 @@ function main() {
     for (const evalCase of cases) {
       const baseline = runTrial(evalCase, "baseline", 1, options, join(runDir, "baseline"));
       const oracle = runTrial(evalCase, "oracle", 1, options, join(runDir, "oracle"));
-      const valid = !baseline.passed && oracle.passed && !baseline.harness_error && !oracle.harness_error;
+      const valid = baseline.outcome === "fail" && oracle.outcome === "pass";
       verification.push({ case_id: evalCase.id, valid, baseline, oracle });
       console.log(`${evalCase.id}: broken=${baseline.passed ? "PASS" : "FAIL"} oracle=${oracle.passed ? "PASS" : "FAIL"}`);
     }

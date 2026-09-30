@@ -155,9 +155,9 @@ describe("permission recovery wheel", () => {
     const prompt = await screen.findByTestId(
       "permission-recovery-restart-prompt"
     );
-    expect(prompt).toHaveTextContent("restart required");
+    expect(prompt).toHaveTextContent("Restart required");
     expect(prompt).toHaveTextContent(
-      "screenpipe won't work until you restart."
+      "Screenpipe won't work until you restart."
     );
     expect(screen.queryByTestId("permission-row-screen")).toBeNull();
 

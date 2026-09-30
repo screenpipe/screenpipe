@@ -84,6 +84,9 @@ pub struct ServerCore {
     /// The HTTP serve task. Resolves only once every connection task has
     /// finished; `shutdown()` awaits it (bounded) after signaling above.
     http_task: Option<tokio::task::JoinHandle<()>>,
+    /// Keeps this generation's runtime alive through shutdown, even after the
+    /// core is removed from RecordingState. Dropped last, after all resources.
+    _runtime_lifetime: tokio::sync::oneshot::Sender<()>,
 }
 
 /// Bind attempts before giving up on the HTTP port. Together with
@@ -95,6 +98,50 @@ const BIND_RETRY_DELAY: Duration = Duration::from_millis(500);
 const PORT_HOLDER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 const OPENAI_COMPATIBLE_FAILURE_POLL_INTERVAL: Duration = Duration::from_secs(15);
 const OPENAI_COMPATIBLE_FAILURE_NOTIFICATION_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+
+/// Preserve the ownership decision before rolling app logs can lose it.
+async fn prepare_database_startup(
+    data_dir: &std::path::Path,
+) -> Result<screenpipe_engine::cli::db::DatabaseStartupGuard, String> {
+    let generation = screenpipe_engine::cli::db::database_generation_diagnostic(data_dir);
+    match screenpipe_engine::cli::db::prepare_database_startup(data_dir).await {
+        Ok(guard) => {
+            if let Some(owner) = guard.reclaimed_owner() {
+                let after = screenpipe_engine::cli::db::database_generation_diagnostic(data_dir);
+                crate::recording::recovery_log::append(
+                    data_dir,
+                    "database_lock_reclaimed",
+                    &format!("{owner}; before=[{generation}]; after=[{after}]; outcome=startup_guard_acquired"),
+                );
+            }
+            Ok(guard)
+        }
+        Err(error) => {
+            let message = format!("Failed to initialize database: {error:#}");
+            crate::health::set_boot_error(&message);
+            crate::recording::recovery_log::append(
+                data_dir,
+                "database_startup_failed",
+                &format!("{message}; {generation}; outcome=recording_blocked"),
+            );
+            Err(message)
+        }
+    }
+}
+
+async fn initialize_frame_privacy_policy(
+    db: &DatabaseManager,
+    data_dir: &std::path::Path,
+) -> Result<(), String> {
+    if let Err(error) = db.set_frame_privacy_policy(&Default::default()).await {
+        let message = format!("Failed to initialize database frame privacy policy: {error}");
+        crate::health::set_boot_error(&message);
+        crate::recording::recovery_log::append(data_dir, "database_startup_failed", &message);
+        db.close().await;
+        return Err(message);
+    }
+    Ok(())
+}
 
 fn should_notify_openai_compatible_failure(
     previous_error_count: u64,
@@ -115,7 +162,9 @@ fn should_notify_openai_compatible_failure(
         && current_completed_count == previous_completed_count;
 
     (failed_request || repeated_empty_responses)
-        && last_notification.is_none_or(|last| now.duration_since(last) >= OPENAI_COMPATIBLE_FAILURE_NOTIFICATION_COOLDOWN)
+        && last_notification.is_none_or(|last| {
+            now.duration_since(last) >= OPENAI_COMPATIBLE_FAILURE_NOTIFICATION_COOLDOWN
+        })
 }
 
 fn monitor_openai_compatible_transcription_failures(
@@ -144,13 +193,7 @@ fn monitor_openai_compatible_transcription_failures(
                 last_notification,
                 now,
             ) {
-                crate::notifications::client::send_typed_with_priority(
-                    "OpenAI Compatible transcription is failing",
-                    "Screenpipe is still recording audio, but the endpoint is failing or returning empty transcripts, so new audio may not be searchable. Check Settings and run Test and enable again.",
-                    "system",
-                    Some(20_000),
-                    crate::notifications::store::NotificationPriority::High,
-                );
+                crate::notifications::client::send_typed_with_priority(crate::localization::ui_text("OpenAI Compatible transcription is failing"), crate::localization::ui_text("Screenpipe is still recording audio, but the endpoint is failing or returning empty transcripts, so new audio may not be searchable. Check Settings and run Test and enable again."), "system", Some(20_000), crate::notifications::store::NotificationPriority::High);
                 last_notification = Some(now);
             }
 
@@ -306,7 +349,17 @@ impl ServerCore {
         // PiExecutor, the Tauri command writer) share one storage cell.
         cloud_token_handle: std::sync::Arc<arc_swap::ArcSwap<Option<String>>>,
         history_access: screenpipe_engine::history_access::HistoryAccessPolicy,
+        workflow_catalog_dir: Option<std::path::PathBuf>,
+        runtime_lifetime: tokio::sync::oneshot::Sender<()>,
     ) -> Result<Self, String> {
+        screenpipe_core::health_diagnostics::begin_startup(&config.data_dir);
+        screenpipe_core::health_diagnostics::configure_media_required(
+            !config.disable_audio
+                || !config.disable_snapshot_compaction
+                || (!config.disable_vision
+                    && config.hd_recording_default
+                        == screenpipe_engine::high_fps_controller::DefaultMode::Always),
+        );
         info!("Starting server core on port {}", config.port);
         crate::health::set_boot_phase("starting", Some("starting server"));
         let ai_gateway_url = crate::config::screenpipe_ai_gateway_url()?;
@@ -336,10 +389,29 @@ impl ServerCore {
         // --- Database ---
         let local_data_dir = config.data_dir.clone();
         let data_path = local_data_dir.join("data");
-        std::fs::create_dir_all(&data_path)
-            .map_err(|e| format!("Failed to create data dir: {}", e))?;
+        std::fs::create_dir_all(&data_path).map_err(|error| {
+            let message =
+                format!("Failed to initialize database: cannot access data directory: {error}");
+            crate::health::set_boot_error(&message);
+            message
+        })?;
 
-        let db_path = format!("{}/db.sqlite", local_data_dir.to_string_lossy());
+        screenpipe_db::storage::recover_interrupted_migration(
+            &local_data_dir,
+            config.db_config.clone(),
+        )
+        .await
+        .map_err(|error| format!("Failed to resume storage after interruption: {error}"))?;
+        crate::db_relaunch::set_active_database(&local_data_dir);
+
+        // A crash during repair may leave the committed WAL archived separately
+        // from the main file. Reconcile the swap before ordinary DB diagnosis.
+        let startup_guard = prepare_database_startup(&local_data_dir).await?;
+        let db_path =
+            screenpipe_db::storage::resolve_database_path(&local_data_dir.join("db.sqlite"))
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .into_owned();
         crate::health::set_boot_phase(
             "migrating_database",
             Some("updating database — this may take several minutes on large installs"),
@@ -432,6 +504,17 @@ impl ServerCore {
         };
         info!("Database initialized at {}", db_path);
 
+        // Finish fallible database setup before sharing the owner with pipes,
+        // HTTP, or background workers. A failure must close this generation.
+        if !config.async_pii_redaction {
+            initialize_frame_privacy_policy(&db, &local_data_dir).await?;
+        }
+
+        // A pending update may interrupt database recovery, but must exclude
+        // native model initialization until the old process exits. Retain the
+        // read guard through all remaining startup work, including errors.
+        let _native_startup = crate::update_restart::RESTART_SAFETY.native_startup().await;
+
         // --- Audio devices + manager (built but NOT started) ---
         let audio_devices = if config.disable_audio {
             Vec::new()
@@ -474,11 +557,16 @@ impl ServerCore {
             .openai_compatible_config(openai_compatible_config);
 
         crate::health::set_boot_phase("building_audio", Some("starting audio pipeline"));
-        let mut audio_manager = audio_manager_builder.build(db.clone()).await.map_err(|e| {
-            let msg = format!("Failed to build audio manager: {}", e);
-            crate::health::set_boot_error(&msg);
-            msg
-        })?;
+        let mut audio_manager = match audio_manager_builder.build(db.clone()).await {
+            Ok(manager) => manager,
+            Err(error) => {
+                let msg = format!("Failed to build audio manager: {error}");
+                crate::health::set_boot_error(&msg);
+                db.close().await;
+                screenpipe_secrets::close_all_secret_pools().await;
+                return Err(msg);
+            }
+        };
 
         // Wire audio → hot cache (only the timeline reads this cache, so skip
         // the per-transcript buffering when the timeline is disabled).
@@ -525,7 +613,9 @@ impl ServerCore {
             })
             .unwrap_or_default();
         let power_manager = start_power_manager_with_pref(initial_power_pref);
-        if let Err(e) = screenpipe_engine::power::set_keep_awake(config.keep_computer_awake) {
+        if let Err(e) =
+            screenpipe_engine::power::set_keep_awake_async(config.keep_computer_awake).await
+        {
             warn!("failed to apply keep-awake setting: {}", e);
         }
 
@@ -547,6 +637,7 @@ impl ServerCore {
             config.use_pii_removal,
             config.video_quality.clone(),
         );
+        server.workflow_catalog_dir = workflow_catalog_dir;
         server.vision_metrics = vision_metrics.clone();
         server.audio_metrics = audio_manager.metrics.clone();
         server.hot_frame_cache = Some(hot_frame_cache.clone());
@@ -723,9 +814,8 @@ impl ServerCore {
             pipe_store,
             config.port,
         );
-        pipe_manager.set_scheduler_run_guard(Arc::new(|| {
-            crate::headless::scheduled_pipe_skip_reason()
-        }));
+        pipe_manager
+            .set_scheduler_run_guard(Arc::new(|| crate::headless::scheduled_pipe_skip_reason()));
         pipe_manager.set_max_non_template_pipes(config.max_non_template_pipes);
         let mcp_session_access =
             screenpipe_core::pipes::mcp_access::McpSessionAccessRegistry::new();
@@ -970,6 +1060,8 @@ impl ServerCore {
                     format!("failed to bind port {}: {}", config.port, e)
                 };
                 crate::health::set_boot_error(&msg);
+                db.close().await;
+                screenpipe_secrets::close_all_secret_pools().await;
                 return Err(msg);
             }
         };
@@ -986,9 +1078,15 @@ impl ServerCore {
                 let msg = format!("failed to construct local API router: {error}");
                 crate::health::set_boot_error(&msg);
                 crate::health::set_recording_status(crate::health::RecordingStatus::Error);
+                db.close().await;
+                screenpipe_secrets::close_all_secret_pools().await;
                 return Err(msg);
             }
         };
+
+        // Startup reconciliation excludes offline maintenance until the
+        // existing offline check can observe the validated, bound listener.
+        drop(startup_guard);
 
         let vision_manager_handle = server.vision_manager.clone();
 
@@ -1112,7 +1210,7 @@ impl ServerCore {
                     placeholder,
                     cfg,
                 )
-                    .spawn_with_shutdown(redact_shutdown.clone());
+                .spawn_with_shutdown(redact_shutdown.clone());
             }
         }
 
@@ -1193,14 +1291,16 @@ impl ServerCore {
                     pipeline_arc,
                     cfg,
                 )
-                    .with_database_error_hook(redact_database_error_hook.clone())
-                    .spawn_with_shutdown(redact_shutdown.clone());
+                .with_frame_storage(Arc::clone(&db))
+                .with_database_error_hook(redact_database_error_hook.clone())
+                .spawn_with_shutdown(redact_shutdown.clone());
             } else {
                 // Local mode: spawn the download+load off the boot path
                 // so a slow first-run HF pull doesn't block the app
                 // launch. The worker is created inside the spawned
                 // task once the model is ready.
                 let pool = db.pool.clone();
+                let frame_storage_db = Arc::clone(&db);
                 let writer = db.coordinated_writer();
                 let shutdown = redact_shutdown.clone();
                 let labels = pii_labels.clone();
@@ -1208,6 +1308,10 @@ impl ServerCore {
                 let database_error_hook = redact_database_error_hook.clone();
                 tokio::spawn(async move {
                     let policy = TextRedactionPolicy::from_labels(&labels);
+                    tokio::select! {
+                        _ = shutdown.notified() => return,
+                        _ = screenpipe_core::background_work::wait_until_resumed() => {}
+                    }
                     // Prefer the local ONNX text redactor (~278 MB INT8,
                     // sub-10 ms p50, gets CoreML on macOS / DirectML on
                     // Windows / CPU on Linux via the redact-onnx-* CI
@@ -1285,6 +1389,7 @@ impl ServerCore {
                         ..Default::default()
                     };
                     let _ = Worker::new_with_writer(pool, writer, pipeline_arc, cfg)
+                        .with_frame_storage(frame_storage_db)
                         .with_database_error_hook(database_error_hook)
                         .spawn_with_shutdown(shutdown);
                 });
@@ -1335,6 +1440,10 @@ impl ServerCore {
                 let labels = pii_labels.clone();
                 let database_error_hook = redact_database_error_hook.clone();
                 tokio::spawn(async move {
+                    tokio::select! {
+                        _ = shutdown.notified() => return,
+                        _ = screenpipe_core::background_work::wait_until_resumed() => {}
+                    }
                     match RfdetrRedactor::load_or_download(RfdetrConfig::default()).await {
                         Ok(detector) => {
                             info!(
@@ -1388,10 +1497,11 @@ impl ServerCore {
             owned_tasks,
             http_shutdown,
             http_task: Some(http_task),
+            _runtime_lifetime: runtime_lifetime,
         })
     }
 
-    /// Shut down the server core. Called only on app quit.
+    /// Shut down the server core before quit, restart, or storage migration.
     pub async fn shutdown(mut self) {
         info!("Shutting down server core");
         screenpipe_connect::mdns::shutdown();
@@ -1476,6 +1586,228 @@ impl ServerCore {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn failed_privacy_setup_releases_owner_and_preserves_recordings() {
+        let root = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+                .await
+                .unwrap(),
+        );
+        db.insert_audio_chunk("before-privacy-startup-failure.wav", None)
+            .await
+            .unwrap();
+        db.execute_raw_sql_write("UPDATE storage_metadata SET policy='previous-policy'")
+            .await
+            .unwrap();
+        db.execute_raw_sql_write("CREATE TRIGGER reject_privacy_setup BEFORE UPDATE ON storage_metadata BEGIN SELECT RAISE(ABORT, 'privacy setup unavailable; contact=private-person@example.com'); END").await.unwrap();
+
+        let error = initialize_frame_privacy_policy(&db, root.path())
+            .await
+            .unwrap_err();
+        assert!(error.contains("privacy setup unavailable"));
+        assert!(db.pool.is_closed());
+        assert!(crate::db_relaunch::is_db_shaped(&error));
+        // Retain the old Arc, just as pipe callbacks may do. Reopening must
+        // depend on completed close, not the last Arc being dropped.
+        let reopened = DatabaseManager::new(
+            root.path().join("db.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        reopened
+            .execute_raw_sql_write("DROP TRIGGER reject_privacy_setup")
+            .await
+            .unwrap();
+        initialize_frame_privacy_policy(&reopened, root.path())
+            .await
+            .unwrap();
+        reopened
+            .insert_audio_chunk("after-privacy-startup-failure.wav", None)
+            .await
+            .unwrap();
+        assert!(reopened
+            .find_audio_chunk_id("before-privacy-startup-failure.wav")
+            .await
+            .unwrap()
+            .is_some());
+        assert!(reopened
+            .find_audio_chunk_id("after-privacy-startup-failure.wav")
+            .await
+            .unwrap()
+            .is_some());
+        reopened.close().await;
+        crate::recording::recovery_log::append(
+            root.path(),
+            "engine_started",
+            "database reopened after privacy setup retry",
+        );
+
+        for day in 1..=7 {
+            std::fs::write(
+                root.path()
+                    .join(format!("screenpipe-app.2026-09-{day:02}.log")),
+                "app restarted\n",
+            )
+            .unwrap();
+        }
+        let report =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[root.path().to_path_buf()])
+                .await
+                .unwrap();
+        assert!(report.contains("database_startup_failed"));
+        assert!(report.contains("privacy setup unavailable"));
+        assert!(report.contains("database reopened after privacy setup retry"));
+        assert!(!report.contains("private-person@example.com"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn recovery_lock_decision_survives_restart_and_support_redaction() {
+        const CHILD_ROOT: &str = "SCREENPIPE_TEST_FOREIGN_LOCK_RESTART";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let error = prepare_database_startup(std::path::Path::new(&root))
+                .await
+                .err()
+                .unwrap();
+            assert!(error.contains("liveness=unverified"));
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap();
+        db.insert_audio_chunk("before-owner-recovery.wav", None)
+            .await
+            .unwrap();
+        db.close().await;
+        let live =
+            screenpipe_db::storage::resolve_database_path(&root.path().join("db.sqlite")).unwrap();
+        let generation = screenpipe_db::sqlite_file_identity(&live).unwrap();
+        let old_bytes = std::fs::read(&live).unwrap();
+
+        let lock = root.path().join(".db_recovery.lock");
+        let guard = prepare_database_startup(root.path()).await.unwrap();
+        let mut payload: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&lock).unwrap()).unwrap();
+        let host_id = payload["host_id"]
+            .as_str()
+            .expect("native macOS owner identity")
+            .to_string();
+        drop(guard);
+        payload["host"] = "previous-host-name".into();
+        payload["op"] = "database startup contact=private-person@example.com".into();
+
+        // An old lock lacking native identity cannot be silently upgraded to
+        // proof that this is a renamed host.
+        payload.as_object_mut().unwrap().remove("host_id");
+        std::fs::write(&lock, serde_json::to_vec(&payload).unwrap()).unwrap();
+        assert!(prepare_database_startup(root.path())
+            .await
+            .err()
+            .unwrap()
+            .contains("host_identity=legacy"));
+        payload["host_id"] = host_id.clone().into();
+        std::fs::write(&lock, serde_json::to_vec(&payload).unwrap()).unwrap();
+        assert!(prepare_database_startup(root.path())
+            .await
+            .err()
+            .unwrap()
+            .contains("liveness=alive"));
+
+        // Restart while the owner is remote: never reinterpret a local PID
+        // as remote liveness, and leave the lock and database bytes intact.
+        payload["host_id"] = "remote-machine".into();
+        payload["pid"] = i32::MAX.into();
+        let remote_lock = serde_json::to_vec(&payload).unwrap();
+        std::fs::write(&lock, &remote_lock).unwrap();
+        for _ in 0..2 {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "server_core::tests::recovery_lock_decision_survives_restart_and_support_redaction", "--nocapture"])
+                .env(CHILD_ROOT, root.path())
+                .status().unwrap();
+            assert!(status.success());
+            assert_eq!(std::fs::read(&lock).unwrap(), remote_lock);
+            assert_eq!(std::fs::read(&live).unwrap(), old_bytes);
+        }
+
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "no_such_test"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        child.wait().unwrap();
+        payload["host_id"] = host_id.clone().into();
+        payload["pid"] = child.id().into();
+        std::fs::write(&lock, serde_json::to_vec(&payload).unwrap()).unwrap();
+        let guard = prepare_database_startup(root.path()).await.unwrap();
+        assert!(guard.reclaimed_owner().unwrap().contains("liveness=dead"));
+        assert_eq!(
+            screenpipe_db::sqlite_file_identity(&live).unwrap(),
+            generation
+        );
+        let reopened = DatabaseManager::new(
+            root.path().join("db.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        reopened
+            .insert_audio_chunk("after-owner-recovery.wav", None)
+            .await
+            .unwrap();
+        reopened.close().await;
+        drop(guard);
+        // Prove committed old/new captures after another close/reopen.
+        let _guard = prepare_database_startup(root.path()).await.unwrap();
+        let reopened = DatabaseManager::new(
+            root.path().join("db.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        for file in ["before-owner-recovery.wav", "after-owner-recovery.wav"] {
+            assert!(reopened.find_audio_chunk_id(file).await.unwrap().is_some());
+        }
+        reopened.close().await;
+        crate::recording::recovery_log::append(
+            root.path(),
+            "engine_started",
+            "database reopened after owner recovery",
+        );
+        for day in 1..=7 {
+            std::fs::write(
+                root.path()
+                    .join(format!("screenpipe-app.2026-09-{day:02}.log")),
+                "noisy rolling log\n".repeat(9000),
+            )
+            .unwrap();
+        }
+        let report =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[root.path().to_path_buf()])
+                .await
+                .unwrap();
+        for expected in [
+            "host_identity=legacy",
+            "host_identity=mismatch",
+            "liveness=unverified",
+            "liveness=alive",
+            "hostname_matches=false",
+            "liveness=dead",
+            "generation=",
+            "outcome=recording_blocked",
+            "outcome=startup_guard_acquired",
+            "database_lock_reclaimed",
+            "database reopened after owner recovery",
+        ] {
+            assert!(report.contains(expected), "missing {expected}: {report}");
+        }
+        assert!(!report.contains("private-person@example.com"));
+        assert!(!report.contains(&host_id));
+        assert!(!report.contains("previous-host-name"));
+    }
+
     fn localhost(port: u16) -> SocketAddr {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
     }
@@ -1546,10 +1878,18 @@ mod tests {
     #[test]
     fn openai_compatible_failure_notifications_are_rate_limited() {
         let now = Instant::now();
-        assert!(should_notify_openai_compatible_failure(2, 3, 0, 0, 0, 0, None, now));
-        assert!(!should_notify_openai_compatible_failure(3, 3, 0, 0, 0, 0, None, now));
-        assert!(should_notify_openai_compatible_failure(3, 3, 1, 4, 10, 10, None, now));
-        assert!(!should_notify_openai_compatible_failure(3, 3, 1, 4, 10, 11, None, now));
+        assert!(should_notify_openai_compatible_failure(
+            2, 3, 0, 0, 0, 0, None, now
+        ));
+        assert!(!should_notify_openai_compatible_failure(
+            3, 3, 0, 0, 0, 0, None, now
+        ));
+        assert!(should_notify_openai_compatible_failure(
+            3, 3, 1, 4, 10, 10, None, now
+        ));
+        assert!(!should_notify_openai_compatible_failure(
+            3, 3, 1, 4, 10, 11, None, now
+        ));
         assert!(!should_notify_openai_compatible_failure(
             3,
             4,

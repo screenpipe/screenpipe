@@ -1,4 +1,9 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
 //! Platform-specific UI event capture implementations
+
+#[cfg(any(target_os = "windows", test))]
+mod retained_tree;
 
 #[cfg(target_os = "macos")]
 pub mod macos;

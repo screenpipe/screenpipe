@@ -88,7 +88,7 @@ describe("file viewer — html render", () => {
       <ViewerFileContent path={content.path} content={content} />,
     );
     const toggle = screen.getByTestId("html-render-toggle");
-    expect(toggle.textContent).toContain("view source");
+    expect(toggle.textContent).toContain("View source");
     expect(container.querySelector("iframe")).not.toBeNull();
   });
 

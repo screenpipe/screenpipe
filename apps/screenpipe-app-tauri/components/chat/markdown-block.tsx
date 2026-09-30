@@ -4,8 +4,11 @@
 "use client";
 
 import React from "react";
+import { ChatMarkdown } from "@screenpipe/workflows-ui/chat";
+export { stableStreamingMarkdownPrefix } from "@screenpipe/workflows-ui/chat";
 import { emit } from "@tauri-apps/api/event";
 import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
 import {
@@ -23,7 +26,53 @@ import { commands } from "@/lib/utils/tauri";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { cn } from "@/lib/utils";
 import { sanitizeToolCallXml } from "@/lib/utils/sanitize-tool-call-xml";
-import { LinkPreviewAnchor } from "@/components/chat/link-preview-anchor";
+import { ChatWebLink } from "@/components/chat/chat-web-link";
+import { useGT } from "gt-react";
+
+
+// Chat text comes from AI replies built on captured screens, pages, and
+// files, so raw HTML must not become live DOM in the app window. rehype-raw
+// keeps the formatting tags the system prompt asks for (e.g. <details>);
+// GitHub's allowlist then drops iframes, forms, meta, scripts, styles, and
+// event-handler attributes. href/src protocols are left to `urlTransform`,
+// which react-markdown applies after rehype and which already allows
+// screenpipe:// and local file links that the default protocol list would
+// strip; attributes urlTransform never sees keep the default protocol check.
+const CLOBBER_PREFIX = "user-content-";
+const chatSanitizeSchema = {
+  ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), "u", "mark", "small"],
+  protocols: { ...defaultSchema.protocols, href: [], src: [] },
+  clobberPrefix: CLOBBER_PREFIX,
+  strip: [...(defaultSchema.strip ?? []), "style"],
+};
+
+// The sanitizer prefixes ids so raw HTML cannot clobber globals. GFM
+// footnotes are emitted unprefixed (see remarkRehypeOptions) so every id is
+// prefixed exactly once; in-page links are re-pointed at the prefixed ids.
+type HastNode = {
+  type: string;
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  children?: HastNode[];
+};
+function prefixInPageLinks(node: HastNode) {
+  const href = node.properties?.href;
+  if (node.tagName === "a" && typeof href === "string" && href.length > 1 && href.startsWith("#")) {
+    node.properties!.href = `#${CLOBBER_PREFIX}${href.slice(1)}`;
+  }
+  node.children?.forEach(prefixInPageLinks);
+}
+const rehypePrefixInPageLinks = () => prefixInPageLinks;
+
+const chatRemarkRehypeOptions: ReactMarkdownOptions["remarkRehypeOptions"] = {
+  clobberPrefix: "",
+};
+const chatRehypePlugins: NonNullable<ReactMarkdownOptions["rehypePlugins"]> = [
+  rehypeRaw,
+  [rehypeSanitize, chatSanitizeSchema],
+  rehypePrefixInPageLinks,
+];
 
 // The transport snapshots text every 80 ms. Parse only complete blocks
 // (blank-line / closed-fence boundaries) and commit each one on the same
@@ -35,7 +84,11 @@ import { LinkPreviewAnchor } from "@/components/chat/link-preview-anchor";
 export interface MarkdownBlockOptions {
   /** Extra parsing passes layered onto the main Chat Markdown pipeline. */
   additionalRemarkPlugins?: ReactMarkdownOptions["remarkPlugins"];
-  /** Extend the main Chat URL allowlist for a bounded embedded surface. */
+  /**
+   * Extend the main Chat URL allowlist for a bounded embedded surface. This is
+   * the only protocol check on href/src (the sanitizer defers to it), so it
+   * must still fall back to `chatUrlTransform` or react-markdown's default.
+   */
   urlTransform?: ReactMarkdownOptions["urlTransform"];
   /** Return a node for links owned by the embedding surface; undefined falls back to Chat. */
   renderLink?: (input: {
@@ -59,69 +112,6 @@ interface MarkdownBlockProps extends MarkdownBlockOptions {
   ) => React.ReactNode | null;
 }
 
-function scanStreamingMarkdown(text: string): {
-  prefix: string;
-  blocks: string[];
-} {
-  let fenceCharacter: "`" | "~" | null = null;
-  let fenceLength = 0;
-  let lastBoundary = 0;
-  let blockStart = 0;
-  let lineStart = 0;
-  const blocks: string[] = [];
-
-  while (lineStart < text.length) {
-    const newlineIndex = text.indexOf("\n", lineStart);
-    const lineEnd = newlineIndex === -1 ? text.length : newlineIndex;
-    const line = text.slice(lineStart, lineEnd).replace(/\r$/, "");
-    const nextLineStart = newlineIndex === -1 ? text.length : newlineIndex + 1;
-    const fenceMatch = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
-
-    if (fenceMatch) {
-      const marker = fenceMatch[1];
-      const character = marker[0] as "`" | "~";
-      if (!fenceCharacter) {
-        fenceCharacter = character;
-        fenceLength = marker.length;
-      } else if (
-        character === fenceCharacter &&
-        marker.length >= fenceLength &&
-        fenceMatch[2].trim() === ""
-      ) {
-        fenceCharacter = null;
-        fenceLength = 0;
-      }
-    } else if (!fenceCharacter && line.trim() === "") {
-      lastBoundary = nextLineStart;
-      const block = text.slice(blockStart, lastBoundary);
-      if (block.trim() !== "") {
-        blocks.push(block);
-      }
-      blockStart = lastBoundary;
-    }
-
-    lineStart = nextLineStart;
-  }
-
-  return { prefix: text.slice(0, lastBoundary), blocks };
-}
-
-export function stableStreamingMarkdownPrefix(text: string): string {
-  return scanStreamingMarkdown(text).prefix;
-}
-
-function streamingMarkdownParts(text: string, streaming: boolean) {
-  if (!streaming) {
-    return { blocks: text ? [text] : [], tailText: "" };
-  }
-
-  const { prefix, blocks } = scanStreamingMarkdown(text);
-  return {
-    blocks,
-    tailText: text.slice(prefix.length),
-  };
-}
-
 export function MarkdownBlock({
   text,
   isUser,
@@ -134,10 +124,11 @@ export function MarkdownBlock({
   suppressImages = false,
   className,
 }: MarkdownBlockProps) {
+
+  const ui = useGT();
   const renderText = rewriteLocalMarkdownLinksForChat(
     isUser ? text : sanitizeToolCallXml(text),
   );
-  const { blocks, tailText } = streamingMarkdownParts(renderText, streaming);
   const markdownClassName = cn(
     "prose prose-sm max-w-full break-words overflow-hidden [word-break:break-word] flex flex-col items-start",
     isUser ? "text-foreground dark:prose-invert" : "dark:prose-invert",
@@ -155,7 +146,7 @@ export function MarkdownBlock({
             <div
               className="scrollbar-minimal my-4 w-full max-w-full overflow-x-auto overscroll-x-contain rounded-md border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               role="region"
-              aria-label="Scrollable table"
+              aria-label={ui("Scrollable table")}
               tabIndex={0}
             >
               <table
@@ -268,7 +259,7 @@ export function MarkdownBlock({
 
           if (href?.startsWith("http://") || href?.startsWith("https://")) {
             return (
-              <LinkPreviewAnchor
+              <ChatWebLink
                 href={href}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -276,7 +267,7 @@ export function MarkdownBlock({
                 {...props}
               >
                 {children}
-              </LinkPreviewAnchor>
+              </ChatWebLink>
             );
           }
 
@@ -304,34 +295,26 @@ export function MarkdownBlock({
         // sidebar, and stays readable in light and dark mode.
         ...createCodeMarkdownComponents({ renderSpecialCodeBlock }),
   };
-  const markdown = blocks.map((block, index) => (
-    <MemoizedReactMarkdown
-      key={index}
-      className={markdownClassName}
-      remarkPlugins={remarkPlugins}
-      urlTransform={resolvedUrlTransform}
-      rehypePlugins={[rehypeRaw]}
-      components={markdownComponents}
-    >
-      {block}
-    </MemoizedReactMarkdown>
-  ));
-
   return (
-    <>
-      {markdown}
-      {tailText ? (
-        <div
-          className={cn(
-            "max-w-full whitespace-pre-wrap break-words [word-break:break-word] leading-relaxed",
-            blocks.length > 0 && "mt-2",
-            className,
-          )}
-          data-testid="streaming-markdown-tail"
+    <ChatMarkdown
+      text={renderText}
+      streaming={streaming}
+      tailClassName={cn(
+        "max-w-full whitespace-pre-wrap break-words [word-break:break-word] leading-relaxed",
+        className,
+      )}
+      renderBlock={(block) => (
+        <MemoizedReactMarkdown
+          className={markdownClassName}
+          remarkPlugins={remarkPlugins}
+          urlTransform={resolvedUrlTransform}
+          remarkRehypeOptions={chatRemarkRehypeOptions}
+          rehypePlugins={chatRehypePlugins}
+          components={markdownComponents}
         >
-          {tailText}
-        </div>
-      ) : null}
-    </>
+          {block}
+        </MemoizedReactMarkdown>
+      )}
+    />
   );
 }

@@ -10,6 +10,8 @@ import { commands, type AcpAgentInstallStatus } from "@/lib/utils/tauri";
 import { Button } from "@/components/ui/button";
 import { AcpSetupProgress } from "@/components/settings/acp-setup-progress";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 /**
  * Install gate for binary ACP agents (OpenCode, Cursor, Kimi). Those run a CLI
@@ -38,6 +40,8 @@ export function AcpInstallGate({
   onInstalled?: () => void;
   compact?: boolean;
 }) {
+
+  const ui = useGT();
   const [status, setStatus] = useState<AcpAgentInstallStatus | null>(null);
   const [nonce, setNonce] = useState(0);
   // Hold the retry spinner for a visible beat: the re-check is instant, so
@@ -164,7 +168,7 @@ export function AcpInstallGate({
             ) : (
               <>Install it, then retry.</>
             )}
-            {onSwitchToDefault ? " Or use Screenpipe Cloud instead." : ""}
+            {onSwitchToDefault ? ui(" Or use Screenpipe Cloud instead.") : ""}
           </p>
         </div>
       </div>
@@ -179,7 +183,7 @@ export function AcpInstallGate({
             compact ? "text-[11px]" : "text-xs",
           )}
         >
-          still not installed. finish the install, then retry.
+          Still not installed. Finish the install, then retry.
         </div>
       )}
       {installError && (
@@ -204,11 +208,11 @@ export function AcpInstallGate({
           >
             {installing ? (
               <>
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> installing…
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> Installing…
               </>
             ) : (
               <>
-                <Download className="mr-1.5 h-3.5 w-3.5" /> install {agentName}
+                <Download className="mr-1.5 h-3.5 w-3.5" /> Install {agentName}
               </>
             )}
           </Button>
@@ -220,7 +224,7 @@ export function AcpInstallGate({
             variant={canInstallAutomatically ? "outline" : "default"}
             onClick={() => void openUrl(url).catch(() => window.open(url, "_blank"))}
           >
-            <ExternalLink className="mr-1.5 h-3.5 w-3.5" /> open official installer
+            <ExternalLink className="mr-1.5 h-3.5 w-3.5" /> Open official installer
           </Button>
         )}
         <Button
@@ -231,14 +235,14 @@ export function AcpInstallGate({
           onClick={beginRetry}
         >
           {checking ? (
-            <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> checking…</>
+            <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> Checking…</>
           ) : (
-            <><RefreshCw className="mr-1.5 h-3.5 w-3.5" /> retry</>
+            <><RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Retry</>
           )}
         </Button>
         {onSwitchToDefault && (
           <Button type="button" size="sm" variant="ghost" onClick={onSwitchToDefault}>
-            use Screenpipe Cloud
+            Use Screenpipe Cloud
           </Button>
         )}
       </div>

@@ -22,6 +22,7 @@
             "ffmpeg\\bin\\*.dll": "./",
             "ffmpeg\\lib\\*": "./",
             "onnxruntime*\\lib\\*.dll": "./",
+            "VulkanRT-License.txt": "./",
             "wer\\*.dll": "./",
             "openblas\\bin\\*.dll": "./",
             "vcredist\\*.dll": "./",

@@ -459,13 +459,18 @@ pub fn webview_renderer_heartbeat(window: tauri::WebviewWindow) {
 /// later policy reversal.
 pub fn enforce_enterprise_ui_visibility(app: &tauri::AppHandle) {
     let hidden = crate::enterprise_policy::is_app_ui_hidden();
+    let tray_hidden = crate::enterprise_policy::is_tray_hidden();
 
     // The enterprise policy hook calls this on every 5-min poll. Only do work
     // on an actual transition — otherwise we'd tear down an already-dormant UI
     // and (worse) rebuild the tray every poll, flickering the menu-bar icon.
-    // -1 = unknown (first call), 0 = visible, 1 = hidden.
+    //
+    // Both axes are packed into the key: the admin can suppress the tray while
+    // leaving windows visible, so keying only on `hidden` would miss a tray-only
+    // flip entirely. 0 = both visible, 1 = app UI hidden, 2 = tray hidden,
+    // 3 = both hidden. -1 = unknown (first call).
     static LAST_APPLIED: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
-    let next = if hidden { 1 } else { 0 };
+    let next = (if hidden { 1 } else { 0 }) | (if tray_hidden { 2 } else { 0 });
     if LAST_APPLIED.swap(next, std::sync::atomic::Ordering::SeqCst) == next {
         return;
     }
@@ -504,11 +509,27 @@ pub fn enforce_enterprise_ui_visibility(app: &tauri::AppHandle) {
 
     // Always re-apply the activation policy + tray so a policy change in EITHER
     // direction is reflected immediately (Accessory+minimal tray when hidden,
-    // Regular+full tray when not).
+    // Regular+full tray when not). enforce_tray_visibility also handles the
+    // tray-suppressed case, where the correct end state is no icon at all.
     #[cfg(target_os = "macos")]
     panel::reset_to_regular_and_refresh_tray(app);
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    crate::tray::recreate_tray(app);
+    crate::tray::enforce_tray_visibility(app);
+
+    // Reached only on an actual transition, so this re-registers shortcuts just
+    // when the pause affordance changed: a policy that suppresses the tray after
+    // launch must still leave a working pause control, and relaxing it must put
+    // the normal shortcut set back.
+    let app_for_shortcuts = app.clone();
+    let (ui_hidden, tray_hidden) = (hidden, tray_hidden);
+    tauri::async_runtime::spawn(async move {
+        crate::shortcuts::reconcile_with_enterprise_policy(
+            &app_for_shortcuts,
+            ui_hidden,
+            tray_hidden,
+        )
+        .await;
+    });
 }
 
 // These re-exports preserve the original public API surface. Some are only

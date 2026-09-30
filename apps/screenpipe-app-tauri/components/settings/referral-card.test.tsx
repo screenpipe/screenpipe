@@ -4,6 +4,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   copyTextToClipboard: vi.fn().mockResolvedValue(undefined),
   openLoginWindow: vi.fn().mockResolvedValue(undefined),
   toast: vi.fn(),
+  openUrl: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/lib/hooks/use-settings", () => ({
@@ -29,9 +31,12 @@ vi.mock("@/lib/utils/tauri", () => ({
   },
 }));
 
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: mocks.openUrl }));
+
 vi.mock("@/components/ui/use-toast", () => ({ toast: mocks.toast }));
 
 import { ReferralCard } from "./referral-card";
+import { installAuthInterceptor } from "@/lib/auth-guard";
 
 const referral = {
   code: "REF-A1B2C3D4",
@@ -63,6 +68,7 @@ describe("ReferralCard", () => {
     render(<ReferralCard />);
 
     expect(await screen.findByDisplayValue(referral.link)).toBeInTheDocument();
+    expect(screen.getByText("Give 10% off. Get a free month.")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       "https://screenpipe.com/api/referral?email=paid%2Btest%40screenpipe.com",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -76,24 +82,83 @@ describe("ReferralCard", () => {
     );
   });
 
-  it("explains paid-plan eligibility instead of showing a broken trial link", async () => {
+  it("keeps a free account signed in when it has no referral code", async () => {
     mocks.user = { email: "trial@screenpipe.com", token: "token-1" };
+    const clearSession = vi.fn(async () => {
+      mocks.user = null;
+    });
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ error: "no referral code found" }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const authenticated =
+          new Headers(init?.headers).get("Authorization") === "Bearer token-1";
+        return new Response(
+          JSON.stringify({ error: authenticated ? "no referral code found" : "unauthorized" }),
+          { status: authenticated ? 404 : 401 },
+        );
+      }),
     );
+    installAuthInterceptor(() => mocks.user?.token, clearSession);
 
     render(<ReferralCard />);
 
     expect(
-      await screen.findByText(/free Business trial does not create a referral code/i),
+      await screen.findByText("Your invite link is temporarily unavailable"),
     ).toBeInTheDocument();
     expect(screen.queryByDisplayValue(/REF-/i)).not.toBeInTheDocument();
+    expect(clearSession).not.toHaveBeenCalled();
+    expect(mocks.user?.token).toBe("token-1");
+  });
+
+
+  it.each(["no referral code found", "user not found"])(
+    "recovers from %s without assuming the user needs to pay",
+    async (error) => {
+      mocks.user = { email: "paid@example.com", token: "token-1" };
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify({ error }), { status: 404 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify(referral), { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<ReferralCard />);
+      await screen.findByText("Your invite link is temporarily unavailable");
+      expect(screen.getByText("Signed in as paid@example.com")).toBeInTheDocument();
+      expect(screen.queryByText(/first paid plan|trial does not/i)).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+      expect(await screen.findByDisplayValue(referral.link)).toBeInTheDocument();
+      expect(screen.queryByText("Your invite link is temporarily unavailable")).not.toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("opens a support email and provides a fallback if the mail app cannot open", async () => {
+    mocks.user = { email: "paid@example.com", token: "token-1" };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 404 })));
+    mocks.openUrl.mockRejectedValueOnce(new Error("no email handler"));
+    render(<ReferralCard />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Contact support" }));
+    await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ description: "Email support@screenpi.pe for help with your referral link." }),
+    ));
+    expect(mocks.openUrl).toHaveBeenCalledWith(
+      "mailto:support@screenpi.pe?subject=Missing%20referral%20link",
+    );
+  });
+
+  it("does not replace the current account's link with a late missing-link response", async () => {
+    let finishOldRequest!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn()
+      .mockImplementationOnce(() => new Promise<Response>(resolve => { finishOldRequest = resolve; }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(referral), { status: 200 })));
+    mocks.user = { email: "first@example.com", token: "token-1" };
+    const { rerender } = render(<ReferralCard />);
+    mocks.user = { email: "second@example.com", token: "token-2" };
+    rerender(<ReferralCard />);
+    await screen.findByDisplayValue(referral.link);
+    await act(async () => finishOldRequest(new Response("{}", { status: 404 })));
+    expect(screen.getByDisplayValue(referral.link)).toBeInTheDocument();
+    expect(screen.queryByText("Your invite link is temporarily unavailable")).not.toBeInTheDocument();
   });
 
   it("shows a retry path when referral loading fails", async () => {

@@ -27,6 +27,9 @@ import {
 } from "@/lib/utils/meeting-format";
 import { ListeningSticks } from "./listening-sticks";
 import { copyMeetingToClipboard } from "./copy-meeting";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 const MEETING_DRAG_MIME = "application/x-screenpipe-meeting-id";
 
@@ -84,6 +87,9 @@ export function PastMeetings({
   onDelete,
   onMerged,
 }: PastMeetingsProps) {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
   const buckets = bucketByRelativeDay(meetings);
   const { toast } = useToast();
   const [draggingId, setDraggingId] = React.useState<number | null>(null);
@@ -170,14 +176,14 @@ export function PastMeetings({
       setPendingMerge(null);
     } catch (err) {
       toast({
-        title: "couldn't merge meetings",
+        title: ui("Couldn't merge meetings"),
         description: String(err),
         variant: "destructive",
       });
     } finally {
       setMerging(false);
     }
-  }, [pendingMerge, onMerged, toast]);
+  }, [pendingMerge, onMerged, toast, uiLanguage]);
 
   if (buckets.length === 0) return null;
 
@@ -185,7 +191,7 @@ export function PastMeetings({
     <div className="space-y-8">
       {buckets.map((b) => (
         <section key={b.label}>
-          <h3 className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/80 mb-2">
+          <h3 className="text-[11px] normal-case tracking-[0.18em] text-muted-foreground/80 mb-2">
             {b.label}
           </h3>
           <ul className="border-t border-border">
@@ -219,10 +225,10 @@ export function PastMeetings({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>merge meetings</AlertDialogTitle>
+            <AlertDialogTitle>Merge meetings</AlertDialogTitle>
             <AlertDialogDescription>
-              combine these two meetings into one. titles, attendees, notes
-              and transcripts are joined chronologically. this can't be
+              Combine these two meetings into one. Titles, attendees, notes
+              and transcripts are joined chronologically. This can't be
               undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -233,7 +239,7 @@ export function PastMeetings({
             </div>
           )}
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={merging}>cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={merging}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={(e) => {
                 e.preventDefault();
@@ -244,10 +250,10 @@ export function PastMeetings({
               {merging ? (
                 <span className="flex items-center gap-2">
                   <Loader2 className="h-3 w-3 animate-spin" />
-                  merging
+                  Merging
                 </span>
               ) : (
-                "merge"
+                ui("Merge")
               )}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -298,6 +304,8 @@ function PastMeetingRow({
   onDragLeave: () => void;
   onDrop: (e: React.DragEvent<HTMLDivElement>) => void;
 }) {
+
+  const ui = useGT();
   const { toast } = useToast();
   const [copyState, setCopyState] = React.useState<
     "idle" | "copying" | "copied"
@@ -310,11 +318,11 @@ function PastMeetingRow({
       await copyMeetingToClipboard(meeting);
       setCopyState("copied");
       window.setTimeout(() => setCopyState("idle"), 2000);
-      toast({ title: "copied meeting to clipboard" });
+      toast({ title: ui("Copied meeting to clipboard") });
     } catch (err) {
       setCopyState("idle");
       toast({
-        title: "couldn't copy meeting",
+        title: ui("Couldn't copy meeting"),
         description: String(err),
         variant: "destructive",
       });
@@ -330,7 +338,7 @@ function PastMeetingRow({
       onDelete(meeting.id);
     } catch (err) {
       toast({
-        title: "couldn't delete meeting",
+        title: ui("Couldn't delete meeting"),
         description: String(err),
         variant: "destructive",
       });
@@ -377,7 +385,7 @@ function PastMeetingRow({
                 gap={1.5}
                 className="text-foreground"
               />
-              <span className="sr-only">recording</span>
+              <span className="sr-only">Recording</span>
             </>
           ) : (
             <Icon className="h-3 w-3 text-muted-foreground" />
@@ -408,8 +416,8 @@ function PastMeetingRow({
             onClick={() => void handleCopy()}
             disabled={copyState === "copying"}
             className="h-7 w-7 flex items-center justify-center bg-transparent text-muted-foreground hover:text-foreground disabled:opacity-60"
-            title="copy full meeting"
-            aria-label="copy full meeting"
+            title={ui("Copy full meeting")}
+            aria-label={ui("Copy full meeting")}
           >
             {copyState === "copying" ? (
               <Loader2 className="h-3 w-3 animate-spin" />
@@ -424,25 +432,25 @@ function PastMeetingRow({
               <AlertDialogTrigger asChild>
                 <button
                   className="opacity-0 group-hover:opacity-100 transition-opacity h-7 w-7 flex items-center justify-center bg-transparent text-muted-foreground hover:text-destructive"
-                  title="delete meeting"
+                  title={ui("Delete meeting")}
                 >
                   <Trash2 className="h-3 w-3" />
                 </button>
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>delete meeting</AlertDialogTitle>
+                  <AlertDialogTitle>Delete meeting</AlertDialogTitle>
                   <AlertDialogDescription>
-                    your notes and transcript will be permanently deleted.
+                    Your notes and transcript will be permanently deleted.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>cancel</AlertDialogCancel>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
                   <AlertDialogAction
                     variant="destructive"
                     onClick={() => void handleDelete()}
                   >
-                    delete
+                    Delete
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
@@ -474,7 +482,7 @@ function formatRowStamp(iso: string, bucket: string): string {
 }
 
 function titleFromApp(app: string): string {
-  if (!app || app === "manual") return "untitled meeting";
+  if (!app || app === "manual") return "Untitled meeting";
   return app.toLowerCase();
 }
 

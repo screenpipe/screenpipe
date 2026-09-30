@@ -27,7 +27,7 @@ export function DropOverlay({
         >
           <div className="flex flex-col items-center gap-2">
             <ImageIcon className="w-6 h-6 text-primary" />
-            <p className="text-sm font-medium text-foreground">drop image here</p>
+            <p className="text-sm font-medium text-foreground">Drop image here</p>
           </div>
         </motion.div>
       )}

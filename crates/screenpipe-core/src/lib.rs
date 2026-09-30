@@ -28,6 +28,7 @@
 //! header before trusting details).
 
 pub mod agents;
+pub use screenpipe_resource::background_work;
 pub mod connections;
 pub mod display_topology;
 // Runtime CPU-feature detection lives in its own leaf crate so that
@@ -35,6 +36,7 @@ pub mod display_topology;
 // cycle via screenpipe-secrets). Re-exported here as the canonical path.
 pub use screenpipe_cpu_features as cpu_features;
 pub mod ffmpeg;
+pub mod health_diagnostics;
 pub mod memories;
 // Single source of truth for CREATE_NO_WINDOW. Spawning a console program from
 // the GUI-subsystem app flashes a terminal on Windows unless every call site
@@ -43,9 +45,11 @@ pub mod no_window;
 pub mod paths;
 pub mod permissions;
 pub mod pipes;
+pub mod starter_skills;
 pub mod strings;
 pub mod thread_priority;
 pub mod window_pattern;
+pub mod workflows;
 // Thin ffmpeg encoder helpers — moved out of screenpipe-engine so that
 // downstream consumers (including the commercial @screenpipe/sdk in
 // screenpipe/sdk) can reuse the x265 pipeline without pulling the full

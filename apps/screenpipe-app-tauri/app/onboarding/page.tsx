@@ -5,6 +5,8 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { LanguageSelector } from "@/components/language-selector";
+import { useLocalizationEnabled } from "@/lib/i18n/provider";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/use-toast";
 import OnboardingLogin from "@/components/onboarding/login-gate";
@@ -21,6 +23,7 @@ import { EnterpriseLicensePrompt } from "@/components/enterprise-license-prompt"
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
 import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
+import { writeBrowserLogNow } from "@/lib/logging/browser-log";
 import type { AppUser } from "@/lib/app-entitlement";
 import {
   isTrialActivationEligible,
@@ -34,6 +37,13 @@ import {
   TRIAL_ACTIVATION_UNLOCKED_STEP,
 } from "@/lib/first-run/trial-activation";
 import { readOnboardingCheckoutStatus } from "@/lib/onboarding-checkout-navigation";
+import { StartupAuthenticationContext } from "@/components/app-entitlement-gate";
+import { shouldRestoreOnboardingLogin } from "@/lib/onboarding-auth-restore";
+
+import { useWorkflowsRolloutEnabled } from "@/lib/workflows/rollout";
+import { FirstTaskChoice } from "@/components/workflows/first-task-choice";
+import { saveProductMode } from "@/lib/workflows/entry-preference";
+import { desktopWorkflowsPlatform } from "@/lib/workflows/desktop-platform";
 
 type SlideKey =
   | "login"
@@ -42,7 +52,8 @@ type SlideKey =
   | "timeline"
   | "engine"
   | "plan"
-  | "recommended-setup";
+  | "recommended-setup"
+  | "first-task";
 
 // One size for the whole flow. Per-slide sizes made the window jump on every
 // step, worst on "plan", which widened to 760 even though the content column is
@@ -127,6 +138,8 @@ function TrialActivationFlagAssignment({
   useEffect(() => {
     let settled = false;
     let matchingIdentityResponses = 0;
+    const startedAt = Date.now();
+    const attemptId = crypto.randomUUID();
     let timeout: number | undefined;
     const settle = (assignment: TrialActivationAssignment) => {
       if (settled) return;
@@ -139,9 +152,30 @@ function TrialActivationFlagAssignment({
       reason: "missing_distinct_id" | "load_error" | "timeout",
     ) => {
       if (settled) return;
+      const diagnostic = {
+        reason,
+        stage: posthog.get_distinct_id() !== expectedDistinctId
+          ? "waiting_for_identity"
+          : matchingIdentityResponses === 0
+            ? "waiting_for_response"
+            : "waiting_for_fresh_response",
+        attempt_id: attemptId,
+        response_count: matchingIdentityResponses,
+        elapsed_ms: Date.now() - startedAt,
+        identity_matches: posthog.get_distinct_id() === expectedDistinctId,
+        fallback_variant: "control",
+        outcome: "continue_setup",
+      };
+      // Support receives this through the existing redacted browser-log bundle,
+      // including when analytics delivery is unavailable. Never log identifiers,
+      // flag payloads or the SDK's raw network error.
+      writeBrowserLogNow("warn", JSON.stringify({
+        event: "trial_activation_assignment_failed",
+        ...diagnostic,
+      }), { route: "/onboarding" });
       posthog.capture(
         "trial_activation_assignment_failed",
-        { reason, fallback_variant: "control" },
+        diagnostic,
         { send_instantly: true },
       );
       settle({ variant: "control", source: "fallback" });
@@ -158,18 +192,22 @@ function TrialActivationFlagAssignment({
     );
     const unsubscribe = posthog.onFeatureFlags((_flags, _variants, context) => {
       if (settled || posthog.get_distinct_id() !== expectedDistinctId) return;
-      if (context?.errorsLoading) {
-        fallBackToControl("load_error");
+      // The installed SDK omits errorsLoading for its synchronous cached
+      // notification and local overrides. Only remote completions carry a
+      // boolean; neither cached values nor an override can prove freshness.
+      if (typeof context?.errorsLoading !== "boolean") return;
+
+      // PostHog serializes remote requests, so at most one request from before
+      // identify can still be in flight. Drain that first completion (including
+      // errors), then request under the expected identity. Counting a cached
+      // callback as well forced cold starts through three network round trips.
+      matchingIdentityResponses += 1;
+      if (matchingIdentityResponses === 1) {
+        posthog.reloadFeatureFlags();
         return;
       }
-
-      // An immediate cached callback and one older request can both arrive
-      // after identify has changed the visible distinct id. Requiring the next
-      // two reload cycles exhausts both stale sources; the third matching
-      // response was requested under the final identity.
-      matchingIdentityResponses += 1;
-      if (matchingIdentityResponses < 3) {
-        posthog.reloadFeatureFlags();
+      if (context.errorsLoading) {
+        fallBackToControl("load_error");
         return;
       }
 
@@ -202,6 +240,7 @@ function TrialActivationFlagAssignment({
 
     posthog.reloadFeatureFlags();
     return () => {
+      settled = true;
       window.clearTimeout(timeout);
       unsubscribe();
     };
@@ -209,7 +248,7 @@ function TrialActivationFlagAssignment({
   return null;
 }
 
-// When shown, the timeline choice sits before "engine" so disableTimeline is
+// When shown, the screenshot choice sits before "engine" so disableScreenshots is
 // persisted before the engine spawns and reads it — no restart needed.
 const SLIDE_ORDER: SlideKey[] = [
   "login",
@@ -219,6 +258,7 @@ const SLIDE_ORDER: SlideKey[] = [
   "engine",
   "plan",
   "recommended-setup",
+  "first-task",
 ];
 
 // endowed progress: the bar first renders on permissions with login already
@@ -235,8 +275,8 @@ const EndowedProgress = ({
   sub?: { done: number; total: number } | null;
 }) => (
   <div className="w-full max-w-sm mx-auto mb-[22px]">
-    <div className="flex justify-between font-mono text-[9px] lowercase tracking-[0.04em] text-muted-foreground mb-[5px]">
-      <span>setup</span>
+    <div className="flex justify-between font-mono text-[9px] tracking-[0.04em] text-muted-foreground mb-[5px]">
+      <span>Setup</span>
       <span>
         {step} of {total}
       </span>
@@ -288,6 +328,7 @@ const applyOnboardingWindowSize = async () => {
 };
 
 export default function OnboardingPage() {
+  const localizationEnabled = useLocalizationEnabled();
   const router = useRouter();
   const { toast } = useToast();
   const [checkoutReturnStatus] = useState(() =>
@@ -316,6 +357,9 @@ export default function OnboardingPage() {
   const { settings, isSettingsLoaded } = useSettings();
   const user = settings.user as AppUser | null | undefined;
   const isLoggedIn = Boolean(user?.token);
+  const startupAuthenticationStatus = React.useContext(
+    StartupAuthenticationContext,
+  );
   const previousLoginStateRef = React.useRef<boolean | null>(null);
   const completedForHiddenUiRef = React.useRef(false);
   const transitioningRef = React.useRef(false);
@@ -358,11 +402,11 @@ export default function OnboardingPage() {
   // mistaken for hardware evidence.
   const isConfidentLowEndDevice = settings.deviceTier === "low";
 
-  // The timeline slide writes disableTimeline AND disableScreenshots, so a
-  // policy owning either one already decides the outcome — showing the choice
-  // would let it contradict what the user picked.
+  // This choice controls capture only. Timeline visibility is a sidebar
+  // preference; policies controlling screen capture still own this decision.
   const timelineChoiceLocked =
-    isSettingLocked("disableTimeline") || isSettingLocked("disableScreenshots");
+    isSettingLocked("disableScreenshots") || isSettingLocked("disableVision") ||
+    isSettingLocked("screen_recording");
   const timelineChoiceVisible =
     isConfidentLowEndDevice && !timelineChoiceLocked;
   const deviceTierForAnalytics =
@@ -432,6 +476,7 @@ export default function OnboardingPage() {
   // excludes it from progress and saved-step restoration as well.
   const canAdvanceIntoPlanSelection =
     shouldShowPlanSelection && Boolean(user?.token);
+  const workflowsRolloutEnabled = useWorkflowsRolloutEnabled();
   const visibleOrder = useMemo(
     () =>
       SLIDE_ORDER.filter(
@@ -446,9 +491,10 @@ export default function OnboardingPage() {
           (s !== "plan" || shouldShowPlanSelection) &&
           // Managed deployments may authenticate with only a license key, so
           // consumer Gmail/Calendar authorization is not available there.
-          (s !== "recommended-setup" || !isManagedDeployment),
+          (s !== "recommended-setup" || !isManagedDeployment) &&
+          (s !== "first-task" || (workflowsRolloutEnabled && !isManagedDeployment && !usesSummaryFirstTrial)),
       ),
-    [isManagedDeployment, shouldShowPlanSelection, timelineChoiceVisible],
+    [isManagedDeployment, shouldShowPlanSelection, timelineChoiceVisible, usesSummaryFirstTrial, workflowsRolloutEnabled],
   );
   // Read by the hydration-gated restore effect below. Assigned during render,
   // per the ref-mirror rule in CLAUDE.md.
@@ -501,6 +547,7 @@ export default function OnboardingPage() {
           engine: "engine",
           plan: "plan",
           "recommended-setup": "recommended-setup",
+          "first-task": "first-task",
           // Native Rust now connects detected AI tools in the background, and
           // the goal/dashboard slide is gone: setup no longer asks the user to
           // declare intent before anything has been observed. Saved installs
@@ -525,7 +572,19 @@ export default function OnboardingPage() {
           // A saved step must not resume onto a slide that this device or its
           // managed policy is no longer eligible to see.
           const mappedSlide =
-            mapped === "acquisition" && isManagedDeployment
+            // Post-login steps assume native startup authentication succeeded.
+            // If the session was lost between launches, restoring one of those
+            // steps calls spawn_screenpipe while signed out and strands the user
+            // on the engine error screen. Return consumer installs to the login
+            // gate so they can re-authenticate before setup resumes.
+            shouldRestoreOnboardingLogin({
+              isManagedDeployment,
+              startupAuthenticationStatus,
+              isLoggedIn,
+              mappedSlide: mapped,
+            })
+              ? "login"
+              : mapped === "acquisition" && isManagedDeployment
               ? // A managed install saved mid-acquisition, from a build that
                 // still asked, resumes at the step that follows it rather than
                 // at the engine: permissions still have to be granted.
@@ -543,9 +602,11 @@ export default function OnboardingPage() {
     checkoutReturnStatus,
     isManagedDeployment,
     isManagedDeploymentResolved,
+    isLoggedIn,
     isSettingsLoaded,
     router,
     shouldShowPlanSelection,
+    startupAuthenticationStatus,
   ]);
 
   useEffect(() => {
@@ -726,6 +787,7 @@ export default function OnboardingPage() {
         clearTrialActivationAssignment();
       } catch (error) {
         console.error("failed to finish onboarding:", error);
+        if (currentSlide === "first-task" || currentSlide === "recommended-setup") throw error;
       } finally {
         // A transient store/IPC failure must not permanently consume the
         // user's click. The automatic retry above handles the common case;
@@ -788,7 +850,9 @@ export default function OnboardingPage() {
     handleNextSlide,
   ]);
 
-  if (isLoading || !isSettingsLoaded || !isManagedDeploymentResolved) {
+  // Initial hydration needs the full-page loader. A step saving completion
+  // owns its busy UI and must stay mounted to retain choices and show retries.
+  if ((isLoading && !isTransitioning) || !isSettingsLoaded || !isManagedDeploymentResolved) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-background">
         <div className="w-6 h-6 border border-foreground border-t-transparent rounded-full animate-spin" />
@@ -809,7 +873,7 @@ export default function OnboardingPage() {
         >
           <div className="h-6 w-6 animate-spin rounded-full border border-foreground border-t-transparent" />
           <p className="font-mono text-[11px] text-muted-foreground">
-            preparing your setup
+            Preparing your setup
           </p>
         </div>
       </div>
@@ -820,6 +884,7 @@ export default function OnboardingPage() {
     <div className="flex flex-col w-full h-screen overflow-hidden bg-background">
       {/* Drag region */}
       <div className="w-full bg-background p-3" data-tauri-drag-region />
+      {localizationEnabled && <div className="mx-auto w-full max-w-lg px-6 pb-2"><LanguageSelector /></div>}
 
       {/* Keep short steps centered, but let content taller than the available
           display grow naturally and scroll from its top instead of clipping. */}
@@ -844,10 +909,10 @@ export default function OnboardingPage() {
               authenticationState === "license_key" ? (
                 <div className="mx-auto w-full max-w-sm">
                   <h2 className="mb-1 text-lg font-semibold">
-                    activate this device
+                    Activate this device
                   </h2>
                   <p className="mb-4 text-sm text-muted-foreground">
-                    enter the enterprise key provided by your administrator
+                    Enter the enterprise key provided by your administrator
                   </p>
                   <EnterpriseLicensePrompt
                     embedded
@@ -873,7 +938,7 @@ export default function OnboardingPage() {
                       onClick={() => selectAuthenticationMethod("license_key")}
                       className="mt-3 font-mono text-xs text-muted-foreground/70 underline underline-offset-4 decoration-muted-foreground/40 transition-colors hover:text-foreground hover:decoration-foreground"
                     >
-                      use enterprise key
+                      Use enterprise key
                     </button>
                   )}
                 </div>
@@ -903,6 +968,21 @@ export default function OnboardingPage() {
           {currentSlide === "plan" && (
             <PlanSelectionStep handleNextSlide={handleNextSlide} />
           )}
+          {currentSlide === "first-task" && workflowsRolloutEnabled && <FirstTaskChoice onComplete={async (mode, goal) => {
+            if (mode === "workflows" && goal) {
+              const existing = await desktopWorkflowsPlatform.loadWorkProfile?.();
+              await desktopWorkflowsPlatform.saveWorkProfile?.({
+                scope: "personal", summary: "", kpis: [], hourlyValue: null,
+                vocabulary: "", guidance: "", visibility: "device-only", ...existing,
+                priorities: existing?.priorities
+                  ? existing.priorities.split("\n").some(line => line.trim() === goal)
+                    ? existing.priorities : `${existing.priorities}\n${goal}`
+                  : goal,
+              });
+            }
+            await saveProductMode(mode);
+            await handleNextSlide();
+          }} />}
           {currentSlide === "recommended-setup" && (
             <FinalSetupStep
               userToken={user?.token}

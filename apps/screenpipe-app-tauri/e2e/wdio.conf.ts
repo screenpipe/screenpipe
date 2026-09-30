@@ -4,9 +4,9 @@
 
 import type { Options } from '@wdio/types';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { Agent, setGlobalDispatcher } from 'undici';
 import { startApp, stopApp, WEBDRIVER_PORT } from './helpers/app-launcher.js';
 import { GatewayRequestProxy } from './helpers/gateway-request-proxy.js';
 import { getReporters, getMochaTimeout } from './helpers/reporter-utils.js';
@@ -16,7 +16,12 @@ import { TestRecorder } from './helpers/test-recorder.js';
 // WebdriverIO passes the current dispatcher explicitly into every WebDriver
 // fetch; that wrapper rejects the explicit `dispatcher` option with
 // UND_ERR_INVALID_ARG. E2E only talks to the local Tauri WebDriver server, so use
-// a plain Agent here.
+// a plain Agent here. Resolve WebDriver's own undici: a hoisted v8 Agent
+// rejects the numeric Content-Length sent by WebDriver's v6 fetch.
+const wdioRequire = createRequire(import.meta.resolve('@wdio/cli'));
+const webdriverioRequire = createRequire(wdioRequire.resolve('webdriverio'));
+const webdriverRequire = createRequire(webdriverioRequire.resolve('webdriver'));
+const { Agent, setGlobalDispatcher } = webdriverRequire('undici');
 setGlobalDispatcher(new Agent());
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

@@ -37,6 +37,11 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
     input: 10.00, output: 50.00, ...GPT56_CACHE,
     longContext: { threshold: 272_000, inputMultiplier: 2, outputMultiplier: 1.5 },
   },
+  // https://developers.openai.com/api/docs/models/gpt-6-luna (Standard).
+  'gpt-6-luna': {
+    input: 0.10, output: 0.50, ...GPT56_CACHE,
+    longContext: { threshold: 272_000, inputMultiplier: 2, outputMultiplier: 1.5 },
+  },
   // GPT-5.6: Sol is the flagship/default, Terra is balanced, Luna is high-volume.
   'gpt-5.6': { input: 5.00, output: 30.00, ...GPT56_CACHE },
   'gpt-5.6-sol': { input: 5.00, output: 30.00, ...GPT56_CACHE },

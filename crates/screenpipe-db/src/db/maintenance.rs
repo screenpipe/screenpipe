@@ -4,29 +4,44 @@
 
 use super::*;
 
-const WAL_HARD_CAP_PAGES: i32 = 40_000;
+// Diagnostic threshold only: backlog does not establish a recording failure.
+const WAL_BACKLOG_WARNING_PAGES: i32 = 40_000;
 
-fn wal_backlog_restart_reason(
+fn report_wal_checkpoint(
+    busy: i32,
     log_pages: i32,
-    checkpointed_pages: i32,
-) -> Option<crate::write_queue::DatabaseRestartReason> {
-    let pending_pages = log_pages.saturating_sub(checkpointed_pages);
-    (pending_pages > WAL_HARD_CAP_PAGES).then_some(
-        crate::write_queue::DatabaseRestartReason::WalBacklog {
+    checkpointed: i32,
+    backlog_since: &mut Option<std::time::Instant>,
+) {
+    let pending_pages = log_pages.saturating_sub(checkpointed);
+    if pending_pages > WAL_BACKLOG_WARNING_PAGES {
+        let since = backlog_since.get_or_insert_with(std::time::Instant::now);
+        warn!(
             pending_pages,
             log_pages,
-            checkpointed_pages,
-        },
-    )
+            checkpointed,
+            busy,
+            backlog_seconds = since.elapsed().as_secs(),
+            "passive WAL checkpoint deferred; recording continues while reader snapshots drain"
+        );
+    } else if pending_pages == 0 && backlog_since.take().is_some() {
+        info!(
+            log_pages,
+            checkpointed, "WAL backlog cleared; recording continued without an engine restart"
+        );
+    } else {
+        debug!(
+            busy,
+            log_pages, checkpointed, pending_pages, "passive WAL checkpoint"
+        );
+    }
 }
 
 async fn run_routine_wal_checkpoint(pool: &SqlitePool) -> Result<(i32, i32, i32), sqlx::Error> {
-    // Routine maintenance must never shorten the live WAL file. A TRUNCATE
-    // checkpoint can make an already-open connection short-read the old WAL
-    // extent if its wal-index generation is stale. PASSIVE still copies every
-    // safe frame into the main database, but leaves WAL reuse/reset to SQLite's
-    // normal writer path instead of physically truncating the file underneath
-    // the app's many long-lived readers.
+    // PASSIVE copies available frames without waiting for readers. FULL,
+    // RESTART and TRUNCATE can hold SQLite's writer lock while waiting for
+    // readers, delaying recording. SQLite coordinates WAL reuse itself;
+    // an incomplete checkpoint does not require an engine restart.
     let row = sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
         .fetch_one(pool)
         .await?;
@@ -46,7 +61,16 @@ async fn run_guarded_routine_wal_checkpoint(
 impl DatabaseManager {
     /// Execute trusted, row-returning dynamic SQL on the query pool.
     pub async fn query_raw_sql(&self, query: &str) -> Result<serde_json::Value, sqlx::Error> {
-        Self::raw_sql_on_pool(&self.pool, query).await
+        if self.storage.is_some() {
+            crate::storage::sql::validate_resident_query(&self.pool, query).await?;
+        }
+        self.consistent_read(|| async {
+            let rows = sqlx::query(sqlx::AssertSqlSafe(query))
+                .fetch_all(&mut *self.acquire_read().await?)
+                .await?;
+            Ok(Self::raw_sql_rows(&rows))
+        })
+        .await
     }
 
     /// Execute trusted dynamic SQL that may mutate the database through the
@@ -55,6 +79,14 @@ impl DatabaseManager {
         &self,
         query: &str,
     ) -> Result<serde_json::Value, sqlx::Error> {
+        if self.storage.as_ref().is_some_and(|s| s.has_bulk()) {
+            let mut tx = self.begin_immediate_with_retry().await?;
+            let rows = sqlx::query(sqlx::AssertSqlSafe(query))
+                .fetch_all(&mut **tx.conn())
+                .await?;
+            tx.commit().await?;
+            return Ok(Self::raw_sql_rows(&rows));
+        }
         let writer = self.coordinated_writer().lock().await?;
         Self::raw_sql_on_pool(writer.pool(), query).await
     }
@@ -69,12 +101,20 @@ impl DatabaseManager {
             .fetch_all(pool)
             .await?;
 
+        Ok(Self::raw_sql_rows(&rows))
+    }
+
+    fn raw_sql_rows(rows: &[sqlx::sqlite::SqliteRow]) -> serde_json::Value {
         let result: Vec<serde_json::Map<String, serde_json::Value>> = rows
             .iter()
             .map(|row| {
                 let mut map = serde_json::Map::new();
                 for (i, column) in row.columns().iter().enumerate() {
                     if let Ok(value) = row.try_get_raw(i) {
+                        if value.is_null() {
+                            map.insert(column.name().to_string(), serde_json::Value::Null);
+                            continue;
+                        }
                         let json_value = match value.type_info().name() {
                             "TEXT" => {
                                 let s: String = row.try_get(i).unwrap_or_default();
@@ -99,9 +139,7 @@ impl DatabaseManager {
             })
             .collect();
 
-        Ok(serde_json::Value::Array(
-            result.into_iter().map(serde_json::Value::Object).collect(),
-        ))
+        serde_json::Value::Array(result.into_iter().map(serde_json::Value::Object).collect())
     }
 
     pub async fn delete_time_range(
@@ -685,6 +723,7 @@ impl DatabaseManager {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> Result<StripTextResult, sqlx::Error> {
+        let archived_stripped = self.strip_archived_frame_details(start, end).await?;
         let mut tx = self.begin_immediate_with_retry().await?;
 
         let start_str = start.to_rfc3339();
@@ -763,7 +802,7 @@ impl DatabaseManager {
         .bind(&end_str)
         .execute(&mut **tx.conn())
         .await?;
-        let frames_stripped = frames_result.rows_affected();
+        let frames_stripped = frames_result.rows_affected() + archived_stripped;
 
         // Delete the UI event stream (its delete trigger keeps ui_events_fts in sync)
         let ui_events_result =
@@ -1343,26 +1382,25 @@ impl DatabaseManager {
         )
     }
 
-    /// Spawn the background task that owns ALL WAL checkpointing.
+    /// Spawn the background task that owns routine WAL checkpointing.
     ///
     /// Since `wal_autocheckpoint = 0` (see [`WAL_SAFETY_PRAGMAS`]), committing
     /// connections do not checkpoint inline. This task therefore owns routine
-    /// checkpointing: it runs a non-truncating `PASSIVE` checkpoint often enough
-    /// to copy safe frames into the main database without shortening the WAL
-    /// underneath long-lived readers. No live path truncates the WAL; physical
-    /// cleanup belongs exclusively to offline recovery after all owners close.
+    /// checkpointing with `PASSIVE`, allowing readers to defer checkpoint work
+    /// while recording continues. SQLite can reuse the WAL after those readers
+    /// finish; backlog alone must not interrupt capture.
     pub fn start_wal_maintenance(&self) {
         let pool = self.write_pool.clone();
         let shutdown = self.close_token.clone();
         let write_queue_health = self.write_queue_health.clone();
         let write_semaphore = std::sync::Arc::clone(&self.write_semaphore);
-        let persistent_failure_hook = self.persistent_failure_hook.clone();
         tokio::spawn(async move {
             // 60s (not 300s): with inline auto-checkpoint off, the WAL grows for
             // the whole interval between ticks, so check more often to keep it
             // small under sustained write load.
             const INTERVAL: Duration = Duration::from_secs(60);
             let mut interval = tokio::time::interval(INTERVAL);
+            let mut backlog_since = None;
             // `interval()` yields its first tick immediately. Startup has just
             // run a serialized checkpoint, so consume that tick and wait a
             // full interval instead of racing callers' first transactions.
@@ -1379,10 +1417,8 @@ impl DatabaseManager {
                     }
                 }
 
-                // The upstream WAL-reset race requires a checkpoint and write
-                // to overlap on independent connections. Every routine pass,
-                // including the common below-cap path, shares the same
-                // process-wide coordinator as every capture writer.
+                // Share the process-wide writer coordinator so maintenance
+                // participates in the same ordering and shutdown as capture.
                 let _write_guard = tokio::select! {
                     permit = Arc::clone(&write_semaphore).acquire_owned() => {
                         match permit {
@@ -1400,30 +1436,9 @@ impl DatabaseManager {
                 };
                 match run_guarded_routine_wal_checkpoint(&pool, &write_queue_health).await {
                     Ok(Some((busy, log_pages, checkpointed))) => {
-                        let backlog_pages = log_pages.saturating_sub(checkpointed);
-                        if let Some(reason) = wal_backlog_restart_reason(log_pages, checkpointed) {
-                            warn!(
-                                "passive wal checkpoint left {} pages pending; requesting a full engine restart before WAL reuse (log={}, checkpointed={}, busy={})",
-                                backlog_pages, log_pages, checkpointed, busy
-                            );
-                            // The writer coordinator cannot quiesce query-pool
-                            // readers or an external opener, so a serialized
-                            // RESTART is not a complete lifecycle boundary. Ask
-                            // the owner to stop capture, drain readers, close
-                            // both pools, and respawn; startup checkpoints before
-                            // any traffic is admitted.
-                            if persistent_failure_hook.signal_wal_backlog_restart(reason) {
-                                return;
-                            }
-                            warn!(
-                                "wal hard cap exceeded but no lifecycle restart hook is installed; staying on safe PASSIVE checkpoints"
-                            );
-                        } else {
-                            debug!(
-                                "passive wal checkpoint: busy={}, checkpointed {}/{} pages ({} pending)",
-                                busy, checkpointed, log_pages, backlog_pages
-                            );
-                        }
+                        // Backlog is deferred checkpoint work, not a failed
+                        // capture writer. Keep recording and retry PASSIVE.
+                        report_wal_checkpoint(busy, log_pages, checkpointed, &mut backlog_since);
                     }
                     Ok(None) => {
                         error!(
@@ -1458,21 +1473,53 @@ impl DatabaseManager {
     /// multi-GB database. On failure we log loudly with the exact recovery
     /// command so the user can self-heal via the existing `screenpipe db
     /// recover` path (which backs up the original before rebuilding).
+    fn startup_integrity_pool(&self) -> sqlx::SqlitePool {
+        // SQLite's FTS5 xIntegrity callback can retain a structure from a prior
+        // search on a pooled connection. Verification owns a fresh read-only
+        // connection, with the same VFS and hybrid functions as normal reads.
+        crate::storage::bulk::pool_options(self.storage.clone(), true)
+            .max_connections(1)
+            .connect_lazy_with((*self.pool.connect_options()).clone())
+    }
+
     pub(crate) fn spawn_startup_integrity_check(&self, database_path: Arc<str>) {
-        let pool = self.pool.clone();
+        let pool = self.startup_integrity_pool();
+        let persistent_failure_hook = self.persistent_failure_hook.clone();
+        crate::recovery::register_database_pool(std::path::Path::new(&*database_path), &pool);
+        let timeout = Duration::from_secs(self.storage.as_ref().map_or_else(
+            || crate::storage::StorageBudget::default().lifecycle_timeout_secs,
+            |storage| storage.descriptor.budget.lifecycle_timeout_secs,
+        ));
         let health = self.write_queue_health.clone();
         let shutdown = self.close_token.clone();
-        let persistent_failure_hook = self.persistent_failure_hook.clone();
         tokio::spawn(async move {
             // Let boot settle so the scan doesn't compete with migrations
             // and the first capture writes for I/O.
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(10)) => {},
+                _ = shutdown.cancelled() => { pool.close().await; return; }
+            }
             // quick_check(1) stops after the first error — we only need a
             // yes/no signal here, not the full corruption inventory.
-            match sqlx::query_scalar::<_, String>("PRAGMA quick_check(1)")
-                .fetch_one(&pool)
-                .await
-            {
+            let result = async {
+                let mut connection = crate::cancellable_query::CancellableReadConnection::acquire(
+                    &pool,
+                    std::time::Instant::now() + timeout,
+                    shutdown.clone(),
+                )
+                .await?;
+                let result = sqlx::query_scalar::<_, String>("PRAGMA quick_check(1)")
+                    .fetch_one(&mut *connection)
+                    .await;
+                connection.release().await?;
+                result
+            }
+            .await;
+            pool.close().await;
+            if shutdown.is_cancelled() {
+                return;
+            }
+            match result {
                 Ok(result) if result == "ok" => {
                     debug!("startup integrity check: ok");
                 }
@@ -1536,6 +1583,9 @@ impl DatabaseManager {
     /// Create an atomic backup of the database using `VACUUM INTO`.
     /// The destination path must not already exist.
     pub async fn backup_to(&self, dest: &str) -> Result<(), sqlx::Error> {
+        if self.storage.is_some() {
+            return self.backup_hybrid(std::path::Path::new(dest)).await;
+        }
         let _write_guard = Arc::clone(&self.write_semaphore)
             .acquire_owned()
             .await
@@ -1586,16 +1636,56 @@ impl DatabaseManager {
 
 #[cfg(test)]
 mod wal_maintenance_tests {
-    use super::{
-        run_guarded_routine_wal_checkpoint, run_routine_wal_checkpoint, wal_backlog_restart_reason,
-        DatabaseManager, WAL_HARD_CAP_PAGES,
-    };
-    use crate::write_queue::{persistent_failure_slot, DatabaseRestartReason};
+    use super::{run_guarded_routine_wal_checkpoint, run_routine_wal_checkpoint, DatabaseManager};
     use screenpipe_config::{DbConfig, DeviceTier};
     use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
     use sqlx::Row;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn startup_integrity_uses_fresh_fts_state_after_concurrent_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = DbConfig::for_tier(DeviceTier::Low);
+        config.read_pool_max = 1;
+        config.read_pool_min = 1;
+        let db = DatabaseManager::new(dir.path().join("db.sqlite").to_str().unwrap(), config)
+            .await
+            .unwrap();
+        db.execute_raw_sql_write(
+            "CREATE VIRTUAL TABLE integrity_fts USING fts5(t,content='',contentless_delete=1)",
+        )
+        .await
+        .unwrap();
+        db.execute_raw_sql_write("INSERT INTO integrity_fts(integrity_fts,rank) VALUES('pgsz',64)")
+            .await
+            .unwrap();
+        for _ in 0..50 {
+            db.execute_raw_sql_write("INSERT INTO integrity_fts(t) VALUES('one two three four five six seven eight nine ten eleven twelve')").await.unwrap();
+        }
+        let mut reused = db.pool.acquire().await.unwrap();
+        sqlx::query("SELECT count(*) FROM integrity_fts WHERE integrity_fts MATCH 'one'")
+            .fetch_one(&mut *reused)
+            .await
+            .unwrap();
+        for _ in 0..200 {
+            db.execute_raw_sql_write("INSERT INTO integrity_fts(t) VALUES('one two three four five six seven eight nine ten eleven twelve')").await.unwrap();
+        }
+        drop(reused);
+        let fresh = db.startup_integrity_pool();
+        let result: String = sqlx::query_scalar("PRAGMA quick_check(1)")
+            .fetch_one(&fresh)
+            .await
+            .unwrap();
+        assert_eq!(result, "ok", "valid FTS writes must not be quarantined");
+        let query_only: i64 = sqlx::query_scalar("PRAGMA query_only")
+            .fetch_one(&fresh)
+            .await
+            .unwrap();
+        assert_eq!(query_only, 1);
+        fresh.close().await;
+        db.close().await;
+    }
 
     #[tokio::test]
     async fn raw_sql_writes_wait_for_coordinator_and_reads_return_rows() {
@@ -1635,6 +1725,128 @@ mod wal_maintenance_tests {
             .expect("query through reader API");
         assert_eq!(rows, serde_json::json!([{ "value": 42 }]));
 
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn raw_sql_preserves_snapshot_during_a_concurrent_storage_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = DbConfig::for_tier(DeviceTier::Low);
+        config.read_pool_max = 2;
+        let db = Arc::new(
+            DatabaseManager::new_hybrid(dir.path(), config, Default::default())
+                .await
+                .unwrap(),
+        );
+        db.execute_raw_sql_write("INSERT INTO frames(id,timestamp) VALUES(1,'2026-09-13')")
+            .await
+            .unwrap();
+
+        // Pause inside statement execution after the snapshot is taken. The
+        // read wrapper owns SQLite's progress handler for cancellation, so a
+        // test progress handler would be replaced before SELECT executes.
+        struct Pause {
+            started: Arc<tokio::sync::Notify>,
+            resumed: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+        }
+        unsafe extern "C" fn wait_for_commit(
+            ctx: *mut libsqlite3_sys::sqlite3_context,
+            _: std::ffi::c_int,
+            _: *mut *mut libsqlite3_sys::sqlite3_value,
+        ) {
+            // SAFETY: this connection owns the boxed Pause until its function
+            // destructor runs; SQLite serializes calls on the connection.
+            let state = unsafe { &*libsqlite3_sys::sqlite3_user_data(ctx).cast::<Arc<Pause>>() };
+            let resumed = state
+                .resumed
+                .lock()
+                .ok()
+                .and_then(|mut receiver| receiver.take());
+            if let Some(resumed) = resumed {
+                state.started.notify_one();
+                if resumed.recv_timeout(Duration::from_secs(5)).is_err() {
+                    unsafe {
+                        libsqlite3_sys::sqlite3_result_error(
+                            ctx,
+                            c"commit was not resumed".as_ptr(),
+                            -1,
+                        )
+                    };
+                    return;
+                }
+            }
+            unsafe { libsqlite3_sys::sqlite3_result_int(ctx, 0) };
+        }
+        unsafe extern "C" fn destroy_pause(ptr: *mut std::ffi::c_void) {
+            // SAFETY: SQLite invokes this once for the context it owns.
+            unsafe { drop(Box::from_raw(ptr.cast::<Arc<Pause>>())) };
+        }
+        let started = Arc::new(tokio::sync::Notify::new());
+        let (resume, resumed) = std::sync::mpsc::channel();
+        let pause = Arc::new(Pause {
+            started: Arc::clone(&started),
+            resumed: std::sync::Mutex::new(Some(resumed)),
+        });
+        // Hybrid reads reserve at least two pool slots. Register on every
+        // connection, holding them all until installation is complete; the
+        // validation and snapshot queries may borrow different connections.
+        let mut connections = Vec::new();
+        for _ in 0..db.pool.options().get_max_connections() {
+            connections.push(db.pool.acquire().await.unwrap());
+        }
+        for connection in &mut connections {
+            let mut handle = connection.lock_handle().await.unwrap();
+            let context = Box::into_raw(Box::new(Arc::clone(&pause)));
+            // SAFETY: the handle is exclusive and ownership of context passes
+            // to SQLite, including cleanup if registration fails.
+            let code = unsafe {
+                libsqlite3_sys::sqlite3_create_function_v2(
+                    handle.as_raw_handle().as_ptr(),
+                    c"test_wait_for_commit".as_ptr(),
+                    0,
+                    libsqlite3_sys::SQLITE_UTF8,
+                    context.cast(),
+                    Some(wait_for_commit),
+                    None,
+                    None,
+                    Some(destroy_pause),
+                )
+            };
+            assert_eq!(code, libsqlite3_sys::SQLITE_OK);
+        }
+        drop(connections);
+        let reader = Arc::clone(&db);
+        let mut reading = tokio::spawn(async move {
+            reader
+                .query_raw_sql("SELECT MAX(id) + test_wait_for_commit() AS id FROM frames")
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                _ = started.notified() => {},
+                result = &mut reading => panic!("query exited before the pause: {result:?}"),
+            }
+        })
+        .await
+        .expect("query did not reach the pause");
+        db.execute_raw_sql_write("INSERT INTO frames(id,timestamp) VALUES(2,'2026-09-13')")
+            .await
+            .unwrap();
+        resume.send(()).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(5), reading)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        // Ordinary writes do not revoke an in-flight snapshot. A later query
+        // must see the committed write, without mixing revisions in this one.
+        assert_eq!(result, serde_json::json!([{"id":1}]));
+        assert_eq!(
+            db.query_raw_sql("SELECT MAX(id) AS id FROM frames")
+                .await
+                .unwrap(),
+            serde_json::json!([{"id":2}]),
+        );
         db.close().await;
     }
 
@@ -1753,117 +1965,9 @@ mod wal_maintenance_tests {
         pool.close().await;
     }
 
-    #[tokio::test]
-    async fn reader_pinned_backlog_requests_one_lifecycle_restart_without_resetting_wal() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let db_path = dir.path().join("db.sqlite");
-        let wal_path = dir.path().join("db.sqlite-wal");
-        let options = SqliteConnectOptions::new()
-            .filename(&db_path)
-            .create_if_missing(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .pragma("wal_autocheckpoint", "0")
-            .busy_timeout(std::time::Duration::from_secs(5));
-        let pool = SqlitePoolOptions::new()
-            .min_connections(3)
-            .max_connections(3)
-            .connect_with(options)
-            .await
-            .expect("open WAL database");
-
-        sqlx::query("CREATE TABLE events (id INTEGER PRIMARY KEY, body TEXT NOT NULL)")
-            .execute(&pool)
-            .await
-            .expect("create table");
-        run_routine_wal_checkpoint(&pool)
-            .await
-            .expect("checkpoint setup frames");
-
-        let mut reader = pool.begin().await.expect("begin reader");
-        let _: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events")
-            .fetch_one(&mut *reader)
-            .await
-            .expect("establish reader snapshot");
-
-        for id in 0..128 {
-            sqlx::query("INSERT INTO events (body) VALUES (?1)")
-                .bind(format!("event-{id}-{}", "x".repeat(1024)))
-                .execute(&pool)
-                .await
-                .expect("insert event");
-        }
-        let wal_size_before = std::fs::metadata(&wal_path)
-            .expect("WAL exists before checkpoint")
-            .len();
-
-        let (_, log_pages, checkpointed) = run_routine_wal_checkpoint(&pool)
-            .await
-            .expect("passive checkpoint with reader");
-        assert!(
-            log_pages > checkpointed,
-            "reader must leave frames pending for the escalation test"
-        );
-
-        let observed = Arc::new(Mutex::new(Vec::new()));
-        let observed_from_hook = Arc::clone(&observed);
-        let restart_hook = persistent_failure_slot(Some(Arc::new(move |reason| {
-            observed_from_hook.lock().unwrap().push(reason);
-        })));
-        let reason = DatabaseRestartReason::WalBacklog {
-            pending_pages: log_pages.saturating_sub(checkpointed),
-            log_pages,
-            checkpointed_pages: checkpointed,
-        };
-        assert!(restart_hook.signal_wal_backlog_restart(reason));
-        assert!(restart_hook.signal_wal_backlog_restart(reason));
-        assert_eq!(
-            observed.lock().unwrap().as_slice(),
-            &[reason],
-            "one manager generation must request at most one lifecycle restart"
-        );
-
-        let wal_size_after = std::fs::metadata(&wal_path)
-            .expect("WAL remains allocated after restart request")
-            .len();
-        assert_eq!(
-            wal_size_after, wal_size_before,
-            "requesting lifecycle recovery must not reset the live WAL"
-        );
-
-        sqlx::query("INSERT INTO events (body) VALUES ('before-lifecycle-handoff')")
-            .execute(&pool)
-            .await
-            .expect("restart request itself must not mutate or block SQLite");
-        reader.rollback().await.expect("release reader snapshot");
-        let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
-            .fetch_one(&pool)
-            .await
-            .expect("integrity check");
-        assert_eq!(integrity, "ok");
-
-        pool.close().await;
-    }
-
-    #[test]
-    fn wal_backlog_policy_preserves_the_existing_hard_cap() {
-        assert_eq!(
-            wal_backlog_restart_reason(WAL_HARD_CAP_PAGES, 0),
-            None,
-            "the ceiling is exclusive"
-        );
-        assert_eq!(
-            wal_backlog_restart_reason(WAL_HARD_CAP_PAGES + 1, 0),
-            Some(DatabaseRestartReason::WalBacklog {
-                pending_pages: WAL_HARD_CAP_PAGES + 1,
-                log_pages: WAL_HARD_CAP_PAGES + 1,
-                checkpointed_pages: 0,
-            })
-        );
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[ignore = "manual 60-second production scheduler chaos test with a ~170 MB WAL"]
-    async fn production_scheduler_requests_lifecycle_for_oversized_reader_pinned_wal() {
+    async fn production_scheduler_preserves_recording_through_reader_pinned_wal() {
         let dir = tempfile::tempdir().expect("temp dir");
         let db_path = dir.path().join("db.sqlite");
         let wal_path = dir.path().join("db.sqlite-wal");
@@ -1871,13 +1975,16 @@ mod wal_maintenance_tests {
         let db = DatabaseManager::new(&db_path_string, DbConfig::for_tier(DeviceTier::Low))
             .await
             .expect("production database manager");
-        sqlx::query("CREATE TABLE wal_cap_chaos(id INTEGER PRIMARY KEY, payload BLOB NOT NULL)")
-            .execute(&db.pool)
+        db.execute_raw_sql_write(
+            "CREATE TABLE wal_cap_chaos(id INTEGER PRIMARY KEY, payload BLOB NOT NULL)",
+        )
+        .await
+        .expect("create chaos table");
+        let meeting_id = db
+            .insert_meeting("Teams", "audio_process", Some("WAL pressure test"), None)
             .await
-            .expect("create chaos table");
-        run_routine_wal_checkpoint(&db.pool)
-            .await
-            .expect("checkpoint setup frames");
+            .unwrap();
+        db.wal_checkpoint().await.expect("checkpoint setup frames");
 
         let mut reader = db.pool.begin().await.expect("begin pinned reader");
         let _: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM wal_cap_chaos")
@@ -1885,24 +1992,24 @@ mod wal_maintenance_tests {
             .await
             .expect("establish reader snapshot");
 
-        // One transaction creates more than WAL_HARD_CAP_PAGES real pages while
+        // One transaction creates more than WAL_BACKLOG_WARNING_PAGES real pages while
         // the old reader pins the first frame. This exercises the exact
-        // production timer + threshold + lifecycle-handoff branch after 60 seconds.
-        sqlx::query(
+        // production timer and backlog branch after 60 seconds.
+        db.execute_raw_sql_write(
             "WITH RECURSIVE rows(n) AS (\
                 VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < 42000\
              ) INSERT INTO wal_cap_chaos(payload) SELECT zeroblob(4096) FROM rows",
         )
-        .execute(&db.pool)
         .await
         .expect("create oversized WAL");
-        let (_, log_pages, checkpointed) = run_routine_wal_checkpoint(&db.pool)
+        let (_, log_pages, checkpointed) = db
+            .wal_checkpoint()
             .await
             .expect("measure reader-pinned backlog");
         let backlog = log_pages.saturating_sub(checkpointed);
         assert!(
-            backlog > super::WAL_HARD_CAP_PAGES,
-            "test did not exceed hard cap: backlog={backlog}, log={log_pages}, checkpointed={checkpointed}"
+            backlog > super::WAL_BACKLOG_WARNING_PAGES,
+            "test did not exceed backlog warning threshold: backlog={backlog}, log={log_pages}, checkpointed={checkpointed}"
         );
         let wal_size_before = std::fs::metadata(&wal_path)
             .expect("oversized WAL exists")
@@ -1912,31 +2019,65 @@ mod wal_maintenance_tests {
             "WAL was not realistically large"
         );
 
-        let (restart_tx, restart_rx) = tokio::sync::oneshot::channel();
-        let restart_tx = Arc::new(Mutex::new(Some(restart_tx)));
+        let restarts = Arc::new(Mutex::new(Vec::new()));
+        let observed = restarts.clone();
         db.set_database_restart_hook(Arc::new(move |reason| {
-            if let Some(tx) = restart_tx.lock().unwrap().take() {
-                let _ = tx.send(reason);
-            }
+            observed.lock().unwrap().push(reason)
         }));
-        let reason = tokio::time::timeout(Duration::from_secs(65), restart_rx)
+        // Cross a real production maintenance tick while captures keep using
+        // the coordinated writer. Backpressure must not trigger a lifecycle reset.
+        for index in 0..65 {
+            db.insert_meeting_transcript_segment(
+                meeting_id,
+                "e2e",
+                None,
+                &format!("segment-{index}"),
+                "microphone",
+                "input",
+                None,
+                "live transcript during WAL pressure",
+                chrono::Utc::now(),
+            )
             .await
-            .expect("scheduled lifecycle request timed out")
-            .expect("scheduled lifecycle sender dropped");
-        assert!(matches!(
-            reason,
-            DatabaseRestartReason::WalBacklog { pending_pages, .. }
-                if pending_pages > WAL_HARD_CAP_PAGES
-        ));
+            .expect("live transcript remains durable during checkpoint pressure");
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        assert!(
+            restarts.lock().unwrap().is_empty(),
+            "backlog interrupted recording"
+        );
 
         let wal_size_after = std::fs::metadata(&wal_path)
             .expect("WAL remains allocated")
             .len();
-        assert_eq!(
-            wal_size_after, wal_size_before,
-            "scheduled hard-cap handling reset the live WAL"
+        assert!(
+            wal_size_after >= wal_size_before,
+            "maintenance truncated the reader-pinned WAL"
         );
         reader.rollback().await.expect("release pinned reader");
+        let (busy, log, checkpointed) = db.wal_checkpoint().await.unwrap();
+        assert_eq!(
+            (busy, log),
+            (0, checkpointed),
+            "backlog did not drain after reader release"
+        );
         db.close().await;
+        let reopened = DatabaseManager::new(&db_path_string, DbConfig::for_tier(DeviceTier::Low))
+            .await
+            .unwrap();
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM meeting_transcript_segments WHERE meeting_id = ?1",
+        )
+        .bind(meeting_id)
+        .fetch_one(&reopened.pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 65, "captures must survive close and reopen");
+        let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+            .fetch_one(&reopened.pool)
+            .await
+            .unwrap();
+        assert_eq!(integrity, "ok");
+        reopened.close().await;
     }
 }

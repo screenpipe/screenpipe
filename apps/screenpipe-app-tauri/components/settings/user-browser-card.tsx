@@ -25,6 +25,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { localFetch } from "@/lib/api";
 import { toast } from "@/components/ui/use-toast";
 import { commands } from "@/lib/utils/tauri";
+import { useGT } from "gt-react";
+
 
 const POLL_INTERVAL_MS = 5_000;
 
@@ -38,6 +40,8 @@ type Status =
   | { kind: "error"; message: string };
 
 export function UserBrowserCard() {
+
+  const ui = useGT();
   const [status, setStatus] = useState<Status>({ kind: "loading" });
 
   const refresh = useCallback(async () => {
@@ -68,25 +72,25 @@ export function UserBrowserCard() {
         return (
           <span className="px-2 py-0.5 text-xs font-medium bg-muted text-muted-foreground rounded-full inline-flex items-center gap-1">
             <Loader2 className="h-3 w-3 animate-spin" />
-            checking
+            Checking
           </span>
         );
       case "connected":
         return (
           <span className="px-2 py-0.5 text-xs font-medium bg-green-500/10 text-green-600 dark:text-green-400 rounded-full">
-            connected
+            Connected
           </span>
         );
       case "disconnected":
         return (
           <span className="px-2 py-0.5 text-xs font-medium bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 rounded-full">
-            extension not installed or not running
+            Extension not installed or not running
           </span>
         );
       case "error":
         return (
           <span className="px-2 py-0.5 text-xs font-medium bg-red-500/10 text-red-600 dark:text-red-400 rounded-full">
-            unreachable
+            Unreachable
           </span>
         );
     }
@@ -138,8 +142,8 @@ export function UserBrowserCard() {
                   } catch {
                     try { await commands.copyTextToClipboard(CHROME_WEBSTORE_URL); } catch { /* clipboard may be denied */ }
                     toast({
-                      title: "couldn't open your browser",
-                      description: `link copied — paste in Chrome: ${CHROME_WEBSTORE_URL}`,
+                      title: ui("Couldn't open your browser"),
+                      description: ui("Link copied — paste in Chrome: {value1}", { value1: CHROME_WEBSTORE_URL }),
                     });
                   }
                 }}

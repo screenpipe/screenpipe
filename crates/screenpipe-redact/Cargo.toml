@@ -12,6 +12,7 @@ license-file.workspace = true
 edition.workspace = true
 
 [dependencies]
+screenpipe-fs = { path = "../screenpipe-fs" }
 # Re-exports & shared deps
 aho-corasick = "1"
 anyhow = { workspace = true }
@@ -31,6 +32,7 @@ rand = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 screenpipe-resource = { path = "../screenpipe-resource" }
+screenpipe-db = { path = "../screenpipe-db" }
 screenpipe-sqlite-coordinator = { path = "../screenpipe-sqlite-coordinator" }
 serde = { workspace = true }
 sha2 = { workspace = true }

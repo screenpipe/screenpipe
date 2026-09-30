@@ -17,6 +17,8 @@ import {
   RotateCcw,
   Users,
 } from "lucide-react";
+import { useGT } from "gt-react";
+
 
 interface CalendarEventItem {
   id: string;
@@ -36,6 +38,8 @@ export function AppleCalendarCard({
 }: {
   onStatusChange?: (connected: boolean) => void;
 }) {
+
+  const ui = useGT();
   const [authorized, setAuthorized] = useState(false);
   const [available, setAvailable] = useState(true);
   const [authorizationStatus, setAuthorizationStatus] = useState("checking");
@@ -241,13 +245,13 @@ export function AppleCalendarCard({
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-medium text-foreground">
-                        upcoming events
+                        Upcoming events
                       </span>
                     </div>
                     {isLoadingEvents ? (
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        loading events...
+                        Loading events...
                       </div>
                     ) : upcomingEvents.length > 0 ? (
                       <div className="space-y-1.5">
@@ -260,11 +264,11 @@ export function AppleCalendarCard({
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-1.5">
                                 <span className="font-medium text-foreground truncate">
-                                  {event.title || "untitled event"}
+                                  {event.title || ui("Untitled event")}
                                 </span>
                                 {isHappeningNow(event.start, event.end) && (
                                   <span className="text-[10px] bg-foreground text-background px-1 rounded">
-                                    now
+                                    Now
                                   </span>
                                 )}
                               </div>
@@ -304,10 +308,10 @@ export function AppleCalendarCard({
         {!connected && (
           <p className="mt-4 text-xs text-muted-foreground">
             {busy === "connect"
-              ? "Waiting for macOS approval…"
+              ? ui("Waiting for macOS approval…")
               : hasAttemptedConnect
-                ? "If the prompt does not appear, revoke permission and connect again."
-                : "Click Connect and approve the macOS Calendar prompt."}
+                ? ui("If the prompt does not appear, revoke permission and connect again.")
+                : ui("Click Connect and approve the macOS Calendar prompt.")}
           </p>
         )}
       </CardContent>

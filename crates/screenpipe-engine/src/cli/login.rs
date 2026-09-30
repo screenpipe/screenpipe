@@ -288,6 +288,7 @@ mod tests {
     const JWT: &str = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJtYXJjZWxvIn0.sig";
 
     #[tokio::test]
+    #[serial_test::serial(secret_store)]
     async fn login_survives_desktop_store_token_scrub() {
         let dir = tempfile::tempdir().unwrap();
         super::persist_login(dir.path(), JWT, "person@example.com")

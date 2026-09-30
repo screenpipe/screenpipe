@@ -131,6 +131,138 @@ async fn count(db: &DatabaseManager, table: &str) -> i64 {
         .expect("count semantic table")
 }
 
+// Exercise the public parsed-search methods, not just the cancellation guard.
+// A connection-local view makes a real SQLite statement expensive without a
+// large fixture or changing the production query. The write pool stays intact.
+async fn assert_semantic_timeout_releases_connection(stage: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = DatabaseManager::new(
+        dir.path().join("db.sqlite").to_str().unwrap(),
+        screenpipe_config::DbConfig {
+            read_pool_max: 1,
+            read_pool_min: 1,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let frame_id = insert_frame(&db, Utc::now()).await;
+    db.store_semantic_projection(
+        frame_id,
+        &manifest(),
+        &app(),
+        1,
+        Duration::from_micros(500),
+        &projection("search cancellation fixture"),
+    )
+    .await
+    .unwrap();
+
+    let table = if stage == "items" {
+        "semantic_run_items"
+    } else {
+        "frames"
+    };
+    let mut connection = db.pool.acquire().await.unwrap();
+    // The production read pool is query-only. Permit only fixture setup, then
+    // restore that setting before any request or recording runs.
+    sqlx::query("PRAGMA query_only = OFF")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE TEMP VIEW {table} AS SELECT * FROM main.{table} WHERE (
+            WITH RECURSIVE counter(value) AS (
+                VALUES(0) UNION ALL SELECT value + 1 FROM counter WHERE value < 10000000
+            ) SELECT sum(value) FROM counter
+        ) > 0"
+    )))
+    .execute(&mut *connection)
+    .await
+    .unwrap();
+    sqlx::query("PRAGMA query_only = ON")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    connection.return_to_pool().await;
+
+    let query = SemanticContextQuery {
+        limit: 5,
+        ..Default::default()
+    };
+    let operation = async {
+        match stage {
+            "selection" => db.search_semantic_context(&query).await.map(|_| ()),
+            "count" => db.count_semantic_context(&query).await.map(|_| ()),
+            "frame" | "items" => db.get_frame_semantic_context(frame_id).await.map(|_| ()),
+            _ => unreachable!(),
+        }
+    };
+    let result = tokio::time::timeout(Duration::from_millis(25), operation).await;
+    assert!(
+        result.is_err(),
+        "{stage} must reach the slow SQLite statement"
+    );
+
+    // A timed-out read must not prevent recording through the existing writer.
+    let new_frame = tokio::time::timeout(Duration::from_secs(1), insert_frame(&db, Utc::now()))
+        .await
+        .expect("recording must remain writable after a search timeout");
+
+    // Use the same sole read connection, with enough instructions to also
+    // detect a cancelled progress handler leaking to the next borrower.
+    let started = Instant::now();
+    let recovered = tokio::time::timeout(
+        Duration::from_millis(500),
+        sqlx::query_scalar::<_, i64>(
+            "WITH RECURSIVE counter(value) AS (
+                VALUES(0) UNION ALL SELECT value + 1 FROM counter WHERE value < 10000
+            ) SELECT sum(value) FROM counter",
+        )
+        .fetch_one(&db.pool),
+    )
+    .await;
+    let recovery_elapsed = started.elapsed();
+    // Close even on the unfixed path so the deliberately expensive statement
+    // cannot leak a worker beyond this regression test.
+    if recovered.is_ok() {
+        let persisted: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM main.frames WHERE id = ?")
+            .bind(new_frame)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(persisted, 1, "recording must persist durably");
+    }
+    db.close().await;
+    assert_eq!(
+        recovered
+            .expect("timed-out parsed search must release its pool connection")
+            .unwrap(),
+        50_005_000,
+    );
+    println!("{stage}: pool recovered in {recovery_elapsed:?}; recording persisted");
+}
+
+#[tokio::test]
+async fn timed_out_semantic_selection_releases_connection() {
+    assert_semantic_timeout_releases_connection("selection").await;
+}
+
+#[tokio::test]
+async fn timed_out_semantic_count_releases_connection() {
+    assert_semantic_timeout_releases_connection("count").await;
+}
+
+#[tokio::test]
+async fn timed_out_semantic_frame_releases_connection() {
+    assert_semantic_timeout_releases_connection("frame").await;
+}
+
+#[tokio::test]
+async fn timed_out_semantic_items_releases_connection() {
+    assert_semantic_timeout_releases_connection("items").await;
+}
+
 async fn active_database_bytes(db: &DatabaseManager) -> u64 {
     let page_count: i64 = sqlx::query_scalar("PRAGMA page_count")
         .fetch_one(&db.pool)

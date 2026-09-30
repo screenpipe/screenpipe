@@ -170,14 +170,14 @@ function ContextualSuggestions({
           onRefresh();
         }}
         disabled={isLoading || isRefreshing}
-        className="mt-3 inline-flex cursor-pointer items-center gap-1.5 border border-border/30 px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground transition-all duration-150 hover:border-foreground hover:bg-foreground hover:text-background disabled:cursor-default disabled:opacity-40"
+        className="mt-3 inline-flex cursor-pointer items-center gap-1.5 border border-border/30 px-2 py-1 text-[10px] font-medium normal-case tracking-wide text-muted-foreground transition-all duration-150 hover:border-foreground hover:bg-foreground hover:text-background disabled:cursor-default disabled:opacity-40"
       >
         <RefreshCw
           className={`h-3 w-3 ${isRefreshing ? "animate-spin motion-reduce:animate-none" : ""}`}
           strokeWidth={1.5}
           aria-hidden
         />
-        refresh
+        Refresh
       </button>
     </div>
   );

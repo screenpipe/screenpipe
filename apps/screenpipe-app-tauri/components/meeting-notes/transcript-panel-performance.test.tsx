@@ -26,7 +26,7 @@ import {
   applyLiveFinal,
   coalesceFinalSpeakerRuns,
   filterBackgroundCoveredByLiveFinals,
-  filterLiveCrossDeviceEchoes,
+  filterLiveAlreadySaved,
   isSpeakerContinuation,
   liveBlockToSpeakerBlock,
   SpeakerParagraph,
@@ -135,7 +135,7 @@ describe("SpeakerParagraph render isolation", () => {
       "data-final",
       "false",
     );
-    const partialIndicator = getByLabelText("transcribing partial text");
+    const partialIndicator = getByLabelText("Transcribing partial text");
     expect(partialIndicator).toBeInTheDocument();
     expect(partialIndicator.firstElementChild).toHaveClass("bg-foreground");
     expect(isSpeakerContinuation(block, partial)).toBe(true);
@@ -347,7 +347,7 @@ describe("SpeakerParagraph render isolation", () => {
     ).toEqual([gap, routedLive]);
   });
 
-  it("suppresses short microphone echoes of clean system audio", () => {
+  it.each(["What?", "The approved budget is twenty thousand dollars."])("preserves cross-device speech: %s", (text) => {
     const output = {
       key: "output:1",
       itemId: "1",
@@ -355,7 +355,7 @@ describe("SpeakerParagraph render isolation", () => {
       deviceType: "output",
       speakerName: "speaker 1",
       provider: "deepgram",
-      text: "What?",
+      text,
       capturedAt: "2026-07-29T19:00:00.000Z",
       final: true,
     };
@@ -372,8 +372,8 @@ describe("SpeakerParagraph render isolation", () => {
     };
 
     expect(
-      filterLiveCrossDeviceEchoes([], [output, inputEcho, actualNearbySpeaker]),
-    ).toEqual([output, actualNearbySpeaker]);
+      filterLiveAlreadySaved([], [output, inputEcho, actualNearbySpeaker]),
+    ).toEqual([output, inputEcho, actualNearbySpeaker]);
   });
 
   it("suppresses a short cached live suffix already present in its saved row", () => {
@@ -401,7 +401,7 @@ describe("SpeakerParagraph render isolation", () => {
       final: true,
     };
 
-    expect(filterLiveCrossDeviceEchoes([saved], [cachedSuffix])).toEqual([]);
+    expect(filterLiveAlreadySaved([saved], [cachedSuffix])).toEqual([]);
   });
 
   it("uses monochrome theme tokens instead of blue or purple speaker colors", () => {

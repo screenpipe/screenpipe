@@ -363,7 +363,7 @@ export function validateFreeChatRequestLimits(
 	return validateFreeChatRequestBodyLimits(body, rawRequestBytes);
 }
 
-function isSyntheticToolImageUserMessage(message: RequestBody['messages'][number]): boolean {
+export function isSyntheticToolImageUserMessage(message: { role: string; content: any }): boolean {
 	if (message.role !== 'user' || !Array.isArray(message.content)) return false;
 	if (message.content.length < 2) return false;
 	const [label, ...images] = message.content;

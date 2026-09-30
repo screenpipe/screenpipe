@@ -146,7 +146,7 @@ describe("HomeStarterSurface", () => {
     mocks.variant = "contextual";
     const { onRefresh } = renderSurface();
 
-    fireEvent.click(screen.getByRole("button", { name: "refresh" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     expect(onRefresh).toHaveBeenCalledTimes(1);
     expect(mocks.capture).toHaveBeenCalledWith("home_card_clicked", {
       schema_version: 1,

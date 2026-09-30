@@ -188,7 +188,9 @@ impl ImageWorker {
         }
 
         loop {
-            if self.paused.load(Ordering::SeqCst) {
+            if self.paused.load(Ordering::SeqCst)
+                || screenpipe_resource::background_work::is_suspended()
+            {
                 self.set_paused(true).await;
                 if race(time::sleep(self.cfg.poll_interval), shutdown.as_ref())
                     .await

@@ -1,0 +1,179 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+
+const mocks = vi.hoisted(() => ({
+  state: { user: null as any },
+  updateSettings: vi.fn().mockResolvedValue(undefined),
+  loadUser: vi.fn().mockResolvedValue(undefined),
+  openLoginWindow: vi.fn().mockResolvedValue(undefined),
+  piUpdateConfig: vi.fn().mockResolvedValue(undefined),
+  capture: vi.fn(),
+  openUrl: vi.fn().mockResolvedValue(undefined),
+  eventHandlers: new Map<string, (event: any) => unknown>(),
+  listen: vi.fn(async (event: string, handler: (event: any) => unknown) => {
+      mocks.eventHandlers.set(event, handler);
+      return () => mocks.eventHandlers.delete(event);
+  }),
+}));
+
+// AccountSection reads everything through useSettings + the tauri `commands`
+// object; swap `mocks.state.user` per case. Keep `@/lib/app-entitlement` REAL —
+// `isSignedInCloudSubscriber` is the gate under test.
+vi.mock("@/lib/hooks/use-settings", () => ({
+  useSettings: () => ({
+    settings: {
+      user: mocks.state.user,
+      pipeSyncEnabled: false,
+      memoriesSyncEnabled: false,
+      connectionSyncEnabled: false,
+    },
+    updateSettings: mocks.updateSettings,
+    loadUser: mocks.loadUser,
+  }),
+}));
+
+vi.mock("@/lib/hooks/use-health-check", () => ({
+  useHealthCheck: () => ({ isServerDown: false }),
+}));
+
+vi.mock("@/lib/hooks/use-managed-policy", () => ({
+  useManagedPolicy: () => ({ isManagedDeployment: false }),
+}));
+
+vi.mock("@/lib/utils/tauri", () => ({
+  commands: {
+    openLoginWindow: mocks.openLoginWindow,
+    piUpdateConfig: mocks.piUpdateConfig,
+  },
+}));
+
+vi.mock("@/components/ui/use-toast", () => ({ toast: vi.fn() }));
+vi.mock("@/lib/api", () => ({ localFetch: vi.fn() }));
+vi.mock("posthog-js", () => ({ default: { capture: mocks.capture } }));
+
+// Tauri plugins the effect wires up on mount — keep them inert.
+vi.mock("@tauri-apps/plugin-shell", () => ({ open: mocks.openUrl }));
+vi.mock("@tauri-apps/plugin-deep-link", () => ({
+  onOpenUrl: vi.fn().mockResolvedValue(() => {}),
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: mocks.listen,
+}));
+
+// ReferralCard pulls its own data deps; it is irrelevant to the gate.
+vi.mock("@/components/settings/referral-card", () => ({
+  ReferralCard: () => null,
+}));
+vi.mock("@/components/settings/business-upgrade-card", () => ({
+  BusinessUpgradeCard: ({
+    onContinue,
+  }: {
+    onContinue: (selection: any) => void;
+  }) => (
+    <button
+      type="button"
+      onClick={() =>
+        onContinue({
+          interval: "month",
+          offerVersion: "business-desktop-v1",
+          experimentKey: "desktop-business-upgrade-offer",
+          experimentVariant: "control",
+          source: "app-account-section",
+        })
+      }
+    >
+      upgrade to business
+    </button>
+  ),
+}));
+
+import { AccountSection } from "@/components/settings/account-section";
+
+// Current source adds translated strings; identity translation is an inert port.
+vi.mock("gt-react", () => ({ useGT: () => (text: string) => text }));
+const blockedFetch = vi.fn(async () => { throw new Error("Unexpected network request"); });
+function user(plan = "pro", token: string | null = "synthetic-token") {
+  mocks.state.user = { id: "synthetic-user", email: "member@example.test", token,
+    cloud_subscribed: true, subscription_plan: plan };
+}
+// Find the smallest visible grouping containing the plan name and price. No
+// class, test id, internal card key, helper name or DOM depth is prescribed.
+function card(name: string, price: number): HTMLElement {
+  const label = screen.getByText(new RegExp(`^${name}$`, "i"));
+  let el = label.parentElement;
+  while (el && !within(el).queryByText(`$${price}`)) el = el.parentElement;
+  expect(el, `visible ${name} price grouping`).not.toBeNull();
+  return el!;
+}
+function billing(target: string) {
+  expect(mocks.openUrl).toHaveBeenCalledTimes(1);
+  const url = new URL(mocks.openUrl.mock.calls[0][0]);
+  expect(url.origin).toBe("https://screenpipe.com");
+  expect(url.pathname).toBe("/account/billing");
+  expect(url.searchParams.get("target_plan")).toBe(target);
+  expect(url.searchParams.get("interval")).toBe("month");
+  expect(blockedFetch).not.toHaveBeenCalled();
+}
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals();
+  vi.unstubAllEnvs(); mocks.eventHandlers.clear(); mocks.state.user = null; });
+function mount(plan = "pro") {
+  vi.stubGlobal("fetch", blockedFetch);
+  vi.stubEnv("NEXT_PUBLIC_BUSINESS_POWER_PLANS_ENABLED", "");
+  user(plan); return render(<AccountSection />);
+}
+describe("capacity plan outcomes", () => {
+  it("exposes all five named prices without a feature flag", () => {
+    mount();
+    for (const [name, price] of [["free",0],["basic",25],["business",50],["business max",100],["business ultra",200]] as const)
+      expect(card(name,price)).toBeVisible();
+    expect(card("business max",100).textContent).toMatch(/2x.*quer/i);
+    expect(card("business ultra",200).textContent).toMatch(/4x.*quer/i);
+    for (const [name,price] of [["business max",100],["business ultra",200]] as const) {
+      expect(card(name,price).textContent).toMatch(/400.*credits/i);
+      expect(card(name,price).textContent).toMatch(/frontier.*models/i);
+    }
+  });
+  it("selects Max through website billing without starting checkout", () => {
+    mount(); fireEvent.click(within(card("business max",100)).getByRole("button")); billing("pro_max");
+  });
+  it("selects Ultra from Max through website billing", () => {
+    mount("pro_max"); fireEvent.click(within(card("business ultra",200)).getByRole("button")); billing("pro_ultra");
+  });
+  it.each([["pro_max","business max",100],["pro_ultra","business ultra",200]] as const)("marks the actual %s plan current", (plan,name,price) => {
+    mount(plan); const active=card(name,price);
+    expect(within(active).getAllByText(/^(current|your plan)$/i).length).toBeGreaterThan(0);
+    expect(within(card("business",50)).queryByText(/^(current|your plan)$/i)).toBeNull();
+    expect(within(active).queryByRole("button")).toBeNull();
+  });
+  it("recommends the immediate capacity step and none above or off ladder", () => {
+    const view=mount();
+    expect(within(card("business max",100)).getByText(/next step/i)).toBeVisible();
+    user("pro_max");view.rerender(<AccountSection />);
+    expect(within(card("business ultra",200)).getByText(/next step/i)).toBeVisible();
+    for (const plan of ["pro_ultra","team","enterprise"]) {
+      user(plan);view.rerender(<AccountSection />);expect(screen.queryByText(/next step/i)).toBeNull();
+    }
+  });
+  it("preserves signed-out stale-account login gating", () => {
+    vi.stubGlobal("fetch",blockedFetch);user("pro",null);render(<AccountSection />);
+    expect(screen.getByText(/sign in to screenpipe/i)).toBeVisible();
+    expect(screen.getByText(/not logged in/i)).toBeVisible();
+    expect(screen.queryByText(/^active$/i)).toBeNull();
+  });
+  it("preserves signed-in account access and the account link", () => {
+    mount();expect(screen.getByText(/^active$/i)).toBeVisible();
+    expect(screen.getByText(/logged in as member@example.test/i)).toBeVisible();
+    fireEvent.click(screen.getByRole("button",{name:/web account/i}));
+    expect(mocks.openUrl).toHaveBeenCalledWith("https://screenpipe.com/account");
+  });
+});

@@ -4,6 +4,6 @@
 
 #[tauri::command]
 #[specta::specta]
-pub fn set_keep_awake(enabled: bool) -> Result<(), String> {
-    screenpipe_engine::power::set_keep_awake(enabled)
+pub async fn set_keep_awake(enabled: bool) -> Result<(), String> {
+    screenpipe_engine::power::set_keep_awake_async(enabled).await
 }

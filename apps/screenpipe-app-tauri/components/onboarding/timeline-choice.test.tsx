@@ -40,17 +40,17 @@ describe("TimelineChoice", () => {
     mocks.updateSettings.mockResolvedValue(undefined);
   });
 
-  it("recommends on for high tier and keeps both capture flags on when chosen", async () => {
+  it("enables screenshots without changing timeline visibility", async () => {
     mocks.settings.deviceTier = "high";
     const handleNextSlide = vi.fn();
     render(<TimelineChoice handleNextSlide={handleNextSlide} />);
 
-    const onButton = screen.getByRole("button", { name: /timeline on/i });
-    const offButton = screen.getByRole("button", { name: /keep it off/i });
+    const onButton = screen.getByRole("button", { name: /enable screenshots/i });
+    const offButton = screen.getByRole("button", { name: /skip screenshots/i });
     expect(onButton).toHaveTextContent(/recommended/i);
     expect(offButton).not.toHaveTextContent(/recommended/i);
     expect(
-      screen.queryByText(/timeline may slow down this device/i),
+      screen.queryByText(/screenshots may slow down this device/i),
     ).not.toBeInTheDocument();
 
     await act(async () => {
@@ -58,7 +58,6 @@ describe("TimelineChoice", () => {
     });
 
     expect(mocks.updateSettings).toHaveBeenCalledWith({
-      disableTimeline: false,
       disableScreenshots: false,
     });
     expect(handleNextSlide).toHaveBeenCalledTimes(1);
@@ -69,25 +68,25 @@ describe("TimelineChoice", () => {
     render(<TimelineChoice handleNextSlide={vi.fn()} />);
 
     expect(
-      screen.getByRole("button", { name: /timeline on/i }),
+      screen.getByRole("button", { name: /enable screenshots/i }),
     ).toHaveTextContent(/recommended/i);
     expect(
-      screen.queryByText(/timeline may slow down this device/i),
+      screen.queryByText(/screenshots may slow down this device/i),
     ).not.toBeInTheDocument();
   });
 
-  it("recommends off on low tier and stops screenshot capture too when chosen", async () => {
+  it("recommends off on low tier and stops screenshots without hiding timeline", async () => {
     mocks.settings.deviceTier = "low";
     const handleNextSlide = vi.fn();
     render(<TimelineChoice handleNextSlide={handleNextSlide} />);
 
-    const offButton = screen.getByRole("button", { name: /keep it off/i });
+    const offButton = screen.getByRole("button", { name: /skip screenshots/i });
     expect(offButton).toHaveTextContent(/recommended/i);
     expect(
-      screen.getByRole("button", { name: /timeline on/i }),
+      screen.getByRole("button", { name: /enable screenshots/i }),
     ).not.toHaveTextContent(/recommended/i);
     expect(
-      screen.getByText(/timeline may slow down this device/i),
+      screen.getByText(/screenshots may slow down this device/i),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/text exposed by your apps stays searchable/i),
@@ -97,33 +96,29 @@ describe("TimelineChoice", () => {
       fireEvent.click(offButton);
     });
 
-    // disableScreenshots is the flag that actually stops capture, JPEG writes,
-    // the OCR fallback and the ffmpeg compaction worker — disableTimeline alone
-    // would only skip the in-memory hot frame cache.
+    // Only capture changes. Sidebar visibility remains a separate preference.
     expect(mocks.updateSettings).toHaveBeenCalledWith({
-      disableTimeline: true,
       disableScreenshots: true,
     });
     expect(handleNextSlide).toHaveBeenCalledTimes(1);
   });
 
-  it("lets a low-tier user override the recommendation and turn the timeline on", async () => {
+  it("lets a low-tier user override the recommendation and enable screenshots", async () => {
     mocks.settings.deviceTier = "low";
     const handleNextSlide = vi.fn();
     render(<TimelineChoice handleNextSlide={handleNextSlide} />);
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /timeline on/i }));
+      fireEvent.click(screen.getByRole("button", { name: /enable screenshots/i }));
     });
 
     expect(mocks.updateSettings).toHaveBeenCalledWith({
-      disableTimeline: false,
       disableScreenshots: false,
     });
     expect(mocks.capture).toHaveBeenCalledWith(
       "onboarding_timeline_choice",
       expect.objectContaining({
-        timeline_enabled: true,
+        capture_choice_version: 2,
         screenshots_enabled: true,
         device_tier: "low",
         followed_recommendation: false,
@@ -141,7 +136,7 @@ describe("TimelineChoice", () => {
     render(<TimelineChoice handleNextSlide={handleNextSlide} />);
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /keep it off/i }));
+      fireEvent.click(screen.getByRole("button", { name: /skip screenshots/i }));
     });
 
     expect(handleNextSlide).not.toHaveBeenCalled();
@@ -160,7 +155,7 @@ describe("TimelineChoice", () => {
     const handleNextSlide = vi.fn();
     render(<TimelineChoice handleNextSlide={handleNextSlide} />);
 
-    const offButton = screen.getByRole("button", { name: /keep it off/i });
+    const offButton = screen.getByRole("button", { name: /skip screenshots/i });
     await act(async () => {
       fireEvent.click(offButton);
     });
@@ -173,7 +168,6 @@ describe("TimelineChoice", () => {
 
     expect(mocks.updateSettings).toHaveBeenCalledTimes(2);
     expect(mocks.updateSettings).toHaveBeenLastCalledWith({
-      disableTimeline: true,
       disableScreenshots: true,
     });
     await waitFor(() => expect(handleNextSlide).toHaveBeenCalledTimes(1));
@@ -189,14 +183,14 @@ describe("TimelineChoice", () => {
     );
     render(<TimelineChoice handleNextSlide={vi.fn()} />);
 
-    const onButton = screen.getByRole("button", { name: /timeline on/i });
-    const offButton = screen.getByRole("button", { name: /keep it off/i });
+    const onButton = screen.getByRole("button", { name: /enable screenshots/i });
+    const offButton = screen.getByRole("button", { name: /skip screenshots/i });
 
     await act(async () => {
       fireEvent.click(offButton);
     });
 
-    // write still pending: exactly one spinner, and it is inside "keep it off"
+    // write still pending: exactly one spinner, and it is inside "Skip screenshots"
     const spinners = document.querySelectorAll(".animate-spin");
     expect(spinners).toHaveLength(1);
     expect(offButton).toContainElement(spinners[0] as HTMLElement);
@@ -216,13 +210,12 @@ describe("TimelineChoice", () => {
     render(<TimelineChoice handleNextSlide={handleNextSlide} />);
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /timeline on/i }));
-      fireEvent.click(screen.getByRole("button", { name: /keep it off/i }));
+      fireEvent.click(screen.getByRole("button", { name: /enable screenshots/i }));
+      fireEvent.click(screen.getByRole("button", { name: /skip screenshots/i }));
     });
 
     expect(mocks.updateSettings).toHaveBeenCalledTimes(1);
     expect(mocks.updateSettings).toHaveBeenCalledWith({
-      disableTimeline: false,
       disableScreenshots: false,
     });
     expect(handleNextSlide).toHaveBeenCalledTimes(1);

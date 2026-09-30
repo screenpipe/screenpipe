@@ -251,3 +251,18 @@ fn serialized_capture_shape_omits_absent_optional_fields() {
     assert_eq!(json, r#"{"role":"AXWindow","text":"title","depth":0}"#);
     assert!(!json.contains("null"));
 }
+
+#[test]
+fn explicit_native_offscreen_geometry_survives_discarded_normalized_bounds() {
+    let mut nodes = vec![node("AXStaticText", "off-window text", 0)];
+    nodes[0].on_screen = Some(false);
+    nodes[0].offscreen_geometry = true;
+    let adapted = adapt_captured_accessibility_tree(&nodes, TreeBudget::default()).unwrap();
+    let root = adapted.tree.roots().next().unwrap();
+    assert_eq!(adapted.tree.text(root), None);
+    assert_eq!(adapted.stats.known_offscreen_nodes, 1);
+    // Contradictory evidence must not discard a node marked on-screen.
+    nodes[0].on_screen = Some(true);
+    let adapted = adapt_captured_accessibility_tree(&nodes, TreeBudget::default()).unwrap();
+    assert_eq!(adapted.tree.text(root), Some("off-window text"));
+}

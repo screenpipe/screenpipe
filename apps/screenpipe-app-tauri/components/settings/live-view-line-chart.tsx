@@ -5,6 +5,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useGT } from "gt-react";
+
 
 export type LiveViewLineChartPoint = {
   timestamp: string;
@@ -23,6 +25,8 @@ export function LiveViewLineChart({
   title: string;
   points: LiveViewLineChartPoint[];
 }) {
+
+  const ui = useGT();
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const geometry = useMemo(() => {
     const values = points.map((point) => point.value);
@@ -77,7 +81,7 @@ export function LiveViewLineChart({
       <div className="relative h-44 w-full">
         <svg
           role="img"
-          aria-label={`${title} time series`}
+          aria-label={ui("{value1} time series", { value1: title })}
           viewBox="0 0 100 100"
           preserveAspectRatio="none"
           className="absolute inset-0 h-full w-full overflow-visible"

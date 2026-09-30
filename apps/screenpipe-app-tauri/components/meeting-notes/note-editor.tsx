@@ -19,6 +19,9 @@ import { Markdown } from "tiptap-markdown";
 import { cn } from "@/lib/utils";
 import { imageFileToDataUrl, isNoteImageFile } from "./image-utils";
 import { FormatToolbar, SlashCommandMenu } from "./editor-menus";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 /**
  * Image extension with resize enabled and custom markdown serialization.
@@ -278,6 +281,9 @@ function NoteEditor(
   },
   ref,
 ) {
+  const uiLanguage = useLocale();
+
+  const ui = useGT();
   // Hold the latest onChange in a ref so the editor's onUpdate closure never
   // captures a stale callback, without re-creating the editor on every render.
   const onChangeRef = useRef(onChange);
@@ -297,7 +303,7 @@ function NoteEditor(
       if (!editor || images.length === 0) return;
 
       const content = images.flatMap((src) => [
-        { type: "image", attrs: { src, alt: "meeting note image" } },
+        { type: "image", attrs: { src, alt: ui("meeting note image") } },
         { type: "paragraph" },
       ]);
 
@@ -316,7 +322,7 @@ function NoteEditor(
         editor.chain().focus().insertContent(content).run();
       }
     },
-    [],
+    [uiLanguage],
   );
 
   const insertImageFiles = useCallback(

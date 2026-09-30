@@ -17,6 +17,7 @@ edition = { workspace = true }
 which = { workspace = true }
 
 [dependencies]
+screenpipe-fs = { path = "../screenpipe-fs" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 oasgen = { workspace = true }
@@ -25,7 +26,7 @@ uuid = { workspace = true }
 
 # Cross-platform audio capture. Tracks screenpipe/cpal main, which carries
 # the Windows WASAPI AEC and macOS VoiceProcessingIO patches.
-cpal = { git = "https://github.com/screenpipe/cpal.git", rev = "e7edfa174466e87a467d1a58e3a4aec233ff8a21" }
+cpal = { git = "https://github.com/screenpipe/cpal.git", rev = "aa6b20a265bd1d9e240f11db26824b531546395b" }
 
 # Wav encoding
 hound = { workspace = true }
@@ -48,7 +49,7 @@ hf-hub = { workspace = true }
 # https://github.com/pdeljanov/Symphonia/tree/master?tab=readme-ov-file#optimizations
 symphonia = { version = "0.5.4", features = ["aac", "isomp4", "opt-simd"] }
 rubato = "0.15.0"
-whisper-rs = { git = "https://github.com/screenpipe/whisper-rs.git", rev = "97e4070", features = ["tracing_backend"] }
+whisper-rs = { git = "https://github.com/EzraEllette/whisper-rs.git", rev = "b649c3fccc8dcee4512c2778b049e64aa2d15978", features = ["tracing_backend"] }
 
 # Log
 log = { workspace = true }
@@ -77,8 +78,8 @@ screenpipe-db = { path = "../screenpipe-db" }
 # failure it got instead of string-matching the Display output.
 sqlx = { workspace = true }
 
-# crossbeam
-crossbeam = { workspace = true }
+# Async-aware bounded channels shared by recording and transcription tasks.
+flume = { version = "0.11.1", default-features = false, features = ["async"] }
 dashmap = { workspace = true }
 
 # Directories
@@ -93,7 +94,7 @@ ort = { workspace = true, default-features = false, features = ["ndarray", "half
 ort-sys = { workspace = true }
 knf-rs = "0.3.2"
 futures = { workspace = true }
-audiopipe = { workspace = true, features = ["qwen3-asr-antirez-blas", "parakeet"], optional = true }
+audiopipe = { workspace = true, features = ["parakeet"], optional = true }
 mlx-rs = { workspace = true, optional = true }
 bytes = { workspace = true, features = ["serde"] }
 rand = { workspace = true }
@@ -130,6 +131,10 @@ windows = { workspace = true, features = [
     # RDP-session detection (GetSystemMetrics/SM_REMOTESESSION).
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D12",
 ] }
 
 # Windows x86_64 RELEASE builds link ONNX Runtime dynamically (import table)
@@ -180,6 +185,7 @@ ort = { workspace = true, features = ["download-binaries", "tls-native", "coreml
 ort = { workspace = true, default-features = false, features = ["load-dynamic", "api-24"] }
 
 [dev-dependencies]
+wiremock = { workspace = true }
 tempfile = { workspace = true }
 infer = "0.15"
 criterion = { workspace = true }
@@ -195,9 +201,13 @@ default = ["pulseaudio"]
 metal = ["whisper-rs/metal", "audiopipe?/metal", "audiopipe?/coreml"]
 cuda = ["whisper-rs/cuda"]
 directml = ["audiopipe?/directml"]
-vulkan = ["audiopipe?/vulkan-ggml"]
+# Windows Qwen and Parakeet use ONNX/DirectML. Enabling audiopipe's GGML
+# Vulkan backend also links a second native GGML implementation into the app;
+# its independently configured CPU backend can contain builder-host AVX-512
+# instructions. Keep Vulkan scoped to Whisper, the only product path using it.
+vulkan = ["whisper-rs/vulkan"]
 pulseaudio = ["dep:libpulse-binding", "dep:libpulse-simple-binding"]
-qwen3-asr = ["dep:audiopipe"]
+qwen3-asr = ["dep:audiopipe", "audiopipe?/qwen3-asr", "audiopipe?/qwen3-asr-antirez-blas"]
 parakeet = ["dep:audiopipe"]
 parakeet-mlx = ["dep:audiopipe", "audiopipe?/parakeet-mlx", "dep:mlx-rs"]
 

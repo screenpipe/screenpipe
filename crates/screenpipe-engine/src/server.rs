@@ -251,6 +251,8 @@ pub struct AppState {
 }
 
 pub struct SCServer {
+    /// Exact catalog directory supplied by the desktop owner; never inferred from another app.
+    pub workflow_catalog_dir: Option<PathBuf>,
     db: Arc<DatabaseManager>,
     /// Rolling history policy. Standalone/headless construction is unrestricted;
     /// the consumer desktop app explicitly supplies its live account policy.
@@ -307,9 +309,8 @@ pub struct SCServer {
     /// instance here on start and clears on stop so `/vision/device/*` hits
     /// the manager that is actually capturing.
     pub vision_manager: Arc<ArcSwap<Option<Arc<crate::vision_manager::VisionManager>>>>,
-    /// When true, the timeline / rewind feature is disabled. The server skips
-    /// warming the hot frame cache from the DB at startup (the cache is only
-    /// read by the timeline streaming endpoint). Set before `start()`.
+    /// Skip background timeline cache warm-up, while retaining database access
+    /// to saved history. Set before `start()` when capture/cache work is off.
     pub timeline_disabled: bool,
     /// Advertise this instance over mDNS. Disabled for loopback-only binds
     /// because LAN clients cannot reach those addresses and Windows may show a
@@ -385,6 +386,7 @@ impl SCServer {
     ) -> Self {
         let audio_metrics = audio_manager.metrics.clone();
         SCServer {
+            workflow_catalog_dir: None,
             db,
             history_access: HistoryAccessPolicy::unrestricted(),
             addr,
@@ -764,9 +766,10 @@ impl SCServer {
             .clone()
             .unwrap_or_else(|| Arc::new(HotFrameCache::new()));
         if self.timeline_disabled {
-            // Timeline disabled: the hot frame cache is only read by the timeline
-            // streaming endpoint, so skip the (potentially 40s+) DB warm-up.
-            tracing::info!("timeline disabled: skipping hot frame cache warm_from_db");
+            // Skip the potentially expensive warm-up but mark it resolved so
+            // requests for saved history immediately use database backfill.
+            hot_frame_cache.skip_warmup();
+            tracing::info!("timeline cache disabled: skipping hot frame cache warm_from_db");
         } else {
             let cache = hot_frame_cache.clone();
             let db = self.db.clone();
@@ -983,6 +986,45 @@ impl SCServer {
             )
             .get("/elements", search_elements)
             .get("/frames/:frame_id/elements", get_frame_elements)
+            .post(
+                "/workflows/rollout",
+                crate::routes::workflow_catalog::rollout,
+            )
+            .get(
+                "/workflows/catalog",
+                crate::routes::workflow_catalog::catalog,
+            )
+            .get(
+                "/workflows/workspace",
+                crate::routes::workflow_workspace::context,
+            )
+            .post(
+                "/workflows/workspace",
+                crate::routes::workflow_workspace::update,
+            )
+            .get(
+                "/workflows/pipeline",
+                crate::routes::workflow_pipeline::context,
+            )
+            .post(
+                "/workflows/pipeline",
+                crate::routes::workflow_pipeline::commit,
+            )
+            .get(
+                "/workflows/context",
+                crate::routes::workflow_catalog::context,
+            )
+            .post(
+                "/workflows/catalog",
+                crate::routes::workflow_catalog::commit,
+            )
+            .post("/workflows/edits", crate::routes::workflow_edits::edit)
+            .post(
+                "/workflows/corrections",
+                crate::routes::workflow_catalog::correct,
+            )
+            .get("/workflows", crate::routes::workflows::list_workflows)
+            .get("/workflows/:id", crate::routes::workflows::get_workflow)
             .get("/activity-summary", get_activity_summary)
             .get("/activity-ledger", get_activity_ledger)
             .get(
@@ -1060,6 +1102,10 @@ impl SCServer {
             // Agent self-improvement lives behind one validated local API so
             // native Pi and ACP share profile safety, prompt rendering, skill
             // provenance, optimistic concurrency, and bundled protection.
+            .route(
+                "/agent/learning/chats",
+                axum::routing::post(crate::agent_skills::learning_chats_handler),
+            )
             .route(
                 "/agent/skills/manage",
                 axum::routing::post(crate::agent_skills::manage_agent_skill_handler),
@@ -1387,7 +1433,7 @@ impl SCServer {
         // (bundled sidecar → install dirs → PATH).
         {
             let wa_lock = wa.lock().await;
-            if wa_lock.has_session() {
+            if wa_lock.has_session() && !screenpipe_core::background_work::is_suspended() {
                 tracing::info!("whatsapp: found existing session, auto-reconnecting...");
                 if let Err(e) = wa_lock.start_pairing("").await {
                     tracing::warn!("whatsapp: auto-reconnect failed: {:?}", e);
@@ -1483,9 +1529,15 @@ impl SCServer {
                     }
                 }),
             )
+            .layer(Extension(crate::routes::workflows::WorkflowCatalogSource(self.workflow_catalog_dir.clone())))
             .with_state(app_state.clone())
+            .layer(axum::middleware::from_fn(crate::search_only::history_only))
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
+                crate::routes::search::storage_snapshot_middleware,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                app_state.pipe_query_semaphore.clone(),
                 crate::pipe_permissions_middleware::pipe_backpressure_layer,
             ))
             .layer(axum::middleware::from_fn_with_state(

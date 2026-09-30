@@ -1530,7 +1530,7 @@ paths:
       summary: Download synced data
   /sync/pipes/push:
     post:
-      description: Push local pipe manifest to cloud (merge with remote first).
+      description: Push local scheduled task manifest to cloud (merge with remote first).
       operationId: sync_api_sync_pipes_push
       responses:
         '200':
@@ -1541,10 +1541,10 @@ paths:
                 $ref: '#/components/schemas/PipeSyncResponse'
       tags:
       - Cloud Sync
-      summary: Push pipe configs to cloud
+      summary: Push scheduled task configs to cloud
   /sync/pipes/pull:
     post:
-      description: Pull pipe manifest from cloud, merge with local, apply to disk.
+      description: Pull scheduled task manifest from cloud, merge with local, apply to disk.
       operationId: sync_api_sync_pipes_pull
       responses:
         '200':
@@ -1555,7 +1555,7 @@ paths:
                 $ref: '#/components/schemas/PipeSyncResponse'
       tags:
       - Cloud Sync
-      summary: Pull pipe configs from cloud
+      summary: Pull scheduled task configs from cloud
   /retention/configure:
     post:
       description: POST /retention/configure — enable/disable local retention, set days.
@@ -3585,7 +3585,7 @@ components:
       - offset
       - total
     PipeSyncResponse:
-      description: Response from pipe sync operations.
+      description: Response from scheduled task sync operations.
       type: object
       properties:
         success:

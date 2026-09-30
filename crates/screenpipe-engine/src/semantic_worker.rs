@@ -660,6 +660,7 @@ fn captured_node(node: &AccessibilityTreeNode, redact_pii: bool) -> CapturedAcce
             height: bounds.height,
         }),
         on_screen: node.on_screen,
+        offscreen_geometry: node.semantic_offscreen,
         automation_id: node.automation_id.clone(),
         dom_identifier: node.semantic_dom_identifier.clone(),
         class_name: node
@@ -777,6 +778,7 @@ mod tests {
             simhash: 1,
             truncated: false,
             truncation_reason: TruncationReason::None,
+            retained_work_pending: false,
             max_depth_reached: 3,
             window_bounds: None,
             semantic_nodes: Vec::new(),

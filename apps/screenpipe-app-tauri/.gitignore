@@ -22,6 +22,11 @@ e2e/dist/
 /.next/
 /out/
 
+# Generated translation downloads and finalized offline snapshots.
+/.localization/
+/lib/i18n/generated.json
+/gt-lock.json
+
 # build-frontend.js atomic-swap staging dirs
 /.out.tmp-*
 

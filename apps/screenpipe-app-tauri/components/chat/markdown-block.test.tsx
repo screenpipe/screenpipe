@@ -4,15 +4,24 @@
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ChatLinkBrowserContext } from "./chat-web-link";
 import { MarkdownBlock, stableStreamingMarkdownPrefix } from "./markdown-block";
 
 const {
   emitMock,
+  ownedBrowserNavigateMock,
+  openUrlMock,
+  copyTextToClipboardMock,
+  toastMock,
   openViewerWindowMock,
   setPendingNavigationMock,
   showWindowMock,
   routeNotificationDeeplinkMock,
 } = vi.hoisted(() => ({
+  ownedBrowserNavigateMock: vi.fn(async () => ({ status: "ok" as const, data: null })),
+  openUrlMock: vi.fn(async () => undefined),
+  copyTextToClipboardMock: vi.fn(async () => ({ status: "ok" as const, data: null })),
+  toastMock: vi.fn(),
   emitMock: vi.fn(async () => undefined),
   openViewerWindowMock: vi.fn(async (_path: string) => ({
     status: "ok" as const,
@@ -24,10 +33,15 @@ const {
 
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {
+    ownedBrowserNavigate: ownedBrowserNavigateMock,
+    copyTextToClipboard: copyTextToClipboardMock,
     openViewerWindow: openViewerWindowMock,
     showWindow: showWindowMock,
   },
 }));
+
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: openUrlMock }));
+vi.mock("@/components/ui/use-toast", () => ({ toast: toastMock }));
 
 vi.mock("@tauri-apps/api/event", () => ({
   emit: emitMock,
@@ -49,6 +63,86 @@ describe("MarkdownBlock", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
+  });
+
+
+  const webUrl = "https://example.com/docs#setup";
+  const renderWebLink = (owner: string | null = "chat-123") => render(
+    <ChatLinkBrowserContext.Provider value={owner}>
+      <MarkdownBlock text={`[Guide](${webUrl})`} isUser={false} />
+    </ChatLinkBrowserContext.Provider>,
+  );
+
+  it("reveals web links in the owning chat's side browser", async () => {
+    renderWebLink();
+    fireEvent.click(screen.getByRole("link", { name: "Guide" }));
+    await waitFor(() => expect(ownedBrowserNavigateMock).toHaveBeenCalledWith(webUrl, "chat-123", true));
+    expect(openUrlMock).not.toHaveBeenCalled();
+  });
+
+  it.each([{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }])("opens modified clicks externally (%j)", async (modifier) => {
+    renderWebLink();
+    fireEvent.click(screen.getByRole("link", { name: "Guide" }), modifier);
+    await waitFor(() => expect(openUrlMock).toHaveBeenCalledWith(webUrl));
+    expect(ownedBrowserNavigateMock).not.toHaveBeenCalled();
+  });
+
+  it("opens middle clicks externally without navigating the side browser", async () => {
+    renderWebLink();
+    fireEvent(screen.getByRole("link", { name: "Guide" }), new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 }));
+    await waitFor(() => expect(openUrlMock).toHaveBeenCalledWith(webUrl));
+    expect(ownedBrowserNavigateMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps links external on surfaces without a side browser", async () => {
+    renderWebLink(null);
+    const link = screen.getByRole("link", { name: "Guide" });
+    fireEvent.click(link);
+    await waitFor(() => expect(openUrlMock).toHaveBeenCalledWith(webUrl));
+    fireEvent.contextMenu(link);
+    expect(screen.queryByRole("menuitem", { name: "Open in side browser" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Open in external browser" })).toBeInTheDocument();
+    expect(ownedBrowserNavigateMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["Open in side browser", "Open in external browser", "Copy link"])("supports the %s menu action", async (label) => {
+    renderWebLink();
+    fireEvent.contextMenu(screen.getByRole("link", { name: "Guide" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: label }));
+    if (label === "Copy link") {
+      await waitFor(() => expect(copyTextToClipboardMock).toHaveBeenCalledWith(webUrl));
+      expect(openUrlMock).not.toHaveBeenCalled();
+      expect(ownedBrowserNavigateMock).not.toHaveBeenCalled();
+    } else if (label === "Open in side browser") {
+      await waitFor(() => expect(ownedBrowserNavigateMock).toHaveBeenCalledWith(webUrl, "chat-123", true));
+      expect(openUrlMock).not.toHaveBeenCalled();
+    } else {
+      await waitFor(() => expect(openUrlMock).toHaveBeenCalledWith(webUrl));
+      expect(ownedBrowserNavigateMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it("supports the keyboard context menu without opening the URL", () => {
+    renderWebLink();
+    fireEvent.keyDown(screen.getByRole("link", { name: "Guide" }), { key: "F10", shiftKey: true });
+    expect(screen.getByRole("menuitem", { name: "Open in side browser" })).toBeInTheDocument();
+    expect(ownedBrowserNavigateMock).not.toHaveBeenCalled();
+    expect(openUrlMock).not.toHaveBeenCalled();
+  });
+
+  it("reports failed navigation without unexpectedly opening an external browser", async () => {
+    ownedBrowserNavigateMock.mockResolvedValueOnce({ status: "error", error: "unavailable" } as never);
+    renderWebLink();
+    fireEvent.click(screen.getByRole("link", { name: "Guide" }));
+    await waitFor(() => expect(toastMock).toHaveBeenCalledWith(expect.objectContaining({ variant: "destructive" })));
+    expect(openUrlMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the current conversation after switching chats", () => {
+    const { rerender } = renderWebLink();
+    rerender(<ChatLinkBrowserContext.Provider value="chat-456"><MarkdownBlock text={`[Guide](${webUrl})`} isUser={false} /></ChatLinkBrowserContext.Provider>);
+    fireEvent.click(screen.getByRole("link", { name: "Guide" }));
+    expect(ownedBrowserNavigateMock).toHaveBeenCalledWith(webUrl, "chat-456", true);
   });
 
   it("routes local viewer links to the in-chat preview callback instead of opening a viewer window", async () => {
@@ -83,6 +177,18 @@ describe("MarkdownBlock", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent(
       "screenpipe/screenpipe",
     );
+  });
+
+  it("closes link previews and prevents the transcript menu from opening over the link menu", async () => {
+    const transcriptMenu = vi.fn();
+    render(<div onContextMenu={transcriptMenu}><ChatLinkBrowserContext.Provider value="chat-123"><MarkdownBlock text="[Repository](https://github.com/screenpipe/screenpipe)" isUser={false} /></ChatLinkBrowserContext.Provider></div>);
+    const link = screen.getByRole("link", { name: "Repository" });
+    fireEvent.focus(link);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+    fireEvent.contextMenu(link);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
+    expect(screen.getByRole("menuitem", { name: "Copy link" })).toBeInTheDocument();
+    expect(transcriptMenu).not.toHaveBeenCalled();
   });
 
   it("keeps wide tables readable in a keyboard-scrollable container", () => {
@@ -270,6 +376,81 @@ describe("MarkdownBlock", () => {
     expect(screen.getByTestId("streaming-markdown-tail")).toHaveTextContent(
       "next words",
     );
+  });
+
+  describe.each([false, true])("raw HTML sanitization (isUser=%s)", (isUser) => {
+    const renderHtml = (text: string) =>
+      render(<MarkdownBlock text={text} isUser={isUser} />).container;
+
+    it.each([
+      ["iframe", `<iframe srcdoc="<h1>INJECTED</h1>"></iframe>`],
+      ["form", `<form action="https://example.com/collect"><input type="password" name="pw"></form>`],
+      ["meta refresh", `<meta http-equiv="refresh" content="0;url=https://example.com">`],
+      ["object", `<object data="https://example.com/x.swf"></object>`],
+      ["embed", `<embed src="https://example.com/x.swf">`],
+      ["style", `<style>body{background:#f00}</style>`],
+      ["base", `<base href="https://example.com/">`],
+    ])("does not create live %s elements", (_name, html) => {
+      const container = renderHtml(`before\n\n${html}\n\nafter`);
+      expect(
+        container.querySelector("iframe, form, meta, object, embed, style, base, input[type=password]"),
+      ).toBeNull();
+      expect(container.textContent).not.toContain("body{background");
+      expect(container).toHaveTextContent("before");
+      expect(container).toHaveTextContent("after");
+    });
+
+    it.each([
+      ["img onerror", `<img src=x onerror=alert(1)>`],
+      ["svg onload", `<svg onload=alert(1)><circle r=1></circle></svg>`],
+      ["script", `<script>alert(1)</script>`],
+    ])("drops %s before it reaches React", (_name, html) => {
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const container = renderHtml(html);
+      expect(container.querySelector("[onerror], [onload], svg, script")).toBeNull();
+      // React silently drops string handlers from the DOM, so the DOM alone
+      // cannot prove sanitization; its warning shows the handler got through.
+      expect(
+        consoleError.mock.calls.filter(([msg]) => String(msg).includes("listener to be a function")),
+      ).toEqual([]);
+      consoleError.mockRestore();
+    });
+
+    it("strips inline styles from allowed tags", () => {
+      const container = renderHtml(`<b style="position:fixed;inset:0">bold</b>`);
+      const bold = container.querySelector("b");
+      expect(bold).toHaveTextContent("bold");
+      expect(bold?.getAttribute("style")).toBeNull();
+    });
+
+    it("neutralizes javascript: URLs in raw HTML attributes", () => {
+      const container = renderHtml(
+        `<a href="javascript:alert(1)">click</a> <img src="https://example.com/x.png" longdesc="javascript:alert(1)">`,
+      );
+      expect(container.querySelector("a[href^='javascript']")).toBeNull();
+      expect(container.querySelector("img")?.getAttribute("longdesc")).toBeNull();
+    });
+
+    it("keeps safe formatting and collapsible details", () => {
+      const container = renderHtml(
+        `<details><summary>More</summary>\n\nhidden **body**\n\n</details>\n\n<kbd>Cmd</kbd> H<sub>2</sub>O x<sup>2</sup> <b>bold</b> <i>it</i> <u>u</u> <mark>m</mark> <small>s</small>`,
+      );
+      expect(container.querySelector("details summary")).toHaveTextContent("More");
+      expect(container.querySelector("details strong")).toHaveTextContent("body");
+      for (const tag of ["kbd", "sub", "sup", "b", "i", "u", "mark", "small"]) {
+        expect(container.querySelector(tag)).not.toBeNull();
+      }
+    });
+  });
+
+  it.each([
+    ["GFM footnote", "claim[^1]\n\n[^1]: source", "a[data-footnote-ref]"],
+    ["raw HTML anchor", `<a href="#sec">jump</a>\n\n<h2 id="sec">Sec</h2>`, "a"],
+  ])("keeps %s in-page links pointing at their targets", (_name, text, selector) => {
+    const { container } = render(<MarkdownBlock text={text} isUser={false} />);
+    const href = container.querySelector(selector)?.getAttribute("href") ?? "";
+    expect(href.startsWith("#user-content-")).toBe(true);
+    expect(container.querySelector(`[id="${href.slice(1)}"]`)).not.toBeNull();
   });
 
   it("renders complete Markdown blocks immediately and keeps the unfinished tail cheap", () => {

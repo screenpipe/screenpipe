@@ -347,6 +347,10 @@ jobs:
           Write-Host "x64: ORT_LIB_LOCATION=$libDir (dynamic import link)"
           Get-ChildItem "$extractDir/lib"
 
+      - name: Install Vulkan SDK for Whisper
+        shell: pwsh
+        run: ./.github/scripts/setup-vulkan-windows.ps1 -Architecture x64 -InstallSdk -StageRuntimeDirectory apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2/lib
+
       - name: Install wget (Windows)
         shell: pwsh
         run: |
@@ -368,6 +372,10 @@ jobs:
           bun scripts/setup_openblas.js
           "OPENBLAS_PATH=${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      - name: Configure Ninja for Windows native dependencies
+        shell: pwsh
+        run: ./.github/scripts/setup-ninja-windows.ps1
+
       - name: Shorten target dir to avoid MAX_PATH
         shell: pwsh
         run: |
@@ -381,6 +389,13 @@ jobs:
 
       - name: Build CLI
         env:
+          # Cargo must pass the short path to CMake; the target junction alone
+          # leaves nested Vulkan compiler probes using the long checkout path.
+          CARGO_TARGET_DIR: "C:/t"
+          # libsamplerate-sys searches build/<profile> on MSVC. Multi-config
+          # Ninja preserves that layout; opt-level="s" requires MinSizeRel.
+          CMAKE_GENERATOR: "Ninja Multi-Config"
+          CMAKE_CONFIGURATION_TYPES: "Debug;Release;RelWithDebInfo;MinSizeRel"
           CARGO_PROFILE_RELEASE_STRIP: "none"
           CARGO_PROFILE_RELEASE_PANIC: "abort"
           CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
@@ -419,7 +434,7 @@ jobs:
           # Use prebuilt NASM objects on Windows: https://aws.github.io/aws-lc-rs/requirements/windows.html#prebuilt-nasm-objects
           AWS_LC_SYS_PREBUILT_NASM: "1"
         run: |
-          cargo build --release -p screenpipe-engine --bin screenpipe --features directml,redact-onnx-directml --target x86_64-pc-windows-msvc
+          cargo build --release -p screenpipe-engine --bin screenpipe --features directml,vulkan,redact-onnx-directml --target x86_64-pc-windows-msvc
 
       - name: Upload debug symbols to Sentry
         # Skipped on smoke_only dispatches: nothing from those builds ships.
@@ -509,6 +524,8 @@ jobs:
           # DirectML.dll: the DirectML-flavored onnxruntime.dll needs it for the
           # DML EP (staged by the "Download ONNX Runtime" step).
           Copy-Item "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2/lib/DirectML.dll" "$packageDir/bin/"
+          Copy-Item "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2/lib/vulkan-1.dll" "$packageDir/bin/"
+          Copy-Item "apps/screenpipe-app-tauri/src-tauri/onnxruntime-win-x64-1.24.2/lib/VulkanRT-License.txt" "$packageDir/bin/"
           # Copy OpenBLAS DLL(s) for qwen3-asr (libopenblas.dll or openblas.dll)
           $openblasBin = "apps/screenpipe-app-tauri/src-tauri/openblas/bin"
           if (Test-Path $openblasBin) {

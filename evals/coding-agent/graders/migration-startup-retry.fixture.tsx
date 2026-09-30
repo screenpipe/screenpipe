@@ -1,0 +1,182 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { StorageMigrationActivity, StorageMigrationStatus } from "@/lib/utils/tauri";
+
+const commands = vi.hoisted(() => ({
+  getStorageMigrationStatus: vi.fn(), startStorageMigration: vi.fn(),
+  cancelStorageMigration: vi.fn(), deleteOriginalStorageDatabase: vi.fn(),
+}));
+vi.mock("@/lib/utils/tauri", () => ({ commands }));
+import { StorageMigrationPrompt } from "./storage-migration-prompt";
+
+const idle: StorageMigrationActivity = { root: "/fixture", busy: false, message: "", error: null, elapsed_seconds: 0, completed_records: null, total_records: null, bytes_saved: null, available_bytes: null, completed: false };
+let status: StorageMigrationStatus;
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  sessionStorage.clear();
+  window.localStorage.clear();
+  status = {
+    app_session_id: "app-launch-1",
+    root: "/fixture", busy: false, message: "", error: null, pending: false, in_place: false, bytes_saved: null, available_bytes: null,
+    completed: false, using_new_storage: false, generation: null, source_bytes: 20 * 1024 ** 3,
+    migrated_bytes: null, can_migrate: true, can_cancel: false, can_delete_source: false,
+    blocked_reason: null,
+  };
+  commands.getStorageMigrationStatus.mockImplementation(async () => ({ status: "ok", data: { ...status } }));
+  commands.startStorageMigration.mockResolvedValue({ status: "ok", data: null });
+  commands.cancelStorageMigration.mockResolvedValue({ status: "ok", data: null });
+});
+afterEach(cleanup);
+
+describe("explicit storage migration readiness", () => {
+  it.each([
+    { busy: true },
+    { blocked_reason: "Screenpipe is restarting or restoring recording. Wait for startup to finish." },
+  ])("withholds retry and recording-resumed claims while startup owns storage: %j", async (startup) => {
+    Object.assign(status, {
+      pending: true, in_place: true, error: "The previous storage migration did not finish.",
+      ...startup,
+    });
+    const app = render(<StorageMigrationPrompt activity={idle} />);
+    await waitFor(() => expect(commands.getStorageMigrationStatus).toHaveBeenCalled());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+    expect(commands.startStorageMigration).not.toHaveBeenCalled();
+    expect(commands.cancelStorageMigration).not.toHaveBeenCalled();
+    expect(commands.deleteOriginalStorageDatabase).not.toHaveBeenCalled();
+    app.unmount();
+    Object.assign(status, { busy: false, blocked_reason: null });
+    render(<StorageMigrationPrompt activity={idle} />);
+    fireEvent.click(await screen.findByRole("button", { name: /try again/i }));
+    await waitFor(() => expect(commands.startStorageMigration).toHaveBeenCalledOnce());
+  });
+
+  it("offers only resume for an interrupted in-place conversion", async () => {
+    Object.assign(status, { pending: true, in_place: true, can_cancel: false, error: "Free more disk space to resume." });
+    render(<StorageMigrationPrompt activity={{ ...idle, error: status.error }} />);
+    await screen.findByRole("alertdialog");
+    expect(screen.queryByRole("button", { name: /use original database/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+    await waitFor(() => expect(commands.startStorageMigration).toHaveBeenCalledWith("/fixture"));
+  });
+  it("detects legacy storage, explains the pause and starts only on request", async () => {
+    render(<StorageMigrationPrompt activity={idle} />);
+    await screen.findByRole("alertdialog");
+    expect(commands.startStorageMigration).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /start now/i }));
+    await waitFor(() => expect(commands.startStorageMigration).toHaveBeenCalledWith("/fixture"));
+    expect(commands.deleteOriginalStorageDatabase).not.toHaveBeenCalled();
+  });
+
+  it("respects do later when a webview is recreated in the same app process", async () => {
+    const app = render(<StorageMigrationPrompt activity={idle} />);
+    fireEvent.click(await screen.findByRole("button", { name: /do later/i }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    app.unmount();
+    sessionStorage.clear();
+    render(<StorageMigrationPrompt activity={idle} />);
+    await waitFor(() => expect(commands.getStorageMigrationStatus).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(commands.startStorageMigration).not.toHaveBeenCalled();
+    expect(commands.deleteOriginalStorageDatabase).not.toHaveBeenCalled();
+  });
+
+  it("offers migration after every app process restart even with webview storage retained", async () => {
+    for (const session of ["app-launch-1", "app-launch-2", "app-launch-3"]) {
+      status.app_session_id = session;
+      const app = render(<StorageMigrationPrompt activity={idle} />);
+      fireEvent.click(await screen.findByRole("button", { name: /do later/i }));
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      app.unmount();
+    }
+    expect(commands.startStorageMigration).not.toHaveBeenCalled();
+    expect(commands.deleteOriginalStorageDatabase).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { can_migrate: false, source_bytes: 0 },
+    { can_migrate: false, completed: true, using_new_storage: true },
+    { can_migrate: false, blocked_reason: "Vault protection is enabled." },
+  ])("does not interrupt users without an eligible migration: %j", async (overrides) => {
+    Object.assign(status, overrides);
+    render(<StorageMigrationPrompt activity={idle} />);
+    await waitFor(() => expect(commands.getStorageMigrationStatus).toHaveBeenCalled());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("stays closed across app launches while completed storage is reopening", async () => {
+    Object.assign(status, {
+      completed: true, using_new_storage: false, can_migrate: false,
+      generation: "migrated-generation",
+    });
+    for (const session of ["app-launch-1", "app-launch-2", "app-launch-3"]) {
+      status.app_session_id = session;
+      const app = render(<StorageMigrationPrompt activity={idle} />);
+      await waitFor(() => expect(commands.getStorageMigrationStatus).toHaveBeenCalled());
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      app.unmount();
+      commands.getStorageMigrationStatus.mockClear();
+    }
+    expect(commands.startStorageMigration).not.toHaveBeenCalled();
+  });
+
+  it.each(["failure", "interruption"])("requires an explicit retry after %s across app launches", async (reason) => {
+    Object.assign(status, {
+      pending: true, in_place: true,
+      error: reason === "failure" ? "Not enough free disk space." : "The previous storage migration did not finish.",
+    });
+    for (const session of ["app-launch-1", "app-launch-2"]) {
+      status.app_session_id = session;
+      const app = render(<StorageMigrationPrompt activity={{ ...idle, error: status.error }} />);
+      await screen.findByRole("button", { name: /try again/i });
+      expect(commands.startStorageMigration).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: /do later/i }));
+      app.unmount();
+    }
+    status.app_session_id = "app-launch-3";
+    render(<StorageMigrationPrompt activity={{ ...idle, error: status.error }} />);
+    fireEvent.click(await screen.findByRole("button", { name: /try again/i }));
+    await waitFor(() => expect(commands.startStorageMigration).toHaveBeenCalledTimes(1));
+    expect(commands.startStorageMigration).toHaveBeenCalledWith("/fixture");
+  });
+
+  it("surfaces start failures and permits retry without losing the original", async () => {
+    commands.startStorageMigration.mockResolvedValueOnce({ status: "error", error: "Could not prevent sleep. Migration has not started." });
+    render(<StorageMigrationPrompt activity={idle} />);
+    fireEvent.click(await screen.findByRole("button", { name: /start now/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not prevent sleep");
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+    await waitFor(() => expect(commands.startStorageMigration).toHaveBeenCalledTimes(2));
+  });
+
+  it("offers recovery for an interrupted migration", async () => {
+    Object.assign(status, { pending: true, can_cancel: true, error: "Verification failed; original kept." });
+    render(<StorageMigrationPrompt activity={{ ...idle, error: status.error }} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Verification failed");
+    fireEvent.click(screen.getByRole("button", { name: /use original database/i }));
+    await waitFor(() => expect(commands.cancelStorageMigration).toHaveBeenCalledWith("/fixture"));
+    expect(commands.deleteOriginalStorageDatabase).not.toHaveBeenCalled();
+  });
+
+
+  it("does not duplicate an unresolved explicit start or allow deferral mid-request", async () => {
+    let finish!: () => void;
+    commands.startStorageMigration.mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve({status:"ok",data:null}); }));
+    render(<StorageMigrationPrompt activity={idle} />);
+    fireEvent.click(await screen.findByRole("button", {name:/start now/i}));
+    const pending=screen.getByRole("button", {name:/starting/i});
+    expect(pending).toBeDisabled();expect(screen.getByRole("button", {name:/do later/i})).toBeDisabled();
+    fireEvent.click(pending);expect(commands.startStorageMigration).toHaveBeenCalledTimes(1);
+    await act(async()=>finish());
+    expect(commands.deleteOriginalStorageDatabase).not.toHaveBeenCalled();
+  });
+  it("keeps quiet when activity owns storage and never starts a migration", async () => {
+    render(<StorageMigrationPrompt activity={{...idle,busy:true}} />);
+    await act(async()=>{});
+    expect(screen.queryByRole("alertdialog")).toBeNull();expect(commands.startStorageMigration).not.toHaveBeenCalled();
+  });
+});

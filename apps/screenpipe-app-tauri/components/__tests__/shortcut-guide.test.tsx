@@ -60,10 +60,10 @@ describe("ShortcutGuide", () => {
 
     fireEvent.keyDown(window, { key: "/", code: "Slash", metaKey: true });
     expect(
-      await screen.findByRole("dialog", { name: "keyboard shortcuts" }),
+      await screen.findByRole("dialog", { name: "Keyboard shortcuts" }),
     ).toBeVisible();
-    expect(screen.getByText("next chat tab")).toBeInTheDocument();
-    expect(screen.getByText("close tab")).toBeInTheDocument();
+    expect(screen.getByText("Next chat tab")).toBeInTheDocument();
+    expect(screen.getByText("Close tab")).toBeInTheDocument();
     expect(screen.getByText("⌘W")).toBeInTheDocument();
     expect(screen.getByText("⌃Tab")).toBeInTheDocument();
     expect(screen.getByText("⌘⌃K")).toBeInTheDocument();
@@ -71,7 +71,7 @@ describe("ShortcutGuide", () => {
     fireEvent.keyDown(window, { key: "/", code: "Slash", metaKey: true });
     await waitFor(() =>
       expect(
-        screen.queryByRole("dialog", { name: "keyboard shortcuts" }),
+        screen.queryByRole("dialog", { name: "Keyboard shortcuts" }),
       ).toBeNull(),
     );
   });
@@ -84,9 +84,9 @@ describe("ShortcutGuide", () => {
       window.dispatchEvent(new Event(OPEN_SHORTCUT_GUIDE_EVENT));
     });
     expect(
-      await screen.findByRole("dialog", { name: "keyboard shortcuts" }),
+      await screen.findByRole("dialog", { name: "Keyboard shortcuts" }),
     ).toBeVisible();
-    expect(screen.getAllByText("disabled")).toHaveLength(1);
+    expect(screen.getAllByText("Disabled")).toHaveLength(1);
   });
 
   it("ignores platform-mismatched and extra-modifier guide chords", () => {

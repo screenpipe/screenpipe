@@ -7,10 +7,7 @@ import { useEnterpriseBuildStatus } from "./use-is-enterprise-build";
 import { commands, type ManagedTeamSkill } from "@/lib/utils/tauri";
 import { isLocalControlPlaneBase, tauriFetchWithDeadline } from "@/lib/http/tauri-fetch";
 import { getStore, useSettings } from "./use-settings";
-import {
-  computeManagedSettingUpdates,
-  isAutoStartEnforced,
-} from "./managed-settings";
+import { isAutoStartEnforced } from "./managed-settings";
 import { getVersion } from "@tauri-apps/api/app";
 import { localFetch } from "@/lib/api";
 import { screenpipeWebUrl } from "@/lib/web-url";
@@ -95,7 +92,6 @@ const LOCAL_POLICY_COMMAND_TIMEOUT_MS = 8_000;
 // control-plane request has a 9s native timeout, so leave enough room for the
 // sequential pair plus IPC scheduling without allowing a late grant.
 const NATIVE_AUTHORIZATION_COMMAND_TIMEOUT_MS = 20_000;
-const ENGINE_RESTART_COMMAND_TIMEOUT_MS = 12_000;
 
 /**
  * Deadline for the mount-time entitlement check. The gate renders a blank
@@ -356,63 +352,6 @@ function supportsEnterpriseAutoStartEnforcement(): boolean {
     return currentPlatform === "macos" || currentPlatform === "windows";
   } catch {
     return false;
-  }
-}
-
-/**
- * Apply enterprise-forced managed settings to the local settings store so the
- * recording engine honors them. Engine-spawn settings only take effect at
- * spawn, so a forced change restarts the engine once; live settings don't.
- * The enforced map is persisted as metadata so every local settings write
- * reasserts policy, including controls that do not render a dedicated lock UI.
- */
-let managedSettingsRestartInFlight = false;
-
-async function applyManagedDeviceSettings(lockedSettings: Record<string, unknown>): Promise<void> {
-  const store = await getStore();
-  const settings = (await store.get<Record<string, unknown>>("settings")) || {};
-  const { engineUpdates, liveUpdates, managedValues, engineChanged, liveChanged } =
-    computeManagedSettingUpdates(lockedSettings, settings);
-  const managedValuesChanged =
-    JSON.stringify(settings.enterpriseManagedSettings || {}) !== JSON.stringify(managedValues);
-
-  if (!engineChanged && !liveChanged && !managedValuesChanged) return;
-
-  await store.set("settings", {
-    ...settings,
-    ...engineUpdates,
-    ...liveUpdates,
-    enterpriseManagedSettings: managedValues,
-  });
-  await store.save();
-  console.log(
-    `[enterprise] managed settings applied: ${Object.entries({ ...engineUpdates, ...liveUpdates })
-      .map(([k, v]) => `${k}=${Array.isArray(v) ? JSON.stringify(v) : v}`)
-      .join(", ")}${engineChanged ? " — restarting engine" : " (no restart needed)"}`,
-  );
-
-  // Live-only change (e.g. analytics) needs no restart.
-  if (!engineChanged) return;
-
-  // Restart so the forced values take effect without waiting for the employee to
-  // restart manually. Guarded so overlapping policy polls don't stack restarts;
-  // steady-state polls are no-ops because the store already matches the policy.
-  if (managedSettingsRestartInFlight) return;
-  managedSettingsRestartInFlight = true;
-  try {
-    await withTimeout(
-      "enterprise input capture stopScreenpipe",
-      commands.stopScreenpipe(),
-      ENGINE_RESTART_COMMAND_TIMEOUT_MS
-    );
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    await withTimeout(
-      "enterprise input capture spawnScreenpipe",
-      commands.spawnScreenpipe(null),
-      ENGINE_RESTART_COMMAND_TIMEOUT_MS
-    );
-  } finally {
-    managedSettingsRestartInFlight = false;
   }
 }
 
@@ -877,13 +816,8 @@ export function useEnterprisePolicyRuntime() {
         console.warn("[enterprise] failed to apply app update policy:", e);
       }
 
-      // Apply every validated managed device setting in one pass. PII, capture,
-      // audio, filters, and performance changes share one coordinated restart.
-      try {
-        await applyManagedDeviceSettings(result.lockedSettings);
-      } catch (e) {
-        console.warn("[enterprise] failed to apply managed device policy:", e);
-      }
+      // Recording settings are applied by the native policy watcher and
+      // native credential verification, independently of webview lifetime.
 
       // Fire-and-forget heartbeat
       sendHeartbeat(credential, { deploymentLicenseKey }).then((heartbeat) => {

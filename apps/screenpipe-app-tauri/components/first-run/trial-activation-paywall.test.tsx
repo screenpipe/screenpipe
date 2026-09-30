@@ -13,6 +13,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  locale: "en",
   capture: vi.fn(),
   getCloudToken: vi.fn(),
   setOnboardingStep: vi.fn().mockResolvedValue({ status: "ok", data: null }),
@@ -25,6 +26,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("posthog-js", () => ({ default: { capture: mocks.capture } }));
+vi.mock("@/lib/i18n/provider", () => ({ useUiLocale: () => mocks.locale }));
 vi.mock("@/lib/hooks/use-settings", () => ({
   useSettings: () => ({
     settings: { user: mocks.user },
@@ -63,12 +65,12 @@ let submitSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.locale = "en";
   window.history.replaceState({}, "", "/home");
   document.querySelectorAll("form").forEach((form) => form.remove());
   window.sessionStorage.clear();
   mocks.user = null;
   mocks.loadUser.mockResolvedValue(undefined);
-  mocks.setOnboardingStep.mockResolvedValue({ status: "ok", data: null });
   submitSpy = vi
     .spyOn(HTMLFormElement.prototype, "submit")
     .mockImplementation(() => undefined);
@@ -87,6 +89,14 @@ function checkoutForm(): HTMLFormElement {
 }
 
 describe("TrialActivationPaywall", () => {
+  it("passes the app language to the shared hosted checkout", async () => {
+    mocks.locale = "ja";
+    mocks.getCloudToken.mockResolvedValue("clerk-token");
+    render(<TrialActivationPaywall open locked />);
+    await waitFor(() => expect(submitSpy).toHaveBeenCalledOnce());
+    expect(checkoutForm().querySelector<HTMLInputElement>('input[name="locale"]')?.value).toBe("ja");
+  });
+
   it("uses onboarding's authenticated hosted checkout instead of the cardless trial iframe", async () => {
     mocks.getCloudToken.mockResolvedValue("clerk-token");
 
@@ -136,7 +146,7 @@ describe("TrialActivationPaywall", () => {
     render(<TrialActivationPaywall open locked />);
 
     expect(
-      await screen.findByText("checkout closed before payment was confirmed"),
+      await screen.findByText("Checkout closed before payment was confirmed"),
     ).toBeInTheDocument();
     expect(submitSpy).not.toHaveBeenCalled();
     expect(mocks.capture).toHaveBeenCalledWith(
@@ -150,50 +160,11 @@ describe("TrialActivationPaywall", () => {
       window.sessionStorage.getItem(TRIAL_ACTIVATION_CHECKOUT_STATE_KEY),
     ).toBe("returned");
 
-    fireEvent.click(screen.getByRole("button", { name: "try checkout again" }));
+    fireEvent.click(screen.getByRole("button", { name: "Try checkout again" }));
 
     await waitFor(() => expect(submitSpy).toHaveBeenCalledOnce());
     expect(
       window.sessionStorage.getItem(TRIAL_ACTIVATION_CHECKOUT_STATE_KEY),
     ).toBe("pending");
-  });
-
-  it("lets a user return from checkout and continue with Free", async () => {
-    mocks.user = {
-      token: "in-memory-token",
-      has_payment_method: false,
-      entitlement_source: "none",
-    };
-    window.sessionStorage.setItem(
-      TRIAL_ACTIVATION_CHECKOUT_STATE_KEY,
-      "pending",
-    );
-
-    render(<TrialActivationPaywall open locked />);
-
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "continue with Free — no card",
-      }),
-    );
-    await waitFor(() =>
-      expect(mocks.setOnboardingStep).toHaveBeenCalledWith(
-        "trial-activation-v1-unlocked",
-      ),
-    );
-    expect(submitSpy).not.toHaveBeenCalled();
-    await waitFor(() =>
-      expect(
-        window.sessionStorage.getItem(TRIAL_ACTIVATION_CHECKOUT_STATE_KEY),
-      ).toBeNull(),
-    );
-    expect(mocks.capture).toHaveBeenCalledWith(
-      "onboarding_plan_activated",
-      expect.objectContaining({
-        plan: "free",
-        confirmation: "free_no_card",
-        source: "checkout_dialog",
-      }),
-    );
   });
 });

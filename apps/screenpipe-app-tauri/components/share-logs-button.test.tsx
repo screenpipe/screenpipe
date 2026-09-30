@@ -276,8 +276,8 @@ describe("ShareLogsButton attachments", () => {
     await waitFor(() =>
       expect(toastMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "couldn't capture recording",
-          description: "could not record the last 5 minutes — try again.",
+          title: "Couldn't capture recording",
+          description: "Could not record the last 5 minutes — try again.",
           variant: "destructive",
         }),
       ),
@@ -326,7 +326,7 @@ describe("ShareLogsButton attachments", () => {
     await waitFor(() =>
       expect(toastMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "unsupported file",
+          title: "Unsupported file",
           variant: "destructive",
         }),
       ),
@@ -349,8 +349,8 @@ describe("ShareLogsButton attachments", () => {
     await waitFor(() =>
       expect(toastMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "file too large",
-          description: "file is 51.0 mb — the 50 mb limit was exceeded.",
+          title: "File too large",
+          description: "File is 51.0 mb — the 50 mb limit was exceeded.",
           variant: "destructive",
         }),
       ),
@@ -407,7 +407,7 @@ describe("ShareLogsButton attachments", () => {
     await waitFor(() =>
       expect(toastMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "file too large",
+          title: "File too large",
           variant: "destructive",
         }),
       ),
@@ -428,7 +428,7 @@ describe("ShareLogsButton attachments", () => {
     await waitFor(() =>
       expect(toastMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "unsupported file",
+          title: "Unsupported file",
           variant: "destructive",
         }),
       ),
@@ -444,7 +444,7 @@ describe("ShareLogsButton attachments", () => {
       dragDropHandlerRef.current!({ payload: { type: "over" } });
     });
     expect(screen.getByTestId("drop-overlay")).toHaveTextContent(
-      "release to attach",
+      "Release to attach",
     );
 
     act(() => {
@@ -498,7 +498,7 @@ describe("ShareLogsButton attachments", () => {
       videoUploaded: true,
     });
     expect(toastMock).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "feedback sent" }),
+      expect.objectContaining({ title: "Feedback sent" }),
     );
     expect(screen.getByRole("button", { name: /sent/i })).toBeDisabled();
     expect(screen.getByTestId("attachment-status")).toHaveTextContent(
@@ -601,9 +601,9 @@ describe("ShareLogsButton attachments", () => {
     await act(async () => acceptJob?.());
     expect(await screen.findByText("dialog closed")).toBeInTheDocument();
     expect(toastMock).toHaveBeenCalledWith({
-      title: "thanks — sending in background",
+      title: "Thanks — sending in background",
       description:
-        "you can keep using screenpipe. please keep the app running for the next minute; we'll notify you when it's sent.",
+        "You can keep using screenpipe. please keep the app running for the next minute; we'll notify you when it's sent.",
     });
   });
 
@@ -629,7 +629,7 @@ describe("ShareLogsButton attachments", () => {
       message: "feedback could not be sent; try again.",
     });
     expect(toastMock).toHaveBeenCalledWith({
-      title: "sharing failed",
+      title: "Sharing failed",
       description: "feedback could not be sent; try again.",
       variant: "destructive",
     });
@@ -679,7 +679,7 @@ describe("ShareLogsButton attachments", () => {
     await waitFor(() =>
       expect(toastMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "sharing failed",
+          title: "Sharing failed",
           description: expect.stringContaining("native start failed"),
         }),
       ),

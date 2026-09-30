@@ -7,6 +7,7 @@ set -eu
 
 AGENT_LABEL="screenpi.pe.enterprise.persistence"
 DAEMON_LABEL="screenpi.pe.enterprise.persistence-supervisor"
+UPDATE_LABEL="screenpi.pe.enterprise.persistence-update"
 STATE_DIR="/Library/Application Support/screenpipe/persistence"
 
 if [ "$(/usr/bin/id -u)" -ne 0 ]; then
@@ -25,10 +26,12 @@ if [ "$console_uid" -ge 500 ] && [ "$console_uid" -ne 65534 ]; then
   /bin/launchctl bootout "gui/${console_uid}/${AGENT_LABEL}" >/dev/null 2>&1 || true
 fi
 
+/bin/launchctl bootout "system/${UPDATE_LABEL}" >/dev/null 2>&1 || true
 /bin/launchctl bootout "system/${DAEMON_LABEL}" >/dev/null 2>&1 || true
 /bin/rm -f \
   "/Library/LaunchAgents/${AGENT_LABEL}.plist" \
   "/Library/LaunchDaemons/${DAEMON_LABEL}.plist" \
+  "/Library/LaunchDaemons/${UPDATE_LABEL}.plist" \
   "/Library/PrivilegedHelperTools/screenpipe-persistence-supervisor" \
   "$0"
 /bin/rm -rf "$STATE_DIR"

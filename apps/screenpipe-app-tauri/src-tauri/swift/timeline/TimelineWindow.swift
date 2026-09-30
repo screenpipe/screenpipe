@@ -355,6 +355,7 @@ final class TimelineWindowGeometry: ObservableObject {
 }
 
 struct TimelineHostView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: TimelineViewModel
     @ObservedObject var originChrome: TimelineOriginChrome
     @ObservedObject var geometry: TimelineWindowGeometry
@@ -378,7 +379,7 @@ struct TimelineHostView: View {
                             .shadow(color: Color.black.opacity(0.25), radius: 8, y: 3)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Back to activity")
+                    .accessibilityLabel(uiText("Back to activity"))
                     .padding(16)
                 }
             }
@@ -800,7 +801,7 @@ final class TimelineWindowController: NSObject, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "timeline"
+        window.title = uiText("timeline")
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.backgroundColor = .black
@@ -1397,4 +1398,9 @@ public func timeline_dismiss_search_review(_ label: UnsafePointer<CChar>?) -> In
 @_cdecl("timeline_free_string")
 public func timeline_free_string(_ ptr: UnsafeMutablePointer<CChar>?) {
     if let ptr { free(ptr) }
+}
+
+@_cdecl("timeline_set_ui_locale")
+public func timeline_set_ui_locale(_ json: UnsafePointer<CChar>?) {
+    UILocalization.shared.update(json)
 }

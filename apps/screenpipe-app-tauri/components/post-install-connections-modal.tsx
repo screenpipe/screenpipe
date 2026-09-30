@@ -37,6 +37,8 @@ import {
   pipeConnectionInstanceName,
   pipeConnectionLookupKey,
 } from "@/lib/pipe-connections";
+import { useGT } from "gt-react";
+
 
 interface PostInstallConnectionsModalProps {
   open: boolean;
@@ -101,6 +103,8 @@ export function PostInstallConnectionsModal({
   connections,
   onConnectionRemoved,
 }: PostInstallConnectionsModalProps) {
+
+  const ui = useGT();
   const { settings } = useSettings();
   const composioToken = settings.user?.token;
   const [statuses, setStatuses] = useState<Record<string, ConnectionStatus>>({});
@@ -336,18 +340,18 @@ export function PostInstallConnectionsModal({
       <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-sm">
-            set up connections for &quot;{pipeName}&quot;
+            Set up connections for &quot;{pipeName}&quot;
           </DialogTitle>
           <DialogDescription className="text-xs">
-            this scheduled task requires the following connections to work properly.
-            configure them now or skip and set them up later in settings.
+            This scheduled task requires the following connections to work properly.
+            Configure them now or skip and set them up later in settings.
           </DialogDescription>
         </DialogHeader>
 
         {loading ? (
           <div className="flex items-center gap-2 py-6 justify-center text-xs text-muted-foreground">
             <Loader2 className="h-3 w-3 animate-spin" />
-            loading connections...
+            Loading connections...
           </div>
         ) : (
           <div className="space-y-2 my-2">
@@ -431,28 +435,28 @@ export function PostInstallConnectionsModal({
                       {status?.missingReason === "deleted_mcp" ? (
                         <>
                           <p className="text-xs text-muted-foreground">
-                            this MCP server was deleted or is no longer available.
-                            remove it from this scheduled task or add a new MCP server from the dropdown.
+                            This MCP server was deleted or is no longer available.
+                            Remove it from this scheduled task or add a new MCP server from the dropdown.
                           </p>
                           {status.serverId && (
                             <p className="text-[10px] text-muted-foreground font-mono">
-                              id: {status.serverId}
+                              ID: {status.serverId}
                             </p>
                           )}
                         </>
                       ) : status?.missingReason === "disabled_mcp" ? (
                         <p className="text-xs text-muted-foreground">
-                          this MCP server is disabled. enable it in custom MCP
+                          This MCP server is disabled. Enable it in custom MCP
                           settings or remove it from this scheduled task.
                         </p>
                       ) : status?.missingReason === "unknown_mcp" ? (
                         <p className="text-xs text-muted-foreground">
-                          MCP server status could not be loaded. try again or
+                          MCP server status could not be loaded. Try again or
                           manage custom MCP servers in settings.
                         </p>
                       ) : (
                         <p className="text-xs text-muted-foreground">
-                          custom MCP servers are configured once, then selected by scheduled tasks.
+                          Custom MCP servers are configured once, then selected by scheduled tasks.
                         </p>
                       )}
                       <div className="flex flex-wrap gap-2">
@@ -467,10 +471,10 @@ export function PostInstallConnectionsModal({
                             {removingConnection === connId ? (
                               <>
                                 <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                                removing...
+                                Removing...
                               </>
                             ) : (
-                              "remove from scheduled task"
+                              ui("Remove from scheduled task")
                             )}
                           </Button>
                         )}
@@ -481,7 +485,7 @@ export function PostInstallConnectionsModal({
                           onClick={openCustomMcpSettings}
                         >
                           <ExternalLink className="h-3 w-3" />
-                          manage MCP servers
+                          Manage MCP servers
                         </Button>
                       </div>
                     </div>
@@ -509,10 +513,10 @@ export function PostInstallConnectionsModal({
                         {status?.loading ? (
                           <>
                             <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                            connecting...
+                            Connecting...
                           </>
                         ) : (
-                          <>connect with {integration.name}</>
+                          <>Connect with {integration.name}</>
                         )}
                       </Button>
                     </div>
@@ -521,8 +525,8 @@ export function PostInstallConnectionsModal({
                   {isExpanded && integration && !integration.is_oauth && integration.fields.length === 0 && (
                     <div className="px-3 pb-3 border-t border-border pt-3">
                       <p className="text-xs text-muted-foreground">
-                        connect {integration.name} in{" "}
-                        <strong>settings &gt; connections</strong> then come back here.
+                        Connect {integration.name} in{" "}
+                        <strong>Settings &gt; connections</strong> then come back here.
                       </p>
                     </div>
                   )}
@@ -530,7 +534,7 @@ export function PostInstallConnectionsModal({
                   {isExpanded && !integration && !isMcp && !isComposio && (
                     <div className="px-3 pb-3 border-t border-border pt-3">
                       <p className="text-xs text-muted-foreground">
-                        connection &quot;{connId}&quot; is not available. it
+                        Connection &quot;{connId}&quot; is not available. It
                         may need to be configured manually in settings &gt;
                         connections.
                       </p>
@@ -549,7 +553,7 @@ export function PostInstallConnectionsModal({
             className="text-xs"
             onClick={() => onOpenChange(false)}
           >
-            skip
+            Skip
           </Button>
           <Button
             size="sm"
@@ -557,7 +561,7 @@ export function PostInstallConnectionsModal({
             onClick={() => onOpenChange(false)}
             disabled={!allConfigured && false}
           >
-            {allConfigured ? "done" : "done"}
+            {allConfigured ? ui("Done") : ui("Done")}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -30,7 +30,7 @@ describe("PipeStoreSubmissionDialog", () => {
     );
 
     expect(screen.getByText("Store publishing is curated")).toBeInTheDocument();
-    expect(screen.getByText(`email ${PIPE_STORE_SUBMISSION_EMAIL}`)).toBeInTheDocument();
+    expect(screen.getByText(`Email ${PIPE_STORE_SUBMISSION_EMAIL}`)).toBeInTheDocument();
     expect(screen.getByText(/repository or pipe\.md link/i)).toBeInTheDocument();
     expect(screen.getByText(/never include API keys, credentials, or private data/i)).toBeInTheDocument();
     expect(screen.queryByText("PUBLISH")).not.toBeInTheDocument();

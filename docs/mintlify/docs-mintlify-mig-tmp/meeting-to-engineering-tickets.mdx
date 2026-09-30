@@ -1,0 +1,55 @@
+---
+title: "Turn a customer meeting into engineering ticket drafts"
+sidebarTitle: "Engineering ticket drafts"
+description: "Turn a reported problem into a ticket that separates the customer\u2019s observation from a verified reproduction."
+icon: "tickets"
+---
+
+Turn a reported problem into a ticket that separates the customer’s observation from a verified reproduction. A transcript can preserve the request and impact; it cannot establish the root cause or prove a fix shipped.
+
+## Start here
+
+Choose one meeting and check related support replies and existing issues. Confirm the customer’s platform and version where available. Keep unrelated customer details out of the ticket.
+
+## Copy this prompt
+
+Use this in Screenpipe chat or an assistant with the required connections. Replace the brackets with your details. If the assistant lacks access, provide a reviewed excerpt; a prompt alone does not connect it to your history.
+
+```text
+Draft engineering tickets from [meeting and related sources]. For each,
+include the user goal, reported behavior, expected behavior, known platform
+and version, reproducible steps if verified, impact, source times, and open
+questions. Separate bugs, feature requests, and setup misunderstandings.
+Search available existing issues for duplicates. Propose acceptance checks.
+Do not invent a root cause, promise a date, or publish customer details.
+```
+
+## Check the result
+
+Link each reported observation to a source passage. Have engineering verify a reproduction before labeling the cause. Review the final ticket for private identifiers before publishing it.
+
+<AccordionGroup>
+<Accordion title="See a worked example" id="worked-example">
+
+```text
+Problem: A scheduled report cannot be found after a run.
+Reported by customer: The task said it completed.
+Verified reproduction: Not yet established.
+Expected behavior: Output can be opened at the stated destination.
+Acceptance check: A test run produces the expected file and content.
+Open question: Did the run fail, or was the destination misunderstood?
+```
+
+</Accordion>
+<Accordion title="Go deeper: setup choices and edge cases" id="details">
+
+One meeting can contain a defect, a requested improvement, and a training question. Keep their acceptance criteria distinct so a documentation clarification does not falsely close a software defect.
+
+After a change, verify the current implementation and relevant test result. A merged PR, a released build, and a customer-confirmed resolution are different milestones; report the milestone actually established.
+
+</Accordion>
+</AccordionGroup>
+
+## Continue
+
+[Meeting follow up](/meeting-follow-up) · [engineering decision log](/engineering-decision-log) · [incident reconstruction](/incident-reconstruction)

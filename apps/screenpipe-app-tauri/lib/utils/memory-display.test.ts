@@ -87,8 +87,8 @@ OAuth demo recording.
     expect(display.summary).toBe("OAuth demo recording.");
     expect(display.properties).toEqual(
       expect.arrayContaining([
-        { label: "date", value: "2026-06-20" },
-        { label: "people", value: "Ansh · goruji" },
+        { label: "Date", value: "2026-06-20" },
+        { label: "People", value: "Ansh · goruji" },
       ]),
     );
   });

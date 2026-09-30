@@ -10,6 +10,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "./tooltip";
+import { useGT } from "gt-react";
+
 
 export interface ValidatedInputProps extends Omit<InputProps, "onChange"> {
   label?: string;
@@ -39,6 +41,7 @@ export const ValidatedInput = React.forwardRef<HTMLInputElement, ValidatedInputP
     onKeyDown,
     ...props
   }, ref) => {
+  const ui = useGT();
     const [value, setValue] = useState(props.value?.toString() || "");
     const [validationResult, setValidationResult] = useState<FieldValidationResult>({ isValid: true });
     const [isTouched, setIsTouched] = useState(false);
@@ -81,7 +84,7 @@ export const ValidatedInput = React.forwardRef<HTMLInputElement, ValidatedInputP
       const newValue = e.target.value;
       setValue(newValue);
       setIsTouched(true);
-      
+
       // Immediate validation for basic checks
       if (required && !newValue.trim()) {
         setValidationResult({ isValid: false, error: `${label || "Field"} is required` });
@@ -93,43 +96,43 @@ export const ValidatedInput = React.forwardRef<HTMLInputElement, ValidatedInputP
         // Clear immediate errors for debounced validation
         setValidationResult({ isValid: true });
       }
-      
+
       debouncedValidation(newValue);
     }, [required, minLength, maxLength, label, debouncedValidation]);
 
     const getValidationIcon = () => {
       if (!showValidationIcon || !isTouched) return null;
-      
+
       if (!validationResult.isValid) {
         return <AlertCircle className="h-4 w-4 text-destructive" />;
       }
-      
+
       if (validationResult.warning) {
         return <Info className="h-4 w-4 text-warning" />;
       }
-      
+
       if (validation && value) {
         return <CheckCircle2 className="h-4 w-4 text-success" />;
       }
-      
+
       return null;
     };
 
     const getInputVariant = () => {
       if (!isTouched) return "";
-      
+
       if (!validationResult.isValid) {
         return "border-destructive focus-visible:ring-destructive";
       }
-      
+
       if (validationResult.warning) {
         return "border-warning focus-visible:ring-warning";
       }
-      
+
       if (validation && value) {
         return "border-success focus-visible:ring-success";
       }
-      
+
       return "";
     };
 
@@ -153,7 +156,7 @@ export const ValidatedInput = React.forwardRef<HTMLInputElement, ValidatedInputP
             {required && <span className="text-destructive">*</span>}
           </Label>
         )}
-        
+
         <div className="relative">
           <Input
             ref={setRefs}
@@ -174,7 +177,7 @@ export const ValidatedInput = React.forwardRef<HTMLInputElement, ValidatedInputP
             )}
             maxLength={maxLength}
           />
-          
+
           {showValidationIcon && (
             <div className="absolute right-3 top-1/2 -translate-y-1/2">
               <TooltipProvider>
@@ -183,14 +186,14 @@ export const ValidatedInput = React.forwardRef<HTMLInputElement, ValidatedInputP
                     <div>{getValidationIcon()}</div>
                   </TooltipTrigger>
                   <TooltipContent>
-                    <p>{validationResult.error || validationResult.warning || "Valid"}</p>
+                    <p>{validationResult.error || validationResult.warning || ui("Valid")}</p>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
             </div>
           )}
         </div>
-        
+
         {getMessage() && (
           <p className={cn("text-sm", getMessageColor())}>
             {getMessage()}
@@ -206,4 +209,4 @@ export const ValidatedInput = React.forwardRef<HTMLInputElement, ValidatedInputP
   }
 );
 
-ValidatedInput.displayName = "ValidatedInput"; 
+ValidatedInput.displayName = "ValidatedInput";

@@ -479,12 +479,12 @@ describe("BrainOverview", () => {
     render(<BrainOverview />);
 
     expect(
-      await screen.findByText("this dashboard was made for your goal"),
+      await screen.findByText("This dashboard was made for your goal"),
     ).toBeTruthy();
     fireEvent.click(
       screen.getByRole("button", { name: "show me how it fills" }),
     );
-    expect(await screen.findByText("wait for real work")).toBeTruthy();
+    expect(await screen.findByText("Wait for real work")).toBeTruthy();
     fireEvent.click(
       screen.getByRole("button", { name: "got it, let me work" }),
     );
@@ -524,7 +524,7 @@ describe("BrainOverview", () => {
     render(<BrainOverview />);
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "finish setup" }),
+      await screen.findByRole("button", { name: "Finish setup" }),
     );
     await waitFor(() =>
       expect(mocks.createOnboardingLiveView).toHaveBeenCalledWith(
@@ -548,7 +548,7 @@ describe("BrainOverview", () => {
 
     expect(
       await screen.findByTestId("onboarding-live-view-first-result"),
-    ).toHaveTextContent("your first real result is ready");
+    ).toHaveTextContent("Your first real result is ready");
     expect(
       await screen.findByTestId("live-view-canvas", {}, { timeout: 10_000 }),
     ).toBeTruthy();
@@ -785,11 +785,11 @@ describe("BrainOverview", () => {
     fireEvent.click(await screen.findByTestId("overview-refresh-data"));
 
     const loadingButton = await screen.findByRole("button", {
-      name: "loading data",
+      name: "Loading data",
     });
     expect(loadingButton).toBeDisabled();
     expect(loadingButton.textContent).toBe("");
-    expect(screen.queryByText("loading data")).toBeNull();
+    expect(screen.queryByText("Loading data")).toBeNull();
   });
 
   it("reports an honest partial refresh when a block is not configured", async () => {
@@ -978,7 +978,7 @@ describe("BrainOverview", () => {
     await openDashboardMenu();
     expect(await screen.findByTestId("overview-new-dashboard")).toBeTruthy();
     expect(screen.getByTestId("overview-edit").textContent).toContain(
-      "customize",
+      "Customize",
     );
   });
 
@@ -1206,7 +1206,7 @@ describe("BrainOverview", () => {
 
     expect(
       await screen.findByTestId("overview-data-warning"),
-    ).toHaveTextContent("showing data older than today");
+    ).toHaveTextContent("Showing data older than today");
     expect(screen.getByTestId("overview-freshness")).toHaveTextContent(
       "Data through",
     );
@@ -1492,7 +1492,7 @@ describe("BrainOverview", () => {
       slots: [],
     });
     expect(await screen.findByTestId("overview-zero-state")).toBeTruthy();
-    expect(screen.getByText("choose an outcome")).toBeTruthy();
+    expect(screen.getByText("Choose an outcome")).toBeTruthy();
     expect(screen.getByTestId("live-view-template-daily-memory")).toBeTruthy();
     expect(
       screen.getByPlaceholderText(/show how I spend my time/),
@@ -1514,11 +1514,11 @@ describe("BrainOverview", () => {
     expect(
       await screen.findByTestId("overview-destination-replace"),
     ).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText("use this dashboard")).toBeTruthy();
+    expect(screen.getByText("Use this dashboard")).toBeTruthy();
     expect(screen.getByTestId("overview-apply-template")).toHaveTextContent(
       "build with agent",
     );
-    fireEvent.click(screen.getByText("discard"));
+    fireEvent.click(screen.getByText("Discard"));
     expect(await screen.findByTestId("overview-zero-state")).toBeTruthy();
     fireEvent.click(screen.getByTestId("overview-start-blank"));
     fireEvent.click(screen.getByTestId("overview-add-card"));
@@ -1567,7 +1567,7 @@ describe("BrainOverview", () => {
     render(<BrainOverview />);
 
     await openDashboardMenu();
-    fireEvent.click(await screen.findByText("delete"));
+    fireEvent.click(await screen.findByText("Delete"));
     fireEvent.click(await screen.findByTestId("overview-confirm-delete"));
 
     const emptyState = await screen.findByTestId("brain-overview-empty");
@@ -1899,7 +1899,7 @@ describe("BrainOverview", () => {
     render(<BrainOverview />);
 
     const useful = await screen.findByRole("button", {
-      name: "mark Focus time useful",
+      name: "Mark Focus time useful",
     });
     mocks.capture.mockClear();
     fireEvent.click(useful);
@@ -1940,7 +1940,7 @@ describe("BrainOverview", () => {
     });
 
     fireEvent.click(
-      screen.getByRole("button", { name: "regenerate Focus time" }),
+      screen.getByRole("button", { name: "Regenerate Focus time" }),
     );
     await waitFor(() =>
       expect(
@@ -1984,7 +1984,7 @@ describe("BrainOverview", () => {
     render(<BrainOverview />);
 
     const useful = await screen.findByRole("button", {
-      name: "mark Focus time useful",
+      name: "Mark Focus time useful",
     });
     mocks.capture.mockClear();
     fireEvent.click(useful);
@@ -2082,7 +2082,7 @@ describe("BrainOverview", () => {
     fireEvent.click(screen.getByText("1 handled · show"));
     expect(
       await screen.findByRole("button", {
-        name: "reopen Send the customer recap",
+        name: "Reopen Send the customer recap",
       }),
     ).toBeTruthy();
   }, 15_000);
@@ -2112,17 +2112,17 @@ describe("BrainOverview", () => {
     render(<BrainOverview />);
 
     const notUseful = await screen.findByRole("button", {
-      name: "mark Focus time not useful",
+      name: "Mark Focus time not useful",
     });
     mocks.capture.mockClear();
     fireEvent.click(notUseful);
     fireEvent.change(
-      await screen.findByPlaceholderText("e.g. exclude meetings"),
+      await screen.findByPlaceholderText("E.g. exclude meetings"),
       {
         target: { value: "exclude meetings" },
       },
     );
-    fireEvent.click(screen.getByRole("button", { name: "save feedback" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save feedback" }));
 
     await waitFor(() =>
       expect(notUseful.getAttribute("aria-pressed")).toBe("true"),
@@ -2158,7 +2158,7 @@ describe("BrainOverview", () => {
     render(<BrainOverview />);
 
     const useful = await screen.findByRole("button", {
-      name: "mark Focus time useful",
+      name: "Mark Focus time useful",
     });
     mocks.capture.mockClear();
     fireEvent.click(useful);
@@ -2212,13 +2212,13 @@ describe("BrainOverview", () => {
     render(<BrainOverview />);
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "edit Focus time with AI" }),
+      await screen.findByRole("button", { name: "Edit Focus time with AI" }),
     );
     fireEvent.change(
-      await screen.findByPlaceholderText("e.g. group by project instead"),
+      await screen.findByPlaceholderText("E.g. group by project instead"),
       { target: { value: "group this by project" } },
     );
-    fireEvent.click(screen.getByRole("button", { name: "update" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update" }));
 
     expect(await screen.findByTestId("live-view-ai-review")).toBeTruthy();
     expect(mocks.saveBrainView).not.toHaveBeenCalled();
@@ -2496,13 +2496,13 @@ describe("BrainOverview", () => {
     render(<BrainOverview />);
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "edit Focus time with AI" }),
+      await screen.findByRole("button", { name: "Edit Focus time with AI" }),
     );
     fireEvent.change(
-      await screen.findByPlaceholderText("e.g. group by project instead"),
+      await screen.findByPlaceholderText("E.g. group by project instead"),
       { target: { value: "group this by project" } },
     );
-    fireEvent.click(screen.getByRole("button", { name: "update" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update" }));
     fireEvent.click(
       await screen.findByTestId("canvas-proposal-reject-focus-time"),
     );

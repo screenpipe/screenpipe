@@ -46,7 +46,7 @@ afterEach(() => vi.clearAllTimers());
 
 /** Accept the step-0 consent card so the tour enters the ASK phase. */
 function startTour() {
-  fireEvent.click(screen.getByRole("button", { name: "show me · 30 sec" }));
+  fireEvent.click(screen.getByRole("button", { name: "Show me · 30 sec" }));
 }
 
 describe("first-run guide", () => {
@@ -59,7 +59,7 @@ describe("first-run guide", () => {
     );
 
     // Step 0: no tour yet, no prompt card — just the invitation.
-    expect(screen.getByText("you're all set")).toBeInTheDocument();
+    expect(screen.getByText("You're all set")).toBeInTheDocument();
     expect(screen.queryByText("1 of 3")).not.toBeInTheDocument();
 
     startTour();
@@ -77,7 +77,7 @@ describe("first-run guide", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "i'll explore" }));
+    fireEvent.click(screen.getByRole("button", { name: "I'll explore" }));
 
     expect(onDone).toHaveBeenCalledOnce();
     expect(mocks.capture).toHaveBeenCalledWith("firstrun_guide_skipped", {
@@ -95,7 +95,7 @@ describe("first-run guide", () => {
     );
     startTour();
 
-    const skipButton = screen.getByRole("button", { name: "skip intro" });
+    const skipButton = screen.getByRole("button", { name: "Skip intro" });
     expect(skipButton).toHaveClass(
       "w-full",
       "border",
@@ -115,7 +115,7 @@ describe("first-run guide", () => {
     );
     startTour();
 
-    fireEvent.click(screen.getByRole("button", { name: "skip intro" }));
+    fireEvent.click(screen.getByRole("button", { name: "Skip intro" }));
 
     expect(onDone).toHaveBeenCalledOnce();
     expect(mocks.capture).toHaveBeenCalledWith("firstrun_guide_skipped", {
@@ -171,7 +171,7 @@ describe("first-run guide", () => {
     );
     startTour();
 
-    expect(screen.getByText("esc to exit anytime")).toBeInTheDocument();
+    expect(screen.getByText("Esc to exit anytime")).toBeInTheDocument();
     expect(screen.getByText("1 of 3")).toBeInTheDocument();
   });
 
@@ -288,7 +288,7 @@ describe("first-run guide", () => {
       screen.getByText("2 of 3 · building your automation"),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "skip intro" }),
+      screen.getByRole("button", { name: "Skip intro" }),
     ).toBeInTheDocument();
   });
 
@@ -308,7 +308,7 @@ describe("first-run guide", () => {
       );
       startTour();
 
-      fireEvent.click(screen.getByRole("button", { name: "skip intro" }));
+      fireEvent.click(screen.getByRole("button", { name: "Skip intro" }));
 
       expect(textarea.value).toBe("");
     } finally {
@@ -332,7 +332,7 @@ describe("first-run guide", () => {
       );
       startTour();
 
-      fireEvent.click(screen.getByRole("button", { name: "skip intro" }));
+      fireEvent.click(screen.getByRole("button", { name: "Skip intro" }));
 
       expect(textarea.value).toBe(
         "create a pipe that tracks what i do every hour, but daily",

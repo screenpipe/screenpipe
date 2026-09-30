@@ -175,7 +175,7 @@ function parseBackgroundPipeAllowanceAdvisory(
   if (!value || typeof value !== "object") return null;
   const candidate = value as Partial<BackgroundPipeAllowanceAdvisory>;
   if (
-    candidate.should_notify !== true ||
+    typeof candidate.should_notify !== "boolean" ||
     candidate.reason !== "background_pipe_allowance_low" ||
     (candidate.lane !== "auto" &&
       candidate.lane !== "explicit" &&

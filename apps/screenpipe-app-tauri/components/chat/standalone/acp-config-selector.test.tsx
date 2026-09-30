@@ -19,6 +19,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { AcpConfigSelector } from "./acp-config-selector";
+import { Toaster } from "@/components/ui/toaster";
 import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 import type { AIPreset } from "@/lib/utils/tauri";
 
@@ -72,7 +73,7 @@ describe("ACP config trigger", () => {
     render(<AcpConfigSelector sessionId={SESSION} agentId="claude-acp" />);
 
     expect(screen.getByTestId("acp-config-trigger")).toHaveTextContent("Opus 4.1");
-    expect(screen.getByTestId("acp-config-trigger")).not.toHaveTextContent("config");
+    expect(screen.getByTestId("acp-config-trigger")).not.toHaveTextContent("Config");
   });
 
   it("replaces a generic default alias with the adapter's resolved model", () => {
@@ -129,7 +130,7 @@ describe("ACP config trigger", () => {
 
     const trigger = screen.getByTestId("acp-config-trigger");
     expect(trigger).toHaveTextContent("screenpipe/Auto");
-    expect(trigger).not.toHaveTextContent("recommended");
+    expect(trigger).not.toHaveTextContent("Recommended");
 
     fireEvent.click(trigger);
     expect(screen.getByRole("option")).toHaveTextContent(
@@ -152,7 +153,7 @@ describe("ACP config trigger", () => {
 
     expect(screen.getByTestId("acp-config-trigger")).toHaveTextContent("Opus 5");
     expect(screen.getByTestId("acp-config-trigger")).not.toHaveTextContent(
-      "context",
+      "Context",
     );
   });
 
@@ -261,7 +262,7 @@ describe("ACP config trigger", () => {
 
     const trigger = screen.getByTestId("acp-config-trigger");
     expect(trigger).toHaveTextContent("screenpipe/Auto");
-    expect(trigger).not.toHaveTextContent("recommended");
+    expect(trigger).not.toHaveTextContent("Recommended");
   });
 
   it("uses the adapter name when only re-authenticate is available", () => {
@@ -343,7 +344,7 @@ describe("ACP config trigger", () => {
 
     const trigger = screen.getByTestId("acp-config-trigger");
     expect(trigger).toHaveTextContent("Agent");
-    expect(trigger).not.toHaveTextContent("config");
+    expect(trigger).not.toHaveTextContent("Config");
     fireEvent.click(trigger);
     expect(screen.getByLabelText("Mode")).toBeInTheDocument();
     expect(screen.queryByLabelText("Allow All")).not.toBeInTheDocument();
@@ -417,6 +418,30 @@ describe("ACP config trigger", () => {
         null,
       ),
     );
+  });
+
+  it("shows an error toast when the live session rejects a change", async () => {
+    seedSession([modelOption("sonnet")]);
+    mocks.setConfigOption.mockResolvedValue({
+      status: "error",
+      error: "adapter rejected model",
+    });
+
+    render(
+      <>
+        <AcpConfigSelector sessionId={SESSION} agentId="claude-acp" />
+        <Toaster />
+      </>,
+    );
+
+    fireEvent.click(screen.getByTestId("acp-config-trigger"));
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "opus" },
+    });
+
+    const toast = await screen.findByTestId("toast-error");
+    expect(toast).toHaveTextContent("Could not change model");
+    expect(toast).toHaveTextContent("adapter rejected model");
   });
 
   it("keeps a two-value effort axis visible as a select", () => {

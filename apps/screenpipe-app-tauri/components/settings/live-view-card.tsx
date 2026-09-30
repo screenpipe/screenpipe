@@ -39,6 +39,8 @@ import type {
   BrainViewTimeRange,
   JsonValue,
 } from "@/lib/utils/tauri";
+import { useGT, useMessages } from "gt-react";
+
 
 export type {
   LiveViewItemActionRequest,
@@ -103,22 +105,24 @@ function LiveViewCardBody({
   onItemAction?: (request: LiveViewItemActionRequest) => Promise<boolean>;
   onItemHandoff?: (item: LiveViewListItem) => void;
 }) {
+
+  const ui = useGT();
   const rawPayload = slot.value?.payload;
   const payload = isRecord(rawPayload) ? rawPayload : null;
   if (!payload) {
     return (
       <div className="flex min-h-24 items-center justify-center border border-dashed border-border px-4 text-center text-xs text-muted-foreground">
         {preview ? (
-          "data loads after you apply this dashboard"
+          ui("Data loads after you apply this dashboard")
         ) : refreshing && slot.binding ? (
           <span className="inline-flex items-center gap-2">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            asking {slot.binding.pipeName} for fresh data
+            Asking {slot.binding.pipeName} for fresh data
           </span>
         ) : slot.binding ? (
-          `${slot.binding.pipeName} has not published this data yet`
+          ui("{value1} has not published this data yet", { value1: slot.binding.pipeName })
         ) : (
-          "connect a scheduled task to fill this Block"
+          ui("Connect a scheduled task to fill this Block")
         )}
       </div>
     );
@@ -187,14 +191,14 @@ function LiveViewCardBody({
               data-testid={`live-view-list-${slot.id}-clear`}
               className="flex min-h-20 items-center justify-center px-4 text-center text-xs text-muted-foreground"
             >
-              nothing needs attention
+              Nothing needs attention
             </div>
           )}
           {handledItems.length > 0 && (
             <details className="border-t border-border">
               <summary
                 data-testid={`live-view-list-${slot.id}-handled-toggle`}
-                className="cursor-pointer px-1 py-2 font-mono text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
+                className="cursor-pointer px-1 py-2 font-mono text-[10px] normal-case tracking-wide text-muted-foreground hover:text-foreground"
               >
                 {handledItems.length} handled · show
               </summary>
@@ -231,7 +235,7 @@ function LiveViewCardBody({
               }
             />
             {typeof item.status === "string" && (
-              <span className="shrink-0 border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+              <span className="shrink-0 border border-border px-1.5 py-0.5 text-[10px] normal-case tracking-wide text-muted-foreground">
                 {item.status}
               </span>
             )}
@@ -306,7 +310,7 @@ function LiveViewCardBody({
                 </td>
                 <td className="py-2.5 pl-4 text-right align-top">
                   {typeof item.status === "string" && (
-                    <span className="border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <span className="border border-border px-1.5 py-0.5 text-[10px] normal-case tracking-wide text-muted-foreground">
                       {item.status}
                     </span>
                   )}
@@ -415,6 +419,9 @@ export function LiveViewCard({
   onItemAction?: (request: LiveViewItemActionRequest) => Promise<boolean>;
   onItemHandoff?: (item: LiveViewListItem) => void;
 }) {
+
+  const ui = useGT();
+  const uiMessages = useMessages();
   const [aiOpen, setAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -459,9 +466,9 @@ export function LiveViewCard({
       <div className="mb-4 flex items-start justify-between gap-3">
         <div className={`min-w-0 ${hasActions ? "pr-32" : ""}`}>
           <h3 className="truncate text-sm font-medium">{slot.title}</h3>
-          <p className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+          <p className="mt-0.5 text-[10px] normal-case tracking-wide text-muted-foreground">
             {COMPONENT_LABELS[slot.component]} · requested:{" "}
-            {getLiveViewTimeRangeOption(timeRange).label}
+            {uiMessages(getLiveViewTimeRangeOption(timeRange).label)}
           </p>
         </div>
       </div>
@@ -474,9 +481,9 @@ export function LiveViewCard({
             type="button"
             variant="ghost"
             size="icon"
-            aria-label={`mark ${slot.title} useful`}
+            aria-label={ui("Mark {value1} useful", { value1: slot.title })}
             aria-pressed={feedback === "up"}
-            className={`h-7 w-7 rounded-none ${
+            className={`h-7 w-7 rounded-md ${
               feedback === "up" ? "bg-foreground text-background" : ""
             }`}
             disabled={!slot.value || busy}
@@ -500,9 +507,9 @@ export function LiveViewCard({
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-label={`mark ${slot.title} not useful`}
+                aria-label={ui("Mark {value1} not useful", { value1: slot.title })}
                 aria-pressed={feedback === "down"}
-                className={`h-7 w-7 rounded-none ${
+                className={`h-7 w-7 rounded-md ${
                   feedback === "down" ? "bg-foreground text-background" : ""
                 }`}
                 disabled={!slot.value || busy}
@@ -517,7 +524,7 @@ export function LiveViewCard({
             <PopoverContent
               align="end"
               sideOffset={6}
-              className="w-72 rounded-none p-3"
+              className="w-72 rounded-lg p-3"
             >
               <form
                 className="space-y-2"
@@ -536,8 +543,8 @@ export function LiveViewCard({
                   autoFocus
                   value={feedbackNote}
                   onChange={(event) => setFeedbackNote(event.target.value)}
-                  placeholder="e.g. exclude meetings"
-                  className="h-8 rounded-none text-xs"
+                  placeholder={ui("E.g. exclude meetings")}
+                  className="h-8 rounded-md text-xs"
                   maxLength={500}
                 />
                 <div className="flex items-center justify-between gap-2">
@@ -546,11 +553,11 @@ export function LiveViewCard({
                       type="button"
                       variant="ghost"
                       size="sm"
-                      className="h-7 rounded-none text-xs"
+                      className="h-7 rounded-md text-xs"
                       disabled={feedbackSaving !== null}
                       onClick={() => void saveFeedback(null)}
                     >
-                      clear
+                      Clear
                     </Button>
                   ) : (
                     <span />
@@ -558,13 +565,13 @@ export function LiveViewCard({
                   <Button
                     type="submit"
                     size="sm"
-                    className="h-7 rounded-none text-xs"
+                    className="h-7 rounded-md text-xs"
                     disabled={feedbackSaving !== null}
                   >
                     {feedbackSaving === "down" && (
                       <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
                     )}
-                    save feedback
+                    Save feedback
                   </Button>
                 </div>
               </form>
@@ -574,9 +581,9 @@ export function LiveViewCard({
             type="button"
             variant="ghost"
             size="icon"
-            aria-label={`regenerate ${slot.title}`}
-            title="regenerate this section"
-            className="h-7 w-7 rounded-none"
+            aria-label={ui("Regenerate {value1}", { value1: slot.title })}
+            title={ui("Regenerate this section")}
+            className="h-7 w-7 rounded-md"
             disabled={!slot.binding || busy}
             onClick={onRegenerate}
           >
@@ -592,9 +599,9 @@ export function LiveViewCard({
                 type="button"
                 variant="ghost"
                 size="icon"
-                aria-label={`edit ${slot.title} with AI`}
-                title="edit this section with AI"
-                className="h-7 w-7 rounded-none"
+                aria-label={ui("Edit {value1} with AI", { value1: slot.title })}
+                title={ui("Edit this section with AI")}
+                className="h-7 w-7 rounded-md"
                 disabled={busy}
               >
                 {aiEditing ? (
@@ -607,7 +614,7 @@ export function LiveViewCard({
             <PopoverContent
               align="end"
               sideOffset={6}
-              className="w-72 rounded-none p-3"
+              className="w-72 rounded-lg p-3"
             >
               <form onSubmit={submitAiEdit} className="space-y-2">
                 <div>
@@ -620,21 +627,21 @@ export function LiveViewCard({
                   autoFocus
                   value={aiPrompt}
                   onChange={(event) => setAiPrompt(event.target.value)}
-                  placeholder="e.g. group by project instead"
-                  className="h-8 rounded-none text-xs"
+                  placeholder={ui("E.g. group by project instead")}
+                  className="h-8 rounded-md text-xs"
                   maxLength={500}
                 />
                 <div className="flex justify-end">
                   <Button
                     type="submit"
                     size="sm"
-                    className="h-7 rounded-none text-xs"
+                    className="h-7 rounded-md text-xs"
                     disabled={!aiPrompt.trim() || aiEditing}
                   >
                     {aiEditing && (
                       <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
                     )}
-                    update
+                    Update
                   </Button>
                 </div>
               </form>
@@ -659,13 +666,13 @@ export function LiveViewCard({
       <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-2 text-[10px] text-muted-foreground">
         <span className="truncate">
           {slot.binding
-            ? `Scheduled task: ${slot.binding.pipeName}`
-            : "No scheduled task connected"}
+            ? ui("Scheduled task: {value1}", { value1: slot.binding.pipeName })
+            : ui("No scheduled task connected")}
         </span>
         {SOURCE_STATUS_LABELS[effectiveSourceStatus] && (
           <span
             data-testid={`overview-card-source-status-${slot.id}`}
-            className="shrink-0 border border-border px-1 py-px uppercase tracking-wide"
+            className="shrink-0 border border-border px-1 py-px normal-case tracking-wide"
             title={SOURCE_STATUS_TITLES[effectiveSourceStatus] ?? undefined}
           >
             {SOURCE_STATUS_LABELS[effectiveSourceStatus]}
@@ -676,7 +683,7 @@ export function LiveViewCard({
             data-testid={`overview-card-updated-${slot.id}`}
             className="ml-auto shrink-0"
           >
-            updated {timeAgo(slot.value.updatedAt)} · artifact #
+            Updated {timeAgo(slot.value.updatedAt)} · artifact #
             {slot.value.artifactOutputId} · v
             {slot.value.artifactVersion}
           </span>

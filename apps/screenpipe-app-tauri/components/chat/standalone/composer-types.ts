@@ -75,6 +75,7 @@ interface ComposerQueueProps {
 }
 
 export interface ComposerInputProps {
+  ariaLabel?: string;
   sectionRef: React.RefObject<HTMLDivElement>;
   inputRef: React.RefObject<HTMLTextAreaElement>;
   value: string;
@@ -196,6 +197,7 @@ export interface ComposerJumpToLatestProps {
 }
 
 export interface ChatComposerProps {
+  dictationEnabled?: boolean;
   prefill: PrefillComposerProps;
   suggestions: ComposerSuggestionsProps;
   attachments: ComposerAttachmentsProps;

@@ -1,0 +1,50 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import {afterEach,beforeEach,expect,test} from 'bun:test';
+import {Miniflare} from 'miniflare';
+import {reserveDailyCostCap,releaseDailyCostReservation} from './cost-cap';
+import {getCostReservationMicroUsd,monthlyCostKey,trialCostKey,utcMonth} from './cost-tracker';
+import {TEST_PRIVATE_COST_CONTROLS} from '../test/fixtures/private-cost-controls';
+let mf:Miniflare,env:any;
+const now=new Date('2026-07-14T12:00:00Z');
+const model='gpt-5.6-luna';
+const amount=getCostReservationMicroUsd(model)/1_000_000;
+beforeEach(async()=>{
+ mf=new Miniflare({compatibilityDate:'2026-01-01',d1Databases:{DB:'synthetic-allowance'},modules:true,script:'export default {fetch(){return new Response("ok")}}'});
+ const DB=await mf.getD1Database('DB');
+ await DB.prepare(`CREATE TABLE usage (device_id TEXT PRIMARY KEY,user_id TEXT,daily_count INTEGER DEFAULT 0,last_reset TEXT NOT NULL,tier TEXT DEFAULT 'anonymous',created_at TEXT DEFAULT (datetime('now')),updated_at TEXT DEFAULT (datetime('now')),cost_day TEXT,daily_cost_usd REAL NOT NULL DEFAULT 0)`).run();
+ env={...TEST_PRIVATE_COST_CONTROLS,DB};
+ for(const plan of ['FREE','BASIC','BUSINESS'])for(const window of ['REQUEST','DAILY','MONTHLY'])env[`MAX_${window}_${plan}_TEXT_COST`]='10';
+ env.MAX_REQUEST_TRIAL_TEXT_COST='10';env.MAX_DAILY_TRIAL_TEXT_COST='10';env.MAX_TRIAL_TEXT_COST='10';
+});
+afterEach(async()=>{await mf?.dispose()});
+async function seed(id:string,cost:number,trial=false){
+ const key=trial?trialCostKey(id):monthlyCostKey(id),period=trial?'trial':utcMonth(now);
+ await env.DB.prepare(`INSERT INTO usage(device_id,daily_count,last_reset,tier,cost_day,daily_cost_usd) VALUES (?,0,?,'synthetic-spend',?,?)`).bind(key,period,period,cost).run();
+ return key;
+}
+const reserve=(id:string,plan='basic',trial=false)=>reserveDailyCostCap(env,id,plan==='basic'?'logged_in':'subscribed',model,now,'interactive',{},plan as any,trial);
+async function snapshot(){return (await env.DB.prepare('SELECT device_id,user_id,daily_count,last_reset,tier,cost_day,daily_cost_usd FROM usage ORDER BY device_id').all()).results}
+async function refused(r:any,code:string,status=429){expect(r.allowed).toBe(false);expect(r.response.status).toBe(status);expect(await r.response.text()).toContain(code)}
+for(const [plan,cap,trial] of [['free',0.1,false],['basic',1.5,false],['business',4,false],['business_max',4,false],['business_ultra',4,false],['business',4,true]] as const){
+ test(`${plan} ${trial?'trial':'monthly'} ceiling refuses crossing hold without changing spend or reservations`,async()=>{
+  await seed('capped',cap-amount/2,trial);const before=await snapshot();await refused(await reserve('capped',plan,trial),trial?'trial_cost_limit_exceeded':'monthly_cost_limit_exceeded');expect(await snapshot()).toEqual(before);
+ });
+ test(`${plan} ${trial?'trial':'monthly'} healthy allowance persists an exact releasable hold`,async()=>{
+  const key=await seed('healthy',cap-amount*2,trial);const before=await snapshot();const r=await reserve('healthy',plan,trial);expect(r.allowed).toBe(true);if(!r.allowed||!r.reservation)throw new Error('missing reservation');expect(r.reservation.reservedMicroUsd).toBeGreaterThan(0);
+  const rows=await snapshot();expect(rows.length).toBe(before.length+1);expect(rows.find((v:any)=>v.device_id===key)).toEqual(before[0]);
+  await releaseDailyCostReservation(env,r.reservation);expect(await snapshot()).toEqual(before);
+ });
+}
+test('concurrent requests cannot jointly cross the public monthly ceiling',async()=>{
+ await seed('concurrent',1.5-amount*1.5);const before=await snapshot();const results=await Promise.all([reserve('concurrent'),reserve('concurrent')]);expect(results.filter(r=>r.allowed)).toHaveLength(1);
+ for(const r of results){if(r.allowed&&r.reservation)await releaseDailyCostReservation(env,r.reservation);else {expect(r.allowed).toBe(false);expect(r.response.status).toBe(429)}}
+ expect(await snapshot()).toEqual(before);
+});
+test('stricter private monthly controls remain enforced',async()=>{
+ for(const plan of ['FREE','BASIC','BUSINESS'])for(const window of ['REQUEST','DAILY','MONTHLY'])env[`MAX_${window}_${plan}_TEXT_COST`]='0.8';
+ await seed('private',0.8-amount/2);const before=await snapshot();await refused(await reserve('private'),'monthly_cost_limit_exceeded');expect(await snapshot()).toEqual(before);
+});
+test('invalid control configuration refuses without a hold',async()=>{
+ env.MAX_MONTHLY_BASIC_TEXT_COST='1oops';const before=await snapshot();await refused(await reserve('invalid'),'cost_control_unavailable',503);expect(await snapshot()).toEqual(before);
+});

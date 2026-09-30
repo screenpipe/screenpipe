@@ -149,6 +149,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
 dependencies = [
  "cfg-if",
+ "const-random",
  "getrandom 0.3.4",
  "once_cell",
  "serde",
@@ -289,7 +290,7 @@ dependencies = [
 [[package]]
 name = "antirez-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f#780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f"
+source = "git+https://github.com/EzraEllette/audiopipe.git?rev=b099a2e589d0dc4d8f22e3e8351efea9e1a359ac#b099a2e589d0dc4d8f22e3e8351efea9e1a359ac"
 dependencies = [
  "cc",
 ]
@@ -745,7 +746,7 @@ dependencies = [
 [[package]]
 name = "audiopipe"
 version = "0.2.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f#780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f"
+source = "git+https://github.com/EzraEllette/audiopipe.git?rev=b099a2e589d0dc4d8f22e3e8351efea9e1a359ac#b099a2e589d0dc4d8f22e3e8351efea9e1a359ac"
 dependencies = [
  "antirez-asr-sys",
  "half",
@@ -1002,7 +1003,7 @@ dependencies = [
  "bitflags 2.11.1",
  "cexpr",
  "clang-sys",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "lazy_static",
  "lazycell",
  "log",
@@ -1025,7 +1026,7 @@ dependencies = [
  "bitflags 2.11.1",
  "cexpr",
  "clang-sys",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -1046,7 +1047,7 @@ dependencies = [
  "bitflags 2.11.1",
  "cexpr",
  "clang-sys",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -1728,7 +1729,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -1846,6 +1847,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
+name = "const-random"
+version = "0.1.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87e00182fe74b066627d63b85fd550ac2998d4b0bd86bfed477a0ae4c7c71359"
+dependencies = [
+ "const-random-macro",
+]
+
+[[package]]
+name = "const-random-macro"
+version = "0.1.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9d839f2a20b0aee515dc581a6172f2321f96cab76c1a38a4c584a194955390e"
+dependencies = [
+ "getrandom 0.2.17",
+ "once_cell",
+ "tiny-keccak",
+]
+
+[[package]]
 name = "convert_case"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1953,7 +1974,7 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.15.3"
-source = "git+https://github.com/screenpipe/cpal.git?rev=e7edfa174466e87a467d1a58e3a4aec233ff8a21#e7edfa174466e87a467d1a58e3a4aec233ff8a21"
+source = "git+https://github.com/screenpipe/cpal.git?rev=aa6b20a265bd1d9e240f11db26824b531546395b#aa6b20a265bd1d9e240f11db26824b531546395b"
 dependencies = [
  "alsa",
  "cidre 0.15.1",
@@ -2648,6 +2669,15 @@ dependencies = [
  "serde",
  "serde_json",
  "thousands",
+]
+
+[[package]]
+name = "diffy"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b545b8c50194bdd008283985ab0b31dba153cfd5b3066a92770634fbc0d7d291"
+dependencies = [
+ "nu-ansi-term",
 ]
 
 [[package]]
@@ -3462,6 +3492,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]
@@ -4414,7 +4454,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -4805,15 +4845,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -4983,6 +5014,15 @@ dependencies = [
  "futures-util",
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "jsonc-parser"
+version = "0.33.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ff5a48f48971be8e762a6ff955725a0802b6e46c441057992da5a673db9fd3a"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -5973,7 +6013,7 @@ version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35bd024e8b2ff75562e5f34e7f4905839deb4b22955ef5e73d2fea1b9813cb23"
 dependencies = [
- "num-bigint",
+ "num-bigint 0.4.6",
  "num-complex",
  "num-integer",
  "num-iter",
@@ -5986,6 +6026,16 @@ name = "num-bigint"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
+dependencies = [
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "num-bigint"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
 dependencies = [
  "num-integer",
  "num-traits",
@@ -6060,7 +6110,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
 dependencies = [
- "num-bigint",
+ "num-bigint 0.4.6",
  "num-integer",
  "num-traits",
 ]
@@ -6904,6 +6954,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "parquet"
+version = "59.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff322f54b1a0f9288e614ed1f2d329b380af5476420db19f46ffb865e1163d73"
+dependencies = [
+ "ahash",
+ "bytes",
+ "chrono",
+ "half",
+ "hashbrown 0.17.0",
+ "num-bigint 0.5.1",
+ "num-integer",
+ "num-traits",
+ "seq-macro",
+ "twox-hash",
+ "zstd",
+]
+
+[[package]]
 name = "password-hash"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7382,7 +7451,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -7497,7 +7566,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -7536,7 +7605,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -7559,7 +7628,7 @@ checksum = "478e0585659a122aa407eb7e3c0e1fa51b1d8a870038bd29f0cf4a8551eea972"
 [[package]]
 name = "qwen3-asr-sys"
 version = "0.1.0"
-source = "git+https://github.com/screenpipe/audiopipe.git?rev=780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f#780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f"
+source = "git+https://github.com/EzraEllette/audiopipe.git?rev=b099a2e589d0dc4d8f22e3e8351efea9e1a359ac#b099a2e589d0dc4d8f22e3e8351efea9e1a359ac"
 dependencies = [
  "cc",
  "cmake",
@@ -8123,7 +8192,7 @@ dependencies = [
  "md5 0.8.1",
  "ml-kem",
  "module-lattice",
- "num-bigint",
+ "num-bigint 0.4.6",
  "p256 0.14.0",
  "p384 0.14.0",
  "p521",
@@ -8555,7 +8624,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-audio"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -8566,10 +8635,10 @@ dependencies = [
  "clap",
  "cpal",
  "criterion",
- "crossbeam",
  "dashmap",
  "dirs 6.0.0",
  "env_logger",
+ "flume 0.11.1",
  "futures",
  "hf-hub 0.3.2",
  "hound",
@@ -8598,6 +8667,7 @@ dependencies = [
  "screenpipe-core",
  "screenpipe-db",
  "screenpipe-events",
+ "screenpipe-fs",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -8619,11 +8689,12 @@ dependencies = [
  "whisper-rs",
  "windows 0.58.0",
  "windows-core 0.58.0",
+ "wiremock",
 ]
 
 [[package]]
 name = "screenpipe-audio-eval"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "anyhow",
  "audiopipe",
@@ -8651,6 +8722,7 @@ dependencies = [
  "once_cell",
  "regex",
  "screenpipe-a11y",
+ "screenpipe-config",
  "screenpipe-core",
  "screenpipe-db",
  "screenpipe-screen",
@@ -8662,7 +8734,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-config"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "dirs 6.0.0",
  "screenpipe-cpu-features",
@@ -8676,7 +8748,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-connect"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -8705,6 +8777,7 @@ dependencies = [
  "russh-sftp",
  "rustls-native-certs",
  "screenpipe-core",
+ "screenpipe-fs",
  "screenpipe-secrets",
  "screenpipe-vault",
  "serde",
@@ -8724,7 +8797,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-core"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "accessibility",
  "accessibility-sys",
@@ -8741,6 +8814,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-graphics",
  "cron",
+ "diffy",
  "dirs 6.0.0",
  "ffmpeg-sidecar",
  "futures",
@@ -8757,6 +8831,8 @@ dependencies = [
  "reqwest 0.13.3",
  "screenpipe-cpu-features",
  "screenpipe-events",
+ "screenpipe-fs",
+ "screenpipe-resource",
  "screenpipe-secrets",
  "screenpipe-sync",
  "screenpipe-vault",
@@ -8778,29 +8854,36 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-cpu-features"
-version = "0.4.49"
+version = "0.4.52"
 
 [[package]]
 name = "screenpipe-db"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "anyhow",
  "chrono",
  "criterion",
+ "fs2",
  "futures",
  "image",
+ "libc",
  "libsqlite3-sys",
  "oasgen",
  "once_cell",
+ "parquet",
  "rand 0.9.4",
  "regex",
+ "rusqlite",
  "screenpipe-config",
  "screenpipe-core",
+ "screenpipe-fs",
+ "screenpipe-resource",
  "screenpipe-secrets",
  "screenpipe-semantic",
  "screenpipe-sqlite-coordinator",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlite-vec",
  "sqlx",
  "tempfile",
@@ -8808,12 +8891,14 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+ "windows-sys 0.59.0",
  "zerocopy 0.7.35",
 ]
 
 [[package]]
 name = "screenpipe-engine"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -8839,6 +8924,7 @@ dependencies = [
  "http-body-util",
  "hyper-util",
  "image",
+ "jsonc-parser",
  "libc",
  "lru",
  "md5 0.7.0",
@@ -8859,6 +8945,7 @@ dependencies = [
  "screenpipe-core",
  "screenpipe-db",
  "screenpipe-events",
+ "screenpipe-fs",
  "screenpipe-redact",
  "screenpipe-resource",
  "screenpipe-screen",
@@ -8898,7 +8985,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-events"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "anyhow",
  "chrono",
@@ -8915,8 +9002,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "screenpipe-fs"
+version = "0.4.52"
+dependencies = [
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "screenpipe-gateway"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "async-trait",
  "axum",
@@ -8941,12 +9036,13 @@ dependencies = [
  "tower 0.4.13",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "wiremock",
 ]
 
 [[package]]
 name = "screenpipe-meeting-eval"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "anyhow",
  "clap",
@@ -8958,7 +9054,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-overlay-win"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "serde",
  "serde_json",
@@ -8969,7 +9065,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-redact"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -8988,6 +9084,8 @@ dependencies = [
  "rand 0.9.4",
  "regex",
  "reqwest 0.13.3",
+ "screenpipe-db",
+ "screenpipe-fs",
  "screenpipe-resource",
  "screenpipe-rfdetr-mlx",
  "screenpipe-sqlite-coordinator",
@@ -9008,7 +9106,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-resource"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "serde",
  "sysinfo",
@@ -9028,7 +9126,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-screen"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -9055,6 +9153,7 @@ dependencies = [
  "screenpipe-connect",
  "screenpipe-core",
  "screenpipe-db",
+ "screenpipe-fs",
  "serde",
  "serde_json",
  "strsim 0.10.0",
@@ -9109,9 +9208,11 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sqlite-coordinator"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
+ "fs2",
  "libsqlite3-sys",
+ "screenpipe-fs",
  "serde",
  "serde_json",
  "sqlx",
@@ -9123,7 +9224,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sqlite-recovery"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "cc",
  "libsqlite3-sys",
@@ -9133,7 +9234,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-sync"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -9155,7 +9256,7 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-team-memory"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "serde",
  "serde_yaml",
@@ -9164,17 +9265,18 @@ dependencies = [
 
 [[package]]
 name = "screenpipe-telemetry-wire"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
 name = "screenpipe-vault"
-version = "0.4.49"
+version = "0.4.52"
 dependencies = [
  "argon2 0.5.3",
  "chacha20poly1305",
@@ -10889,6 +10991,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tiny-keccak"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c9d3793400a45f954c52e73d068316d76b6f4e36977e3fcebb13a2721e80237"
+dependencies = [
+ "crunchy",
+]
+
+[[package]]
 name = "tinystr"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11426,6 +11537,12 @@ dependencies = [
  "thiserror 1.0.69",
  "utf-8",
 ]
+
+[[package]]
+name = "twox-hash"
+version = "2.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5283634e518fe9e82c7b20520bb4bc209009fd16c82077c802f8111ecbb0117a"
 
 [[package]]
 name = "typed-path"
@@ -12111,8 +12228,9 @@ dependencies = [
 [[package]]
 name = "whisper-rs"
 version = "0.16.0"
-source = "git+https://github.com/screenpipe/whisper-rs.git?rev=97e4070#97e40705033724dee601e89f3bd701af8096c846"
+source = "git+https://github.com/EzraEllette/whisper-rs.git?rev=b649c3fccc8dcee4512c2778b049e64aa2d15978#b649c3fccc8dcee4512c2778b049e64aa2d15978"
 dependencies = [
+ "libc",
  "tracing",
  "whisper-rs-sys",
 ]
@@ -12120,7 +12238,7 @@ dependencies = [
 [[package]]
 name = "whisper-rs-sys"
 version = "0.15.0"
-source = "git+https://github.com/screenpipe/whisper-rs.git?rev=97e4070#97e40705033724dee601e89f3bd701af8096c846"
+source = "git+https://github.com/EzraEllette/whisper-rs.git?rev=b649c3fccc8dcee4512c2778b049e64aa2d15978#b649c3fccc8dcee4512c2778b049e64aa2d15978"
 dependencies = [
  "bindgen 0.72.1",
  "cfg-if",
@@ -12163,7 +12281,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -13318,6 +13436,34 @@ dependencies = [
  "crc32fast",
  "log",
  "simd-adler32",
+]
+
+[[package]]
+name = "zstd"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "7.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64d80649ab6db9d9f6f9c80a40becd948eda4714a0a5ac8c4d157a32231c7882"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.1.0+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ef0a8027ec3ee71300ab3bcbcd0393f434aa72b91ca6d635a39941deae8eea0"
+dependencies = [
+ "cc",
+ "pkg-config",
 ]
 
 [[package]]

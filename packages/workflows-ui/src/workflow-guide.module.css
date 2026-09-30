@@ -1,0 +1,572 @@
+/* screenpipe — AI that knows everything you've seen, said, or heard */
+/* https://screenpipe.com */
+.guide {
+  color: var(--ink, #171815);
+  font-size: 14px;
+}
+.guide button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--line, #dfe1d9);
+  border-radius: 7px;
+  min-height: 36px;
+  padding: 8px 12px;
+  background: var(--panel, #fff);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.guide button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.guide button:focus-visible,
+.guide a:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}
+.guide .primary {
+  background: var(--ink, #171815);
+  color: var(--panel, #fff);
+  border-color: var(--ink, #171815);
+}
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 0 12px;
+}
+.toolbar > button {
+  border: 0;
+  padding-left: 0;
+  background: transparent;
+}
+.toolbar > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.toolbar span {
+  color: var(--muted, #777b70);
+  font-size: 12px;
+}
+.guide .actionButton {
+  min-height: 34px;
+  padding: 6px 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.guide .actionButton:hover {
+  background: var(--soft, #f1f2ec);
+  color: var(--ink);
+}
+.saveStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.layout {
+  display: grid;
+  grid-template-columns: 205px minmax(0, 820px);
+  gap: 48px;
+  justify-content: center;
+  padding-top: 24px;
+  padding-bottom: 64px;
+}
+.outline {
+  align-self: start;
+  position: sticky;
+  top: 24px;
+  padding-top: 28px;
+}
+.eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.11em;
+  font-weight: 600;
+  color: var(--muted, #777b70);
+}
+.outline a {
+  display: flex;
+  gap: 12px;
+  padding: 10px 0;
+  text-decoration: none;
+  font-size: 12px;
+  line-height: 1.6;
+  color: inherit;
+}
+.outline a span {
+  color: var(--muted, #777b70);
+  font-size: 10px;
+  padding-top: 2px;
+}
+.note {
+  border-top: 1px solid var(--line, #dfe1d9);
+  margin-top: 30px;
+  padding-top: 22px;
+  color: var(--muted, #777b70);
+}
+.note p {
+  color: var(--ink, #171815);
+  margin: 10px 0 5px;
+  font-weight: 600;
+}
+.note small {
+  line-height: 1.7;
+  display: block;
+}
+.document {
+  min-width: 0;
+  padding-bottom: 70px;
+}
+.intro {
+  margin-bottom: 32px;
+}
+.intro h1 {
+  font-size: clamp(28px, 3vw, 42px);
+  letter-spacing: -0.035em;
+  line-height: 1.15;
+  margin: 18px 0;
+}
+.intro p:not(.eyebrow) {
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--muted, #777b70);
+}
+.intro small {
+  color: var(--muted, #777b70);
+  font-size: 11px;
+}
+.eyebrow span {
+  display: inline-block;
+  margin-left: 12px;
+  border: 1px solid var(--line, #dfe1d9);
+  padding: 4px 8px;
+  border-radius: 20px;
+  letter-spacing: 0;
+  font-size: 11px;
+}
+.section {
+  margin: 28px 0;
+  scroll-margin-top: 24px;
+}
+.section h2 {
+  margin: 0 0 8px 5px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 10px 5px;
+}
+.steps {
+  margin: 32px 0 0;
+}
+.step {
+  position: relative;
+  margin: 0 0 32px;
+  scroll-margin-top: 24px;
+}
+.step.drop {
+  box-shadow: 0 -2px 0 var(--ink);
+}
+.stepHeading {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 28px;
+  align-items: start;
+  gap: 4px;
+}
+.number {
+  padding-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.guide .stepTitle {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.4;
+}
+.stepBody {
+  margin: 6px 32px 0;
+}
+.step figure {
+  margin: 16px 5px;
+  position: relative;
+}
+.step img {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.step figure button {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+}
+.guide .grip {
+  -webkit-user-drag: element;
+  position: absolute;
+  left: -28px;
+  top: 3px;
+  padding: 4px;
+  min-height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: grab;
+}
+.guide .grip:active {
+  cursor: grabbing;
+}
+.step::before {
+  content: "";
+  position: absolute;
+  left: -28px;
+  top: 0;
+  bottom: 0;
+  width: 28px;
+}
+.grip,
+.controls,
+.step figure button {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+}
+.step:hover .grip,
+.step:hover .controls,
+.step:focus-within .grip,
+.step:focus-within .controls,
+.controls[open],
+.step figure:hover button,
+.step figure:focus-within button {
+  opacity: 1;
+  pointer-events: auto;
+}
+.controls {
+  position: relative;
+  margin-top: 4px;
+}
+.controls > summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  list-style: none;
+  min-height: 28px;
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.controls > summary::-webkit-details-marker {
+  display: none;
+}
+.controls > summary:hover {
+  background: var(--soft);
+}
+.controls > summary:focus-visible {
+  outline: 2px solid var(--muted);
+  outline-offset: 2px;
+}
+.stepTools {
+  position: absolute;
+  right: 0;
+  top: 30px;
+  z-index: 5;
+  width: 150px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 4px 12px #0000000d;
+}
+.stepTools button {
+  width: 100%;
+  justify-content: flex-start;
+  border: 0;
+  min-height: 32px;
+  background: transparent;
+  font-size: 12px;
+}
+.stepTools button:hover {
+  background: var(--soft);
+}
+.result {
+  margin: 12px 0 0;
+  color: var(--muted);
+}
+.result > span {
+  display: block;
+  padding-left: 5px;
+  font-size: 11px;
+}
+.guide .addStep {
+  margin: 0 0 8px 32px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 4px 5px;
+}
+.guide .addStep:hover {
+  background: var(--soft);
+  color: var(--ink);
+}
+.guide textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  resize: none;
+  overflow: hidden;
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 3px 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.65;
+}
+.guide textarea:focus-visible {
+  outline: none;
+  border-color: var(--muted);
+}
+.guide textarea::placeholder {
+  color: var(--muted);
+}
+.imageReview {
+  border: 1px solid var(--line, #dfe1d9);
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 20px 0;
+}
+.imageReviewHeader {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  color: var(--muted, #777b70);
+  font-size: 13px;
+}
+.imageReview img {
+  border: 0;
+  border-top: 1px solid var(--line, #dfe1d9);
+  border-bottom: 1px solid var(--line, #dfe1d9);
+  border-radius: 0;
+}
+.empty {
+  max-width: 650px;
+  min-height: 470px;
+  margin: 70px auto;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.empty h1 {
+  font-size: 30px;
+  letter-spacing: -0.04em;
+  margin: 8px 0;
+}
+.empty p {
+  margin: 0;
+  line-height: 1.7;
+  color: var(--muted, #777b70);
+}
+.empty small {
+  margin-top: 16px;
+  color: var(--muted, #777b70);
+}
+.mark {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--line, #dfe1d9);
+  border-radius: 14px;
+  margin-bottom: 14px;
+}
+.phases {
+  display: flex;
+  gap: 24px;
+  margin: 20px 0;
+  font-size: 12px;
+  color: var(--muted, #777b70);
+}
+.notice {
+  border-left: 2px solid #aaa;
+  padding: 12px 18px;
+  line-height: 1.65;
+  font-size: 13px;
+}
+.exportDialog {
+  width: min(480px, calc(100vw - 36px));
+  box-sizing: border-box;
+  border: 1px solid var(--line, #dfe1d9);
+  border-radius: 12px;
+  padding: 26px;
+  background: var(--panel, #fff);
+  color: var(--ink, #171815);
+}
+.exportDialog::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+.exportDialog > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.exportDialog h2 {
+  font-size: 23px;
+  letter-spacing: -0.025em;
+  margin: 0;
+}
+.exportDialog p,
+.exportDialog small {
+  color: var(--muted, #777b70);
+  line-height: 1.65;
+}
+.exportDialog input[type="checkbox"] {
+  appearance: auto;
+  accent-color: #171815;
+  color-scheme: light;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.exportDialog label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 0;
+}
+.exportDialog small {
+  display: block;
+  margin-bottom: 24px;
+}
+.spin {
+  animation: turn 1.5s linear infinite;
+}
+@keyframes turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+@media (max-width: 1050px) {
+  .layout {
+    grid-template-columns: minmax(0, 820px);
+    gap: 0;
+  }
+  .outline {
+    display: none;
+  }
+}
+@media (max-width: 650px) {
+  .toolbar {
+    gap: 8px;
+  }
+  .toolbar > div {
+    margin-left: auto;
+    gap: 4px;
+  }
+  .guide .grip {
+    left: 0;
+    z-index: 1;
+  }
+  .step:hover .number,
+  .step:focus-within .number {
+    opacity: 0;
+  }
+
+  .stepBody {
+    margin-right: 0;
+  }
+  .stepHeading {
+    grid-template-columns: 24px minmax(0, 1fr) 28px;
+  }
+  .number {
+    font-size: 11px;
+  }
+  .guide .stepTitle {
+    font-size: 17px;
+  }
+  .phases {
+    gap: 12px;
+  }
+  .empty {
+    margin: 40px auto;
+  }
+}
+
+.guide {
+  container-type: inline-size;
+  container-name: sop-guide;
+}
+.dialogActions {
+  margin-top: 24px;
+  flex-wrap: wrap;
+  justify-content: flex-end !important;
+  gap: 12px;
+}
+@container sop-guide (max-width: 1050px) {
+  .layout {
+    grid-template-columns: minmax(0, 780px);
+  }
+  .outline {
+    display: none;
+  }
+}
+@media (hover: none) {
+  .grip,
+  .controls,
+  .step figure button {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .grip,
+  .controls,
+  .step figure button {
+    transition: none;
+  }
+}
+
+@media (hover: none) and (max-width: 650px) {
+  .step .number {
+    opacity: 0;
+  }
+}

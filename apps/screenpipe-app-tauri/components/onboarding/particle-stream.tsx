@@ -632,7 +632,7 @@ export function ProgressSteps({
             }
           />
           <span
-            className={`font-mono text-[9px] tracking-wider uppercase ${
+            className={`font-mono text-[9px] tracking-wider normal-case ${
               step.done
                 ? "text-foreground"
                 : step.active

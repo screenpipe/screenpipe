@@ -24,6 +24,9 @@ import { Input } from "@/components/ui/input";
 import { commands, type IcsCalendarEntry } from "@/lib/utils/tauri";
 import { getStore, saveAndEncrypt } from "@/lib/hooks/use-settings";
 import { cn } from "@/lib/utils";
+import { useGT, useLocale, msg, useMessages } from "gt-react";
+import { englishUiMessage, type UiMessage } from "@/lib/i18n/message";
+
 
 export type CalendarProviderId = "native" | "google" | "ics";
 
@@ -61,27 +64,27 @@ export function nativeCalendarLabel({
 export function calendarProviderOptions(platform: {
   isMac: boolean;
   isWindows: boolean;
-}): CalendarProviderOption[] {
+}, ui: UiMessage = englishUiMessage): CalendarProviderOption[] {
   const nativeLabel = nativeCalendarLabel(platform);
   return [
     {
       id: "native",
       label: nativeLabel,
       description: platform.isMac
-        ? "Use calendars synced through macOS Internet Accounts."
+        ? ui(msg("Use calendars synced through macOS Internet Accounts."))
         : platform.isWindows
-          ? "Use calendars available through Windows Calendar."
-          : "Use calendars available through your operating system.",
+          ? ui(msg("Use calendars available through Windows Calendar."))
+          : ui(msg("Use calendars available through your operating system.")),
     },
     {
       id: "google",
       label: "Google Calendar",
-      description: "Connect directly with Google OAuth.",
+      description: ui(msg("Connect directly with Google OAuth.")),
     },
     {
       id: "ics",
       label: "ICS",
-      description: "Paste a read-only webcal or ICS feed URL.",
+      description: ui(msg("Paste a read-only webcal or ICS feed URL.")),
     },
   ];
 }
@@ -151,12 +154,15 @@ export function CalendarConnectDialog({
   platform,
   onConnected,
 }: CalendarConnectDialogProps) {
+  const uiMessages = useMessages();
+  const language = useLocale();
+
   const option = useMemo(
     () =>
-      calendarProviderOptions(platform).find(
+      calendarProviderOptions(platform, uiMessages).find(
         (candidate) => candidate.id === provider,
       ) ?? null,
-    [platform, provider],
+    [platform, provider, language],
   );
 
   if (!option || !provider) return null;
@@ -212,6 +218,8 @@ function NativeCalendarConnect({
   onConnected: () => void | Promise<void>;
   onClose: () => void;
 }) {
+
+  const ui = useGT();
   const [busy, setBusy] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
@@ -268,10 +276,10 @@ function NativeCalendarConnect({
       </p>
       <div className="border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
         {platform.isMac
-          ? "For Google, Outlook, or Exchange via Apple Calendar, add the account in macOS Internet Accounts first."
+          ? ui("For Google, Outlook, or Exchange via Apple Calendar, add the account in macOS Internet Accounts first.")
           : platform.isWindows
-            ? "For Google, Outlook, or Exchange via Windows Calendar, add the account in Windows Email & accounts first."
-            : "Use your operating system's calendar account settings to choose which calendars are available."}
+            ? ui("For Google, Outlook, or Exchange via Windows Calendar, add the account in Windows Email & accounts first.")
+            : ui("Use your operating system's calendar account settings to choose which calendars are available.")}
       </div>
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -280,15 +288,15 @@ function NativeCalendarConnect({
           ) : (
             <Monitor className="h-3.5 w-3.5" />
           )}
-          {connected ? "connected" : "not connected"}
+          {connected ? ui("connected") : ui("not connected")}
         </div>
-        <Button onClick={connect} disabled={busy} className="rounded-none">
+        <Button onClick={connect} disabled={busy} className="rounded-md">
           {busy ? (
             <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
           ) : (
             <CalendarDays className="mr-2 h-3.5 w-3.5" />
           )}
-          connect
+          Connect
         </Button>
       </div>
       {statusText && (
@@ -305,6 +313,7 @@ function GoogleCalendarConnect({
   onConnected: () => void | Promise<void>;
   onClose: () => void;
 }) {
+
   const [busy, setBusy] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
 
@@ -335,7 +344,7 @@ function GoogleCalendarConnect({
         Connect your Google Calendar directly. ScreenPipe uses read-only access
         for meeting detection and note metadata.
       </p>
-      <Button onClick={connect} disabled={busy} className="w-full rounded-none">
+      <Button onClick={connect} disabled={busy} className="w-full rounded-md">
         {busy ? (
           <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
         ) : (
@@ -345,7 +354,7 @@ function GoogleCalendarConnect({
             className="mr-2 h-3.5 w-3.5"
           />
         )}
-        connect google calendar
+        Connect google calendar
       </Button>
       {statusText && (
         <p className="text-xs text-muted-foreground">{statusText}</p>
@@ -361,6 +370,8 @@ function IcsCalendarConnect({
   onConnected: () => void | Promise<void>;
   onClose: () => void;
 }) {
+
+  const ui = useGT();
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -419,26 +430,26 @@ function IcsCalendarConnect({
             setStatusText(null);
           }}
           placeholder="https:// or webcal:// URL"
-          className="rounded-none"
+          className="rounded-md"
         />
         <Input
           value={name}
           onChange={(event) => setName(event.target.value)}
-          placeholder="name, optional"
-          className="rounded-none"
+          placeholder={ui("Name, optional")}
+          className="rounded-md"
         />
       </div>
       <Button
         onClick={addFeed}
         disabled={busy || !url.trim()}
-        className="w-full rounded-none"
+        className="w-full rounded-md"
       >
         {busy ? (
           <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
         ) : (
           <Plus className="mr-2 h-3.5 w-3.5" />
         )}
-        add feed
+        Add feed
       </Button>
       {statusText && (
         <p className="text-xs text-muted-foreground">{statusText}</p>

@@ -11,8 +11,9 @@ use super::{
     apply_focused_window_filters, AccessibilityTreeNode, FocusedWindowFilterResult, NodeBounds,
     SkipReason, TreeSnapshot, TreeWalkResult, TreeWalkerConfig, TreeWalkerPlatform,
 };
+use crate::capture_diagnostics::RetainedUiaIssue;
 use crate::events::AccessibilityNode;
-use crate::platform::windows_uia::UiaContext;
+use crate::platform::windows_uia::{BrowserDocumentKind, RetainedUiaCapture, UiaContext};
 
 use anyhow::Result;
 use chrono::Utc;
@@ -29,7 +30,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
 };
-use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
@@ -53,6 +54,23 @@ const EXCLUDED_APPS: &[&str] = &[
     "pickerhost",
     "snippingtool",
 ];
+
+fn is_windows_browser(app_lower: &str) -> bool {
+    browser_document_kind(app_lower).is_some()
+}
+
+fn browser_document_kind(app_lower: &str) -> Option<BrowserDocumentKind> {
+    if ["firefox", "zen"]
+        .iter()
+        .any(|browser| app_lower.contains(browser))
+    {
+        Some(BrowserDocumentKind::Mozilla)
+    } else if crate::url_filter::is_known_browser(app_lower) {
+        Some(BrowserDocumentKind::Chromium)
+    } else {
+        None
+    }
+}
 
 /// UIA control types that should be skipped (decorative, not text-bearing).
 const SKIP_TYPES: &[&str] = &[
@@ -112,18 +130,48 @@ fn is_automation_structure_type(control_type: &str) -> bool {
     )
 }
 
+/// UIA containers that preserve the browser document hierarchy needed by the
+/// semantic parsers. Text-bearing controls are emitted by the normal path;
+/// this list only covers otherwise-discarded structural nodes.
+fn is_semantic_structure_type(control_type: &str) -> bool {
+    matches!(
+        control_type,
+        "Document" | "Group" | "Pane" | "Custom" | "List" | "Table" | "DataGrid"
+    )
+}
+
+fn is_semantic_raw_view_app(app_lower: &str) -> bool {
+    [
+        "edge", "chrome", "chromium", "brave", "firefox", "slack", "discord", "claude", "obsidian",
+        "code", "cursor", "windsurf", "notion",
+    ]
+    .iter()
+    .any(|name| app_lower.contains(name))
+}
+
 /// Lazily-initialized COM + UIA state. Wrapped in `UnsafeCell` because
 /// `TreeWalkerPlatform::walk_focused_window` takes `&self` but we need
 /// to mutate on first call (lazy init). The walker is single-threaded.
 struct WalkerState {
     uia: Option<UiaContext>,
+    retained: Option<RetainedUiaCapture>,
+    retained_identity: Option<RetainedIdentity>,
     com_initialized_by_us: bool,
     com_ready: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RetainedIdentity {
+    hwnd: isize,
+    pid: u32,
+    semantic: bool,
+    config_epoch: u64,
 }
 
 /// Windows tree walker using UI Automation CacheRequest.
 pub struct WindowsTreeWalker {
     config: TreeWalkerConfig,
+    config_epoch: u64,
     state: UnsafeCell<WalkerState>,
 }
 
@@ -161,8 +209,11 @@ impl WindowsTreeWalker {
         config.compile_patterns();
         Self {
             config,
+            config_epoch: 0,
             state: UnsafeCell::new(WalkerState {
                 uia: None,
+                retained: None,
+                retained_identity: None,
                 com_initialized_by_us: false,
                 com_ready: false,
             }),
@@ -172,10 +223,13 @@ impl WindowsTreeWalker {
     /// Lazy-init COM + UIA context on first call (must happen on the walker thread).
     ///
     /// Safety: caller must ensure single-threaded access (guaranteed by walker design).
-    unsafe fn ensure_init(&self) -> Result<&UiaContext> {
+    unsafe fn ensure_init(&self) -> Result<()> {
         let state = &mut *self.state.get();
         if !state.com_ready {
-            let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            // UI Automation event handlers are documented for a non-UI MTA
+            // thread. This is the dedicated tree-walker thread, so it can own
+            // subscription registration and removal for its full lifetime.
+            let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
             if hr.is_ok() {
                 state.com_initialized_by_us = true;
                 state.com_ready = true;
@@ -220,13 +274,16 @@ impl WindowsTreeWalker {
                 ));
             }
         }
-        Ok(state.uia.as_ref().unwrap())
+        Ok(())
     }
 }
 
 impl Drop for WindowsTreeWalker {
     fn drop(&mut self) {
         let state = self.state.get_mut();
+        if let (Some(uia), Some(mut retained)) = (state.uia.as_ref(), state.retained.take()) {
+            uia.stop_retained_capture(&mut retained);
+        }
         // Drop UIA before CoUninitialize
         state.uia.take();
         if state.com_initialized_by_us {
@@ -238,27 +295,70 @@ impl Drop for WindowsTreeWalker {
 }
 
 impl TreeWalkerPlatform for WindowsTreeWalker {
+    fn suspend(&mut self) {
+        let state = self.state.get_mut();
+        if let (Some(uia), Some(mut retained)) = (state.uia.as_ref(), state.retained.take()) {
+            uia.stop_retained_capture(&mut retained);
+        }
+        state.retained_identity = None;
+    }
+
     fn update_config(&mut self, mut config: TreeWalkerConfig) {
+        let identity_changed = self.config.ignored_windows != config.ignored_windows
+            || self.config.included_windows != config.included_windows
+            || self.config.ignored_urls != config.ignored_urls
+            || self.config.included_urls != config.included_urls
+            || self.config.ignore_incognito_windows != config.ignore_incognito_windows
+            || self.config.capture_semantic_structure != config.capture_semantic_structure
+            || self.config.capture_automation_structure != config.capture_automation_structure;
         config.compile_patterns_reusing(Some(&self.config));
         self.config = config;
+        if !identity_changed {
+            return;
+        }
+        self.config_epoch = self.config_epoch.wrapping_add(1);
+        let state = self.state.get_mut();
+        if let (Some(uia), Some(mut retained)) = (state.uia.as_ref(), state.retained.take()) {
+            uia.stop_retained_capture(&mut retained);
+        }
+        state.retained_identity = None;
     }
 
     fn walk_focused_window(&self) -> Result<TreeWalkResult> {
         let start = Instant::now();
 
         // Safety: single-threaded access guaranteed by walker thread design
-        let uia = unsafe { self.ensure_init()? };
+        unsafe { self.ensure_init()? };
+        // Take one exclusive state borrow, then split its disjoint fields.
+        // This avoids retaining a shared reference into the UnsafeCell while
+        // also mutating retained capture state from that same cell.
+        let WalkerState {
+            uia,
+            retained,
+            retained_identity,
+            ..
+        } = unsafe { &mut *self.state.get() };
+        let uia = uia.as_ref().expect("UIA initialized");
 
         // Get the focused window
-        let hwnd = unsafe { GetForegroundWindow() };
+        let foreground_hwnd = unsafe { GetForegroundWindow() };
+        let hwnd = foreground_hwnd;
         if hwnd == HWND::default() {
             return Ok(TreeWalkResult::NotFound);
+        }
+        // Drop the previous window's subscription before any privacy/filter
+        // early return for the newly focused identity.
+        if retained_identity.is_some_and(|identity| identity.hwnd != hwnd.0 as isize) {
+            if let Some(mut old) = retained.take() {
+                uia.stop_retained_capture(&mut old);
+            }
+            *retained_identity = None;
         }
 
         // Skip transient shell-internal windows (MSCTFIME UI, Shell_TrayWnd, CiceroUIWndFrame).
         // On Windows 11 24H2+ a TSF/IME regression causes these explorer.exe-owned windows to
         // steal foreground focus for ~10-50ms on every mouse click, producing spurious frames.
-        if crate::platform::windows::is_transient_shell_window(hwnd) {
+        if crate::platform::windows::is_transient_shell_window(foreground_hwnd) {
             debug!("a11y: skipped transient shell window class");
             return Ok(TreeWalkResult::Skipped(SkipReason::ExcludedApp));
         }
@@ -271,6 +371,8 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
 
         // Skip excluded apps
         let app_lower = app_name.to_lowercase();
+        let url_policy_requires_fresh = is_windows_browser(&app_lower)
+            && (!self.config.ignored_urls.is_empty() || !self.config.included_urls.is_empty());
         if EXCLUDED_APPS.iter().any(|ex| app_lower.contains(ex)) {
             debug!(app = %app_name, pid, "a11y: skipped — hardcoded excluded app");
             return Ok(TreeWalkResult::Skipped(SkipReason::ExcludedApp));
@@ -337,7 +439,10 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
 
         // Use adaptive budget overrides when set
         let effective_timeout = self.config.effective_walk_timeout();
-        let effective_max_nodes = self.config.effective_max_nodes();
+        // Adaptive pressure changes how much work a slice admits, never the
+        // total retained-tree memory cap. Shrinking the latter strands an
+        // already useful baseline and prevents structural recovery.
+        let retained_max_nodes = self.config.max_nodes;
 
         // Check timeout budget
         if start.elapsed() >= effective_timeout {
@@ -345,17 +450,136 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         }
 
         // Capture the accessibility tree, bounded by the remaining wall-clock
-        // budget. The in-walk deadline truncates the per-element TreeWalker
-        // fallback (Chromium/Electron), which is serviced synchronously on the
-        // target app's UI thread and freezes it for the duration of the walk.
+        // budget. Requests cache only one element; the deadline is checked
+        // before asking the provider for another node. A single synchronous
+        // provider call can still overrun it and is covered by the watchdog.
         let remaining_budget = effective_timeout.saturating_sub(start.elapsed());
-        let captured =
-            match uia.capture_window_tree_bounded(hwnd, effective_max_nodes, remaining_budget) {
-                Some(captured) => captured,
-                None => return Ok(TreeWalkResult::NotFound),
-            };
+        let semantic =
+            self.config.capture_semantic_structure && is_semantic_raw_view_app(&app_lower);
+        let identity = RetainedIdentity {
+            hwnd: hwnd.0 as isize,
+            pid,
+            semantic,
+            config_epoch: self.config_epoch,
+        };
+        // Safety: the platform walker is permanently owned by one worker
+        // thread. Observer removal and COM release therefore happen in the
+        // same apartment that created them.
+        if *retained_identity != Some(identity) {
+            if let Some(mut old) = retained.take() {
+                uia.stop_retained_capture(&mut old);
+            }
+            *retained_identity = None;
+            match uia.start_retained_capture(hwnd, semantic) {
+                Ok(capture) => {
+                    *retained = Some(capture);
+                    *retained_identity = Some(identity);
+                }
+                Err(error) => {
+                    #[cfg(test)]
+                    eprintln!(
+                        "retained start failed hresult=0x{:08X}",
+                        error.code().0 as u32
+                    );
+                    RetainedUiaIssue {
+                        stage: "subscribe_or_root",
+                        hresult: Some(error.code().0),
+                        elapsed: start.elapsed(),
+                        budget: effective_timeout,
+                        nodes: 0,
+                        fallback: "pixel_only",
+                        accessibility_outcome: "unavailable",
+                        pixel_outcome: "preserved_when_privacy_allows",
+                    }
+                    .report();
+                    return Ok(if url_policy_requires_fresh {
+                        TreeWalkResult::Skipped(SkipReason::BlockedUrl)
+                    } else {
+                        TreeWalkResult::NotFound
+                    });
+                }
+            }
+        }
+        let slice_timeout = remaining_budget.min(std::time::Duration::from_millis(12));
+        let captured = match uia.advance_retained_capture(
+            retained.as_mut().expect("retained capture initialized"),
+            32,
+            retained_max_nodes,
+            slice_timeout,
+            browser_document_kind(&app_lower),
+            url_policy_requires_fresh,
+        ) {
+            Ok(captured) => captured,
+            Err(error) => {
+                #[cfg(test)]
+                eprintln!(
+                    "retained advance failed hresult=0x{:08X}",
+                    error.code().0 as u32
+                );
+                RetainedUiaIssue {
+                    stage: "retained_advance",
+                    hresult: Some(error.code().0),
+                    elapsed: start.elapsed(),
+                    budget: slice_timeout,
+                    nodes: 0,
+                    fallback: "restart_retained_baseline",
+                    accessibility_outcome: "unavailable",
+                    pixel_outcome: "preserved_when_privacy_allows",
+                }
+                .report();
+                if let Some(mut failed) = retained.take() {
+                    uia.stop_retained_capture(&mut failed);
+                }
+                *retained_identity = None;
+                return Ok(if url_policy_requires_fresh {
+                    TreeWalkResult::Skipped(SkipReason::BlockedUrl)
+                } else {
+                    TreeWalkResult::NotFound
+                });
+            }
+        };
+        let url_policy_enabled = url_policy_requires_fresh;
+        let fresh_policy_url = captured
+            .retained
+            .as_ref()
+            .and_then(|stats| stats.fresh_url.clone());
+        if let Some(stats) = captured.retained.as_ref() {
+            debug!(
+                provider_calls = stats.calls,
+                retained_nodes = stats.retained_nodes,
+                event_notices = stats.notices,
+                pending = stats.pending,
+                event_overflow = stats.overflowed,
+                slice_ms = slice_timeout.as_millis() as u64,
+                "uia retained capture slice"
+            );
+            if url_policy_enabled && !stats.url_fresh {
+                return Ok(TreeWalkResult::Skipped(
+                    if stats.document_pending_discovery {
+                        SkipReason::UrlPending
+                    } else {
+                        SkipReason::BlockedUrl
+                    },
+                ));
+            }
+        }
         let root = captured.root;
-        let truncation_reason = captured.truncation;
+        let truncation_reason = if captured
+            .retained
+            .as_ref()
+            .is_some_and(|stats| stats.document_pending_discovery)
+        {
+            // A cold Chromium profile may first expose only browser chrome.
+            // Keep ordinary (no URL policy) discovery alive in the owner
+            // worker until the committed RootWebArea appears.
+            crate::tree::TruncationReason::Pending
+        } else {
+            captured.truncation
+        };
+        let retained_work_pending = captured
+            .retained
+            .as_ref()
+            .is_some_and(|stats| stats.pending);
 
         // Get monitor dimensions for normalizing element bounds to 0-1 coords
         let monitor_rect = get_monitor_rect(hwnd);
@@ -367,6 +591,8 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
         // Extract text from the tree (matching macOS text extraction behavior)
         let mut text_buffer = String::with_capacity(4096);
         let mut nodes = Vec::with_capacity(256);
+        let mut semantic_nodes = Vec::with_capacity(128);
+        let mut walk_index = 0u32;
         let mut browser_url: Option<String> = None;
         let mut hit_ignored_extension = false;
         extract_text_from_tree(
@@ -381,8 +607,17 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             ignored_patterns.as_ref(),
             &app_lower,
             &mut hit_ignored_extension,
+            self.config.capture_semantic_structure,
             self.config.capture_automation_structure,
+            false,
+            &mut semantic_nodes,
+            &mut walk_index,
         );
+        if url_policy_enabled {
+            // The freshly read committed Document value is authoritative for URL
+            // policy. A retained Document value may lag same-title navigation.
+            browser_url = fresh_policy_url;
+        }
 
         if hit_ignored_extension {
             debug!(
@@ -465,7 +700,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             window_name,
             text_content: text_buffer,
             nodes,
-            semantic_nodes: Vec::new(),
+            semantic_nodes,
             browser_url,
             document_path,
             timestamp: Utc::now(),
@@ -475,6 +710,7 @@ impl TreeWalkerPlatform for WindowsTreeWalker {
             simhash,
             truncated: truncation_reason != super::TruncationReason::None,
             truncation_reason,
+            retained_work_pending,
             max_depth_reached: 0,
             window_bounds,
         }))
@@ -665,6 +901,23 @@ fn normalize_bounds(
     })
 }
 
+/// Preserve trustworthy native visibility evidence even when normalized bounds
+/// are omitted because the element is wholly outside the monitor.
+fn semantic_offscreen(
+    bounds: Option<&crate::events::ElementBounds>,
+    on_screen: Option<bool>,
+) -> bool {
+    on_screen == Some(false)
+        && bounds.is_some_and(|bounds| {
+            bounds.x.is_finite()
+                && bounds.y.is_finite()
+                && bounds.width.is_finite()
+                && bounds.height.is_finite()
+                && bounds.width > 0.0
+                && bounds.height > 0.0
+        })
+}
+
 /// Build an AccessibilityTreeNode from a UIA AccessibilityNode, propagating automation properties.
 fn make_tree_node(
     uia_node: &AccessibilityNode,
@@ -673,6 +926,8 @@ fn make_tree_node(
     depth: usize,
     bounds: Option<NodeBounds>,
     on_screen: Option<bool>,
+    capture_semantic_dom: bool,
+    walk_index: u32,
 ) -> AccessibilityTreeNode {
     let mut n = AccessibilityTreeNode::new(
         role.to_string(),
@@ -681,6 +936,7 @@ fn make_tree_node(
         bounds,
     );
     n.on_screen = on_screen;
+    n.walk_index = walk_index;
     n.automation_id = uia_node.automation_id.clone();
     n.class_name = uia_node.class_name.clone();
     n.value = uia_node.value.clone();
@@ -694,6 +950,11 @@ fn make_tree_node(
     n.accelerator_key = uia_node.accelerator_key.clone();
     n.access_key = uia_node.access_key.clone();
     n.role_description = uia_node.localized_control_type.clone();
+    if capture_semantic_dom {
+        n.semantic_dom_identifier = uia_node.automation_id.clone();
+        n.semantic_dom_classes = uia_node.class_name.clone();
+        n.semantic_offscreen = semantic_offscreen(uia_node.bounds.as_ref(), on_screen);
+    }
     n
 }
 
@@ -712,13 +973,21 @@ fn extract_text_from_tree(
     ignored_patterns: &[WindowPattern],
     focused_app_lower: &str,
     hit_ignored_extension: &mut bool,
+    capture_semantic_structure: bool,
     capture_automation_structure: bool,
+    inside_document: bool,
+    semantic_nodes: &mut Vec<AccessibilityTreeNode>,
+    walk_index: &mut u32,
 ) {
     if depth > max_depth {
         return;
     }
 
     let ct = node.control_type.as_str();
+    let current_walk_index = *walk_index;
+    *walk_index = walk_index.saturating_add(1);
+    let in_document = inside_document || ct.eq_ignore_ascii_case("Document");
+    let capture_semantic_dom = capture_semantic_structure && in_document;
 
     // Skip decorative elements
     if SKIP_TYPES.iter().any(|&s| ct.eq_ignore_ascii_case(s))
@@ -750,8 +1019,16 @@ fn extract_text_from_tree(
             // Never extract the value of password fields
             if node.is_password == Some(true) {
                 if capture_automation_structure {
-                    let mut tree_node =
-                        make_tree_node(node, ct, "", depth, norm_bounds.clone(), on_screen);
+                    let mut tree_node = make_tree_node(
+                        node,
+                        ct,
+                        "",
+                        depth,
+                        norm_bounds.clone(),
+                        on_screen,
+                        false,
+                        current_walk_index,
+                    );
                     // UIA Value can contain the secret even when IsPassword is
                     // set. Preserve targeting metadata, never the field value.
                     tree_node.value = None;
@@ -770,6 +1047,8 @@ fn extract_text_from_tree(
                         depth,
                         norm_bounds.clone(),
                         on_screen,
+                        capture_semantic_dom,
+                        current_walk_index,
                     ));
                     // Don't recurse into text controls — their children are sub-elements of the same text
                     return;
@@ -832,6 +1111,8 @@ fn extract_text_from_tree(
                             depth,
                             norm_bounds.clone(),
                             on_screen,
+                            capture_semantic_dom,
+                            current_walk_index,
                         ));
                     }
                 }
@@ -849,6 +1130,8 @@ fn extract_text_from_tree(
                         depth,
                         norm_bounds.clone(),
                         on_screen,
+                        capture_semantic_dom,
+                        current_walk_index,
                     ));
                 }
             }
@@ -869,6 +1152,8 @@ fn extract_text_from_tree(
                     depth,
                     norm_bounds.clone(),
                     on_screen,
+                    capture_semantic_dom,
+                    current_walk_index,
                 ));
             }
         } else if ct.eq_ignore_ascii_case("Custom") {
@@ -883,6 +1168,8 @@ fn extract_text_from_tree(
                         depth,
                         norm_bounds.clone(),
                         on_screen,
+                        capture_semantic_dom,
+                        current_walk_index,
                     ));
                 }
             }
@@ -901,9 +1188,45 @@ fn extract_text_from_tree(
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .unwrap_or("");
-        let mut tree_node = make_tree_node(node, ct, text, depth, norm_bounds.clone(), on_screen);
+        let mut tree_node = make_tree_node(
+            node,
+            ct,
+            text,
+            depth,
+            norm_bounds.clone(),
+            on_screen,
+            capture_semantic_dom,
+            current_walk_index,
+        );
         tree_node.automation_relevant = true;
         nodes.push(tree_node);
+    }
+
+    if capture_semantic_dom
+        && nodes.len() == nodes_before
+        && (is_semantic_structure_type(ct)
+            || node
+                .automation_id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty())
+            || node
+                .class_name
+                .as_deref()
+                .is_some_and(|class| !class.trim().is_empty()))
+    {
+        let text = node.name.as_deref().map(str::trim).unwrap_or("");
+        let mut tree_node = make_tree_node(
+            node,
+            ct,
+            text,
+            depth,
+            norm_bounds.clone(),
+            on_screen,
+            true,
+            current_walk_index,
+        );
+        tree_node.semantic_only = true;
+        semantic_nodes.push(tree_node);
     }
 
     // Recurse into children
@@ -920,7 +1243,11 @@ fn extract_text_from_tree(
             ignored_patterns,
             focused_app_lower,
             hit_ignored_extension,
+            capture_semantic_structure,
             capture_automation_structure,
+            in_document,
+            semantic_nodes,
+            walk_index,
         );
     }
 }
@@ -976,6 +1303,70 @@ fn append_text(buffer: &mut String, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_document_provider_classification_distinguishes_mozilla() {
+        assert_eq!(
+            browser_document_kind("firefox.exe"),
+            Some(BrowserDocumentKind::Mozilla)
+        );
+        assert_eq!(
+            browser_document_kind("zen.exe"),
+            Some(BrowserDocumentKind::Mozilla)
+        );
+        assert_eq!(
+            browser_document_kind("msedge.exe"),
+            Some(BrowserDocumentKind::Chromium)
+        );
+        assert_eq!(
+            browser_document_kind("helium.exe"),
+            Some(BrowserDocumentKind::Chromium)
+        );
+        assert_eq!(
+            browser_document_kind("microsoft edge"),
+            Some(BrowserDocumentKind::Chromium)
+        );
+        assert_eq!(browser_document_kind("notepad.exe"), None);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn extract_for_test(
+        node: &AccessibilityNode,
+        depth: usize,
+        max_depth: usize,
+        buffer: &mut String,
+        nodes: &mut Vec<AccessibilityTreeNode>,
+        browser_url: &mut Option<String>,
+        monitor_rect: &Option<MonitorRect>,
+        window_rect: &Option<WindowRect>,
+        ignored_patterns: &[WindowPattern],
+        focused_app_lower: &str,
+        hit_ignored_extension: &mut bool,
+        capture_semantic_structure: bool,
+        capture_automation_structure: bool,
+    ) -> Vec<AccessibilityTreeNode> {
+        let mut semantic_nodes = Vec::new();
+        let mut walk_index = 0;
+        extract_text_from_tree(
+            node,
+            depth,
+            max_depth,
+            buffer,
+            nodes,
+            browser_url,
+            monitor_rect,
+            window_rect,
+            ignored_patterns,
+            focused_app_lower,
+            hit_ignored_extension,
+            capture_semantic_structure,
+            capture_automation_structure,
+            false,
+            &mut semantic_nodes,
+            &mut walk_index,
+        );
+        semantic_nodes
+    }
 
     #[test]
     fn test_skip_types() {
@@ -1038,7 +1429,7 @@ mod tests {
         let mut buf = String::new();
         let mut nodes = Vec::new();
         let mut url = None;
-        extract_text_from_tree(
+        extract_for_test(
             &tree,
             0,
             10,
@@ -1050,6 +1441,7 @@ mod tests {
             &[],
             "",
             &mut false,
+            false,
             false,
         );
 
@@ -1098,7 +1490,7 @@ mod tests {
         let mut buf = String::new();
         let mut nodes = Vec::new();
         let mut url = None;
-        extract_text_from_tree(
+        extract_for_test(
             &tree,
             0,
             10,
@@ -1110,6 +1502,7 @@ mod tests {
             &[],
             "",
             &mut false,
+            false,
             true,
         );
 
@@ -1120,6 +1513,83 @@ mod tests {
         assert_eq!(nodes[1].is_password, Some(true));
         assert_eq!(nodes[1].value, None);
         assert!(!buf.contains("must-never-escape"));
+    }
+
+    #[test]
+    fn semantic_offscreen_requires_positive_finite_native_geometry() {
+        use crate::events::ElementBounds;
+
+        let positive = ElementBounds {
+            x: -500.0,
+            y: 20.0,
+            width: 120.0,
+            height: 30.0,
+        };
+        assert!(semantic_offscreen(Some(&positive), Some(false)));
+        assert!(!semantic_offscreen(Some(&positive), Some(true)));
+
+        for invalid in [
+            ElementBounds {
+                width: 0.0,
+                ..positive.clone()
+            },
+            ElementBounds {
+                height: 0.0,
+                ..positive.clone()
+            },
+            ElementBounds {
+                x: f64::NAN,
+                ..positive.clone()
+            },
+            ElementBounds {
+                width: f64::INFINITY,
+                ..positive.clone()
+            },
+        ] {
+            assert!(!semantic_offscreen(Some(&invalid), Some(false)));
+        }
+        assert!(!semantic_offscreen(None, Some(false)));
+    }
+
+    #[test]
+    fn combined_semantic_and_automation_capture_keeps_dom_evidence() {
+        let tree = AccessibilityNode {
+            control_type: "Document".into(),
+            children: vec![AccessibilityNode {
+                control_type: "Button".into(),
+                automation_id: Some("submit".into()),
+                class_name: Some("primary action".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut nodes = Vec::new();
+        let semantic = extract_for_test(
+            &tree,
+            0,
+            10,
+            &mut String::new(),
+            &mut nodes,
+            &mut None,
+            &None,
+            &None,
+            &[],
+            "",
+            &mut false,
+            true,
+            true,
+        );
+
+        assert!(
+            semantic.is_empty(),
+            "automation copy suppresses a duplicate"
+        );
+        let button = nodes.iter().find(|node| node.role == "Button").unwrap();
+        assert_eq!(button.semantic_dom_identifier.as_deref(), Some("submit"));
+        assert_eq!(
+            button.semantic_dom_classes.as_deref(),
+            Some("primary action")
+        );
     }
 
     #[test]
@@ -1159,7 +1629,7 @@ mod tests {
         let mut buf = String::new();
         let mut nodes = Vec::new();
         let mut url = None;
-        extract_text_from_tree(
+        extract_for_test(
             &tree,
             0,
             30,
@@ -1171,6 +1641,7 @@ mod tests {
             &[],
             "",
             &mut false,
+            false,
             false,
         );
 
@@ -1209,6 +1680,86 @@ mod tests {
             "Should capture at least 3 nodes from Document children, got {}",
             nodes.len()
         );
+    }
+
+    #[test]
+    fn test_semantic_capture_retains_native_browser_dom_evidence_only_when_enabled() {
+        let tree = AccessibilityNode {
+            control_type: "Window".into(),
+            children: vec![AccessibilityNode {
+                control_type: "Document".into(),
+                value: Some("https://example.com/item".into()),
+                children: vec![AccessibilityNode {
+                    control_type: "Group".into(),
+                    automation_id: Some("issue-42-permalink".into()),
+                    class_name: Some("js-comment timeline-comment".into()),
+                    children: vec![AccessibilityNode {
+                        control_type: "Text".into(),
+                        name: Some("Verified body".into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let mut text = String::new();
+        let mut nodes = Vec::new();
+        let mut url = None;
+        let semantic_nodes = extract_for_test(
+            &tree,
+            0,
+            10,
+            &mut text,
+            &mut nodes,
+            &mut url,
+            &None,
+            &None,
+            &[],
+            "msedge",
+            &mut false,
+            true,
+            false,
+        );
+
+        let container = semantic_nodes
+            .iter()
+            .find(|node| node.semantic_dom_identifier.as_deref() == Some("issue-42-permalink"))
+            .expect("native UIA identifier should be retained for semantic parsing");
+        assert_eq!(
+            container.semantic_dom_classes.as_deref(),
+            Some("js-comment timeline-comment")
+        );
+        assert!(container.semantic_only);
+        assert_eq!(container.walk_index, 2);
+        assert!(nodes.iter().any(|node| node.text == "Verified body"));
+
+        let mut off_text = String::new();
+        let mut off_nodes = Vec::new();
+        let mut off_url = None;
+        let semantic_off = extract_for_test(
+            &tree,
+            0,
+            10,
+            &mut off_text,
+            &mut off_nodes,
+            &mut off_url,
+            &None,
+            &None,
+            &[],
+            "msedge",
+            &mut false,
+            false,
+            false,
+        );
+        assert!(semantic_off.is_empty());
+        assert!(off_nodes
+            .iter()
+            .all(|node| node.semantic_dom_identifier.is_none()
+                && node.semantic_dom_classes.is_none()));
+        assert_eq!(off_text, text);
     }
 
     #[test]
@@ -1253,7 +1804,7 @@ mod tests {
         let mut url = None;
         let mut hit = false;
 
-        extract_text_from_tree(
+        extract_for_test(
             &bitwarden_popup,
             0,
             10,
@@ -1265,6 +1816,7 @@ mod tests {
             &ignored,
             "",
             &mut hit,
+            false,
             false,
         );
 
@@ -1294,5 +1846,358 @@ mod tests {
         // Bare "password"/"private" words are deliberately NOT incognito
         // indicators (false-positive reduction — see incognito/titles.rs).
         assert!(!is_title_private("Enter Password - Chrome"));
+    }
+
+    /// Console acceptance probe for the deterministic Edge fixture. Keep
+    /// ignored: it intentionally reads the real foreground window.
+    #[test]
+    #[ignore]
+    fn retained_edge_fixture_probe() {
+        let mut config = TreeWalkerConfig::default();
+        config.max_text_length = 1_000_000;
+        config.walk_timeout = std::time::Duration::from_millis(250);
+        let mut walker = WindowsTreeWalker::new(config.clone());
+        let started = Instant::now();
+        let mut saw_early = false;
+        let mut saw_captured = false;
+        let mut saw_edit = false;
+        let mut saw_added = false;
+        let mut saw_removed_after_add = false;
+        let mut storm_recovery_floor = None;
+        let mut saw_storm_recovery = false;
+        let mut saw_storm_marker = false;
+        let mut saw_plain_before = false;
+        let mut saw_plain_after = false;
+        let mut early_y = None::<f32>;
+        let mut early_on_screen = None::<bool>;
+        let mut saw_scroll_geometry_change = false;
+        let mut saw_capacity = false;
+        let mut final_nodes = 0;
+        for sample in 0..4000 {
+            // Match PlatformTreeWalkRunner's production call pattern.
+            walker.update_config(config.clone());
+            let call_started = Instant::now();
+            match walker.walk_focused_window().unwrap() {
+                TreeWalkResult::Found(snapshot) => {
+                    if sample == 0 {
+                        println!("initial_text={:?}", snapshot.text_content);
+                    }
+                    saw_early |= snapshot.text_content.contains("EARLY-MARKER-0000");
+                    saw_captured |= snapshot.text_content.contains("CAPTURED-MARKER-2000");
+                    saw_edit |= snapshot.text_content.contains("CAPTURED-MARKER-EDITED");
+                    saw_storm_marker |= snapshot.text_content.contains("STORM-")
+                        || snapshot.text_content.contains("storm ");
+                    saw_plain_before |= snapshot.text_content.contains("PLAIN-TEXT-BEFORE");
+                    saw_plain_after |= snapshot.text_content.contains("PLAIN-TEXT-AFTER");
+                    if let Some(node) = snapshot
+                        .nodes
+                        .iter()
+                        .find(|node| node.text == "EARLY-MARKER-0000")
+                    {
+                        if let Some(on_screen) = node.on_screen {
+                            if let Some(initial) = early_on_screen {
+                                saw_scroll_geometry_change |= initial != on_screen;
+                            } else {
+                                early_on_screen = Some(on_screen);
+                            }
+                        }
+                        match (early_y, node.bounds.as_ref().map(|bounds| bounds.top)) {
+                            (Some(before), Some(after)) => {
+                                saw_scroll_geometry_change |= (before - after).abs() > 0.01;
+                            }
+                            (Some(_), None) => {
+                                // Scrolling the marker wholly off-monitor
+                                // intentionally omits its normalized bounds.
+                                saw_scroll_geometry_change = true;
+                            }
+                            (None, Some(initial)) => early_y = Some(initial),
+                            (None, None) => {}
+                        }
+                    }
+                    let has_added = snapshot.text_content.contains("ADDED-LATE-MARKER");
+                    saw_removed_after_add |= saw_added && !has_added;
+                    saw_added |= has_added;
+                    if saw_removed_after_add && snapshot.node_count < 4_000 {
+                        let floor = *storm_recovery_floor.get_or_insert(snapshot.node_count);
+                        saw_storm_recovery |= snapshot.node_count >= floor.saturating_add(500);
+                    }
+                    saw_capacity |= matches!(
+                        snapshot.truncation_reason,
+                        crate::tree::TruncationReason::MaxNodes
+                    );
+                    final_nodes = snapshot.node_count;
+                    if sample % 25 == 0 {
+                        println!(
+                            "sample={sample} call_ms={} app={:?} window={:?} nodes={} early={} captured={} edited={} added={} removed={} capacity={}",
+                            call_started.elapsed().as_millis(),
+                            snapshot.app_name,
+                            snapshot.window_name,
+                            snapshot.node_count,
+                            saw_early,
+                            saw_captured,
+                            saw_edit,
+                            saw_added,
+                            saw_removed_after_add,
+                            saw_capacity,
+                        );
+                    }
+                }
+                other => println!("sample={sample} outcome={other:?}"),
+            }
+            if saw_early
+                && saw_captured
+                && saw_edit
+                && saw_added
+                && saw_removed_after_add
+                && saw_plain_after
+                && saw_scroll_geometry_change
+                && saw_storm_marker
+                && saw_storm_recovery
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        println!(
+            "fixture_total_ms={} final_nodes={final_nodes} plain_before={saw_plain_before} plain_after={saw_plain_after} scroll_geometry_changed={saw_scroll_geometry_change} edited={saw_edit} added={saw_added} removed={saw_removed_after_add} storm_marker={saw_storm_marker} storm_recovery={saw_storm_recovery}",
+            started.elapsed().as_millis(),
+        );
+        assert!(saw_early, "early fixture marker was not retained");
+        assert!(
+            saw_captured,
+            "captured fixture marker was not reached before capacity"
+        );
+        assert!(saw_capacity, "default 5000-node capacity was not observed");
+        assert!(saw_edit, "post-cap fixture edit event was not refreshed");
+        assert!(saw_added, "post-cap addition was not observed");
+        assert!(saw_removed_after_add, "post-cap removal was not observed");
+        assert!(saw_plain_before, "initial plain text was not observed");
+        assert!(saw_plain_after, "plain text change was not refreshed");
+        assert!(
+            saw_scroll_geometry_change,
+            "scroll/layout change did not refresh retained descendant bounds"
+        );
+        assert!(saw_storm_marker, "event storm marker was not observed");
+        assert!(
+            saw_storm_recovery,
+            "event storm did not make bounded forward recovery progress"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn retained_edge_cpu_page_probe() {
+        const EXPECTED_URL: &str = "https://www.cpubenchmark.net/cpu-list/";
+        let config = TreeWalkerConfig::default();
+        let mut walker = WindowsTreeWalker::new(config.clone());
+        let mut discovery_samples = Vec::new();
+        let mut last = None;
+        for sample in 0..2_000 {
+            walker.update_config(config.clone());
+            let started = Instant::now();
+            if let TreeWalkResult::Found(snapshot) = walker.walk_focused_window().unwrap() {
+                let elapsed = started.elapsed().as_millis() as u64;
+                discovery_samples.push(elapsed);
+                if sample % 25 == 0 {
+                    println!(
+                        "sample={sample} call_ms={elapsed} nodes={} text_len={} url_present={} truncated={}",
+                        snapshot.node_count,
+                        snapshot.text_content.len(),
+                        snapshot.browser_url.is_some(),
+                        snapshot.truncated
+                    );
+                }
+                let reached_full_coverage = snapshot.truncation_reason
+                    == crate::tree::TruncationReason::MaxNodes
+                    && snapshot.node_count == 5_000
+                    && snapshot.text_content.len() >= 50_000
+                    && snapshot.browser_url.as_deref() == Some(EXPECTED_URL);
+                last = Some(snapshot);
+                if reached_full_coverage {
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let snapshot = last.expect("CPU page was not captured");
+        discovery_samples.sort_unstable();
+        let p95 = discovery_samples
+            [(discovery_samples.len() * 95 / 100).min(discovery_samples.len() - 1)];
+        println!(
+            "cpu_page_discovery samples={} min_ms={} p95_ms={} max_ms={} nodes={} text_len={} url={:?}",
+            discovery_samples.len(),
+            discovery_samples[0],
+            p95,
+            discovery_samples[discovery_samples.len() - 1],
+            snapshot.node_count,
+            snapshot.text_content.len(),
+            snapshot.browser_url
+        );
+        assert_eq!(snapshot.app_name, "msedge.exe");
+        assert_eq!(snapshot.browser_url.as_deref(), Some(EXPECTED_URL));
+        assert_eq!(snapshot.node_count, 5_000);
+        assert!(snapshot.text_content.len() >= 50_000);
+        assert!(discovery_samples[discovery_samples.len() - 1] < 1000);
+
+        let mut warm_samples = Vec::new();
+        let mut warm_min_nodes = usize::MAX;
+        let mut warm_min_text = usize::MAX;
+        let mut settling_calls = 0usize;
+        for _ in 0..2_000 {
+            walker.update_config(config.clone());
+            let started = Instant::now();
+            if let TreeWalkResult::Found(snapshot) = walker.walk_focused_window().unwrap() {
+                let full_coverage = snapshot.browser_url.as_deref() == Some(EXPECTED_URL)
+                    && snapshot.node_count == 5_000
+                    && snapshot.text_content.len() >= 50_000
+                    && snapshot.truncation_reason == crate::tree::TruncationReason::MaxNodes;
+                if full_coverage {
+                    warm_samples.push(started.elapsed().as_millis() as u64);
+                    warm_min_nodes = warm_min_nodes.min(snapshot.node_count);
+                    warm_min_text = warm_min_text.min(snapshot.text_content.len());
+                    if warm_samples.len() == 20 {
+                        break;
+                    }
+                } else {
+                    // A queued startup rebuild belongs to settling, not the
+                    // warm sample set. Reset so the final set is consecutive;
+                    // never silently skip a partial call between warm calls.
+                    settling_calls += 1;
+                    warm_samples.clear();
+                    warm_min_nodes = usize::MAX;
+                    warm_min_text = usize::MAX;
+                }
+            } else {
+                settling_calls += 1;
+                warm_samples.clear();
+                warm_min_nodes = usize::MAX;
+                warm_min_text = usize::MAX;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(warm_samples.len(), 20, "20 consecutive warm calls required");
+        warm_samples.sort_unstable();
+        let warm_p95 = warm_samples[(warm_samples.len() * 95 / 100).min(warm_samples.len() - 1)];
+        println!(
+            "cpu_page_warm samples={} min_ms={} p95_ms={} max_ms={} min_nodes={} min_text_len={} settling_calls={}",
+            warm_samples.len(),
+            warm_samples[0],
+            warm_p95,
+            warm_samples[warm_samples.len() - 1],
+            warm_min_nodes,
+            warm_min_text,
+            settling_calls,
+        );
+    }
+
+    /// Bounded real-window loop used by the Windows responsiveness harness.
+    /// The harness owns foreground verification and UIA-free input/title probes.
+    #[test]
+    #[ignore]
+    fn retained_edge_input_responsiveness_probe() {
+        let config = TreeWalkerConfig::default();
+        let mut walker = WindowsTreeWalker::new(config.clone());
+        let started = Instant::now();
+        let mut calls = 0usize;
+        let mut found = 0usize;
+        while started.elapsed() < std::time::Duration::from_secs(20) {
+            walker.update_config(config.clone());
+            let call_started = Instant::now();
+            if matches!(
+                walker.walk_focused_window().unwrap(),
+                TreeWalkResult::Found(_)
+            ) {
+                found += 1;
+            }
+            calls += 1;
+            let elapsed = call_started.elapsed();
+            if elapsed >= std::time::Duration::from_millis(50) {
+                println!(
+                    "input_probe_slow_call call={calls} elapsed_ms={}",
+                    elapsed.as_millis()
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        println!(
+            "input_probe_complete calls={calls} found={found} elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
+        assert!(calls > 0);
+        assert!(found > 0);
+    }
+
+    /// Same-title live navigation privacy acceptance. Start on an allowed
+    /// `localhost` page, wait for `url_policy_allowed=true`, then navigate the
+    /// focused browser to the same-title `127.0.0.1` page.
+    #[test]
+    #[ignore]
+    fn retained_edge_same_title_url_policy_probe() {
+        let mut config = TreeWalkerConfig::default();
+        config.included_urls = vec![screenpipe_config::DomainRule {
+            domain: "127.0.0.1".into(),
+            include_subdomains: false,
+            excluded_subdomains: Vec::new(),
+        }];
+        let mut walker = crate::tree::create_tree_walker(config.clone());
+        let mut allowed = false;
+        for sample in 0..1000 {
+            walker.update_config(config.clone());
+            match walker.walk_focused_window().unwrap() {
+                TreeWalkResult::Found(snapshot) => {
+                    allowed |= snapshot
+                        .browser_url
+                        .as_deref()
+                        .is_some_and(|url| url.contains("127.0.0.1"));
+                    if sample % 25 == 0 {
+                        println!(
+                            "sample={sample} url_policy_allowed={allowed} url={:?}",
+                            snapshot.browser_url
+                        );
+                    }
+                }
+                TreeWalkResult::Skipped(SkipReason::BlockedUrl) if allowed => {
+                    println!("same_title_blocked=true sample={sample}");
+                    return;
+                }
+                outcome => println!("sample={sample} outcome={outcome:?}"),
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        panic!("same-title allowed-to-blocked navigation was not observed");
+    }
+
+    /// Start on a blocked committed document, wait for the marker, then type
+    /// an allowed URL into the omnibox without pressing Enter. The uncommitted
+    /// edit must never authorize the still-visible blocked document.
+    #[test]
+    #[ignore]
+    fn retained_edge_uncommitted_url_stays_blocked_probe() {
+        let mut config = TreeWalkerConfig::default();
+        config.included_urls = vec![screenpipe_config::DomainRule {
+            domain: "127.0.0.1".into(),
+            include_subdomains: false,
+            excluded_subdomains: Vec::new(),
+        }];
+        let mut walker = crate::tree::create_tree_walker(config.clone());
+        let mut blocked = false;
+        for _ in 0..500 {
+            walker.update_config(config.clone());
+            match walker.walk_focused_window().unwrap() {
+                TreeWalkResult::Found(snapshot) => panic!(
+                    "uncommitted address authorized blocked document: {:?}",
+                    snapshot.browser_url
+                ),
+                TreeWalkResult::Skipped(SkipReason::BlockedUrl) => {
+                    if !blocked {
+                        println!("blocked_committed=true");
+                    }
+                    blocked = true;
+                }
+                _ => {}
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(blocked, "blocked committed document was not detected");
     }
 }

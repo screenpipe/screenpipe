@@ -208,14 +208,14 @@ export function FocusedSpotlight({
         className="absolute w-[360px] max-w-[calc(100vw-2rem)] border border-foreground bg-background p-5 shadow-xl"
         style={cardStyle}
       >
-        <div className="flex items-center justify-between gap-4 font-mono text-[10px] lowercase tracking-[0.14em] text-muted-foreground">
+        <div className="flex items-center justify-between gap-4 font-mono text-[10px] normal-case tracking-[0.14em] text-muted-foreground">
           <span className="flex items-center gap-2">
             <span className="h-1.5 w-1.5 rounded-full bg-foreground" />
             {eyebrow}
           </span>
           <span>{step}</span>
         </div>
-        <h3 className="mt-4 font-mono text-base font-semibold lowercase">
+        <h3 className="mt-4 font-mono text-base font-semibold normal-case">
           {title}
         </h3>
         <div className="mt-2 text-xs leading-relaxed text-muted-foreground">
@@ -225,19 +225,19 @@ export function FocusedSpotlight({
           type="button"
           disabled={busy}
           onClick={onPrimary}
-          className="mt-5 w-full border border-foreground bg-foreground px-3 py-2.5 font-mono text-[11px] uppercase tracking-widest text-background transition-colors hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          className="mt-5 w-full border border-foreground bg-foreground px-3 py-2.5 font-mono text-[11px] normal-case tracking-widest text-background transition-colors hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
         >
           {primaryLabel}
         </button>
         <button
           type="button"
           onClick={() => onDismiss("skip_button")}
-          className="mt-2 w-full border border-foreground/40 px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-foreground transition-colors hover:border-foreground"
+          className="mt-2 w-full border border-foreground/40 px-3 py-2 font-mono text-[10px] normal-case tracking-widest text-foreground transition-colors hover:border-foreground"
         >
-          skip guide
+          Skip guide
         </button>
-        <p className="mt-2 text-center font-mono text-[9px] lowercase tracking-wide text-muted-foreground">
-          esc to exit anytime
+        <p className="mt-2 text-center font-mono text-[9px] normal-case tracking-wide text-muted-foreground">
+          Esc to exit anytime
         </p>
       </div>
     </div>

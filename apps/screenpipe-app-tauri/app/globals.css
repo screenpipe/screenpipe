@@ -1149,9 +1149,8 @@
    Durations collapse to 0.01ms rather than `animation: none`, deliberately:
    `none` never fires `animationend`/`transitionend`, so anything awaiting
    those events to advance a state machine would hang instead of finishing
-   instantly. Iteration count is left alone for the same reason — an
-   infinite liveness indicator keeps ticking, just imperceptibly, rather
-   than freezing on a frame and reading as "stuck".
+   instantly. Cap animations at one iteration so infinite indicators settle
+   instead of flickering through a new cycle every 0.01ms.
 
    Components needing a *meaningful* static fallback (a recording dot that
    must still look live) keep their own rule; those still win on the
@@ -1161,6 +1160,7 @@
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     animation-delay: 0ms !important;
     transition-delay: 0ms !important;

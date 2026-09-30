@@ -75,11 +75,11 @@ describe("Live View model dropdown", () => {
     fireEvent.click(screen.getByRole("combobox"));
 
     expect(
-      await screen.findByPlaceholderText("search presets..."),
+      await screen.findByPlaceholderText("Search presets..."),
     ).toBeVisible();
     fireEvent.click(screen.getByText("fast"));
 
     expect(onSelectedPresetIdChange).toHaveBeenCalledWith("fast");
-    expect(screen.queryByPlaceholderText("search presets...")).toBeNull();
+    expect(screen.queryByPlaceholderText("Search presets...")).toBeNull();
   });
 });

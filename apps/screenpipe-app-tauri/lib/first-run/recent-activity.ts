@@ -11,8 +11,9 @@ import type { ActivitySnapshot } from "@/lib/first-run/learning-window";
  * Every optional field is switched off except the ones the first-run window
  * actually renders. `include_key_texts` in particular is documented in the
  * route as the heaviest field and triggers accessibility text sampling, so
- * leaving it on would make a 3 second poll needlessly expensive. What remains
- * is two indexed range scans over `frames`, which is cheap enough to poll.
+ * leaving it on would make the preview needlessly expensive. Even without
+ * text, summaries can read archived metadata; the caller bounds the learning
+ * window and waits for each request before scheduling another.
  */
 export async function fetchRecentActivity(
   sinceISO: string,
@@ -56,11 +57,17 @@ export async function fetchRecentActivity(
     const response = await localFetch(`/activity-summary?${params.toString()}`, {
       signal: options.signal,
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.warn(`[first-run] activity preview request failed: HTTP ${response.status}; preview retained, retry backs off`);
+      return null;
+    }
     return (await response.json()) as ActivitySnapshot;
-  } catch {
-    // A poll that fails is indistinguishable from "nothing captured yet" for
-    // the user, and the next tick retries in seconds. Never surface it.
+  } catch (error) {
+    // Keep the last preview on failure. The caller backs off; the native
+    // summary owner independently reports generation failures to support logs.
+    if (!options.signal?.aborted) {
+      console.warn("[first-run] activity preview request failed; preview retained, retry backs off", error);
+    }
     return null;
   }
 }

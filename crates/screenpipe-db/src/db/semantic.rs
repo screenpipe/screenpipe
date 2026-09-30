@@ -471,7 +471,7 @@ impl DatabaseManager {
                 WHERE f.id = ?1 AND sr.status = 'handled'"#,
         )
         .bind(frame_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *self.acquire_search_read().await?)
         .await?
         else {
             return Ok(None);
@@ -504,7 +504,7 @@ impl DatabaseManager {
                 ORDER BY sri.sort_order"#,
         )
         .bind(run.run_id)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *self.acquire_search_read().await?)
         .await?;
 
         let mut items = Vec::with_capacity(rows.len());
@@ -565,8 +565,10 @@ impl DatabaseManager {
             .push(" OFFSET ")
             .push_bind(query.offset);
 
-        let frame_rows: Vec<(i64, DateTime<Utc>)> =
-            sql.build_query_as().fetch_all(&self.pool).await?;
+        let frame_rows: Vec<(i64, DateTime<Utc>)> = sql
+            .build_query_as()
+            .fetch_all(&mut *self.acquire_search_read().await?)
+            .await?;
         let mut contexts = Vec::with_capacity(frame_rows.len());
         for (frame_id, _) in frame_rows {
             if let Some(context) = self.get_frame_semantic_context(frame_id).await? {
@@ -585,7 +587,10 @@ impl DatabaseManager {
         let search = semantic_search_term(query);
         let mut sql =
             semantic_context_query_builder("SELECT COUNT(DISTINCT f.id)", query, search.as_deref());
-        let count: i64 = sql.build_query_scalar().fetch_one(&self.pool).await?;
+        let count: i64 = sql
+            .build_query_scalar()
+            .fetch_one(&mut *self.acquire_search_read().await?)
+            .await?;
         usize::try_from(count)
             .map_err(|_| sqlx::Error::Protocol("invalid semantic context count".to_string()))
     }

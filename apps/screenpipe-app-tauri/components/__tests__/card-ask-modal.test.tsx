@@ -225,7 +225,7 @@ describe("CardAskModal", () => {
     );
     expect(openUrl).not.toHaveBeenCalled();
     expect(screen.getByTestId("card-ask-start").textContent).toContain(
-      "try again",
+      "Try again",
     );
   });
 

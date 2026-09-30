@@ -7,12 +7,16 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import type { ComposerMentionsProps } from "./composer-types";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 export function MentionDropdown({
   mentions,
 }: {
   mentions: ComposerMentionsProps;
 }) {
+
+  const ui = useGT();
   if (!mentions.show || mentions.suggestions.length === 0) return null;
 
   return (
@@ -33,24 +37,24 @@ export function MentionDropdown({
           if (items.length === 0) return null;
           return (
             <div key={category}>
-              <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50">
+              <div className="px-2 py-1 text-[10px] font-medium normal-case tracking-wider text-muted-foreground bg-muted/30 border-b border-border/50">
                 {category === "command"
-                  ? "commands"
+                  ? ui("Commands")
                   : category === "chat"
-                  ? "recent chats"
+                  ? ui("Recent chats")
                   : category === "skill"
-                    ? "installed skills"
+                    ? ui("Installed skills")
                     : category === "range"
-                      ? "time ranges"
+                      ? ui("Time ranges")
                   : category === "time"
-                  ? "time"
+                  ? ui("Time")
                   : category === "content"
-                    ? "content type"
+                    ? ui("Content type")
                     : category === "speaker"
-                      ? "speakers"
+                      ? ui("Speakers")
                       : category === "tag"
-                        ? "tags"
-                        : "apps"}
+                        ? ui("Tags")
+                        : ui("Apps")}
               </div>
               {items.map((suggestion) => {
                 const globalIndex = mentions.suggestions.indexOf(suggestion);
@@ -92,7 +96,7 @@ export function MentionDropdown({
         )}
         </div>
         <div className="px-3 py-1.5 text-[10px] text-muted-foreground border-t border-border/50 bg-muted/20">
-          type to filter · ↓/enter to select · esc to clear
+          Type to filter · ↓/enter to select · esc to clear
         </div>
       </motion.div>
     </AnimatePresence>

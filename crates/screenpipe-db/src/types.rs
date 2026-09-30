@@ -474,6 +474,9 @@ pub struct MeetingTranscriptSegment {
     pub audio_transcription_id: Option<i64>,
     pub audio_chunk_id: Option<i64>,
     pub audio_file_path: Option<String>,
+    /// Seconds into the linked audio file, not a wall-clock timestamp.
+    #[serde(default)]
+    pub audio_start_time_secs: Option<f64>,
     pub speaker_id: Option<i64>,
     pub session_speaker_id: Option<String>,
     pub speaker_name: Option<String>,
@@ -569,6 +572,7 @@ pub struct OCREntry {
 
 #[derive(OaSchema, Debug, Clone)]
 pub struct AudioEntry {
+    pub captured_at: Option<DateTime<Utc>>,
     pub transcription: String,
     pub device_name: String,
     pub is_input: bool,

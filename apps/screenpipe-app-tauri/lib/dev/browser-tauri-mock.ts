@@ -4,6 +4,7 @@
 
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import type {
+  StorageMigrationStatus,
   BrainViewCanvasDocument,
   BrainViewDefinition,
   BrainViewTemplateKit,
@@ -15,6 +16,7 @@ import type {
   SaveBrainViewRequest,
 } from "@/lib/utils/tauri";
 import type { BrowserDevScenario } from "./browser-engine-mock";
+import { buildProviderErrorPresentation } from "../chat/provider-errors";
 
 export type BrowserDevMode = "mock" | "live";
 
@@ -26,11 +28,13 @@ type StoreChange = {
 };
 
 export interface BrowserIpcMockOptions {
+  systemLocale?: string;
   mode: BrowserDevMode;
   scenario?: BrowserDevScenario;
   apiPort: number;
   apiKey?: string;
   onStoreChange?: (change: StoreChange) => void;
+  onEvent?: (event: string, payload: unknown) => void;
   warn?: (message: string) => void;
 }
 
@@ -471,9 +475,24 @@ function handleWindowCommand(command: string): unknown {
 }
 
 export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
+  let storageMigration: StorageMigrationStatus = {
+    app_session_id: crypto.randomUUID(),
+    root: "/Users/screenpipe/.screenpipe", busy: false, message: "", error: null,
+    pending: false, in_place: true, bytes_saved: null, available_bytes: 3_000_000_000, completed: false, using_new_storage: false, generation: null,
+    source_bytes: 13_000_000_000, migrated_bytes: null, can_migrate: true,
+    can_cancel: false, can_delete_source: false, blocked_reason: null,
+  };
+  let migrationStartedAt = 0;
+  let migrationActivity = {
+    root: null as string | null, busy: false, message: "", error: null as string | null,
+    elapsed_seconds: 0, completed_records: null as number | null,
+    total_records: null as number | null, bytes_saved: null as number | null, available_bytes: 3_000_000_000 as number | null, completed: false,
+  };
+  const emitMigrationActivity = () => options.onEvent?.("storage-migration-activity", { ...migrationActivity });
   const stores = new Map<number, Map<string, unknown>>();
   const storePaths = new Map<string, number>();
   const warned = new Set<string>();
+  let grokBotConnected = true;
   let nextResourceId = 1;
   let piExtensionPackages: PiExtensionPackage[] = [];
   let importedSkills = BROWSER_DEV_IMPORTED_SKILLS.map((skill) => ({ ...skill }));
@@ -522,6 +541,25 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
       })] as const;
     }),
   );
+  // Synthetic failures in the real chat UI for inspecting ACP account recovery.
+  for (const [agentId, title, error] of [
+    ["claude-acp", "Claude billing recovery", 'Internal error: Credit balance is too low: { "errorKind": "billing_error" }'],
+    ["cursor", "Cursor billing recovery", "spending_limit_exceeded"],
+    ["codex-acp", "Codex usage recovery", '{"codexErrorInfo":"usageLimitExceeded"}'],
+  ]) {
+    const id = `browser-acp-billing-${agentId}`;
+    const billingPreview = buildProviderErrorPresentation(error, {
+      provider: "acp", acpAgent: { id: agentId, useScreenpipeCloud: false },
+    });
+    chatFixtures.set(`${chatsDir}/${id}.json`, JSON.stringify({
+      id, title, titleSource: "user", kind: "chat",
+      createdAt: Date.now(), updatedAt: Date.now(), lastUserMessageAt: Date.now(),
+      messages: [
+        { id: `${id}-user`, role: "user", content: "What did I work on in the last hour?", timestamp: Date.now() },
+        { id: `${id}-assistant`, role: "assistant", content: `Error: ${billingPreview?.message}`, provider: "acp", model: agentId, timestamp: Date.now() + 1 },
+      ],
+    }));
+  }
   let liveViews =
     options.scenario === "empty"
       ? []
@@ -636,6 +674,65 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
     }
 
     switch (command) {
+      case "get_env":
+        return options.mode === "mock" && input.name === "SCREENPIPE_STARTUP_AUTHENTICATION_STATUS" ? "authenticated" : "";
+      case "get_onboarding_status":
+        return {
+          isCompleted: true, completedAt: "2026-09-01T12:00:00Z",
+          currentStep: "completed", firstRunSummaryPhase: "idle",
+          firstRunSummaryStartedAt: null, firstRunSummaryChatId: null,
+        };
+      case "get_storage_migration_status":
+        return { ...storageMigration };
+      case "get_storage_migration_activity":
+        return { ...migrationActivity, elapsed_seconds: migrationActivity.busy ? Math.floor((Date.now() - migrationStartedAt) / 1000) : migrationActivity.elapsed_seconds };
+      case "start_storage_migration": {
+        if (input.root !== storageMigration.root || storageMigration.busy) throw new Error("Storage changed or migration is already running.");
+        migrationStartedAt = Date.now();
+        storageMigration = { ...storageMigration, busy: true, can_migrate: false, pending: true, error: null };
+        migrationActivity = { ...migrationActivity, root: storageMigration.root, busy: true, completed: false, error: null, message: "converting and compressing recordings", elapsed_seconds: 0, completed_records: 0, total_records: 1000 };
+        emitMigrationActivity();
+        let tick = 0;
+        const timer = setInterval(() => {
+          tick += 1;
+          migrationActivity.elapsed_seconds = Math.floor((Date.now() - migrationStartedAt) / 1000);
+          if (tick <= 10) {
+            migrationActivity.completed_records = tick * 100;
+            migrationActivity.bytes_saved = tick * 1_087_000_000;
+            migrationActivity.available_bytes = 3_000_000_000 + migrationActivity.bytes_saved;
+          } else {
+            migrationActivity.completed_records = null;
+            migrationActivity.total_records = null;
+            migrationActivity.message = tick === 11 ? "checking storage and search" : "resuming recording on the new storage";
+          }
+          if (tick === 13) {
+            clearInterval(timer);
+            migrationActivity.busy = false;
+            if (options.scenario === "backend-error") {
+              migrationActivity.error = "Migration paused because verification could not finish. Saved progress has been kept.";
+              storageMigration = { ...storageMigration, busy: false, can_migrate: true, can_cancel: false, error: migrationActivity.error };
+            } else {
+              migrationActivity.completed = true;
+              migrationActivity.message = "Your history has been migrated and recording has resumed.";
+              storageMigration = { ...storageMigration, busy: false, pending: false, completed: true, using_new_storage: true, generation: "browser-migration", migrated_bytes: 2_130_000_000, source_bytes: 0, bytes_saved: 10_870_000_000, can_delete_source: false };
+            }
+          }
+          storageMigration.message = migrationActivity.message;
+          emitMigrationActivity();
+        }, 1000);
+        return null;
+      }
+      case "cancel_storage_migration":
+        migrationActivity = { ...migrationActivity, busy: false, completed: false, error: null, message: "" };
+        emitMigrationActivity();
+        storageMigration = { ...storageMigration, pending: false, error: null, can_cancel: false, can_migrate: true };
+        return null;
+      case "delete_original_storage_database": {
+        if (!input.confirmPermanentDeletion || !storageMigration.can_delete_source || input.generation !== storageMigration.generation) throw new Error("Complete migration and confirm permanent deletion first.");
+        const removed = storageMigration.source_bytes;
+        storageMigration = { ...storageMigration, source_bytes: 0, can_delete_source: false };
+        return removed;
+      }
       case "plugin:store|load": {
         const path = String(input.path ?? "browser-dev-store");
         const existing = storePaths.get(path);
@@ -707,7 +804,7 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
       case "plugin:app|supports_multiple_windows":
         return false;
       case "plugin:os|locale":
-        return "en-US";
+        return options.systemLocale ?? "en-US";
       case "plugin:os|hostname":
         return "browser-dev";
       case "plugin:updater|check":
@@ -729,7 +826,9 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
             }))
           : [];
       case "plugin:fs|exists":
-        return String(input.path) === chatsDir || chatFixtures.has(String(input.path));
+        return String(input.path) === chatsDir || chatFixtures.has(String(input.path)) || String(input.path).endsWith("/.grokbot/settings.json");
+      case "resolve_ai_tool_config_path":
+        return String(input.path);
       case "plugin:fs|stat":
       case "plugin:fs|lstat":
         return {
@@ -742,6 +841,14 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
           birthtime: null,
           readonly: false,
         };
+      case "grokbot_connection":
+        if (input.action === "connect") grokBotConnected = true;
+        if (input.action === "disconnect") grokBotConnected = false;
+        return { detected: true, connected: grokBotConnected, optedOut: !grokBotConnected };
+      case "bun_check":
+        return { available: true, path: "/mock/screenpipe/bun", version: "browser-mock" };
+      case "get_active_data_dir":
+        return "/mock/screenpipe/data";
       case "get_local_api_config":
         return {
           key: options.mode === "live" ? options.apiKey || null : null,

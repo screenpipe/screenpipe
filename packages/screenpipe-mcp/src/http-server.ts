@@ -32,6 +32,7 @@ import {
 } from "./telemetry";
 import { PKG_VERSION } from "./version";
 import { normalizeTimeFields } from "./time-normalization";
+import { createMcpQualifiedValueReporter, resolveMcpClient, type McpClient } from "./qualified-value";
 
 // ── CLI parsing ─────────────────────────────────────────────────────────
 
@@ -193,23 +194,31 @@ const TOOLS = [
 
 // ── Tool handlers ───────────────────────────────────────────────────────
 
-function makeFetchAPI(screenpipePort: number) {
+function makeFetchAPI(screenpipePort: number, client: () => McpClient) {
   // Honor SCREENPIPE_API_URL so the HTTP MCP can also front a remote screenpipe
   // (set by `screenpipe agent setup --api-url`); falls back to the local port.
   const base = (process.env.SCREENPIPE_API_URL || `http://localhost:${screenpipePort}`).replace(
     /\/+$/,
     "",
   );
+  const apiKey = process.env.SCREENPIPE_LOCAL_API_KEY || process.env.SCREENPIPE_API_KEY;
   return async (endpoint: string, options: RequestInit = {}): Promise<Response> =>
     fetch(`${base}${endpoint}`, {
       ...options,
-      headers: { "Content-Type": "application/json", ...options.headers },
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        "x-screenpipe-client": "mcp",
+        "x-screenpipe-agent": client(),
+        ...options.headers,
+      },
     });
 }
 
 async function handleSearchContent(
   fetchAPI: ReturnType<typeof makeFetchAPI>,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  qualifiedValue: ReturnType<typeof createMcpQualifiedValueReporter>,
 ) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(normalizeTimeFields(args))) {
@@ -276,6 +285,8 @@ async function handleSearchContent(
       ? ` (use offset=${(pagination.offset || 0) + results.length} for more)`
       : "");
 
+  if (formattedResults.length > 0) qualifiedValue.searchResult();
+
   return {
     content: [
       {
@@ -291,7 +302,7 @@ async function handleSearchContent(
 // Each HTTP session gets its own Server — the MCP SDK requires a 1:1
 // mapping between Server and transport (reusing a Server across
 // transports throws "Already connected to a transport").
-function createMcpServer(fetchAPI: ReturnType<typeof makeFetchAPI>): Server {
+function createMcpServer(screenpipePort: number): Server {
   // version comes from package.json (see src/version.ts) — this used to be a
   // hardcoded "0.14.0" and reported that over the wire long after the package
   // had moved on, which is unusable for support triage.
@@ -299,13 +310,21 @@ function createMcpServer(fetchAPI: ReturnType<typeof makeFetchAPI>): Server {
     { name: "screenpipe-http", version: PKG_VERSION },
     { capabilities: { tools: {} } }
   );
+  // Resolve per session after initialize; one HTTP client's identity must
+  // never carry over to another connected client.
+  const client = () => resolveMcpClient(process.env.SCREENPIPE_MCP_CLIENT, s.getClientVersion()?.name);
+  const fetchAPI = makeFetchAPI(screenpipePort, client);
+  const qualifiedValue = createMcpQualifiedValueReporter((payload) =>
+    fetchAPI("/internal/telemetry/mcp-value", { method: "POST", body: JSON.stringify(payload) }),
+    client,
+  );
 
   s.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 
   s.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     if (!args) throw new Error("Missing arguments");
-    if (name === "search_content") return handleSearchContent(fetchAPI, args);
+    if (name === "search_content") return handleSearchContent(fetchAPI, args, qualifiedValue);
     throw new Error(`Unknown tool: ${name}`);
   });
 
@@ -315,7 +334,6 @@ function createMcpServer(fetchAPI: ReturnType<typeof makeFetchAPI>): Server {
 // ── HTTP server ─────────────────────────────────────────────────────────
 
 export function buildHttpServer(config: CliConfig) {
-  const fetchAPI = makeFetchAPI(config.screenpipePort);
   const sessions = new Map<
     string,
     { server: Server; transport: StreamableHTTPServerTransport }
@@ -357,7 +375,7 @@ export function buildHttpServer(config: CliConfig) {
       let session = sessionId ? sessions.get(sessionId) : undefined;
 
       if (!session) {
-        const server = createMcpServer(fetchAPI);
+        const server = createMcpServer(config.screenpipePort);
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => crypto.randomUUID(),
           onsessioninitialized: (newSessionId) => {

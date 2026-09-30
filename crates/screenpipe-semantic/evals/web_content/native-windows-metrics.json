@@ -1,0 +1,142 @@
+{
+  "capture_platform": "Windows 11, isolated Azure Standard_DC8s_v3 VM",
+  "browser": "153.0.4234.48",
+  "capture_and_native_test_commit": "9f17d2a5f9d7b9c205b7db7ef98d19fc8b29a7eb",
+  "baseline_capture_commit": "d00a8e2deb98a3d5af2777b23eadd160279e5f1c",
+  "previous_windows_fix_commit": "242579f39f0f38964e2ca389f084ce64edc82f40",
+  "method": "Fresh production UIA captures replayed independently through the final parser. Before/after captures are separate observations, not a same-input speed or token benchmark. Checks apply only to these captured surfaces. Raw content is private.",
+  "limitation": "All semantic-on browser captures exhausted the unchanged 250ms walk budget. Deep scrolled Wikipedia safely abstains; full-page and universal viewport coverage are not claimed.",
+  "results": [
+    {
+      "surface": "GitHub PR, top",
+      "before_outcome": "not_handled",
+      "after_outcome": "handled",
+      "items": 2,
+      "context_tokens": 130,
+      "known_offscreen_nodes": 56,
+      "capture": {
+        "node_count": 428,
+        "truncated": true,
+        "truncation_reason": "Timeout",
+        "walk_duration_ms": 252
+      },
+      "checks": 12,
+      "passed": 12,
+      "failures": []
+    },
+    {
+      "surface": "GitLab work item, top",
+      "before_outcome": "not_handled",
+      "after_outcome": "handled",
+      "items": 2,
+      "context_tokens": 228,
+      "known_offscreen_nodes": 72,
+      "capture": {
+        "node_count": 428,
+        "truncated": true,
+        "truncation_reason": "Timeout",
+        "walk_duration_ms": 252
+      },
+      "checks": 12,
+      "passed": 12,
+      "failures": []
+    },
+    {
+      "surface": "Hacker News discussion",
+      "before_outcome": "not_handled",
+      "after_outcome": "handled",
+      "items": 4,
+      "context_tokens": 85,
+      "known_offscreen_nodes": 0,
+      "capture": {
+        "node_count": 424,
+        "truncated": true,
+        "truncation_reason": "Timeout",
+        "walk_duration_ms": 251
+      },
+      "checks": 12,
+      "passed": 12,
+      "failures": []
+    },
+    {
+      "surface": "Wikipedia article, top",
+      "before_outcome": "not_handled",
+      "after_outcome": "handled",
+      "items": 1,
+      "context_tokens": 206,
+      "known_offscreen_nodes": 0,
+      "capture": {
+        "node_count": 423,
+        "truncated": true,
+        "truncation_reason": "Timeout",
+        "walk_duration_ms": 251
+      },
+      "checks": 12,
+      "passed": 12,
+      "failures": []
+    },
+    {
+      "surface": "Wikipedia article, scrolled",
+      "before_outcome": "handled with stale offscreen introduction",
+      "after_outcome": "not_handled",
+      "items": 0,
+      "context_tokens": null,
+      "known_offscreen_nodes": 209,
+      "capture": {
+        "node_count": 431,
+        "truncated": true,
+        "truncation_reason": "Timeout",
+        "walk_duration_ms": 252
+      },
+      "checks": 7,
+      "passed": 7,
+      "failures": []
+    },
+    {
+      "surface": "Edge semantic-off control",
+      "before_outcome": "legacy control",
+      "after_outcome": "not_handled",
+      "items": 0,
+      "context_tokens": null,
+      "known_offscreen_nodes": 7,
+      "capture": {
+        "node_count": 1769,
+        "truncated": false,
+        "truncation_reason": "None",
+        "walk_duration_ms": 217
+      },
+      "checks": 7,
+      "passed": 7,
+      "failures": []
+    }
+  ],
+  "notepad_acceptance": {
+    "tested_commit": "9f17d2a5f9d7b9c205b7db7ef98d19fc8b29a7eb",
+    "surface": "Notepad synthetic document",
+    "capture": {
+      "node_count": 48,
+      "truncated": false,
+      "truncation_reason": "None",
+      "walk_duration_ms": 112
+    },
+    "outcome": "handled",
+    "items": 1,
+    "context_tokens": 76,
+    "independent_replay_checks": {
+      "notepad_identity": true,
+      "no_browser_url": true,
+      "untruncated": true,
+      "handled": true,
+      "one_item": true,
+      "no_failures": true,
+      "marker": true,
+      "owner": true,
+      "status": true,
+      "authored_actions": true,
+      "indentation": true
+    },
+    "vm_focus_and_content_assertions": 11,
+    "vm_assertions_passed": 11,
+    "independent_checks_passed": 11
+  }
+}

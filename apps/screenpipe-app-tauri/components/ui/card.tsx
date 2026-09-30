@@ -41,8 +41,8 @@ const CardTitle = React.forwardRef<
   <h3
     ref={ref}
     className={cn(
-      // Screenpipe Brand: Monospace, lowercase
-      "text-xl font-mono font-medium leading-none tracking-tight lowercase",
+      // Screenpipe Brand: Monospace, sentence case
+      "text-xl font-mono font-medium leading-none tracking-tight normal-case",
       className
     )}
     {...props}

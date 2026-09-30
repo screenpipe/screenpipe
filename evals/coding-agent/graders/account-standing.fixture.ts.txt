@@ -1,0 +1,106 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import { expect, test, mock, afterAll } from 'bun:test';
+import { RateLimiter, checkRateLimit } from '../utils/rate-limiter';
+import type { Env } from '../types';
+mock.module('@clerk/backend', () => ({ verifyToken: async (token: string) => {
+ if (token.includes('.verified.')) return { sub: token.split('.').at(-1) };
+ throw new Error('synthetic alternate credential');
+}}));
+const { handleRequest } = await import('../index');
+const originalFetch = globalThis.fetch;
+afterAll(() => { globalThis.fetch = originalFetch; });
+function makeHarness(over: Record<string, unknown> = {}) {
+	const instances = new Map<string, RateLimiter>();
+	const storageByName = new Map<string, Map<string, unknown>>();
+	const requestedNames: string[] = [];
+	const valuesFor = (name: string) => {
+		let values = storageByName.get(name);
+		if (!values) {
+			values = new Map();
+			storageByName.set(name, values);
+		}
+		return values;
+	};
+	const storageFor = (name: string) => {
+		const values = valuesFor(name);
+		return {
+			get: async <T>(key: string): Promise<T | undefined> => values.get(key) as T | undefined,
+			put: async (key: string, value: unknown): Promise<void> => {
+				values.set(key, value);
+			},
+		};
+	};
+	const harnessEnv = {
+		CLERK_SECRET_KEY: 'synthetic-standing-key',
+		...over,
+	} as unknown as Env;
+	const RATE_LIMITER = {
+		idFromName: (name: string) => ({ name, toString: () => name }),
+		get: (id: { name: string }) => {
+			requestedNames.push(id.name);
+			let inst = instances.get(id.name);
+			if (!inst) {
+				inst = new RateLimiter(
+					{ storage: storageFor(id.name) } as any,
+					harnessEnv,
+				);
+				instances.set(id.name, inst);
+			}
+			return {
+				fetch: (input: string | Request) =>
+					inst!.fetch(typeof input === 'string' ? new Request(input) : input),
+			};
+		},
+	};
+	(harnessEnv as any).RATE_LIMITER = RATE_LIMITER;
+	return {
+		env: harnessEnv,
+		evict: (name: string) => instances.delete(name),
+		fetchDo: (name: string, request: Request) => RATE_LIMITER.get({ name }).fetch(request),
+		readStorage: <T>(name: string, key: string): T | undefined =>
+			valuesFor(name).get(key) as T | undefined,
+		seedStorage: (name: string, key: string, value: unknown) => {
+			valuesFor(name).set(key, value);
+		},
+		requestedNames,
+	};
+}
+
+
+
+for (const route of ['models', 'chat']) {
+ for (const provenance of ['verified', 'database']) {
+  for (const standing of (route==='models' ? ['good','locked','deleted','banned'] : ['deleted','banned'])) {
+   test(`${route} ${provenance} ${standing} through HTTP dispatch`, async () => {
+    const subject=`user_${route}_${provenance}_${standing}`;
+    const calls: string[]=[];
+    globalThis.fetch=mock(async (input: any) => {
+     const url=String(input);calls.push(url);
+     if(url==='https://api.anthropic.com/v1/models') return Response.json({data:[{id:'claude-sonnet-5',type:'model',created_at:'2026-07-01T00:00:00Z'}]});
+     if(url==='https://screenpipe.com/api/user') return Response.json({success:true,user:{id:'synthetic_db_user',clerk_id:subject,cloud_subscribed:true,app_entitled:true,subscription_plan:'pro',entitlement:{active:true,plan:'pro',features:{app:true,cloud:true}}}});
+     if(url===`https://api.clerk.com/v1/users/${subject}`) return standing==='deleted'?new Response('',{status:404}):Response.json({id:subject,banned:standing==='banned',locked:standing==='locked'});
+     throw new Error('unexpected network port '+url);
+    }) as typeof fetch;
+    const env=makeHarness({NODE_ENV:'production',MODEL_GATING_ENABLED:'false',ANTHROPIC_API_KEY:'synthetic-provider-key'}).env;
+    const request=new Request(route==='models'?'https://gateway.test/anthropic/v1/models':'https://gateway.test/v1/chat/completions',{
+     method:route==='models'?'GET':'POST',headers:{Authorization:`Bearer eyJ.${provenance}.${subject}`,'Content-Type':'application/json'},
+     ...(route==='chat'?{body:JSON.stringify({model:'auto',messages:[{role:'user',content:'synthetic'}]})}:{})
+    });
+    const result=await handleRequest(request,env,{waitUntil:()=>{},passThroughOnException:()=>{}} as any);
+    expect(calls.every(url=>url==='https://screenpipe.com/api/user'||url===`https://api.clerk.com/v1/users/${subject}`||url==='https://api.anthropic.com/v1/models')).toBe(true);
+    expect(calls.filter(url=>url==='https://api.anthropic.com/v1/models').length).toBe(standing==='good'||standing==='locked'?1:0);
+    if (standing==='good'||standing==='locked') {
+     expect(result.status).toBe(200);
+     const body=await result.json() as any;expect(Array.isArray(body.data)).toBe(true);expect(body.data.length).toBeGreaterThan(0);
+    } else {
+     const unavailable=standing==='deleted'&&provenance==='database';
+     expect(result.status).toBe(unavailable?503:403);
+     const outer=await result.json() as any;const error=JSON.parse(outer.error);
+     expect(error.error).toBe(unavailable?'account_status_unavailable':'account_not_in_good_standing');
+     if(!unavailable) expect(error.reason).toBe(standing);
+    }
+   });
+  }
+ }
+}

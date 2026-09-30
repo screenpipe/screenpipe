@@ -11,3 +11,6 @@ pub mod sync;
 
 #[cfg(feature = "enterprise-build")]
 pub mod device_config;
+
+#[cfg(feature = "enterprise-build")]
+pub mod managed_settings;

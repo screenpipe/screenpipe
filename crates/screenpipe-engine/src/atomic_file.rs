@@ -57,7 +57,7 @@ pub(crate) fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .tempfile_in(parent)?;
     temporary.write_all(bytes)?;
     temporary.flush()?;
-    temporary.as_file().sync_all()?;
+    screenpipe_fs::sync_all(temporary.as_file())?;
 
     persist_replace(temporary, path)?;
 
@@ -68,7 +68,7 @@ pub(crate) fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
         // Some external and network filesystems reject directory fsync even
         // after the file replacement succeeded. Keep the state write usable
         // there while taking the stronger durability guarantee when offered.
-        let _ = directory.sync_all();
+        let _ = screenpipe_fs::sync_all(&directory);
     }
 
     Ok(())

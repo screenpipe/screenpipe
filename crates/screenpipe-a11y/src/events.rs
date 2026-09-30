@@ -207,7 +207,7 @@ pub fn ancestors_to_json(mut leaf_first: Vec<AncestorHop>, max_hops: usize) -> O
 }
 
 /// Element bounding rectangle
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ElementBounds {
     pub x: f64,
     pub y: f64,
@@ -220,7 +220,7 @@ pub struct ElementBounds {
 // ============================================================================
 
 /// A node in the accessibility tree
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AccessibilityNode {
     /// Control type (e.g., "Button", "Edit", "Text", "Window")
     pub control_type: String,

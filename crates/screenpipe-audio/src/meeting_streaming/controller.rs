@@ -117,6 +117,7 @@ pub fn start_meeting_streaming_loop(
     mut audio_rx: broadcast::Receiver<MeetingAudioFrame>,
     db: Arc<DatabaseManager>,
     transcription_engine: Arc<RwLock<Option<TranscriptionEngine>>>,
+    on_insert: Option<crate::transcription::AudioInsertCallback>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         if !config.enabled {
@@ -286,8 +287,9 @@ pub fn start_meeting_streaming_loop(
                         continue;
                     }
                     let db = db.clone();
+                    let on_insert = on_insert.clone();
                     tokio::spawn(async move {
-                        persist_live_final_with_retry(db, event.data).await;
+                        persist_live_final_with_retry(db, event.data, on_insert).await;
                     });
                 }
                 Some(event) = delta_sub.next() => {
@@ -559,9 +561,13 @@ async fn mark_live_covered_chunks(db: &Arc<DatabaseManager>, meeting_id: i64) {
     }
 }
 
-async fn persist_live_final_with_retry(db: Arc<DatabaseManager>, event: MeetingTranscriptFinal) {
+async fn persist_live_final_with_retry(
+    db: Arc<DatabaseManager>,
+    event: MeetingTranscriptFinal,
+    on_insert: Option<crate::transcription::AudioInsertCallback>,
+) {
     for attempt in 1..=LIVE_FINAL_PERSIST_ATTEMPTS {
-        match persist_live_final_once(db.clone(), &event).await {
+        match persist_live_final_once(db.clone(), &event, on_insert.as_ref()).await {
             Ok(true) => return,
             Ok(false) if attempt < LIVE_FINAL_PERSIST_ATTEMPTS => {
                 sleep(LIVE_FINAL_PERSIST_RETRY_DELAY).await;
@@ -592,6 +598,7 @@ async fn persist_live_final_with_retry(db: Arc<DatabaseManager>, event: MeetingT
 async fn persist_live_final_once(
     db: Arc<DatabaseManager>,
     event: &MeetingTranscriptFinal,
+    on_insert: Option<&crate::transcription::AudioInsertCallback>,
 ) -> Result<bool, String> {
     let transcript = event.transcript.trim();
     if transcript.is_empty() {
@@ -620,6 +627,22 @@ async fn persist_live_final_once(
         .map_err(|e| e.to_string())?;
 
     if id > 0 {
+        // The live provider bypasses batch STT. Notify the timeline only after
+        // persistence succeeds, using a distinct transcript-only ID per turn.
+        if let Some(callback) = on_insert {
+            callback(crate::transcription::AudioInsertInfo {
+                audio_chunk_id: -id,
+                transcription: transcript.to_string(),
+                device_name: event.device_name.clone(),
+                is_input: event.device_type == "input",
+                audio_file_path: String::new(),
+                duration_secs: 5.0,
+                start_time: None,
+                end_time: None,
+                speaker_id: None,
+                capture_timestamp: event.captured_at.timestamp().max(0) as u64,
+            });
+        }
         info!(
             "meeting streaming: persisted live final (meeting_id={}, item_id={}, segment_id={})",
             event.meeting_id, event.item_id, id
@@ -1056,6 +1079,59 @@ fn emit_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn persisted_live_finals_notify_timeline_with_distinct_turn_ids() {
+        let db = Arc::new(
+            DatabaseManager::new("sqlite::memory:", Default::default())
+                .await
+                .unwrap(),
+        );
+        let meeting_id = db
+            .insert_meeting("test", "manual", None, None)
+            .await
+            .unwrap();
+        let notifications = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let received = notifications.clone();
+        let callback: crate::transcription::AudioInsertCallback = Arc::new(move |info| {
+            received.lock().unwrap().push(info);
+        });
+        let mut event = MeetingTranscriptFinal {
+            meeting_id,
+            provider: "fixture".into(),
+            model: None,
+            stream_id: "stream".into(),
+            item_id: "turn-1".into(),
+            device_name: "Microphone".into(),
+            device_type: "input".into(),
+            session_speaker_id: None,
+            speaker_name: None,
+            transcript: "first saved turn".into(),
+            captured_at: Utc::now(),
+        };
+        persist_live_final_once(db.clone(), &event, Some(&callback))
+            .await
+            .unwrap();
+        event.item_id = "turn-2".into();
+        event.transcript = "second saved turn".into();
+        persist_live_final_once(db.clone(), &event, Some(&callback))
+            .await
+            .unwrap();
+        let rows = db
+            .list_meeting_transcript_segments(meeting_id)
+            .await
+            .unwrap();
+        let seen = notifications.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_ne!(seen[0].audio_chunk_id, seen[1].audio_chunk_id);
+        assert!(seen
+            .iter()
+            .all(|info| info.audio_chunk_id < 0 && info.is_input));
+        assert!(seen.iter().all(|info| rows
+            .iter()
+            .any(|row| row.id == -info.audio_chunk_id && row.transcript == info.transcription)));
+    }
+
     use crate::transcription::deepgram::DeepgramTranscriptionConfig;
     use crate::transcription::stt::OpenAICompatibleConfig;
 

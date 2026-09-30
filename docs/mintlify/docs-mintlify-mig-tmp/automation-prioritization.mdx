@@ -1,0 +1,48 @@
+---
+title: "Choose which observed workflow to automate first"
+sidebarTitle: "Choose an automation"
+description: "Prioritize a repeated, well-understood task with a clear success check."
+icon: "list-filter"
+---
+
+Prioritize a repeated, well-understood task with a clear success check. Estimate value using observed frequency and reviewed time measurements, then subtract setup, review, and maintenance effort. A suggested automation is a hypothesis until tested.
+
+## Start here
+
+Collect two or more approved examples of a candidate workflow when possible. Record its trigger, frequency, active effort, error consequences, variability, and available APIs or tools.
+
+## Copy this prompt
+
+Use this in Screenpipe chat or an assistant with the required connections. Replace the brackets with your details. If the assistant lacks access, provide a reviewed excerpt; a prompt alone does not connect it to your history.
+
+```text
+Compare these candidate workflows: [list and approved evidence].
+For each, report frequency, reviewed active effort, variation, input quality,
+reversibility, success check, setup effort, human review, and maintenance.
+Label estimates and unknowns. Recommend one small experiment.
+Do not infer time savings from screen-frame counts or promise ROI.
+Keep observed behavior separate from proposed implementation.
+```
+
+## Check the result
+
+Test the selected step and measure actual review effort and error rate. Recalculate the estimate with observed results. Stop or revise when correction work exceeds the benefit.
+
+<AccordionGroup>
+<Accordion title="See a worked example" id="worked-example">
+
+A fictional task performed 20 times per week at 6 minutes each has a 120-minute manual baseline. If a tested draft takes 2 minutes of human review per run, the potential gross reduction is 80 minutes per week. A 4-hour setup would take three such weeks to recover before maintenance and failures. These are illustrative inputs, not product performance claims.
+
+</Accordion>
+<Accordion title="Go deeper: setup choices and edge cases" id="details">
+
+Good early candidates have consistent inputs, a limited action scope, and an output a person can inspect. A draft checklist or classified queue can be easier to evaluate than a workflow that immediately modifies financial or customer records.
+
+Include exception frequency and recovery cost in the comparison. An automation that succeeds on the normal path but duplicates a submission during retries can cost more than it saves.
+
+</Accordion>
+</AccordionGroup>
+
+## Continue
+
+[Workflow discovery](/workflow-discovery) · [automation validation](/automation-validation) · [enterprise pilot](/enterprise-pilot)

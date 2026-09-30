@@ -1,44 +1,44 @@
 ---
 title: "GitHub Copilot CLI — agentic coding with screen context"
-sidebarTitle: "copilot cli"
-description: "Connect screenpipe to GitHub Copilot CLI via MCP so Copilot can reference your screen history, meeting transcriptions, and app context from the terminal."
+sidebarTitle: "Copilot CLI"
+description: "Connect Screenpipe to GitHub Copilot CLI via MCP so Copilot can reference your screen history, meeting transcriptions, and app context from the terminal."
 icon: "terminal"
 ---
 
 <img src="/copilot-icon.svg" alt="GitHub Copilot" width="80" />
 
-[GitHub Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli) is GitHub's terminal-based AI coding agent. it supports MCP servers, so you can connect screenpipe and let Copilot reference what you've been seeing, hearing, and doing.
+[GitHub Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli) is GitHub's terminal-based AI coding agent. It supports MCP servers, so you can connect Screenpipe and let Copilot reference what you've been seeing, hearing, and doing.
 
-## setup
+## Setup
 
-before setting up, make sure screenpipe is running on your machine:
+Before setting up, make sure Screenpipe is running on your machine:
 
 ```bash
 npx -y screenpipe@latest record
 ```
 
-check that it's running:
+Check that it's running:
 ```bash
 curl http://localhost:3030/health
 ```
 
-the easiest way to connect is the built-in `/mcp add` slash command inside Copilot CLI:
+The easiest way to connect is the built-in `/mcp add` slash command inside Copilot CLI:
 
 ```
 /mcp add
 ```
 
-fill in the prompts:
+Fill in the prompts:
 
-| field | value |
+| Field | Value |
 |-------|-------|
-| name | `screenpipe` |
-| type | `local` |
-| command | `npx` |
-| args | `-y screenpipe-mcp` |
-| tools | `*` |
+| Name | `screenpipe` |
+| Type | `local` |
+| Command | `npx` |
+| Args | `-y screenpipe-mcp` |
+| Tools | `*` |
 
-or edit `~/.copilot/mcp-config.json` directly:
+Or edit `~/.copilot/mcp-config.json` directly:
 
 ```json
 {
@@ -53,38 +53,38 @@ or edit `~/.copilot/mcp-config.json` directly:
 }
 ```
 
-restart Copilot CLI after editing the config.
+Restart Copilot CLI after editing the config.
 
-## stdio vs http — which should I use?
+## Stdio vs HTTP — which should I use?
 
-**use stdio** (`type: "local"` in config). this is the standard for local MCP servers on the same machine. screenpipe runs locally on your machine, so stdio communication has no network overhead and is the intended pattern.
+**Use stdio** (`type: "local"` in config). This is the standard for local MCP servers on the same machine. Screenpipe runs locally on your machine, so stdio communication has no network overhead and is the intended pattern.
 
-HTTP transport is only for remote scenarios where your MCP client (Claude, Cursor, etc.) runs on a different machine than screenpipe — see [openclaw](/openclaw) for that pattern. **for Copilot CLI on the same machine, always choose stdio.**
+HTTP transport is only for remote scenarios where your MCP client (Claude, Cursor, etc.) runs on a different machine than Screenpipe — see [OpenClaw](/openclaw) for that pattern. **for Copilot CLI on the same machine, always choose stdio.**
 
-## verify connection
+## Verify connection
 
-inside Copilot CLI, run:
+Inside Copilot CLI, run:
 
 ```
 /mcp
 ```
 
-you should see `screenpipe` listed with its tools.
+You should see `screenpipe` listed with its tools.
 
-## available tools
+## Available tools
 
-| tool | description |
+| Tool | Description |
 |------|-------------|
-| `search-content` | search screen text (accessibility-first, OCR fallback), audio transcriptions, and input |
-| `activity-summary` | lightweight overview of app usage, speakers, and recent texts for a time range |
-| `search-elements` | search structured UI elements from the accessibility tree |
-| `frame-context` | full accessibility tree, URLs, and text for a specific frame |
-| `list-meetings` | list detected meetings with duration, app, and attendees |
-| `export-video` | export screen recordings as MP4 for a time range |
+| `search-content` | Search screen text (accessibility-first, OCR fallback), audio transcriptions, and input |
+| `activity-summary` | Lightweight overview of app usage, speakers, and recent texts for a time range |
+| `search-elements` | Search structured UI elements from the accessibility tree |
+| `frame-context` | Full accessibility tree, URLs, and text for a specific frame |
+| `list-meetings` | List detected meetings with duration, app, and attendees |
+| `export-video` | Export screen recordings as MP4 for a time range |
 
-## usage examples
+## Usage examples
 
-ask Copilot CLI to use screenpipe naturally:
+Ask Copilot CLI to use Screenpipe naturally:
 
 ```
 > what was I working on this morning?
@@ -100,43 +100,43 @@ ask Copilot CLI to use screenpipe naturally:
 > which apps did I switch between most today?
 ```
 
-## example workflows
+## Example workflows
 
-**recall context from earlier:**
+**Recall context from earlier:**
 ```
 > I was reading a blog post about rust async earlier today,
 > search screenpipe and summarize the key points
 ```
 
-**reference meeting discussion:**
+**Reference meeting discussion:**
 ```
 > search my audio transcriptions for what was discussed in standup
 > about the API refactor, then help me implement it
 ```
 
-**debug with screen history:**
+**Debug with screen history:**
 ```
 > I saw an error message flash on screen, search screenpipe
 > to find it and help me fix the issue
 ```
 
-## requirements
+## Requirements
 
-- screenpipe running on localhost:3030 (start with `npx -y screenpipe@latest record`)
+- Screenpipe running on localhost:3030 (start with `npx -y screenpipe@latest record`)
 - GitHub Copilot CLI installed
 - Node.js >= 18.0.0
 
-## troubleshooting
+## Troubleshooting
 
-**how do I check I'm on the latest screenpipe CLI?**
+**How do I check I'm on the latest Screenpipe CLI?**
 
-always invoke screenpipe with the `@latest` npm tag — it pulls the freshest build from npm each time:
+Always invoke Screenpipe with the `@latest` npm tag — it pulls the freshest build from npm each time:
 
 ```bash
 npx -y screenpipe@latest record
 ```
 
-check the version you're running:
+Check the version you're running:
 
 ```bash
 npx -y screenpipe@latest --version
@@ -144,27 +144,27 @@ npx -y screenpipe@latest --version
 
 **MCP not connecting?**
 
-1. verify screenpipe is running:
+1. Verify Screenpipe is running:
    ```bash
    curl http://localhost:3030/health
    ```
    you should see `{"status":"healthy"}`.
 
-2. confirm Copilot sees the server:
+2. Confirm Copilot sees the server:
    ```
    /mcp
    ```
 
-3. remove and re-add via `/mcp` if the server is in an error state.
+3. Remove and re-add via `/mcp` if the server is in an error state.
 
-**queries returning empty?**
+**Queries returning empty?**
 
-- check screenpipe has data: `curl "http://localhost:3030/search?limit=1"`
-- ensure screen recording permissions are granted
-- give screenpipe a minute or two of running before querying
+- Check Screenpipe has data: `curl "http://localhost:3030/search?limit=1"`
+- Ensure screen recording permissions are granted
+- Give Screenpipe a minute or two of running before querying
 
-**permission errors on macOS?**
+**Permission errors on macOS?**
 
 - System Settings → Privacy & Security → Screen Recording → enable for your terminal
 
-still stuck? [ask in our discord](https://discord.gg/screenpipe).
+Still stuck? [ask in our Discord](https://discord.gg/screenpipe).

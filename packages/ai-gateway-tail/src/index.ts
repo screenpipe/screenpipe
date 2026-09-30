@@ -69,6 +69,8 @@ export interface AiGatewayAuditEvent {
 	router_tier?: string;
 	workload?: string;
 	gateway_mode?: string;
+	fallback_model?: string;
+	fallback_reason?: string;
 	latency_ms?: number;
 	exception_type?: string;
 }
@@ -197,6 +199,9 @@ export function normalizeTailItem(item: TailItem): AiGatewayAuditEvent | null {
 		router_tier: token(route.router_tier, 24),
 		workload: token(route.workload, 24),
 		gateway_mode: token(route.gateway_mode, 24),
+		fallback_model: model(route.fallback_model),
+		fallback_reason: ['account_allowance', 'safety_refusal', 'allowance_or_quota'].includes(String(route.fallback_reason))
+			? String(route.fallback_reason) : undefined,
 		latency_ms: latency,
 		exception_type: token(firstException?.name, 80),
 	};

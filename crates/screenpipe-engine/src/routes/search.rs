@@ -19,7 +19,7 @@ use super::response_format::{
 /// Extracts an optional `Arc<PipePermissions>` from request extensions.
 /// Wrapper exists because `Option<Extension<T>>` falls back to oasgen's
 /// `impl<A: OaSchema> OaParameter for A` and `Extension<T>` is not OaSchema.
-pub(crate) struct OptionalPipePerms(Option<std::sync::Arc<PipePermissions>>);
+pub(crate) struct OptionalPipePerms(pub(crate) Option<std::sync::Arc<PipePermissions>>);
 
 impl<S: Send + Sync> FromRequestParts<S> for OptionalPipePerms {
     type Rejection = std::convert::Infallible;
@@ -553,6 +553,7 @@ fn capture_direct_api_search_value(client: &ExplicitApiClient, result_count: usi
             "qualified_value_event",
             crate::qualified_value::api_outcome_properties(
                 crate::qualified_value::ApiOutcomeKind::SearchResult,
+                client.agent_client(),
             ),
         );
     }
@@ -1104,11 +1105,25 @@ pub(crate) async fn search(
     );
 
     // Check cache first (only for queries without frame extraction)
-    let cache_key = compute_search_cache_key(&query);
+    let storage_read = state.db.storage_read_token().await.map_err(|e| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            JsonResponse(json!({"error":e.to_string()})),
+        )
+    })?;
+    let cache_key =
+        compute_search_cache_key(&query) ^ (storage_read.revision as u64).rotate_left(17);
+
     if !history_restricted && !query.include_frames && cacheable_render && !pipe_data_restricted {
         if let Some(cached) = state.search_cache.get(&cache_key).await {
             debug!("search cache hit for key {}", cache_key);
             capture_direct_api_search_value(&api_client, cached.result_count);
+            let _admission = storage_read.admit(&state.db.pool).await.map_err(|e| {
+                (
+                    StatusCode::CONFLICT,
+                    JsonResponse(json!({"error":e.to_string()})),
+                )
+            })?;
             return Ok(render_cached_search(&cached));
         }
     }
@@ -1473,6 +1488,7 @@ pub(crate) async fn search(
             "query_length": query.q.as_ref().map(|q| q.len()).unwrap_or(0),
             "content_type": format!("{:?}", query.content_type),
             "request_source": api_client.source_label(),
+            "agent_client": api_client.agent_client().as_str(),
             "has_date_filter": query.start_time.is_some() || query.end_time.is_some(),
             "has_app_filter": query.app_name.is_some(),
             "result_count": total,
@@ -1511,21 +1527,30 @@ pub(crate) async fn search(
 
     capture_direct_api_search_value(&api_client, response.data.len());
 
-    // Cache the result (only for queries without frame extraction). Cache hits
-    // serve the pre-serialized JSON bytes directly for the common response
-    // shape, avoiding repeated deep clones of text-heavy search payloads.
-    if !history_restricted && !query.include_frames && cacheable_render && !pipe_data_restricted {
-        if let Some(cache_entry) = build_search_cache_entry(&response) {
-            let rendered = render_cached_search(&cache_entry);
-            state
-                .search_cache
-                .insert(cache_key, Arc::new(cache_entry))
-                .await;
-            return Ok(rendered);
-        }
+    let cache_entry = if !history_restricted
+        && !query.include_frames
+        && cacheable_render
+        && !pipe_data_restricted
+    {
+        build_search_cache_entry(&response)
+    } else {
+        None
+    };
+    let rendered = if let Some(entry) = &cache_entry {
+        render_cached_search(entry)
+    } else {
+        render_search(format, &fields, &response)
+    };
+    let _admission = storage_read.admit(&state.db.pool).await.map_err(|e| {
+        (
+            StatusCode::CONFLICT,
+            JsonResponse(json!({"error":e.to_string()})),
+        )
+    })?;
+    if let Some(entry) = cache_entry {
+        state.search_cache.insert(cache_key, Arc::new(entry)).await;
     }
-
-    Ok(render_search(format, &fields, &response))
+    Ok(rendered)
 }
 
 #[oasgen]
@@ -2636,5 +2661,34 @@ mod tests {
         let result = truncate_middle(text, 10);
         assert!(result.chars().count() > 10); // marker adds chars, but original content is truncated
         assert!(result.contains("...(truncated"));
+    }
+}
+
+/// A response shares one snapshot across candidate selection, pagination counts,
+/// and payload hydration. WebSocket history reads own their scope in the DB.
+pub(crate) async fn storage_snapshot_middleware(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let path = request.uri().path();
+    let read = (request.method() == axum::http::Method::GET
+        && (matches!(path, "/search" | "/search/keyword" | "/elements")
+            || (path.starts_with("/frames/")
+                && ["/text", "/ocr", "/context", "/metadata", "/elements"]
+                    .iter()
+                    .any(|suffix| path.ends_with(suffix)))))
+        || (request.method() == axum::http::Method::POST && path == "/raw_sql");
+    if !read {
+        return next.run(request).await;
+    }
+    match state.db.read_snapshot(next.run(request)).await {
+        Ok(response) => response,
+        Err(error) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(serde_json::json!({"error": error.to_string()})),
+        )
+            .into_response(),
     }
 }

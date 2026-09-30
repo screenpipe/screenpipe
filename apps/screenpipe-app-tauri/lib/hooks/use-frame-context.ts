@@ -4,6 +4,8 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { localFetch } from "@/lib/api";
+import { useGT } from "gt-react";
+
 
 export interface AccessibilityNodeBounds {
 	left: number;
@@ -74,6 +76,7 @@ class ContextCache {
 const globalContextCache = new ContextCache(100);
 
 export function useFrameContext(frameId: number | null): UseFrameContextReturn {
+  const ui = useGT();
 	const [context, setContext] = useState<FrameContext | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -142,7 +145,7 @@ export function useFrameContext(frameId: number | null): UseFrameContextReturn {
 				setError(
 					err instanceof Error
 						? err.message
-						: "Failed to fetch frame context"
+						: ui("Failed to fetch frame context")
 				);
 				setContext(null);
 			}

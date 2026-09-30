@@ -10,6 +10,7 @@
 //! are cooperative: deferrable workloads opt into the shared lane, cooldown,
 //! and bounded work-slice feedback without delaying capture or live audio.
 
+pub mod background_work;
 mod cpu;
 mod monitor;
 

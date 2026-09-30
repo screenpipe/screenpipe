@@ -15,6 +15,7 @@ import {
   replaceComposerMentionAtCursor,
   resolvePinnedMentionIndex,
   TIME_RANGE_MENTION_SUGGESTIONS,
+  COMPOSER_COMMAND_SUGGESTIONS,
   type ComposerCommandId,
   type MentionSuggestion as ChatMentionSuggestion,
   type MentionTrigger,
@@ -23,6 +24,9 @@ import { localFetch } from "@/lib/api";
 import { listConversations } from "@/lib/chat-storage";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { commands } from "@/lib/utils/tauri";
+import { useGT, useMessages } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 const TAG_AUTOCOMPLETE_LIMIT = 50;
 const SPEAKER_SUGGESTION_LIMIT = 50;
@@ -71,6 +75,9 @@ export function useChatMentions({
   onOpenConversation,
   onRunCommand,
 }: UseChatMentionsOptions) {
+  const uiLanguage = useLocale();
+  const ui = useGT();
+  const uiMessages = useMessages();
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
@@ -136,13 +143,13 @@ export function useChatMentions({
   const filterSearchGroups = useMemo(() => {
     const groups: { label: string; suggestions: MentionSuggestion[] }[] = [];
     if (filterTagResults.length > 0) {
-      groups.push({ label: "tags", suggestions: filterTagResults });
+      groups.push({ label: ui("Tags"), suggestions: filterTagResults });
     }
     if (filterSpeakerResults.length > 0) {
-      groups.push({ label: "speakers", suggestions: filterSpeakerResults });
+      groups.push({ label: ui("Speakers"), suggestions: filterSpeakerResults });
     }
     return groups;
-  }, [filterTagResults, filterSpeakerResults]);
+  }, [filterTagResults, filterSpeakerResults, uiLanguage]);
 
   const filterSearchResults = useMemo(
     () => filterSearchGroups.flatMap((group) => group.suggestions),
@@ -376,7 +383,7 @@ export function useChatMentions({
             .filter((speaker) => speaker.name)
             .map((speaker) => ({
               tag: speaker.name.includes(" ") ? `@"${speaker.name}"` : `@${speaker.name}`,
-              description: "speaker",
+              description: ui("Speaker"),
               category: "speaker" as const,
             }));
           setSpeakerSuggestions(suggestions);
@@ -407,7 +414,7 @@ export function useChatMentions({
         if (response.ok) {
           const tags = await response.json();
           if (Array.isArray(tags)) {
-            setTagSearchSuggestions(buildTagMentionSuggestions(tags, TAG_AUTOCOMPLETE_LIMIT));
+            setTagSearchSuggestions(buildTagMentionSuggestions(tags, TAG_AUTOCOMPLETE_LIMIT, uiMessages));
           }
         }
       } catch (error) {
@@ -419,7 +426,7 @@ export function useChatMentions({
 
     const debounceTimeout = setTimeout(searchTags, 200);
     return () => clearTimeout(debounceTimeout);
-  }, [mentionFilter, mentionTrigger]);
+  }, [mentionFilter, mentionTrigger, uiLanguage]);
 
   useEffect(() => {
     const query = filterSearch.trim();
@@ -444,7 +451,7 @@ export function useChatMentions({
           const tags = await tagResponse.json();
           setFilterTagResults(
             Array.isArray(tags)
-              ? buildTagMentionSuggestions(tags, TAG_AUTOCOMPLETE_LIMIT)
+              ? buildTagMentionSuggestions(tags, TAG_AUTOCOMPLETE_LIMIT, uiMessages)
               : []
           );
         } else {
@@ -459,7 +466,7 @@ export function useChatMentions({
                   .filter((speaker) => speaker.name)
                   .map((speaker) => ({
                     tag: speaker.name.includes(" ") ? `@"${speaker.name}"` : `@${speaker.name}`,
-                    description: "speaker",
+                    description: ui("Speaker"),
                     category: "speaker" as const,
                   }))
               : []
@@ -483,7 +490,7 @@ export function useChatMentions({
       cancelled = true;
       clearTimeout(debounceTimeout);
     };
-  }, [appFilterOpen, filterSearch]);
+  }, [appFilterOpen, filterSearch, uiLanguage]);
 
   const filteredMentions = useMemo(() => {
     return filterMentionSuggestions({
@@ -492,7 +499,18 @@ export function useChatMentions({
       atMentionSuggestions,
       recentChatSuggestions,
       skillMentionSuggestions,
-      timeRangeMentionSuggestions: TIME_RANGE_MENTION_SUGGESTIONS,
+      timeRangeMentionSuggestions: TIME_RANGE_MENTION_SUGGESTIONS.map((item) => ({
+        ...item,
+        description: uiMessages(item.description),
+      })),
+      commandSuggestions: COMPOSER_COMMAND_SUGGESTIONS.map((item) => ({
+        ...item,
+        description: uiMessages(item.description),
+        searchTerms: [
+          ...(item.searchTerms ?? []),
+          ...(item.searchTerms?.[0] ? [uiMessages(item.searchTerms[0])] : []),
+        ],
+      })),
       tagMentionSuggestions,
       allTagMentionSuggestions,
       tagSearchSuggestions,
@@ -500,6 +518,7 @@ export function useChatMentions({
       recentSpeakers,
     });
   }, [
+    uiLanguage,
     mentionFilter,
     mentionTrigger,
     atMentionSuggestions,
@@ -601,7 +620,7 @@ export function useChatMentions({
               .filter((speaker) => speaker.name)
               .map((speaker) => ({
                 tag: speaker.name.includes(" ") ? `@"${speaker.name}"` : `@${speaker.name}`,
-                description: "speaker",
+                description: "Speaker",
                 category: "speaker" as const,
               }))
           );

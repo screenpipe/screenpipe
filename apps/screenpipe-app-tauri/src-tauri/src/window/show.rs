@@ -648,12 +648,13 @@ impl ShowRewindWindow {
             // Settings window: navigate to the requested section if specified
             // and ensure it comes to front (macOS set_focus alone is unreliable from tray context)
             if id.label() == RewindWindowId::Home.label() {
-                if let ShowRewindWindow::Home {
-                    page: Some(ref section),
-                } = self
-                {
-                    let url = format!("/home?section={}", section);
-                    let _ = window.emit("navigate", serde_json::json!({ "url": url }));
+                if let ShowRewindWindow::Home { ref page } = self {
+                    let url = home_navigation_url(page.as_deref());
+                    // Opening the app should preserve an existing Home view, but
+                    // leave Settings when the same webview is showing that route.
+                    if page.is_some() {
+                        let _ = window.emit("navigate", serde_json::json!({ "url": url }));
+                    }
                     if let Ok(url_literal) = serde_json::to_string(&url) {
                         let _ = window.eval(&format!(
                             "if (window.location.pathname !== '/home') window.location.replace({});",
@@ -1609,10 +1610,7 @@ impl ShowRewindWindow {
                 window
             }
             ShowRewindWindow::Home { page } => {
-                let url = match page {
-                    Some(p) => format!("/home?section={}", p),
-                    None => "/home".to_string(),
-                };
+                let url = home_navigation_url(page.as_deref());
 
                 let builder = self.window_builder(app, &url).focused_gated(true);
                 #[cfg(target_os = "macos")]
@@ -2205,6 +2203,14 @@ impl ShowRewindWindow {
             window.set_size(size).ok();
         }
         Ok(())
+    }
+}
+
+// Used for both a newly created Home window and an existing Settings webview.
+fn home_navigation_url(page: Option<&str>) -> String {
+    match page {
+        Some(section) => format!("/home?section={}", section),
+        None => "/home".to_string(),
     }
 }
 

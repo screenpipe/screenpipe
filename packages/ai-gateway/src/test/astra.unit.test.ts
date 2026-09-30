@@ -196,7 +196,7 @@ describe('Astra access and allowance', () => {
 		const env: any = { OPENAI_API_KEY: 'test', DB: { prepare: () => statement } };
 		const response: any = await (await handleModelListing(env, 'subscribed', false, 'business')).json();
 		const astra = response.data.find((m: any) => m.id === 'gpt-6-astra');
-		expect(astra).toMatchObject({ name: 'GPT-6 Astra (Low)', query_weight: 10, cost_tier: 'very_high', warning: 'Uses more of your included allowance.' });
+		expect(astra).toMatchObject({ name: 'GPT-6 Astra (Low)', query_weight: 0, cost_tier: 'very_high', warning: 'Uses more of your included allowance.' });
 		expect(astra.locked).not.toBe(true);
 		expect(response.data[0].id).toBe('auto');
 		const basic: any = await (await handleModelListing(env, 'logged_in', false, 'basic')).json();

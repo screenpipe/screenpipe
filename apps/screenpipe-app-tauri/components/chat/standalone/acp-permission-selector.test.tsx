@@ -29,6 +29,7 @@ vi.mock("@/lib/utils/tauri", () => ({
 }));
 
 import { AcpPermissionSelector } from "./acp-permission-selector";
+import { Toaster } from "@/components/ui/toaster";
 
 const SESSION = "chat-1";
 const codexModeOption = {
@@ -131,7 +132,7 @@ describe("AcpPermissionSelector", () => {
 
     fireEvent.click(trigger);
     expect(
-      screen.getByText("how should codex actions be approved?"),
+      screen.getByText("How should codex actions be approved?"),
     ).toBeInTheDocument();
     expect(screen.getByText("Ask for approval")).toBeInTheDocument();
     expect(screen.getByText("Approve for me")).toBeInTheDocument();
@@ -171,6 +172,27 @@ describe("AcpPermissionSelector", () => {
       ),
     );
     expect(mocks.setMode).not.toHaveBeenCalled();
+  });
+
+  it("shows an error toast when the live session rejects a permission change", async () => {
+    seedLive();
+    mocks.setConfigOption.mockResolvedValue({
+      status: "error",
+      error: "adapter rejected mode",
+    });
+    render(
+      <>
+        <AcpPermissionSelector sessionId={SESSION} agentId="codex-acp" />
+        <Toaster />
+      </>,
+    );
+
+    fireEvent.click(screen.getByTestId("acp-permission-trigger"));
+    fireEvent.click(screen.getByTestId("acp-permission-option-agent"));
+
+    const toast = await screen.findByTestId("toast-error");
+    expect(toast).toHaveTextContent("Could not change codex permissions");
+    expect(toast).toHaveTextContent("adapter rejected mode");
   });
 
   it("uses the saved preset before a live Codex session exists", () => {
@@ -371,7 +393,7 @@ describe("AcpPermissionSelector", () => {
 
     fireEvent.click(trigger);
     expect(
-      screen.getByText("how should claude code actions be approved?"),
+      screen.getByText("How should claude code actions be approved?"),
     ).toBeInTheDocument();
     expect(screen.getByText("Approve edits")).toBeInTheDocument();
     expect(screen.getByText("Plan only")).toBeInTheDocument();

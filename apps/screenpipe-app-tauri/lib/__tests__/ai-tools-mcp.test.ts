@@ -12,7 +12,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const fsMock = vi.hoisted(() => ({
   files: new Map<string, string>(),
   unreadable: new Set<string>(),
+  forbiddenDirectories: new Set<string>(),
 }));
+
+const pathMock = vi.hoisted(() => ({ home: "/Users/test" }));
 
 const skillsMock = vi.hoisted(() => ({
   installExternalAgentSkills: vi.fn(async () => ["a", "b"]),
@@ -20,18 +23,33 @@ const skillsMock = vi.hoisted(() => ({
 }));
 
 const tauriMock = vi.hoisted(() => ({
+  getEnv: vi.fn(async () => ""),
+  resolveAiToolConfigPath: vi.fn<[string], Promise<
+    { status: "ok"; data: string } | { status: "error"; error: string }
+  >>(),
+  grokbotConnection: vi.fn(),
   setAiToolAutoConnectOptOut: vi.fn(async () => ({ status: "ok", data: null })),
 }));
 
-vi.mock("@tauri-apps/api/path", () => ({
-  homeDir: vi.fn(async () => "/Users/test"),
-  join: vi.fn(async (...parts: string[]) => parts.join("/")),
-  dirname: vi.fn(async (p: string) => p.split("/").slice(0, -1).join("/")),
-}));
+vi.mock("@tauri-apps/api/path", async () => {
+  const { posix, win32 } = await import("node:path");
+  const paths = () => pathMock.home.includes("\\") ? win32 : posix;
+  // Tauri simplifies verbatim Windows prefixes in join/dirname and strips
+  // trailing separators in join, unlike node:path.join.
+  const simplified = (path: string) => path.replace(/^\\\\\?\\/, "");
+  return {
+    homeDir: vi.fn(async () => pathMock.home),
+    configDir: vi.fn(async () => paths().join(pathMock.home, "Library/Application Support")),
+    join: vi.fn(async (...parts: string[]) => simplified(paths().join(...parts)).replace(/[\\/]+$/, "")),
+    dirname: vi.fn(async (path: string) => simplified(paths().dirname(path))),
+  };
+});
 
 vi.mock("@tauri-apps/plugin-fs", () => ({
   exists: vi.fn(async (path: string) => fsMock.files.has(path) || fsMock.unreadable.has(path)),
-  mkdir: vi.fn(async () => undefined),
+  mkdir: vi.fn(async (path: string) => {
+    if (fsMock.forbiddenDirectories.has(path)) throw new Error(`forbidden path: ${path}`);
+  }),
   readTextFile: vi.fn(async (path: string) => {
     if (fsMock.unreadable.has(path)) throw new Error("EACCES: permission denied");
     const text = fsMock.files.get(path);
@@ -64,12 +82,15 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
 
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {
+    getEnv: tauriMock.getEnv,
+    resolveAiToolConfigPath: tauriMock.resolveAiToolConfigPath,
     getLocalApiConfig: vi.fn(async () => ({ key: "sp-test", port: 3030, auth_enabled: true })),
     bunCheck: vi.fn(async () => ({
       status: "ok",
       data: { available: true, path: "/app/bun" },
     })),
     setAiToolAutoConnectOptOut: tauriMock.setAiToolAutoConnectOptOut,
+    grokbotConnection: tauriMock.grokbotConnection,
   },
 }));
 
@@ -82,6 +103,13 @@ vi.mock("@/lib/hooks/use-hardcoded-tiles", () => ({
 vi.mock("@/lib/external-agent-skills", () => skillsMock);
 
 import {
+  installVscodeMcp,
+  uninstallVscodeMcp,
+  isVscodeMcpInstalled,
+  isToolConfigHealthy,
+  installCodexMcp,
+  installCloudMcp,
+  uninstallCodexMcp,
   installCursorMcp,
   uninstallCursorMcp,
   installHermesMcp,
@@ -112,14 +140,77 @@ const tmpsOf = (path: string) =>
   Array.from(fsMock.files.keys()).filter((p) => p.startsWith(`${path}.`) && p.endsWith(".tmp"));
 
 beforeEach(() => {
+  pathMock.home = "/Users/test";
+  tauriMock.getEnv.mockReset().mockResolvedValue("");
+  tauriMock.resolveAiToolConfigPath.mockReset();
+  tauriMock.resolveAiToolConfigPath.mockImplementation(async (path) => ({ status: "ok", data: path }));
   fsMock.files.clear();
   fsMock.unreadable.clear();
+  fsMock.forbiddenDirectories.clear();
   skillsMock.installExternalAgentSkills.mockClear();
   skillsMock.removeExternalAgentSkills.mockClear();
   tauriMock.setAiToolAutoConnectOptOut.mockClear();
 });
 
 describe("safe config IO", () => {
+  it.each([
+    ["POSIX", "/Users/test/", "/Users/test/.claude.json", "/Users/test/.claude.json"],
+    ["Windows", "C:\\Users\\test\\", "C:\\Users\\test\\.claude.json", "C:\\Users\\test\\.claude.json"],
+    ["Windows canonical", "C:\\Users\\test\\", "C:\\Users\\test\\.claude.json", "\\\\?\\C:\\Users\\test\\.claude.json"],
+  ])("connects and disconnects Claude Code with a forbidden home directory on %s", async (_, home, configPath, target) => {
+    pathMock.home = home;
+    fsMock.forbiddenDirectories.add(home.slice(0, -1));
+    tauriMock.resolveAiToolConfigPath.mockImplementation(async (path) => ({
+      status: "ok", data: path === configPath ? target : path,
+    }));
+    const seeded = JSON.stringify({ theme: "dark", mcpServers: { other: { command: "other-tool" } } });
+    fsMock.files.set(target, seeded);
+
+    await connectAiTool("claude-code");
+    expect(JSON.parse(fsMock.files.get(target)!).mcpServers.screenpipe).toBeDefined();
+    expect(fsMock.files.get(backupsOf(target)[0])).toBe(seeded);
+    expect(tmpsOf(target)).toEqual([]);
+
+    await disconnectAiTool("claude-code");
+    expect(JSON.parse(fsMock.files.get(target)!)).toEqual(JSON.parse(seeded));
+    expect(tmpsOf(target)).toEqual([]);
+
+    // A first connection also works when the home-level config is absent.
+    fsMock.files.delete(target);
+    await connectAiTool("claude-code");
+    expect(JSON.parse(fsMock.files.get(target)!).mcpServers.screenpipe).toBeDefined();
+  });
+
+  it.each([
+    ["/Users/test/.codex/config.toml", 'model = "test"\n', installCodexMcp, uninstallCodexMcp],
+    [CURSOR, '{"theme":"dark"}', installCursorMcp, uninstallCursorMcp],
+  ] as const)("backs up and replaces the resolved target of %s on connect and disconnect", async (path, seeded, install, uninstall) => {
+    const target = `/Users/test/dotfiles/${path.split("/").pop()}`;
+    fsMock.files.set(target, seeded);
+    tauriMock.resolveAiToolConfigPath.mockImplementation(async (requested) => ({
+      status: "ok", data: requested === path ? target : requested,
+    }));
+
+    await install();
+    expect(fsMock.files.get(target)).toContain("screenpipe");
+    expect(fsMock.files.get(backupsOf(target)[0])).toBe(seeded);
+    expect(fsMock.files.has(path)).toBe(false);
+    expect(backupsOf(path)).toHaveLength(0);
+    expect(tmpsOf(target)).toHaveLength(0);
+
+    await uninstall();
+    expect(fsMock.files.get(target)).not.toContain("screenpipe");
+    expect(fsMock.files.get(target)).toContain(path.endsWith("toml") ? 'model = "test"' : '"theme": "dark"');
+    expect(fsMock.files.has(path)).toBe(false);
+  });
+
+  it("refuses connect and disconnect when config resolution fails", async () => {
+    tauriMock.resolveAiToolConfigPath.mockResolvedValue({ status: "error", error: "could not resolve config: symlink loop" });
+    await expect(installCodexMcp()).rejects.toThrow(/could not resolve config/);
+    await expect(uninstallCodexMcp()).rejects.toThrow(/could not resolve config/);
+    expect(fsMock.files.size).toBe(0);
+  });
+
   it("preserves unrelated servers and settings, and takes a backup", async () => {
     const seeded = JSON.stringify({ mcpServers: { other: { command: "x" } }, theme: "dark" });
     fsMock.files.set(CURSOR, seeded);
@@ -402,5 +493,148 @@ describe("transactional connect / disconnect", () => {
 
     expect(skillsMock.installExternalAgentSkills).not.toHaveBeenCalled();
     expect(skillsMock.removeExternalAgentSkills).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("Grok Bot skill transport", () => {
+  it("connects and disconnects via native reconciliation without local MCP or skill writes", async () => {
+    tauriMock.grokbotConnection.mockImplementation(async action => ({ status: "ok", data: { detected: true, connected: action === "connect" } }));
+    await connectAiTool("grokbot");
+    await disconnectAiTool("grokbot");
+    expect(tauriMock.grokbotConnection).toHaveBeenNthCalledWith(1, "connect");
+    expect(tauriMock.grokbotConnection).toHaveBeenNthCalledWith(2, "disconnect");
+    expect(fsMock.files.size).toBe(0);
+    expect(skillsMock.installExternalAgentSkills).not.toHaveBeenCalled();
+  });
+  it("treats unconfirmed installation as a failed connection", async () => {
+    tauriMock.grokbotConnection.mockResolvedValue({ status: "ok", data: { detected: true, connected: false } });
+    await expect(connectAiTool("grokbot")).rejects.toThrow("not confirmed");
+  });
+});
+
+
+describe("VS Code MCP", () => {
+  const path = "/Users/test/Library/Application Support/Code/User/mcp.json";
+  it("detects the user profile and preserves JSONC, inputs, and other servers through connect/disconnect", async () => {
+    fsMock.files.set(path.slice(0, -"/mcp.json".length), "");
+    const original = `{
+      // keep this comment
+      "servers": { "screenpipe": { "command": "old", "sandboxEnabled": true, "cwd": "/project" }, "other": { "type": "http", "url": "https://example.com" }, },
+      "inputs": [{ "id": "token" }],
+    }`;
+    fsMock.files.set(path, original);
+    expect(await detectAiTools()).toContain("vscode");
+    expect(await isToolConfigHealthy("vscode")).toBe(true);
+    await connectAiTool("vscode");
+    expect(await isVscodeMcpInstalled()).toBe(true);
+    const text = fsMock.files.get(path)!;
+    const { parse } = await import("jsonc-parser");
+    const config = parse(text);
+    expect(text).toContain("// keep this comment");
+    expect(config.servers.other.url).toBe("https://example.com");
+    expect(config.inputs).toEqual([{ id: "token" }]);
+    expect(config.mcpServers).toBeUndefined();
+    expect(config.servers.screenpipe.sandboxEnabled).toBe(true);
+    expect(config.servers.screenpipe.cwd).toBe("/project");
+    expect(config.servers.screenpipe).toMatchObject({ type: "stdio", command: "/app/bun", env: { SCREENPIPE_LOCAL_API_KEY: "sp-test", SCREENPIPE_MCP_CLIENT: "vscode", SCREENPIPE_API_URL: "http://localhost:3030" } });
+    expect(backupsOf(path).map((p) => fsMock.files.get(p))).toContain(original);
+    expect(tauriMock.setAiToolAutoConnectOptOut).toHaveBeenCalledWith("vscode", false);
+    await disconnectAiTool("vscode");
+    expect(tauriMock.setAiToolAutoConnectOptOut).toHaveBeenCalledWith("vscode", true);
+    expect(await isVscodeMcpInstalled()).toBe(false);
+    expect(parse(fsMock.files.get(path)!).servers.other).toEqual(config.servers.other);
+    expect(skillsMock.installExternalAgentSkills).not.toHaveBeenCalled();
+  });
+  it.each(["[]", "null", '{"servers":[]}', '{"servers":null}', '{"servers":{} "inputs":[]}'])("refuses malformed config %s without overwriting", async (original) => {
+    fsMock.files.set(path, original);
+    await expect(installVscodeMcp()).rejects.toThrow();
+    expect(fsMock.files.get(path)).toBe(original);
+    expect(await isToolConfigHealthy("vscode")).toBe(false);
+  });
+  it("initializes missing config and removes mixed-case stale entries", async () => {
+    await installVscodeMcp();
+    expect(await isVscodeMcpInstalled()).toBe(true);
+    fsMock.files.set(path, '{"servers":{"Screenpipe":{"type":"stdio"},"screenpipe":{"type":"stdio"},"other":{}}}');
+    await uninstallVscodeMcp();
+    expect(JSON.parse(fsMock.files.get(path)!).servers).toEqual({ other: {} });
+  });
+});
+
+
+describe("explicit cloud MCP setup without a CLI", () => {
+  const path = "/Users/test/.codex/config.toml";
+  const url = "https://screenpipe.com/api/user/data-sync/mcp";
+  it("preserves existing Codex text and local servers, backs up, and is idempotent", async () => {
+    fsMock.files.set("/Users/test/.codex", "");
+    const original =
+      '# personal settings\nmodel = "my-model"\n[mcp_servers.screenpipe]\ncommand = "local-server"\n';
+    fsMock.files.set(path, original);
+    await installCloudMcp("codex");
+    expect(fsMock.files.get(path)).toContain(original);
+    expect(fsMock.files.get(path)).toContain(
+      `[mcp_servers.screenpipe-cloud]\nurl = "${url}"`,
+    );
+    expect(backupsOf(path)).toHaveLength(1);
+    expect(fsMock.files.get(backupsOf(path)[0])).toBe(original);
+    const installed = fsMock.files.get(path);
+    await installCloudMcp("codex");
+    expect(fsMock.files.get(path)).toBe(installed);
+    expect(tmpsOf(path)).toHaveLength(0);
+  });
+  it.each([
+    "broken = [",
+    '[mcp_servers.screenpipe-cloud]\nurl = "https://other.test/mcp"',
+    '[mcp_servers.screenpipe-cloud]\nurl = "' + url + '"\nenabled = false',
+    'mcp_servers = { local = { command = "keep" } }',
+  ])(
+    "refuses invalid, conflicting, disabled, or incompatible configs untouched: %s",
+    async (original) => {
+      fsMock.files.set("/Users/test/.codex", "");
+      fsMock.files.set(path, original);
+      await expect(installCloudMcp("codex")).rejects.toThrow("was not changed");
+      expect(fsMock.files.get(path)).toBe(original);
+      expect(backupsOf(path)).toHaveLength(0);
+    },
+  );
+  it("does not create an AI installation when no app config exists", async () => {
+    await expect(installCloudMcp("codex")).rejects.toThrow("Open Codex once");
+    await expect(installCloudMcp("claude-code")).rejects.toThrow(
+      "Open Claude Code once",
+    );
+    expect(fsMock.files.size).toBe(0);
+  });
+  it("preserves Claude Code user settings and local MCP entry", async () => {
+    fsMock.files.set(
+      CLAUDE_CODE,
+      JSON.stringify({
+        theme: "dark",
+        mcpServers: { screenpipe: { command: "local" } },
+      }),
+    );
+    await installCloudMcp("claude-code");
+    expect(JSON.parse(fsMock.files.get(CLAUDE_CODE)!)).toEqual({
+      theme: "dark",
+      mcpServers: {
+        screenpipe: { command: "local" },
+        "screenpipe-cloud": { type: "http", url },
+      },
+    });
+    const installed = fsMock.files.get(CLAUDE_CODE);
+    await installCloudMcp("claude-code");
+    expect(fsMock.files.get(CLAUDE_CODE)).toBe(installed);
+  });
+  it("preserves an unreadable config instead of replacing it", async () => {
+    fsMock.files.set("/Users/test/.codex", "");
+    fsMock.unreadable.add(path);
+    await expect(installCloudMcp("codex")).rejects.toThrow("could not read");
+    expect(fsMock.files.has(path)).toBe(false);
+  });
+  it("does not edit a default profile when the app uses a custom config home", async () => {
+    tauriMock.getEnv.mockResolvedValue("/custom/profile");
+    await expect(installCloudMcp("codex")).rejects.toThrow(
+      "custom config location",
+    );
+    expect(fsMock.files.size).toBe(0);
   });
 });

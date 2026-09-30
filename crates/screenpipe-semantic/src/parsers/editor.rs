@@ -41,7 +41,7 @@ impl EditorFamilyParser {
             ],
             60,
         );
-        manifest.parser_version = "2".into();
+        manifest.parser_version = "3".into();
         Self { manifest }
     }
 }

@@ -1,0 +1,143 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+
+import { render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  CARD_ASK_ARM_STORAGE_KEY,
+} from "@/lib/card-ask/gating";
+import { resetCardAskTriggerBus } from "@/lib/card-ask/trigger-bus";
+
+
+
+let flagVariant: string | undefined = "at_login";
+let settingsState: { settings: any; isSettingsLoaded: boolean };
+
+vi.mock("posthog-js/react", () => ({
+  useFeatureFlagVariantKey: () => flagVariant,
+}));
+
+vi.mock("@/lib/hooks/use-settings", () => ({
+  useSettings: () => settingsState,
+}));
+
+vi.mock("@tauri-apps/plugin-os", () => ({ platform: () => "macos" }));
+
+vi.mock("posthog-js", () => ({ default: { capture: vi.fn() } }));
+
+vi.mock("@/lib/open-external-url", () => ({
+  openExternalUrl: vi.fn(async () => {}),
+}));
+
+import { CardAskProvider } from "@/components/card-ask-provider";
+
+const localStorageValues = new Map<string, string>();
+const localStorageMock = {
+  getItem: (key: string) => localStorageValues.get(key) ?? null,
+  setItem: (key: string, value: string) => {
+    localStorageValues.set(key, value);
+  },
+  removeItem: (key: string) => {
+    localStorageValues.delete(key);
+  },
+  clear: () => {
+    localStorageValues.clear();
+  },
+};
+
+
+const cardlessUser = {
+  id: "synthetic-user",
+  email: "user@example.test",
+  has_payment_method: false,
+};
+
+function reset() {
+  localStorageValues.clear();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: localStorageMock,
+  });
+  resetCardAskTriggerBus();
+  flagVariant = "at_login";
+  settingsState = { settings: { user: cardlessUser }, isSettingsLoaded: true };
+}
+
+beforeEach(reset);
+afterEach(reset);
+
+function modal() {
+  return screen.queryByRole("dialog");
+}
+
+describe("CardAskProvider login trigger", () => {
+  it("shows the login ask for an eligible user in at_login", () => {
+    render(<CardAskProvider />);
+    expect(modal()).not.toBeNull();
+  });
+
+  it("still shows it when settings finish loading after the arm resolves", () => {
+    settingsState = { settings: { user: null }, isSettingsLoaded: false };
+    const { rerender } = render(<CardAskProvider />);
+    expect(modal()).toBeNull();
+
+    settingsState = { settings: { user: cardlessUser }, isSettingsLoaded: true };
+    rerender(<CardAskProvider />);
+    expect(modal()).not.toBeNull();
+  });
+
+  it("shows it when the user signs in after Home is already mounted", () => {
+    settingsState = { settings: { user: null }, isSettingsLoaded: true };
+    const { rerender } = render(<CardAskProvider />);
+    expect(modal()).toBeNull();
+
+    settingsState = { settings: { user: cardlessUser }, isSettingsLoaded: true };
+    rerender(<CardAskProvider />);
+    expect(modal()).not.toBeNull();
+  });
+
+  it("re-emitting on every settings change still asks only once", () => {
+    const first = render(<CardAskProvider />);
+    expect(modal()).not.toBeNull();
+    first.unmount();
+
+    resetCardAskTriggerBus();
+    render(<CardAskProvider />);
+    expect(modal()).toBeNull();
+  });
+
+  it("stays silent for a user with a card on file", () => {
+    settingsState = {
+      settings: { user: { ...cardlessUser, has_payment_method: true } },
+      isSettingsLoaded: true,
+    };
+    render(<CardAskProvider />);
+    expect(modal()).toBeNull();
+  });
+
+  it("stays silent in control even once settings load", () => {
+    flagVariant = "control";
+    settingsState = { settings: { user: null }, isSettingsLoaded: false };
+    const { rerender } = render(<CardAskProvider />);
+    settingsState = { settings: { user: cardlessUser }, isSettingsLoaded: true };
+    rerender(<CardAskProvider />);
+    expect(modal()).toBeNull();
+  });
+
+  it("does not fire login for an arm that does not own it", () => {
+    flagVariant = "at_limit";
+    localStorageValues.set(CARD_ASK_ARM_STORAGE_KEY, "at_limit");
+    render(<CardAskProvider />);
+    expect(modal()).toBeNull();
+  });
+});
+it("stays silent without a signed-in account", () => {
+  settingsState = { settings: { user: null }, isSettingsLoaded: true };
+  render(<CardAskProvider />);
+  expect(modal()).toBeNull();
+});
+it("stays silent while the timing variant is unresolved", () => {
+  flagVariant = undefined;
+  render(<CardAskProvider />);
+  expect(modal()).toBeNull();
+});

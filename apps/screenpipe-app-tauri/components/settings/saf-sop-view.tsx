@@ -13,6 +13,8 @@ import {
   parseSafArtifact,
   type SafArtifact,
 } from "@/lib/saf";
+import { useGT } from "gt-react";
+
 
 // Typed renderer for SAF artifacts in the local artifacts view — the same
 // envelope the cloud dashboard renders, so a device-authored SOP and a
@@ -24,6 +26,8 @@ import {
  * unmount; the image is hidden entirely when the fetch fails.
  */
 function FrameImage({ frameId }: { frameId: number }) {
+
+  const ui = useGT();
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -61,7 +65,7 @@ function FrameImage({ frameId }: { frameId: number }) {
     // eslint-disable-next-line @next/next/no-img-element
     <img
       src={url}
-      alt={`frame ${frameId}`}
+      alt={ui("Frame {value1}", { value1: frameId })}
       className="h-20 w-auto max-w-full rounded border border-border object-cover"
       data-testid={`saf-frame-${frameId}`}
       onError={() => setFailed(true)}
@@ -85,6 +89,7 @@ function ConfidenceBadge({ confidence }: { confidence: string }) {
 }
 
 function PrettyJson({ value }: { value: unknown }) {
+
   return (
     <pre className="text-xs bg-muted/30 rounded p-2 whitespace-pre-wrap break-words font-mono max-h-96 overflow-y-auto">
       {JSON.stringify(value, null, 2)}
@@ -94,6 +99,7 @@ function PrettyJson({ value }: { value: unknown }) {
 
 /** Numbered-step renderer for a validated SAF artifact of kind "sop". */
 export function SafSopView({ artifact }: { artifact: SafArtifact }) {
+
   const steps = extractSopSteps(artifact);
   const summary =
     typeof artifact.body.summary === "string" ? artifact.body.summary : null;
@@ -103,7 +109,7 @@ export function SafSopView({ artifact }: { artifact: SafArtifact }) {
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-sm font-medium">{artifact.title}</span>
         <span className="text-[10px] text-muted-foreground font-mono">
-          v{artifact.version}
+          V{artifact.version}
         </span>
       </div>
       {summary && (
@@ -189,11 +195,12 @@ export function SafArtifactBody({
   onToggleExpanded,
   hideTitle = false,
 }: SafArtifactBodyProps) {
+
   let body: React.ReactNode = null;
   if (!expanded) {
     body = hideTitle ? null : <p className="text-sm font-medium">{title}</p>;
   } else if (content == null) {
-    body = <p className="text-xs text-muted-foreground">loading artifact…</p>;
+    body = <p className="text-xs text-muted-foreground">Loading artifact…</p>;
   } else {
     let raw: unknown;
     let parsedOk = false;
@@ -235,11 +242,11 @@ export function SafArtifactBody({
         >
           {expanded ? (
             <>
-              <ChevronUp className="h-2.5 w-2.5" /> show less
+              <ChevronUp className="h-2.5 w-2.5" /> Show less
             </>
           ) : (
             <>
-              <ChevronDown className="h-2.5 w-2.5" /> show more
+              <ChevronDown className="h-2.5 w-2.5" /> Show more
             </>
           )}
         </button>

@@ -51,10 +51,12 @@ const deviceKey = (device: TimelineDeviceLike): string | null => {
 	return null;
 };
 
-const audioKey = (audio: unknown): string | null => {
+export const timelineAudioKey = (audio: unknown): string | null => {
 	if (!isRecord(audio)) return null;
 	const entry = audio as TimelineAudioLike;
-	if (entry.audio_chunk_id != null) return `chunk:${String(entry.audio_chunk_id)}`;
+	if (entry.audio_chunk_id != null) {
+		return JSON.stringify([entry.audio_chunk_id, entry.captured_at ?? null, entry.start_offset ?? null]);
+	}
 	return null;
 };
 
@@ -76,13 +78,13 @@ function mergeAudioEntries(
 	const byKey = new Map<string, number>();
 
 	for (let i = 0; i < merged.length; i++) {
-		const key = audioKey(merged[i]);
+		const key = timelineAudioKey(merged[i]);
 		if (key) byKey.set(key, i);
 	}
 
 	let changed = false;
 	for (const incoming of incomingAudio) {
-		const key = audioKey(incoming);
+		const key = timelineAudioKey(incoming);
 		if (!key) {
 			if (!merged.includes(incoming)) {
 				merged.push(incoming);
@@ -314,4 +316,37 @@ export function mergeTimelineFrames<T extends TimelineFrameLike>({
 		newAtFront,
 		changed: true,
 	};
+}
+
+/** Attach late transcripts without mutating memoized frame snapshots. */
+export function mergeTimelineAudioUpdate<T extends TimelineFrameLike>(
+	frames: T[],
+	timestamp: string,
+	audio: unknown,
+): T[] {
+	if (!isRecord(audio)) return frames;
+	const capturedMs = Date.parse(timestamp);
+	if (!Number.isFinite(capturedMs)) return frames;
+	const incoming = { ...audio, captured_at: audio.captured_at ?? timestamp };
+	let next = frames;
+	for (let i = 0; i < frames.length; i++) {
+		const frame = frames[i];
+		const frameMs = Date.parse(frame.timestamp);
+		if (!Number.isFinite(frameMs) || Math.abs(frameMs - capturedMs) > 60_000) continue;
+		const devices = getDevices(frame);
+		if (!devices?.length) continue;
+		let changed = false;
+		const nextDevices = devices.map((device) => {
+			const merged = mergeAudioEntries(device.audio, [incoming]);
+			if (!merged.changed) return device;
+			changed = true;
+			return { ...device, audio: merged.audio };
+		});
+		if (!changed) continue;
+		// Copy the pointer array only once, and only when content changes. The
+		// potentially large set of unaffected frame/device objects stays shared.
+		if (next === frames) next = frames.slice();
+		next[i] = { ...frame, devices: nextDevices } as T;
+	}
+	return next;
 }

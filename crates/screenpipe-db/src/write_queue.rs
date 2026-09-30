@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
+use tracing::instrument::WithSubscriber;
 use tracing::{debug, error, info, warn};
 
 /// Maximum writes per batch. Caps transaction size to avoid holding
@@ -66,30 +67,19 @@ pub fn request_write_resume() {
 // The old loop retried the SAME pool 3× then dropped the batch forever, silently
 // losing writes until a manual restart (see reference_db_corruption_mmap). The
 // drain loop now escalates on consecutive fatal batches:
-//   * every `WRITE_POOL_REOPEN_EVERY` it reopens its own write pool in-process
-//     (cheap; drops poisoned write connections);
 //   * at `DEGRADED_AFTER` it flips `WriteQueueHealth::degraded` so the app can
 //     surface "recording degraded";
 //   * at `PERSISTENT_FAILURE_AFTER` it fires the `on_persistent_failure` hook
-//     once — the seam the app uses to restart the engine, the only thing that
-//     rebuilds the shared WAL-index + read pool (the real cure).
+//     through the owning lifecycle, which replaces every pool together.
+//     A queue-only replacement closes clones still held by direct writers,
+//     checkpoints and storage workers, stranding them on PoolClosed.
 
-/// Reopen the write pool every N consecutive fatal batches.
-const WRITE_POOL_REOPEN_EVERY: u64 = 5;
 /// Flip the queue to `degraded` after this many consecutive fatal batches.
 const DEGRADED_AFTER: u64 = 3;
-/// Fire the persistent-failure hook (engine restart) after this many consecutive
-/// fatal batches. Each fatal batch takes ~150ms+ (3 retries with backoff), so this
-/// is ~6s+ of uninterrupted total write failure — long enough to rule out a
-/// transient blip, short enough to bound data loss.
-///
-/// NOTE this count-based rule alone is far too slow in production: batches only
-/// form when writes ARRIVE, and under normal desktop load that's one batch every
-/// ~30s — 40 consecutive fatal batches is ~20 MINUTES of lost writes, not ~6s
-/// (2026-07-02 incident: 522 storm at 07:03Z, first hook fire 09:39Z). The
-/// wall-clock rule below is the real production trigger; this stays as the fast
-/// path for write-heavy bursts and for tests.
-const PERSISTENT_FAILURE_AFTER: u64 = 40;
+/// Request owner-controlled recovery at the former queue-only reopen threshold.
+/// Preserve the wall-clock trigger for sparse writes and the refire/healthy
+/// streak rules; contention has its own longer budget below.
+const PERSISTENT_FAILURE_AFTER: u64 = 5;
 /// Wall-clock escalation: fire the hook once a fatal run has spanned this long,
 /// regardless of how few batches formed in that window.
 const PERSISTENT_FAILURE_AFTER_WALL: Duration = Duration::from_secs(120);
@@ -341,7 +331,6 @@ struct WriteQueueHealthInner {
     total_fatal_batches: std::sync::atomic::AtomicU64,
     consecutive_contention: std::sync::atomic::AtomicU64,
     total_contention_batches: std::sync::atomic::AtomicU64,
-    write_pool_reopens: std::sync::atomic::AtomicU64,
     persistent_failure_signals: std::sync::atomic::AtomicU64,
     /// Advances only after the escalation state observes the full healthy
     /// streak required to end a fatal run. A recovery hook snapshots this
@@ -386,9 +375,10 @@ impl WriteQueueHealth {
     pub fn consecutive_contention_batches(&self) -> u64 {
         self.inner.consecutive_contention.load(Ordering::SeqCst)
     }
-    /// How many times the write pool was reopened in-process.
+    /// Legacy health field retained for API compatibility. Recovery now goes
+    /// through the owner; this queue never replaces a shared pool independently.
     pub fn write_pool_reopens(&self) -> u64 {
-        self.inner.write_pool_reopens.load(Ordering::SeqCst)
+        0
     }
     /// How many times the persistent-failure hook fired (engine-restart requests).
     pub fn persistent_failure_signals(&self) -> u64 {
@@ -464,9 +454,6 @@ impl WriteQueueHealth {
         }
         first_for_manager
     }
-    fn note_reopen(&self) {
-        self.inner.write_pool_reopens.fetch_add(1, Ordering::SeqCst);
-    }
     fn note_persistent_signal(&self) {
         self.inner
             .persistent_failure_signals
@@ -480,19 +467,10 @@ impl WriteQueueHealth {
 }
 
 /// Why the database layer needs the owning process to rebuild every live pool.
-///
-/// A WAL backlog is intentionally handled at the same lifecycle boundary as a
-/// write wedge: only the owner can stop capture, drain readers, close every
-/// connection, and reopen SQLite against a fresh WAL-index generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DatabaseRestartReason {
     PersistentWriteFailure,
     SqliteHardFault,
-    WalBacklog {
-        pending_pages: i32,
-        log_pages: i32,
-        checkpointed_pages: i32,
-    },
 }
 
 /// Hook used by the database layer to ask its owner for a full lifecycle
@@ -509,7 +487,6 @@ pub type PersistentFailureHook = Arc<dyn Fn() + Send + Sync>;
 pub(crate) struct PersistentFailureState {
     hook: std::sync::Mutex<Option<DatabaseRestartHook>>,
     hard_fault_signaled: AtomicBool,
-    wal_backlog_signaled: AtomicBool,
 }
 
 pub(crate) type PersistentFailureSlot = Arc<PersistentFailureState>;
@@ -533,33 +510,12 @@ impl PersistentFailureState {
             .ok()
             .map(|_| hook)
     }
-
-    /// Deliver at most one WAL-backlog restart request for this manager.
-    /// Leave the gate open until a hook is installed so embedders that wire the
-    /// lifecycle after construction can still receive the request on a later
-    /// maintenance pass.
-    pub(crate) fn signal_wal_backlog_restart(&self, reason: DatabaseRestartReason) -> bool {
-        debug_assert!(matches!(reason, DatabaseRestartReason::WalBacklog { .. }));
-        let Some(hook) = self.hook() else {
-            return false;
-        };
-        if self
-            .wal_backlog_signaled
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            return true;
-        }
-        hook(reason);
-        true
-    }
 }
 
 pub(crate) fn persistent_failure_slot(hook: Option<DatabaseRestartHook>) -> PersistentFailureSlot {
     Arc::new(PersistentFailureState {
         hook: std::sync::Mutex::new(hook),
         hard_fault_signaled: AtomicBool::new(false),
-        wal_backlog_signaled: AtomicBool::new(false),
     })
 }
 
@@ -577,49 +533,12 @@ pub(crate) fn capture_pool_options() -> sqlx::sqlite::SqlitePoolOptions {
         .max_lifetime(None)
 }
 
-/// Rebuilds the write pool from the same options used at startup, so the drain
-/// loop can drop poisoned connections in-process without a full restart.
-#[derive(Clone)]
-pub(crate) struct WritePoolRebuilder {
-    options: sqlx::sqlite::SqliteConnectOptions,
-    max_connections: u32,
-    min_connections: u32,
-    acquire_timeout: Duration,
-}
-
-impl WritePoolRebuilder {
-    pub(crate) fn new(
-        options: sqlx::sqlite::SqliteConnectOptions,
-        max_connections: u32,
-        min_connections: u32,
-        acquire_timeout: Duration,
-    ) -> Self {
-        Self {
-            options,
-            max_connections,
-            min_connections,
-            acquire_timeout,
-        }
-    }
-    async fn rebuild(&self) -> Result<Pool<Sqlite>, sqlx::Error> {
-        capture_pool_options()
-            .max_connections(self.max_connections)
-            .min_connections(self.min_connections)
-            .acquire_timeout(self.acquire_timeout)
-            .connect_with(self.options.clone())
-            .await
-    }
-}
-
-/// Optional recovery wiring for the drain loop. `Default` keeps the production
-/// thresholds and disables the rebuilder/hook (used by `spawn_write_drain` and the
-/// existing tests — behaviour unchanged).
+/// Recovery wiring for the drain loop. The lifecycle owner rebuilds all pools;
+/// this queue only reports failures and requests that transition.
 pub(crate) struct WriteDrainOpts {
-    pub rebuilder: Option<WritePoolRebuilder>,
+    pub admission_gate: Option<Arc<tokio::sync::Mutex<()>>>,
     pub on_persistent_failure: PersistentFailureSlot,
     pub health: WriteQueueHealth,
-    /// Reopen the write pool every N consecutive fatal batches.
-    pub reopen_every: u64,
     /// Flip `degraded` after this many consecutive fatal batches.
     pub degraded_after: u64,
     /// Fire the persistent-failure hook after this many consecutive fatal batches.
@@ -634,7 +553,7 @@ pub(crate) struct WriteDrainOpts {
     /// Per-batch acquisition budgets. Injectable for the same reason.
     pub batch_timeouts: BatchTimeouts,
     /// Cancelled on `DatabaseManager::close()`. The drain loop exits and closes
-    /// its current write pool (which may be a rebuilt one only it holds) so no
+    /// its shared write pool so no
     /// SQLite connection survives teardown.
     pub shutdown: tokio_util::sync::CancellationToken,
 }
@@ -642,10 +561,9 @@ pub(crate) struct WriteDrainOpts {
 impl Default for WriteDrainOpts {
     fn default() -> Self {
         Self {
-            rebuilder: None,
+            admission_gate: None,
             on_persistent_failure: persistent_failure_slot(None),
             health: WriteQueueHealth::default(),
-            reopen_every: WRITE_POOL_REOPEN_EVERY,
             degraded_after: DEGRADED_AFTER,
             persistent_after: PERSISTENT_FAILURE_AFTER,
             contention_persistent_after: CONTENTION_PERSISTENT_AFTER,
@@ -873,6 +791,7 @@ pub(crate) enum WriteOp {
     /// INSERT...RETURNING id queries that element insertion requires.
     InsertDeferredElements {
         frame_id: i64,
+        expected_generation: Option<i64>,
         ocr_text_json: Option<String>,
         accessibility_tree_json: Option<String>,
     },
@@ -1017,8 +936,8 @@ pub(crate) fn spawn_write_drain(
     )
 }
 
-/// Like [`spawn_write_drain`] but with recovery wiring (in-process write-pool
-/// rebuild + persistent-failure hook + shared health). The caller keeps a clone
+/// Like [`spawn_write_drain`] but with owner-controlled recovery and shared
+/// health. The caller keeps a clone
 /// of `opts.health` to observe degradation.
 pub(crate) fn spawn_write_drain_with(
     write_pool: Pool<Sqlite>,
@@ -1028,23 +947,24 @@ pub(crate) fn spawn_write_drain_with(
 ) -> WriteQueue {
     let (tx, rx) = mpsc::channel::<PendingWrite>(CHANNEL_CAPACITY);
 
-    tokio::spawn(drain_loop(rx, write_pool, write_semaphore, db_path, opts));
+    tokio::spawn(
+        drain_loop(rx, write_pool, write_semaphore, db_path, opts).with_current_subscriber(),
+    );
 
     WriteQueue { tx }
 }
 
 async fn drain_loop(
     mut rx: mpsc::Receiver<PendingWrite>,
-    mut write_pool: Pool<Sqlite>,
+    write_pool: Pool<Sqlite>,
     write_semaphore: Arc<Semaphore>,
     db_path: Arc<str>,
     opts: WriteDrainOpts,
 ) {
     let WriteDrainOpts {
-        rebuilder,
+        admission_gate,
         on_persistent_failure,
         health,
-        reopen_every,
         degraded_after,
         persistent_after,
         contention_persistent_after,
@@ -1070,9 +990,7 @@ async fn drain_loop(
         let n = tokio::select! {
             n = rx.recv_many(&mut batch, MAX_BATCH_SIZE) => n,
             // DatabaseManager::close(): exit WITHOUT flushing — the pools are
-            // being closed right now, and this loop may hold a rebuilt pool
-            // only it can close. Leaked-writer data loss is bounded by the
-            // caller having already decided to tear the engine down.
+            // being closed right now by their authoritative lifecycle owner.
             _ = shutdown.cancelled() => {
                 write_pool.close().await;
                 debug!("write_queue: drain loop shut down via close token");
@@ -1108,13 +1026,14 @@ async fn drain_loop(
         }
 
         debug!("write_queue: draining batch of {} writes", batch.len());
-        let outcome = execute_batch(
+        let outcome = execute_batch_with_gate(
             &write_pool,
             &write_semaphore,
             &mut batch,
             &db_path,
             &health,
             batch_timeouts,
+            admission_gate.as_ref(),
         )
         .await;
         batch.clear();
@@ -1175,46 +1094,20 @@ async fn drain_loop(
                 let consecutive_fatal = health.record_fatal();
                 debug_assert_eq!(consecutive_fatal, escalation.consecutive_fatal);
 
-                // Tier 2: reopen our write pool in-process every N fatal batches.
-                // Drops poisoned write connections without a full restart. Cheap
-                // (~ms) and idempotent; retried periodically until writes recover.
-                if reopen_every != 0 && consecutive_fatal.is_multiple_of(reopen_every) {
-                    if let Some(rb) = &rebuilder {
-                        match rb.rebuild().await {
-                            Ok(new_pool) => {
-                                let old = std::mem::replace(&mut write_pool, new_pool);
-                                old.close().await;
-                                health.note_reopen();
-                                warn!(
-                                    "write_queue: reopened write pool after {} consecutive fatal I/O batches",
-                                    consecutive_fatal
-                                );
-                            }
-                            Err(e) => {
-                                warn!("write_queue: write pool reopen failed (will retry): {}", e)
-                            }
-                        }
-                    }
-                }
-
-                // Tier 3a: surface degradation early so the app/health route reports it.
+                // Surface degradation early so the app/health route reports it.
                 if consecutive_fatal >= degraded_after {
                     health.set_degraded();
                 }
 
-                // Tier 3b: fire the engine-restart hook. A restart is the only thing
-                // that rebuilds the shared WAL-index + read pool — the cure for a
-                // process-wide desync that an in-process reopen can't fix. Two
-                // triggers (see FatalRunEscalation): the count rule (fast under
-                // write-heavy load) and the wall-clock rule (batches arrive ~every
-                // 30s on an idle desktop, so counting alone takes ~20 min to
-                // notice). Refires at most every PERSISTENT_FAILURE_REFIRE_EVERY
-                // while the same run persists, so a restart that did NOT cure the
-                // wedge gets escalated again instead of wedging silently forever.
+                // Recovery must replace every pool through its lifecycle owner.
+                // Closing only the queue's clone permanently closes direct writers
+                // and background capabilities while a private replacement can
+                // falsely report successful capture. Keep one shared generation
+                // until the existing owner-controlled shutdown/reopen completes.
                 if fire_hook {
                     health.note_persistent_signal();
                     error!(
-                        "write_queue: persistent write failure ({} fatal batches over {:?}) — requesting engine restart to rebuild all pools + WAL-index",
+                        "write_queue: persistent write failure ({} fatal batches over {:?}) — requesting owner-controlled restart; shared pools retained until shutdown",
                         escalation.fatal_in_run,
                         escalation.run_elapsed(now)
                     );
@@ -1261,13 +1154,14 @@ async fn drain_loop(
             "write_queue: shutdown — flushing {} remaining writes",
             tail_batch.len()
         );
-        let _ = execute_batch(
+        let _ = execute_batch_with_gate(
             &write_pool,
             &write_semaphore,
             &mut tail_batch,
             &db_path,
             &health,
             batch_timeouts,
+            admission_gate.as_ref(),
         )
         .await;
         tail_batch.clear();
@@ -1275,6 +1169,7 @@ async fn drain_loop(
     debug!("write_queue: drain loop exited");
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 async fn execute_batch(
     write_pool: &Pool<Sqlite>,
     write_semaphore: &Arc<Semaphore>,
@@ -1282,6 +1177,27 @@ async fn execute_batch(
     db_path: &str,
     health: &WriteQueueHealth,
     timeouts: BatchTimeouts,
+) -> BatchOutcome {
+    execute_batch_with_gate(
+        write_pool,
+        write_semaphore,
+        batch,
+        db_path,
+        health,
+        timeouts,
+        None,
+    )
+    .await
+}
+
+async fn execute_batch_with_gate(
+    write_pool: &Pool<Sqlite>,
+    write_semaphore: &Arc<Semaphore>,
+    batch: &mut Vec<PendingWrite>,
+    db_path: &str,
+    health: &WriteQueueHealth,
+    timeouts: BatchTimeouts,
+    admission_gate: Option<&Arc<tokio::sync::Mutex<()>>>,
 ) -> BatchOutcome {
     // Acquire write semaphore once for the entire batch
     let _permit: OwnedSemaphorePermit = match tokio::time::timeout(
@@ -1310,6 +1226,11 @@ async fn execute_batch(
             // degradation and suppresses the sustained-contention signal.
             return BatchOutcome::Contention;
         }
+    };
+
+    let _admission = match admission_gate {
+        Some(gate) => Some(Arc::clone(gate).lock_owned().await),
+        None => None,
     };
 
     // Acquire connection and BEGIN IMMEDIATE with retry logic
@@ -1353,6 +1274,7 @@ async fn execute_batch(
                     continue;
                 }
                 let fatal = should_recycle_sqlite_connection(&e);
+                warn!(error = %e, "write_queue: write pool acquisition failed");
                 send_error_to_all(batch, e);
                 return if fatal {
                     BatchOutcome::FatalConnection
@@ -1361,13 +1283,18 @@ async fn execute_batch(
                 };
             }
             Err(_) => {
+                warn!(
+                    pool_size = write_pool.size(),
+                    idle_connections = write_pool.num_idle(),
+                    "write_queue: write pool acquisition timed out while holding the SQLite write coordinator"
+                );
                 send_error_to_all(
                     batch,
                     sqlx::Error::Protocol(WRITE_POOL_STARVED_MESSAGE.to_string()),
                 );
                 // We already own the single write coordinator, so every normal
                 // writer is excluded. Exhausting the connection wait here means
-                // the pool itself is starved; drive the existing reopen/restart
+                // the pool itself is starved; drive owner-controlled restart
                 // recovery instead of incorrectly resetting health.
                 return BatchOutcome::FatalConnection;
             }
@@ -1500,7 +1427,7 @@ async fn execute_batch(
             // per-attempt ROLLBACK didn't clear within the budget. Treating it
             // as Healthy would leave the wedge in place (writes silently fail,
             // SCREENPIPE-CLI-RC) — escalate to FatalConnection so the drain
-            // loop's pool reopen recovers it, same as for IOERR/CANTOPEN.
+            // owner can recover every writer together.
             let hard_fault = is_hard_fault(&e);
             let contention = is_busy_error(&e);
             let fatal = should_recycle_sqlite_connection(&e) || is_nested_transaction_error(&e);
@@ -1899,9 +1826,29 @@ async fn execute_single_write(
 
         WriteOp::InsertDeferredElements {
             frame_id,
+            expected_generation,
             ocr_text_json,
             accessibility_tree_json,
         } => {
+            let authoritative;
+            let (ocr_text_json, accessibility_tree_json) = if let Some(generation) =
+                expected_generation
+            {
+                authoritative = sqlx::query_as::<_,(String,Option<String>,Option<String>)>("SELECT p.state,f.text_json,f.accessibility_tree_json FROM frames f JOIN frame_payloads p ON p.frame_id=f.id WHERE f.id=? AND p.generation=?")
+                    .bind(frame_id).bind(generation).fetch_optional(&mut **conn).await?;
+                let Some((state, ocr, tree)) = authoritative.as_ref() else {
+                    return Ok(WriteResult::Unit);
+                };
+                // Sealing preserves this generation's bytes. Its queued
+                // inputs remain valid while the catalog names that generation.
+                if state == "sealed" {
+                    (ocr_text_json, accessibility_tree_json)
+                } else {
+                    (ocr, tree)
+                }
+            } else {
+                (ocr_text_json, accessibility_tree_json)
+            };
             if let Some(ref text_json) = ocr_text_json {
                 if !text_json.is_empty() {
                     crate::db::DatabaseManager::insert_ocr_elements(conn, *frame_id, text_json)
@@ -2690,11 +2637,70 @@ mod tests {
     use super::*;
     use sqlx::migrate::MigrateDatabase;
 
+    #[tokio::test]
+    async fn deferred_elements_survive_sealing_and_retire_after_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let db =
+            crate::DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+                .await
+                .unwrap();
+        let json = serde_json::json!([{
+            "block_num":"0","conf":"95","page_num":"0","left":"0.2","height":"0.1",
+            "level":"0","text":"original word","par_num":"0","top":"0.3","word_num":"0","width":"0.4","line_num":"0"
+        }]).to_string();
+        for id in [1, 2] {
+            let mut tx = db.begin_immediate_with_retry().await.unwrap();
+            sqlx::query("INSERT INTO frames(id,timestamp,full_text,text_json) VALUES(?,'2026-09-11T12:00:00Z','original word',?)")
+                .bind(id).bind(&json).execute(&mut **tx.conn()).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        db.seal_frame_payloads().await.unwrap();
+        let mut replacement = db
+            .frame_payloads(&[2], crate::storage::Projection::All)
+            .await
+            .unwrap()
+            .remove(&2)
+            .unwrap();
+        replacement.full_text = Some("changed".into());
+        replacement.text_json = Some("[]".into());
+        assert!(db
+            .replace_frame_payload(&replacement, "", 0, None, None)
+            .await
+            .unwrap());
+        for id in [1, 2] {
+            let mut tx = db.begin_immediate_with_retry().await.unwrap();
+            execute_single_write(
+                &WriteOp::InsertDeferredElements {
+                    frame_id: id,
+                    expected_generation: Some(1),
+                    ocr_text_json: Some(json.clone()),
+                    accessibility_tree_json: None,
+                },
+                tx.conn(),
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+        let rows: Vec<(i64, String)> =
+            sqlx::query_as("SELECT frame_id,text FROM elements ORDER BY frame_id")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(rows, vec![(1, "original word".into())]);
+        db.close().await;
+    }
+
     #[test]
     fn capture_pool_connections_live_until_authoritative_shutdown() {
-        let options = capture_pool_options();
-        assert_eq!(options.get_idle_timeout(), None);
-        assert_eq!(options.get_max_lifetime(), None);
+        for options in [
+            capture_pool_options(),
+            crate::storage::bulk::pool_options(None, true),
+            crate::storage::bulk::pool_options(None, false),
+        ] {
+            assert_eq!(options.get_idle_timeout(), None);
+            assert_eq!(options.get_max_lifetime(), None);
+        }
     }
     use sqlx::sqlite::SqlitePoolOptions;
 
@@ -3898,7 +3904,7 @@ mod tests {
         assert!(is_nested_transaction_error(&stuck));
 
         // The exhausted-retries decision escalates it to FatalConnection
-        // (so the drain loop reopens the pool) even though it is NOT in the
+        // (so the lifecycle owner recovers the pools) even though it is NOT in the
         // plain recycle set — that's the gap this guards.
         assert!(!should_recycle_sqlite_connection(&stuck));
         assert!(should_recycle_sqlite_connection(&stuck) || is_nested_transaction_error(&stuck));

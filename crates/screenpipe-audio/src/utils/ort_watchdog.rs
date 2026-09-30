@@ -53,15 +53,51 @@ where
         })
         .map_err(|e| anyhow!("{context}: failed to spawn watchdog thread: {e}"))?;
 
-    match rx.recv_timeout(timeout) {
-        Ok(result) => result,
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(anyhow!(
+    let (result, status) = match rx.recv_timeout(timeout) {
+        Ok(Ok(value)) => (Ok(value), "ok"),
+        Ok(Err(error)) => (Err(error), "init_failed"),
+        Err(mpsc::RecvTimeoutError::Timeout) => (
+            Err(anyhow!(
             "{context}: timed out after {timeout:?} (likely an ONNX Runtime init hang on this host)"
         )),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(anyhow!(
-            "{context}: watchdog worker exited without a result"
-        )),
+            "init_timed_out",
+        ),
+        Err(mpsc::RecvTimeoutError::Disconnected) => (
+            Err(anyhow!(
+                "{context}: watchdog worker exited without a result"
+            )),
+            "init_failed",
+        ),
+    };
+    let component = if context == "silero vad init" {
+        "silero_vad"
+    } else {
+        context
+    };
+    screenpipe_core::health_diagnostics::component_state(
+        "runtime",
+        component,
+        status,
+        None,
+        result.as_ref().err().map(ToString::to_string),
+    );
+    if matches!(
+        component,
+        "silero_vad" | "speaker_embedding" | "speaker_segmentation"
+    ) {
+        screenpipe_core::health_diagnostics::component_state(
+            "models",
+            if component == "silero_vad" {
+                "vad"
+            } else {
+                component
+            },
+            if status == "ok" { "ready" } else { status },
+            None,
+            result.as_ref().err().map(ToString::to_string),
+        );
     }
+    result
 }
 
 #[cfg(test)]

@@ -23,6 +23,19 @@
 use screenpipe_config::{DbConfig, DeviceTier};
 use screenpipe_db::DatabaseManager;
 
+#[path = "support/writer_recovery.rs"]
+mod writer_recovery;
+
+#[tokio::test]
+async fn writer_starvation_keeps_all_pool_owners_until_coordinated_restart() {
+    writer_recovery::writer_starvation_recovery(false).await;
+}
+
+#[tokio::test]
+async fn hybrid_writer_starvation_keeps_all_pool_owners_until_coordinated_restart() {
+    writer_recovery::writer_starvation_recovery(true).await;
+}
+
 fn temp_db_path(tag: &str) -> String {
     let dir = std::env::temp_dir().join(format!("sp_close_test_{}_{}", tag, std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -106,4 +119,66 @@ async fn repeated_restart_cycles_reopen_cleanly() {
         .unwrap();
     assert_eq!(count.0, 5);
     db.close().await;
+}
+
+#[tokio::test]
+async fn verified_reopen_waits_for_checked_out_connections_before_new_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("db.sqlite").to_string_lossy().into_owned();
+    let db = DatabaseManager::new(&db_path, DbConfig::for_tier(DeviceTier::Low))
+        .await
+        .unwrap();
+    db.insert_audio_chunk("/before/held-reader", None)
+        .await
+        .unwrap();
+    let held_reader = db.pool.acquire().await.unwrap();
+    let old_gate = screenpipe_sqlite_coordinator::sqlite_write_lock(&db_path);
+    screenpipe_sqlite_coordinator::latch_sqlite_hard_fault(&db_path, 10);
+
+    let retry_path = db_path.clone();
+    let mut reopening = tokio::spawn(async move {
+        // The owner must finish shutdown and release its manager lease before
+        // admitting another manager; borrowed connections delay that boundary.
+        db.close().await;
+        DatabaseManager::new(&retry_path, DbConfig::for_tier(DeviceTier::Low)).await
+    });
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut reopening)
+            .await
+            .is_err(),
+        "verification must wait for the borrowed old connection"
+    );
+    assert!(old_gate.is_closed());
+    assert!(!screenpipe_db::sqlite_quarantine_exists(&db_path));
+    drop(held_reader);
+
+    let resumed = tokio::time::timeout(std::time::Duration::from_secs(5), reopening)
+        .await
+        .expect("reopen proceeds after the old handle closes")
+        .expect("reopen task must not panic")
+        .expect("healthy storage resumes without a process restart");
+    resumed
+        .insert_audio_chunk("/after/held-reader", None)
+        .await
+        .unwrap();
+    resumed.close().await;
+    assert!(
+        old_gate.is_closed(),
+        "the retired lane cannot be resurrected"
+    );
+
+    let reopened = DatabaseManager::new(&db_path, DbConfig::for_tier(DeviceTier::Low))
+        .await
+        .unwrap();
+    assert!(reopened
+        .find_audio_chunk_id("/before/held-reader")
+        .await
+        .unwrap()
+        .is_some());
+    assert!(reopened
+        .find_audio_chunk_id("/after/held-reader")
+        .await
+        .unwrap()
+        .is_some());
+    reopened.close().await;
 }

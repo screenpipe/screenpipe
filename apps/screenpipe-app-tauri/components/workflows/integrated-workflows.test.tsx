@@ -1,0 +1,163 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+
+import React from "react";
+import { act, fireEvent, render, screen, within, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { RecordingStatus } from "@/components/recording-status";
+import { SidebarFooter } from "@/components/sidebar-footer";
+import { IntegratedWorkflows, workflowAgentTask } from "./integrated-workflows";
+
+vi.mock("@/lib/workflows/desktop-platform", async () => {
+  const { createFixtureWorkflowsPlatform, fixtureWorkflowAnalysis } = await import("@screenpipe/workflows-ui/fixture");
+  return { desktopWorkflowsPlatform: {
+    ...createFixtureWorkflowsPlatform(),
+    // jsdom cannot rasterize the browser fixture's SVG screenshots.
+    loadCapturedWork: async () => {
+      const catalog = structuredClone(fixtureWorkflowAnalysis);
+      catalog.analysis.workflows.forEach((workflow, index) => { workflow.id = `wf-fixture-${index}`; });
+      return catalog;
+    },
+  } };
+});
+vi.mock("@/components/connected-share-dialog", () => ({
+  ConnectedShareDialog: ({ open, artifact, onOpenChange, onConnect, connectionsRevision }: any) => open ? <div role="dialog" aria-label="Sharing review"><h2>{artifact.title}</h2><p>{artifact.surface}</p><span>Connections revision {connectionsRevision}</span><button onClick={() => onConnect("slack")}>Connect Slack</button><button onClick={() => onOpenChange(false)}>Close sharing</button></div> : null,
+}));
+vi.mock("@/components/settings/connections-section", () => ({
+  ConnectionsSection: ({ panelOnly, focusConnectionId, focusScopeVariant, focusRequestId, onConnectionClose }: any) => !focusRequestId ? null : <div role="dialog" aria-label="Connection setup"><p>{panelOnly ? "Panel only" : "All connections"} {focusConnectionId} {focusScopeVariant}</p><button onClick={onConnectionClose}>Close connection</button></div>,
+}));
+vi.mock("posthog-js", () => ({ default: { capture: vi.fn() } }));
+
+it("renders the native recording dot and opens device controls in Workflows", async () => {
+  render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={
+    <RecordingStatus devices={[{ name: "Display 1", fullName: "Display 1", kind: "monitor", active: true, id: 1 }]}
+      onDevicesChange={vi.fn()} meetingActive={false} onPauseRecording={vi.fn()} />
+  } />);
+  fireEvent.click(await screen.findByRole("button", { name: "Recording" }));
+  expect(await screen.findByTestId("recording-status-popover")).toBeVisible();
+  expect(screen.getByText("Display 1")).toBeVisible();
+  expect(screen.getByRole("button", { name: "pause all recording" })).toBeVisible();
+  expect(screen.queryByText("Starting")).not.toBeInTheDocument();
+});
+
+it("keeps Settings and Help in the footer and opens workspace shortcuts from Help", async () => {
+  const settings = vi.fn(), help = vi.fn();
+  render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null}
+    navigationFooter={({ openKeyboardShortcuts }) => <SidebarFooter onSettings={settings} onHelp={help} onKeyboardShortcuts={openKeyboardShortcuts} />} />);
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  expect(settings).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("button", { name: /Keyboard shortcuts/ })).not.toBeInTheDocument();
+  fireEvent.keyDown(screen.getByRole("button", { name: "Help" }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Keyboard shortcuts" }));
+  expect(await screen.findByRole("dialog", { name: /command/i })).toBeVisible();
+});
+
+it("opens the team invite popover and web management from the Workflows footer", async () => {
+  const manageTeam = vi.fn();
+  render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null}
+    navigationFooter={({ openKeyboardShortcuts }) => <SidebarFooter
+      onSettings={vi.fn()} onHelp={vi.fn()} onKeyboardShortcuts={openKeyboardShortcuts}
+      teamEntry={{ kind: "team", label: "Example Studio", href: "https://screenpipe.com/team-dashboard?team_id=studio", teamId: "studio", canInvite: true }}
+      teamToken="fixture-only" onTeam={manageTeam} />} />);
+  fireEvent.click(screen.getByRole("button", { name: "Example Studio, team menu" }));
+  expect(await screen.findByRole("textbox", { name: "Teammate email" })).toHaveFocus();
+  expect(screen.getByRole("button", { name: "Send invitation" })).toBeDisabled();
+  expect(manageTeam).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Manage team on the web" }));
+  expect(manageTeam).toHaveBeenCalledOnce();
+});
+
+it("opens the existing sharing review from the selected workflow in the main app", async () => {
+  window.history.replaceState(null, "", "/home?mode=workflows");
+  render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
+  // Wait for saved data instead of interacting with a transient empty screen.
+  const card = (await screen.findByRole("heading", { name: "Research synthesis" })).closest("article")!;
+  fireEvent.click(within(card).getByRole("button", { name: "Open map" }));
+  expect(screen.queryByRole("dialog", { name: "Sharing review" })).not.toBeInTheDocument();
+  const agents = screen.getByRole("group", { name: "Run Research synthesis in another agent" });
+  expect(agents.parentElement).toContainElement(screen.getByRole("button", { name: "Create SOP" }));
+  fireEvent.focus(within(agents).getByRole("button", { name: "Choose an AI agent" }));
+  for (const name of ["Claude", "Cursor", "Codex"]) {
+    expect(within(agents).getByRole("button", { name: `Run in ${name}` })).toBeVisible();
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Share with team" }));
+  expect(screen.getByRole("dialog", { name: "Sharing review" })).toHaveTextContent("Research synthesis");
+  expect(screen.getByRole("dialog", { name: "Sharing review" })).toHaveTextContent("workflow");
+  fireEvent.click(screen.getByRole("button", { name: "Connect Slack" }));
+  expect(screen.getByRole("dialog", { name: "Connection setup" })).toHaveTextContent("Panel only slack send");
+  fireEvent.click(screen.getByRole("button", { name: "Close connection" }));
+  expect(screen.queryByRole("dialog", { name: "Connection setup" })).not.toBeInTheDocument();
+  expect(screen.getByRole("dialog", { name: "Sharing review" })).toHaveTextContent("Connections revision 1");
+  // Reopening must issue another focus request after the first panel unmounts.
+  fireEvent.click(screen.getByRole("button", { name: "Connect Slack" }));
+  expect(screen.getByRole("dialog", { name: "Connection setup" })).toHaveTextContent("Panel only slack send");
+  fireEvent.click(screen.getByRole("button", { name: "Close connection" }));
+  expect(screen.getByRole("dialog", { name: "Sharing review" })).toHaveTextContent("Connections revision 2");
+  fireEvent.click(screen.getByRole("button", { name: "Close sharing" }));
+  expect(screen.queryByRole("dialog", { name: "Sharing review" })).not.toBeInTheDocument();
+  expect(screen.getByRole("textbox", { name: "Workflow title" })).toHaveValue("Research synthesis");
+});
+
+vi.mock("@/lib/workflows/rollout", () => ({ useWorkflowsRolloutEnabled: () => true, requireWorkflowsRollout: vi.fn() }));
+
+it("hands off workflow identity without embedding captured content", async () => {
+  const { fixtureWorkflowAnalysis } = await import("@screenpipe/workflows-ui/fixture");
+  const workflow = fixtureWorkflowAnalysis.analysis.workflows[0];
+  const task = workflowAgentTask({ ...workflow, id: "wf-example", title: 'Review "launch"' });
+  expect(task.previewPrompt).toContain('wf-example');
+  expect(task.previewPrompt).toContain(JSON.stringify('Review "launch"'));
+  expect(task.previewPrompt).toContain("Retrieve its current steps and sources");
+  expect(task.previewPrompt).toContain("confirm before sending");
+  expect(task.previewPrompt).not.toContain(workflow.stages[0].evidence[0].detail);
+});
+
+
+it("opens quiet header filters and restores the catalog after clearing them", async () => {
+  window.history.replaceState(null, "", "/home?mode=workflows");
+  render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
+  const filters = await screen.findByRole("button", { name: "Filters", exact: true });
+  expect(filters).toHaveAttribute("title", "Filters");
+  expect(screen.queryByRole("combobox", { name:"Workflow activity period" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Update now" })).toHaveAttribute("title", "Update now");
+  fireEvent.click(filters);
+  const panel = screen.getByRole("region", { name: "Workflow filters" });
+  expect(filters).toHaveAttribute("aria-controls", panel.id);
+  fireEvent.change(within(panel).getByLabelText("Evidence quality"), { target: { value: "strong" } });
+  expect(screen.getByRole("button", { name: "Filters (1)" })).toHaveAttribute("aria-expanded", "true");
+  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+  expect(within(panel).getByLabelText("Evidence quality")).toHaveValue("all");
+  expect(screen.queryByRole("button", { name: "Clear filters" })).not.toBeInTheDocument();
+  fireEvent.click(filters);
+  expect(screen.queryByRole("region", { name: "Workflow filters" })).not.toBeInTheDocument();
+});
+
+
+
+it("waits for the catalog then opens the exact workflow once across delivery retries", async () => {
+  sessionStorage.clear();
+  const posthog = (await import("posthog-js")).default;
+  vi.mocked(posthog.capture).mockClear();
+  const { rememberWorkflowReview } = await import("@/lib/workflows/notification");
+  const request = { key: "cold-start", workflowId: "wf-fixture-4" };
+  rememberWorkflowReview(request);
+  window.history.replaceState(null, "", "/home?mode=workflows");
+  render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
+  expect(await screen.findByRole("button", { name: "Create SOP" })).toBeVisible();
+  expect(screen.getByRole("textbox", { name: "Workflow title" })).toHaveValue("Research synthesis");
+  act(() => rememberWorkflowReview(request));
+  await waitFor(() => expect(vi.mocked(posthog.capture).mock.calls.filter(c => c[0] === "workflow_notification_opened")).toHaveLength(1));
+  expect(sessionStorage.getItem("screenpipe:workflow-review-request")).toBeNull();
+});
+
+it("recovers a removed workflow into the catalog without claiming it opened", async () => {
+  sessionStorage.clear();
+  const posthog = (await import("posthog-js")).default;
+  vi.mocked(posthog.capture).mockClear();
+  const { rememberWorkflowReview } = await import("@/lib/workflows/notification");
+  rememberWorkflowReview({ key: "missing", workflowId: "wf-missing" });
+  window.history.replaceState(null, "", "/home?mode=workflows");
+  render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
+  expect(await screen.findByText("This workflow is no longer available. Your other workflows are shown below.")).toBeVisible();
+  expect(screen.getByRole("heading", { name: "Your workflows" })).toBeVisible();
+  expect(posthog.capture).toHaveBeenCalledWith("workflow_notification_open_failed", expect.objectContaining({ reason: "workflow_unavailable" }));
+});

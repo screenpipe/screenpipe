@@ -260,6 +260,22 @@ pub async fn paired_capture(
     tree_snapshot: Option<&TreeSnapshot>,
     ocr_gate: Option<&mut OcrGate>,
 ) -> Result<PairedCaptureResult> {
+    paired_capture_inner(ctx, tree_snapshot, ocr_gate, false).await
+}
+
+/// Save an authorized screenshot while expensive text extraction is deferred.
+/// Never reuse accessibility or OCR text from an earlier image. The normal
+/// capture path can resume extraction on the next admitted walk.
+pub async fn paired_capture_deferred(ctx: &CaptureContext<'_>) -> Result<PairedCaptureResult> {
+    paired_capture_inner(ctx, None, None, true).await
+}
+
+async fn paired_capture_inner(
+    ctx: &CaptureContext<'_>,
+    tree_snapshot: Option<&TreeSnapshot>,
+    ocr_gate: Option<&mut OcrGate>,
+    defer_text_extraction: bool,
+) -> Result<PairedCaptureResult> {
     let start = Instant::now();
 
     // AX and focused-window identity describe one global focused window, not
@@ -362,7 +378,8 @@ pub async fn paired_capture(
     let meeting_matched = app_name.map(is_meeting_app).unwrap_or(false)
         || browser_url.map(is_meeting_url).unwrap_or(false);
     let meeting_trigger = ctx.in_meeting && meeting_matched && ctx.monitor_hosts_focus;
-    let wants_ocr = !ctx.screenshot_disabled
+    let wants_ocr = !defer_text_extraction
+        && !ctx.screenshot_disabled
         && (app_prefers_ocr || meeting_trigger || !has_accessibility_text || a11y_is_thin_generic);
 
     let mut ocr_gate = ocr_gate;
@@ -741,7 +758,7 @@ pub async fn paired_capture(
             content_hash,
             simhash,
             ocr_data,
-            (ctx.monitor_hosts_focus && ctx.ax_screenshot_coherent)
+            (!defer_text_extraction && ctx.monitor_hosts_focus && ctx.ax_screenshot_coherent)
                 .then_some(ctx.elements_ref_frame_id)
                 .flatten(),
         )
@@ -1124,6 +1141,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deferred_extraction_persists_pixels_and_recovers_after_reopen() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("capture.sqlite");
+        let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        let writer = SnapshotWriter::new(tmp.path(), 80, 1920);
+        let mut ctx = CaptureContext {
+            db: &db,
+            snapshot_writer: &writer,
+            image: test_image(),
+            captured_at: Utc::now(),
+            monitor_id: 0,
+            device_name: "test_monitor",
+            app_name: Some("msedge.exe"),
+            window_name: Some("CPU list"),
+            browser_url: None,
+            document_path: None,
+            focused: true,
+            capture_trigger: "visual_change",
+            use_pii_removal: false,
+            languages: vec![],
+            elements_ref_frame_id: Some(999_999),
+            screenshot_disabled: false,
+            in_meeting: false,
+            monitor_hosts_focus: true,
+            ax_screenshot_coherent: true,
+            focused_window_bounds: None,
+        };
+        let first = paired_capture_deferred(&ctx).await.unwrap();
+        ctx.captured_at += chrono::Duration::seconds(1);
+        let second = paired_capture_deferred(&ctx).await.unwrap();
+        for frame in [&first, &second] {
+            assert!(std::path::Path::new(&frame.snapshot_path).is_file());
+            assert_eq!(frame.ocr_duration_ms, None);
+            assert_eq!(frame.accessibility_text, None);
+            assert_eq!(frame.text_source, None);
+        }
+        assert_ne!(first.frame_id, second.frame_id);
+        db.close().await;
+
+        let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        for frame in [&first, &second] {
+            let stored = db.get_frame(frame.frame_id).await.unwrap().unwrap();
+            assert_eq!(stored.0, frame.snapshot_path);
+            assert!(stored.2);
+            assert_eq!(
+                db.get_frame_accessibility_data(frame.frame_id)
+                    .await
+                    .unwrap(),
+                (None, None)
+            );
+        }
+
+        let mut recovered = make_snap(vec![AccessibilityTreeNode {
+            role: "AXStaticText".into(),
+            text: "Accessibility capture recovered with fresh page content".into(),
+            ..Default::default()
+        }]);
+        recovered.truncated = true;
+        recovered.truncation_reason = screenpipe_a11y::tree::TruncationReason::Timeout;
+        let ctx = CaptureContext {
+            db: &db,
+            captured_at: Utc::now() + chrono::Duration::seconds(2),
+            elements_ref_frame_id: None,
+            ..ctx
+        };
+        let result = paired_capture(&ctx, Some(&recovered), None).await.unwrap();
+        assert_eq!(
+            result.accessibility_text.as_deref(),
+            Some(recovered.text_content.as_str())
+        );
+        assert!(std::path::Path::new(&result.snapshot_path).is_file());
+        assert_eq!(
+            db.get_frame_accessibility_data(result.frame_id)
+                .await
+                .unwrap()
+                .0
+                .as_deref(),
+            Some(recovered.text_content.as_str())
+        );
+        db.close().await;
+    }
+
+    #[tokio::test]
     async fn test_paired_capture_without_accessibility() {
         let tmp = TempDir::new().unwrap();
         let snapshot_writer = SnapshotWriter::new(tmp.path(), 80, 1920);
@@ -1265,6 +1369,7 @@ mod tests {
             simhash: 67890,
             truncated: false,
             truncation_reason: screenpipe_a11y::tree::TruncationReason::None,
+            retained_work_pending: false,
             max_depth_reached: 0,
             window_bounds: None,
         };
@@ -1332,6 +1437,7 @@ mod tests {
             simhash: 0,
             truncated: false,
             truncation_reason: screenpipe_a11y::tree::TruncationReason::None,
+            retained_work_pending: false,
             max_depth_reached: 0,
             window_bounds: None,
         };
@@ -1450,6 +1556,7 @@ mod tests {
             simhash: 0,
             truncated: false,
             truncation_reason: screenpipe_a11y::tree::TruncationReason::None,
+            retained_work_pending: false,
             max_depth_reached: 0,
             window_bounds: None,
         }

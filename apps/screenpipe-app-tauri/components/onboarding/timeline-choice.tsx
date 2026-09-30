@@ -9,6 +9,10 @@ import { motion } from "framer-motion";
 import { Camera, Check, EyeOff, HardDrive, Loader } from "lucide-react";
 import posthog from "posthog-js";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+import { useGT } from "gt-react";
+
 
 interface TimelineChoiceProps {
   handleNextSlide: () => void;
@@ -30,10 +34,10 @@ const isLowTier = (tier: string | null | undefined) =>
 
 // Each "frame" is a skeleton layout of a different app the user was in.
 const MOCK_FRAMES = [
-  { label: "now · your editor", bars: [85, 60, 72, 40, 65] },
-  { label: "-2m · browser", bars: [50, 90, 45, 78, 30] },
-  { label: "-10m · a meeting", bars: [70, 35, 88, 55, 62] },
-  { label: "-1h · slack", bars: [40, 75, 52, 85, 48] },
+  { label: msg("Now · your editor", {}), bars: [85, 60, 72, 40, 65] },
+  { label: msg("-2m · browser", {}), bars: [50, 90, 45, 78, 30] },
+  { label: msg("-10m · a meeting", {}), bars: [70, 35, 88, 55, 62] },
+  { label: msg("-1h · slack", {}), bars: [40, 75, 52, 85, 48] },
 ];
 
 const FRAME_MS = 1800;
@@ -58,6 +62,8 @@ const PREVIEW_CSS = `
 `;
 
 function TimelinePreview() {
+
+  const uiMessages = useMessages();
   return (
     <div
       className="w-full border border-border/50 overflow-hidden select-none"
@@ -73,7 +79,7 @@ function TimelinePreview() {
           <div className="w-1.5 h-1.5 rounded-full bg-foreground/20" />
         </div>
         {/* skeleton content: one stacked layer per "app", crossfaded by CSS */}
-        {MOCK_FRAMES.map((frame, i) => (
+        {localizeDefinitions(MOCK_FRAMES, uiMessages).map((frame, i) => (
           <div
             key={i}
             className={`ob-tl-frame ${i === 0 ? "ob-tl-frame-0" : ""} absolute inset-x-4 top-8 opacity-0`}
@@ -153,6 +159,8 @@ const COSTS = [
 export default function TimelineChoice({
   handleNextSlide,
 }: TimelineChoiceProps) {
+
+  const ui = useGT();
   const { settings, updateSettings } = useSettings();
   const mountTimeRef = useRef(Date.now());
   const hasAdvanced = useRef(false);
@@ -163,7 +171,7 @@ export default function TimelineChoice({
   const [error, setError] = useState<string | null>(null);
 
   const lowTier = isLowTier(settings.deviceTier);
-  // Recommendation: keep the timeline on unless the device is low tier.
+  // Recommendation: capture screenshots unless the device is low tier.
   const recommendEnabled = !lowTier;
 
   const choose = async (enabled: boolean) => {
@@ -175,7 +183,7 @@ export default function TimelineChoice({
     setPending(enabled);
     setError(null);
     posthog.capture("onboarding_timeline_choice", {
-      timeline_enabled: enabled,
+      capture_choice_version: 2,
       screenshots_enabled: enabled,
       device_tier: settings.deviceTier ?? "unknown",
       followed_recommendation: enabled === recommendEnabled,
@@ -186,12 +194,9 @@ export default function TimelineChoice({
     // capture still on, i.e. the opposite of what the user just asked for —
     // worst on exactly the low-end machines this step exists to protect.
     try {
-      // Both flags move together. On its own `disableTimeline` only skips the
-      // in-memory hot frame cache — screen capture, JPEG writes, the OCR
-      // fallback and the ffmpeg compaction worker all keep running, so "saves
-      // ram, cpu & disk" would not hold.
+      // Capture is independent of navigation. Sidebar visibility is owned by
+      // the sidebar's right-click menu, including when capture stays off.
       await updateSettings({
-        disableTimeline: !enabled,
         disableScreenshots: !enabled,
       });
     } catch (e) {
@@ -199,7 +204,7 @@ export default function TimelineChoice({
       posthog.capture("onboarding_timeline_choice_failed", {
         stage: "persist",
       });
-      setError("couldn't save that choice. check disk space and try again.");
+      setError(ui("Couldn't save that choice. check disk space and try again."));
       inFlight.current = false;
       setPending(null);
       return;
@@ -212,7 +217,7 @@ export default function TimelineChoice({
   const recommendedTag = (
     <span className="flex items-center gap-1 font-mono text-[9px] normal-case tracking-normal opacity-70">
       <Check className="w-2.5 h-2.5" strokeWidth={2.5} />
-      recommended
+      Recommended
     </span>
   );
   const subtext = (text: string) => (
@@ -235,11 +240,11 @@ export default function TimelineChoice({
         animate={{ opacity: 1 }}
         transition={{ delay: 0.1 }}
       >
-        <h2 className="font-mono text-base font-bold lowercase">
-          meet the timeline
+        <h2 className="font-mono text-base font-bold normal-case">
+          Record screenshots for the timeline
         </h2>
         <p className="font-mono text-[10px] text-muted-foreground/60 mt-1 max-w-[320px]">
-          rewind what you&apos;ve seen on screen
+          Choose whether to save new visual history
         </p>
       </motion.div>
 
@@ -281,11 +286,11 @@ export default function TimelineChoice({
           animate={{ opacity: 1 }}
           transition={{ delay: 0.3 }}
         >
-          <p className="font-mono text-[10px] text-amber-500/90 font-semibold lowercase">
-            timeline may slow down this device
+          <p className="font-mono text-[10px] text-amber-500/90 font-semibold normal-case">
+            Screenshots may slow down this device
           </p>
           <p className="font-mono text-[10px] text-muted-foreground/70 mt-1 leading-snug">
-            keeping it off saves memory, cpu and disk. text exposed by your apps
+            Skipping screenshots saves memory, CPU and disk. Text exposed by your apps
             stays searchable; screenshots and image-only text won&apos;t be
             captured.
           </p>
@@ -314,7 +319,7 @@ export default function TimelineChoice({
         <button
           onClick={() => choose(true)}
           disabled={pending !== null}
-          className={`flex-1 flex flex-col items-center gap-1 border py-3 font-mono text-xs uppercase tracking-widest transition-colors duration-150 disabled:opacity-60 ${
+          className={`flex-1 flex flex-col items-center gap-1 border py-3 font-mono text-xs normal-case tracking-widest transition-colors duration-150 disabled:opacity-60 ${
             recommendEnabled
               ? "border-foreground bg-foreground text-background hover:bg-background hover:text-foreground"
               : "border-border text-foreground hover:border-foreground"
@@ -322,14 +327,14 @@ export default function TimelineChoice({
         >
           <span className="flex items-center gap-1.5">
             {pending === true && <Loader className="w-3 h-3 animate-spin" />}
-            timeline on
+            Enable screenshots
           </span>
           {recommendEnabled ? recommendedTag : subtext("visual rewind")}
         </button>
         <button
           onClick={() => choose(false)}
           disabled={pending !== null}
-          className={`flex-1 flex flex-col items-center gap-1 border py-3 font-mono text-xs uppercase tracking-widest transition-colors duration-150 disabled:opacity-60 ${
+          className={`flex-1 flex flex-col items-center gap-1 border py-3 font-mono text-xs normal-case tracking-widest transition-colors duration-150 disabled:opacity-60 ${
             !recommendEnabled
               ? "border-foreground bg-foreground text-background hover:bg-background hover:text-foreground"
               : "border-border text-foreground hover:border-foreground"
@@ -337,7 +342,7 @@ export default function TimelineChoice({
         >
           <span className="flex items-center gap-1.5">
             {pending === false && <Loader className="w-3 h-3 animate-spin" />}
-            keep it off
+            Skip screenshots
           </span>
           {!recommendEnabled
             ? recommendedTag
@@ -351,7 +356,7 @@ export default function TimelineChoice({
         animate={{ opacity: 1 }}
         transition={{ delay: 0.45 }}
       >
-        not a forever choice — change it anytime in settings
+        Change screenshot capture in Screen settings. Right-click Timeline to hide it. Restore it from Sidebar options.
       </motion.p>
     </motion.div>
   );

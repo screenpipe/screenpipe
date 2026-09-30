@@ -16,7 +16,7 @@ describe("EnterpriseLicensePrompt", () => {
   it("links users to their workspace to find an enterprise key", () => {
     render(<EnterpriseLicensePrompt onSubmit={vi.fn()} />);
 
-    expect(screen.getByRole("link", { name: "find it in your workspace" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Find it in your workspace" })).toHaveAttribute(
       "href",
       "https://screenpipe.com/account/workspace"
     );
@@ -48,7 +48,7 @@ describe("EnterpriseLicensePrompt", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /activate/i }));
 
-    await waitFor(() => expect(screen.getByText("failed to validate enterprise key")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Failed to validate enterprise key")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: /activate/i })).not.toBeDisabled();
   });
 
@@ -70,7 +70,7 @@ describe("EnterpriseLicensePrompt", () => {
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("ENT-TEST-ONLY-PROM-0001"));
     expect(onActivated).toHaveBeenCalledOnce();
-    expect(screen.getByText("no employee account is required for managed devices")).toBeInTheDocument();
+    expect(screen.getByText("No employee account is required for managed devices")).toBeInTheDocument();
   });
 
   it("rejects malformed enterprise keys locally", async () => {

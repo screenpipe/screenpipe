@@ -8,7 +8,6 @@ members = [
 ]
 exclude = [
     "apps/screenpipe-app-tauri/src-tauri",
-    "crates/screenpipe-integrations",
     "crates/screenpipe-rfdetr-mlx",
     "packages/sdk",
     ".github/ci/ort-smoke",
@@ -16,7 +15,7 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-version = "0.4.49"
+version = "0.4.52"
 authors = ["louis030195 <hi@louis030195.com>"]
 description = ""
 repository = "https://github.com/screenpipe/screenpipe"
@@ -136,7 +135,7 @@ wiremock = "0.6"
 
 # Audio
 hound = "3.5"
-audiopipe = { git = "https://github.com/screenpipe/audiopipe.git", rev = "780ef2d86f4186b34a7238d17ed5b7b7a7a31e0f", default-features = false }
+audiopipe = { git = "https://github.com/EzraEllette/audiopipe.git", rev = "b099a2e589d0dc4d8f22e3e8351efea9e1a359ac", default-features = false }
 mlx-rs = "0.25"
 
 # Privacy filter enclave attestation (shared by engine + redact)
@@ -166,6 +165,7 @@ uiautomation = "0.16.1"
 [patch.crates-io]
 # enables chinese mirror (hf is banned in china) and rustls-tls
 hf-hub = { git = "https://github.com/neo773/hf-hub", rev = "437dcf4049233f4a0e0cfc4e1c1dbf5ed2c57760" }
+
 
 [profile.release]
 codegen-units = 1

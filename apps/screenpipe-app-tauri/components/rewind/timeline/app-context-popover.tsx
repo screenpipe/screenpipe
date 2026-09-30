@@ -11,6 +11,9 @@ import { format } from "date-fns";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { commands } from "@/lib/utils/tauri";
 import { localFetch } from "@/lib/api";
+import { useGT } from "gt-react";
+import { useUiLocale } from "@/lib/i18n/provider";
+
 
 interface UiEventSummary {
 	event_type: string;
@@ -24,19 +27,19 @@ function formatUiEvent(ev: UiEventSummary): { icon: string; label: string } | nu
 	const truncate = (s: string, max = 40) => s.length > max ? s.slice(0, max) + "\u2026" : s;
 	switch (ev.event_type) {
 		case "text":
-			return { icon: "\u2328", label: ev.text_content ? `typed "${truncate(ev.text_content)}"` : "typed" };
+			return { icon: "\u2328", label: ev.text_content ? `Typed "${truncate(ev.text_content)}"` : "Typed" };
 		case "clipboard":
-			return { icon: "\ud83d\udccb", label: ev.text_content ? `copied "${truncate(ev.text_content)}"` : "copied" };
+			return { icon: "\ud83d\udccb", label: ev.text_content ? `Copied "${truncate(ev.text_content)}"` : "Copied" };
 		case "click":
-			return { icon: "\ud83d\uddb1", label: `clicked "${truncate(ev.text_content || "element")}"` };
+			return { icon: "\ud83d\uddb1", label: `Clicked "${truncate(ev.text_content || "element")}"` };
 		case "app_switch":
-			return { icon: "\u21d4", label: `switched to ${ev.app_name || "app"}` };
+			return { icon: "\u21d4", label: `Switched to ${ev.app_name || "app"}` };
 		case "key":
-			return { icon: "\u2303", label: ev.text_content ? `pressed ${truncate(ev.text_content)}` : "key press" };
+			return { icon: "\u2303", label: ev.text_content ? `Pressed ${truncate(ev.text_content)}` : "Key press" };
 		case "scroll":
-			return { icon: "\u21f3", label: `scrolled${ev.window_title ? ` in ${truncate(ev.window_title)}` : ""}` };
+			return { icon: "\u21f3", label: `Scrolled${ev.window_title ? ` in ${truncate(ev.window_title)}` : ""}` };
 		case "window_focus":
-			return { icon: "\ud83d\udd32", label: `focused ${ev.window_title ? truncate(ev.window_title) : ev.app_name || "window"}` };
+			return { icon: "\ud83d\udd32", label: `Focused ${ev.window_title ? truncate(ev.window_title) : ev.app_name || "window"}` };
 		default:
 			return null;
 	}
@@ -66,6 +69,8 @@ export function AppContextPopover({
 	onClose,
 	onSearch,
 }: AppContextPopoverProps) {
+  const uiLocale = useUiLocale();
+  const ui = useGT();
 	// Deduplicate app names (trim + unique) to prevent showing same icon twice
 	const allApps = [...new Set((appNames && appNames.length > 0 ? appNames : [appName]).map(n => n.trim()).filter(Boolean))];
 	const [copied, setCopied] = useState(false);
@@ -173,7 +178,7 @@ export function AppContextPopover({
 		if (!timeRange) return;
 
 		const lines = [
-			`${appName} — ${format(timeRange.start, "h:mm a")} to ${format(timeRange.end, "h:mm a")}`,
+			`${appName} — ${new Intl.DateTimeFormat(uiLocale, {"hour":"numeric","minute":"2-digit"}).format(timeRange.start)} to ${new Intl.DateTimeFormat(uiLocale, {"hour":"numeric","minute":"2-digit"}).format(timeRange.end)}`,
 			`~${approxMinutes} min`,
 			"",
 		];
@@ -201,7 +206,7 @@ export function AppContextPopover({
 		if (audioTranscripts.length) {
 			lines.push("Audio:");
 			audioTranscripts.slice(0, 5).forEach((t) =>
-				lines.push(`  [${format(t.time, "h:mm a")}] ${t.text}`)
+				lines.push(`  [${new Intl.DateTimeFormat(uiLocale, {"hour":"numeric","minute":"2-digit"}).format(t.time)}] ${t.text}`)
 			);
 		}
 
@@ -267,8 +272,8 @@ export function AppContextPopover({
 					<div className="flex items-center gap-1.5 text-muted-foreground">
 						<Clock className="w-3 h-3 flex-shrink-0" />
 						<span>
-							~{approxMinutes} min · {format(timeRange.start, "h:mm a")}–
-							{format(timeRange.end, "h:mm a")}
+							~{approxMinutes} min · {new Intl.DateTimeFormat(uiLocale, {"hour":"numeric","minute":"2-digit"}).format(timeRange.start)}–
+							{new Intl.DateTimeFormat(uiLocale, {"hour":"numeric","minute":"2-digit"}).format(timeRange.end)}
 						</span>
 					</div>
 				)}
@@ -278,7 +283,7 @@ export function AppContextPopover({
 					<div className="space-y-1">
 						<div className="flex items-center gap-1.5 text-muted-foreground">
 							<AppWindow className="w-3 h-3 flex-shrink-0" />
-							<span>{data.uniqueWindows} window{data.uniqueWindows !== 1 ? "s" : ""}</span>
+							<span>{ui("{count, plural, one {# window} other {# windows}}", { count: data.uniqueWindows })}</span>
 						</div>
 						<div className="pl-4 space-y-0.5">
 							{data.topWindows.map((w, i) => (
@@ -299,7 +304,7 @@ export function AppContextPopover({
 					<div className="space-y-1">
 						<div className="flex items-center gap-1.5 text-muted-foreground">
 							<Globe className="w-3 h-3 flex-shrink-0" />
-							<span>top sites</span>
+							<span>Top sites</span>
 						</div>
 						<div className="pl-4 space-y-0.5">
 							{data.topUrls.map((u, i) => {
@@ -337,7 +342,7 @@ export function AppContextPopover({
 					<div className="space-y-1">
 						<div className="flex items-center gap-1.5 text-muted-foreground">
 							<MousePointerClick className="w-3 h-3 flex-shrink-0" />
-							<span>{formattedUiEvents.length} action{formattedUiEvents.length !== 1 ? "s" : ""}</span>
+							<span>{ui("{count, plural, one {# action} other {# actions}}", { count: formattedUiEvents.length })}</span>
 						</div>
 						<div className="pl-4 space-y-0.5">
 							{formattedUiEvents.slice(0, 5).map((ev, i) => (
@@ -360,13 +365,13 @@ export function AppContextPopover({
 					<div className="space-y-1">
 						<div className="flex items-center gap-1.5 text-muted-foreground">
 							<Mic className="w-3 h-3 flex-shrink-0" />
-							<span>{audioTranscripts.length} transcript{audioTranscripts.length !== 1 ? "s" : ""}</span>
+							<span>{ui("{count, plural, one {# transcript} other {# transcripts}}", { count: audioTranscripts.length })}</span>
 						</div>
 						<div className="pl-4 space-y-1">
 							{audioTranscripts.slice(0, 3).map((t, i) => (
 								<div key={i} className="text-popover-foreground">
 									<span className="text-muted-foreground">
-										{format(t.time, "h:mm a")}
+										{new Intl.DateTimeFormat(uiLocale, {"hour":"numeric","minute":"2-digit"}).format(t.time)}
 									</span>{" "}
 									<span className="line-clamp-1">{t.text}</span>
 								</div>
@@ -388,7 +393,7 @@ export function AppContextPopover({
 					className="flex items-center gap-1 px-2 py-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
 				>
 					<Copy className="w-3 h-3" />
-					<span>{copied ? "copied" : "copy"}</span>
+					<span>{copied ? ui("Copied") : ui("Copy")}</span>
 				</button>
 				{onSearch && (
 					<button
@@ -396,7 +401,7 @@ export function AppContextPopover({
 						className="flex items-center gap-1 px-2 py-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
 					>
 						<Search className="w-3 h-3" />
-						<span>search</span>
+						<span>Search</span>
 					</button>
 				)}
 			</div>

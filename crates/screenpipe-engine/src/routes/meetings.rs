@@ -458,8 +458,18 @@ async fn latest_summary_execution(
     meeting_id: i64,
     not_before: Option<DateTime<Utc>>,
 ) -> Option<(ExecutionSnapshot, Option<String>, Option<String>)> {
-    let rows = sqlx::query_as::<_, (i64, String, Option<String>, Option<String>, Option<String>)>(
-        r#"SELECT id, status, started_at, error_type, error_message
+    let rows = sqlx::query_as::<
+        _,
+        (
+            i64,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        r#"SELECT id, status, started_at, error_type, error_message, finished_at
            FROM pipe_executions
            WHERE pipe_name = ?1 AND trigger_event = 'meeting_ended' AND trigger_key = ?2
            ORDER BY id DESC
@@ -473,7 +483,7 @@ async fn latest_summary_execution(
     .unwrap_or_default();
 
     rows.into_iter()
-        .find(|(_, _, started_at, _, _)| match not_before {
+        .find(|(_, _, started_at, _, _, _)| match not_before {
             // A run that started before the newest input summarized the old
             // transcript, so it must not satisfy the current generation.
             Some(boundary) => started_at
@@ -482,8 +492,20 @@ async fn latest_summary_execution(
                 .is_some_and(|started| started.with_timezone(&Utc) >= boundary),
             None => true,
         })
-        .map(|(id, status, _, error_type, error_message)| {
-            (ExecutionSnapshot { id, status }, error_type, error_message)
+        .map(|(id, status, _, error_type, error_message, finished_at)| {
+            let finished_at = finished_at
+                .as_deref()
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                .map(|t| t.with_timezone(&Utc));
+            (
+                ExecutionSnapshot {
+                    id,
+                    status,
+                    finished_at,
+                },
+                error_type,
+                error_message,
+            )
         })
 }
 
@@ -584,6 +606,9 @@ pub(crate) async fn get_meeting_summary_status_handler(
 
     let execution = found.as_ref().map(|(snapshot, _, _)| snapshot);
     let state_value = resolve_summary_state(&SummaryStatusInputs {
+        has_saved_summary: crate::meeting_summary::notes::note_has_summary_section(
+            meeting.note.as_deref().unwrap_or(""),
+        ),
         auto_summary_enabled: enabled,
         meeting_end,
         latest_input_at,
@@ -600,8 +625,18 @@ pub(crate) async fn get_meeting_summary_status_handler(
         execution_status: found
             .as_ref()
             .map(|(snapshot, _, _)| snapshot.status.clone()),
-        error_type: found.as_ref().and_then(|(_, kind, _)| kind.clone()),
-        error_message: found.as_ref().and_then(|(_, _, message)| message.clone()),
+        error_type: found.as_ref().and_then(|(execution, kind, _)| {
+            kind.clone().or_else(|| {
+                (state_value == SummaryState::Failed && execution.status == "completed")
+                    .then(|| "summary_not_saved".to_string())
+            })
+        }),
+        error_message: found.as_ref().and_then(|(execution, _, message)| {
+            message.clone().or_else(|| {
+                (state_value == SummaryState::Failed && execution.status == "completed")
+                    .then(|| "The run finished without saving a meeting summary.".to_string())
+            })
+        }),
     }))
 }
 
@@ -718,10 +753,12 @@ pub(crate) async fn save_meeting_summary_handler(
     Path(id): Path<i64>,
     axum::Json(body): axum::Json<SaveMeetingSummaryRequest>,
 ) -> Result<JsonResponse<MeetingRecord>, (StatusCode, JsonResponse<Value>)> {
-    if body.summary.trim().is_empty() {
+    if !crate::meeting_summary::notes::summary_has_content(&body.summary) {
         return Err((
             StatusCode::BAD_REQUEST,
-            JsonResponse(json!({"error": "summary must not be empty"})),
+            JsonResponse(
+                json!({"error": "summary must contain meeting content, not an empty result or failure message"}),
+            ),
         ));
     }
     crate::meeting_summary::notes::save_meeting_summary(

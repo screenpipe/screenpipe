@@ -109,6 +109,31 @@ describe("useComposerDictation", () => {
     return { ...hook, onValueChange };
   }
 
+  it("routes the microphone shortcut and transcript only to the focused split pane", async () => {
+    const panes = ["a", "b"].map(id => {
+      const pane = document.createElement("section");
+      pane.dataset.chatPaneId = id;
+      const textarea = document.createElement("textarea");
+      pane.append(textarea);
+      document.body.append(pane);
+      return { pane, textarea };
+    });
+    const updates = [vi.fn(), vi.fn()];
+    const hooks = panes.map(({ textarea }, index) => renderHook(() => useComposerDictation({
+      inputValue: "", inputRef: { current: textarea }, onValueChange: updates[index], disabled: false, sessionId: index ? "b" : "a", shortcutsEnabled: index === 0,
+    })));
+    transcribeComposerAudio.mockResolvedValue("Right pane transcript");
+    try {
+      await act(async () => { panes[1].textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "d", metaKey: true, bubbles: true, cancelable: true })); });
+      expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
+      expect(hooks[0].result.current.status).toBe("idle");
+      expect(hooks[1].result.current.status).toBe("recording");
+      await act(async () => { panes[1].textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+      expect(updates[1]).toHaveBeenCalledWith("Right pane transcript");
+      expect(updates[0]).not.toHaveBeenCalled();
+    } finally { hooks.forEach(hook => hook.unmount()); panes.forEach(({ pane }) => pane.remove()); }
+  });
+
   it("cancels a recording without uploading its in-memory clip", async () => {
     const { result } = setup();
 

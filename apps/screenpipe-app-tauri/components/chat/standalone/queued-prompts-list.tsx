@@ -13,6 +13,8 @@ import {
 } from "@/lib/chat-queue-controls";
 import type { PiQueuedPrompt } from "@/lib/utils/tauri";
 import type { QueuedDisplayPayload } from "@/lib/chat/types";
+import { useGT } from "gt-react";
+
 
 interface QueuedPromptsListProps {
   queuedPrompts: PiQueuedPrompt[];
@@ -33,6 +35,8 @@ export function QueuedPromptsList({
   onSteerQueuedPrompt,
   onCancelQueuedPrompt,
 }: QueuedPromptsListProps) {
+
+  const ui = useGT();
   if (queuedPrompts.length === 0) return null;
 
   return (
@@ -43,7 +47,7 @@ export function QueuedPromptsList({
       <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-border/50 bg-background">
         <div className="flex items-center gap-1.5 min-w-0">
           <Clock className="h-3 w-3 text-muted-foreground/70 shrink-0" />
-          <span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+          <span className="text-[10px] normal-case tracking-wide text-muted-foreground font-medium">
             Queued
           </span>
         </div>
@@ -56,7 +60,7 @@ export function QueuedPromptsList({
           {queuedPrompts.map((p, i) => {
             const isBusy = queuedActionPromptId === p.id;
             const queuedDisplay = queuedDisplayById?.[p.id];
-            const label = queuedDisplay?.preview || p.preview || "image follow-up";
+            const label = queuedDisplay?.preview || p.preview || "Image follow-up";
             return (
               <div
                 key={p.id}
@@ -89,7 +93,7 @@ export function QueuedPromptsList({
                         disabled={isBusy}
                         onClick={() => onSteerQueuedPrompt(p)}
                         className="h-6 px-2 inline-flex items-center gap-1 justify-center text-foreground bg-background hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-border/50"
-                        aria-label={`steer queued message ${i + 1}`}
+                        aria-label={ui("Steer queued message {value1}", { value1: i + 1 })}
                       >
                         {isBusy ? (
                           <Loader2 className="h-3 w-3 animate-spin" />
@@ -112,7 +116,7 @@ export function QueuedPromptsList({
                         disabled={isBusy}
                         onClick={() => onCancelQueuedPrompt(p)}
                         className="h-6 w-6 inline-flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/20 disabled:opacity-50 disabled:pointer-events-none transition-colors border border-transparent hover:border-border/50"
-                        aria-label={`remove queued message ${i + 1}`}
+                        aria-label={ui("Remove queued message {value1}", { value1: i + 1 })}
                       >
                         <Trash2 className="h-3 w-3" />
                       </button>

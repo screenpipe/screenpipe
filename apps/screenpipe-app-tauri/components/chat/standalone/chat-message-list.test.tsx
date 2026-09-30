@@ -8,14 +8,6 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatMessageList, type ChatMessageListProps } from "./chat-message-list";
 import type { Message } from "@/lib/chat/types";
 
-vi.mock("@/components/chat/standalone/message-content", () => ({
-  MessageContent: ({ message, isGenerating }: { message: Message; isGenerating: boolean }) => (
-    <span data-testid={`message-content-${message.id}`} data-generating={String(isGenerating)}>
-      {message.content}
-    </span>
-  ),
-}));
-
 vi.mock("@/lib/stores/acp-boot-state", () => ({
   useAcpBootLabel: () => null,
 }));
@@ -198,7 +190,7 @@ describe("ChatMessageList turn status ownership", () => {
     }],
   };
 
-  it("keeps the active tool group live through a silent post-tool gap", () => {
+  it("shows the conversation loader through a silent post-tool gap until the turn ends", () => {
     const { rerender } = render(<ChatMessageList {...messageListProps({
       messages: [userMessage, completedToolMessage],
       isLoading: true,
@@ -206,9 +198,9 @@ describe("ChatMessageList turn status ownership", () => {
       activeSourceFooterMessageId: completedToolMessage.id,
     })} />);
 
-    expect(screen.getByTestId(`message-content-${completedToolMessage.id}`))
-      .toHaveAttribute("data-generating", "true");
-    expect(screen.queryByTestId("chat-turn-status")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tool-activity-summary")).toBeInTheDocument();
+    expect(screen.getByTestId("chat-turn-status")).toBeInTheDocument();
+    expect(screen.getByTestId("chat-turn-scan-glyph")).toBeInTheDocument();
 
     const finalMessage: Message = {
       ...completedToolMessage,
@@ -225,9 +217,93 @@ describe("ChatMessageList turn status ownership", () => {
       activeSourceFooterMessageId: null,
     })} />);
 
-    expect(screen.getByTestId(`message-content-${finalMessage.id}`))
-      .toHaveAttribute("data-generating", "false");
+    expect(screen.getByTestId("tool-activity-widget"))
+      .toHaveAttribute("data-activity-state", "completed");
+    expect(screen.queryByTestId("chat-turn-status")).not.toBeInTheDocument();
     expect(screen.getByText("diagnostic complete")).toBeInTheDocument();
+  });
+
+  it("lets a running tool own progress, then restores the loader when the tool finishes", () => {
+    const runningMessage: Message = {
+      ...completedToolMessage,
+      contentBlocks: [{
+        type: "tool",
+        toolCall: { id: "read-1", toolName: "read", args: {}, isRunning: true },
+      }],
+    };
+    const props = messageListProps({
+      messages: [userMessage, runningMessage],
+      isLoading: true,
+      isStreaming: true,
+      activeSourceFooterMessageId: runningMessage.id,
+    });
+    const { rerender } = render(<ChatMessageList {...props} />);
+
+    expect(screen.getByTestId("tool-activity-running-indicator")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-turn-status")).not.toBeInTheDocument();
+
+    rerender(<ChatMessageList {...props} messages={[userMessage, completedToolMessage]} />);
+    expect(screen.getByTestId("chat-turn-status")).toBeInTheDocument();
+
+    rerender(<ChatMessageList {...props} />);
+    expect(screen.queryByTestId("chat-turn-status")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tool-activity-running-indicator")).toBeInTheDocument();
+  });
+
+  it("shows the loader when the turn is streaming without the loading flag", () => {
+    render(<ChatMessageList {...messageListProps({
+      messages: [userMessage, completedToolMessage],
+      isLoading: false,
+      isStreaming: true,
+      activeSourceFooterMessageId: completedToolMessage.id,
+    })} />);
+
+    expect(screen.getByTestId("chat-turn-status")).toBeInTheDocument();
+  });
+
+  it("does not let hidden MCP startup work suppress the loader", () => {
+    const startupMessage: Message = {
+      ...completedToolMessage,
+      contentBlocks: [{
+        type: "tool",
+        toolCall: { id: "startup", toolName: "mcp__screenpipe__startup", args: {}, isRunning: true },
+      }],
+    };
+    render(<ChatMessageList {...messageListProps({
+      messages: [userMessage, startupMessage],
+      isLoading: true,
+      activeSourceFooterMessageId: startupMessage.id,
+    })} />);
+
+    expect(screen.queryByTestId("tool-activity-widget")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat-turn-status")).toBeInTheDocument();
+  });
+
+  it("keeps the approval prompt as the status while the turn waits for the user", () => {
+    const permissionMessage: Message = {
+      id: "permission",
+      role: "assistant",
+      content: "",
+      timestamp: Date.now(),
+      contentBlocks: [{
+        type: "agent_action",
+        actionKind: "permission",
+        requestId: "permission-1",
+        sessionId: "session-1",
+        title: "Run a local command",
+        options: [{ optionId: "allow-once", name: "Allow once", kind: "allow_once" }],
+      }],
+    };
+    render(<ChatMessageList {...messageListProps({
+      messages: [userMessage, completedToolMessage, permissionMessage],
+      isLoading: true,
+      activeSourceFooterMessageId: completedToolMessage.id,
+    })} />);
+
+    expect(screen.getByRole("button", { name: "Allow once" })).toBeInTheDocument();
+    expect(screen.getByTestId("tool-activity-widget"))
+      .toHaveAttribute("data-activity-state", "waiting");
+    expect(screen.queryByTestId("chat-turn-status")).not.toBeInTheDocument();
   });
 
   it("shows the fallback when only historical tool work exists", () => {
@@ -238,8 +314,8 @@ describe("ChatMessageList turn status ownership", () => {
       activeSourceFooterMessageId: "new-turn-placeholder",
     })} />);
 
-    expect(screen.getByTestId(`message-content-${completedToolMessage.id}`))
-      .toHaveAttribute("data-generating", "false");
+    expect(screen.getByTestId("tool-activity-widget"))
+      .toHaveAttribute("data-activity-state", "completed");
     expect(screen.getByTestId("chat-turn-status")).toBeInTheDocument();
   });
 
@@ -252,8 +328,8 @@ describe("ChatMessageList turn status ownership", () => {
       turnLiveness: { state: "offline" },
     })} />);
 
-    expect(screen.getByTestId(`message-content-${completedToolMessage.id}`))
-      .toHaveAttribute("data-generating", "false");
+    expect(screen.getByTestId("tool-activity-widget"))
+      .toHaveAttribute("data-activity-state", "completed");
     expect(screen.getByTestId("chat-turn-status"))
       .toHaveAttribute("data-liveness", "offline");
     expect(screen.queryByTestId("chat-turn-scan-glyph")).not.toBeInTheDocument();

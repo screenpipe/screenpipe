@@ -23,7 +23,7 @@ describe("MeetingSummaryTransition", () => {
       />,
     );
 
-    expect(screen.getByRole("status")).toHaveAccessibleName("meeting saved");
+    expect(screen.getByRole("status")).toHaveAccessibleName("Meeting saved");
     expect(
       screen.getByText(
         "Your notes are saved. Finishing the transcript before the summary starts.",
@@ -32,9 +32,9 @@ describe("MeetingSummaryTransition", () => {
     expect(
       screen.queryByTestId("meeting-summary-draft-block"),
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "show transcript" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show transcript" }));
     expect(onTranscriptToggle).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole("button", { name: "resume recording" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resume recording" }));
     expect(onResume).toHaveBeenCalledOnce();
   });
 
@@ -49,7 +49,7 @@ describe("MeetingSummaryTransition", () => {
       />,
     );
 
-    expect(screen.getByRole("status")).toHaveAccessibleName("writing summary");
+    expect(screen.getByRole("status")).toHaveAccessibleName("Writing summary");
     expect(
       screen.getByText(
         "Your notes and transcript are safe. The draft appears in Summary as it is written.",
@@ -58,13 +58,13 @@ describe("MeetingSummaryTransition", () => {
     expect(
       screen.queryByTestId("meeting-summary-draft-block"),
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "view summary" }));
+    fireEvent.click(screen.getByRole("button", { name: "View summary" }));
     expect(onOpenSummary).toHaveBeenCalledOnce();
     expect(
-      screen.getByRole("button", { name: "hide transcript" }),
+      screen.getByRole("button", { name: "Hide transcript" }),
     ).toHaveAttribute("aria-pressed", "true");
     expect(
-      screen.queryByRole("button", { name: "resume recording" }),
+      screen.queryByRole("button", { name: "Resume recording" }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveClass("mb-7", "border-b", "pb-5");
   });

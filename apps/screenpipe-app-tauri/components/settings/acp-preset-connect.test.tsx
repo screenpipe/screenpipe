@@ -120,7 +120,7 @@ describe("an agent that needs downloading", () => {
 
     const progress = await screen.findByTestId("acp-setup-progress");
     expect(progress).toHaveTextContent("Downloading Claude Code");
-    expect(progress).toHaveTextContent("step 1 of 3");
+    expect(progress).toHaveTextContent("Step 1 of 3");
 
     const emitPhase = (phase: string) =>
       act(() =>
@@ -131,11 +131,11 @@ describe("an agent that needs downloading", () => {
 
     emitPhase("starting");
     expect(progress).toHaveTextContent("Starting Claude Code");
-    expect(progress).toHaveTextContent("step 2 of 3");
+    expect(progress).toHaveTextContent("Step 2 of 3");
 
     emitPhase("connecting");
     expect(progress).toHaveTextContent("Connecting Claude Code");
-    expect(progress).toHaveTextContent("step 3 of 3");
+    expect(progress).toHaveTextContent("Step 3 of 3");
 
     emitPhase("ready");
     expect(progress).toHaveTextContent("Claude Code is ready");
@@ -161,7 +161,7 @@ describe("an agent that needs downloading", () => {
     await screen.findByText("Starting Kimi CLI");
     const progress = screen.getByTestId("acp-setup-progress");
     expect(progress).toHaveTextContent("Install");
-    expect(progress).toHaveTextContent("step 2 of 3");
+    expect(progress).toHaveTextContent("Step 2 of 3");
 
     act(() =>
       progressHandlers.get(ACP_PRESET_SETUP_PROGRESS_EVENT)?.({
@@ -169,7 +169,7 @@ describe("an agent that needs downloading", () => {
       }),
     );
     expect(progress).toHaveTextContent("Connecting Kimi CLI");
-    expect(progress).toHaveTextContent("step 3 of 3");
+    expect(progress).toHaveTextContent("Step 3 of 3");
 
     await act(async () =>
       finishProbe?.({ status: "error", error: "test probe complete" }),

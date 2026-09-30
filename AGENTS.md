@@ -8,10 +8,10 @@ a pointer.
 
 ## Read on demand
 
-- `VISION.md` — before product, feature, or UX decisions. Stability over
+- `docs/VISION.md` — before product, feature, or UX decisions. Stability over
   features, activation over new capabilities, no feature creep.
-- `DESIGN.md` — before design decisions.
-- `TESTING.md` — before touching window management, tray/dock, monitors, or
+- `docs/DESIGN.md` — before design decisions.
+- `docs/TESTING.md` — before touching window management, tray/dock, monitors, or
   audio. Regression checklist with commit references.
 - `docs/human-only-app-publication.md` — before anything release-related.
 - `docs/macos-dev-builds.md` — canonical fast native build commands and the
@@ -65,6 +65,15 @@ See `docs/macos-dev-builds.md` for the exact commands and for the separate
 signed `.app` path used only when persistent macOS TCC identity is required.
 
 ## Hot paths
+
+Recording is the critical path. Never sacrifice an authorized recording to
+archival, compression, indexing, redaction backlog, sync, or other background
+work. Persist captures durably through the existing writer; processing budgets
+bound background work, never capture admission. When processing cannot keep up,
+retain the recording and defer that work. Preserve privacy, user pause controls,
+and genuine disk/data-integrity protections. Tests must prove continued durable
+recording and recovery under processing failure, backlog, and restart; replace
+expectations that require recordings to be rejected or dropped for those reasons.
 
 Capture and encode per frame (`screenpipe-screen`, `-capture`, `-a11y`), audio
 device callbacks (`screenpipe-audio`), and SQLite writes (`screenpipe-db` via

@@ -29,8 +29,12 @@ import { Skeleton } from "../ui/skeleton";
 import { cn } from "@/lib/utils";
 import { Progress } from "../ui/progress";
 import { RetentionSettings } from "./retention-settings";
+import { useGT } from "gt-react";
+
 
 export function DiskUsageSection() {
+
+  const ui = useGT();
   const { diskUsage, isLoading, error, refetch } = useDiskUsage();
 
   const handleRefresh = () => {
@@ -79,7 +83,7 @@ export function DiskUsageSection() {
           <RefreshCw
             className={`h-3 w-3 mr-1.5 ${isLoading ? "animate-spin" : ""}`}
           />
-          {isLoading ? "..." : "Refresh"}
+          {isLoading ? "..." : ui("Refresh")}
         </Button>
       </div>
 
@@ -116,12 +120,12 @@ export function DiskUsageSection() {
           return (
             <div className="rounded-md border border-border bg-card px-3 py-2.5 space-y-1.5">
               <p className="text-sm font-medium">
-                {months} {months === 1 ? "month" : "months"} of memory in{" "}
+                {months} {months === 1 ? ui("month") : ui("months")} of memory in{" "}
                 {dataGb} GB
               </p>
               <Progress value={usedPct} className="h-1.5" />
               <p className="text-xs text-muted-foreground">
-                ~{remainingMonths} {remainingMonths === 1 ? "month" : "months"}{" "}
+                ~{remainingMonths} {remainingMonths === 1 ? ui("month") : ui("months")}{" "}
                 of space remaining
               </p>
             </div>
@@ -147,7 +151,7 @@ export function DiskUsageSection() {
               <Skeleton className="h-5 w-16" />
             ) : (
               <div className="text-sm font-bold">
-                {diskUsage?.total_data_size || "0 KB"}
+                {diskUsage?.total_data_size || ui("0 KB")}
               </div>
             )}
           </CardContent>
@@ -170,7 +174,7 @@ export function DiskUsageSection() {
               <Skeleton className="h-5 w-16" />
             ) : (
               <div className="text-sm font-bold">
-                {diskUsage?.total_cache_size || "0 KB"}
+                {diskUsage?.total_cache_size || ui("0 KB")}
               </div>
             )}
           </CardContent>
@@ -193,7 +197,7 @@ export function DiskUsageSection() {
               <Skeleton className="h-5 w-16" />
             ) : (
               <div className="text-sm font-bold">
-                {diskUsage?.available_space || "Unknown"}
+                {diskUsage?.available_space || ui("Unknown")}
               </div>
             )}
           </CardContent>
@@ -255,13 +259,13 @@ export function DiskUsageSection() {
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">Audio</span>
                 <span className="font-medium">
-                  {diskUsage?.media.audios_size || "0 KB"}
+                  {diskUsage?.media.audios_size || ui("0 KB")}
                 </span>
               </div>
               <div className="flex items-center justify-between text-xs pt-1 border-t">
                 <span className="font-medium">Total</span>
                 <span className="font-bold">
-                  {diskUsage?.media.total_media_size || "0 KB"}
+                  {diskUsage?.media.total_media_size || ui("0 KB")}
                 </span>
               </div>
             </div>
@@ -291,7 +295,7 @@ export function DiskUsageSection() {
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">Database</span>
                 <span className="font-medium">
-                  {diskUsage?.other?.database_size || "0 KB"}
+                  {diskUsage?.other?.database_size || ui("0 KB")}
                 </span>
               </div>
               <div className="flex items-center justify-between text-xs">
@@ -303,7 +307,7 @@ export function DiskUsageSection() {
                       "text-destructive",
                   )}
                 >
-                  {diskUsage?.other?.logs_size || "0 KB"}
+                  {diskUsage?.other?.logs_size || ui("0 KB")}
                 </span>
               </div>
               {diskUsage?.other?.logs_size?.includes("GB") && (
@@ -314,7 +318,7 @@ export function DiskUsageSection() {
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">Scheduled tasks</span>
                 <span className="font-medium">
-                  {diskUsage?.other?.pipes_size || "0 KB"}
+                  {diskUsage?.other?.pipes_size || ui("0 KB")}
                 </span>
               </div>
               {diskUsage?.other?.other_size &&

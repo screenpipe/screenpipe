@@ -1,19 +1,19 @@
 ---
-title: "continue - open-source copilot with screen context"
-sidebarTitle: "continue"
-description: "Set up screenpipe with Continue, the open-source AI copilot for VS Code and JetBrains, so it can reference your screen history while you code."
+title: "Continue - open-source copilot with screen context"
+sidebarTitle: "Continue"
+description: "Set up Screenpipe with Continue, the open-source AI Copilot for VS Code and JetBrains, so it can reference your screen history while you code."
 icon: "forward"
 ---
 
-[Continue](https://github.com/continuedev/continue) is an open-source AI coding assistant with 20k+ GitHub stars. it works in VS Code and JetBrains IDEs, and supports MCP servers for external context.
+[Continue](https://github.com/continuedev/continue) is an open-source AI coding assistant with 20k+ GitHub stars. It works in VS Code and JetBrains IDEs, and supports MCP servers for external context.
 
-## setup
+## Setup
 
 ### VS Code
 
-1. install Continue from the VS Code marketplace
-2. open Continue settings
-3. edit `~/.continue/config.json`:
+1. Install Continue from the VS Code marketplace
+2. Open Continue settings
+3. Edit `~/.continue/config.json`:
 
 ```json
 {
@@ -27,18 +27,18 @@ icon: "forward"
 }
 ```
 
-4. restart VS Code
+4. Restart VS Code
 
 ### JetBrains
 
-1. install Continue from JetBrains marketplace
-2. open Continue settings
-3. add the same MCP configuration
-4. restart the IDE
+1. Install Continue from JetBrains marketplace
+2. Open Continue settings
+3. Add the same MCP configuration
+4. Restart the IDE
 
-## usage
+## Usage
 
-once configured, Continue can access your screen history:
+Once configured, Continue can access your screen history:
 
 ```
 > @screenpipe what was I working on this morning?
@@ -48,95 +48,95 @@ once configured, Continue can access your screen history:
 > what documentation was I reading about react hooks?
 ```
 
-## example workflows
+## Example workflows
 
-**code with context:**
+**Code with context:**
 ```
 > I was looking at how another project handles authentication,
 > find that code and help me implement something similar
 ```
 
-**recall errors:**
+**Recall errors:**
 ```
 > there was a typescript error earlier about types,
 > find it and explain how to fix it
 ```
 
-**meeting follow-up:**
+**Meeting follow-up:**
 ```
 > what did we discuss in the standup about the API changes?
 > help me implement those changes
 ```
 
-## available tools
+## Available tools
 
-via MCP, Continue gets access to:
+Via MCP, Continue gets access to:
 
-| tool | description |
+| Tool | Description |
 |------|-------------|
-| `search-content` | search screen text (accessibility-first, OCR fallback), audio transcriptions, and input |
-| `activity-summary` | lightweight overview of app usage, speakers, and recent texts for a time range |
-| `search-elements` | search structured UI elements from the accessibility tree |
-| `frame-context` | full accessibility tree, URLs, and text for a specific frame |
-| `list-meetings` | list detected meetings with duration, app, and attendees |
-| `export-video` | export screen recordings as MP4 for a time range |
+| `search-content` | Search screen text (accessibility-first, OCR fallback), audio transcriptions, and input |
+| `activity-summary` | Lightweight overview of app usage, speakers, and recent texts for a time range |
+| `search-elements` | Search structured UI elements from the accessibility tree |
+| `frame-context` | Full accessibility tree, URLs, and text for a specific frame |
+| `list-meetings` | List detected meetings with duration, app, and attendees |
+| `export-video` | Export screen recordings as MP4 for a time range |
 
-## requirements
+## Requirements
 
-- screenpipe running on localhost:3030
+- Screenpipe running on localhost:3030
 - Continue extension in VS Code or JetBrains
 - Node.js >= 18.0.0
 
-## troubleshooting
+## Troubleshooting
 
 **MCP server not appearing in Continue?**
 
-1. check screenpipe is running:
+1. Check Screenpipe is running:
    ```bash
    curl http://localhost:3030/health
    ```
    you should see `{"status":"healthy"}`
 
-2. verify the config file location:
+2. Verify the config file location:
    - VS Code: `~/.continue/config.json` (check it exists and is valid JSON)
    - JetBrains: open Continue settings and confirm the MCP config is saved
 
-3. restart the IDE completely (not just the Continue extension)
+3. Restart the IDE completely (not just the Continue extension)
 
-4. if the server still doesn't appear, remove and re-add it in Continue settings
+4. If the server still doesn't appear, remove and re-add it in Continue settings
 
-**screenpipe queries returning empty?**
+**Screenpipe queries returning empty?**
 
-- verify screenpipe has data:
+- Verify Screenpipe has data:
   ```bash
   curl "http://localhost:3030/search?limit=1"
   ```
-  if empty, screenpipe hasn't recorded anything yet — let it run for a minute and try again
+  if empty, Screenpipe hasn't recorded anything yet — let it run for a minute and try again
 
-- check screen recording permissions are granted (System Settings on macOS)
+- Check screen recording permissions are granted (System Settings on macOS)
 
-- confirm you're querying a time range with recorded data
+- Confirm you're querying a time range with recorded data
 
 **"Error calling tool" in Continue?**
 
-- check the screenpipe process is still running (it may have crashed):
+- Check the Screenpipe process is still running (it may have crashed):
   ```bash
   curl http://localhost:3030/health
   ```
 
-- check screenpipe logs:
+- Check Screenpipe logs:
   - macOS/Linux: `~/.screenpipe/screenpipe.log`
   - Windows: check event viewer or `%APPDATA%\screenpipe\logs`
 
-- restart screenpipe if needed:
+- Restart Screenpipe if needed:
   ```bash
   npx -y screenpipe@latest record
   ```
 
 **VS Code extension not showing MCP tools?**
 
-- reload the Continue extension: use VS Code's Command Palette (Cmd+Shift+P) → "Reload Window"
-- verify `config.json` is valid JSON (check for trailing commas)
-- ensure Node.js >= 18.0.0: `node --version`
+- Reload the Continue extension: use VS Code's Command Palette (Cmd+Shift+P) → "Reload Window"
+- Verify `config.json` is valid JSON (check for trailing commas)
+- Ensure Node.js >= 18.0.0: `node --version`
 
-still stuck? [join our discord](https://discord.gg/screenpipe).
+Still stuck? [join our Discord](https://discord.gg/screenpipe).

@@ -156,10 +156,12 @@ export interface Env {
 	AI: Ai;
 	/** GPT-5.6 prompt caching: `system` (default/kill switch) or `history`. */
 	GPT56_HISTORY_CACHE_MODE?: string;
-	/** Hosted chat rollout switch. Any value other than `cloudflare` is legacy. */
-	HOSTED_CHAT_GATEWAY_MODE?: string;
 	/** Same-account Cloudflare AI Gateway used by the Workers AI binding. */
 	CLOUDFLARE_AI_GATEWAY_ID?: string;
+	/** Narration stays disabled until BYOK and its contracted character price are configured. */
+	TTS_ENABLED?: string;
+	ELEVENLABS_VOICE_ID?: string;
+	ELEVENLABS_USD_PER_CHARACTER?: string;
 	/** Local-dev only: Gateway root or compat chat URL when remote binding URL resolution is unavailable. */
 	CLOUDFLARE_AI_GATEWAY_BASE_URL?: string;
 	/** Local-dev only: authenticate provider-native fetches made off-platform. */

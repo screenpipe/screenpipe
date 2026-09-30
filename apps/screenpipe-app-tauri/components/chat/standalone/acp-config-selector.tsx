@@ -5,7 +5,7 @@
 
 import { useState } from "react";
 import { Loader2, SlidersHorizontal } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/use-toast";
 import { Switch } from "@/components/ui/switch";
 import {
   ComposerSettingsPopover,
@@ -28,6 +28,8 @@ import {
 import { acpAdapterInfo } from "@/lib/utils/preset-appearance";
 import { cn } from "@/lib/utils";
 import { compactModelLabel } from "@/lib/utils/model-label";
+import { useGT } from "gt-react";
+
 
 // A live-session command fails this way before the first prompt spawns the ACP
 // runtime. That's expected on a fresh chat — the choice is persisted to the
@@ -143,6 +145,8 @@ export function AcpConfigSelector({
    *  this general config popover. */
   hideModeControl?: boolean;
 }) {
+
+  const ui = useGT();
   const live = useAcpSessionConfig((state) =>
     sessionId ? state.sessions[sessionId] : undefined,
   );
@@ -240,8 +244,10 @@ export function AcpConfigSelector({
     try {
       await action();
     } catch (error) {
-      toast.error(`could not change ${label.toLowerCase()}`, {
+      toast({
+        title: ui("Could not change {value1}", { value1: label.toLowerCase() }),
         description: String(error),
+        variant: "destructive",
       });
     } finally {
       setPendingId(null);
@@ -280,10 +286,10 @@ export function AcpConfigSelector({
       label={triggerLabel}
       title={
         modelOption
-          ? `Model: ${triggerLabel}${advertisedModelValue?.name && advertisedModelValue.name !== triggerLabel ? ` · ${advertisedModelValue.name}` : ""}`
-          : `Agent configuration${triggerLabel === "config" ? "" : `: ${triggerLabel}`}`
+          ? ui("Model: {value1}{value2}", { value1: triggerLabel, value2: advertisedModelValue?.name && advertisedModelValue.name !== triggerLabel ? ` · ${advertisedModelValue.name}` : "" })
+          : ui("Agent configuration{value1}", { value1: triggerLabel === "config" ? "" : `: ${triggerLabel}` })
       }
-      ariaLabel={modelOption ? `Model: ${triggerLabel}` : "Agent configuration"}
+      ariaLabel={modelOption ? ui("Model: {value1}", { value1: triggerLabel }) : ui("Agent configuration")}
       triggerTestId="acp-config-trigger"
       contentTestId="acp-config-popover"
       triggerIcon={triggerLabel === "config" ? SlidersHorizontal : undefined}
@@ -293,7 +299,7 @@ export function AcpConfigSelector({
     >
       {modes && (
         <ComposerSettingsSelect
-          label="mode"
+          label={ui("Mode")}
           value={selectedModeId ?? modes.currentModeId}
           disabled={pendingId === "__mode"}
           options={modes.availableModes}
@@ -405,7 +411,7 @@ export function AcpConfigSelector({
             )}
           >
             {reauthPending && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
-            {reauthPending ? "signing out…" : "re-authenticate"}
+            {reauthPending ? ui("signing out…") : ui("re-authenticate")}
           </button>
         )}
     </ComposerSettingsPopover>

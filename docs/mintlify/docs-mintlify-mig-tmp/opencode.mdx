@@ -1,17 +1,17 @@
 ---
 title: "OpenCode - terminal AI with screen memory"
-sidebarTitle: "opencode"
-description: "Integrate screenpipe with OpenCode to give your terminal AI assistant access to your screen history, audio transcriptions, and app context."
+sidebarTitle: "OpenCode"
+description: "Integrate Screenpipe with OpenCode to give your terminal AI assistant access to your screen history, audio transcriptions, and app context."
 icon: "code"
 ---
 
-[OpenCode](https://github.com/opencode-ai/opencode) is a powerful terminal-based AI coding assistant written in Go. it implements the [Agent Skills](https://opencode.ai/docs/skills) open standard, which means screenpipe skills work out of the box.
+[OpenCode](https://github.com/opencode-ai/opencode) is a powerful terminal-based AI coding assistant written in Go. It implements the [Agent Skills](https://opencode.ai/docs/skills) open standard, which means Screenpipe skills work out of the box.
 
-## setup
+## Setup
 
-OpenCode discovers skills from multiple locations. copy the screenpipe skills to any of these:
+OpenCode discovers skills from multiple locations. Copy the Screenpipe skills to any of these:
 
-### option 1: project-level
+### Option 1: project-level
 
 ```bash
 # copy to current project
@@ -19,7 +19,7 @@ mkdir -p .opencode/skills
 cp -r /path/to/screenpipe/.claude/agents/* .opencode/skills/
 ```
 
-### option 2: user-level (global)
+### Option 2: user-level (global)
 
 ```bash
 # copy to home directory for all projects
@@ -27,7 +27,7 @@ mkdir -p ~/.opencode/skills
 cp -r /path/to/screenpipe/.claude/agents/* ~/.opencode/skills/
 ```
 
-### option 3: clone directly
+### Option 3: clone directly
 
 ```bash
 # clone screenpipe and symlink skills
@@ -36,20 +36,20 @@ ln -s ~/screenpipe/.claude/agents ~/.opencode/skills/screenpipe
 ```
 
 <Note>
-OpenCode uses the same Agent Skills format as Claude Code. files in `.claude/agents/` work in `.opencode/skills/` and vice versa.
+OpenCode uses the same Agent Skills format as Claude Code. Files in `.claude/agents/` work in `.opencode/skills/` and vice versa.
 </Note>
 
-## available skills
+## Available skills
 
-| skill | description |
+| Skill | Description |
 |-------|-------------|
-| `screenpipe-query` | search accessibility-first screen text, audio transcriptions, and UI events (keyboard input, clicks, app switches, clipboard) |
-| `screenpipe-health` | check status, diagnose issues, verify permissions |
-| `screenpipe-logs` | retrieve and analyze screenpipe logs |
+| `screenpipe-query` | Search accessibility-first screen text, audio transcriptions, and UI events (keyboard input, clicks, app switches, clipboard) |
+| `screenpipe-health` | Check status, diagnose issues, verify permissions |
+| `screenpipe-logs` | Retrieve and analyze Screenpipe logs |
 
-## usage
+## Usage
 
-OpenCode automatically discovers installed skills. invoke them in your prompts:
+OpenCode automatically discovers installed skills. Invoke them in your prompts:
 
 ```bash
 # start OpenCode
@@ -62,7 +62,7 @@ opencode
 > @screenpipe-logs show me errors from today
 ```
 
-or let OpenCode choose automatically:
+Or let OpenCode choose automatically:
 
 ```bash
 > what was I working on in VS Code this morning?
@@ -74,7 +74,7 @@ or let OpenCode choose automatically:
 
 ## MCP alternative
 
-OpenCode also supports MCP servers. if you prefer MCP over skills:
+OpenCode also supports MCP servers. If you prefer MCP over skills:
 
 ```bash
 # add to your opencode config
@@ -82,39 +82,39 @@ opencode config mcp add screenpipe "npx -y screenpipe-mcp"
 ```
 
 <Tip>
-skills are more token-efficient than MCP. the OpenCode team recommends skills for most use cases, with MCP for external API integrations.
+Skills are more token-efficient than MCP. The OpenCode team recommends skills for most use cases, with MCP for external API integrations.
 </Tip>
 
-## example workflows
+## Example workflows
 
-**context-aware coding:**
+**Context-aware coding:**
 ```
 > I was looking at a react component earlier that had a cool
 > animation effect, use screenpipe to find it and help me
 > implement something similar
 ```
 
-**recall documentation:**
+**Recall documentation:**
 ```
 > use screenpipe to find that kubernetes docs page I was
 > reading about pod scheduling
 ```
 
-**meeting follow-up:**
+**Meeting follow-up:**
 ```
 > what did we discuss in the team call about the database
 > migration? use screenpipe to find it
 ```
 
-**debug from memory:**
+**Debug from memory:**
 ```
 > there was an error in my terminal earlier, use screenpipe
 > to find it and help me fix it
 ```
 
-## skill format reference
+## Skill format reference
 
-screenpipe skills follow the Agent Skills standard:
+Screenpipe skills follow the Agent Skills standard:
 
 ```markdown
 ---
@@ -130,28 +130,28 @@ tools:
 Instructions for querying screenpipe data...
 ```
 
-you can customize these skills or create your own following the same format.
+You can customize these skills or create your own following the same format.
 
-## requirements
+## Requirements
 
-- screenpipe running on localhost:3030
+- Screenpipe running on localhost:3030
 - OpenCode installed (`go install github.com/opencode-ai/opencode@latest`)
-- skills copied to `.opencode/skills/` or `~/.opencode/skills/`
+- Skills copied to `.opencode/skills/` or `~/.opencode/skills/`
 
-## troubleshooting
+## Troubleshooting
 
-**skills not discovered?**
-- run `opencode skills list` to see available skills
-- verify files are in correct location with valid yaml frontmatter
-- check skill file ends in `.md`
+**Skills not discovered?**
+- Run `opencode skills list` to see available skills
+- Verify files are in correct location with valid yaml frontmatter
+- Check skill file ends in `.md`
 
-**queries returning no data?**
-- verify screenpipe is running: `curl http://localhost:3030/health`
-- check data exists: `curl "http://localhost:3030/search?limit=1"`
-- ensure screenpipe has screen recording permissions
+**Queries returning no data?**
+- Verify Screenpipe is running: `curl http://localhost:3030/health`
+- Check data exists: `curl "http://localhost:3030/search?limit=1"`
+- Ensure Screenpipe has screen recording permissions
 
 **OpenCode not using skills?**
-- mention the skill explicitly: `@screenpipe-query find...`
-- check skill description matches your query intent
+- Mention the skill explicitly: `@screenpipe-query find...`
+- Check skill description matches your query intent
 
-still stuck? [ask in our discord](https://discord.gg/screenpipe).
+Still stuck? [ask in our Discord](https://discord.gg/screenpipe).

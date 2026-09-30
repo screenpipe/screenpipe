@@ -24,7 +24,7 @@ import path from 'node:path';
 const SIGNING_PASSWORD = 'screenpipe-local-updater-e2e';
 const CARGO_PROFILE    = 'release-local';
 const PORT             = 8765;
-const TAURI_CLI        = ['bunx', '--bun', '@tauri-apps/cli@2.11.2'];
+const TAURI_CLI        = ['bun', 'x', '--bun', '@tauri-apps/cli@2.11.2'];
 
 // ── Paths ──────────────────────────────────────────────────────────────────────
 

@@ -7,6 +7,9 @@ import { Check, Download, LayoutTemplate } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getLiveViewTimeRangeOption } from "@/lib/live-views/time-range";
 import type { BrainViewTemplateKit } from "@/lib/utils/tauri";
+import { useGT, msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 export type TemplatePipeReadiness = {
   state: "none" | "partial" | "ready";
@@ -26,7 +29,7 @@ export function getTemplatePipeReadiness(
   );
   const installed = kit.pipes.length - missingPipes.length;
   const required = kit.pipes.length;
-  const helperLabel = required === 1 ? "helper" : "helpers";
+
 
   if (missingPipes.length === 0) {
     return {
@@ -34,9 +37,9 @@ export function getTemplatePipeReadiness(
       installed,
       required,
       missingPipes,
-      label: `${required} local starting point${required === 1 ? "" : "s"} available`,
+      label: msg("{count, plural, one {# local starting point} other {# local starting points}} available", { count: required }),
       explanation:
-        "The agent can reuse these helpers when they fit, or choose a better approach.",
+        msg("The agent can reuse these helpers when they fit, or choose a better approach.", {}),
     };
   }
 
@@ -46,8 +49,8 @@ export function getTemplatePipeReadiness(
       installed,
       required,
       missingPipes,
-      label: "Agent chooses the data helpers",
-      explanation: `This template suggests ${required} built-in ${helperLabel}, but the agent decides what to reuse or create after checking your data.`,
+      label: msg("Agent chooses the data helpers", {}),
+      explanation: msg("This template suggests {count, plural, one {# built-in helper} other {# built-in helpers}}, but the agent decides what to reuse or create after checking your data.", { count: required }),
     };
   }
 
@@ -56,9 +59,9 @@ export function getTemplatePipeReadiness(
     installed,
     required,
     missingPipes,
-    label: `${installed} local starting point${installed === 1 ? "" : "s"} available`,
+    label: msg("{count, plural, one {# local starting point} other {# local starting points}} available", { count: installed }),
     explanation:
-      "The agent will inspect what is useful, then reuse, improve, or create only the helpers this dashboard needs.",
+      msg("The agent will inspect what is useful, then reuse, improve, or create only the helpers this dashboard needs.", {}),
   };
 }
 
@@ -71,6 +74,8 @@ export function LiveViewTemplateGallery({
   installedPipeNames: Set<string>;
   onPreview: (kit: BrainViewTemplateKit) => void;
 }) {
+  const uiPlural = useGT();
+  const uiMessages = useMessages();
   return (
     <section data-testid="live-view-template-gallery" className="w-full">
       <div className="mb-3 flex items-center gap-2">
@@ -85,7 +90,7 @@ export function LiveViewTemplateGallery({
       </div>
       <div className="grid gap-3 md:grid-cols-2">
         {kits.map((kit) => {
-          const readiness = getTemplatePipeReadiness(kit, installedPipeNames);
+          const readiness = localizeDefinitions(getTemplatePipeReadiness(kit, installedPipeNames), uiMessages);
           return (
             <article
               key={kit.id}
@@ -99,9 +104,9 @@ export function LiveViewTemplateGallery({
                     {kit.description}
                   </p>
                 </div>
-                <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
-                  {kit.slots.length} section{kit.slots.length === 1 ? "" : "s"}{" "}
-                  · {getLiveViewTimeRangeOption(kit.timeRange).label}
+                <span className="shrink-0 text-[10px] normal-case tracking-wide text-muted-foreground">
+                  {uiPlural("{count, plural, one {# section} other {# sections}}", { count: kit.slots.length })}{" "}
+                  · {uiMessages(getLiveViewTimeRangeOption(kit.timeRange).label)}
                 </span>
               </div>
               <div
@@ -117,7 +122,7 @@ export function LiveViewTemplateGallery({
               </div>
               <details className="mt-2 text-[10px] text-muted-foreground">
                 <summary className="cursor-pointer select-none hover:text-foreground">
-                  possible starting points
+                  Possible starting points
                 </summary>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {kit.pipes.map((pipe) => {
@@ -146,10 +151,10 @@ export function LiveViewTemplateGallery({
                   data-testid={`preview-live-view-template-${kit.id}`}
                   variant="outline"
                   size="sm"
-                  className="rounded-none"
+                  className="rounded-md"
                   onClick={() => onPreview(kit)}
                 >
-                  preview
+                  Preview
                 </Button>
               </div>
             </article>

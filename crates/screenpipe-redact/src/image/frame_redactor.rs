@@ -126,10 +126,10 @@ pub fn redact_frame(
     tmp_writer
         .flush()
         .map_err(|e| RedactError::Runtime(format!("flush {}: {e}", tmp_path.display())))?;
-    tmp_writer
+    let file = tmp_writer
         .into_inner()
-        .map_err(|e| RedactError::Runtime(format!("close {}: {e}", tmp_path.display())))?
-        .sync_all()
+        .map_err(|e| RedactError::Runtime(format!("close {}: {e}", tmp_path.display())))?;
+    screenpipe_fs::sync_all(&file)
         .map_err(|e| RedactError::Runtime(format!("fsync {}: {e}", tmp_path.display())))?;
     std::fs::rename(&tmp_path, &output_path).map_err(|e| {
         // On rename failure, try to clean up the tempfile — best effort.

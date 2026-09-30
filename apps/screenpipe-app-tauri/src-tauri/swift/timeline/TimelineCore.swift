@@ -394,6 +394,58 @@ enum TimelineLiveEdge {
     }
 }
 
+// MARK: - Range removal
+
+/// Drops the frames inside a deleted range and decides where the playhead
+/// lands, without touching the view model. Frames are newest-first.
+enum TimelineRangeRemoval {
+    struct Result: Equatable {
+        var frames: [StreamTimeSeriesResponse]
+        var removedFrameIds: Set<String>
+        var nextIndex: Int
+    }
+
+    /// Playhead policy, in order: the frame under the playhead survived, so
+    /// stay on it; the newest frame was deleted, so the user was at or near
+    /// the live edge and index 0 keeps following new captures; otherwise the
+    /// nearest surviving frame by timestamp.
+    static func remove(
+        from start: Date,
+        to end: Date,
+        frames: [StreamTimeSeriesResponse],
+        currentIndex: Int
+    ) -> Result {
+        let currentFrameId = frames.indices.contains(currentIndex)
+            ? frames[currentIndex].devices.first?.frameId
+            : nil
+        let currentDate = frames.indices.contains(currentIndex)
+            ? TimelineFrames.date(of: frames[currentIndex])
+            : nil
+        let headDate = frames.first.flatMap(TimelineFrames.date(of:))
+
+        var removedFrameIds = Set<String>()
+        let kept = frames.filter { frame in
+            guard let date = TimelineFrames.date(of: frame),
+                  date >= start, date <= end else { return true }
+            for device in frame.devices { removedFrameIds.insert(device.frameId) }
+            return false
+        }
+
+        var next = 0
+        if let currentFrameId,
+           let survived = TimelineNavigation.index(ofFrameId: currentFrameId, in: kept) {
+            next = survived
+        } else if let headDate, headDate >= start, headDate <= end {
+            next = 0
+        } else if let currentDate,
+                  let nearest = TimelineNavigation.indexNearest(currentDate, in: kept) {
+            next = nearest
+        }
+        next = min(max(0, next), max(0, kept.count - 1))
+        return Result(frames: kept, removedFrameIds: removedFrameIds, nextIndex: next)
+    }
+}
+
 // MARK: - Geometry
 
 /// Everything the scrubber needs to lay out, derived from the zoom level.
@@ -562,12 +614,9 @@ enum TimelineGrouping {
         return urls
     }
 
-    private static let dayBoundaryFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "EEE, MMM d"
-        return f
-    }()
+    private static var dayBoundaryFormatter: DateFormatter {
+        UILocalization.shared.dateFormatter("EEEMMMd")
+    }
 
     private static func dayKey(_ date: Date) -> String {
         let cal = Calendar.current
@@ -1082,6 +1131,10 @@ struct TimelineSelection: Equatable {
     var start: Date
     var end: Date
     var indices: [Int]
+    // Keep the server's precision for destructive requests: Date/ISO formatters
+    // cannot round-trip every fractional digit in a captured timestamp.
+    var startTimestamp: String
+    var endTimestamp: String
 
     /// The playhead drifting this far outside the range clears the selection.
     static let driftTolerance: TimeInterval = 30
@@ -1106,7 +1159,11 @@ struct TimelineSelection: Equatable {
         // Newest-first: the higher index is the older end of the range.
         guard let startDate = TimelineFrames.date(of: frames[upper]),
               let endDate = TimelineFrames.date(of: frames[lower]) else { return nil }
-        return TimelineSelection(start: startDate, end: endDate, indices: indices)
+        return TimelineSelection(
+            start: startDate, end: endDate, indices: indices,
+            startTimestamp: frames[upper].timestamp,
+            endTimestamp: frames[lower].timestamp
+        )
     }
 
     /// "1h 12m" / "3m" for the tag toolbar header.
@@ -1135,6 +1192,22 @@ struct TimelineAISelectionPayload: Codable, Equatable {
 struct TimelineExportSelectionPayload: Codable, Equatable {
     var start: String
     var end: String
+}
+
+/// Outcome of a range deletion the Swift timeline performed itself. The
+/// webview only toasts and drops its caches; it never re-issues the delete.
+struct TimelineDeleteRangeResultPayload: Codable, Equatable {
+    var start: String
+    var end: String
+    var framesDeleted: Int
+    var audioTranscriptionsDeleted: Int
+    var error: String?
+
+    var actionString: String? {
+        guard let data = try? JSONEncoder().encode(self),
+              let json = String(data: data, encoding: .utf8) else { return nil }
+        return "delete_range:\(json)"
+    }
 }
 
 // MARK: - Meetings

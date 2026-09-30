@@ -84,7 +84,7 @@ describe("WhatsAppPanel", () => {
     });
 
     expect(screen.getByRole("alert").textContent).toContain("local server unavailable");
-    expect(screen.getByRole("button", { name: "retry" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   }, 8_000);
 
   it("times out a pairing attempt that never produces a QR code", async () => {

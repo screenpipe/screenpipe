@@ -29,10 +29,10 @@ export const CHAT_RESPONSE_FEEDBACK_REASONS: ReadonlyArray<{
   value: ChatResponseFeedbackReason;
   label: string;
 }> = [
-  { value: "missed_context", label: "missed my context" },
-  { value: "incorrect", label: "incorrect" },
-  { value: "missing_tool_use", label: "didn't use tools" },
-  { value: "not_useful", label: "not useful" },
+  { value: "missed_context", label: "Missed my context" },
+  { value: "incorrect", label: "Incorrect" },
+  { value: "missing_tool_use", label: "Didn't use tools" },
+  { value: "not_useful", label: "Not useful" },
 ];
 
 export type ChatTelemetryContext = {

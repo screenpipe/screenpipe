@@ -142,7 +142,7 @@ describe("ChatResponseFeedback", () => {
     expect(badButton).toHaveAttribute("aria-pressed", "true");
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() =>
-      expect(screen.queryByText("what went wrong?")).not.toBeInTheDocument(),
+      expect(screen.queryByText("What went wrong?")).not.toBeInTheDocument(),
     );
   });
 
@@ -162,11 +162,11 @@ describe("ChatResponseFeedback", () => {
     const badButton = screen.getByRole("button", { name: "Bad response" });
     fireEvent.click(badButton);
 
-    expect(await screen.findByText("what went wrong?")).toBeInTheDocument();
+    expect(await screen.findByText("What went wrong?")).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "didn't use tools" })).not.toBeDisabled(),
+      expect(screen.getByRole("button", { name: "Didn't use tools" })).not.toBeDisabled(),
     );
-    fireEvent.click(screen.getByRole("button", { name: "didn't use tools" }));
+    fireEvent.click(screen.getByRole("button", { name: "Didn't use tools" }));
 
     await waitFor(() =>
       expect(submitFeedbackMock).toHaveBeenLastCalledWith(
@@ -204,7 +204,7 @@ describe("ChatResponseFeedback", () => {
     expect(analyticsPayload).not.toContain("private");
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() =>
-      expect(screen.queryByText("what went wrong?")).not.toBeInTheDocument(),
+      expect(screen.queryByText("What went wrong?")).not.toBeInTheDocument(),
     );
   });
 
@@ -227,7 +227,7 @@ describe("ChatResponseFeedback", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Bad response" }));
-    const reasonButton = await screen.findByRole("button", { name: "incorrect" });
+    const reasonButton = await screen.findByRole("button", { name: "Incorrect" });
     await waitFor(() => expect(reasonButton).not.toBeDisabled());
     fireEvent.click(reasonButton);
     expect(await screen.findByRole("alert")).toHaveTextContent(

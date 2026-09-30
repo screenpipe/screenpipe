@@ -65,33 +65,21 @@ enum TimelineTheme {
         return v == 0 ? 0 : 2 * (1 - ll / v)
     }
 
-    static let hourFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "h a"
-        return f
-    }()
+    static var hourFormatter: DateFormatter {
+        UILocalization.shared.dateFormatter("j")
+    }
 
-    static let playheadFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "h:mm:ss a"
-        return f
-    }()
+    static var playheadFormatter: DateFormatter {
+        UILocalization.shared.dateFormatter("jmmss")
+    }
 
-    static let clockFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "h:mm a"
-        return f
-    }()
+    static var clockFormatter: DateFormatter {
+        UILocalization.shared.dateFormatter("jmm")
+    }
 
-    static let dateButtonFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "MMM d"
-        return f
-    }()
+    static var dateButtonFormatter: DateFormatter {
+        UILocalization.shared.dateFormatter("MMM d")
+    }
 }
 
 /// The square-cornered bordered pill every timeline control uses.

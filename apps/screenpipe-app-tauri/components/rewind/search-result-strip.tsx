@@ -6,6 +6,9 @@
 // Each result is a small bar; the active one is bright yellow with a glow.
 // Renders nothing for ≤1 result (the counter alone is sufficient).
 
+
+import { useGT } from "gt-react";
+
 export const STRIP_WIDTH = 110;
 const STRIP_HEIGHT = 14;
 
@@ -41,13 +44,15 @@ export function SearchResultStrip({
 	activeIndex: number;
 	onJump: (index: number) => void;
 }) {
+
+  const ui = useGT();
 	if (resultsLength <= 1) return null;
 	return (
 		<div
 			className="relative shrink-0"
 			style={{ width: STRIP_WIDTH, height: STRIP_HEIGHT }}
 			role="slider"
-			aria-label="Search result position"
+			aria-label={ui("Search result position")}
 			aria-valuemin={1}
 			aria-valuemax={resultsLength}
 			aria-valuenow={activeIndex + 1}
@@ -79,7 +84,7 @@ export function SearchResultStrip({
 							transition: "all 120ms ease-out",
 							zIndex: isActive ? 2 : 1,
 						}}
-						title={`Match ${i + 1}`}
+						title={ui("Match {value1}", { value1: i + 1 })}
 					/>
 				);
 			})}

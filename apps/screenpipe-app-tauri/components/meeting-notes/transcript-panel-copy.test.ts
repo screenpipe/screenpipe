@@ -61,7 +61,7 @@ describe("meeting retranscription recovery copy", () => {
           autoSummaryEnabled: true,
           summaryRefreshEventEmitted: true,
         }),
-      ).toBe("no speech was found in the saved audio");
+      ).toBe("No speech was found in the saved audio");
     },
   );
 });

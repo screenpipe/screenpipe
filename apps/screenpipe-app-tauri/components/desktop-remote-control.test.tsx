@@ -77,7 +77,7 @@ describe("DesktopRemoteControl", () => {
     vi.clearAllMocks();
     mocks.settings = {
       platform: "macos",
-      enableSemanticContext: false,
+      enableSemanticContext: true,
       experimentalCoreaudioSystemAudio: true,
       experimentalMeetingPiggyback: true,
       filterMusic: true,
@@ -129,6 +129,7 @@ describe("DesktopRemoteControl", () => {
   });
 
   it("applies independently targeted defaults with one settings write and restart", async () => {
+    mocks.settings.enableSemanticContext = false; // legacy install
     mocks.settings.experimentalMeetingPiggyback = false; // legacy install
     mocks.payloads = {
       "semantic-context-control": {

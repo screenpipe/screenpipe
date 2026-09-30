@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 const COMPLETED_EVENT: &str = "feedback-upload-completed";
 const MAX_LOG_FILES: usize = 5;
-const MAX_LOG_BYTES: u64 = 100 * 1024;
+const MAX_LOG_BYTES: u64 = 1024 * 1024;
 const MAX_ATTACHMENT_BYTES: usize = 50 * 1024 * 1024;
 const API_TIMEOUT: Duration = Duration::from_secs(30);
 const LOG_READ_TIMEOUT: Duration = Duration::from_secs(60);
@@ -257,6 +257,10 @@ async fn collect_log_text(app: &AppHandle) -> String {
         }
     };
 
+    collect_log_text_from_files(files).await
+}
+
+async fn collect_log_text_from_files(files: Vec<crate::log_files::LogFile>) -> String {
     let mut logs = stream::iter(files.into_iter().take(MAX_LOG_FILES).enumerate().map(
         |(index, file)| async move {
             let content = match timeout(
@@ -275,7 +279,7 @@ async fn collect_log_text(app: &AppHandle) -> String {
                     "[Error reading file: timed out]".to_string()
                 }
             };
-            (index, file.name, content)
+            (index, file, content)
         },
     ))
     .buffer_unordered(MAX_LOG_FILES)
@@ -284,7 +288,7 @@ async fn collect_log_text(app: &AppHandle) -> String {
     logs.sort_unstable_by_key(|(index, _, _)| *index);
 
     logs.into_iter()
-        .map(|(_, name, content)| format!("\n\n=== {name} ===\n{content}"))
+        .map(|(_, file, content)| format!("\n{}{content}", file.bundle_header()))
         .collect()
 }
 
@@ -296,6 +300,43 @@ async fn probe_recording_endpoint(client: &Client, url: String) -> Value {
         }),
         Ok(Err(error)) => json!({ "ok": false, "error": error.to_string() }),
         Err(_) => json!({ "ok": false, "error": "timeout" }),
+    }
+}
+
+async fn collect_migration_diagnostics(app: &AppHandle) -> String {
+    let root = crate::store::SettingsStore::get(app)
+        .ok()
+        .flatten()
+        .and_then(|settings| crate::config::selected_recording_data_dir(&settings.data_dir).ok());
+    let Some(root) = root else {
+        return "[Storage directory unavailable]".into();
+    };
+    collect_migration_diagnostics_from_root(root).await
+}
+
+async fn collect_migration_diagnostics_from_root(root: std::path::PathBuf) -> String {
+    match timeout(
+        DIAGNOSTIC_PROBE_TIMEOUT,
+        tokio::task::spawn_blocking(move || {
+            let attempts = match screenpipe_db::storage::diagnostics::recent(&root) {
+                Ok(snapshots) => json!(snapshots),
+                Err(error) => {
+                    json!({"error": format!("Could not read migration diagnostics: {error}")})
+                }
+            };
+            // The retry block can predate attempt diagnostics. Include it even
+            // if the snapshot directory is missing or unreadable.
+            json!({
+                "attempts": attempts,
+                "retry_block": crate::storage_migration::saved_migration_error(&root),
+            })
+        }),
+    )
+    .await
+    {
+        Ok(Ok(diagnostics)) => serde_json::to_string_pretty(&diagnostics).unwrap_or_default(),
+        Ok(Err(error)) => format!("[Migration diagnostic reader failed: {error}]"),
+        Err(_) => "[Migration diagnostic read timed out]".into(),
     }
 }
 
@@ -601,11 +642,16 @@ async fn run_feedback_upload(
     let screenshot = prepare_screenshot(request.screenshot_data_url.as_deref())?;
     let video = prepare_video(request)?;
     let logs = collect_log_text(app).await;
-    let recording_diagnostics = collect_recording_diagnostics(app).await;
-    let raw_bundle = format!(
-        "{}{}\n\n=== Browser Console Logs ===\n{}\n\n=== Recording Diagnostics ===\n{}",
-        request.chat_history, logs, request.console_log, recording_diagnostics
+    let (recording_diagnostics, migration_diagnostics) = tokio::join!(
+        collect_recording_diagnostics(app),
+        collect_migration_diagnostics(app),
     );
+    let raw_bundle = format!(
+        "{}{}\n\n=== Browser Console Logs ===\n{}\n\n=== Recording Diagnostics ===\n{}\n\n=== Storage Migration Diagnostics ===\n{}",
+        request.chat_history, logs, request.console_log, recording_diagnostics, migration_diagnostics
+    );
+    let raw_bundle =
+        append_localization_diagnostics(raw_bundle, &crate::localization::diagnostics());
     let redacted_logs =
         crate::feedback_redact::redact_pii_for_feedback(raw_bundle, request.settings_json.clone())
             .await
@@ -624,6 +670,10 @@ async fn run_feedback_upload(
         video,
     )
     .await
+}
+
+pub(crate) fn append_localization_diagnostics(bundle: String, diagnostics: &str) -> String {
+    format!("{bundle}\n\n=== Localization Diagnostics ===\n{diagnostics}")
 }
 
 fn finish(app: &AppHandle, completed: FeedbackUploadCompleted) {
@@ -708,6 +758,933 @@ mod tests {
             video_path: None,
             video_ext: None,
         }
+    }
+
+    #[tokio::test]
+    async fn audio_flush_and_persistence_diagnostics_reach_mocked_support_upload() {
+        let Some(native_trace) = std::env::var_os("SCREENPIPE_TEST_AUDIO_TRACE_PATH") else {
+            return;
+        };
+        let logs = tempfile::tempdir().unwrap();
+        for day in 20..23 {
+            let body = if day == 22 {
+                let mut emitted = std::fs::read_to_string(&native_trace)
+                    .expect("native recorder diagnostic trace");
+                emitted.push_str("email=private@example.com\n");
+                emitted
+            } else {
+                "ordinary rotated log\n".to_string()
+            };
+            std::fs::write(
+                logs.path()
+                    .join(format!("screenpipe-app.2026-09-{day}.log")),
+                body,
+            )
+            .unwrap();
+        }
+
+        let files = crate::log_files::collect_log_files(&[logs.path().to_path_buf()]).await;
+        let raw = collect_log_text_from_files(files).await;
+        let redacted = crate::feedback_redact::redact_pii_for_feedback(raw, "{}".into())
+            .await
+            .unwrap();
+        let unattended =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[logs.path().to_path_buf()])
+                .await
+                .unwrap();
+        for report in [&redacted, &unattended] {
+            assert!(report.contains("audio recorder final flush queued successfully"));
+            assert!(report.contains("samples=16000"));
+            assert!(report.contains("duration=1.000s"));
+            assert!(report.contains("audio recorder final flush queue failed"));
+            assert!(report.contains("cause=whisper channel disconnected"));
+            assert!(!report.contains("private@example.com"));
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "signedUrl": format!("{}/upload/log", server.uri()), "path": "logs/report.log"
+            }})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .and(body_bytes(redacted.as_bytes()))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"id": 42}})))
+            .mount(&server)
+            .await;
+        upload_report(
+            &Client::new(),
+            &server.uri(),
+            &request(),
+            redacted,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn parity_scan_failure_reaches_support_without_rolling_logs() {
+        use screenpipe_db::{storage, DatabaseManager};
+        let root = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new(
+            root.path().join("db.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        // Valid SQLite with a source shape the existing migration cannot read:
+        // the actual receipt SELECT fails after integrity verification passes.
+        db.execute_raw_sql_write("CREATE TABLE parity_probe(key TEXT PRIMARY KEY,payload TEXT) WITHOUT ROWID; INSERT INTO parity_probe VALUES('key','private history')")
+            .await.unwrap();
+        db.close().await;
+        let error = storage::migrate(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("no such column: rowid"));
+        assert_migration_failure_uploaded(
+            root.path(),
+            &[
+                "scanning_parity_rows",
+                "no such column: rowid",
+                "\"table\": \"parity_probe\"",
+                "\"status\": \"failed\"",
+            ],
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn archive_verification_failure_reaches_support_without_rolling_logs() {
+        use screenpipe_db::{storage, DatabaseManager};
+        let root = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap();
+        // SQLite is intact but the committed archive catalog is not. The
+        // single verification pass must reject it and identify the real phase.
+        db.execute_raw_sql_write("INSERT INTO _bulk_files(table_name,path,state,rows,checksum) VALUES('elements','private history','published',1,'invalid')")
+            .await.unwrap();
+        let error = storage::diagnostics::observe(
+            root.path(),
+            "conversion",
+            |_, _| {},
+            db.verify_storage(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("bulk payload catalog is incomplete"));
+        db.close().await;
+        assert_migration_failure_uploaded(
+            root.path(),
+            &[
+                "verifying_archives",
+                "bulk payload catalog is incomplete",
+                "\"status\": \"failed\"",
+            ],
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn element_selection_failure_reaches_support_without_rolling_logs() {
+        use screenpipe_db::{storage, DatabaseManager};
+        let root = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap();
+        // A broken resident source makes the real element selector fail. The
+        // support report must retain that cause even after the pool is closed.
+        db.execute_raw_sql_write("DROP TABLE _bulk_element_rows")
+            .await
+            .unwrap();
+        let error =
+            storage::diagnostics::observe(root.path(), "conversion", |_, _| {}, db.seal_payloads())
+                .await
+                .unwrap_err();
+        assert!(error.to_string().contains("no such table"));
+        db.close().await;
+        assert_migration_failure_uploaded(
+            root.path(),
+            &[
+                "selecting_staged_elements",
+                "no such table",
+                "_bulk_element_rows",
+                "\"status\": \"failed\"",
+                "\"table\": \"elements\"",
+            ],
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn migration_conflict_reaches_support_after_log_rotation_and_redaction() {
+        use screenpipe_db::{storage, DatabaseManager};
+        const RESTART_ROOT: &str = "SCREENPIPE_TEST_MIGRATION_REPORT_ROOT";
+        if let Some(root) = std::env::var_os(RESTART_ROOT) {
+            assert_migration_failure_uploaded(
+                std::path::Path::new(&root),
+                &[
+                    "source contains recorded history",
+                    "validating_migration_source",
+                    "\"source_exists\": true",
+                    "\"index_exists\": true",
+                    "pool timed out",
+                    "recording_recovery_outcome",
+                    "\"status\": \"completed\"",
+                    "\"retry_block\":",
+                ],
+            )
+            .await;
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("db.sqlite");
+        let db = DatabaseManager::new(source.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        let timeout_pool_options = db.pool.options().clone();
+        db.execute_raw_sql_write(
+            "INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-09-18','private history')",
+        )
+        .await
+        .unwrap();
+        db.close().await;
+        let report = storage::migrate(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap();
+        let descriptor = storage::StorageDescriptor::read(root.path())
+            .unwrap()
+            .unwrap();
+        let extra = root.path().join("extra.sqlite");
+        let db = DatabaseManager::new(extra.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        db.execute_raw_sql_write("INSERT INTO frames(id,timestamp,full_text) VALUES(2,'2026-09-18','additional private history')").await.unwrap();
+        db.close().await;
+        std::fs::rename(extra, &source).unwrap();
+        std::fs::write(
+            root.path().join("storage-migration.json"),
+            serde_json::to_vec(&json!({
+                "format": 2, "phase": "paused", "descriptor": descriptor,
+                "source": report.tables, "snapshot": null, "report": null
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let error = storage::migrate(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("source contains recorded history"));
+        let retry_block = format!("{error}; password=hunter2");
+        std::fs::write(
+            root.path().join("storage-migration-error.txt"),
+            &retry_block,
+        )
+        .unwrap();
+        // Wait for the originating attempt to reach disk before subsequent
+        // process starts rotate the recovery history.
+        wait_for_migration_failure(root.path()).await;
+        let source_before = std::fs::read(&source).unwrap();
+        let index = root.path().join(&descriptor.index);
+        let index_before = std::fs::read(&index).unwrap();
+
+        // Exercise a real pool timeout, then a successful startup outcome.
+        // Each iteration rereads only persisted evidence, as a later process
+        // would after the original rolling logs have disappeared.
+        let pool = timeout_pool_options
+            .max_connections(1)
+            .min_connections(0)
+            .acquire_timeout(Duration::from_millis(20))
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let held = pool.acquire().await.unwrap();
+        let startup_error = pool.acquire().await.unwrap_err().to_string();
+        assert!(startup_error.contains("pool timed out"));
+        for result in [
+            Err(startup_error.clone()),
+            Err(startup_error.clone()),
+            Err(startup_error.clone()),
+            Err(startup_error),
+            Ok(()),
+        ] {
+            let previous: Vec<_> = storage::diagnostics::recent(root.path())
+                .unwrap()
+                .into_iter()
+                .map(|snapshot| snapshot.attempt_id)
+                .collect();
+            crate::storage_migration::record_recovery_outcome(root.path(), &result).await;
+            timeout(Duration::from_secs(3), async {
+                loop {
+                    if storage::diagnostics::recent(root.path())
+                        .unwrap()
+                        .iter()
+                        .any(|s| {
+                            s.kind == "recording_recovery" && !previous.contains(&s.attempt_id)
+                        })
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        drop(held);
+        pool.close().await;
+        assert_eq!(
+            crate::storage_migration::saved_migration_error(root.path()).as_deref(),
+            Some(retry_block.as_str()),
+        );
+        // A fresh test process collects and uploads the report without any of
+        // this process's in-memory diagnostic state or rolling logs.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "feedback_upload::tests::migration_conflict_reaches_support_after_log_rotation_and_redaction",
+                "--nocapture",
+            ])
+            .env(RESTART_ROOT, root.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "support collection after restart failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), source_before);
+        assert_eq!(std::fs::read(&index).unwrap(), index_before);
+    }
+
+    #[tokio::test]
+    async fn migration_credential_failure_reaches_support_after_log_rotation_and_redaction() {
+        use screenpipe_db::{storage, DatabaseManager};
+        use screenpipe_secrets::{secrets_database_path, shared_secret_pool, SecretStore};
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("db.sqlite");
+        let db = DatabaseManager::new(source.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        db.execute_raw_sql_write(
+            "INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-09-20','private history')",
+        )
+        .await
+        .unwrap();
+        db.close().await;
+        let report = storage::migrate(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap();
+        let descriptor = storage::StorageDescriptor::read(root.path())
+            .unwrap()
+            .unwrap();
+        SecretStore::open_for_data_dir(root.path(), None)
+            .await
+            .unwrap();
+        let pool = shared_secret_pool(secrets_database_path(root.path()).to_str().unwrap())
+            .await
+            .unwrap();
+        pool.close().await;
+        rusqlite::Connection::open(secrets_database_path(root.path()))
+            .unwrap()
+            .execute_batch("CREATE TRIGGER refuse_recovery BEFORE INSERT ON secrets BEGIN SELECT RAISE(ABORT,'credential destination refused write'); END")
+            .unwrap();
+        let legacy = SecretStore::open(source.to_str().unwrap(), None)
+            .await
+            .unwrap();
+        legacy
+            .set("recovered-token", b"private history")
+            .await
+            .unwrap();
+        shared_secret_pool(source.to_str().unwrap())
+            .await
+            .unwrap()
+            .close()
+            .await;
+        std::fs::write(
+            root.path().join("storage-migration.json"),
+            serde_json::to_vec(&json!({
+                "format": 2, "phase": "paused", "descriptor": descriptor,
+                "source": report.tables, "snapshot": null, "report": null
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let error = storage::migrate(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("credential destination refused write"),
+            "{error}"
+        );
+        assert!(source.is_file());
+        assert_migration_failure_uploaded(
+            root.path(),
+            &[
+                "credential destination refused write",
+                "recovering_migration_secrets",
+                "\"table\": \"secrets\"",
+                "\"status\": \"failed\"",
+                "\"source_exists\": true",
+                "\"index_exists\": true",
+            ],
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn migration_search_failure_reaches_support_after_collection_and_redaction() {
+        use screenpipe_db::{storage, DatabaseManager};
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("db.sqlite");
+        let db = DatabaseManager::new(source.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        db.execute_raw_sql_write(
+            "INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-09-28','private history'); DROP TABLE frames_fts;",
+        )
+        .await
+        .unwrap();
+        db.close().await;
+        let error = storage::migrate(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("no such table: frames_fts"),
+            "{error}"
+        );
+        assert!(source.is_file());
+        assert!(!root.path().join("storage-migration.json").exists());
+        assert_migration_failure_uploaded(
+            root.path(),
+            &[
+                "no such table: frames_fts",
+                "\"failure_stage\": \"sampling_source_search\"",
+                "\"status\": \"failed\"",
+            ],
+        )
+        .await;
+    }
+
+    async fn wait_for_migration_failure(root: &std::path::Path) {
+        timeout(Duration::from_secs(3), async {
+            loop {
+                if screenpipe_db::storage::diagnostics::recent(root)
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|snapshot| snapshot.status == "failed")
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn migration_retry_block_reaches_support_without_attempt_snapshots() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("storage-migration-error.txt"),
+            "migration source identity changed; both files have been kept; password=hunter2",
+        )
+        .unwrap();
+        assert_migration_report_uploaded(
+            root.path(),
+            &[
+                "migration source identity changed",
+                "\"attempts\": []",
+                "\"retry_block\":",
+            ],
+        )
+        .await;
+    }
+
+    async fn assert_migration_failure_uploaded(root: &std::path::Path, expected: &[&str]) {
+        wait_for_migration_failure(root).await;
+        assert_migration_report_uploaded(root, expected).await;
+    }
+
+    async fn assert_migration_report_uploaded(root: &std::path::Path, expected: &[&str]) {
+        // A later support submission has no original rolling log in memory or on disk.
+        let diagnostics = collect_migration_diagnostics_from_root(root.to_owned()).await;
+        let raw =
+            format!("[no log files found]\n\n=== Storage Migration Diagnostics ===\n{diagnostics}");
+        let redacted = crate::feedback_redact::redact_pii_for_feedback(raw, "{}".into())
+            .await
+            .unwrap();
+        for expected in expected {
+            assert!(
+                redacted.contains(expected),
+                "missing {expected}: {redacted}"
+            );
+        }
+        assert!(!redacted.contains("private history"));
+        assert!(!redacted.contains("cHJpdmF0ZSBoaXN0b3J5"));
+        assert!(!redacted.contains("hunter2"));
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "signedUrl": format!("{}/upload/log", server.uri()), "path": "logs/report.log"
+            }})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"id": 42}})))
+            .mount(&server)
+            .await;
+        upload_report(
+            &Client::new(),
+            &server.uri(),
+            &request(),
+            redacted.clone(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let upload = requests.iter().find(|r| r.method == "PUT").unwrap();
+        assert_eq!(upload.body, redacted.as_bytes());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn updater_failure_reaches_support_after_restart_and_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::staged_update::tests::failed_install_fixture(dir.path()).await;
+        // Simulate the next process consuming its marker, then ordinary log rotation.
+        crate::updates::tests::consume_failed_update_fixture(dir.path());
+        crate::update_diagnostics::append(dir.path(), "redaction_fixture", "password=hunter2");
+        for day in 10..22 {
+            std::fs::write(
+                dir.path().join(format!("screenpipe-app.2026-09-{day}.log")),
+                "restarted\n",
+            )
+            .unwrap();
+        }
+        let files = crate::log_files::collect_log_files(&[dir.path().to_path_buf()]).await;
+        assert_eq!(files[0].name, crate::update_diagnostics::LOG_NAME);
+        let raw = collect_log_text_from_files(files).await;
+        let redacted = crate::feedback_redact::redact_pii_for_feedback(raw, "{}".into())
+            .await
+            .unwrap();
+        // The unattended collector must preserve the same failure through its
+        // separate owned-file allow-list and stricter five-file limit.
+        let unattended =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+                .await
+                .unwrap();
+        for bundle in [&redacted, &unattended] {
+            for expected in [
+                "installer_failed",
+                "os error 2",
+                "target=99.0.0",
+                "relaunch_observed",
+                "running=1.0.0",
+                "outcome=Failed",
+            ] {
+                assert!(bundle.contains(expected), "missing {expected}: {bundle}");
+            }
+            assert!(!bundle.contains("hunter2"));
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "signedUrl": format!("{}/upload/log", server.uri()), "path": "logs/report.log"
+            }})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"id": 42}})))
+            .mount(&server)
+            .await;
+        upload_report(
+            &Client::new(),
+            &server.uri(),
+            &request(),
+            redacted.clone(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let upload = requests.iter().find(|r| r.method == "PUT").unwrap();
+        assert_eq!(upload.body, redacted.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn writer_pool_recovery_reaches_support_after_rotation_and_redaction() {
+        use tracing::instrument::WithSubscriber;
+        mod fixture {
+            include!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../../crates/screenpipe-db/tests/support/writer_recovery.rs"
+            ));
+        }
+        let logs = tempfile::tempdir().unwrap();
+        let current = logs.path().join("screenpipe-app.2026-09-22.log");
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(std::fs::File::create(&current).unwrap())
+            .finish();
+        fixture::writer_starvation_recovery(false)
+            .with_subscriber(subscriber)
+            .await;
+        std::fs::rename(
+            &current,
+            logs.path().join("screenpipe-app.2026-09-22.1.log"),
+        )
+        .unwrap();
+        std::fs::write(
+            &current,
+            "contact=private-person@example.com\npassword=hunter2\n",
+        )
+        .unwrap();
+        let files = crate::log_files::collect_log_files(&[logs.path().to_path_buf()]).await;
+        let raw = collect_log_text_from_files(files).await;
+        let redacted = crate::feedback_redact::redact_diagnostics_locally(raw)
+            .await
+            .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "signedUrl": format!("{}/upload/log", server.uri()), "path": "logs/report.log"
+            }})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"id": 42}})))
+            .mount(&server)
+            .await;
+        upload_report(
+            &Client::new(),
+            &server.uri(),
+            &request(),
+            redacted,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let upload = requests.iter().find(|r| r.method == "PUT").unwrap();
+        let report = String::from_utf8_lossy(&upload.body);
+        for expected in [
+            "write pool acquisition timed out while holding the SQLite write coordinator",
+            "pool_size=1",
+            "idle_connections=0",
+            "requesting owner-controlled restart; shared pools retained until shutdown",
+            "write path recovered after 5 consecutive fatal batch(es)",
+        ] {
+            assert!(report.contains(expected), "missing {expected}: {report}");
+        }
+        assert!(!report.contains("private-person@example.com"));
+        assert!(!report.contains("hunter2"));
+    }
+
+    #[tokio::test]
+    async fn database_verification_failure_reaches_support_after_log_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let database = dir.path().join("db.sqlite");
+        let damaged = vec![0x5a; 4096];
+        std::fs::write(&database, &damaged).unwrap();
+        screenpipe_db::persist_sqlite_quarantine(
+            &database,
+            Some(11),
+            "SQLite hard fault (extended result code 11)",
+        )
+        .unwrap();
+        let failure = match screenpipe_db::DatabaseManager::new(
+            database.to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        {
+            Ok(db) => {
+                db.close().await;
+                panic!("verified damage must keep startup blocked");
+            }
+            Err(error) => error,
+        };
+        assert!(failure.to_string().contains("file is not a database"));
+        assert_eq!(std::fs::read(&database).unwrap(), damaged);
+        tokio::fs::write(
+            dir.path().join("screenpipe-app.2026-09-20.log"),
+            format!("ERROR boot phase → error: Failed to initialize database: {failure}\npassword=hunter2\n"),
+        ).await.unwrap();
+        tokio::fs::write(
+            dir.path().join("screenpipe-app.2026-09-21.log"),
+            "INFO app restarted; engine startup pending\n",
+        )
+        .await
+        .unwrap();
+        let files = crate::log_files::collect_log_files(&[dir.path().to_path_buf()]).await;
+        let logs = collect_log_text_from_files(files).await;
+        let redacted = crate::feedback_redact::redact_diagnostics_locally(logs)
+            .await
+            .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "signedUrl": format!("{}/upload/log", server.uri()), "path": "logs/report.log"
+            }})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"id": 42}})))
+            .mount(&server)
+            .await;
+        upload_report(
+            &Client::new(),
+            &server.uri(),
+            &request(),
+            redacted,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let upload = requests.iter().find(|r| r.method == "PUT").unwrap();
+        let report = String::from_utf8_lossy(&upload.body);
+        for expected in [
+            "Failed to initialize database",
+            "database has verified damage",
+            "file is not a database",
+            "engine startup pending",
+        ] {
+            assert!(report.contains(expected), "missing {expected}: {report}");
+        }
+        assert!(!report.contains("hunter2"));
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "windows")]
+    async fn meeting_output_compatibility_fallback_reaches_support_after_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let cause =
+            screenpipe_audio::core::process_tap::WindowsProcessTapCompatibility::MultipleRoots {
+                requested_pids: vec![120, 220],
+                roots: vec![120, 220],
+            }
+            .to_string();
+        let outcome = screenpipe_audio::audio_manager::compatibility_outcome_diagnostic(
+            "configured output restoration failed for Speakers (output): representative open failure",
+        );
+        assert!(cause.contains("multiple independent roots [120, 220]"));
+        assert!(outcome.contains("restoration failed"));
+        tokio::fs::write(
+            dir.path().join("screenpipe-app.2026-09-20.log"),
+            format!("INFO [MEETING_PIGGYBACK] {cause}; restoring configured output capture\nWARN {outcome}\npassword=hunter2\n"),
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            dir.path().join("screenpipe-app.2026-09-21.log"),
+            "INFO later application log after rotation\n",
+        )
+        .await
+        .unwrap();
+        let files = crate::log_files::collect_log_files(&[dir.path().to_path_buf()]).await;
+        let logs = collect_log_text_from_files(files).await;
+        let redacted = crate::feedback_redact::redact_diagnostics_locally(logs)
+            .await
+            .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "signedUrl": format!("{}/upload/log", server.uri()), "path": "logs/report.log"
+            }})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"id": 42}})))
+            .mount(&server)
+            .await;
+        upload_report(
+            &Client::new(),
+            &server.uri(),
+            &request(),
+            redacted,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let upload = requests
+            .iter()
+            .find(|request| request.method == "PUT")
+            .unwrap();
+        let report = String::from_utf8_lossy(&upload.body);
+        for expected in [
+            "requested pids [120, 220] resolve to multiple independent roots [120, 220]",
+            "compatibility outcome: configured output restoration failed",
+            "representative open failure",
+            "normal output follow remains enabled",
+            "later application log after rotation",
+        ] {
+            assert!(report.contains(expected), "missing {expected}: {report}");
+        }
+        assert!(!report.contains("hunter2"));
+    }
+
+    #[tokio::test]
+    async fn transcription_gateway_failure_reaches_support_after_log_rotation() {
+        assert_transcription_failure_reaches_support_after_log_rotation(
+            504,
+            "upstream inference timed out",
+            1,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn transcription_rate_limit_reaches_support_after_log_rotation() {
+        assert_transcription_failure_reaches_support_after_log_rotation(
+            429,
+            "queue full or wait deadline; retry later",
+            3,
+        )
+        .await;
+    }
+
+    async fn assert_transcription_failure_reaches_support_after_log_rotation(
+        status: u16,
+        cause: &str,
+        attempts: u64,
+    ) {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .respond_with(ResponseTemplate::new(status).set_body_string(cause))
+            .expect(attempts)
+            .mount(&server)
+            .await;
+        let failure = screenpipe_audio::transcription::openai_compatible::batch::transcribe_with_openai_compatible(
+            None, &server.uri(), None, "whisper-1", &vec![0.0; 120 * 16000],
+            "test", 16000, vec![], &[], None, true,
+        ).await.unwrap_err();
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("screenpipe-app.2026-09-18.log");
+        tokio::fs::write(
+            &log_path,
+            format!("meeting retranscribe: transcription failed: {failure}\npassword=hunter2\n"),
+        )
+        .await
+        .unwrap();
+        // A subsequent process/day has a healthy log; support must retain the
+        // originating failure from the previous log as well.
+        tokio::fs::write(
+            dir.path().join("screenpipe-app.2026-09-19.log"),
+            "recording resumed\n",
+        )
+        .await
+        .unwrap();
+        let files = crate::log_files::collect_log_files(&[dir.path().to_path_buf()]).await;
+        let logs = collect_log_text_from_files(files).await;
+        let redacted = crate::feedback_redact::redact_diagnostics_locally(logs)
+            .await
+            .unwrap();
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "signedUrl": format!("{}/upload/log", server.uri()), "path": "logs/report.log"
+            }})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"id": 42}})))
+            .mount(&server)
+            .await;
+        upload_report(
+            &Client::new(),
+            &server.uri(),
+            &request(),
+            redacted,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let upload = requests.iter().find(|r| r.method == "PUT").unwrap();
+        let report = String::from_utf8_lossy(&upload.body);
+        assert!(
+            report.contains("meeting retranscribe: transcription failed"),
+            "{report}"
+        );
+        assert!(report.contains("audio=120s, timeout=120s"), "{report}");
+        assert!(
+            report.contains(&reqwest::StatusCode::from_u16(status).unwrap().to_string()),
+            "{report}"
+        );
+        assert!(report.contains(cause), "{report}");
+        assert!(report.contains(&format!("attempt={attempts}")), "{report}");
+        assert!(!report.contains("hunter2"));
     }
 
     #[test]
@@ -815,6 +1792,47 @@ mod tests {
         let server = MockServer::start().await;
         let mut input = request();
         input.video_ext = Some("mp4".to_string());
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("first-launch");
+        assert!(!dir.exists());
+        // Exercise the desktop hook's writer before normal app setup has
+        // created its data directory, then the existing append/rotation path.
+        crate::app_panic::write_report(
+            &dir,
+            "main",
+            r"C:\build\tao-0.35.3\src\platform_impl\windows\event_loop.rs:709:5",
+            "assertion failed: subclass_result.as_bool()",
+            &"0: tauri::app::Builder::build",
+            false,
+        );
+        screenpipe_engine::crash_log::write_panic_log(
+            dir.as_path(),
+            "[2026-09-18 19:19:44.000] PANIC on thread 'capture': encoder failed; recording stopped\nBacktrace:\n0: capture_frame\npassword=hunter2",
+        );
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(dir.as_path().join("last-panic.log"))
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1789759184))
+            .unwrap();
+        screenpipe_engine::crash_log::rotate_panic_log(dir.as_path());
+        assert!(!dir.as_path().join("last-panic.log").exists());
+        for day in 1..=MAX_LOG_FILES + 1 {
+            tokio::fs::write(
+                dir.as_path()
+                    .join(format!("screenpipe-app.2026-09-{day:02}.log")),
+                "recording resumed\n",
+            )
+            .await
+            .unwrap();
+        }
+        let files = crate::log_files::collect_log_files(&[dir.as_path().to_path_buf()]).await;
+        let logs = collect_log_text_from_files(files).await;
+        // Exercise the deterministic redaction shared by manual feedback and
+        // unattended logs, without contacting the optional enrichment service.
+        let redacted_logs = crate::feedback_redact::redact_diagnostics_locally(logs)
+            .await
+            .unwrap();
 
         Mock::given(method("POST"))
             .and(path("/api/logs"))
@@ -838,7 +1856,7 @@ mod tests {
         Mock::given(method("PUT"))
             .and(path("/upload/log"))
             .and(header("Content-Type", "text/plain"))
-            .and(body_bytes(b"safe logs"))
+            .and(body_bytes(redacted_logs.as_bytes()))
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
@@ -880,7 +1898,7 @@ mod tests {
             &Client::new(),
             &server.uri(),
             &input,
-            "safe logs".to_string(),
+            redacted_logs,
             Some(AttachmentBytes {
                 bytes: Bytes::from_static(b"image"),
                 content_type: "image/jpeg",
@@ -898,7 +1916,24 @@ mod tests {
         assert_eq!(receipt.follow_up.as_deref(), Some("email"));
         assert!(receipt.screenshot_uploaded);
         assert!(receipt.video_uploaded);
-        assert_eq!(server.received_requests().await.unwrap().len(), 5);
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 5);
+        let uploaded = requests
+            .iter()
+            .find(|request| request.url.path() == "/upload/log")
+            .unwrap();
+        let report = std::str::from_utf8(&uploaded.body).unwrap();
+        assert!(report.contains("=== last-panic.log.prev ==="));
+        assert!(report.contains("assertion failed: subclass_result.as_bool()"));
+        assert!(report.contains("event_loop.rs:709:5"));
+        assert!(report.contains("Launch outcome: main thread panicked before app setup"));
+        assert!(report.contains("0: tauri::app::Builder::build"));
+        assert!(report.contains("File modified at: 2026-09-18T19:19:44Z"));
+        assert!(report.contains("[2026-09-18 19:19:44.000]"));
+        assert!(report.contains("encoder failed; recording stopped"));
+        assert!(report.contains("Backtrace:\n0: capture_frame"));
+        assert!(report.contains("recording resumed"));
+        assert!(!report.contains("hunter2"));
     }
 
     #[tokio::test]

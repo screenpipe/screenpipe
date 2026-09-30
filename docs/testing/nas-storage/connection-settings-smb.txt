@@ -1,0 +1,12 @@
+
+running 2 tests
+test mcp_servers::tests::upsert_then_list_returns_entry ... ok
+test mcp_servers::tests::upsert_replaces_existing_entry ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 214 filtered out; finished in 0.08s
+
+
+running 1 test
+test mcp_servers::tests::delete_removes_entry ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 215 filtered out; finished in 0.07s

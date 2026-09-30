@@ -13,6 +13,8 @@ import { cn } from "@/lib/utils";
 import type { Message } from "@/lib/chat/types";
 import { useChatStore } from "@/lib/stores/chat-store";
 import { resolveVisibleChatTitle } from "@/lib/chat/conversation-title";
+import { useGT } from "gt-react";
+
 
 interface StandaloneChatHeaderProps {
   className?: string;
@@ -66,6 +68,8 @@ export function StandaloneChatHeader({
   onNewChat,
   pendingUserText,
 }: StandaloneChatHeaderProps) {
+
+  const ui = useGT();
   const storeTitle = useChatStore((s) =>
     conversationId ? s.sessions[conversationId]?.title : undefined
   );
@@ -131,7 +135,7 @@ export function StandaloneChatHeader({
             setShowHistory(!showHistory);
           }}
           className="relative z-10 h-7 w-7"
-          title="Chat history"
+          title={ui("Chat history")}
         >
           <History size={14} />
         </Button>
@@ -163,7 +167,7 @@ export function StandaloneChatHeader({
               await onNewChat();
             }}
             className="relative z-10 h-7 px-3 gap-1.5 text-xs bg-foreground text-background hover:bg-background hover:text-foreground transition-colors duration-150"
-            title="New chat"
+            title={ui("New chat")}
           >
             <Plus size={14} />
             <span>New</span>

@@ -32,7 +32,7 @@ const EXECUTABLE_NAME: &str = "ffmpeg.exe";
 // until the app restarts — the entire session's audio is lost, never persisted.
 // See SCREENPIPE-CLI-V8 (337×/day on Windows) and SCREENPIPE-CLI-VC.
 static FFMPEG_PATH: Lazy<RwLock<Option<PathBuf>>> =
-    Lazy::new(|| RwLock::new(find_ffmpeg_path_internal()));
+    Lazy::new(|| RwLock::new(resolve_observed_ffmpeg()));
 
 // Path discovery remains eager so a manual or bundled install is picked up on
 // the next call. Only the network-backed auto-install is rate-limited after a
@@ -95,12 +95,104 @@ pub fn find_ffmpeg_path() -> Option<PathBuf> {
             return Some(p.clone());
         }
     }
-    let resolved = find_ffmpeg_path_internal();
+    let resolved = resolve_observed_ffmpeg();
     if resolved.is_some() {
         debug!("re-resolved ffmpeg path (cache was stale/empty): {resolved:?}");
     }
     *guard = resolved.clone();
     resolved
+}
+
+// Observe discovery outside /health. The bounded version probe runs only when
+// the resolved path changes and never delays capture or the resolver.
+fn resolve_observed_ffmpeg() -> Option<PathBuf> {
+    let path = find_ffmpeg_path_internal()?;
+    let probe = [path.with_file_name(if cfg!(windows) {
+        "ffprobe.exe"
+    } else {
+        "ffprobe"
+    })]
+    .into_iter()
+    .find(|p| p.is_file())
+    .or_else(|| which("ffprobe").ok());
+    let source = if std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .is_some_and(|dir| path.starts_with(&dir) || path.starts_with(dir.join("../Resources")))
+    {
+        "bundled"
+    } else if which(EXECUTABLE_NAME).ok().as_ref() == Some(&path) {
+        "path"
+    } else {
+        "sidecar_download"
+    };
+    crate::health_diagnostics::binary_resolved(&path, source, probe);
+    static PROBED: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
+    let mut probed = PROBED.lock().unwrap_or_else(|e| e.into_inner());
+    if probed.as_ref() != Some(&path) {
+        *probed = Some(path.clone());
+        let probe_path = path.clone();
+        let _ = std::thread::Builder::new()
+            .name("ffmpeg-version".into())
+            .spawn(move || {
+                use std::io::Read;
+                use std::process::Stdio;
+                let result = (|| -> std::io::Result<String> {
+                    let mut child = ffmpeg_cmd(&probe_path)
+                        .arg("-version")
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::null())
+                        .spawn()?;
+                    let deadline = Instant::now() + Duration::from_secs(2);
+                    loop {
+                        match child.try_wait() {
+                            Ok(Some(status)) => {
+                                if !status.success() {
+                                    return Err(std::io::Error::other(format!(
+                                        "ffmpeg -version exited with {status}"
+                                    )));
+                                }
+                                let mut text = String::new();
+                                if let Some(stdout) = child.stdout.take() {
+                                    stdout.take(8192).read_to_string(&mut text)?;
+                                }
+                                return Ok(text
+                                    .lines()
+                                    .next()
+                                    .unwrap_or_default()
+                                    .chars()
+                                    .take(256)
+                                    .collect());
+                            }
+                            Ok(None) if Instant::now() < deadline => {
+                                std::thread::sleep(Duration::from_millis(20))
+                            }
+                            other => {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                return Err(other.err().unwrap_or_else(|| {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::TimedOut,
+                                        "ffmpeg version probe timed out",
+                                    )
+                                }));
+                            }
+                        }
+                    }
+                })();
+                match result {
+                    Ok(version) => {
+                        crate::health_diagnostics::binary_version(&probe_path, Some(version), None)
+                    }
+                    Err(error) => crate::health_diagnostics::binary_version(
+                        &probe_path,
+                        None,
+                        Some(error.to_string()),
+                    ),
+                }
+            });
+    }
+    Some(path)
 }
 
 /// Create a `std::process::Command` for ffmpeg with `CREATE_NO_WINDOW` on Windows.
@@ -366,7 +458,9 @@ fn find_ffmpeg_path_internal() -> Option<PathBuf> {
 
     debug!("ffmpeg not found. installing...");
 
+    crate::health_diagnostics::binary_installing();
     if let Err(error) = handle_ffmpeg_installation() {
+        crate::health_diagnostics::binary_install_failed(&error.to_string(), 60);
         ffmpeg_install_retry().record_failure(Instant::now());
         error!("failed to install ffmpeg: {}", error);
         return None;
@@ -403,6 +497,10 @@ fn find_ffmpeg_path_internal() -> Option<PathBuf> {
     }
 
     ffmpeg_install_retry().record_failure(Instant::now());
+    crate::health_diagnostics::binary_install_failed(
+        "ffmpeg not found even after installation",
+        60,
+    );
     error!("ffmpeg not found even after installation");
     None // Return None if ffmpeg is not found
 }

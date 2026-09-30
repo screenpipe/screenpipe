@@ -448,6 +448,15 @@ const SCREENPIPE_SYSTEM_CONTEXT_CLOSE = "</screenpipe-system-context>";
 const CODEX_FILES_SECTION = "# Files mentioned by the user:";
 const CODEX_REQUEST_HEADING = /^## My request:\s*$/m;
 
+function stripCodexSetupBlocks(text: string): string {
+  const setupBlock = /^<(recommended_plugins|environment_context)>[\s\S]*?<\/\1>\s*/;
+  let clean = text;
+  while (setupBlock.test(clean)) {
+    clean = clean.replace(setupBlock, "").trimStart();
+  }
+  return clean;
+}
+
 /**
  * Recover the text the person actually submitted from Codex's user item.
  *
@@ -459,7 +468,6 @@ const CODEX_REQUEST_HEADING = /^## My request:\s*$/m;
  */
 function cleanCodexUserText(text: string): string {
   let clean = text.trim();
-  if (!clean || isCodexHarnessContext(clean)) return "";
 
   if (clean.startsWith(SCREENPIPE_SYSTEM_CONTEXT_OPEN)) {
     const closeIndex = clean.indexOf(SCREENPIPE_SYSTEM_CONTEXT_CLOSE);
@@ -468,6 +476,12 @@ function cleanCodexUserText(text: string): string {
       .slice(closeIndex + SCREENPIPE_SYSTEM_CONTEXT_CLOSE.length)
       .trim();
   }
+
+  // Codex desktop emits these setup blocks as user-role content, sometimes
+  // alongside the actual request. Strip only complete leading envelopes so
+  // quoted tags and the request following a preamble remain user content.
+  clean = stripCodexSetupBlocks(clean);
+  if (!clean || isCodexHarnessContext(clean)) return "";
 
   if (clean.startsWith(CODEX_FILES_SECTION)) {
     const requestHeading = CODEX_REQUEST_HEADING.exec(clean);
@@ -480,6 +494,40 @@ function cleanCodexUserText(text: string): string {
     .replace(/(?:&#x20;|&#32;|&nbsp;)/gi, " ")
     .replace(/[ \t]+\n/g, "\n")
     .trim();
+}
+
+/** Clean saved imports without rediscovering old provider transcripts. */
+export function normalizeImportedCodexConversation(
+  conversation: ChatConversation,
+): ChatConversation {
+  if (conversation?.importedFrom?.source !== "codex" || !Array.isArray(conversation.messages)) {
+    return conversation;
+  }
+
+  let changed = false;
+  const messages = conversation.messages.flatMap((message) => {
+    if (message?.role !== "user" || typeof message.content !== "string"
+      || (message.importedFrom !== "codex"
+        && !message.id?.startsWith(`${conversation.id}-`))) {
+      return [message];
+    }
+    const text = message.content.trim();
+    const withoutSetup = stripCodexSetupBlocks(text);
+    if (withoutSetup === text) return [message];
+
+    changed = true;
+    const content = cleanCodexUserText(withoutSetup);
+    return content ? [{ ...message, content }] : [];
+  });
+  if (!changed) return conversation;
+
+  return {
+    ...conversation,
+    messages,
+    title: conversation.titleSource === "user" || conversation.titleSource === "ai"
+      ? conversation.title
+      : titleFromText(firstUserText(messages) ?? "Codex chat"),
+  };
 }
 
 function parseCodexTranscriptSnapshot(

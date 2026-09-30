@@ -6,13 +6,11 @@ import type { AuthResult, Env } from '../types';
 import { isFrontierModel } from './cost-tracker';
 import { getHostedAiPlan } from './hosted-ai-policy';
 import { SCREENPIPE_GLM_MODEL } from '../providers/screenpipe-glm';
-
-export type HostedChatGatewayMode = 'legacy' | 'cloudflare';
 export type HostedChatPlan = 'free' | 'basic' | 'business' | 'business_max' | 'business_ultra' | 'super_admin' | 'internal';
 export type HostedChatLane = 'auto' | 'explicit' | 'frontier';
 export type HostedChatRequestLane = Exclude<HostedChatLane, 'frontier'>;
 export type HostedChatWorkload = 'interactive' | 'background';
-export type CloudflareGatewayProvider = 'openai' | 'anthropic' | 'custom-tinfoil';
+export type CloudflareGatewayProvider = 'openai' | 'anthropic' | 'custom-tinfoil' | 'elevenlabs';
 export type HostedChatLimitScope = 'combined' | 'frontier' | 'unknown';
 
 const SUPER_ADMIN_ACTOR_ID = 'f0d67846f15d207818a4016c5f12edac415d35adf8084792fec508554def5906';
@@ -68,25 +66,6 @@ class HostedChatGatewayConfigurationError extends Error {
 		super(message);
 		this.name = 'HostedChatGatewayConfigurationError';
 	}
-}
-
-export function getHostedChatGatewayMode(env: Pick<Env, 'HOSTED_CHAT_GATEWAY_MODE'>): HostedChatGatewayMode {
-	return String(env.HOSTED_CHAT_GATEWAY_MODE ?? '').trim().toLowerCase() === 'cloudflare'
-		? 'cloudflare'
-		: 'legacy';
-}
-
-export function isHostedChatGatewayEnabled(env: Pick<Env, 'HOSTED_CHAT_GATEWAY_MODE'>): boolean {
-	return getHostedChatGatewayMode(env) === 'cloudflare';
-}
-
-/** Keep the global rollout gate for existing providers, but GLM is only
- * exposed through Screenpipe's reviewed custom Gateway provider. */
-export function shouldUseHostedChatGateway(
-	env: Pick<Env, 'HOSTED_CHAT_GATEWAY_MODE'>,
-	model: string,
-): boolean {
-	return isHostedChatGatewayEnabled(env) || model.toLowerCase() === SCREENPIPE_GLM_MODEL;
 }
 
 function collapsePlan(auth: AuthResult): HostedChatPlan {

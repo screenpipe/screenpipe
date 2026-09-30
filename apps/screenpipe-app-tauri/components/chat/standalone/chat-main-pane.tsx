@@ -19,6 +19,8 @@ import type { Message } from "@/lib/chat/types";
 import type { ContinuousPipeChatPolicy } from "@/lib/pipe-chat-policy";
 import { useOptionalFirstRunLearningWindow } from "@/components/first-run/learning-window-provider";
 import { hasRenderableAssistantBody } from "@/lib/chat/message-rendering";
+import { useGT } from "gt-react";
+
 
 const CHAT_RAIL_CLASS = "max-w-4xl mx-auto w-full";
 
@@ -28,7 +30,7 @@ type ActivePipeExecution = {
 } | null;
 
 interface ChatMainPaneProps {
-  /** Only Home presents the first-summary lifecycle owned by the main layout. */
+  /** Only visible Home presents the first-summary lifecycle owned by the main layout. */
   firstRunLearningEnabled?: boolean;
   hideInlineHistory?: boolean;
   showHistory: boolean;
@@ -104,13 +106,15 @@ export function ChatMainPane({
   messageListProps,
   pendingSend,
 }: ChatMainPaneProps) {
+
+  const ui = useGT();
   const firstRun = useOptionalFirstRunLearningWindow();
   const learning = firstRun?.learning;
   const summaryRenderedRef = React.useRef<string | null>(null);
   React.useEffect(() => {
     if (
       !firstRunLearningEnabled ||
-      learning?.activationState !== "summary" ||
+      learning?.phase !== "ready" ||
       !learning.chatId ||
       conversationId !== learning.chatId ||
       isLoading ||
@@ -122,8 +126,8 @@ export function ChatMainPane({
     ) {
       return;
     }
-    summaryRenderedRef.current = learning.chatId;
     const frame = requestAnimationFrame(() => {
+      summaryRenderedRef.current = learning.chatId;
       void learning.markSummaryRendered().catch(() => {
         summaryRenderedRef.current = null;
       });
@@ -194,21 +198,21 @@ export function ChatMainPane({
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-medium">
                     {continuousPipeChat.state === "on"
-                      ? "one chat"
+                      ? ui("One chat")
                       : continuousPipeChat.state === "off"
-                        ? "memory paused"
+                        ? ui("Memory paused")
                         : continuousPipeChat.state === "missing"
-                          ? "scheduled task unavailable"
-                          : "checking one-chat memory"}
+                          ? ui("Scheduled task unavailable")
+                          : ui("Checking one-chat memory")}
                   </p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
                     {continuousPipeChat.state === "on"
-                      ? "Future runs and your replies share context here."
+                      ? ui("Future runs and your replies share context here.")
                       : continuousPipeChat.state === "off"
-                        ? "Future runs start separate chats. Saved context stays here until you clear it."
+                        ? ui("Future runs start separate chats. Saved context stays here until you clear it.")
                         : continuousPipeChat.state === "missing"
-                          ? "This transcript is kept, but replies are disabled until you reinstall the task."
-                          : "The saved transcript is available while screenpipe checks the current task setting."}
+                          ? ui("This transcript is kept, but replies are disabled until you reinstall the task.")
+                          : ui("The saved transcript is available while screenpipe checks the current task setting.")}
                   </p>
                 </div>
                 <Button
@@ -218,7 +222,7 @@ export function ChatMainPane({
                   className="h-7 shrink-0 px-2 text-[11px]"
                   onClick={onOpenPipeSettings}
                 >
-                  manage
+                  Manage
                 </Button>
               </div>
             )}
@@ -246,15 +250,15 @@ export function ChatMainPane({
                   <div className="text-center space-y-2">
                     <h3 className="font-semibold tracking-tight">
                       {!hasPresets
-                        ? "No AI Presets"
+                        ? ui("No AI Presets")
                         : !hasValidModel
-                          ? "No Model Selected"
+                          ? ui("No Model Selected")
                           : needsLogin
-                            ? "Login to continue"
-                            : "Setup Required"}
+                            ? ui("Login to continue")
+                            : ui("Setup Required")}
                     </h3>
                     <p className="text-sm text-muted-foreground max-w-sm">
-                      {needsLogin ? "Sign in to use the AI assistant" : disabledReason}
+                      {needsLogin ? ui("Sign in to use the AI assistant") : disabledReason}
                     </p>
                   </div>
                   {needsLogin && (

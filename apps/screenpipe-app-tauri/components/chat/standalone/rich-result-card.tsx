@@ -25,6 +25,8 @@ import {
   type ChatRichResult,
 } from "@/lib/chat/rich-results";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 const COLLAPSED_CARD_COUNT = 3;
 
@@ -54,6 +56,7 @@ export function RichResultCard({
   result: ChatRichResult;
   onOpen?: (result: ChatRichResult) => void | Promise<void>;
 }) {
+  const ui = useGT();
   const openable = canOpenChatRichResult(result) && Boolean(onOpen);
   const stateLabel = chatRichResultStateLabel(result.state);
   return (
@@ -88,7 +91,7 @@ export function RichResultCard({
         size="sm"
         disabled={!openable}
         onClick={() => void onOpen?.(result)}
-        aria-label={`Open ${result.title}`}
+        aria-label={ui("Open {value1}", { value1: result.title })}
         className="shrink-0 bg-background/70"
       >
         Open
@@ -104,6 +107,8 @@ export function RichResultCards({
   results: ChatRichResult[];
   onOpen?: (result: ChatRichResult) => void | Promise<void>;
 }) {
+
+  const ui = useGT();
   const [expanded, setExpanded] = useState(false);
   if (results.length === 0) return null;
   const visible = expanded ? results : results.slice(0, COLLAPSED_CARD_COUNT);
@@ -123,7 +128,7 @@ export function RichResultCards({
           className="px-1 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
           onClick={() => setExpanded((current) => !current)}
         >
-          {expanded ? "Show fewer" : `Show ${hiddenCount} more`}
+          {expanded ? ui("Show fewer") : ui("Show {value1} more", { value1: hiddenCount })}
         </button>
       ) : null}
     </div>

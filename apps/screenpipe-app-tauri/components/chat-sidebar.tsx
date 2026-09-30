@@ -52,6 +52,7 @@ import {
   GitBranch,
   LockKeyhole,
 } from "lucide-react";
+import { ChatActionMenuItems, CHAT_MENU_CLASS, handleChatMenuShortcut } from "@/components/chat/chat-action-menu";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { emit, listen } from "@tauri-apps/api/event";
 import { cn } from "@/lib/utils";
@@ -172,6 +173,12 @@ import {
   type SidebarRecentsSection,
   validateSidebarGroupName,
 } from "@/lib/utils/chat-sidebar-grouping";
+import { formatUiCompactAge as formatCompactAge } from "@/lib/i18n/format";
+import { useGT } from "gt-react";
+import { msg, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 /** Max top-level rows shown in recents. Pipes use the authoritative inventory. */
 const SIDEBAR_CAP = 8;
@@ -189,9 +196,9 @@ type RecentSource = "screenpipe" | ExternalChatSource;
 type RecentLayout = "source" | "list";
 type RecentSort = "priority" | "updated";
 const RECENT_SOURCE_OPTIONS: Array<{ source: RecentSource; label: string }> = [
-  { source: "screenpipe", label: "screenpipe" },
-  { source: "codex", label: "Codex" },
-  { source: "claude-code", label: "Claude" },
+  { source: "screenpipe", label: msg("Screenpipe", {}) },
+  { source: "codex", label: msg("Codex", {}) },
+  { source: "claude-code", label: msg("Claude", {}) },
 ];
 const RECENT_SOURCE_ICONS: Record<RecentSource, string> = {
   screenpipe: "/images/screenpipe.png",
@@ -220,6 +227,8 @@ export function RecentsSourceFilterLabel({
   source: RecentSource;
   label: string;
 }) {
+  const uiMessages = useMessages();
+
   return (
     <span className="flex min-w-0 flex-1 items-center gap-2">
       <Image
@@ -230,7 +239,7 @@ export function RecentsSourceFilterLabel({
         className="h-4 w-4 shrink-0 rounded-sm object-contain"
         unoptimized
       />
-      <span className="truncate">{label}</span>
+      <span className="truncate">{localizeDefinitions(label, uiMessages)}</span>
     </span>
   );
 }
@@ -383,6 +392,7 @@ function readCollapsedPref(key: string, defaultValue = false): boolean {
 }
 
 function useCollapsedPref(key: string, defaultValue = false) {
+
   const [collapsed, setCollapsedRaw] = useState<boolean>(() => readCollapsedPref(key, defaultValue));
   const setCollapsed = useCallback((v: boolean) => {
     setCollapsedRaw(v);
@@ -401,6 +411,7 @@ function useVisibleChatSections(): {
   pipes: SessionRecord[];
   archived: SessionRecord[];
 } {
+
   const sessions = useOrderedSessions();
 
   return useMemo(() => {
@@ -443,6 +454,7 @@ function useVisibleChatSections(): {
  * only mirrors the snapshot rust pushes via `pi-queue-changed`.
  */
 function useQueueDepths(): Map<string, number> {
+
   const [depths, setDepths] = useState<Map<string, number>>(() => new Map());
   useTauriEvent<{ sessionId?: string; session_id?: string; queued?: { id: string }[] }>(
     "pi-queue-changed",
@@ -473,6 +485,10 @@ export function ChatSidebar({
   onViewAll,
   allowedConversationId,
 }: ChatSidebarProps) {
+  const uiLanguage = useLocale();
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const conversationRestrictionActive = allowedConversationId !== undefined;
   const currentId = useChatStore(selectDisplayedChatId);
   // Reactive group key for the current session — re-evaluates when the
@@ -775,7 +791,7 @@ export function ChatSidebar({
   }, []);
   const groupedSections = useMemo(
     () => recentLayout === "source"
-      ? RECENT_SOURCE_OPTIONS.flatMap(({ source, label }) => {
+      ? localizeDefinitions(RECENT_SOURCE_OPTIONS, uiMessages).flatMap(({ source, label }) => {
           const sessions = visibleRecents.filter((session) => recentSource(session) === source);
           return sessions.length === 0
             ? []
@@ -798,7 +814,7 @@ export function ChatSidebar({
             () => null,
           ),
         }],
-    [recentLayout, visibleRecents],
+    [recentLayout, visibleRecents, uiLanguage],
   );
 
   const [pipesCollapsed, setPipesCollapsed] = useCollapsedPref(
@@ -1340,8 +1356,8 @@ export function ChatSidebar({
       !isTerminalPipeExecutionStatus(fullExecution.status)
     ) {
       toast({
-        title: "couldn't load automation run",
-        description: "the execution output is temporarily unavailable",
+        title: ui("Couldn't load automation run"),
+        description: ui("The execution output is temporarily unavailable"),
         variant: "destructive",
       });
       return false;
@@ -1413,7 +1429,7 @@ export function ChatSidebar({
         const fresh = crypto.randomUUID();
         actions.upsert({
           id: fresh,
-          title: "untitled",
+          title: "Untitled",
           preview: "",
           status: "idle",
           messageCount: 0,
@@ -1514,7 +1530,7 @@ export function ChatSidebar({
         const fresh = crypto.randomUUID();
         actions.upsert({
           id: fresh,
-          title: "untitled",
+          title: "Untitled",
           preview: "",
           status: "idle",
           messageCount: 0,
@@ -1611,8 +1627,8 @@ export function ChatSidebar({
     } catch (error) {
       console.warn("[chat-sidebar] failed to branch conversation:", error);
       toast({
-        title: "couldn't branch chat",
-        description: "the conversation could not be copied. try again.",
+        title: ui("Couldn't branch chat"),
+        description: ui("The conversation could not be copied. Try again."),
         variant: "destructive",
       });
     }
@@ -1662,7 +1678,7 @@ export function ChatSidebar({
       const fresh = crypto.randomUUID();
       actions.upsert({
         id: fresh,
-        title: "untitled",
+        title: "Untitled",
         preview: "",
         status: "idle",
         messageCount: 0,
@@ -1729,7 +1745,7 @@ export function ChatSidebar({
       });
       if (!validation.ok) {
         toast({
-          title: "Invalid group name",
+          title: ui("Invalid group name"),
           description: validation.message,
           variant: "destructive",
         });
@@ -1783,7 +1799,7 @@ export function ChatSidebar({
           {pinned.length > 0 && (
             <div className="shrink-0">
               <Section
-                title="pinned"
+                title={ui("Pinned")}
                 tone="default"
                 collapsed={pinnedCollapsed}
                 onCollapsedChange={setPinnedCollapsed}
@@ -1813,19 +1829,19 @@ export function ChatSidebar({
 
           <div className="group/recents min-h-0 flex flex-col">
             <Section
-              title="recents"
+              title={ui("Recents")}
               collapsed={recentsCollapsed}
               onCollapsedChange={setRecentsCollapsed}
               headerAction={
-                <div className="group ml-auto flex items-center gap-1">
+                <div className="ml-auto flex items-center gap-1">
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button
                         type="button"
                         disabled={conversationRestrictionActive}
-                        className="inline-flex h-5 w-5 items-center justify-center rounded opacity-0 transition-opacity hover:bg-muted/40 focus-visible:opacity-100 group-hover:opacity-100"
-                        aria-label="organize recents"
-                        title="organize recents"
+                        className="inline-flex h-5 w-5 items-center justify-center rounded hover:bg-muted/40"
+                        aria-label={ui("Organize recents")}
+                        title={ui("Organize recents")}
                       >
                         <MoreHorizontal className="h-3.5 w-3.5" aria-hidden />
                       </button>
@@ -1835,7 +1851,7 @@ export function ChatSidebar({
                       align="end"
                       onKeyDown={handleRecentsMenuShortcut}
                     >
-                      <DropdownMenuLabel>show in recents</DropdownMenuLabel>
+                      <DropdownMenuLabel>Show in recents</DropdownMenuLabel>
                       {visibleRecentSourceOptions().map(({ source, label }) => (
                         <DropdownMenuCheckboxItem
                           key={source}
@@ -1852,7 +1868,7 @@ export function ChatSidebar({
                         </DropdownMenuCheckboxItem>
                       ))}
                       <DropdownMenuSeparator />
-                      <DropdownMenuLabel>organize sidebar</DropdownMenuLabel>
+                      <DropdownMenuLabel>Organize sidebar</DropdownMenuLabel>
                       <DropdownMenuRadioGroup value={recentLayout} onValueChange={changeRecentLayout}>
                         <DropdownMenuRadioItem data-shortcut="b" aria-keyshortcuts="B" value="source">
                           By source
@@ -1868,7 +1884,7 @@ export function ChatSidebar({
                         </DropdownMenuRadioItem>
                       </DropdownMenuRadioGroup>
                       <DropdownMenuSeparator />
-                      <DropdownMenuLabel>sort chats by</DropdownMenuLabel>
+                      <DropdownMenuLabel>Sort chats by</DropdownMenuLabel>
                       <DropdownMenuRadioGroup value={recentSort} onValueChange={changeRecentSort}>
                         <DropdownMenuRadioItem data-shortcut="p" aria-keyshortcuts="P" value="priority">
                           Priority
@@ -1902,7 +1918,7 @@ export function ChatSidebar({
                       <button
                         type="button"
                         className={cn(
-                          "inline-flex items-center gap-0.5 text-[10px] uppercase tracking-wider opacity-0 transition-[color,opacity] group-hover:opacity-100 focus-visible:opacity-100",
+                          "inline-flex items-center gap-0.5 text-[10px] normal-case tracking-wider transition-colors",
                           (recentsCollapsed || !hasAnythingToView) && "hidden",
                           onViewAll
                             ? "sidebar-text-secondary hover:text-foreground"
@@ -1913,13 +1929,13 @@ export function ChatSidebar({
                           onViewAll?.();
                         }}
                         disabled={!onViewAll}
-                        title="view all · right-click to filter"
+                        title={ui("View all · right-click to filter")}
                       >
                         View all <ChevronRight className="h-3 w-3" aria-hidden />
                       </button>
                     </ContextMenuTrigger>
                     <ContextMenuContent className="w-52" onKeyDown={handleRecentsMenuShortcut}>
-                      <ContextMenuLabel>show in recents</ContextMenuLabel>
+                      <ContextMenuLabel>Show in recents</ContextMenuLabel>
                       {visibleRecentSourceOptions().map(({ source, label }) => (
                         <ContextMenuCheckboxItem
                           key={source}
@@ -1937,7 +1953,7 @@ export function ChatSidebar({
                         </ContextMenuCheckboxItem>
                       ))}
                       <ContextMenuSeparator />
-                      <ContextMenuLabel>organize sidebar</ContextMenuLabel>
+                      <ContextMenuLabel>Organize sidebar</ContextMenuLabel>
                       <ContextMenuRadioGroup value={recentLayout} onValueChange={changeRecentLayout}>
                         <ContextMenuRadioItem data-shortcut="b" aria-keyshortcuts="B" value="source">
                           By source
@@ -1953,7 +1969,7 @@ export function ChatSidebar({
                         </ContextMenuRadioItem>
                       </ContextMenuRadioGroup>
                       <ContextMenuSeparator />
-                      <ContextMenuLabel>sort chats by</ContextMenuLabel>
+                      <ContextMenuLabel>Sort chats by</ContextMenuLabel>
                       <ContextMenuRadioGroup value={recentSort} onValueChange={changeRecentSort}>
                         <ContextMenuRadioItem data-shortcut="p" aria-keyshortcuts="P" value="priority">
                           Priority
@@ -1995,10 +2011,10 @@ export function ChatSidebar({
               ) : visibleRecents.length === 0 ? (
                 <div className="px-2.5 py-2 text-xs sidebar-text-secondary italic">
                   {recents.length > 0
-                    ? "no chats match filters"
+                    ? ui("No chats match filters")
                     : pinned.length === 0 && pipes.length === 0
-                    ? "no chats yet — click + to start"
-                    : "no recent chats"}
+                    ? ui("No chats yet — click + to start")
+                    : ui("No recent chats")}
                 </div>
               ) : (
                 <RecentsBody
@@ -2028,7 +2044,7 @@ export function ChatSidebar({
 
           <div className="group/pipes min-h-0 flex flex-col shrink-0">
               <Section
-                title="automations"
+                title={ui("Automations")}
                 collapsed={pipesCollapsed}
                 onCollapsedChange={updatePipesCollapsed}
                 headerAction={
@@ -2044,7 +2060,7 @@ export function ChatSidebar({
                   </div>
                 ) : pipeItems.length === 0 ? (
                   <div className="px-2.5 py-2 text-xs sidebar-text-secondary italic">
-                    no automation runs yet
+                    No automation runs yet
                   </div>
                 ) : pipeItems.map((item) => (
                     <PipeGroupRow
@@ -2076,11 +2092,11 @@ export function ChatSidebar({
                 {pipeInventoryHasMore && (
                   <button
                     type="button"
-                    className="w-full px-2.5 py-1.5 text-left text-[10px] uppercase tracking-wider sidebar-text-secondary hover:text-foreground transition-colors"
+                    className="w-full px-2.5 py-1.5 text-left text-[10px] normal-case tracking-wider sidebar-text-secondary hover:text-foreground transition-colors"
                     onClick={() => void fetchPipeInventory(true)}
                     disabled={pipeInventoryLoadingMore}
                   >
-                    {pipeInventoryLoadingMore ? "loading…" : "show more automation runs"}
+                    {pipeInventoryLoadingMore ? ui("Loading…") : ui("Show more automation runs")}
                   </button>
                 )}
               </Section>
@@ -2146,8 +2162,8 @@ export function ChatSidebar({
                 "w-full rounded-md border bg-background px-3 py-2 text-sm outline-none",
                 "focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
               )}
-              placeholder="Chat title"
-              aria-label="Chat title"
+              placeholder={ui("Chat title")}
+              aria-label={ui("Chat title")}
             />
           </div>
           <DialogFooter>
@@ -2200,8 +2216,8 @@ export function ChatSidebar({
                 "w-full rounded-md border bg-background px-3 py-2 text-sm outline-none",
                 "focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
               )}
-              placeholder="Group name"
-              aria-label="Group name"
+              placeholder={ui("Group name")}
+              aria-label={ui("Group name")}
             />
           </div>
           <DialogFooter>
@@ -2236,6 +2252,7 @@ export function CollapsedChatSidebarButton({
   onSelect: (id: string) => void;
   isTranslucent: boolean;
 }) {
+  const ui = useGT();
   const currentId = useChatStore((s) => s.currentId);
   const { pinned, recents, archived } = useVisibleChatSections();
   const diskHydrated = useChatStore((s) => s.diskHydrated);
@@ -2297,7 +2314,7 @@ export function CollapsedChatSidebarButton({
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
             <button
-              aria-label="recent chats"
+              aria-label={ui("Recent chats")}
               onClick={() => {
                 setTooltipOpen(false);
                 setSuppressTooltip(true);
@@ -2325,7 +2342,7 @@ export function CollapsedChatSidebarButton({
         side="right"
         align="start"
         sideOffset={8}
-        className="w-64 p-0 rounded-none shadow-none"
+        className="w-64 p-0 rounded-lg shadow-none"
       >
         {isLoadingChats ? (
           <div className="py-1" aria-busy="true" data-testid="collapsed-chat-sidebar-skeleton">
@@ -2345,21 +2362,21 @@ export function CollapsedChatSidebarButton({
               <TabsTrigger
                 value="pinned"
                 disabled={pinned.length === 0}
-                className="relative h-8 rounded-none bg-transparent px-2 text-[10px] uppercase tracking-wider shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:left-0 data-[state=active]:after:right-0 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:bg-foreground"
+                className="relative h-8 rounded-none bg-transparent px-2 text-[10px] normal-case tracking-wider shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:left-0 data-[state=active]:after:right-0 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:bg-foreground"
               >
                 Pinned
               </TabsTrigger>
               <TabsTrigger
                 value="recents"
                 disabled={recents.length === 0}
-                className="relative h-8 rounded-none bg-transparent px-2 text-[10px] uppercase tracking-wider shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:left-0 data-[state=active]:after:right-0 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:bg-foreground"
+                className="relative h-8 rounded-none bg-transparent px-2 text-[10px] normal-case tracking-wider shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:left-0 data-[state=active]:after:right-0 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:bg-foreground"
               >
                 Recents
               </TabsTrigger>
               <TabsTrigger
                 value="archived"
                 disabled={archived.length === 0}
-                className="relative h-8 rounded-none bg-transparent px-2 text-[10px] uppercase tracking-wider shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:left-0 data-[state=active]:after:right-0 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:bg-foreground"
+                className="relative h-8 rounded-none bg-transparent px-2 text-[10px] normal-case tracking-wider shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:after:absolute data-[state=active]:after:left-0 data-[state=active]:after:right-0 data-[state=active]:after:bottom-0 data-[state=active]:after:h-0.5 data-[state=active]:after:bg-foreground"
               >
                 Archived
               </TabsTrigger>
@@ -2379,7 +2396,7 @@ export function CollapsedChatSidebarButton({
                 </div>
               ) : recents.length === 0 ? (
                 <div className="px-2.5 py-2 text-xs text-muted-foreground/70 italic">
-                  {pinned.length === 0 ? emptyText : "no recent chats"}
+                  {pinned.length === 0 ? emptyText : ui("No recent chats")}
                 </div>
               ) : (
                 <CompactDrawerList items={recents} currentId={currentId} onSelect={handleSelect} />
@@ -2404,6 +2421,7 @@ function CompactDrawerList({
   currentId: string | null;
   onSelect: (id: string) => void;
 }) {
+
   return (
     <div className="max-h-72 overflow-y-auto overflow-x-hidden scrollbar-minimal">
       <div className="flex flex-col py-1">
@@ -2437,6 +2455,7 @@ const CHAT_ROW_SKELETON_WIDTHS = [
 ] as const;
 
 function ChatRowsSkeleton({ rows }: { rows: number }) {
+
   return (
     <div
       className="flex flex-col"
@@ -2503,7 +2522,7 @@ function Section({
         >
           <span
             className={cn(
-              "text-[10px] uppercase tracking-wider flex-1",
+              "text-[10px] normal-case tracking-wider flex-1",
               "sidebar-text-tertiary",
               "group-hover/section:text-foreground/[0.75] group-focus-within/section:text-foreground/[0.75]"
             )}
@@ -2601,6 +2620,7 @@ function RecentsBody({
   openConversationMenuId: string | null;
   setOpenConversationMenuId: (id: string | null) => void;
 }) {
+
   const renderItem = (item: SidebarItem) =>
     item.kind === "single" ? (
       <SidebarChatRow
@@ -2664,7 +2684,7 @@ function RecentsBody({
                 )}
                 aria-expanded={!isCollapsed}
               >
-                <span className="text-[10px] uppercase tracking-wider sidebar-text-tertiary flex-1">
+                <span className="text-[10px] normal-case tracking-wider sidebar-text-tertiary flex-1">
                   {section.title}
                 </span>
                 {isCollapsed ? (
@@ -2734,8 +2754,11 @@ function PipeGroupRow({
   openConversationMenuId: string | null;
   setOpenConversationMenuId: (id: string | null) => void;
 }) {
+
+  const ui = useGT();
   const now = useMinuteTick(!!lastRun);
-  const lastRunAge = lastRun ? formatCompactAge(new Date(lastRun).getTime(), now) : null;
+  const rowLocale = useLocale();
+  const lastRunAge = lastRun ? formatCompactAge(new Date(lastRun).getTime(), now, rowLocale) : null;
   return (
     <div data-testid={`pipe-group-${item.key}`}>
       <button
@@ -2748,9 +2771,9 @@ function PipeGroupRow({
         aria-expanded={expanded}
       >
         <span className="truncate flex-1 text-xs">{item.title}</span>
-        <span className="relative inline-flex items-center justify-end shrink-0 w-6 h-4">
+        <span className="relative inline-flex items-center justify-end shrink-0 min-w-6 h-4">
           {lastRunAge && !expanded && (
-            <span className="absolute inset-0 flex items-center justify-end text-[10px] tabular-nums sidebar-text-tertiary opacity-100 group-hover/pipe:opacity-0 transition-opacity duration-150">
+            <span className="flex items-center justify-end whitespace-nowrap text-[10px] tabular-nums sidebar-text-tertiary opacity-100 group-hover/pipe:opacity-0 transition-opacity duration-150">
               {lastRunAge}
             </span>
           )}
@@ -2776,7 +2799,7 @@ function PipeGroupRow({
             </div>
           ) : runsLoaded && item.sessions.length === 0 ? (
             <div className="px-2 py-1.5 text-[11px] sidebar-text-tertiary italic">
-              no visible runs
+              No visible runs
             </div>
           ) : item.sessions.map((s) => (
             <SidebarChatRow
@@ -2799,11 +2822,11 @@ function PipeGroupRow({
           {runsLoaded && hasMoreRuns && onLoadMore && (
             <button
               type="button"
-              className="w-full px-2 py-1.5 text-left text-[10px] uppercase tracking-wider sidebar-text-secondary hover:text-foreground transition-colors"
+              className="w-full px-2 py-1.5 text-left text-[10px] normal-case tracking-wider sidebar-text-secondary hover:text-foreground transition-colors"
               onClick={onLoadMore}
               disabled={runsLoading}
             >
-              {runsLoading ? "loading…" : "show older runs"}
+              {runsLoading ? ui("Loading…") : ui("Show older runs")}
             </button>
           )}
         </div>
@@ -2835,13 +2858,6 @@ interface ChatRowProps {
 }
 
 /**
- * Single-letter shortcuts shown on the right of each menu row (anthropic-style).
- * Each maps to an item carrying `data-shortcut={key}`; pressing the key while a
- * row menu is open selects that item. Keep in sync with `RowMenuItems`.
- */
-const ROW_MENU_SHORTCUT_KEYS = ["p", "r", "b", "a", "d"] as const;
-
-/**
  * Press a shortcut letter while a menu is open to fire the matching item. We
  * forward Enter so radix runs its own onSelect + close — no second action path.
  */
@@ -2868,7 +2884,7 @@ function handleRecentsMenuShortcut(e: React.KeyboardEvent<HTMLElement>) {
 }
 
 function handleRowMenuShortcut(e: React.KeyboardEvent<HTMLElement>) {
-  handleMenuShortcut(e, ROW_MENU_SHORTCUT_KEYS);
+  handleChatMenuShortcut(e);
 }
 
 /**
@@ -2931,53 +2947,21 @@ function RowMenuItems({
   onNewGroupRequest?: (id: string) => void;
   existingGroups?: string[];
 }) {
+
+  const ui = useGT();
   const P = ROW_MENU_PARTS[variant];
   const { isMac } = usePlatform();
-  const itemCls = "text-[11px] h-[30px] px-2 gap-2 rounded-none focus:bg-muted/30";
-  const groupItemCls = "min-w-0 text-[11px] h-[30px] px-2 rounded-none whitespace-nowrap focus:bg-muted/30";
-  const shortcutCls = "text-[10px] tracking-normal text-muted-foreground/55";
-  return (
+  const itemCls = "text-[11px] h-[30px] px-2 gap-2 rounded-sm focus:bg-muted/30";
+  const groupItemCls = "min-w-0 text-[11px] h-[30px] px-2 rounded-sm whitespace-nowrap focus:bg-muted/30";
+    return (
     <>
-      <P.Item
-        data-shortcut="p"
-        className={itemCls}
-        onSelect={(e: Event) => {
-          e.stopPropagation();
-          void onTogglePin(session.id);
-        }}
-      >
-        <Pin className="h-3 w-3 text-muted-foreground" />
-        {session.pinned ? "Unpin" : "Pin"}
-        <P.Shortcut className={shortcutCls}>P</P.Shortcut>
-      </P.Item>
-      <P.Item
-        data-shortcut="r"
-        className={itemCls}
-        onSelect={(e: Event) => {
-          e.stopPropagation();
-          onRenameRequest(session.id);
-        }}
-      >
-        <Pencil className="h-3 w-3 text-muted-foreground" />
-        Rename
-        <P.Shortcut className={shortcutCls}>R</P.Shortcut>
-      </P.Item>
-      {onBranch && (
-        <P.Item
-          data-shortcut="b"
-          aria-keyshortcuts="B"
-          className={itemCls}
-          disabled={session.messageCount === 0}
-          onSelect={(e: Event) => {
-            e.stopPropagation();
-            void onBranch(session.id);
-          }}
-        >
-          <GitBranch className="h-3 w-3 text-muted-foreground" />
-          Branch in new chat
-          <P.Shortcut className={shortcutCls}>B</P.Shortcut>
-        </P.Item>
-      )}
+      <ChatActionMenuItems variant={variant} session={session} canBranch={Boolean(onBranch)} onAction={action => {
+        if (action === "rename_chat") onRenameRequest(session.id);
+        if (action === "pin_chat") void onTogglePin(session.id);
+        if (action === "branch_chat") void onBranch?.(session.id);
+        if (action === "archive_chat") void (session.hidden ? onUnarchive(session.id) : onArchive(session.id));
+      }} />
+      <P.Separator />
       {onMoveToGroup && existingGroups && (
         <P.Sub>
           <P.SubTrigger
@@ -3047,36 +3031,8 @@ function RowMenuItems({
           </P.SubContent>
         </P.Sub>
       )}
-      {!session.hidden ? (
-        <P.Item
-          data-shortcut="a"
-          className={itemCls}
-          onSelect={(e: Event) => {
-            e.stopPropagation();
-            void onArchive(session.id);
-          }}
-        >
-          <Archive className="h-3 w-3 text-muted-foreground" />
-          Archive
-          <P.Shortcut className={shortcutCls}>A</P.Shortcut>
-        </P.Item>
-      ) : (
-        <P.Item
-          data-shortcut="a"
-          className={itemCls}
-          onSelect={(e: Event) => {
-            e.stopPropagation();
-            void onUnarchive(session.id);
-          }}
-        >
-          <Undo2 className="h-3 w-3 text-muted-foreground" />
-          Unarchive
-          <P.Shortcut className={shortcutCls}>A</P.Shortcut>
-        </P.Item>
-      )}
       <P.Separator className="my-1 bg-border/70" />
       <P.Item
-        data-shortcut="d"
         className="text-[11px] h-[30px] px-2 gap-2 rounded-none text-destructive focus:text-destructive focus:bg-destructive/10"
         onSelect={(e: Event) => {
           e.stopPropagation();
@@ -3085,7 +3041,6 @@ function RowMenuItems({
       >
         <Trash2 className="h-3 w-3 text-destructive" />
         Delete
-        <P.Shortcut className={cn(shortcutCls, "text-destructive/60")}>D</P.Shortcut>
       </P.Item>
     </>
   );
@@ -3130,6 +3085,8 @@ export function SidebarChatRow({
   openConversationMenuId,
   setOpenConversationMenuId,
 }: ChatRowProps) {
+
+  const ui = useGT();
   const allowedConversationId = React.useContext(
     ChatSidebarAllowedConversationContext,
   );
@@ -3148,7 +3105,8 @@ export function SidebarChatRow({
     showActions && !disableHover && !conversationRestrictionActive;
   const activityAt = session.lastUserMessageAt ?? session.updatedAt ?? session.createdAt;
   const now = useMinuteTick(!isLive && !isUnread && !isError && queuedCount === 0);
-  const age = formatCompactAge(activityAt, now);
+  const rowLocale = useLocale();
+  const age = formatCompactAge(activityAt, now, rowLocale);
   const canSwapAgeForMenu = !isLive && !isError && queuedCount === 0 && !isUnread && Boolean(age);
   const menuOpen = openConversationMenuId === session.id;
   // Exclude the group the session already lives in — whether it was placed
@@ -3274,7 +3232,7 @@ export function SidebarChatRow({
                 : "sidebar-text-secondary"
           )}
           >
-            {session.streamingTitle || (isInjectedTitle(session.title) ? undefined : session.title) || "untitled"}
+            {session.streamingTitle || (isInjectedTitle(session.title) ? undefined : session.title) || ui("Untitled")}
           </span>
         </span>
         <span className="ml-1 h-4 w-10 shrink-0 relative flex items-center justify-end">
@@ -3287,12 +3245,12 @@ export function SidebarChatRow({
           >
             {interactionDisabled ? (
               <LockKeyhole
-                aria-label="locked during trial"
+                aria-label={ui("Locked during trial")}
                 className="h-3 w-3 text-muted-foreground"
               />
             ) : showCurrentLabel ? (
-              <span className="text-[9px] font-medium uppercase tracking-[0.08em] text-foreground/70">
-                current
+              <span className="text-[9px] font-medium normal-case tracking-[0.08em] text-foreground/70">
+                Current
               </span>
             ) : (
               <RowRightSignal
@@ -3331,7 +3289,7 @@ export function SidebarChatRow({
                     ? "opacity-100 visible"
                     : "opacity-0 invisible group-hover:opacity-100 group-hover:visible"
                 )}
-                aria-label="conversation actions"
+                aria-label={ui("Conversation actions")}
               >
                 <MoreVertical className="h-3.5 w-3.5 text-muted-foreground" />
               </button>
@@ -3342,7 +3300,7 @@ export function SidebarChatRow({
               side="bottom"
               sideOffset={4}
               collisionPadding={8}
-              className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
+              className={CHAT_MENU_CLASS} data-chat-actions-menu=""
               onClick={(e) => e.stopPropagation()}
               onPointerDown={(e) => e.stopPropagation()}
               onKeyDown={handleRowMenuShortcut}
@@ -3356,7 +3314,7 @@ export function SidebarChatRow({
       </ContextMenuTrigger>
       {canShowActions && (
         <ContextMenuContent
-          className="w-[156px] p-1 rounded-none border border-border bg-background shadow-none"
+          className={CHAT_MENU_CLASS} data-chat-actions-menu=""
           onKeyDown={handleRowMenuShortcut}
         >
           <RowMenuItems variant="context" session={session} {...rowMenuActions} />
@@ -3383,11 +3341,13 @@ function RowRightSignal({
   status: string;
   age: string | null;
 }) {
+
+  const ui = useGT();
   const { content, label } = ((): { content: React.ReactNode; label: string | null } => {
     if (isError) {
       return {
-        content: <AlertCircle className="h-3 w-3 text-red-500" aria-label="error" />,
-        label: "error",
+        content: <AlertCircle className="h-3 w-3 text-red-500" aria-label={ui("Error")} />,
+        label: ui("Error"),
       };
     }
     if (isLive) {
@@ -3406,10 +3366,10 @@ function RowRightSignal({
         content: (
           <span
             className="inline-block h-1.5 w-1.5 rounded-full bg-foreground"
-            aria-label="unread"
+            aria-label={ui("Unread")}
           />
         ),
-        label: "new",
+        label: ui("New"),
       };
     }
     if (age) {
@@ -3436,7 +3396,7 @@ function RowRightSignal({
   return (
     <Tooltip>
       <TooltipTrigger asChild>{wrapper}</TooltipTrigger>
-      <TooltipContent side="left" sideOffset={6} className="text-[10px] px-1.5 py-0.5 lowercase">
+      <TooltipContent side="left" sideOffset={6} className="text-[10px] px-1.5 py-0.5 normal-case">
         {label}
       </TooltipContent>
     </Tooltip>
@@ -3444,23 +3404,8 @@ function RowRightSignal({
 }
 
 function useMinuteTick(enabled = true): number {
+
   const [now, setNow] = useState(() => Date.now());
   useInterval(() => setNow(Date.now()), enabled ? 60_000 : null);
   return now;
-}
-
-function formatCompactAge(timestamp?: number, now = Date.now()): string | null {
-  if (!timestamp || !Number.isFinite(timestamp)) return null;
-  const ms = Math.max(0, now - timestamp);
-  if (ms < 60_000) return "now";
-  const minutes = Math.floor(ms / 60_000);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d`;
-  const weeks = Math.floor(days / 7);
-  if (weeks < 5) return `${weeks}w`;
-  if (days < 365) return `${Math.max(1, Math.floor(days / 30))}mo`;
-  return `${Math.floor(days / 365)}y`;
 }

@@ -1,0 +1,35 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import {afterEach,beforeEach,expect,test} from 'bun:test';
+import {Miniflare} from 'miniflare';
+import {reserveDailyCostCap,releaseDailyCostReservation} from './cost-cap';
+import {TEST_PRIVATE_COST_CONTROLS} from '../test/fixtures/private-cost-controls';
+let mf:Miniflare,env:any,realDb:any;
+const now=new Date('2026-07-14T12:00:00Z');
+beforeEach(async()=>{
+ mf=new Miniflare({compatibilityDate:'2026-01-01',d1Databases:{DB:'synthetic-admission-proof'},modules:true,script:'export default {fetch(){return new Response("ok")}}'});
+ realDb=await mf.getD1Database('DB');
+ await realDb.prepare(`CREATE TABLE usage (device_id TEXT PRIMARY KEY,user_id TEXT,daily_count INTEGER DEFAULT 0,last_reset TEXT NOT NULL,tier TEXT DEFAULT 'anonymous',created_at TEXT DEFAULT (datetime('now')),updated_at TEXT DEFAULT (datetime('now')),cost_day TEXT,daily_cost_usd REAL NOT NULL DEFAULT 0)`).run();
+ env={...TEST_PRIVATE_COST_CONTROLS,DB:realDb,PRIVATE_MAX_ACTIVE_INTERACTIVE_RESERVATIONS:'3'};
+});
+afterEach(async()=>{await mf?.dispose()});
+// All reads and normal writes use real workerd D1. Only the fault under test is synthesized.
+function fault(mode:string){
+ function statement(sql:string,bound:any):any {const write=/^\s*(INSERT|UPDATE|DELETE)\b/i.test(sql);return new Proxy(bound,{get(target,prop){if(prop==='bind')return(...args:any[])=>statement(sql,target.bind(...args));if(['run','first','all'].includes(String(prop)))return async(...args:any[])=>{
+   if(write&&mode==='throw')throw new Error('synthetic storage unavailable');
+   if(write&&mode==='drop')return prop==='first'?null:{success:true,meta:{changes:1},results:[]};
+   const result=await target[prop](...args);
+   if(write&&prop!=='first')return {...result,meta:mode==='missing'?{}:{...result.meta,changes:mode==='positive'?1:0}};
+   return result;
+ };const v=target[prop];return typeof v==='function'?v.bind(target):v;}});}
+ env.DB={prepare:(sql:string)=>statement(sql,realDb.prepare(sql))};
+}
+const reserve=()=>reserveDailyCostCap(env,'synthetic-user','subscribed','gpt-5.6-luna',now,'interactive',{},'business');
+async function rows(){return (await realDb.prepare('SELECT device_id,user_id,daily_count,last_reset,tier FROM usage ORDER BY device_id').all()).results;}
+async function hold(r:any){expect(r.allowed).toBe(true);expect(r.reservation).toBeTruthy();expect(r.reservation.reservedMicroUsd).toBeGreaterThan(0);const stored=(await rows()).find((x:any)=>x.device_id===r.reservation.key);expect(stored).toBeTruthy();expect(stored.user_id).toBe('synthetic-user');expect(stored.daily_count).toBe(r.reservation.reservedMicroUsd);return r.reservation;}
+for(const mode of ['zero','missing'])test(`committed write with ${mode} change metadata still admits its persisted hold`,async()=>{fault(mode);const r=await reserve();expect(await rows()).toHaveLength(1);const h=await hold(r);await releaseDailyCostReservation(env,h);expect(await rows()).toHaveLength(0)});
+test('concurrent ambiguous receipts agree with the three stored admissions',async()=>{fault('zero');const rs=await Promise.all(Array.from({length:6},reserve));expect(await rows()).toHaveLength(3);expect(rs.filter(r=>r.allowed)).toHaveLength(3);for(const r of rs){if(r.allowed)await hold(r);else expect(r.response.status).toBe(429)}});
+test('positive write metadata cannot admit beyond full capacity',async()=>{for(let i=0;i<3;i++)await hold(await reserve());const before=await rows();fault('positive');const r=await reserve();expect(r.allowed).toBe(false);expect(r.response.status).toBe(429);expect(await rows()).toEqual(before)});
+test('reported write success without a stored reservation must refuse',async()=>{fault('drop');const r=await reserve();expect(r.allowed).toBe(false);expect([429,503]).toContain(r.response.status);expect(await rows()).toHaveLength(0)});
+test('healthy admission and exact release preserve sibling holds',async()=>{const a=await hold(await reserve()),b=await hold(await reserve());await releaseDailyCostReservation(env,a);expect((await rows()).map((x:any)=>x.device_id)).toEqual([b.key]);await hold(await reserve());expect(await rows()).toHaveLength(2)});
+test('storage write error refuses without a reservation',async()=>{fault('throw');const r=await reserve();expect(r.allowed).toBe(false);expect(r.response.status).toBe(503);expect(await rows()).toHaveLength(0)});

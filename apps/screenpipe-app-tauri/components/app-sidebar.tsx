@@ -12,6 +12,7 @@ import React, {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { useGT } from "gt-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cn } from "@/lib/utils";
 import { useSettings } from "@/lib/hooks/use-settings";
@@ -140,6 +141,7 @@ const SidebarShellContext = createContext<SidebarShellContextValue | null>(null)
 // one at all (the floating top-left strip is the entire collapsed chrome).
 
 export function AppSidebarLayout({ children }: { children: React.ReactNode }) {
+  const gt = useGT();
   const { isTranslucent } = useSidebarContext();
   // macOS hides the traffic-light buttons in fullscreen, so the 32px top
   // reservation we kept for them becomes awkward dead space at the corner.
@@ -223,7 +225,7 @@ export function AppSidebarLayout({ children }: { children: React.ReactNode }) {
             <div
               role="separator"
               aria-orientation="vertical"
-              aria-label="Resize sidebar"
+              aria-label={gt("Resize sidebar")}
               onPointerDown={beginResize}
               className={cn(
                 // 6px hit area straddling the right border so it's easy to

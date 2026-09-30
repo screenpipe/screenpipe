@@ -1,0 +1,27 @@
+/* screenpipe — AI that knows everything you've seen, said, or heard */
+/* https://screenpipe.com */
+@import url("https://fonts.googleapis.com/css2?family=Crimson+Text:ital,wght@0,400;0,600;0,700;1,400;1,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
+/* Keep navigation compact while giving long guides the shared reading face. */
+#content {
+  font-family: "Crimson Text", Baskerville, "Times New Roman", serif;
+  font-size: 1.125rem;
+  line-height: 1.65;
+}
+
+#content :is(h1, h2, h3, h4, h5, h6, button, .card-title) {
+  font-family: "Space Grotesk", system-ui, sans-serif;
+}
+
+#content :is(code, pre) {
+  font-family: "IBM Plex Mono", monospace;
+}
+
+/* Match the product's surface and control tiers without transforming copy. */
+#content :is(.card, pre, img, video) {
+  border-radius: 8px;
+}
+
+#sidebar a {
+  border-radius: 6px;
+}

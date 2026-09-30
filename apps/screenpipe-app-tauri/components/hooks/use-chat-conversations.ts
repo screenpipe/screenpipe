@@ -57,6 +57,9 @@ import {
 } from "@/lib/stores/chat-store";
 import { createConversationBranch } from "@/lib/chat/branch-conversation";
 import { showChatArchiveUndoToast } from "@/components/chat/archive-undo-toast";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 // --- Hook options ---
 
@@ -141,6 +144,8 @@ function newestUserMessageTimestamp(messages: Message[]): number | undefined {
 const aiTitleAttempted = new Set<string>();
 
 export function useChatConversations(opts: UseChatConversationsOpts) {
+  const uiLanguage = useLocale();
+  const ui = useGT();
   const {
     messages,
     setMessages,
@@ -235,7 +240,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
 
     const meta: ConversationMeta = {
       id: conversation.id,
-      title: typeof conversation.title === "string" ? conversation.title : "untitled",
+      title: typeof conversation.title === "string" ? conversation.title : ui("untitled"),
       createdAt: typeof conversation.createdAt === "number" ? conversation.createdAt : 0,
       updatedAt: typeof conversation.updatedAt === "number" ? conversation.updatedAt : 0,
       messageCount: msgs.length,
@@ -263,7 +268,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         .slice(0, CHAT_HISTORY_INITIAL_LIMIT);
     });
     lastHistoryQueryRef.current = "";
-  }, [historySearch]);
+  }, [historySearch, uiLanguage]);
 
   const syncConversationTitleState = useCallback(async (
     id: string,
@@ -1283,6 +1288,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     //     the panel's mirrored copy back over the writer's accumulator
     //     would be a regression (lossy round-trip via React state).
     if (outgoingSid && store.sessions[outgoingSid]) {
+      const outgoingPresetId = getSelectedPreset()?.id;
+      if (outgoingPresetId) store.actions.patch(outgoingSid, { presetId: outgoingPresetId });
       const outgoingKind = store.sessions[outgoingSid].kind;
       if (outgoingKind !== "pipe-watch") {
         store.actions.snapshotSession(outgoingSid, {
@@ -1319,22 +1326,6 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     if (sendDispatchInFlightRef) sendDispatchInFlightRef.current = false;
     setIsLoading(false);
     setIsStreaming(false);
-    // Composer state (text, images, docs) is scoped to the chat the user
-    // was composing in. Switching to another conversation must not carry
-    // any of it over — otherwise the user can send a draft into the wrong
-    // thread (or silently inject a PDF/image they thought belonged to the
-    // previous chat). Mirrors startNewConversation, which already clears
-    // the full composer on "+ new chat". The block below then restores
-    // the INCOMING chat's saved draft after switching — ChatGPT/Claude
-    // parity. The clear is intentional even with restore: if the
-    // incoming chat has no draft, we want a clean composer, not the
-    // outgoing chat's contents lingering for a frame.
-    setInput("");
-    if (inputRef.current) inputRef.current.style.height = "auto";
-    setPastedImages([]);
-    setAttachedDocs?.([]);
-    setPendingDocs?.([]);
-
     // Switch to this conversation's session. Pair the panel's ref
     // switch with `setCurrent` on the store so the router's
     // foreground/background skip logic flips at the same instant the
@@ -1389,7 +1380,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         if (!sessionAfterLoad) {
           store.actions.upsert({
             id: conv.id,
-            title: persisted.title || "untitled",
+            title: persisted.title || ui("untitled"),
             ...(persisted.titleSource ? { titleSource: persisted.titleSource } : {}),
             preview: "",
             status: "idle",
@@ -1409,7 +1400,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
           });
         } else {
           store.actions.patch(conv.id, {
-            title: persisted.title || sessionAfterLoad.title || "untitled",
+            title: persisted.title || sessionAfterLoad.title || ui("untitled"),
             ...(persisted.titleSource ? { titleSource: persisted.titleSource } : {}),
             pinned: persisted.pinned === true,
             hidden: persisted.hidden === true,
@@ -1512,7 +1503,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       if (!sessionBeforeSeed) {
         store.actions.upsert({
           id: conv.id,
-          title: full.title || "untitled",
+          title: full.title || ui("untitled"),
           ...(full.titleSource ? { titleSource: full.titleSource } : {}),
           preview: "",
           status: "idle",
@@ -1535,7 +1526,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
         });
       } else if (conv.kind || conv.pipeContext || conv.sidebarGroup || full.sidebarGroup) {
         store.actions.patch(conv.id, {
-          title: full.title || sessionBeforeSeed.title || "untitled",
+          title: full.title || sessionBeforeSeed.title || ui("untitled"),
           ...(full.titleSource ? { titleSource: full.titleSource } : {}),
           pinned: full.pinned === true,
           hidden: full.hidden === true,
@@ -1566,6 +1557,13 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // do not let this older request overwrite the panel when it resumes.
     if (!isLatestRequest()) return;
 
+    // Keep the outgoing draft visible during async restoration. Replace it
+    // atomically with the incoming transcript/draft once this request wins.
+    setInput("");
+    if (inputRef.current) inputRef.current.style.height = "auto";
+    setPastedImages([]);
+    setAttachedDocs?.([]);
+    setPendingDocs?.([]);
     setMessages(messagesForPanel);
     setConversationId(conv.id);
     setShowHistory(false);
@@ -1577,7 +1575,9 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // there's no saved draft — the composer was just cleared above,
     // so we're either restoring a real draft or staying empty.
     // Only runs when value refs were wired by the caller.
-    const incomingDraft = store.sessions[conv.id]?.composerDraft;
+    // A visible split composer can change while disk/model restoration awaits.
+    // Read the current draft, never the pre-await store snapshot.
+    const incomingDraft = useChatStore.getState().sessions[conv.id]?.composerDraft;
     if (incomingDraft && inputValueRef) {
       if (incomingDraft.input) {
         setInput(incomingDraft.input);
@@ -1621,7 +1621,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
 
     // Emit the preset ID so the chat panel can restore the model selection.
     // This ensures the model selector reflects the preset used in this chat.
-    const presetId = persisted?.presetId ?? (conv as ChatConversation).presetId;
+    const presetId = useChatStore.getState().sessions[conv.id]?.presetId ?? persisted?.presetId ?? (conv as ChatConversation).presetId;
     if (presetId && isLatestRequest()) {
       try {
         await emit("chat-preset-restore", { presetId });
@@ -1837,8 +1837,8 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       store.actions.upsert({
         id: newSid,
         title: options.sideConversationParentId
-          ? "temporary side chat"
-          : "untitled",
+          ? ui("temporary side chat")
+          : ui("untitled"),
         preview: "",
         status: "idle",
         messageCount: 0,
@@ -1986,13 +1986,13 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
       }
     }
 
-    if (todayConvs.length > 0) groups.push({ label: "Today", conversations: todayConvs });
-    if (yesterdayConvs.length > 0) groups.push({ label: "Yesterday", conversations: yesterdayConvs });
-    if (lastWeekConvs.length > 0) groups.push({ label: "Last 7 Days", conversations: lastWeekConvs });
-    if (olderConvs.length > 0) groups.push({ label: "Older", conversations: olderConvs });
+    if (todayConvs.length > 0) groups.push({ label: ui("Today"), conversations: todayConvs });
+    if (yesterdayConvs.length > 0) groups.push({ label: ui("Yesterday"), conversations: yesterdayConvs });
+    if (lastWeekConvs.length > 0) groups.push({ label: ui("Last 7 Days"), conversations: lastWeekConvs });
+    if (olderConvs.length > 0) groups.push({ label: ui("Older"), conversations: olderConvs });
 
     return groups;
-  }, [filteredConversations]);
+  }, [filteredConversations, uiLanguage]);
 
   return {
     showHistory,

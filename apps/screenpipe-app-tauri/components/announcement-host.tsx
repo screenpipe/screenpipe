@@ -26,6 +26,10 @@ import { cn } from "@/lib/utils";
 import { type Announcement, type SurveyAnswers } from "@/lib/announcements";
 import { useAnnouncement } from "@/lib/hooks/use-announcement";
 import { isPrimaryWindow } from "@/lib/utils/is-primary-window";
+import { useGT } from "gt-react";
+import { useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 /** Auto-close the surface after `ms`, if set. Used by banner/card (not modal).
  *  Re-arms only when the announcement id or the duration changes. */
@@ -77,6 +81,8 @@ function AnnouncementModal({
   onCta: () => void;
   onSubmit: (answers: SurveyAnswers) => boolean;
 }) {
+
+  const ui = useGT();
   const { dismissible, cta } = announcement;
   // never trap the user: if it can't be dismissed and has no cta to close it,
   // fall back to showing a close button anyway.
@@ -131,7 +137,7 @@ function AnnouncementModal({
               data-testid="announcement-dismiss"
               onClick={onDismiss}
             >
-              {cta ? "later" : "got it"}
+              {cta ? ui("Later") : ui("Got it")}
             </Button>
           )}
         </DialogFooter>
@@ -147,6 +153,7 @@ export function SurveyForm({
   announcement: Announcement;
   onSubmit: (answers: SurveyAnswers) => boolean;
 }) {
+
   const survey = announcement.survey;
   const [answers, setAnswers] = useState<SurveyAnswers>({});
   const [attempted, setAttempted] = useState(false);
@@ -177,7 +184,7 @@ export function SurveyForm({
             <legend className="text-sm font-medium text-foreground">
               {question.prompt}
               {!question.required && (
-                <span className="ml-1 text-muted-foreground">optional</span>
+                <span className="ml-1 text-muted-foreground">Optional</span>
               )}
             </legend>
             {question.description && (
@@ -221,7 +228,7 @@ export function SurveyForm({
             </div>
             {attempted && question.required && selected.length === 0 && (
               <p role="alert" className="text-xs text-destructive">
-                choose an answer
+                Choose an answer
               </p>
             )}
           </fieldset>
@@ -237,6 +244,7 @@ export function SurveyForm({
 }
 
 function useSidebarSlot() {
+
   const [slot, setSlot] = useState<HTMLElement | null>(null);
   useEffect(() => {
     const findSlot = () =>
@@ -260,6 +268,7 @@ export function AnnouncementSidebarPrompt({
   onDismiss: () => void;
   onShown: () => void;
 }) {
+  const ui = useGT();
   const slot = useSidebarSlot();
   useEffect(() => {
     if (slot) onShown();
@@ -275,7 +284,7 @@ export function AnnouncementSidebarPrompt({
         type="button"
         onClick={onOpen}
         className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left text-xs hover:bg-muted/40"
-        aria-label={`open survey: ${announcement.title}`}
+        aria-label={ui("Open survey: {value1}", { value1: announcement.title })}
       >
         <span
           className="h-2 w-2 shrink-0 rounded-full bg-foreground"
@@ -287,7 +296,7 @@ export function AnnouncementSidebarPrompt({
         type="button"
         onClick={onDismiss}
         className="p-2 text-muted-foreground hover:text-foreground"
-        aria-label="dismiss survey"
+        aria-label={ui("Dismiss survey")}
       >
         <X className="h-3.5 w-3.5" />
       </button>
@@ -305,7 +314,9 @@ function AnnouncementBanner({
   onDismiss: () => void;
   onCta: () => void;
 }) {
-  const { icon: Icon, label } = ANNOUNCEMENT_KIND_META[announcement.kind];
+  const uiMessages = useMessages();
+  const ui = useGT();
+  const { icon: Icon, label } = localizeDefinitions(ANNOUNCEMENT_KIND_META, uiMessages)[announcement.kind];
   const { dismissible, cta } = announcement;
   // never trap the user: keep the close affordance unless there's a cta to act on.
   const showClose = dismissible || !cta;
@@ -325,7 +336,7 @@ function AnnouncementBanner({
     >
       <div className="flex min-w-0 items-center gap-2">
         <Icon className="h-4 w-4 shrink-0 text-foreground" />
-        <span className="hidden shrink-0 font-mono text-[10px] uppercase tracking-wide text-muted-foreground sm:inline">
+        <span className="hidden shrink-0 font-mono text-[10px] normal-case tracking-wide text-muted-foreground sm:inline">
           {label}
         </span>
         <span className="truncate">
@@ -349,7 +360,7 @@ function AnnouncementBanner({
         {showClose && (
           <button
             type="button"
-            aria-label="dismiss"
+            aria-label={ui("Dismiss")}
             data-testid="announcement-dismiss"
             onClick={onDismiss}
             className="rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground"
@@ -386,6 +397,7 @@ function AnnouncementCard({
   onDismiss: () => void;
   onCta: () => void;
 }) {
+  const ui = useGT();
   const { dismissible, cta } = announcement;
   const showClose = dismissible || !cta;
   const pos = CARD_POSITION_CLASS[announcement.position ?? "bottom-right"];
@@ -405,7 +417,7 @@ function AnnouncementCard({
         {showClose && (
           <button
             type="button"
-            aria-label="dismiss"
+            aria-label={ui("Dismiss")}
             data-testid="announcement-dismiss"
             onClick={onDismiss}
             className="-mr-1 -mt-1 rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground"
@@ -414,7 +426,7 @@ function AnnouncementCard({
           </button>
         )}
       </div>
-      <div className="mb-1 font-mono text-sm font-medium lowercase">
+      <div className="mb-1 font-mono text-sm font-medium normal-case">
         {announcement.title}
       </div>
       <AnnouncementBody body={announcement.body} className="text-[13px]" />

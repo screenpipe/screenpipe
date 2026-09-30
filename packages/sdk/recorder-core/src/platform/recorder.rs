@@ -838,6 +838,7 @@ fn skip_verdict(reason: SkipReason) -> (bool, Option<String>) {
         SkipReason::UserIgnored => "ignored_window",
         SkipReason::NotInIncludeList => "included_window_mismatch",
         SkipReason::BlockedUrl => "blocked_url",
+        SkipReason::UrlPending => "url_pending",
     };
     (true, Some(tag.to_string()))
 }

@@ -13,7 +13,7 @@ describe("default settings: remote controls", () => {
   it("ships local behavior while new installs can inherit remote defaults", () => {
     const settings = createDefaultSettingsObject();
 
-    expect(settings.enableSemanticContext).toBe(false);
+    expect(settings.enableSemanticContext).toBe(true);
     expect(settings.experimentalCoreaudioSystemAudio).toBe(true);
     expect(settings.experimentalMeetingPiggyback).toBe(true);
     expect(settings.filterMusic).toBe(true);

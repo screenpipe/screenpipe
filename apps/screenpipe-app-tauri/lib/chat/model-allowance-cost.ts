@@ -133,12 +133,12 @@ const NOTICES: Record<
   Omit<ModelAllowanceNotice, "tier">
 > = {
   higher: {
-    label: "uses allowance faster",
+    label: "Uses allowance faster",
     description:
       "This model uses your monthly AI allowance faster than the default. Switch to Auto to make it last longer.",
   },
   highest: {
-    label: "uses allowance much faster",
+    label: "Uses allowance much faster",
     description:
       "This model uses your monthly AI allowance much faster than the default. Heavy use can exhaust a month of allowance in a day. Switch to Auto to make it last longer.",
   },

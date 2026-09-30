@@ -11,6 +11,9 @@ import {
   type PiProviderConfig,
 } from "@/lib/utils/tauri";
 import { selectWorktreeRepository } from "@/lib/utils/select-worktree-repository";
+import { useGT } from "gt-react";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 export type WorktreeRouterContext = {
   providerConfig: PiProviderConfig;
@@ -56,11 +59,15 @@ export function useCodingWorkspace({
   conversationId,
   locked,
   projectDirectory,
+  registerE2eHooks = true,
 }: {
   conversationId: string | null;
   locked: boolean;
   projectDirectory?: string | null;
+  registerE2eHooks?: boolean;
 }) {
+  const uiLanguage = useLocale();
+  const ui = useGT();
   const [workspace, setWorkspace] = useState<CodingWorkspace | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [resolvedConversationId, setResolvedConversationId] = useState<
@@ -150,9 +157,9 @@ export function useCodingWorkspace({
         publishWorkspaceIdentity(requestConversationId, result.data);
         setResolvedConversationId(requestConversationId);
         toast({
-          title: "coding workspace ready",
+          title: ui("Coding workspace ready"),
           description: result.data.sourceDirty
-            ? "created from HEAD; your uncommitted source changes were left untouched"
+            ? ui("Created from HEAD; your uncommitted source changes were left untouched")
             : result.data.branch,
         });
         return result.data;
@@ -165,7 +172,7 @@ export function useCodingWorkspace({
           setEnabled(false);
           setError(message);
           toast({
-            title: "could not create coding workspace",
+            title: ui("Could not create coding workspace"),
             description: message,
             variant: "destructive",
           });
@@ -180,7 +187,7 @@ export function useCodingWorkspace({
         }
       }
     },
-    [conversationId],
+    [conversationId, uiLanguage],
   );
 
   const hasCurrentConversation =
@@ -263,7 +270,7 @@ export function useCodingWorkspace({
             setEnabled(false);
             setError(message);
             toast({
-              title: "could not resolve a coding repository",
+              title: ui("Could not resolve a coding repository"),
               description: message,
               variant: "destructive",
             });
@@ -279,9 +286,9 @@ export function useCodingWorkspace({
           setEnabled(true);
           setResolvedConversationId(requestConversationId);
           toast({
-            title: "coding workspace ready",
+            title: ui("Coding workspace ready"),
             description: preparedWorkspace.sourceDirty
-              ? "created from HEAD; your uncommitted source changes were left untouched"
+              ? ui("Created from HEAD; your uncommitted source changes were left untouched")
               : preparedWorkspace.branch,
           });
         }
@@ -299,7 +306,7 @@ export function useCodingWorkspace({
           setEnabled(false);
           setError(message);
           toast({
-            title: "could not create coding workspace",
+            title: ui("Could not create coding workspace"),
             description: message,
             variant: "destructive",
           });
@@ -314,11 +321,11 @@ export function useCodingWorkspace({
         }
       }
     },
-    [conversationId, currentWorkspace, projectDirectory],
+    [conversationId, currentWorkspace, projectDirectory, uiLanguage],
   );
 
   useEffect(() => {
-    if (process.env.NEXT_PUBLIC_SCREENPIPE_E2E !== "true") return;
+    if (!registerE2eHooks || process.env.NEXT_PUBLIC_SCREENPIPE_E2E !== "true") return;
     window.__e2eAttachCodingWorkspace = attachRepositoryPath;
     window.__e2ePrepareCodingWorkspace = (prompt, startingPath, router) =>
       prepareForPrompt(prompt, router, startingPath);
@@ -326,7 +333,7 @@ export function useCodingWorkspace({
       delete window.__e2eAttachCodingWorkspace;
       delete window.__e2ePrepareCodingWorkspace;
     };
-  }, [attachRepositoryPath, prepareForPrompt]);
+  }, [attachRepositoryPath, prepareForPrompt, registerE2eHooks]);
 
   return {
     workspace: currentWorkspace,

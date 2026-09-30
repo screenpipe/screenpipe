@@ -142,6 +142,12 @@ mod timeline_live_meeting_tests {
             found,
             "live meeting transcript should be surfaced on the timeline"
         );
+        let turn = &chunks.frames[0].audio_entries[0];
+        assert_eq!(turn.captured_at, Some(base + Duration::seconds(2)));
+        assert!(
+            turn.audio_chunk_id < 0,
+            "live turns have distinct transcript identities"
+        );
     }
 
     /// A live segment that duplicates a background transcription of the same moment
@@ -475,6 +481,13 @@ mod timeline_live_meeting_tests {
         assert_eq!(
             count, 1,
             "mirrored segment must appear on the timeline exactly once (mirror shown, live row deduped)"
+        );
+        let turn = &chunks.frames[0].audio_entries[0];
+        assert_eq!(turn.start_time, Some(2.0));
+        assert_eq!(
+            turn.captured_at,
+            Some(base + Duration::seconds(2)),
+            "live capture time already includes the file offset; do not add it twice"
         );
     }
 

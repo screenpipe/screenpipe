@@ -173,9 +173,9 @@ describe("archive all recent chats", () => {
 
     expect(currentButton).toBeEnabled();
     expect(otherButton).toBeDisabled();
-    expect(screen.getAllByLabelText("locked during trial").length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText("Locked during trial").length).toBeGreaterThan(0);
     expect(
-      screen.getByRole("button", { name: "organize recents" }),
+      screen.getByRole("button", { name: "Organize recents" }),
     ).toBeDisabled();
 
     fireEvent.click(currentButton!);
@@ -190,7 +190,7 @@ describe("archive all recent chats", () => {
       renderSidebar();
 
       fireEvent.pointerDown(
-        screen.getByRole("button", { name: "organize recents" }),
+        screen.getByRole("button", { name: "Organize recents" }),
         { button: 0, ctrlKey: false },
       );
       const archiveAll = await screen.findByTestId("archive-all-recent-chats");

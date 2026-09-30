@@ -282,6 +282,9 @@ if your summary is worth saving, append it to the meeting note (and refresh the 
 
 replace `<EXISTING_NOTE>` with the meeting's current `note` field (empty string if none) so you don't overwrite the user's work; just append your summary under a `## Summary` heading. for the title: if the current title is missing, generic ("untitled", "meeting", just the app name) or doesn't capture what actually happened, replace it with a 5-8 word plain-english title (no quotes, no "meeting about…" prefix) — otherwise omit the field so a user-set title is left alone. if there's nothing useful to summarize (empty transcript, irrelevant audio), say so out loud and skip the PUT — don't write a placeholder."#;
 
+const LEGACY_MEETING_AUDIO_FETCH: &str = r###"  curl -s -G -H "$A" --data-urlencode "start_time=$S" --data-urlencode "end_time=$E" \
+    -d content_type=audio -d limit=500 "http://localhost:3030/search" -o /tmp/audio.json &"###;
+
 /// Swaps for `meeting-summary`, oldest defect first.
 fn meeting_summary_swaps() -> Vec<FragmentSwap> {
     let mut swaps = vec![
@@ -524,6 +527,31 @@ fn meeting_summary_swaps() -> Vec<FragmentSwap> {
         }
     }
 
+    // Apply narrow replacements after whole-section legacy migrations.
+    if let Some(fetch) = section_between(
+        bundled_prompt("meeting-summary").unwrap_or(""),
+        "  # Use the same meeting-scoped transcript",
+        "  (curl -sf -G",
+    ) {
+        swaps.push(FragmentSwap {
+            why:
+                "use the meeting transcript instead of missing live speech in general audio search",
+            old: LEGACY_MEETING_AUDIO_FETCH,
+            new: fetch.trim_end(),
+        });
+    }
+    if let Some(rule) = section_between(
+        bundled_prompt("meeting-summary").unwrap_or(""),
+        "summarize what happened: key topics, decisions, action items.",
+        " and parsed data first",
+    ) {
+        swaps.push(FragmentSwap {
+            why: "do not reject readable meeting speech because screen evidence is unrelated",
+            old: "summarize what happened: key topics, decisions, action items. use accessibility",
+            new: rule,
+        });
+    }
+
     swaps
 }
 
@@ -705,12 +733,150 @@ fn meeting_summary_evidence_steps() -> Option<&'static str> {
     )
 }
 
+/// Upgrade only recognized shipped staged-workflow instruction bodies.
+/// Keep frontmatter byte-for-byte for enrichment stages. Final review uses
+/// its existing permission migration below. Preserve disabled state and custom
+/// schedules; upgrade the shipped daily discovery default to hourly.
+/// Customized instructions are never overwritten. Hashes cover
+/// the shipped pipeline prompts from #7020, #7045, #7071, #7095 and the handoff repairs.
+fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> {
+    let shipped_hashes: &[&str] = match name {
+        // v2.7.56: retain observed knowledge work while repairing unsupported outcomes.
+        "workflow-discover" => &["d4d8181286615282", "c68d5744f8a33504"],
+        // Upgrade the shipped knowledge-work prompts too; otherwise existing
+        // tasks never receive the observed-scope repair in a new app build.
+        "workflow-deepen" => &[
+            "45c67de30edcc651",
+            "b278bd6a8abcfc77",
+            "996ff7f9a6026e05",
+            "cf31ccaa932b7784",
+        ],
+        "workflow-review" => &[
+            "6512c73c08db5ceb",
+            "ac29fac407670584",
+            "182e0b733f5c2bce",
+            "7cace9312eb52b72",
+            // Review must perform its own lookup and continue after self-edits.
+            "09a0ab9de50d94ff",
+        ],
+        "workflow-maintain" => &[
+            "6e11baeed08afb5e",
+            "a769acb2f48eb6c3",
+            "3fd301c337d95126",
+            "75da536f6510aa25",
+        ],
+        "workflow-discovery" => &["9e7b057416c5e119", "57b754f5d27ad27d", "3cb46a10a341de9b"],
+        "workflow-activity" => &[
+            "f5adb347d838aff7",
+            "f4afd94ec5e0270a",
+            "5c54891aced4f9d2",
+            "d4f98410d29b8f0c",
+            "54efbeee72f32fb7",
+        ],
+        "workflow-patterns" => &["a31c48cdb79f4b6d", "f9b67dd914738d05", "09e892b7e53bc79b"],
+        "workflow-procedures" => &["5d59624801ae318f", "e0337eafa55e446a", "20950f99d0200c6a"],
+        "workflow-timing" => &[
+            "8c232b41d405af3f",
+            "5d4517bb8ae2d8bb",
+            "06c5c09cfe623e48",
+            "8e07b86d6863e354",
+        ],
+        _ => return None,
+    };
+    let parts: Vec<_> = original.splitn(3, "---").collect();
+    if parts.len() != 3 || !parts[0].trim().is_empty() {
+        return None;
+    }
+    let body = parts[2].trim();
+    let replacement = bundled_prompt(name)?.splitn(3, "---").nth(2)?.trim();
+    let recognized = body == replacement || shipped_hashes.contains(&simple_hash(body).as_str());
+    if !recognized {
+        return None;
+    }
+    // Upgrade only the shipped daily discovery cadence. Keep explicit custom
+    // schedules, disabled state and customized prompt bodies unchanged.
+    let frontmatter = if name == "workflow-discover" {
+        parts[1].replace("\nschedule: every 24h\n", "\nschedule: every 1h\n")
+    } else {
+        parts[1].to_owned()
+    };
+    if body == replacement && frontmatter == parts[1] {
+        return None;
+    }
+    Some(format!(
+        "{}---{}---\n\n{}\n",
+        parts[0], frontmatter, replacement
+    ))
+}
+
 /// Apply every known repair for `name` to an installed prompt.
 ///
 /// Returns the rewritten content only when something actually changed, so the
 /// caller can skip the disk write. Idempotent: running it on already-fixed
 /// content is a no-op.
 pub(super) fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<String> {
+    if let Some(updated) = migrate_staged_workflow_prompt(name, original) {
+        return Some(updated);
+    }
+    if name == "workflow-discovery" {
+        // Recognize the original discovery body and the shipped staged revisions,
+        // allowing the scheduler's trailing-newline rewrite.
+        let legacy = include_str!("../../assets/pipes/workflow-discovery/legacy-v1.md");
+        let body = legacy.splitn(3, "---").nth(2)?.trim();
+        let timing_start = body.find("Investigate time per workflow run")?;
+        let timing_end = body.find("When a source supplies a frame ID")?;
+        let without_timing = format!("{}{}", &body[..timing_start], &body[timing_end..]);
+        let mut parts = original.splitn(3, "---");
+        parts.next()?;
+        let frontmatter = parts.next()?;
+        let original_body = parts.next()?.trim();
+        // Upgrade recognized staged prompts as well as pre-pipeline discovery.
+        // Custom bodies opt out; all replacement instructions come from the asset.
+        let replacement = bundled_prompt(name)?.splitn(3, "---").nth(2)?.trim();
+        if original_body == replacement {
+            return None;
+        }
+        let shipped_staged_prompt = matches!(
+            simple_hash(original_body).as_str(),
+            "57b754f5d27ad27d" | "120adaeac3926f64" | "bfbd40f62e019ac4" | "8928a07fbb8eaaff"
+        );
+        if original_body != body && original_body != without_timing.trim() && !shipped_staged_prompt
+        {
+            return None;
+        }
+        let mut config: serde_yaml::Value = serde_yaml::from_str(frontmatter).ok()?;
+        let allow = config
+            .get_mut("permissions")?
+            .get_mut("allow")?
+            .as_sequence_mut()?;
+        for rule in [
+            "Api(GET /workflows/pipeline)",
+            "Api(GET /feedback)",
+            "Api(POST /notify)",
+        ] {
+            let rule = serde_yaml::Value::String(rule.into());
+            if !allow.contains(&rule) {
+                allow.push(rule);
+            }
+        }
+        let map = config.as_mapping_mut()?;
+        let trigger = map
+            .entry(serde_yaml::Value::String("trigger".into()))
+            .or_insert_with(|| serde_yaml::Value::Mapping(Default::default()));
+        let events = trigger
+            .as_mapping_mut()?
+            .entry(serde_yaml::Value::String("events".into()))
+            .or_insert_with(|| serde_yaml::Value::Sequence(vec![]));
+        let event = serde_yaml::Value::String("pipe_completed:workflow-timing".into());
+        if !events.as_sequence()?.contains(&event) {
+            events.as_sequence_mut()?.push(event);
+        }
+        return Some(format!(
+            "---\n{}---\n\n{}\n",
+            serde_yaml::to_string(&config).ok()?,
+            replacement
+        ));
+    }
     if name == "automate-my-work" {
         let replacement = bundled_prompt(name)?;
         return replace_prompt_body_when_hash_matches(
@@ -766,6 +932,166 @@ fn replace_prompt_body_when_hash_matches(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn default_discovery_cadence_upgrades_without_enabling_or_changing_custom_schedules() {
+        let bundled = super::bundled_prompt("workflow-discover").unwrap();
+        let daily = bundled.replace("schedule: every 1h", "schedule: every 24h");
+        for enabled in ["false", "true"] {
+            let original = daily.replace("enabled: false", &format!("enabled: {enabled}"));
+            let updated = super::migrate_builtin_pipe_text("workflow-discover", &original).unwrap();
+            assert!(updated.contains("schedule: every 1h"));
+            assert!(updated.contains(&format!("enabled: {enabled}")));
+            assert!(super::migrate_builtin_pipe_text("workflow-discover", &updated).is_none());
+        }
+        assert!(super::migrate_builtin_pipe_text(
+            "workflow-discover",
+            &daily.replace("every 24h", "every 48h")
+        )
+        .is_none());
+        assert!(super::migrate_builtin_pipe_text(
+            "workflow-discover",
+            &format!("{daily}\nOwner instructions")
+        )
+        .is_none());
+    }
+    #[test]
+    fn all_staged_workflow_prompts_upgrade_without_changing_user_configuration() {
+        let fixtures = [
+            ("workflow-discover", include_str!("../../assets/pipes/legacy-workflow-prompts/before-research-checkpoints-workflow-discover.md")),
+            ("workflow-deepen", include_str!("../../assets/pipes/legacy-workflow-prompts/before-research-checkpoints-workflow-deepen.md")),
+            ("workflow-maintain", include_str!("../../assets/pipes/legacy-workflow-prompts/before-research-checkpoints-workflow-maintain.md")),
+            ("workflow-review", include_str!("../../assets/pipes/legacy-workflow-prompts/before-research-checkpoints-workflow-review.md")),
+            ("workflow-review", include_str!("../../assets/pipes/legacy-workflow-prompts/before-review-ownership-workflow-review.md")),
+            ("workflow-maintain", include_str!("../../assets/pipes/legacy-workflow-prompts/before-detail-enrichment-workflow-maintain.md")),
+            ("workflow-maintain", include_str!("../../assets/pipes/legacy-workflow-prompts/before-timing-enrichment-workflow-maintain.md")),
+            ("workflow-review", include_str!("../../assets/pipes/legacy-workflow-prompts/before-timing-enrichment-workflow-review.md")),
+            ("workflow-deepen", include_str!("../../assets/pipes/legacy-workflow-prompts/before-timing-enrichment-workflow-deepen.md")),
+            ("workflow-deepen", include_str!("../../assets/pipes/legacy-workflow-prompts/before-observed-scope-workflow-deepen.md")),
+            ("workflow-review", include_str!("../../assets/pipes/legacy-workflow-prompts/before-observed-scope-workflow-review.md")),
+            ("workflow-discover", include_str!("../../assets/pipes/legacy-workflow-prompts/before-knowledge-work-workflow-discover.md")),
+            ("workflow-deepen", include_str!("../../assets/pipes/legacy-workflow-prompts/before-knowledge-work-workflow-deepen.md")),
+            ("workflow-review", include_str!("../../assets/pipes/legacy-workflow-prompts/before-knowledge-work-workflow-review.md")),
+            ("workflow-maintain", include_str!("../../assets/pipes/legacy-workflow-prompts/before-knowledge-work-workflow-maintain.md")),
+            ("workflow-activity", include_str!("../../assets/pipes/legacy-workflow-prompts/before-shared-runtime-workflow-activity.md")),
+            ("workflow-discovery", include_str!("../../assets/pipes/legacy-workflow-prompts/before-resolved-exclusions-workflow-discovery.md")),
+            ("workflow-activity", include_str!("../../assets/pipes/legacy-workflow-prompts/before-bounded-activity-workflow-activity.md")),
+            ("workflow-activity", include_str!("../../assets/pipes/legacy-workflow-prompts/before-context-api-workflow-activity.md")),
+            ("workflow-discovery", include_str!("../../assets/pipes/legacy-workflow-prompts/before-bounded-review-workflow-discovery.md")),
+            ("workflow-timing", include_str!("../../assets/pipes/legacy-workflow-prompts/before-bounded-review-workflow-timing.md")),
+            ("workflow-activity", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-activity.md")),
+            ("workflow-patterns", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-patterns.md")),
+            ("workflow-procedures", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-procedures.md")),
+            ("workflow-timing", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-timing.md")),
+            ("workflow-discovery", include_str!("../../assets/pipes/legacy-workflow-prompts/before-normal-tools-workflow-discovery.md")),
+            (
+                "workflow-activity",
+                include_str!("../../assets/pipes/legacy-workflow-prompts/workflow-activity.md"),
+            ),
+            (
+                "workflow-patterns",
+                include_str!("../../assets/pipes/legacy-workflow-prompts/workflow-patterns.md"),
+            ),
+            (
+                "workflow-procedures",
+                include_str!("../../assets/pipes/legacy-workflow-prompts/workflow-procedures.md"),
+            ),
+            (
+                "workflow-timing",
+                include_str!("../../assets/pipes/legacy-workflow-prompts/workflow-timing.md"),
+            ),
+            (
+                "workflow-discovery",
+                include_str!("../../assets/pipes/legacy-workflow-prompts/workflow-discovery.md"),
+            ),
+        ];
+        for (name, old) in fixtures {
+            for enabled in ["true", "false"] {
+                let original = old
+                    .replace("enabled: false", &format!("enabled: {enabled}"))
+                    .replace("every 24h", "every 48h");
+                let updated = super::migrate_builtin_pipe_text(name, &original).unwrap();
+                let original_config: serde_yaml::Value =
+                    serde_yaml::from_str(original.splitn(3, "---").nth(1).unwrap()).unwrap();
+                let updated_config: serde_yaml::Value =
+                    serde_yaml::from_str(updated.splitn(3, "---").nth(1).unwrap()).unwrap();
+                for key in ["enabled", "schedule", "model", "timeout", "trigger"] {
+                    assert_eq!(original_config[key], updated_config[key], "{name} {key}");
+                }
+                assert_eq!(
+                    updated.splitn(3, "---").nth(2).unwrap().trim(),
+                    super::bundled_prompt(name)
+                        .unwrap()
+                        .splitn(3, "---")
+                        .nth(2)
+                        .unwrap()
+                        .trim(),
+                    "{name} prompt"
+                );
+                assert!(
+                    super::migrate_builtin_pipe_text(name, &updated).is_none(),
+                    "{name} idempotency"
+                );
+                assert!(
+                    super::migrate_builtin_pipe_text(
+                        name,
+                        &format!("{original}\nCustom user instruction")
+                    )
+                    .is_none(),
+                    "{name} customization"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn workflow_migration_preserves_consent_and_customization() {
+        let legacy = include_str!("../../assets/pipes/workflow-discovery/legacy-v1.md");
+        let enabled = legacy
+            .replace("enabled: false", "enabled: true")
+            .replace("every 24h", "every 48h");
+        let migrated = super::migrate_builtin_pipe_text("workflow-discovery", &enabled).unwrap();
+        assert!(migrated.contains("enabled: true"));
+        assert!(migrated.contains("every 48h"));
+        assert!(migrated.contains("pipe_completed:workflow-timing"));
+        assert!(migrated.contains("Api(GET /workflows/pipeline)"));
+        assert!(super::migrate_builtin_pipe_text("workflow-discovery", &migrated).is_none());
+        assert!(super::migrate_builtin_pipe_text(
+            "workflow-discovery",
+            &format!("{legacy}\nMy custom instruction")
+        )
+        .is_none());
+    }
+    #[test]
+    fn workflow_notification_upgrade_preserves_settings_and_custom_prompts() {
+        let old =
+            include_str!("../../assets/pipes/workflow-discovery/legacy-before-notifications.md");
+        for enabled in ["false", "true"] {
+            let original = old
+                .replace("enabled: false", &format!("enabled: {enabled}"))
+                .replace("every 24h", "every 48h");
+            let updated =
+                super::migrate_builtin_pipe_text("workflow-discovery", &original).unwrap();
+            assert!(updated.contains(&format!("enabled: {enabled}")));
+            assert!(updated.contains("every 48h"));
+            assert!(updated.contains("Api(GET /feedback)"));
+            assert!(updated.contains("Api(POST /notify)"));
+            assert_eq!(
+                updated.splitn(3, "---").nth(2).unwrap().trim(),
+                super::bundled_prompt("workflow-discovery")
+                    .unwrap()
+                    .splitn(3, "---")
+                    .nth(2)
+                    .unwrap()
+                    .trim()
+            );
+            assert!(super::migrate_builtin_pipe_text("workflow-discovery", &updated).is_none());
+            assert!(super::migrate_builtin_pipe_text(
+                "workflow-discovery",
+                &format!("{original}\nMy custom instruction")
+            )
+            .is_none());
+        }
+    }
     use super::*;
     use crate::pipes::{parse_frontmatter, PipeManager};
     use std::collections::HashMap;
@@ -1344,7 +1670,8 @@ replace `<EXISTING_NOTE>` with the meeting's current `note` field (empty string 
 
         // Primary reads are batched, backgrounded, and joined.
         assert!(body.contains("pull everything the summary needs in ONE command"));
-        assert!(body.contains("-o /tmp/audio.json &"));
+        assert!(body.contains("/meetings/$ID/transcript"));
+        assert!(body.contains("  fi) &"));
         assert!(body.contains("content_type=accessibility"));
         assert!(body.contains("content_type=parsed"));
         assert!(body.contains("> /tmp/a11.json) &"));

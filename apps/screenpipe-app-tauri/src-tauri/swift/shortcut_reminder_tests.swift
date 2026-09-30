@@ -13,6 +13,7 @@
 // covered only by Rust tests asserting the anchor strings round-trip.
 
 import Cocoa
+import CryptoKit
 
 private var failures: [String] = []
 private var checks = 0
@@ -517,6 +518,26 @@ private func testClampWithoutDisplaysIsIdentity() {
     expect(clamped == origin, "clamp with no displays should be identity, got \(clamped)")
 }
 
+/// Selecting a UI locale must translate labels and leave shortcut tokens intact.
+private func testLocalizedDisclosure() {
+    let sources = ["right-click", "timeline", "ask chat", "search", "mic capture", "live", "idle", "settings"]
+    let translations = Dictionary(uniqueKeysWithValues: sources.map { source in
+        (SHA256.hash(data: Data(source.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined(), "localized " + source)
+    })
+    let payload = try! JSONSerialization.data(withJSONObject: ["locale": "ja", "messages": translations])
+    String(data: payload, encoding: .utf8)!.withCString { UILocalization.shared.update($0) }
+    defer { "{\"locale\":\"en\",\"messages\":{}}".withCString { UILocalization.shared.update($0) } }
+    let metrics = OverlayMetrics()
+    for (control, label) in [("timeline", "timeline"), ("chat", "ask chat"), ("search", "search"), ("settings", "settings")] {
+        let content = disclosureContent(for: control, overlayShortcut: "⌥Space", chatShortcut: "⌥C", searchShortcut: "⌥S", metrics: metrics)
+        expect(content?.0 == "localized " + label, "untranslated overlay control: \(control)")
+        if control == "timeline" { expect(content?.1 == "⌥Space", "shortcut was translated") }
+    }
+    let brand = disclosureContent(for: "brand", overlayShortcut: "", chatShortcut: "", searchShortcut: "", metrics: metrics)
+    expect(brand?.0 == "screenpipe", "brand was translated")
+    expect(brand?.1 == "localized right-click", "right-click hint was not translated")
+}
+
 @main
 struct ShortcutReminderTests {
     static func main() {
@@ -532,6 +553,7 @@ struct ShortcutReminderTests {
         testAttachmentStaysOnScreen()
         testWireContract()
         testShortcutGlyphs()
+        testLocalizedDisclosure()
         testClampLeavesOnScreenDragsAlone()
         testClampKeepsPillOnDesktop()
         testClampPicksNearestDisplay()

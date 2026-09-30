@@ -14,6 +14,42 @@ function jsonl(records: unknown[]): string {
 }
 
 describe("external agent chat parsers", () => {
+  const codexSetup = "<recommended_plugins>\nExample plugin list\n</recommended_plugins>\n<environment_context>\nExample environment\n</environment_context>";
+  const codexUser = (text: string) => ({
+    type: "response_item",
+    payload: { type: "message", role: "user", content: [{ type: "input_text", text }] },
+  });
+
+  it.each([
+    [codexSetup, "find the sidebar bug"],
+    [`${codexSetup}\nfind the sidebar bug`],
+    ["<recommended_plugins>plugins</recommended_plugins>", "find the sidebar bug"],
+    [`<screenpipe-system-context>context</screenpipe-system-context>\n${codexSetup}\nfind the sidebar bug`],
+  ])("uses the actual request after Codex setup: %j", (...texts) => {
+    const conversation = parseCodexTranscript(jsonl(texts.map(codexUser)), {
+      sourceId: "setup", fallbackTimestamp: 1,
+    });
+    expect(conversation?.title).toBe("find the sidebar bug");
+    expect(conversation?.messages.map((message) => message.content)).toEqual(["find the sidebar bug"]);
+  });
+
+  it("does not import a Codex setup-only transcript", () => {
+    expect(parseCodexTranscript(jsonl([codexUser(codexSetup)]), {
+      sourceId: "setup", fallbackTimestamp: 1,
+    })).toBeNull();
+  });
+
+  it.each([
+    "Explain <recommended_plugins>plugins</recommended_plugins>",
+    "```xml\n<recommended_plugins>plugins</recommended_plugins>\n```",
+    "<recommended_plugins>unfinished example",
+  ])("preserves user text containing plugin tags: %s", (text) => {
+    const conversation = parseCodexTranscript(jsonl([codexUser(text)]), {
+      sourceId: "request", fallbackTimestamp: 1,
+    });
+    expect(conversation?.messages[0].content).toBe(text);
+  });
+
   it("imports Claude Code text, thinking, and completed tool calls", () => {
     const conversation = parseClaudeCodeTranscript(jsonl([
       { type: "ai-title", sessionId: "claude-session", aiTitle: "AI title" },

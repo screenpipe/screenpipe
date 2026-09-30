@@ -40,3 +40,10 @@ pub mod vault;
 pub mod vision;
 pub mod web_search;
 pub mod websocket;
+
+pub mod workflows;
+
+pub mod workflow_catalog;
+pub mod workflow_edits;
+pub mod workflow_pipeline;
+pub(crate) mod workflow_workspace;

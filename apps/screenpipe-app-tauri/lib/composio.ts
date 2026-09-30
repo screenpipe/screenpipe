@@ -61,6 +61,26 @@ export type ComposioStatus = Partial<
   >
 >;
 
+export class ComposioRequestError extends Error {
+  constructor(
+    public readonly code: "network" | "http_error" | "invalid_response",
+    public readonly httpStatus?: number,
+  ) {
+    super(httpStatus === 404
+      ? "this connection isn't available yet — update screenpipe and try again"
+      : "could not reach the connection service; try again");
+  }
+}
+
+async function composioJson(path: string, init: RequestInit): Promise<any> {
+  let response: Response;
+  try { response = await fetch(`${COMPOSIO_API}/${path}`, init); }
+  catch { throw new ComposioRequestError("network"); }
+  if (!response.ok) throw new ComposioRequestError("http_error", response.status);
+  try { return await response.json(); }
+  catch { throw new ComposioRequestError("invalid_response", response.status); }
+}
+
 export function composioStatusToMap(status: ComposioStatus): ComposioStatusMap {
   return Object.fromEntries(
     COMPOSIO_TOOLKITS.map((toolkit) => [
@@ -71,15 +91,17 @@ export function composioStatusToMap(status: ComposioStatus): ComposioStatusMap {
 }
 
 export async function fetchComposioStatus(
-  token: string
+  token: string,
+  options: { throwOnError?: boolean } = {},
 ): Promise<ComposioStatus | null> {
   try {
-    const response = await fetch(`${COMPOSIO_API}/status`, {
+    const data = await composioJson("status", {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!response.ok) return null;
-    return await response.json();
-  } catch {
+    if (!data || typeof data !== "object" || Array.isArray(data)) throw new ComposioRequestError("invalid_response");
+    return data;
+  } catch (error) {
+    if (options.throwOnError) throw error;
     return null;
   }
 }
@@ -89,7 +111,7 @@ export async function authorizeComposioToolkit(
   toolkit: ComposioToolkit,
   alias?: string
 ): Promise<string> {
-  const response = await fetch(`${COMPOSIO_API}/authorize`, {
+  const data = await composioJson("authorize", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -98,23 +120,15 @@ export async function authorizeComposioToolkit(
     body: JSON.stringify(alias ? { toolkit, alias } : { toolkit }),
   });
 
-  if (response.status === 404) {
-    throw new Error(
-      "this connection isn't available yet — update screenpipe and try again"
-    );
-  }
-
-  const data = await response.json();
-  if (!response.ok || !data.redirect_url) {
-    throw new Error(data.error || "could not start the connection");
-  }
+  if (typeof data?.redirect_url !== "string") throw new ComposioRequestError("invalid_response");
   return data.redirect_url;
 }
 
 export async function registerComposioMcpServer(
   token: string
 ): Promise<void> {
-  const response = await localFetch(`/mcp-servers/${MCP_SERVER_ID}`, {
+  let response: Response;
+  try { response = await localFetch(`/mcp-servers/${MCP_SERVER_ID}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -123,8 +137,8 @@ export async function registerComposioMcpServer(
       headers: [{ name: "Authorization", value: `Bearer ${token}` }],
       enabled: true,
     }),
-  });
-  if (!response.ok) throw new Error("failed to register composio mcp server");
+  }); } catch { throw new ComposioRequestError("network"); }
+  if (!response.ok) throw new ComposioRequestError("http_error", response.status);
 }
 
 export async function removeComposioMcpServer(): Promise<void> {

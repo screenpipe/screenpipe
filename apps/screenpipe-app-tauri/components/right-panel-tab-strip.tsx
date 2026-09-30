@@ -5,8 +5,10 @@
 "use client";
 
 import React, { useEffect, useRef } from "react";
-import { FileText, Globe2, Loader2, Plus, X } from "lucide-react";
+import { Home, FileText, Globe2, Loader2, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 export const BROWSER_RIGHT_PANEL_TAB_ID = "browser";
 
@@ -29,6 +31,8 @@ export function rightPanelFileTabLabel(path: string): string {
 }
 
 interface RightPanelTabStripProps {
+  onHome?: () => void;
+  homeActive?: boolean;
   tabs: RightPanelTab[];
   activeTabId: string | null;
   onSelect: (tab: RightPanelTab) => void;
@@ -37,12 +41,16 @@ interface RightPanelTabStripProps {
 }
 
 export function RightPanelTabStrip({
+  onHome,
+  homeActive,
   tabs,
   activeTabId,
   onSelect,
   onClose,
   onNewBrowserTab,
 }: RightPanelTabStripProps) {
+
+  const ui = useGT();
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
 
   useEffect(() => {
@@ -81,10 +89,12 @@ export function RightPanelTabStrip({
       className="flex h-9 min-w-0 shrink-0 items-stretch border-b border-border/60 bg-muted/20 pl-2"
       data-testid="right-panel-tab-strip"
     >
+      {onHome && <button type="button" aria-label={ui("Side panel home")} aria-pressed={Boolean(homeActive)} title={ui("Side panel home")} onClick={onHome}
+        className={cn("flex w-8 shrink-0 items-center justify-center border-r border-border/45 text-muted-foreground hover:bg-background/60 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring", homeActive && "bg-background text-foreground")}><Home className="h-3.5 w-3.5" /></button>}
       <div
         className="flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         role="tablist"
-        aria-label="Open side panel items"
+        aria-label={ui("Open side panel items")}
       >
         {tabs.map((tab, index) => {
           const active = tab.id === activeTabId;
@@ -132,8 +142,8 @@ export function RightPanelTabStrip({
               </button>
               <button
                 type="button"
-                aria-label={`Close ${tab.label}`}
-                title={`Close ${tab.label}`}
+                aria-label={ui("Close {value1}", { value1: tab.label })}
+                title={ui("Close {value1}", { value1: tab.label })}
                 className={cn(
                   "mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-foreground/50",
                   active
@@ -161,8 +171,8 @@ export function RightPanelTabStrip({
         <button
           type="button"
           className="flex w-9 shrink-0 items-center justify-center border-l border-border/45 text-muted-foreground transition-colors hover:bg-background/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-          aria-label="New browser tab"
-          title="New browser tab"
+          aria-label={ui("New browser tab")}
+          title={ui("New browser tab")}
           onClick={onNewBrowserTab}
         >
           <Plus className="h-3.5 w-3.5" aria-hidden />

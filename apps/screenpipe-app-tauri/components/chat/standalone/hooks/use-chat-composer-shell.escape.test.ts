@@ -115,3 +115,32 @@ describe("composer Escape with the palette open", () => {
     expect(stopPropagation).not.toHaveBeenCalled();
   });
 });
+
+
+describe("split composer shortcut ownership", () => {
+  it("does not steer the main chat from the secondary pane", () => {
+    const primary = document.createElement("section");
+    primary.dataset.chatPaneId = "a";
+    const input = document.createElement("textarea");
+    primary.append(input);
+    const secondary = document.createElement("section");
+    secondary.dataset.chatPaneId = "b";
+    const otherInput = document.createElement("textarea");
+    secondary.append(otherInput);
+    document.body.append(primary, secondary);
+    const options = makeOptions({ input: "main", inputRef: { current: input }, mentions: { isOpen: false, selectedIndex: 0, suggestions: [] } });
+    const hook = renderHook(() => useChatComposerShellActions(options));
+    try {
+      otherInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+      expect(options.steerMessage).not.toHaveBeenCalled();
+    } finally { hook.unmount(); primary.remove(); secondary.remove(); }
+  });
+  it("does not send on modified, repeated, IME, or already-consumed Enter", () => {
+    const options = makeOptions({ input: "draft", mentions: { isOpen: false, selectedIndex: 0, suggestions: [] } });
+    const { result } = renderHook(() => useChatComposerShellActions(options));
+    for (const modifiers of [{ metaKey: true }, { ctrlKey: true }, { altKey: true }, { shiftKey: true }, { repeat: true }, { defaultPrevented: true }, { nativeEvent: { isComposing: true } }]) {
+      result.current.handleKeyDown({ ...escapeEvent().event, key: "Enter", ...modifiers } as React.KeyboardEvent<HTMLTextAreaElement>);
+    }
+    expect(options.sendMessage).not.toHaveBeenCalled();
+  });
+});

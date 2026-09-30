@@ -61,6 +61,15 @@
       "sourceRoots": [
         "src"
       ]
+    },
+    {
+      "crate": "screenpipe-fs",
+      "testRoots": [
+        "tests"
+      ],
+      "sourceRoots": [
+        "src"
+      ]
     }
   ],
   "criticalFlows": [
@@ -308,6 +317,7 @@
         "src/meeting_summary/notes.rs",
         "src/pipe_stream.rs",
         "src/routes/activity_summary.rs",
+        "src/routes/activity_summary_key_text_tests.rs",
         "src/routes/activity_ledger.rs",
         "src/routes/artifacts.rs",
         "src/routes/connect_broker.rs",
@@ -332,6 +342,7 @@
         "src/routes/time.rs",
         "src/routes/timezone.rs",
         "src/routes/websocket.rs",
+        "src/search_only.rs",
         "src/server.rs",
         "tests/router_contract_test.rs",
         "tests/tags_test.rs",
@@ -589,11 +600,12 @@
     },
     {
       "id": "sqlite-coordinator-durable-quarantine",
-      "label": "SQLite coordination and durable quarantine",
+      "label": "SQLite coordination, verification, and confirmed quarantine",
       "crate": "screenpipe-sqlite-coordinator",
       "files": [
         "src/lib.rs",
-        "src/quarantine.rs"
+        "src/quarantine.rs",
+        "src/verification.rs"
       ],
       "platforms": [
         "windows",
@@ -611,7 +623,7 @@
       "criticality": "high",
       "confidence": "strong",
       "kind": "unit",
-      "notes": "Process-wide single-writer gates, SQLite runtime pinning, atomic hard-fault markers, OS file identity, fail-closed malformed metadata, fresh-identity resolution, and a real cross-process restart test."
+      "notes": "Process-wide single-writer gates and manager ownership, SQLite runtime pinning, pending incident markers, fresh integrity verification, confirmed-damage quarantine, file-identity guarded admission, and crash-journal recovery."
     },
     {
       "id": "db-search-indexing",
@@ -663,20 +675,37 @@
         "src/db/feedback.rs",
         "src/db/maintenance.rs",
         "src/db/setup.rs",
+        "src/db/source_identity.rs",
         "src/db/tests.rs",
         "src/db/truncation_tests.rs",
+        "src/storage/bulk/tests.rs",
+        "src/storage/bulk/elements/lifecycle.rs",
+        "src/storage/diagnostics.rs",
+        "src/storage/lifecycle.rs",
+        "src/storage/parity.rs",
+        "src/storage/reclaim.rs",
+        "src/storage/schema.rs",
+        "src/storage/sealing.rs",
         "src/types.rs",
         "src/write_queue.rs",
+        "tests/bulk_storage.rs",
         "tests/db.rs",
+        "tests/element_pagination.rs",
         "tests/evict_media_null_chunk_test.rs",
         "tests/frame_offset_sync_test.rs",
+        "tests/hybrid_storage.rs",
+        "tests/in_place_migration.rs",
         "tests/live_coverage_marker_test.rs",
+        "tests/migration_foreign_keys.rs",
+        "tests/migration_source_recovery.rs",
         "tests/orphan_chunk_null_poisoning_test.rs",
         "tests/outputs_saf_test.rs",
         "tests/range_export_frame_sources_test.rs",
         "tests/semantic_storage_test.rs",
+        "tests/storage_staging_drain.rs",
         "tests/suggestions_frames_table_test.rs",
         "tests/timeline_frameless_audio_test.rs",
+        "tests/timeline_parquet_test.rs",
         "tests/timeline_performance_test.rs"
       ],
       "platforms": [
@@ -708,14 +737,17 @@
         "src/failpoint_vfs.rs",
         "src/recovery.rs",
         "src/sqlite_error.rs",
+        "src/storage/reader.rs",
         "tests/cancellable_query_test.rs",
         "tests/cancellation_performance_bench.rs",
         "tests/close_severs_connections_test.rs",
+        "tests/hybrid_recovery.rs",
         "tests/memory_pressure_test.rs",
         "tests/multi_pool_wal_parity_test.rs",
         "tests/quarantine_self_heal_test.rs",
         "tests/sqlite_architecture_invariants_test.rs",
         "tests/sqlite_runtime_version.rs",
+        "tests/storage_snapshots.rs",
         "tests/wal_chaos_e2e_test.rs"
       ],
       "platforms": [
@@ -747,6 +779,7 @@
         "tests/meeting_end_generation_test.rs",
         "tests/meeting_end_reason_test.rs",
         "tests/meeting_transcript_dedup_test.rs",
+        "tests/meeting_playback_regression_test.rs",
         "tests/output_audio_liveness_test.rs",
         "tests/single_open_meeting_invariant_test.rs",
         "tests/speaker_benchmark.rs",
@@ -822,6 +855,7 @@
         "src/transcription/deepgram/batch.rs",
         "src/transcription/deepgram/mod.rs",
         "src/transcription/engine.rs",
+        "src/transcription/handle_new_transcript.rs",
         "src/transcription/openai_compatible/batch.rs",
         "src/transcription/transcription_result.rs",
         "src/transcription/whisper/batch.rs",
@@ -852,6 +886,28 @@
       "confidence": "partial",
       "kind": "mixed",
       "notes": "Batch deferral, cleanup, language detection, result normalization, and real recording/transcription tests. Hardware/model-heavy tests are ignored by default. Also covers ffmpeg encode child reaping on error paths."
+    },
+    {
+      "id": "audio-windows-parakeet-provider",
+      "label": "Windows Parakeet execution provider selection",
+      "crate": "screenpipe-audio",
+      "files": [
+        "src/transcription/parakeet_windows.rs"
+      ],
+      "platforms": [
+        "windows"
+      ],
+      "layers": [
+        "audio",
+        "transcription"
+      ],
+      "flows": [
+        "audio-record-transcribe"
+      ],
+      "criticality": "high",
+      "confidence": "partial",
+      "kind": "unit",
+      "notes": "Registers existing CPU override, eligible adapter selection, DXGI ordinal, error fallback and adapter determinism tests. Windows-only; manifest registration does not verify execution on physical GPU hardware."
     },
     {
       "id": "audio-device-stream-health",
@@ -1313,6 +1369,7 @@
       "crate": "screenpipe-a11y",
       "files": [
         "src/incognito/windows.rs",
+        "src/platform/retained_tree.rs",
         "src/platform/windows.rs",
         "src/platform/windows_uia.rs",
         "src/platform/windows_uia_tests.rs",
@@ -1335,6 +1392,84 @@
       "confidence": "partial",
       "kind": "unit",
       "notes": "Windows UIA/accessibility parsing and privacy matching; some UIA tests are ignored where they require a live desktop."
+    },
+    {
+      "id": "engine-workflows",
+      "label": "Workflow catalog, pipeline, and evidence contracts",
+      "crate": "screenpipe-engine",
+      "files": [
+        "src/pipe_permissions_middleware.rs",
+        "src/routes/workflow_catalog.rs",
+        "src/routes/workflow_edits.rs",
+        "src/routes/workflow_pipeline.rs",
+        "src/routes/workflows.rs",
+        "tests/workflow_catalog_contract_test.rs",
+        "tests/workflow_timing_e2e.rs"
+      ],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api",
+        "storage"
+      ],
+      "flows": [
+        "local-api-search"
+      ],
+      "criticality": "high",
+      "confidence": "partial",
+      "kind": "mixed",
+      "notes": "Catalog identity and persistence, revision-scoped feedback, workflow evidence and pipeline contracts, and denial of agent-granted rollout access. Does not assert live cloud discovery quality. Workflow publication orchestration deadlines and nested query backpressure are covered with virtual-time router tests."
+    },
+    {
+      "id": "filesystem-durable-sync",
+      "label": "Local and network filesystem durability",
+      "crate": "screenpipe-fs",
+      "files": [
+        "src/lib.rs"
+      ],
+      "platforms": [
+        "macos",
+        "linux",
+        "windows"
+      ],
+      "layers": [
+        "database",
+        "vision-capture",
+        "audio"
+      ],
+      "flows": [
+        "capture-ocr-pipeline",
+        "audio-record-transcribe",
+        "engine-health-lifecycle"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "unit",
+      "notes": "Durable flushes preserve local full-sync behavior, fall back to fsync only for macOS ENOTSUP, and propagate real I/O or fallback failures. Real SMB migration and continued recording are covered by the marked-volume integration test."
+    },
+    {
+      "id": "engine-linux-keep-awake",
+      "label": "Linux keep-awake acquisition and release",
+      "crate": "screenpipe-engine",
+      "files": [
+        "src/power/awake_tests.rs"
+      ],
+      "platforms": [
+        "linux"
+      ],
+      "layers": [
+        "engine-lifecycle"
+      ],
+      "flows": [
+        "engine-health-lifecycle"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "kind": "mixed",
+      "notes": "Existing isolated-process missing/stalled bus regressions plus ignored live logind inhibitor tests. Live tests require logind and explicit execution."
     }
   ]
 }

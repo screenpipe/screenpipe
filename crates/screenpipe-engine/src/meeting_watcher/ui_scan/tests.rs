@@ -315,7 +315,25 @@ fn browser_app_detection_is_case_insensitive() {
     assert!(is_browser_app("CHROME.EXE"));
     assert!(is_browser_app("Microsoft Edge Helper"));
     assert!(is_browser_app("brave.exe"));
+    assert!(is_browser_app("Dia"));
     assert!(!is_browser_app("Zoom.exe"));
+}
+
+/// Short `BROWSER_NAMES` entries are substrings of ordinary app names, so an
+/// unanchored match reports NVIDIA and Media Player as browsers. A window
+/// classified as a browser has its title and URL run against every meeting
+/// pattern, so a false positive there becomes a false meeting.
+#[test]
+fn browser_app_detection_requires_word_boundaries() {
+    assert!(!is_browser_app("NVIDIA GeForce Experience"));
+    assert!(!is_browser_app("Windows Media Player"));
+    assert!(!is_browser_app("Search"));
+    assert!(!is_browser_app("Diagnostics"));
+
+    assert!(is_browser_app("Dia"));
+    assert!(is_browser_app("Dia Browser"));
+    assert!(is_browser_app("Arc"));
+    assert!(is_browser_app("Arc Browser"));
 }
 
 #[test]
@@ -1065,6 +1083,82 @@ fn test_real_browser_meetings_still_detected() {
         Some("https://www.amazon.com/amrit-meet/dp/B013JLWFDG"),
         Some("meet - App on Amazon Appstore")
     ));
+}
+
+#[test]
+fn test_arc_slack_huddle_titles_detected() {
+    // #6989 — Slack huddles in Arc/Chrome keep the tab at
+    // `app.slack.com/client/...` (never `/huddle`), so the URL pattern can't
+    // fire. The huddle window title is the only signal, and the URL is on
+    // Slack's own host, so the title fallback must apply.
+    //
+    // Huddles list / active huddle window title (captured from a live Arc
+    // frame): "Huddles - leadgen - Slack".
+    assert!(any_profile_matches(
+        Some("https://app.slack.com/client/T0123456/C0123456"),
+        Some("Huddles - leadgen - Slack")
+    ));
+    // URL-less window (Arc exposes no AXDocument) — plain fallback path.
+    assert!(any_profile_matches(None, Some("Huddles - leadgen - Slack")));
+    // Anchored prefix match: pattern "Huddles" + non-alphanumeric separator.
+    assert!(any_profile_matches(
+        Some("https://app.slack.com/client/T0123456/D0123456"),
+        Some("Huddles — My Workspace - Slack")
+    ));
+}
+
+#[test]
+fn test_arc_slack_non_huddle_titles_not_detected() {
+    // Ordinary Slack browsing must NOT start a meeting: the workspace URL is
+    // on Slack's host but the titles carry no huddle marker.
+    assert!(!any_profile_matches(
+        Some("https://app.slack.com/client/T0BBNEEH6Q2/D0BBT87MELU"),
+        Some("Alex N (DM) - 1651 Market Apartments Residents - 1 new item - Slack")
+    ));
+    assert!(!any_profile_matches(
+        Some("https://app.slack.com/client/T0123456/C0123456"),
+        Some("* Threads - leadgen - Slack")
+    ));
+    // #4246 guardrail unchanged: huddle-ish title on a FOREIGN host must not
+    // match even though "Huddles" would anchor-match the title.
+    assert!(!any_profile_matches(
+        Some("https://www.amazon.com/dp/B0123456"),
+        Some("Huddles - leadgen - Slack")
+    ));
+    // Substring anchoring: "Huddlesworth" must not match (next char is alnum).
+    assert!(!any_profile_matches(
+        Some("https://app.slack.com/client/T0123456/C0123456"),
+        Some("Huddlesworth notes - Slack")
+    ));
+}
+
+#[test]
+fn slack_title_fallback_checks_the_parsed_host() {
+    for url in [
+        "https://example.org/app.slack.com/client/T123/C456",
+        "https://app.slack.com@example.org/client/T123/C456",
+        "https://app.slack.com.example.org/client/T123/C456",
+        "https://notapp.slack.com/client/T123/C456",
+        "https://example.org/?next=https://app.slack.com/client/T123/C456",
+        "https://example.org/#app.slack.com/client/T123/C456",
+        "file:///app.slack.com/client/T123/C456",
+        "not a URL app.slack.com/client/T123/C456",
+    ] {
+        assert!(
+            !any_profile_matches(Some(url), Some("Huddles - workspace - Slack")),
+            "foreign or invalid URL must not enable the title fallback: {url}"
+        );
+    }
+    for url in [
+        "https://app.slack.com/client/T123/C456",
+        "https://APP.SLACK.COM:443/client/T123/C456?view=huddles#top",
+        "https://sub.app.slack.com/client/T123/C456",
+    ] {
+        assert!(any_profile_matches(
+            Some(url),
+            Some("Huddles - workspace - Slack")
+        ));
+    }
 }
 
 // ── State machine tests ────────────────────────────────────────────

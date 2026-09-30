@@ -108,7 +108,7 @@ describe("provider error copy", () => {
     ).toBeNull();
   });
 
-  it("maps screenpipe cloud connection errors to a transient-outage message", () => {
+  it("maps screenpipe cloud connection errors to retry guidance without assigning a cause", () => {
     const msg = buildProviderErrorMessage("Connection error.", {
       provider: "screenpipe-cloud",
       model: "auto",
@@ -116,6 +116,8 @@ describe("provider error copy", () => {
 
     expect(msg).toContain("screenpipe cloud");
     expect(msg?.toLowerCase()).toContain("try again");
+    expect(msg).not.toContain("outage on our end");
+    expect(msg).not.toContain("not your setup");
     // does not blame the user's own machine/setup
     expect(msg?.toLowerCase()).not.toContain("ollama");
   });
@@ -190,7 +192,7 @@ describe("provider error copy", () => {
     });
 
     expect(msg).toContain("screenpipe cloud");
-    expect(msg).toContain("outage on our end");
+    expect(msg).toContain("try again");
     expect(msg).not.toContain("rate-limited");
     expect(msg).not.toContain("upgrade");
   });
@@ -281,7 +283,7 @@ describe("provider error copy", () => {
     const expected =
       "The AI provider usage limit has been reached. Wait for it to reset, or switch your AI preset or provider.";
     const acpExpected =
-      "Your Codex usage limit has been reached. Wait for it to reset, upgrade your ChatGPT plan, or switch your Screenpipe AI preset.";
+      "Your Codex account has reached its usage limit. Open your Codex account's usage settings to check when it resets or change your plan, then send your message again. To continue now, choose another AI preset.";
 
     expect(
       buildProviderErrorMessage(
@@ -325,6 +327,55 @@ describe("provider error copy", () => {
         { provider: "screenpipe-cloud", model: "auto" },
       ),
     ).toContain("2 free AI messages");
+  });
+
+  describe.each([
+    ["claude-acp", "Claude Code"],
+    ["cursor", "Cursor"],
+    ["codex-acp", "Codex"],
+  ])("%s account recovery", (agentId, agentName) => {
+    it.each([
+      ['Internal error: Credit balance is too low: { "errorKind": "billing_error" }', "Add credits"],
+      ["spending_limit_exceeded", "adjust the limit or see when it resets"],
+      ["You've hit your usage limit.", "usage settings to check when it resets"],
+      ['429 {"error":{"code":"insufficient_quota"}}', "credit balance, payment method, and spending limit"],
+    ])("gives a recovery step for %s", (raw, recovery) => {
+      const result = buildProviderErrorPresentation(raw, {
+        provider: "acp", model: agentId,
+        acpAgent: { id: agentId, useScreenpipeCloud: false },
+      });
+      expect(result).toMatchObject({ kind: "agent_billing", retryable: false });
+      expect(result?.message).toContain(agentName);
+      expect(result?.message).toContain(recovery);
+      expect(result?.message).toContain("send your message again");
+      expect(result?.message).toContain("choose another AI preset");
+      expect(result?.message).not.toMatch(/Internal error|billing_error|screenpipe support|not our|can't grant|Anthropic|https?:/i);
+    });
+
+    it("uses the selected agent's billing settings without assuming a reset", () => {
+      const result = buildProviderErrorPresentation("Credit balance is too low", {
+        provider: "acp", acpAgent: { id: agentId },
+      });
+      expect(result?.message).toContain(`your ${agentName} account's billing settings`);
+      expect(result?.message).not.toContain("resets");
+    });
+  });
+
+  it("keeps hosted billing failures out of own-account ACP guidance", () => {
+    for (const preset of [
+      { provider: "screenpipe-cloud" },
+      { provider: "acp", acpAgent: { id: "claude-acp", useScreenpipeCloud: true } },
+      { provider: "anthropic" },
+    ]) {
+      expect(buildProviderErrorPresentation("Credit balance is too low", preset)).toBeNull();
+    }
+  });
+
+  it("keeps closed agents on their own billing and leaves transient errors retryable", () => {
+    const preset = { provider: "acp", acpAgent: { id: "cursor", useScreenpipeCloud: true } };
+    expect(buildProviderErrorPresentation("spend_limit_reached", preset)?.message).toContain("your Cursor account's billing settings");
+    expect(buildProviderErrorPresentation("Connection error.", preset)?.retryable).toBe(true);
+    expect(buildProviderErrorPresentation("429 Too many requests", preset)?.kind).not.toBe("agent_billing");
   });
 
   it("does not map unrelated token errors to the ChatGPT account-id message", () => {
@@ -401,6 +452,13 @@ describe("provider error copy", () => {
     ).toBe(
       "This provider exposes 8,192 context tokens, but Screenpipe's agent request already needs 13,069. Increase the provider's context window (for example, Ollama num_ctx) to at least 32,768, or choose a larger-context model, then retry in a new chat."
     );
+  });
+
+  it("shows hosted GLM's limit without directing users to a hidden manual setting", () => {
+    expect(buildProviderErrorMessage(
+      "400 request (33252 tokens) exceeds the available context size (32768 tokens), try increasing it",
+      { provider: "screenpipe-cloud", model: "glm-5.3-flash-reap50-iq3m" },
+    )).toBe("This model accepts 32,768 context tokens, but the request used 33,252. Start a new chat or choose a model with a larger context window, then retry.");
   });
 
   it("points larger-context providers at the matching preset value", () => {

@@ -42,6 +42,9 @@ pub struct DeviceFrame {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioEntry {
+    // Runtime metadata; keep the on-disk bincode cache layout compatible.
+    #[serde(skip)]
+    pub captured_at: Option<DateTime<Utc>>,
     pub transcription: String,
     pub device_name: String,
     pub is_input: bool,
@@ -57,6 +60,7 @@ pub struct AudioEntry {
 impl From<screenpipe_db::AudioEntry> for AudioEntry {
     fn from(db_entry: screenpipe_db::AudioEntry) -> Self {
         Self {
+            captured_at: db_entry.captured_at,
             transcription: db_entry.transcription,
             device_name: db_entry.device_name,
             is_input: db_entry.is_input,
@@ -535,6 +539,7 @@ impl FrameCache {
                                 .audio_entries
                                 .iter()
                                 .map(|a| AudioEntry {
+                                    captured_at: a.captured_at,
                                     transcription: a.transcription.clone(),
                                     device_name: a.device_name.clone(),
                                     is_input: a.is_input,
@@ -877,6 +882,7 @@ async fn extract_frame(
                             .audio_entries
                             .iter()
                             .map(|a| AudioEntry {
+                                captured_at: a.captured_at,
                                 transcription: a.transcription.clone(),
                                 device_name: a.device_name.clone(),
                                 is_input: a.is_input,

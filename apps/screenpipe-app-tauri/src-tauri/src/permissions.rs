@@ -427,7 +427,7 @@ pub(crate) async fn restart_capture_on_mic_grant(app: tauri::AppHandle) {
     let mut last_err: Option<String> = None;
     for attempt in 1..=MAX_ATTEMPTS {
         let state = app.state::<crate::recording::RecordingState>();
-        match crate::recording::start_capture(state, app.clone()).await {
+        match crate::recording::restart_capture_after_permission(state, app.clone()).await {
             Ok(()) => {
                 if attempt > 1 {
                     info!(

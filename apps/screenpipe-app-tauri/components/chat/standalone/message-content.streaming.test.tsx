@@ -75,6 +75,10 @@ describe("MessageContent streaming Markdown", () => {
     expect(screen.getByTestId("streaming-markdown-tail")).toHaveTextContent(
       "still streaming",
     );
+    // Once the model is writing the next paragraph, the earlier read must
+    // remain completed instead of borrowing the whole turn's busy state.
+    expect(screen.getByTestId("tool-activity-widget")).toHaveAttribute("data-activity-state", "completed");
+    expect(screen.getByTestId("tool-activity-summary")).toHaveTextContent("Read source.ts");
     expect(
       screen.getByRole("heading", { name: "live result" }),
     ).toBeInTheDocument();

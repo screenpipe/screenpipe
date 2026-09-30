@@ -9,8 +9,9 @@
   <string>screenpi.pe.enterprise.persistence</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Applications/screenpipe enterprise.app/Contents/MacOS/screenpipe-app</string>
-    <string>--autostart</string>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>state='/Library/Application Support/screenpipe/persistence'; while [ -e "$state/maintenance" ]; do /bin/sleep 1; done; [ -e "$state/enabled" ] &amp;&amp; [ ! -e "$state/policy-disabled" ] &amp;&amp; exec '/Applications/screenpipe enterprise.app/Contents/MacOS/screenpipe-app' --autostart</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

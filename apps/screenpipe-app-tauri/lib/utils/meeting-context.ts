@@ -35,6 +35,7 @@ export interface AudioSegment {
 export interface MeetingAudioChunk {
   audioChunkId: number;
   audioFilePath: string;
+  audioStartTimeSecs?: number | null;
   speakerId: number | null;
   sessionSpeakerId?: string | null;
   speakerName: string;
@@ -58,6 +59,7 @@ interface MeetingTranscriptSegment {
   audioTranscriptionId?: number | null;
   audioChunkId?: number | null;
   audioFilePath?: string | null;
+  audioStartTimeSecs?: number | null;
   speakerId?: number | null;
   sessionSpeakerId?: string | null;
   speakerName?: string | null;
@@ -856,6 +858,7 @@ interface SearchAudioItem {
     transcription?: string;
     timestamp?: string;
     file_path?: string;
+    start_time?: number | null;
     device?: string;
     device_type?: string;
     speaker?: { id?: number; name?: string } | null;
@@ -904,6 +907,7 @@ export async function fetchMeetingAudio(
         out.push({
           audioChunkId: id,
           audioFilePath: c.file_path,
+          audioStartTimeSecs: c.start_time,
           speakerId: c.speaker?.id ?? null,
           sessionSpeakerId: null,
           // Mic rows show "me" only until someone is actually assigned —
@@ -982,6 +986,7 @@ async function fetchRoutedMeetingTranscript(
               ? segment.audioChunkId
               : -segment.id,
           audioFilePath: segment.audioFilePath ?? "",
+          audioStartTimeSecs: segment.audioStartTimeSecs,
           speakerId: segment.speakerId ?? null,
           sessionSpeakerId: segment.sessionSpeakerId ?? null,
           // The endpoint only returns a name for mic rows once a real speaker

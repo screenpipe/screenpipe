@@ -86,7 +86,7 @@ describe("SidebarChatRow current conversation", () => {
     expect(row).toHaveAttribute("data-current", "true");
     expect(row).toHaveClass("border-foreground", "bg-foreground/[0.08]");
     expect(button).toHaveAttribute("aria-current", "page");
-    expect(screen.getByText("current")).toBeVisible();
+    expect(screen.getByText("Current")).toBeVisible();
   });
 
   it("keeps inactive chats visually neutral", () => {
@@ -101,20 +101,20 @@ describe("SidebarChatRow current conversation", () => {
       "sidebar-text-secondary",
     );
     expect(button).not.toHaveAttribute("aria-current");
-    expect(screen.queryByText("current")).toBeNull();
+    expect(screen.queryByText("Current")).toBeNull();
   });
 
   it("keeps live activity visible on the focused chat", () => {
     renderRow(true, "streaming");
 
-    expect(screen.queryByText("current")).toBeNull();
+    expect(screen.queryByText("Current")).toBeNull();
     expect(screen.getByLabelText("streaming")).toBeVisible();
   });
 
   it("renders unread as a semantic dot instead of a text block glyph", () => {
     renderRow(false, "idle", { unread: true, lastContentAt: Date.now() });
 
-    const unread = screen.getByLabelText("unread");
+    const unread = screen.getByLabelText("Unread");
     expect(unread).toHaveClass("h-1.5", "w-1.5", "rounded-full", "bg-foreground");
     expect(unread).toHaveTextContent("");
     expect(screen.queryByText("█")).toBeNull();
@@ -159,11 +159,13 @@ describe("Recents provider filtering", () => {
   });
 
   it.each([
+    ["screenpipe", "Screenpipe", "/images/screenpipe.png"],
     ["codex", "Codex", "/images/codex.svg"],
     ["claude-code", "Claude", "/images/claude-ai.svg"],
   ] as const)("shows the %s mark in the source picker", (source, label, icon) => {
+    const option = visibleRecentSourceOptions().find((option) => option.source === source)!;
     const { container } = render(
-      <RecentsSourceFilterLabel source={source} label={label} />,
+      <RecentsSourceFilterLabel {...option} />,
     );
 
     expect(screen.getByText(label)).toBeVisible();
@@ -289,7 +291,7 @@ describe("menu letter shortcuts", () => {
 
     fireEvent.contextMenu(screen.getByTestId("chat-row-chat-focus-test"));
     const branchItem = await screen.findByText("Branch in new chat");
-    expect(branchItem.closest('[role="menuitem"]')).toHaveAttribute("data-shortcut", "b");
+    expect(branchItem.closest('[role="menuitem"]')).toHaveAttribute("data-chat-shortcut", "branch_chat");
 
     fireEvent.click(branchItem);
 

@@ -19,9 +19,41 @@ import {
 } from "./desktop-remote-control";
 
 describe("desktop remote control", () => {
+  it.each(["macos", "windows", "linux"])(
+    "enables structured context for old opt-outs on %s and honors emergency stops",
+    (platform) => {
+      const settings = {
+        platform,
+        enableSemanticContext: false,
+        semanticContextPreference: false,
+        enterpriseManagedSettings: { enableSemanticContext: false },
+        remoteControlPreferences: {
+          ...NEW_INSTALL_REMOTE_CONTROL_PREFERENCES,
+          semanticContext: false,
+        },
+      };
+      const policy = structuredClone(LOCAL_DESKTOP_REMOTE_POLICY);
+      policy.boolean.semanticContext.defaultEnabled = false;
+      const enabled = buildDesktopRemoteControlPatch(settings, policy);
+      expect(enabled.preferences.semanticContext).toBe(true);
+      expect(enabled.patch.enableSemanticContext).toBe(true);
+      expect(enabled.recorderRestartRequired).toBe(true);
+      policy.boolean.semanticContext.forceDisabled = true;
+      const stopped = buildDesktopRemoteControlPatch(
+        { ...settings, ...enabled.patch }, policy,
+      );
+      expect(stopped.patch.enableSemanticContext).toBe(false);
+      policy.boolean.semanticContext.forceDisabled = false;
+      const restored = buildDesktopRemoteControlPatch(
+        { ...settings, ...enabled.patch, ...stopped.patch }, policy,
+      );
+      expect(restored.patch.enableSemanticContext).toBe(true);
+    },
+  );
+
   it("preserves each shipped default for missing or malformed flag payloads", () => {
     expect(parseBooleanRemotePolicy("semanticContext", null)).toEqual({
-      defaultEnabled: false,
+      defaultEnabled: true,
       forceDisabled: false,
     });
     expect(parseBooleanRemotePolicy("coreAudioSystemAudio", undefined)).toEqual(
@@ -304,7 +336,7 @@ describe("desktop remote control", () => {
       remoteControlPreferences: NEW_INSTALL_REMOTE_CONTROL_PREFERENCES,
       remoteControlPolicy: LOCAL_DESKTOP_REMOTE_POLICY,
       autoUpdate: false,
-      enableSemanticContext: false,
+      enableSemanticContext: true,
       experimentalCoreaudioSystemAudio: true,
       experimentalMeetingPiggyback: true,
       filterMusic: true,
@@ -376,7 +408,7 @@ describe("desktop remote control", () => {
 
     expect(
       buildDesktopRemoteControlPatch(settings, policy).changedControls,
-    ).toEqual(["smartRecording"]);
+    ).toEqual(["semanticContext", "smartRecording"]);
   });
 
   it("ships the rollout capability disabled and never seeds a local opt-in", () => {
@@ -423,7 +455,7 @@ describe("desktop remote control", () => {
     const result = buildDesktopRemoteControlPatch(
       {
         platform: "macos",
-        enableSemanticContext: false,
+        enableSemanticContext: true,
         experimentalCoreaudioSystemAudio: true,
         experimentalMeetingPiggyback: true,
         filterMusic: true,

@@ -1419,6 +1419,194 @@ fn browser_google_meet_without_call_signal_is_unchanged() {
     assert_eq!(candidates.len(), 1);
 }
 
+// Exercise attribution -> real signal matcher -> session gate -> state machine.
+// A title identifies a candidate; it must never stand in for in-call evidence.
+fn slack_browser_candidate(live: bool, start: Instant) -> ResolvedMeetingCandidate {
+    let profiles = load_detection_profiles();
+    let process = arc_process();
+    let evidence = [BrowserPageEvidence {
+        browser_app: Some("Arc".into()),
+        url: Some("https://app.slack.com/client/T123/C456".into()),
+        title: Some("Huddles - workspace - Slack".into()),
+    }];
+    let ax = profiles
+        .iter()
+        .enumerate()
+        .filter(|(_, profile)| {
+            live && crate::meeting_watcher::shared::ax_window_matches_meeting(
+                None,
+                evidence[0].title.as_deref(),
+                profile,
+            )
+        })
+        .map(|(profile_index, _)| AxResolvedCandidate {
+            browser_app: "Arc".into(),
+            profile_index,
+            meeting_url: None,
+        })
+        .collect::<Vec<_>>();
+    resolve_process_candidate(
+        ProcessKey::from_process(&process).unwrap(),
+        start,
+        &process,
+        &profiles,
+        &evidence,
+        &ax,
+        &[],
+    )
+}
+
+fn slack_call_evidence(role: &str, label: &str) -> CallSignalEvidence {
+    let profiles = load_detection_profiles();
+    let profile = profiles
+        .iter()
+        .find(|p| platform_name_for_profile(p, true) == "Slack Huddle")
+        .unwrap();
+    let matched_signals = profile
+        .call_signals
+        .iter()
+        .filter(|signal| {
+            crate::meeting_watcher::shared::check_signal_match(
+                signal,
+                role,
+                Some(label),
+                None,
+                None,
+            )
+        })
+        .map(|signal| format!("{signal:?}"))
+        .collect::<Vec<_>>();
+    CallSignalEvidence {
+        session_key: ProcessKey::from_process(&arc_process()).unwrap(),
+        platform: "slack huddle".into(),
+        is_in_call: matched_signals.len() >= profile.min_signals_required,
+        matched_signals,
+    }
+}
+
+#[test]
+fn slack_browser_title_and_unrelated_mic_never_start_a_meeting() {
+    let profiles = load_detection_profiles();
+    for live in [false, true] {
+        for evidence in [
+            vec![], // unavailable or timed-out scan
+            vec![slack_call_evidence("AXButton", "Start a Huddle")],
+            vec![slack_call_evidence("AXButton", "Leave channel")],
+            vec![slack_call_evidence("AXButton", "Leave")],
+            vec![slack_call_evidence("AXStaticText", "Leave Huddle")],
+        ] {
+            let start = Instant::now();
+            let mut candidates = vec![slack_browser_candidate(live, start)];
+            retain_candidates_with_required_call_signal(&mut candidates, &profiles, &evidence);
+            let mut state = AudioProcessMeetingState::Idle;
+            for elapsed in [0, 1, 5, 30] {
+                let (next, action) = advance_audio_process_state(
+                    state,
+                    &candidates,
+                    &candidates,
+                    start + Duration::from_secs(elapsed),
+                    CANDIDATE_CONFIRM_WINDOW,
+                    ENDING_GRACE,
+                );
+                assert!(
+                    action.is_none(),
+                    "live={live}, evidence={evidence:?}: {action:?}"
+                );
+                assert!(matches!(next, AudioProcessMeetingState::Idle));
+                state = next;
+            }
+        }
+    }
+}
+
+#[test]
+fn slack_browser_starts_only_with_huddle_controls_for_its_session() {
+    let profiles = load_detection_profiles();
+    for live in [false, true] {
+        let start = Instant::now();
+        let candidate = slack_browser_candidate(live, start);
+        assert!(
+            matches!(&candidate, ResolvedMeetingCandidate::Browser { platform, .. } if platform == "Slack Huddle")
+        );
+        let evidence = slack_call_evidence("AXButton", "Leave Huddle");
+        assert!(evidence.is_in_call);
+        let mut wrong_session = evidence.clone();
+        wrong_session.session_key = ProcessKey::from_process(&chrome_process()).unwrap();
+        let mut wrong_platform = evidence.clone();
+        wrong_platform.platform = "google meet".into();
+        for unrelated in [wrong_session, wrong_platform] {
+            let mut candidates = vec![candidate.clone()];
+            retain_candidates_with_required_call_signal(&mut candidates, &profiles, &[unrelated]);
+            assert!(candidates.is_empty());
+        }
+        let mut candidates = vec![candidate];
+        retain_candidates_with_required_call_signal(&mut candidates, &profiles, &[evidence]);
+        assert_eq!(candidates.len(), 1);
+        let (state, action) = advance_audio_process_state(
+            AudioProcessMeetingState::Idle,
+            &candidates,
+            &candidates,
+            start,
+            CANDIDATE_CONFIRM_WINDOW,
+            ENDING_GRACE,
+        );
+        let action = if live {
+            action
+        } else {
+            assert!(action.is_none());
+            advance_audio_process_state(
+                state,
+                &candidates,
+                &candidates,
+                start + CANDIDATE_CONFIRM_WINDOW,
+                CANDIDATE_CONFIRM_WINDOW,
+                ENDING_GRACE,
+            )
+            .1
+        };
+        assert!(
+            matches!(action, Some(AudioProcessStateAction::StartMeeting { platform, .. }) if platform == "Slack Huddle")
+        );
+    }
+}
+
+#[test]
+fn native_slack_keeps_its_existing_start_policy() {
+    let profiles = load_detection_profiles();
+    let mut process = zoom_process();
+    process.bundle_id = Some("com.tinyspeck.slackmacgap".into());
+    process.owner_bundle_id = process.bundle_id.clone();
+    process.process_name = Some("Slack".into());
+    process.owner_app_name = process.process_name.clone();
+    let candidate = resolve_process_candidate(
+        ProcessKey::from_process(&process).unwrap(),
+        Instant::now(),
+        &process,
+        &profiles,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(
+        matches!(&candidate, ResolvedMeetingCandidate::Native { platform, .. } if platform == "Slack")
+    );
+    let mut candidates = vec![candidate];
+    retain_candidates_with_required_call_signal(&mut candidates, &profiles, &[]);
+    assert_eq!(candidates.len(), 1);
+
+    let native_profile = profiles
+        .iter()
+        .find(|p| p.app_identifiers.macos_app_names.contains(&"slack"))
+        .unwrap();
+    for ignored in ["slack", "huddle", "app.slack.com/huddle"] {
+        assert!(meeting_app_is_ignored_with_terms(
+            "Slack",
+            native_profile,
+            &[ignored.into()],
+        ));
+    }
+}
+
 fn whatsapp_process() -> AudioInputProcess {
     AudioInputProcess {
         audio_session_id: Some("coreaudio-process:500:input:built-in-mic".to_string()),

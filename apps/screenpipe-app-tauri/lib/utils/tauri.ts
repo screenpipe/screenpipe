@@ -15,6 +15,14 @@ export const commands = {
 async activateAppAfterOauth() : Promise<void> {
     await TAURI_INVOKE("activate_app_after_oauth");
 },
+async analyzeWorkflows(days: number | null, profile: JsonValue | null) : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("analyze_workflows", { days, profile }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Reconcile the live app + the next-boot config with the current enterprise
  * hidden-UI policy. The frontend calls this right after pushing a freshly
@@ -119,6 +127,14 @@ async calendarResetPermission() : Promise<Result<string, string>> {
 async calendarStatus() : Promise<Result<CalendarStatus, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("calendar_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async cancelStorageMigration(root: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("cancel_storage_migration", { root }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -405,6 +421,14 @@ async deleteDeviceLocalData(machineId: string) : Promise<Result<string, string>>
     else return { status: "error", error: e  as any };
 }
 },
+async deleteOriginalStorageDatabase(root: string, generation: string, confirmPermanentDeletion: boolean) : Promise<Result<number, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_original_storage_database", { root, generation, confirmPermanentDeletion }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async disableKeychainEncryption() : Promise<Result<KeychainStatus, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("disable_keychain_encryption") };
@@ -461,6 +485,14 @@ async ensureWebviewFocus() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async ensureWorkflowsRuntime() : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ensure_workflows_runtime") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Export a recording to `output_path` (an .mp4).
  *
@@ -504,6 +536,14 @@ async forceRegenerateSuggestions() : Promise<Result<CachedSuggestions, string>> 
 async generateActivityHistory(start: string, end: string, idempotencyKey: string) : Promise<Result<PersistedActivityHistory, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("generate_activity_history", { start, end, idempotencyKey }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async generateWorkflowSkill(workflow: JsonValue, profile: JsonValue | null) : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("generate_workflow_skill", { workflow, profile }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -786,13 +826,23 @@ async getScreenpipeAiGatewayUrl() : Promise<Result<string, string>> {
 },
 /**
  * Tauri command: absolute path of the screenpipe base dir (where store.bin
- * lives). Honors SCREENPIPE_DATA_DIR; the webview must use this instead of
- * hardcoding ~/.screenpipe, or it reads/writes a different settings file
- * than the Rust side whenever the override is set.
+ * lives). Honors SCREENPIPE_DATA_DIR at launch and remains stable when startup
+ * selects a different recording folder, so the webview and Rust share a store.
  */
 async getScreenpipeBaseDir() : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_screenpipe_base_dir") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getStorageMigrationActivity() : Promise<StorageMigrationActivity> {
+    return await TAURI_INVOKE("get_storage_migration_activity");
+},
+async getStorageMigrationStatus() : Promise<Result<StorageMigrationStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_storage_migration_status") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -826,6 +876,17 @@ async getSyncDevices() : Promise<Result<SyncDeviceInfo[], string>> {
 async getSyncStatus() : Promise<Result<SyncStatusResponse, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_sync_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getWorkflowsRuntime() : Promise<JsonValue> {
+    return await TAURI_INVOKE("get_workflows_runtime");
+},
+async grokbotConnection(action: string) : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("grokbot_connection", { action }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1160,6 +1221,14 @@ async loadBrainViewCanvas(viewId: string) : Promise<Result<BrainViewCanvasDocume
     else return { status: "error", error: e  as any };
 }
 },
+async loadWorkflowRecording(timestamp: string, appName: string) : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_workflow_recording", { timestamp, appName }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Lock sync (clear keys from memory and stop server sync service).
  */
@@ -1353,6 +1422,14 @@ async openViewerWindow(path: string) : Promise<Result<null, string>> {
 async openWindowsShellTarget(target: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("open_windows_shell_target", { target }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async openWorkflowCapturedMoment(frameId: number, timestamp: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_workflow_captured_moment", { frameId, timestamp }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1996,6 +2073,18 @@ async redactPiiForFeedback(text: string, settingsJson: string) : Promise<Result<
 }
 },
 /**
+ * Strict contribution redaction. No regex-only fallback, no content-bearing
+ * errors, no capture settings, and no chunk boundaries through identifiers.
+ */
+async redactWorkflowContribution(text: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("redact_workflow_contribution", { text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Tauri command: re-encrypt store.bin after frontend saves.
  *
  * Runs on a blocking worker. The previous sync command ran `fsync` of a
@@ -2042,6 +2131,9 @@ async registerWindowShortcuts() : Promise<Result<null, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async releaseWorkflowRecording(url: string) : Promise<void> {
+    await TAURI_INVOKE("release_workflow_recording", { url });
 },
 async remoteSyncDiscoverHosts() : Promise<Result<DiscoveredHost[], string>> {
     try {
@@ -2238,6 +2330,17 @@ async resizeSearchWindow(width: number, height: number) : Promise<Result<null, s
 }
 },
 /**
+ * Resolve a local AI tool config without replacing a symlink during setup.
+ */
+async resolveAiToolConfigPath(path: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("resolve_ai_tool_config_path", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Restart only after the user explicitly clicks the in-app action. macOS's
  * native Screen Recording sheet includes a "Later" choice; closing that sheet
  * must never be treated as consent to relaunch screenpipe.
@@ -2273,6 +2376,18 @@ async restartForUpdate(timeoutSecs: number | null) : Promise<Result<string, stri
 async resumeGlobalShortcuts() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("resume_global_shortcuts") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Automatic retry preserves capture intent; unlike the user command it must
+ * not turn recording back on after the user stopped it.
+ */
+async retryScreenpipe() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("retry_screenpipe") };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2348,6 +2463,14 @@ async saveEnterpriseLicenseKey(licenseKey: string) : Promise<Result<null, string
 async saveEnterpriseTeamConfig(isAdmin: boolean | null, licenseActive: boolean | null, teamApiToken: string | null, gatewayUrl: string | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("save_enterprise_team_config", { isAdmin, licenseActive, teamApiToken, gatewayUrl }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async saveWorkflowSkill(draft: JsonValue) : Promise<Result<JsonValue, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_workflow_skill", { draft }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -2803,6 +2926,17 @@ async startFeedbackUpload(request: FeedbackUploadRequest) : Promise<Result<strin
 }
 },
 /**
+ * Own the stop/convert/restart sequence in the native app even if settings closes.
+ */
+async startStorageMigration(root: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("start_storage_migration", { root }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Stop recording without killing the server.
  * Pipes, memories, search, and the HTTP API remain accessible.
  */
@@ -3025,7 +3159,7 @@ async writeBrowserLogs(entries: BrowserLogEntry[]) : Promise<void> {
 
 /** user-defined types **/
 
-export type AIPreset = { id: string; prompt: string; provider: AIProviderType; acpAgent?: AcpAgentPresetConfig | null; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
+export type AIPreset = { id: string; prompt: string; provider: AIProviderType; acpAgent?: AcpAgentPresetConfig | null; url?: string; model?: string; defaultPreset: boolean; enterpriseManaged?: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
 export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "acp" | "pi" | "anthropic"
 export type AcpAgentConfig = {
 /**
@@ -3141,8 +3275,8 @@ error: string | null;
 sinceEpochSecs: number;
 /**
  * True when this CPU lacks AVX2 (pre-2013 x86-64 / Atom-line): local
- * whisper/qwen3 STT is disabled at runtime (their kernels are
- * AVX2-compiled); parakeet + cloud engines still work. Drives the
+ * Whisper (and non-Windows Qwen) STT is disabled at runtime because its
+ * kernels are AVX2-compiled; Windows ONNX Qwen, Parakeet, and cloud engines work. Drives the
  * "compatibility mode" notice in onboarding/settings.
  */
 cpuCompatMode: boolean }
@@ -3363,7 +3497,12 @@ downloaded: boolean;
 /**
  * True when download failed with 401/403 — user must sign in.
  */
-auth_required: boolean }
+auth_required: boolean;
+/**
+ * True when the privileged persistence supervisor must apply the complete
+ * system package rather than the ordinary Tauri app-only artifact.
+ */
+persistent: boolean }
 export type PersistedActivityHistory = { entries: ActivityHistoryEntry[]; coverage: ActivityHistoryCoverage[] }
 export type PiBackend = "acp"
 export type PiCheckResult = { available: boolean; path: string | null }
@@ -3650,10 +3789,10 @@ useSystemDefaultAudio: boolean;
  */
 experimentalCoreaudioSystemAudio?: boolean;
 /**
- * Beta ("Smart recording" in the app): during detected meetings, capture
+ * Automatic meeting capture: during detected meetings, capture
  * the meeting app's own audio via a per-process tap plus the microphone
  * that app actually has open (instead of the global mix + assumed-default
- * mic). Default `false`. Takes precedence over everything: it engages in
+ * mic). Default `true`. Takes precedence over everything: it engages in
  * ANY `audio_capture_mode` (continuous or meetings-only) and displaces
  * the configured devices for the meeting's duration. Requires macOS 14.4+
  * or Windows, plus the meeting detector (with `disable_meeting_detector`
@@ -3668,10 +3807,10 @@ experimentalMeetingPiggyback?: boolean;
  * link out of A2DP into SCO, degrading the user's headphone/speaker
  * output quality (48kHz stereo -> 24kHz stereo or mono HFP, depending on
  * hardware) — a macOS/OS-level tradeoff with no external workaround
- * (issue #3750). Default `false`: Bluetooth input devices are only
- * actually opened while a meeting is detected; outside a meeting they
- * stay enabled-but-gated (selected in settings, not streaming) so the
- * Bluetooth link stays in A2DP. Set `true` to always record Bluetooth
+ * (issue #3750). Default `false`: automatically selected Bluetooth inputs
+ * are opened only during meetings, keeping A2DP outside meetings. A
+ * manually selected device or explicit device-start request is exempt.
+ * Set `true` to always record automatically selected Bluetooth
  * mics regardless of meeting state (prior behavior). Has no effect on
  * wired/built-in/unrecognized mics, on Bluetooth output devices, or on a
  * dedicated Bluetooth microphone with no output side of its own (macOS:
@@ -3714,7 +3853,8 @@ deepgramApiKey: string;
 filterMusic: boolean;
 /**
  * Maximum batch duration in seconds for batch transcription.
- * None = use engine-aware defaults (Deepgram=5000s, OpenAI=3000s, Whisper=600s).
+ * None or zero = use the audio engine's default. Overrides apply only to
+ * OpenAI-compatible endpoints, including meeting retranscription.
  * Also controls the max deferral cap during active meetings.
  */
 batchMaxDurationSecs?: number | null;
@@ -3749,10 +3889,9 @@ enableSemanticContext?: boolean;
  */
 semanticContextMode?: SemanticContextMode;
 /**
- * Disable the timeline / rewind feature. When true, the engine skips
- * timeline-only work: warming the hot frame cache from the DB at startup
- * and buffering captured frames/audio into the in-memory hot cache that
- * only the timeline streaming endpoint reads.
+ * Legacy timeline gate retained for managed deployments and compatibility.
+ * Consumer installs migrate visibility to sidebarNavLayout. Screenshot
+ * capture controls cache work through `timeline_cache_disabled`.
  */
 disableTimeline?: boolean;
 /**
@@ -4145,7 +4284,15 @@ listenOnLan?: boolean }) &
  * that the Rust struct doesn't know about. Without this, `save()` would
  * serialize only known fields and silently wipe frontend-only data.
  */
-({ [key in string]: null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue } }) & { aiPresets: AIPreset[]; isLoading: boolean; devMode: boolean; ocrEngine: string; dataDir: string; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; lockVaultShortcut?: string;
+({ [key in string]: null | boolean | number | string | JsonValue[] | { [key in string]: JsonValue } }) & { aiPresets: AIPreset[]; isLoading: boolean;
+/**
+ * Interface language only. "system" follows the OS; never changes capture.
+ */
+uiLocale: string;
+/**
+ * Last resolved PostHog rollout decision, shared with all native surfaces.
+ */
+uiLocalizationEnabled: boolean; devMode: boolean; ocrEngine: string; dataDir: string; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; lockVaultShortcut?: string;
 /**
  * Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
  */
@@ -4198,14 +4345,14 @@ autoUpdatePipes?: boolean;
  */
 enhancedAI?: boolean;
 /**
- * Explicit consumer opt-in for on-demand remote diagnostic log requests.
+ * Default-enabled on-demand remote diagnostic log requests.
  * Enterprise builds enforce remote log collection separately; this stored
- * value remains false unless a consumer chooses to enable it.
+ * value can be disabled by the user after the one-time default migration.
  */
 remoteLogCollectionEnabled?: boolean;
 /**
- * Account that granted remote log collection consent on this device.
- * Consumer collection is allowed only while this matches the current user.
+ * Account for an explicit enable; None uses the device-wide default.
+ * An explicit account binding must match the current user; None uses the device default.
  */
 remoteLogCollectionUserId?: string | null;
 /**
@@ -4268,9 +4415,15 @@ headless?: boolean;
  * When true, headless mode skips scheduled pipe runs so only recording
  * and the local server continue in the background.
  */
-headlessRecordOnly?: boolean }
+headlessRecordOnly?: boolean;
+/**
+ * Quit stops capture and closes the UI while the existing process serves history.
+ */
+keepSearchAvailableAfterQuit?: boolean }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
 export type StartExportRecordingResponse = { jobId: string }
+export type StorageMigrationActivity = { root: string | null; busy: boolean; recovering: boolean; message: string; error: string | null; elapsed_seconds: number; completed_records: number | null; total_records: number | null; bytes_saved: number | null; available_bytes: number | null; completed: boolean }
+export type StorageMigrationStatus = { root: string; app_session_id: string; busy: boolean; message: string; error: string | null; pending: boolean; in_place: boolean; completed: boolean; using_new_storage: boolean; generation: string | null; source_bytes: number; migrated_bytes: number | null; bytes_saved: number | null; available_bytes: number | null; can_migrate: boolean; can_cancel: boolean; can_delete_source: boolean; blocked_reason: string | null }
 export type Suggestion = { text: string;
 /**
  * Short preview with real data (e.g. "1h20m in VS Code — auth.rs, api.rs")

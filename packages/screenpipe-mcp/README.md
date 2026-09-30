@@ -8,6 +8,57 @@ https://github.com/user-attachments/assets/7466a689-7703-4f0b-b3e1-b1cb9ed70cff
 
 MCP server for screenpipe - search your screen recordings, audio transcriptions, and control your computer with AI.
 
+## Usage attribution
+
+When Screenpipe analytics are enabled, successful nonempty retrievals produce
+`qualified_value_event` with `surface` (`api` or `mcp`) and `agent_client`.
+Supported app identifiers are `claude`, `chatgpt`, `codex`, `cursor`, `gemini`,
+`openclaw`, `hermes`, `runner`, `windsurf`, `vscode`, `grok`, and `grokbot`. Claude Desktop
+and Claude Code share the existing `claude` bucket. This identifies the caller,
+not the app appearing in a recording.
+
+MCP uses `SCREENPIPE_MCP_CLIENT` when it names a supported app, falling back to
+the initialization handshake's client name. HTTP sessions resolve independently.
+Only the fixed identifier is forwarded; raw client names are never analytics
+properties. Unrecognized MCP clients remain `unknown`.
+
+Installed REST skills send `X-Screenpipe-Client: api` and a fixed
+`X-Screenpipe-Agent` header for their target app. Other API clients can send the
+same headers. Missing or unrecognized app identifiers retain the legacy
+`direct_api` bucket on qualified-value events. `search_performed` also includes
+the fixed `agent_client` (`unknown` when unidentified), alongside `request_source`.
+These are self-reported identifiers, not verified app identities; copied skills
+and callers that omit the headers cannot be reliably attributed. Historical
+generic API events cannot be assigned an app retroactively.
+
+Attribution adds fields to existing events and uses the existing analytics
+opt-out. It does not scan running apps or send prompts, search text, or raw
+client names. HTTP MCP now reports successful searches through the same
+best-effort local telemetry endpoint as stdio MCP; empty/failed searches do not
+produce qualified-value events.
+
+## Installable plugins
+
+Build the local Claude Desktop extension and the cloud plugin from source:
+
+```sh
+cd packages/screenpipe-mcp
+bun install --frozen-lockfile
+bun run build:installers
+```
+
+- `installers/screenpipe-local.mcpb`: open in Claude Desktop's extension installer.
+  Bundles the server and its dependencies; Claude supplies Node. Keep Screenpipe
+  running. Includes an optional sensitive API key setting and API URL setting.
+- `installers/screenpipe-cloud.zip`: portable remote plugin with OpenAI/Codex and
+  Claude compatibility manifests. Requires Data Sync and OAuth sign-in; exposes
+  only synced device listing and search. See the [cloud setup guide](plugins/screenpipe-cloud/README.md).
+- `installers/SUBMISSION.md`: listing copy, endpoint, permissions guidance, and
+  acceptance cases for directory submission. Building does not publish a listing.
+
+The archive builder uses an explicit file allowlist, so local environment files,
+credentials, development dependencies, and source tests are not packaged.
+
 ## Installation
 
 ### Option 1: The screenpipe desktop app (Recommended)
@@ -90,6 +141,17 @@ The server exposes:
 | `--listen-on-lan` | Bind `0.0.0.0` so other devices on the LAN can connect. Requires `--api-key`. | off (binds `127.0.0.1`) |
 | `--api-key <secret>` | Bearer token required for non-loopback requests (`Authorization: Bearer <secret>`). Loopback always allowed. | none |
 
+When the Screenpipe API requires authentication, set `SCREENPIPE_LOCAL_API_KEY`
+in the HTTP server's environment (`SCREENPIPE_API_KEY` is the fallback). Obtain
+it with `screenpipe auth token`, and keep it out of client configuration and
+chat. The server uses this key for upstream API requests, including retrieval
+telemetry. `--api-key` is a separate credential for callers connecting to MCP;
+it is never forwarded to the Screenpipe API.
+
+```bash
+SCREENPIPE_LOCAL_API_KEY="$(screenpipe auth token)" npx -y screenpipe-mcp --http
+```
+
 **Connecting a remote MCP client:**
 
 Point any MCP client that supports HTTP transport at the `/mcp` endpoint:
@@ -153,6 +215,12 @@ An `sk_ent_…` enterprise admin token, resolved in this order:
    app's **Settings → Privacy → Admin Team API Token**
 
 No token → the `team-*` tools do not appear at all.
+
+The MCP rereads `enterprise.json` for each team request, so replacing or clearing
+the saved token takes effect without restarting it. An explicit
+`SCREENPIPE_ENTERPRISE_TOKEN` still takes priority. If that override expires,
+replace it or remove it to use the desktop app's saved token, then restart the
+MCP server to reload its environment.
 
 ### 2. The base URL
 
@@ -399,3 +467,48 @@ Every line is auditable.
 Questions or concerns: open an issue at
 <https://github.com/screenpipe/screenpipe/issues> or reach out via
 <https://screenpi.pe>.
+
+## Saved personal workflows
+
+`list-workflows` searches the desktop Workflows catalog; `get-workflow` returns
+ordered steps, gaps and historical accessibility evidence through the same
+authenticated API. Both tools are available in stdio and HTTP modes. The running
+desktop engine must support `/workflows`; an older engine returns an error.
+Connected clients can use this context to plan automation, but retrieval neither
+authorizes nor executes actions. Captured bounds/IDs must be resolved again in
+the live app. Missing or expired capture and approximate frame matches are explicit.
+No automatic upload to ChatGPT, Claude or other services is introduced.
+
+The API exposes `GET /workflows?q=...&limit=20&offset=0` and
+`GET /workflows/{id}?include_automation=true` in OpenAPI. Workflow IDs derive from
+title, trigger and outcome, so rediscover after a rename. Results omit embedded
+screenshot bytes. Detail includes up to 30 stages and 100 context nodes per frame,
+with explicit truncation. `frame-context` with `purpose="automation"`,
+`node_offset` and `node_limit` (maximum 500) retrieves further nodes while preserving
+roles, normalized monitor bounds, automation IDs, state and structural ancestors.
+The default reading mode is unchanged. `get-frame-elements` with
+`purpose="automation"` remains the compact targeting view.
+
+A workflow's frame ID and timestamp must match the current recorder before node
+hydration. Missing, expired or mismatched frames remain explicit. A historical
+control is not proof it was clicked: the action target remains unknown until an
+agent establishes it from current context and the user's instructions.
+
+The API uses the desktop owner's configured app-local `workflows/catalog.json`
+with its validated backup, rather than guessing another installation's path.
+Unconfigured or unreadable storage returns 503. Existing authentication, vault
+locking and history access apply. Data-scoped or privacy-filtered pipes are denied
+rather than receiving an unfiltered synthesized report; explicit frame endpoint
+denials also apply when hydrating accessibility nodes.
+
+```text
+Desktop catalog -> authenticated /workflows -> MCP list-workflows / get-workflow
+                          |
+                          +-> existing frame metadata/context APIs
+                          +-> bundled API skill and generated skill references
+```
+
+Each stage can also return `inputSearch` arguments for `search-content` with
+`content_type="input"`. Input results preserve recorded x/y, keys/modifiers,
+element role/name and linked frame IDs. Treat the bounded time window as
+candidate events to verify, not as automatic proof of the workflow's actions.

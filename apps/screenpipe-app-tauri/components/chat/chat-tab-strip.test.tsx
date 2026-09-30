@@ -4,12 +4,16 @@
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChatActionsDropdown } from "@/components/chat/chat-action-menu";
 import { ChatTabStrip } from "@/components/chat/chat-tab-strip";
 import { CloseTabOrWindowShortcut } from "@/components/close-tab-or-window-shortcut";
 import { resetCloseShortcutForTests } from "@/lib/close-tab-shortcut";
 import { useChatStore, type SessionRecord } from "@/lib/stores/chat-store";
 
 const closeWindowMock = vi.fn(async () => undefined);
+const shortcutSettings = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
+vi.mock("@/lib/hooks/use-settings", () => ({ useOptionalSettings: () => ({ settings: shortcutSettings.current }) }));
+
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ close: closeWindowMock }),
@@ -78,6 +82,7 @@ function resetStore() {
 describe("ChatTabStrip", () => {
   beforeEach(() => {
     resetStore();
+    shortcutSettings.current = {};
     resetCloseShortcutForTests();
     closeWindowMock.mockClear();
     copyTextToClipboard.mockClear();
@@ -88,6 +93,65 @@ describe("ChatTabStrip", () => {
 
   afterEach(() => {
     resetCloseShortcutForTests();
+  });
+
+  it("renames and pins the active chat without a menu, with modifier guards", async () => {
+    useChatStore.getState().actions.upsert(record({ id: "chat-a" }));
+    const rename = vi.fn();
+    render(<ChatTabStrip activeId="chat-a" onActivate={vi.fn()} onNewChat={vi.fn()} renameConversation={rename} />);
+    fireEvent.keyDown(window, {key:"p"});
+    fireEvent.keyDown(window, {key:"p",code:"KeyP",ctrlKey:true,altKey:true,repeat:true});
+    fireEvent.keyDown(window, {key:"p",code:"KeyP",ctrlKey:true,altKey:true,isComposing:true});
+    expect(useChatStore.getState().sessions["chat-a"].pinned).toBe(false);
+    fireEvent.keyDown(window, {key:"p",code:"KeyP",ctrlKey:true,altKey:true});
+    expect(useChatStore.getState().sessions["chat-a"].pinned).toBe(true);
+    fireEvent.keyDown(window, {key:"r",code:"KeyR",ctrlKey:true,altKey:true});
+    const input = screen.getByRole("textbox", {name:"Rename first chat"});
+    fireEvent.change(input, {target:{value:"Updated title"}});
+    fireEvent.keyDown(input, {key:"Enter"});
+    await waitFor(() => expect(rename).toHaveBeenCalledWith("chat-a", "Updated title"));
+  });
+
+  it("does not dispatch through a hidden chat, dialog, or conflicting global shortcut", () => {
+    useChatStore.getState().actions.upsert(record({ id: "chat-a" }));
+    const props = {activeId:"chat-a", onActivate:vi.fn(), onNewChat:vi.fn()};
+    const view = render(<ChatTabStrip {...props} shortcutsEnabled={false} />);
+    const pin = () => fireEvent.keyDown(window, {key:"p",code:"KeyP",ctrlKey:true,altKey:true});
+    pin();
+    expect(useChatStore.getState().sessions["chat-a"].pinned).toBe(false);
+    shortcutSettings.current = {searchShortcut:"Control+Alt+P"};
+    view.rerender(<ChatTabStrip {...props} />);
+    pin();
+    expect(useChatStore.getState().sessions["chat-a"].pinned).toBe(false);
+    shortcutSettings.current = {};
+    view.rerender(<><ChatTabStrip {...props} /><div role="dialog" data-state="open" /></>);
+    pin();
+    expect(useChatStore.getState().sessions["chat-a"].pinned).toBe(false);
+  });
+
+  it("targets the right-clicked chat instead of the active chat when using a menu chord", async () => {
+    const actions = useChatStore.getState().actions;
+    actions.upsert(record({id:"chat-a",title:"first chat"}));
+    actions.upsert(record({id:"chat-b",title:"second chat"}));
+    actions.openChat("chat-b");
+    render(<ChatTabStrip activeId="chat-a" onActivate={vi.fn()} onNewChat={vi.fn()} />);
+    fireEvent.contextMenu(screen.getByRole("tab",{name:"second chat"}));
+    fireEvent.keyDown(await screen.findByRole("menu"), {key:"p",code:"KeyP",ctrlKey:true,altKey:true});
+    await waitFor(() => expect(useChatStore.getState().sessions["chat-b"].pinned).toBe(true));
+    expect(useChatStore.getState().sessions["chat-a"].pinned).toBe(false);
+  });
+
+  it("keeps the rename input focused after the header action menu closes", async () => {
+    useChatStore.getState().actions.upsert(record({id:"chat-a"}));
+    const rename = vi.fn();
+    render(<><ChatTabStrip activeId="chat-a" onActivate={vi.fn()} onNewChat={vi.fn()} renameConversation={rename} /><ChatActionsDropdown conversationId="chat-a" /></>);
+    fireEvent.pointerDown(screen.getByRole("button", {name:"Chat actions"}), {button:0, ctrlKey:false});
+    fireEvent.click(await screen.findByRole("menuitem", {name:/Rename/}));
+    const input = await screen.findByRole("textbox", {name:"Rename first chat"});
+    await waitFor(() => expect(input).toHaveFocus());
+    fireEvent.change(input,{target:{value:"Renamed from header"}});
+    fireEvent.keyDown(input,{key:"Enter"});
+    await waitFor(() => expect(rename).toHaveBeenCalledWith("chat-a","Renamed from header"));
   });
 
   it("renders the in-memory working set and activates another chat", () => {
@@ -133,7 +197,7 @@ describe("ChatTabStrip", () => {
     fireEvent.click(await screen.findByText("Open in split"));
     expect(useChatStore.getState().splitChatId).toBe("chat-b");
     expect(useChatStore.getState().splitChatPosition).toBe("right");
-    expect(screen.getByLabelText("split pane")).toBeInTheDocument();
+    expect(screen.getByLabelText("Split pane")).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.queryByText("Open in split")).not.toBeInTheDocument(),
     );
@@ -183,12 +247,12 @@ describe("ChatTabStrip", () => {
       />,
     );
 
-    const tab = screen.getByRole("tab", { name: "temporary side chat" });
+    const tab = screen.getByRole("tab", { name: "Temporary side chat" });
     expect(tab).toHaveAttribute(
       "title",
-      "temporary side chat · not saved to history",
+      "Temporary side chat · not saved to history",
     );
-    fireEvent.click(screen.getByLabelText("Close temporary side chat"));
+    fireEvent.click(screen.getByLabelText("Close Temporary side chat"));
     expect(onClose).toHaveBeenCalledWith("temporary-side");
   });
 
@@ -281,7 +345,7 @@ describe("ChatTabStrip", () => {
     );
   });
 
-  it("archives the active tab on Ctrl+E and keeps the sibling open", async () => {
+  it("archives the active tab on Ctrl+Shift+A and keeps the sibling open", async () => {
     const actions = useChatStore.getState().actions;
     for (const [id, title] of [
       ["chat-a", "first"],
@@ -301,7 +365,7 @@ describe("ChatTabStrip", () => {
       />,
     );
 
-    fireEvent.keyDown(window, { key: "e", code: "KeyE", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "A", code: "KeyA", ctrlKey: true, shiftKey: true });
 
     await waitFor(() =>
       expect(archiveConversation).toHaveBeenCalledWith("chat-b"),
@@ -310,7 +374,7 @@ describe("ChatTabStrip", () => {
     expect(onActivate).toHaveBeenCalledWith("chat-a");
   });
 
-  it("closes an empty untitled draft on Ctrl+E instead of archiving it", async () => {
+  it("closes an empty untitled draft on Ctrl+Shift+A instead of archiving it", async () => {
     const actions = useChatStore.getState().actions;
     actions.upsert(
       record({
@@ -340,7 +404,7 @@ describe("ChatTabStrip", () => {
       />,
     );
 
-    fireEvent.keyDown(window, { key: "e", code: "KeyE", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "A", code: "KeyA", ctrlKey: true, shiftKey: true });
 
     expect(archiveConversation).not.toHaveBeenCalled();
     expect(useChatStore.getState().openChatIds).toEqual(["chat-a"]);
@@ -363,10 +427,40 @@ describe("ChatTabStrip", () => {
 
     fireEvent.contextMenu(screen.getByRole("tab", { name: "crm" }));
     expect(await screen.findByText("Archive")).toBeVisible();
-    expect(screen.getByText("Ctrl+E")).toBeVisible();
+    expect(screen.getByText("Ctrl+Shift+A")).toBeVisible();
   });
 
-  it("starts a new chat on Ctrl+E when the last real tab is archived", async () => {
+  it("routes action shortcuts to the focused split composer without activating it", async () => {
+    const actions = useChatStore.getState().actions;
+    actions.upsert(record({ id: "chat-a", title: "primary" }));
+    actions.upsert(record({ id: "chat-b", title: "secondary" }));
+    actions.openChat("chat-a");
+    actions.setSplitChat("chat-b");
+    const onActivate = vi.fn();
+    render(<><ChatTabStrip activeId="chat-a" onActivate={onActivate} onNewChat={vi.fn()} /><section data-chat-pane-id="chat-b"><textarea aria-label="Secondary draft" /></section></>);
+    fireEvent.keyDown(screen.getByLabelText("Secondary draft"), { key: "p", code: "KeyP", ctrlKey: true, altKey: true });
+    await waitFor(() => expect(useChatStore.getState().sessions["chat-b"].pinned).toBe(true));
+    expect(useChatStore.getState().sessions["chat-a"].pinned).toBe(false);
+    expect(onActivate).not.toHaveBeenCalled();
+  });
+
+  it("closes the focused secondary pane on Ctrl+W and preserves its draft", () => {
+    const actions = useChatStore.getState().actions;
+    actions.upsert(record({ id: "chat-a", title: "primary" }));
+    actions.upsert(record({ id: "chat-b", title: "secondary", composerDraft: { input: "keep me", pastedImages: [], attachedDocs: [], pendingDocs: [] } }));
+    actions.openChat("chat-a");
+    actions.setSplitChat("chat-b");
+    const onActivate = vi.fn();
+    render(<><CloseTabOrWindowShortcut /><ChatTabStrip activeId="chat-a" onActivate={onActivate} onNewChat={vi.fn()} /><section data-chat-pane-id="chat-b"><textarea aria-label="Secondary draft" /></section></>);
+    screen.getByLabelText("Secondary draft").focus();
+    fireEvent.keyDown(window, { key: "w", code: "KeyW", ctrlKey: true });
+    expect(useChatStore.getState().openChatIds).toEqual(["chat-a"]);
+    expect(useChatStore.getState().sessions["chat-b"].composerDraft?.input).toBe("keep me");
+    expect(onActivate).not.toHaveBeenCalled();
+    expect(closeWindowMock).not.toHaveBeenCalled();
+  });
+
+  it("starts a new chat on Ctrl+Shift+A when the last real tab is archived", async () => {
     const actions = useChatStore.getState().actions;
     actions.upsert(record({ id: "chat-a", title: "only" }));
     actions.openChat("chat-a");
@@ -381,7 +475,7 @@ describe("ChatTabStrip", () => {
       />,
     );
 
-    fireEvent.keyDown(window, { key: "e", code: "KeyE", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "A", code: "KeyA", ctrlKey: true, shiftKey: true });
 
     await waitFor(() =>
       expect(archiveConversation).toHaveBeenCalledWith("chat-a"),
@@ -471,12 +565,12 @@ describe("ChatTabStrip", () => {
 
     expect(useChatStore.getState().sessions["chat-a"].unread).toBe(true);
     expect(useChatStore.getState().sessions["chat-b"].unread).toBe(true);
-    expect(screen.queryByLabelText("unread")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Unread")).toBeInTheDocument();
     expect(
-      screen.getByRole("tab", { name: "front" }).querySelector("[aria-label='unread']"),
+      screen.getByRole("tab", { name: "front" }).querySelector("[aria-label='Unread']"),
     ).toBeNull();
     expect(
-      screen.getByRole("tab", { name: "background" }).querySelector("[aria-label='unread']"),
+      screen.getByRole("tab", { name: "background" }).querySelector("[aria-label='Unread']"),
     ).not.toBeNull();
   });
 
@@ -504,7 +598,7 @@ describe("ChatTabStrip", () => {
       />,
     );
 
-    expect(screen.getByLabelText("working")).toBeInTheDocument();
+    expect(screen.getByLabelText("Working")).toBeInTheDocument();
     expect(screen.queryByTestId("chat-tab-worktree-chat-a")).not.toBeInTheDocument();
   });
 
@@ -524,8 +618,8 @@ describe("ChatTabStrip", () => {
       />,
     );
 
-    expect(screen.getByLabelText("working")).toBeInTheDocument();
-    expect(screen.queryByLabelText("split pane")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Working")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Split pane")).not.toBeInTheDocument();
   });
 
   it("owns pin, rename, copy, and archive on the tab instead of a header menu", async () => {
@@ -591,7 +685,7 @@ describe("ChatTabStrip", () => {
         "screenpipe://chat/chat-a",
       ),
     );
-    expect(toast).toHaveBeenCalledWith({ title: "copied chat link" });
+    expect(toast).toHaveBeenCalledWith({ title: "Copied" });
   });
 
   it("copies the worktree path only when the chat has one", async () => {
@@ -681,7 +775,7 @@ describe("ChatTabStrip", () => {
     );
 
     fireEvent.contextMenu(
-      screen.getByRole("tab", { name: "temporary side chat" }),
+      screen.getByRole("tab", { name: "Temporary side chat" }),
     );
     expect(await screen.findByText("Close tab")).toBeVisible();
     expect(screen.queryByText("Pin")).not.toBeInTheDocument();

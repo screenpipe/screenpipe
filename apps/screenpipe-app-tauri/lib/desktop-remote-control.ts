@@ -15,7 +15,7 @@ export const BOOLEAN_REMOTE_CONTROL_DEFINITIONS = {
   semanticContext: {
     flagKey: "semantic-context-control",
     settingKey: "enableSemanticContext",
-    shippedDefault: false,
+    shippedDefault: true,
   },
   coreAudioSystemAudio: {
     flagKey: "coreaudio-system-audio-control",
@@ -144,7 +144,7 @@ export const LOCAL_DESKTOP_REMOTE_POLICY: DesktopRemotePolicySnapshot = {
 
 export const NEW_INSTALL_REMOTE_CONTROL_PREFERENCES: DesktopRemotePreferences =
   {
-    semanticContext: null,
+    semanticContext: true,
     coreAudioSystemAudio: null,
     smartRecording: null,
     filterMusic: null,
@@ -469,13 +469,9 @@ export function normalizeDesktopRemotePreferences(
   settings: RemoteControllableSettings,
 ): DesktopRemotePreferences {
   const current = settings.remoteControlPreferences;
-  const legacySemanticPreference = settings.semanticContextPreference;
   return {
-    semanticContext: validBooleanPreference(current?.semanticContext)
-      ? current.semanticContext
-      : validBooleanPreference(legacySemanticPreference)
-        ? legacySemanticPreference
-        : Boolean(settings.enableSemanticContext ?? false),
+    // Structured app context is built in, including for former opt-outs.
+    semanticContext: true,
     coreAudioSystemAudio: validBooleanPreference(current?.coreAudioSystemAudio)
       ? current.coreAudioSystemAudio
       : Boolean(settings.experimentalCoreaudioSystemAudio ?? true),
@@ -565,13 +561,8 @@ export function buildDesktopRemoteControlPatch(
   const preferences = normalizeDesktopRemotePreferences(settings);
   const managed = settings.enterpriseManagedSettings ?? {};
   const effective = {
-    semanticContext: resolveBooleanRemoteControlValue(
-      "semanticContext",
-      preferences.semanticContext,
-      booleanPolicyOf(policy, "semanticContext"),
-      settings.platform,
-      parseManagedBoolean(managed.enableSemanticContext),
-    ),
+    // Only the emergency shutoff can disable built-in app context.
+    semanticContext: !booleanPolicyOf(policy, "semanticContext").forceDisabled,
     coreAudioSystemAudio: resolveBooleanRemoteControlValue(
       "coreAudioSystemAudio",
       preferences.coreAudioSystemAudio,

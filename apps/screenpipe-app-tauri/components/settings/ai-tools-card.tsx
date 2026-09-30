@@ -31,6 +31,7 @@ import {
   isGeminiMcpInstalled,
   isRunnerMcpInstalled,
   isWindsurfMcpInstalled,
+  isVscodeMcpInstalled,
 } from "@/lib/ai-tools-mcp";
 import { areExternalAgentSkillsInstalled } from "@/lib/external-agent-skills";
 import {
@@ -38,6 +39,10 @@ import {
   isCodexMcpInstalled,
   isCursorMcpInstalled,
 } from "@/lib/hooks/use-hardcoded-tiles";
+
+import { isGrokBotConnected } from "@/lib/grokbot-connection";
+import { useGT } from "gt-react";
+
 
 const DISPLAY_NAMES: Record<ConnectAllToolId, string> = {
   ...CONNECT_ALL_TOOL_NAMES,
@@ -88,6 +93,8 @@ function hasRowConnection(
 // Connected = MCP entry AND both skills where supported — same rule as tiles.
 async function isToolConnected(id: ConnectAllToolId): Promise<boolean> {
   switch (id) {
+    case "grokbot":
+      return isGrokBotConnected();
     case "claude":
       return !!(await getInstalledMcpVersion()) && (await areExternalAgentSkillsInstalled("claude"));
     case "claude-code":
@@ -106,6 +113,8 @@ async function isToolConnected(id: ConnectAllToolId): Promise<boolean> {
       return isRunnerMcpInstalled();
     case "windsurf":
       return isWindsurfMcpInstalled();
+    case "vscode":
+      return isVscodeMcpInstalled();
   }
 }
 
@@ -128,6 +137,9 @@ function ToolIcon({ id }: { id: ConnectAllToolId }) {
       return <img src="/images/openclaw.png" alt="" className={`${img} rounded`} />;
     case "hermes":
       return <img src="/images/hermes.png" alt="" className={`${img} rounded`} />;
+    case "vscode":
+      return <img src="/images/vscode.svg" alt="" className={img} />;
+    case "grokbot":
     case "runner":
       return <Bot className={img} />;
     case "windsurf":
@@ -137,6 +149,8 @@ function ToolIcon({ id }: { id: ConnectAllToolId }) {
 }
 
 export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
+
+  const ui = useGT();
   const [detected, setDetected] = useState<ConnectAllToolId[]>([]);
   const [connected, setConnected] = useState<Partial<Record<ConnectAllToolId, boolean>>>({});
   const [busy, setBusy] = useState<Partial<Record<ConnectAllToolId, ToolBusy>>>({});
@@ -150,10 +164,11 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
     try {
       const tools = await detectAiTools();
       setDetected(tools);
-      const entries = await Promise.all(
-        tools.map(async (id) => [id, await isToolConnected(id).catch(() => false)] as const)
-      );
-      setConnected(Object.fromEntries(entries));
+      await Promise.all(tools.map(async (id) => {
+        const value = await isToolConnected(id).catch(() => false);
+        // A cloud status check must not delay the other apps' local status.
+        setConnected((previous) => ({ ...previous, [id]: value }));
+      }));
     } catch {
       /* keep previous state */
     }
@@ -263,11 +278,11 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
   }, [confirmingDisconnect, rows, connected, removeTool, refresh, onChanged]);
 
   // Reveal the offending config next to the error so the fix is one click
-  // away. macOS `open -R` selects the file in Finder (the shell "open" command
-  // is already in the app's allowlist); other platforms fall back silently.
+  // away. macOS `open -R` selects the file in Finder (the "open-reveal" entry
+  // in the app's shell allowlist); other platforms fall back silently.
   const revealPath = async (path: string) => {
     try {
-      if (platform() === "macos") await Command.create("open", ["-R", path]).execute();
+      if (platform() === "macos") await Command.create("open-reveal", ["-R", path]).execute();
     } catch (e) {
       console.warn("[ai-tools] reveal failed:", e);
     }
@@ -281,6 +296,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
     : allConnected
     ? `All ${rows.length} connected`
     : `${connectedCount} of ${rows.length} connected`;
+
 
   return (
     <div className={`rounded-lg border bg-card p-3 transition-colors ${expanded ? "border-foreground bg-accent" : "border-border"}`}>
@@ -302,7 +318,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
           </div>
         </button>
         {/* Adaptive: one-click magic for first-timers, Manage once anything is on. */}
-        {noneConnected ? (
+        {noneConnected && rows.length > 0 ? (
           <Button
             type="button"
             size="sm"
@@ -316,7 +332,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
             ) : (
               <Plus className="h-3.5 w-3.5" />
             )}
-            {bulkRunning ? "Connecting..." : "Connect all"}
+            {bulkRunning ? ui("Connecting...") : ui("Connect all")}
           </Button>
         ) : (
           <Button
@@ -331,6 +347,12 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
           </Button>
         )}
       </div>
+
+      {detected.includes("grokbot") && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Connecting Grok Bot reads its saved connection credential and contacts its service.
+        </p>
+      )}
 
       {expanded && (
         <div className="mt-3 border-t border-border">
@@ -352,7 +374,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
                   <div className="min-w-0 flex-1">
                     <span className="text-[13px] text-foreground">{DISPLAY_NAMES[id]}</span>
                     <span className="ml-2 text-xs text-muted-foreground">
-                      screen and audio history
+                      Screen and audio history
                     </span>
                     {err && (
                       <p className="text-[11px] mt-1 flex items-center gap-1.5 flex-wrap">
@@ -366,9 +388,14 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
                             onClick={() => revealPath(err.path!)}
                             className="underline text-foreground/80 hover:text-foreground"
                           >
-                            open file
+                            Open file
                           </button>
                         )}
+                      </p>
+                    )}
+                    {id === "vscode" && isOn && !err && (
+                      <p className="text-[11px] mt-1 text-muted-foreground">
+                        In VS Code, open Copilot Chat and approve screenpipe when prompted.
                       </p>
                     )}
                     {id === "runner" && isOn && !err && (
@@ -380,7 +407,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
                   {toolBusy ? (
                     <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                       <Loader2 className="h-3 w-3 animate-spin" />
-                      {toolBusy === "connecting" ? "Connecting..." : "Removing..."}
+                      {toolBusy === "connecting" ? ui("Connecting...") : ui("Removing...")}
                     </span>
                   ) : isOn ? (
                     <>
@@ -449,7 +476,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
                   disabled={bulkRunning}
                   className="text-xs text-muted-foreground/60 hover:text-foreground transition-colors disabled:opacity-50"
                 >
-                  {confirmingDisconnect ? "Click again to confirm" : "Disconnect all…"}
+                  {confirmingDisconnect ? ui("Click again to confirm") : ui("Disconnect all…")}
                 </button>
                 {!allConnected && (
                   <Button

@@ -1,19 +1,19 @@
 ---
-title: "msty - privacy-first AI with screen context"
-sidebarTitle: "msty"
-description: "Connect screenpipe to Msty's Toolbox via MCP (STDIO or HTTP) so this privacy-first desktop AI can search your screen history and meeting transcripts."
+title: "Msty - privacy-first AI with screen context"
+sidebarTitle: "Msty"
+description: "Connect Screenpipe to Msty's Toolbox via MCP (STDIO or HTTP) so this privacy-first desktop AI can search your screen history and meeting transcripts."
 icon: "brain"
 ---
 
-[Msty](https://msty.studio) is a privacy-first AI platform (desktop + web) that natively supports MCP via its Toolbox feature — both STDIO and HTTP modes. screenpipe works out of the box with Msty, giving it access to your screen history, audio transcriptions, and more.
+[Msty](https://msty.studio) is a privacy-first AI platform (desktop + web) that natively supports MCP via its Toolbox feature — both STDIO and HTTP modes. Screenpipe works out of the box with Msty, giving it access to your screen history, audio transcriptions, and more.
 
-## setup
+## Setup
 
 ### STDIO mode
 
-1. make sure screenpipe is running on your machine
-2. open Msty and go to **Settings** → **Toolbox**
-3. add a new tool with the following configuration:
+1. Make sure Screenpipe is running on your machine
+2. Open Msty and go to **Settings** → **Toolbox**
+3. Add a new tool with the following configuration:
 
 ```json
 {
@@ -26,17 +26,17 @@ icon: "brain"
 }
 ```
 
-4. save and enable the tool
+4. Save and enable the tool
 
 ### HTTP mode
 
-if you need remote access, use the HTTP transport instead. start the HTTP MCP server:
+If you need remote access, use the HTTP transport instead. Start the HTTP MCP server:
 
 ```bash
 npx -y screenpipe-mcp-http --port 3031
 ```
 
-then point Msty's Toolbox at the HTTP endpoint:
+Then point Msty's Toolbox at the HTTP endpoint:
 
 ```json
 {
@@ -48,9 +48,9 @@ then point Msty's Toolbox at the HTTP endpoint:
 }
 ```
 
-## usage
+## Usage
 
-once configured, Msty can search your screen history and get context about what you've been working on:
+Once configured, Msty can search your screen history and get context about what you've been working on:
 
 ```
 > what was I working on this morning?
@@ -62,49 +62,49 @@ once configured, Msty can search your screen history and get context about what 
 > search for the API response format I was looking at in the browser
 ```
 
-## example workflows
+## Example workflows
 
-**recall context from earlier:**
+**Recall context from earlier:**
 ```
 > I was reading a blog post about rust macros earlier today,
 > search screenpipe and summarize the key points
 ```
 
-**reference meeting discussion:**
+**Reference meeting discussion:**
 ```
 > search my audio transcriptions for what was discussed
 > about the deployment timeline, then help me plan next steps
 ```
 
-**debug from memory:**
+**Debug from memory:**
 ```
 > I saw an error message flash on screen, search screenpipe
 > to find it and help me fix the issue
 ```
 
-**find code examples:**
+**Find code examples:**
 ```
 > search screenpipe for the python code I was looking at
 > in the browser yesterday about asyncio patterns
 ```
 
-## available tools
+## Available tools
 
-screenpipe provides these MCP tools to Msty:
+Screenpipe provides these MCP tools to Msty:
 
-| tool | description |
+| Tool | Description |
 |------|-------------|
-| `search-content` | search screen text (accessibility-first, OCR fallback), audio transcriptions, and input |
-| `activity-summary` | lightweight overview of app usage, speakers, and recent texts for a time range |
-| `search-elements` | search structured UI elements from the accessibility tree |
-| `frame-context` | full accessibility tree, URLs, and text for a specific frame |
-| `list-meetings` | list detected meetings with duration, app, and attendees |
-| `export-video` | export screen recordings as MP4 for a time range |
+| `search-content` | Search screen text (accessibility-first, OCR fallback), audio transcriptions, and input |
+| `activity-summary` | Lightweight overview of app usage, speakers, and recent texts for a time range |
+| `search-elements` | Search structured UI elements from the accessibility tree |
+| `frame-context` | Full accessibility tree, URLs, and text for a specific frame |
+| `list-meetings` | List detected meetings with duration, app, and attendees |
+| `export-video` | Export screen recordings as MP4 for a time range |
 
-## requirements
+## Requirements
 
-- screenpipe running on localhost:3030 (or localhost:3031 for HTTP mode)
+- Screenpipe running on localhost:3030 (or localhost:3031 for HTTP mode)
 - Msty desktop or web app
 - Node.js >= 18.0.0
 
-need help? [join our discord](https://discord.gg/screenpipe).
+Need help? [join our Discord](https://discord.gg/screenpipe).

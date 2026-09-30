@@ -11,24 +11,16 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuShortcut,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { toast } from "@/components/ui/use-toast";
-import { chatConversationLink } from "@/lib/chat/conversation-link";
-import {
-  formatChatAsMarkdown,
-  type MarkdownCitationPlan,
-} from "@/lib/chat/markdown-export";
 import type { Message } from "@/lib/chat/types";
 import { isInjectedTitle } from "@/lib/chat-utils";
 import { registerChatTabCloser } from "@/lib/close-tab-shortcut";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import {
+  hasOpenShortcutBlockingLayer,
   inAppShortcutLabel,
-  matchesInAppShortcut,
 } from "@/lib/shortcuts";
 import {
   isEphemeralSideConversation,
@@ -36,26 +28,21 @@ import {
   useChatStore,
   type SessionRecord,
 } from "@/lib/stores/chat-store";
-import { commands } from "@/lib/utils/tauri";
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+import { ChatActionMenuItems, CHAT_MENU_ACTION_EVENT, CHAT_MENU_ACTIONS, CHAT_MENU_CLASS, handleChatMenuShortcut, useChatActionBindings, type ChatMenuAction, type ChatMenuRequest } from "./chat-action-menu";
+import { createConversationBranch } from "@/lib/chat/branch-conversation";
+import { sessionRecordFromMeta } from "@/lib/stores/chat-store";
+
 
 interface ChatTabStripProps {
+  shortcutsEnabled?: boolean;
   activeId: string | null;
   onActivate: (id: string) => void | Promise<void>;
   onNewChat: () => void | Promise<void>;
   onClose?: (id: string) => void | Promise<void>;
   renameConversation?: (id: string, title: string) => Promise<void> | void;
   archiveConversation?: (id: string) => Promise<void> | void;
-}
-
-const EMPTY_CITATION_PLAN: MarkdownCitationPlan = {
-  deferredMessageIds: new Set(),
-  aggregatedAfter: new Map(),
-};
-
-async function copyText(text: string, title: string) {
-  await commands.copyTextToClipboard(text);
-  toast({ title });
 }
 
 async function messagesForExport(session: SessionRecord): Promise<Message[]> {
@@ -68,42 +55,16 @@ async function messagesForExport(session: SessionRecord): Promise<Message[]> {
   return (file?.messages ?? []) as Message[];
 }
 
-function visibleTabTitle(session: SessionRecord): string {
-  if (isEphemeralSideConversation(session)) return "temporary side chat";
-  if (session.streamingTitle?.trim()) return session.streamingTitle.trim();
-  const title = session.title.trim();
-  if (!title || isInjectedTitle(title)) return "new chat";
-  return title;
-}
 
 type TabGlyph =
-  | { kind: "error"; label: "error" }
-  | { kind: "working"; label: "working" }
-  | { kind: "unread"; label: "unread" }
+  | { kind: "error"; label: string }
+  | { kind: "working"; label: string }
+  | { kind: "unread"; label: string }
   | { kind: "worktree"; label: string }
-  | { kind: "split"; label: "split pane" };
+  | { kind: "split"; label: string };
 
 /** One left-slot mark. Status wins over worktree/split so the dot stays
  *  readable instead of stacking a branch icon on top of a 6px circle. */
-function tabGlyph(
-  session: SessionRecord,
-  active: boolean,
-  split: boolean,
-): TabGlyph | null {
-  if (session.status === "error") return { kind: "error", label: "error" };
-  if (["streaming", "thinking", "tool"].includes(session.status)) {
-    return { kind: "working", label: "working" };
-  }
-  if (session.unread && !active) return { kind: "unread", label: "unread" };
-  if (session.codingWorkspace) {
-    return {
-      kind: "worktree",
-      label: `worktree · ${session.codingWorkspace.repoName}`,
-    };
-  }
-  if (split) return { kind: "split", label: "split pane" };
-  return null;
-}
 
 function TabGlyphMark({
   glyph,
@@ -147,19 +108,51 @@ function TabGlyphMark({
 
 export function ChatTabStrip({
   activeId,
+  shortcutsEnabled = true,
   onActivate,
   onNewChat,
   onClose,
   renameConversation,
   archiveConversation,
 }: ChatTabStripProps) {
+
+  const ui = useGT();
+
+  function visibleTabTitle(session: SessionRecord): string {
+    if (isEphemeralSideConversation(session)) return ui("Temporary side chat");
+    if (session.streamingTitle?.trim()) return session.streamingTitle.trim();
+    const title = session.title.trim();
+    if (!title || title === "untitled" || isInjectedTitle(title)) return ui("New chat");
+    return title;
+  }
+
+  function tabGlyph(
+    session: SessionRecord,
+    active: boolean,
+    split: boolean,
+  ): TabGlyph | null {
+    if (session.status === "error") return { kind: "error", label: ui("Error") };
+    if (["streaming", "thinking", "tool"].includes(session.status)) {
+      return { kind: "working", label: ui("Working") };
+    }
+    if (session.unread && !active) return { kind: "unread", label: ui("Unread") };
+    if (session.codingWorkspace) {
+      return {
+        kind: "worktree",
+        label: ui("Worktree · {repository}", { repository: session.codingWorkspace.repoName }),
+      };
+    }
+    if (split) return { kind: "split", label: ui("Split pane") };
+    return null;
+  }
+
   const sessions = useChatStore((state) => state.sessions);
   const openChatIds = useChatStore((state) => state.openChatIds);
   const splitChatId = useChatStore((state) => state.splitChatId);
   const actions = useChatActions();
   const { isMac } = usePlatform();
   const closeShortcut = inAppShortcutLabel("close_tab", isMac);
-  const archiveShortcut = inAppShortcutLabel("archive_chat", isMac);
+  const bindings = useChatActionBindings();
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const closingActiveIdRef = useRef<string | null>(null);
   const [contextMenuRevision, setContextMenuRevision] = useState(0);
@@ -283,33 +276,77 @@ export function ChatTabStrip({
     [archiveConversation, closeTab, sessions],
   );
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (!matchesInAppShortcut(event, "archive_chat", isMac)) return;
-      if (document.querySelector('[role="dialog"][data-state="open"]')) return;
-      if (renamingId) return;
-      const id =
-        (activeId && tabs.some((tab) => tab.id === activeId) && activeId) ||
-        tabs[0]?.id;
-      if (!id) return;
-      event.preventDefault();
-      event.stopPropagation();
+  const runAction = async (id: string, action: ChatMenuAction) => {
+    const session = sessions[id];
+    if (!session || isEphemeralSideConversation(session)) return;
+    closeContextMenu();
+    if (action === "rename_chat") {
+      setRenameDraft(visibleTabTitle(session));
+      setRenamingId(id);
+    } else if (action === "pin_chat") {
+      const next = !session.pinned;
+      actions.togglePinned(id);
+      try {
+        const { updateConversationFlags } = await import("@/lib/chat-storage");
+        await updateConversationFlags(id, { pinned: next });
+      } catch { toast({ title: ui("Couldn't save pin"), variant: "destructive" }); }
+    } else if (action === "archive_chat") {
       archiveTab(id);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [activeId, archiveTab, isMac, renamingId, tabs]);
+    } else if (session.messageCount > 0) {
+      try {
+        const { saveConversationFile, conversationMetaFromJson } = await import("@/lib/chat-storage");
+        const branch = createConversationBranch({ sourceId: id, title: session.title, messages: await messagesForExport(session) });
+        if (!branch) throw new Error("No messages to branch");
+        await saveConversationFile(branch);
+        const meta = conversationMetaFromJson(branch);
+        if (!meta) throw new Error("Invalid branch");
+        actions.upsert(sessionRecordFromMeta(meta));
+        actions.setMessages(branch.id, branch.messages as any);
+        await onActivate(branch.id);
+      } catch { toast({ title: ui("Couldn't branch chat"), variant: "destructive" }); }
+    }
+  };
 
   useEffect(() => {
+    if (!shortcutsEnabled) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.isComposing || event.getModifierState?.("AltGraph") || hasOpenShortcutBlockingLayer() || renamingId) return;
+      const action = CHAT_MENU_ACTIONS.find(id => bindings.match(event, id));
+      const focusedPaneId = event.target instanceof Element
+        ? event.target.closest<HTMLElement>("[data-chat-pane-id]")?.dataset.chatPaneId
+        : undefined;
+      const targetId = focusedPaneId || activeId;
+      if (!action || !targetId || !tabs.some(tab => tab.id === targetId)) return;
+      event.preventDefault();
+      void runAction(targetId, action);
+    };
+    const onAction = (event: Event) => {
+      const request = (event as CustomEvent<ChatMenuRequest>).detail;
+      if (!request || !CHAT_MENU_ACTIONS.includes(request.action)) return;
+      const { id, action } = request;
+      if (tabs.some(tab => tab.id === id)) void runAction(id, action);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener(CHAT_MENU_ACTION_EVENT, onAction);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener(CHAT_MENU_ACTION_EVENT, onAction);
+    };
+  });
+
+  useEffect(() => {
+    if (!shortcutsEnabled) return;
     return registerChatTabCloser(() => {
+      const focusedPaneId = document.activeElement?.closest<HTMLElement>("[data-chat-pane-id]")?.dataset.chatPaneId;
       const id =
+        (focusedPaneId && tabs.some((tab) => tab.id === focusedPaneId) && focusedPaneId) ||
         (activeId && tabs.some((tab) => tab.id === activeId) && activeId) ||
         tabs[0]?.id;
       if (!id) return false;
       closeTab(id);
       return true;
     });
-  }, [activeId, closeTab, tabs]);
+  }, [activeId, closeTab, tabs, shortcutsEnabled]);
 
   return (
     <div
@@ -320,7 +357,7 @@ export function ChatTabStrip({
         ref={scrollerRef}
         className="scrollbar-hide flex min-w-0 items-center gap-0.5 overflow-x-auto scroll-smooth"
         role="tablist"
-        aria-label="Open chats"
+        aria-label={ui("Open chats")}
       >
         {tabs.map((session, index) => {
           const active = session.id === activeId;
@@ -359,7 +396,7 @@ export function ChatTabStrip({
                       <input
                         ref={renameInputRef}
                         value={renameDraft}
-                        aria-label={`Rename ${title}`}
+                        aria-label={ui("Rename {value1}", { value1: title })}
                         data-testid={`chat-tab-rename-${session.id}`}
                         className="min-w-0 flex-1 border border-border bg-background px-1 text-xs font-medium outline-none focus:ring-1 focus:ring-foreground/30"
                         onChange={(event) => setRenameDraft(event.target.value)}
@@ -426,8 +463,8 @@ export function ChatTabStrip({
                   )}
                   <button
                     type="button"
-                    aria-label={`Close ${title}`}
-                    title={`Close ${title} (${closeShortcut})`}
+                    aria-label={ui("Close {value1}", { value1: title })}
+                    title={ui("Close {value1} ({value2})", { value1: title, value2: closeShortcut })}
                     data-testid={`chat-tab-close-${session.id}`}
                     className={cn(
                       "mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground outline-none transition-opacity hover:bg-background/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
@@ -444,106 +481,11 @@ export function ChatTabStrip({
                   </button>
                 </div>
               </ContextMenuTrigger>
-              <ContextMenuContent className="w-52">
-                {!temporary ? (
-                  <>
-                    <ContextMenuItem
-                      onSelect={() => {
-                        closeContextMenu();
-                        const next = !session.pinned;
-                        actions.togglePinned(session.id);
-                        void import("@/lib/chat-storage").then(
-                          ({ updateConversationFlags }) =>
-                            updateConversationFlags(session.id, {
-                              pinned: next,
-                            }),
-                        );
-                      }}
-                    >
-                      {session.pinned ? "Unpin" : "Pin"}
-                    </ContextMenuItem>
-                    <ContextMenuItem
-                      onSelect={() => {
-                        closeContextMenu();
-                        setRenameDraft(title);
-                        setRenamingId(session.id);
-                      }}
-                    >
-                      Rename
-                    </ContextMenuItem>
-                    <ContextMenuSub>
-                      <ContextMenuSubTrigger>Copy</ContextMenuSubTrigger>
-                      <ContextMenuSubContent className="w-48">
-                        <ContextMenuItem
-                          onSelect={() => {
-                            closeContextMenu();
-                            void copyText(
-                              chatConversationLink(session.id),
-                              "copied chat link",
-                            );
-                          }}
-                        >
-                          Copy link
-                        </ContextMenuItem>
-                        <ContextMenuItem
-                          onSelect={() => {
-                            closeContextMenu();
-                            void (async () => {
-                              const messages = await messagesForExport(session);
-                              if (messages.length === 0) {
-                                toast({ title: "no messages to copy" });
-                                return;
-                              }
-                              await copyText(
-                                formatChatAsMarkdown(
-                                  messages,
-                                  EMPTY_CITATION_PLAN,
-                                ),
-                                "copied chat as markdown",
-                              );
-                            })();
-                          }}
-                        >
-                          Copy as Markdown
-                        </ContextMenuItem>
-                        <ContextMenuItem
-                          onSelect={() => {
-                            closeContextMenu();
-                            void copyText(session.id, "copied chat ID");
-                          }}
-                        >
-                          Copy chat ID
-                        </ContextMenuItem>
-                        {codingWorkspace ? (
-                          <ContextMenuItem
-                            onSelect={() => {
-                              closeContextMenu();
-                              void copyText(
-                                codingWorkspace.worktreePath,
-                                "copied worktree path",
-                              );
-                            }}
-                          >
-                            Copy worktree path
-                          </ContextMenuItem>
-                        ) : null}
-                      </ContextMenuSubContent>
-                    </ContextMenuSub>
-                    <ContextMenuSeparator />
-                    <ContextMenuItem
-                      onSelect={() => {
-                        closeContextMenu();
-                        archiveTab(session.id);
-                      }}
-                    >
-                      Archive
-                      <ContextMenuShortcut className="text-[10px] tracking-normal text-muted-foreground/55">
-                        {archiveShortcut}
-                      </ContextMenuShortcut>
-                    </ContextMenuItem>
-                    <ContextMenuSeparator />
-                  </>
-                ) : null}
+              <ContextMenuContent data-chat-actions-menu="" className={CHAT_MENU_CLASS} onKeyDown={handleChatMenuShortcut}>
+                {!temporary && <>
+                  <ChatActionMenuItems variant="context" session={session} onBeforeCopy={closeContextMenu} onAction={action => void runAction(session.id, action)} />
+                  <ContextMenuSeparator />
+                </>}
                 <ContextMenuItem
                   disabled={active || split || temporary}
                   onSelect={() => {
@@ -616,8 +558,8 @@ export function ChatTabStrip({
 
       <button
         type="button"
-        aria-label="New chat tab"
-        title="New chat"
+        aria-label={ui("New chat tab")}
+        title={ui("New chat")}
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/45 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onClick={() => void onNewChat()}
       >

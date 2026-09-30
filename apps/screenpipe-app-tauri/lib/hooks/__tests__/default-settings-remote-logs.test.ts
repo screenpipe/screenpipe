@@ -6,9 +6,9 @@ import { describe, expect, it } from "vitest";
 import { createDefaultSettingsObject } from "@/lib/hooks/use-settings";
 
 describe("default settings: remote support logs", () => {
-  it("defaults remote log collection to disabled", () => {
+  it("defaults remote log collection to enabled", () => {
     const settings = createDefaultSettingsObject();
-    expect(settings.remoteLogCollectionEnabled).toBe(false);
+    expect(settings.remoteLogCollectionEnabled).toBe(true);
     expect(settings.remoteLogCollectionUserId).toBeNull();
   });
 });

@@ -165,6 +165,8 @@ export function isAllowedMeetingChatTool(
 export function advanceMeetingChatStream(
   state: MeetingChatStreamState,
   envelope: AgentEventEnvelope,
+  // Other consumers share text folding, but supply their own runtime tool scope.
+  isAllowedTool: typeof isAllowedMeetingChatTool = isAllowedMeetingChatTool,
 ): MeetingChatStreamState {
   if (state.done) return state;
 
@@ -175,7 +177,7 @@ export function advanceMeetingChatStream(
   // Case 65: an unexpected tool ends the run rather than silently succeeding.
   if (
     type === "tool_execution_start" &&
-    !isAllowedMeetingChatTool(
+    !isAllowedTool(
       event.toolName,
       typeof event.kind === "string" ? event.kind : undefined,
     )

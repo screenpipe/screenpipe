@@ -15,6 +15,7 @@
 // original JavaScript, so these constants cannot silently drift.
 
 import Foundation
+import CryptoKit
 
 private var failures: [String] = []
 private var checks = 0
@@ -322,6 +323,46 @@ private func testLiveEdge() {
     expectEqual(TimelineLiveEdge.shiftIndex(7, newFramesAtFront: 3), 10, "index shifts by prepended count")
     expectEqual(TimelineLiveEdge.shiftIndex(7, newFramesAtFront: 0), 7, "no shift without new frames")
     expectEqual(TimelineLiveEdge.shiftIndex(7, newFramesAtFront: -2), 7, "negative counts are ignored")
+}
+
+// MARK: - Range removal
+
+private func testRangeRemoval() {
+    let base = Date(timeIntervalSince1970: 1_760_000_000)
+    // Newest-first: index 0 is `base`, index 9 is 90 s ago.
+    let frames = (0..<10).map {
+        makeFrame(secondsAgo: Double($0) * 10, app: "A", frameId: 100 + $0, base: base)
+    }
+    let at: (Int) -> Date = { base.addingTimeInterval(-Double($0) * 10) }
+
+    // Deleting up to and including the newest frame while the playhead is on
+    // it: land on the live edge, not the oldest frame.
+    var r = TimelineRangeRemoval.remove(from: at(3), to: at(0), frames: frames, currentIndex: 0)
+    expectEqual(r.frames.count, 6, "four newest frames removed")
+    expectEqual(r.nextIndex, 0, "playhead follows the live edge after deleting the head")
+    expectEqual(r.frames.first?.devices.first?.frameId, "104", "next-newest frame becomes the head")
+    expectEqual(r.removedFrameIds, Set(["100", "101", "102", "103"]), "removed ids are reported")
+
+    // Playhead outside the range keeps its frame even though its index shifts.
+    r = TimelineRangeRemoval.remove(from: at(5), to: at(3), frames: frames, currentIndex: 7)
+    expectEqual(r.frames.count, 7, "middle frames removed")
+    expectEqual(r.frames[r.nextIndex].devices.first?.frameId, "107", "playhead stays on its frame")
+    expectEqual(r.nextIndex, 4, "index shifts by the number of newer frames removed")
+
+    // Playhead inside a middle range: nearest surviving frame, not index 0.
+    r = TimelineRangeRemoval.remove(from: at(5), to: at(3), frames: frames, currentIndex: 4)
+    let landed = r.frames[r.nextIndex].devices.first?.frameId
+    expect(landed == "102" || landed == "106", "playhead lands on a neighbour, got \(landed ?? "nil")")
+
+    // Nothing in range: untouched.
+    r = TimelineRangeRemoval.remove(from: at(30), to: at(20), frames: frames, currentIndex: 2)
+    expectEqual(r.frames.count, 10, "out-of-range delete keeps every frame")
+    expectEqual(r.nextIndex, 2, "out-of-range delete keeps the playhead")
+
+    // Everything deleted: safe empty result.
+    r = TimelineRangeRemoval.remove(from: at(9), to: at(0), frames: frames, currentIndex: 5)
+    expect(r.frames.isEmpty, "full-range delete empties the day")
+    expectEqual(r.nextIndex, 0, "empty day clamps the playhead to zero")
 }
 
 // MARK: - Colours
@@ -830,9 +871,15 @@ private func testSelection() {
     expect(TimelineSelection.make(anchor: 0, hovered: 99, frames: frames) == nil,
            "an out-of-range selection is rejected")
 
-    let hour = TimelineSelection(start: base, end: base.addingTimeInterval(4320), indices: [0, 1])
+    let hour = TimelineSelection.make(anchor: 0, hovered: 1, frames: [
+        makeFrame(secondsAgo: -4320, app: "A", base: base),
+        makeFrame(secondsAgo: 0, app: "A", base: base),
+    ])!
     expectEqual(hour.durationLabel, "1h 12m", "duration label over an hour")
-    let short = TimelineSelection(start: base, end: base.addingTimeInterval(180), indices: [0, 1])
+    let short = TimelineSelection.make(anchor: 0, hovered: 1, frames: [
+        makeFrame(secondsAgo: -180, app: "A", base: base),
+        makeFrame(secondsAgo: 0, app: "A", base: base),
+    ])!
     expectEqual(short.durationLabel, "3m", "duration label under an hour")
 }
 
@@ -1240,6 +1287,17 @@ private func testTopChromeSafeInset() {
 
 // MARK: - Runner
 
+// The grouping sentinel belongs to captured metadata, not the UI language.
+private func testLocalizedAppMetadata() {
+    let id = SHA256.hash(data: Data("Unknown".utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+    let payload = try! JSONSerialization.data(withJSONObject: ["locale": "ja", "messages": [id: "localized unknown"]])
+    String(data: payload, encoding: .utf8)!.withCString { UILocalization.shared.update($0) }
+    defer { "{\"locale\":\"en\",\"messages\":{}}".withCString { UILocalization.shared.update($0) } }
+    testGrouping()
+    testFrameAccessors()
+    expectEqual(TimelineHoverMetadata.effectiveAppName(raw: "Unknown", carried: "Unknown"), "Unknown", "unknown metadata stays language independent")
+}
+
 private let allTests: [(String, () -> Void)] = [
     ("timestamp parsing", testTimestampParsing),
     ("stream decoding", testStreamDecoding),
@@ -1249,6 +1307,7 @@ private let allTests: [(String, () -> Void)] = [
     ("merge audio upgrade", testMergeAudioUpgrade),
     ("audio update window", testAudioUpdateWindow),
     ("live edge", testLiveEdge),
+    ("range removal", testRangeRemoval),
     ("js int32", testJSToInt32),
     ("colours", testColors),
     ("categories", testCategories),
@@ -1256,6 +1315,7 @@ private let allTests: [(String, () -> Void)] = [
     ("geometry", testGeometry),
     ("viewport", testViewport),
     ("grouping", testGrouping),
+    ("localized app metadata", testLocalizedAppMetadata),
     ("browser grouping", testBrowserGrouping),
     ("browser url carry-forward", testBrowserURLCarryForward),
     ("day boundary", testDayBoundary),

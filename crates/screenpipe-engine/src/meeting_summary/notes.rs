@@ -23,9 +23,33 @@ pub(crate) fn is_summary_heading(line: &str) -> bool {
         && trimmed.trim().eq_ignore_ascii_case("summary")
 }
 
-/// Does this note already carry a `## Summary` section?
+/// Clear failure messages are outcomes to recover from, not meeting summaries.
+/// Keep this narrow: a genuine summary may mention missing evidence or errors.
+pub(crate) fn summary_has_content(summary: &str) -> bool {
+    let normalized = summary.trim().to_lowercase().replace('’', "'");
+    !normalized.is_empty()
+        && ![
+            "i couldn't produce a reliable summary",
+            "i could not produce a reliable summary",
+            "i couldn't summarize",
+            "i could not summarize",
+            "i can't summarize",
+            "i cannot summarize",
+            "unable to summarize this meeting",
+            "no speech was captured",
+            "no transcript was available",
+        ]
+        .iter()
+        .any(|prefix| normalized.starts_with(prefix))
+}
+
+/// Does this note carry a nonempty summary rather than just a heading/refusal?
 pub(crate) fn note_has_summary_section(note: &str) -> bool {
-    note.lines().any(is_summary_heading)
+    let lines: Vec<_> = note.lines().collect();
+    lines
+        .iter()
+        .rposition(|line| is_summary_heading(line))
+        .is_some_and(|index| summary_has_content(&lines[index + 1..].join("\n")))
 }
 
 /// Merge a finished summary into a meeting note without touching user content.
@@ -69,8 +93,11 @@ pub(crate) async fn save_meeting_summary(
     title: Option<&str>,
 ) -> Result<MeetingRecord, String> {
     let summary = summary.trim();
-    if summary.is_empty() {
-        return Err("summary must not be empty".to_string());
+    if !summary_has_content(summary) {
+        return Err(
+            "summary must contain meeting content, not an empty result or failure message"
+                .to_string(),
+        );
     }
     let meeting = db
         .get_meeting_by_id(id)
@@ -96,7 +123,13 @@ mod tests {
     #[test]
     fn detects_summary_headings_like_the_note_ui() {
         assert!(note_has_summary_section("hello\n## Summary\nbody"));
-        assert!(note_has_summary_section("### summary"));
+        assert!(!note_has_summary_section("### summary"));
+        assert!(!note_has_summary_section(
+            "## Summary\nI couldn't produce a reliable summary for this meeting."
+        ));
+        assert!(note_has_summary_section(
+            "## Summary\nThe team investigated missing evidence in the dashboard."
+        ));
         assert!(!note_has_summary_section("start a line with `## Summary`"));
         assert!(!note_has_summary_section("##Summary\nno space"));
         assert!(!note_has_summary_section("## Summary of the meeting"));
@@ -166,6 +199,12 @@ mod tests {
             Some("## Summary\nDecisions were made.")
         );
         assert_eq!(saved.title.as_deref(), Some("Pricing sync"));
+        assert!(save_meeting_summary(&db, id,
+            "I couldn't produce a reliable summary for this meeting. The evidence appears mismatched.",
+            Some("Unwanted replacement")).await.is_err());
+        let unchanged = db.get_meeting_by_id(id).await.unwrap();
+        assert_eq!(unchanged.note, saved.note);
+        assert_eq!(unchanged.title, saved.title);
 
         // A refresh replaces the section and an empty title leaves it alone.
         let refreshed = save_meeting_summary(&db, id, "Refreshed.", Some("  "))

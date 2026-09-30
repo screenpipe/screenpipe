@@ -17,6 +17,7 @@
 //! redactions until the worker catches up.
 
 mod columns;
+mod hybrid;
 mod tables;
 
 use std::collections::HashMap;
@@ -127,6 +128,7 @@ pub struct WorkerStatus {
 
 #[derive(Clone)]
 pub struct Worker {
+    frame_storage: Option<Arc<screenpipe_db::DatabaseManager>>,
     pool: SqlitePool,
     writer: SqliteWritePool,
     redactor: Arc<dyn Redactor>,
@@ -149,6 +151,7 @@ impl Worker {
         cfg: WorkerConfig,
     ) -> Self {
         Self {
+            frame_storage: None,
             pool,
             writer,
             redactor,
@@ -293,7 +296,9 @@ impl Worker {
             .collect();
 
         loop {
-            if self.paused.load(std::sync::atomic::Ordering::SeqCst) {
+            if self.paused.load(std::sync::atomic::Ordering::SeqCst)
+                || screenpipe_resource::background_work::is_suspended()
+            {
                 self.set_paused(true).await;
                 if race(time::sleep(self.cfg.poll_interval), shutdown.as_ref())
                     .await
@@ -494,6 +499,13 @@ impl Worker {
     /// per-row path (issue #4115); everything else uses the generic
     /// single-column path.
     async fn process_one(&self, table: TargetTable, batch_size: u32) -> Result<u32, anyhow::Error> {
+        if self.frame_storage.is_some() {
+            match table {
+                TargetTable::FullText => return self.process_hybrid_frames(batch_size).await,
+                TargetTable::Accessibility => return Ok(0),
+                _ => {}
+            }
+        }
         let cols = self.cfg.columns;
         match table {
             TargetTable::FullText => self.process_frames_fulltext(batch_size).await,

@@ -23,6 +23,7 @@ export const CONNECTION_CATEGORY_BY_ID: Record<string, string> = {
   cursor: "Desktop",
   codex: "Desktop",
   grok: "Desktop",
+  grokbot: "Desktop",
   "claude-code": "Desktop",
   warp: "Desktop",
   chatgpt: "Desktop",
@@ -154,6 +155,7 @@ export interface ConnectionSuggestionTile {
 
 const CONNECTION_SEARCH_ALIASES_BY_ID: Record<string, readonly string[]> = {
   gmail: ["google", "google mail", "email", "mail"],
+  grokbot: ["grok bot", "grokbot", "xai", "x.ai"],
   claude: ["anthropic", "claude desktop", "claude code"],
 };
 
@@ -176,7 +178,8 @@ export const CONNECTION_HARDCODED_DESCRIPTIONS: Record<string, string> = {
   "claude": "Let Claude search your screen and audio history",
   "cursor": "Let Cursor search your screen and audio history",
   "codex": "Let Codex search your screen and audio history",
-  "grok": "Let Grok search your screen and audio history",
+  "grok": "Search your screen history from the Grok terminal app",
+  "grokbot": "Use your screen and audio history in Grok Bot",
   "claude-code": "Use your screen history in Claude Code",
   "warp": "Search your screen and audio history from Warp",
   "chatgpt": "Search your screen history from ChatGPT",
@@ -254,6 +257,7 @@ export const DEVICE_CONNECTION_ORDER = [
   "claude",
   "codex",
   "cursor",
+  "grokbot",
   "grok",
   "chatgpt",
   "warp",

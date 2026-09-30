@@ -18,6 +18,7 @@ pub mod cli_runtime;
 pub mod cloud;
 mod cloud_context;
 pub mod pi;
+pub mod pi_compaction;
 pub mod worktree;
 
 use anyhow::Result;
@@ -49,6 +50,7 @@ pub struct ExecutionHandle {
     pub pid: u32,
     shared_pid: SharedPid,
     pub stop_requested: Arc<AtomicBool>,
+    stop_notify: Arc<tokio::sync::Notify>,
     finished: Arc<AtomicBool>,
 }
 
@@ -58,6 +60,7 @@ impl ExecutionHandle {
             pid: 0,
             shared_pid,
             stop_requested: Arc::new(AtomicBool::new(false)),
+            stop_notify: Arc::new(tokio::sync::Notify::new()),
             finished: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -75,6 +78,7 @@ impl ExecutionHandle {
         }
 
         self.stop_requested.store(true, Ordering::SeqCst);
+        self.stop_notify.notify_waiters();
 
         loop {
             match self.shared_pid.load(Ordering::SeqCst) {
@@ -95,6 +99,16 @@ impl ExecutionHandle {
 
     pub fn clear_stop_request(&self) {
         self.stop_requested.store(false, Ordering::SeqCst);
+    }
+
+    /// Wake work waiting for capacity without having to spawn a child first.
+    pub async fn wait_for_stop(&self) {
+        let notified = self.stop_notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.stop_requested.load(Ordering::SeqCst) {
+            notified.await;
+        }
     }
 
     pub fn mark_finished(&self) {

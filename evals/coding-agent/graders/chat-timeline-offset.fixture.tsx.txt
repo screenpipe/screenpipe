@@ -1,0 +1,28 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import React from 'react';
+import {fireEvent,render,screen,waitFor,cleanup} from '@testing-library/react';
+import {afterEach,beforeEach,expect,it,vi} from 'vitest';
+import {MarkdownBlock} from './markdown-block';
+const ports=vi.hoisted(()=>({emit:vi.fn(async()=>{}),show:vi.fn(async()=>({status:'ok'})),viewer:vi.fn(async()=>({status:'ok'})),pending:vi.fn()}));
+vi.mock('@/lib/utils/tauri',()=>({commands:{showWindow:ports.show,openViewerWindow:ports.viewer}}));
+vi.mock('@tauri-apps/api/event',()=>({emit:ports.emit}));
+vi.mock('@/lib/hooks/use-timeline-store',()=>({useTimelineStore:{getState:()=>({setPendingNavigation:ports.pending})}}));
+beforeEach(()=>{vi.clearAllMocks();vi.stubGlobal('fetch',vi.fn(async()=>{throw Error('unexpected network')}));});
+afterEach(()=>{cleanup();vi.unstubAllGlobals()});
+async function click(href:string){render(<MarkdownBlock text={`[moment](${href})`} isUser={false}/>);fireEvent.click(screen.getByRole('link',{name:'moment'}));await Promise.resolve();}
+async function navigates(href:string,expected:string){await click(href);await waitFor(()=>expect(ports.emit).toHaveBeenCalled());const event=ports.emit.mock.calls.find((c:any[])=>c[0]==='navigate-to-timestamp') as any[]|undefined;expect(event).toBeDefined();expect(Date.parse(event![1])).toBe(Date.parse(expected));expect(ports.show).toHaveBeenCalledWith('Main');const pending=ports.pending.mock.calls.at(-1)?.[0] as any;expect(pending).toBeDefined();expect(Date.parse(pending.timestamp)).toBe(Date.parse(expected));expect(ports.viewer).not.toHaveBeenCalled();}
+it.each([
+ ['raw UTC','2026-01-15T18:12:34.123456+00:00',false],
+ ['raw previous day','2026-01-14T23:58:04.120000+00:00',false],
+ ['raw nonzero offset','2026-01-15T04:12:34.987+05:30',false],
+ ['encoded offset','2026-01-15T04:12:34.987+05:30',true],
+ ['negative offset','2026-01-15T04:12:34.987-07:00',false],
+ ['Z timestamp','2026-01-15T04:12:34.987Z',false],
+])('%s citation reaches its captured instant',async(_label,timestamp,encoded)=>{await navigates(`screenpipe://timeline?timestamp=${encoded?encodeURIComponent(timestamp as string):timestamp}`,timestamp as string)});
+it('start_time preserves a raw positive offset',async()=>{const t='2026-01-16T01:02:03+02:00';await navigates(`screenpipe://timeline?start_time=${t}`,t)});
+it('timestamp takes precedence over start_time',async()=>{const t='2026-01-17T02:03:04Z';await navigates(`screenpipe://timeline?start_time=2026-01-16T00:00:00Z&timestamp=${t}`,t)});
+it('invalid timeline input causes no navigation',async()=>{await click('screenpipe://timeline?timestamp=not-a-date');expect(ports.pending).not.toHaveBeenCalled();expect(ports.emit).not.toHaveBeenCalled();expect(ports.show).not.toHaveBeenCalled();expect(ports.viewer).not.toHaveBeenCalled()});
+it('frame links retain frame navigation',async()=>{await click('screenpipe://frame/42');await waitFor(()=>expect(ports.emit).toHaveBeenCalledWith('navigate-to-frame','42'));expect(ports.pending).toHaveBeenCalledWith({timestamp:'',frameId:'42'});expect(ports.show).toHaveBeenCalledWith('Main')});
+it('local artifacts retain the in-chat preview callback',()=>{const open=vi.fn();render(<MarkdownBlock text='[artifact](file:///tmp/synthetic-preview.md)' isUser={false} onOpenViewerPath={open}/>);fireEvent.click(screen.getByRole('link',{name:'artifact'}));expect(open).toHaveBeenCalledWith('/tmp/synthetic-preview.md');expect(ports.viewer).not.toHaveBeenCalled();expect(ports.emit).not.toHaveBeenCalled()});
+it('ordinary web links retain their destination',()=>{render(<MarkdownBlock text='[web](https://example.invalid/document)' isUser={false}/>);expect(screen.getByRole('link',{name:'web'}).getAttribute('href')).toBe('https://example.invalid/document');expect(ports.pending).not.toHaveBeenCalled();expect(ports.emit).not.toHaveBeenCalled()});

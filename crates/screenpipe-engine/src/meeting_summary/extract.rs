@@ -11,7 +11,7 @@
 //! save command (a heredoc, a fetch body), every string value in the stream
 //! is scanned too.
 
-use super::notes::is_summary_heading;
+use super::notes::{is_summary_heading, summary_has_content};
 
 /// Pull the summary the agent wrote out of a persisted run transcript.
 pub(crate) fn extract_summary_markdown(stdout: &str) -> Option<String> {
@@ -60,7 +60,7 @@ fn summary_tail(text: &str) -> Option<String> {
 
 /// A summary worth persisting has more than a stray heading's worth of text.
 fn is_plausible_summary(tail: &str) -> bool {
-    tail.trim().len() >= 40
+    tail.trim().len() >= 40 && summary_has_content(tail)
 }
 
 /// A summary recovered from inside a shell heredoc drags the rest of the
@@ -134,6 +134,14 @@ fn collect_strings<'a>(value: &'a serde_json::Value, out: &mut Vec<&'a str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refusal_under_summary_heading_is_not_recovered_as_content() {
+        let stdout = serde_json::json!({"type":"agent_end","messages":[{
+            "role":"assistant", "content":"## Summary\nI couldn't produce a reliable summary for this meeting. The recorded evidence appears mismatched."
+        }]}).to_string();
+        assert!(extract_summary_markdown(&stdout).is_none());
+    }
 
     #[test]
     fn extracts_summary_from_assistant_message() {

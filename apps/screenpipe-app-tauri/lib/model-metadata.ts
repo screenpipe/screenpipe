@@ -122,6 +122,10 @@ export function resolveModelLimits(
   if (!provider || !model) return null;
 
   const normalized = model.toLowerCase();
+  if (provider === "screenpipe-cloud" && normalized === "glm-5.3-flash-reap50-iq3m") {
+    // The hosted deployment has a smaller window than the GLM model family.
+    return { contextWindow: 32_768, maxOutputTokens: 8_192 };
+  }
   const table =
     provider === "openai"
       ? OPENAI_MODEL_LIMITS

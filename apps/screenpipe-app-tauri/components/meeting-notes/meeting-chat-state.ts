@@ -120,14 +120,14 @@ export function resolveMeetingChatAvailability(
   // inconsistent: a live meeting, where the transcript is actively growing,
   // stayed askable.
   if (c.refreshingAfterRetranscription) {
-    return { enabled: false, placeholder: "refreshing…", reason: "refreshing" };
+    return { enabled: false, placeholder: "Refreshing…", reason: "refreshing" };
   }
   // Case 11: nothing to ask about at all. Mirrors Granola's empty-transcript
   // copy, but only when there is no written context either.
   if (c.transcriptTurnCount === 0 && !c.hasWrittenContext) {
     return {
       enabled: false,
-      placeholder: "nothing recorded yet",
+      placeholder: "Nothing recorded yet",
       reason: "no-transcript",
     };
   }
@@ -135,13 +135,13 @@ export function resolveMeetingChatAvailability(
   if (!c.hasPreset) {
     return {
       enabled: false,
-      placeholder: "set up ai in settings",
+      placeholder: "Set up AI in settings",
       reason: "no-preset",
     };
   }
   // Case 71.
   if (c.quotaExhausted) {
-    return { enabled: false, placeholder: "ai limit reached", reason: "quota" };
+    return { enabled: false, placeholder: "AI limit reached", reason: "quota" };
   }
   return { enabled: true, placeholder: REST_PLACEHOLDER, reason: null };
 }

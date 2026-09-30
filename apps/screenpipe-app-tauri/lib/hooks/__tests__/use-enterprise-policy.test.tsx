@@ -387,7 +387,7 @@ describe("enterprise policy runtime manual activation", () => {
     );
   });
 
-  it("pushes explicit startup enforcement to Rust and applies it live", async () => {
+  it("shows explicit startup enforcement while Rust owns the settings write", async () => {
     mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
     Object.assign(mocks.settings, { autoStartEnabled: false });
     mockEnterpriseApi({
@@ -404,10 +404,8 @@ describe("enterprise policy runtime manual activation", () => {
     );
     expect(result.current.isSettingLocked("autoStartEnabled")).toBe(true);
     expect(result.current.getManagedValue("autoStartEnabled")).toBe("true");
-    expect(mocks.settings).toMatchObject({
-      autoStartEnabled: true,
-      enterpriseManagedSettings: { autoStartEnabled: true },
-    });
+    expect(mocks.settings.autoStartEnabled).toBe(false);
+    expect(mocks.settings).not.toHaveProperty("enterpriseManagedSettings");
     expect(mocks.commands.stopScreenpipe).not.toHaveBeenCalled();
   });
 
@@ -432,7 +430,8 @@ describe("enterprise policy runtime manual activation", () => {
     expect(result.current.isSettingLocked("autoStartEnabled")).toBe(false);
     expect(result.current.getManagedValue("autoStartEnabled")).toBeUndefined();
     expect(mocks.settings.autoStartEnabled).toBe(false);
-    expect(mocks.settings.enterpriseManagedSettings ?? {}).toEqual({});
+    // Native reconciliation releases the cached lock. The UI must not race it.
+    expect(mocks.settings.enterpriseManagedSettings).toEqual({ autoStartEnabled: true });
   });
 
   it("leaves malformed startup policy under employee control", async () => {
@@ -690,10 +689,9 @@ describe("enterprise policy runtime manual activation", () => {
     );
   });
 
-  it("does not wait for a hanging engine restart during activation", async () => {
+  it("leaves managed recording writes and restarts to the native process", async () => {
     vi.useFakeTimers();
     mockEnterpriseApi({ policy: { lockedSettings: { disableKeyboardCapture: "false" } } });
-    mocks.commands.stopScreenpipe.mockReturnValue(new Promise(() => undefined) as never);
     const { result } = await renderEnterprisePolicy();
 
     let activation!: Awaited<ReturnType<typeof result.current.submitLicenseKey>>;
@@ -707,6 +705,9 @@ describe("enterprise policy runtime manual activation", () => {
     await act(async () => {
       await vi.runOnlyPendingTimersAsync();
     });
+    expect(mocks.commands.stopScreenpipe).not.toHaveBeenCalled();
+    expect(mocks.commands.spawnScreenpipe).not.toHaveBeenCalled();
+    expect(mocks.settings).not.toHaveProperty("enterpriseManagedSettings");
   });
 
   it("surfaces seat-limit heartbeat failures instead of silently enrolling", async () => {

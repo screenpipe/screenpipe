@@ -10,6 +10,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "./tooltip";
+import { useGT } from "gt-react";
+
 
 export interface ValidatedTextareaProps extends Omit<TextareaProps, "onChange"> {
   label?: string;
@@ -37,6 +39,7 @@ export const ValidatedTextarea = React.forwardRef<HTMLTextAreaElement, Validated
     className,
     ...props
   }, ref) => {
+  const ui = useGT();
     const [value, setValue] = useState(props.value?.toString() || "");
     const [validationResult, setValidationResult] = useState<FieldValidationResult>({ isValid: true });
     const [isTouched, setIsTouched] = useState(false);
@@ -78,7 +81,7 @@ export const ValidatedTextarea = React.forwardRef<HTMLTextAreaElement, Validated
       const newValue = e.target.value;
       setValue(newValue);
       setIsTouched(true);
-      
+
       // Immediate validation for basic checks
       if (required && !newValue.trim()) {
         setValidationResult({ isValid: false, error: `${label || "Field"} is required` });
@@ -90,43 +93,43 @@ export const ValidatedTextarea = React.forwardRef<HTMLTextAreaElement, Validated
         // Clear immediate errors for debounced validation
         setValidationResult({ isValid: true });
       }
-      
+
       debouncedValidation(newValue);
     }, [required, minLength, maxLength, label, debouncedValidation]);
 
     const getValidationIcon = () => {
       if (!showValidationIcon || !isTouched) return null;
-      
+
       if (!validationResult.isValid) {
         return <AlertCircle className="h-4 w-4 text-destructive" />;
       }
-      
+
       if (validationResult.warning) {
         return <Info className="h-4 w-4 text-warning" />;
       }
-      
+
       if (validation && value) {
         return <CheckCircle2 className="h-4 w-4 text-success" />;
       }
-      
+
       return null;
     };
 
     const getTextareaVariant = () => {
       if (!isTouched) return "";
-      
+
       if (!validationResult.isValid) {
         return "border-destructive focus-visible:ring-destructive";
       }
-      
+
       if (validationResult.warning) {
         return "border-warning focus-visible:ring-warning";
       }
-      
+
       if (validation && value) {
         return "border-success focus-visible:ring-success";
       }
-      
+
       return "";
     };
 
@@ -150,7 +153,7 @@ export const ValidatedTextarea = React.forwardRef<HTMLTextAreaElement, Validated
             {required && <span className="text-destructive">*</span>}
           </Label>
         )}
-        
+
         <div className="relative">
           <Textarea
             ref={setRefs}
@@ -165,7 +168,7 @@ export const ValidatedTextarea = React.forwardRef<HTMLTextAreaElement, Validated
             )}
             maxLength={maxLength}
           />
-          
+
           {showValidationIcon && (
             <div className="absolute right-3 top-3">
               <TooltipProvider>
@@ -174,14 +177,14 @@ export const ValidatedTextarea = React.forwardRef<HTMLTextAreaElement, Validated
                     <div>{getValidationIcon()}</div>
                   </TooltipTrigger>
                   <TooltipContent>
-                    <p>{validationResult.error || validationResult.warning || "Valid"}</p>
+                    <p>{validationResult.error || validationResult.warning || ui("Valid")}</p>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
             </div>
           )}
         </div>
-        
+
         {getMessage() && (
           <p className={cn("text-sm", getMessageColor())}>
             {getMessage()}
@@ -197,4 +200,4 @@ export const ValidatedTextarea = React.forwardRef<HTMLTextAreaElement, Validated
   }
 );
 
-ValidatedTextarea.displayName = "ValidatedTextarea"; 
+ValidatedTextarea.displayName = "ValidatedTextarea";

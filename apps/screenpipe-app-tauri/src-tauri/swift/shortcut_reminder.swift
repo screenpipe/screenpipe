@@ -127,9 +127,9 @@ final class OverlayMetrics: ObservableObject {
     /// same `healthSubsystem` from the same payload.
     var healthHeadline: String {
         switch healthSubsystem {
-        case "audio": return "audio needs help"
-        case "screen": return "screen capture needs help"
-        default: return "recording needs help"
+        case "audio": return uiText("audio needs help")
+        case "screen": return uiText("screen capture needs help")
+        default: return uiText("recording needs help")
         }
     }
 
@@ -235,7 +235,7 @@ struct MeetingOverlayTranscriptItem: Identifiable, Equatable {
         if let speakerName = speakerName, !speakerName.trimmingCharacters(in: .whitespaces).isEmpty {
             return speakerName
         }
-        return deviceType == "input" ? "me" : "speaker"
+        return deviceType == "input" ? uiText("me") : uiText("speaker")
     }
 }
 
@@ -413,6 +413,7 @@ class AnimationTick: ObservableObject {
 
 @available(macOS 13.0, *)
 struct AudioEqualizerView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let active: Bool
     let speechRatio: Double
     @ObservedObject private var anim = AnimationTick.shared
@@ -824,12 +825,12 @@ func disclosureContent(
     metrics: OverlayMetrics
 ) -> (String, String?)? {
     switch control {
-    case "brand": return ("screenpipe", "right-click")
-    case "timeline": return ("timeline", overlayShortcut)
-    case "chat": return ("ask chat", chatShortcut)
-    case "search": return ("search", searchShortcut)
-    case "audio": return ("mic capture", metrics.audioActive ? "live" : "idle")
-    case "settings": return ("settings", nil)
+    case "brand": return ("screenpipe", uiText("right-click"))
+    case "timeline": return (uiText("timeline"), overlayShortcut)
+    case "chat": return (uiText("ask chat"), chatShortcut)
+    case "search": return (uiText("search"), searchShortcut)
+    case "audio": return (uiText("mic capture"), metrics.audioActive ? uiText("live") : uiText("idle"))
+    case "settings": return (uiText("settings"), nil)
     default: return nil
     }
 }
@@ -857,6 +858,7 @@ func disclosurePanelOrigin(
 
 @available(macOS 13.0, *)
 struct ShortcutDisclosureView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let label: String
     let value: String?
     let scale: CGFloat
@@ -887,6 +889,7 @@ struct ShortcutDisclosureView: View {
 
 @available(macOS 13.0, *)
 struct ShortcutReminderView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let overlayShortcut: String
     let chatShortcut: String
     let searchShortcut: String
@@ -981,7 +984,7 @@ struct ShortcutReminderView: View {
                     // its mouse routing; observed as a dead-click pill).
                     // Collapsed names the failing subsystem (#6126); expanded
                     // stays generic because the action row owns that width.
-                    Text(isExpanded ? "needs help" : metrics.healthHeadline)
+                    Text(isExpanded ? uiText("needs help") : metrics.healthHeadline)
                         .font(Brand.swiftUIMonoFont(size: 8 * scale, weight: .regular))
                         .foregroundColor(.white.opacity(0.85))
                         .padding(.trailing, isExpanded ? s(8) : s(2))
@@ -1007,7 +1010,7 @@ struct ShortcutReminderView: View {
                         Image(systemName: "power")
                             .font(.system(size: 6 * scale, weight: .bold))
                             .foregroundColor(.white.opacity(0.95))
-                        Text("quit & reopen")
+                        Text(uiText("quit & reopen"))
                             .font(Brand.swiftUIMonoFont(size: 8 * scale, weight: .bold))
                             .foregroundColor(.white.opacity(0.95))
                     }
@@ -1024,7 +1027,7 @@ struct ShortcutReminderView: View {
                             Image(systemName: "arrow.clockwise")
                                 .font(.system(size: 6 * scale, weight: .bold))
                                 .foregroundColor(.white.opacity(0.95))
-                            Text("restart")
+                            Text(uiText("restart"))
                                 .font(Brand.swiftUIMonoFont(size: 8 * scale, weight: .bold))
                                 .foregroundColor(.white.opacity(0.95))
                         }
@@ -1065,13 +1068,13 @@ struct ShortcutReminderView: View {
     private var fixingView: some View {
         healthProgressView(
             label: metrics.healthDetail.isEmpty
-                ? "fixing recording..."
-                : "fixing — \(metrics.healthDetail)..."
+                ? uiText("fixing recording...")
+                : uiText("fixing — {value1}...", ["value1": String(describing: metrics.healthDetail)])
         )
     }
 
     private var recoveringView: some View {
-        healthProgressView(label: "checking recovery...")
+        healthProgressView(label: uiText("checking recovery..."))
     }
 
     private func healthProgressView(label: String) -> some View {
@@ -1104,7 +1107,7 @@ struct ShortcutReminderView: View {
                 .foregroundColor(.green)
                 .padding(.leading, s(8))
 
-            Text("recording again")
+            Text(uiText("recording again"))
                 .font(Brand.swiftUIMonoFont(size: 8 * scale, weight: .regular))
                 .foregroundColor(.white.opacity(0.85))
                 .padding(.trailing, s(8))
@@ -1150,8 +1153,8 @@ struct ShortcutReminderView: View {
                     .fill(Color.red)
                     .frame(width: c(5), height: c(5))
                     .offset(x: c(2), y: c(-2))
-                    .help("meeting live — hover for transcript")
-                    .accessibilityLabel("meeting live")
+                    .help(uiText("meeting live — hover for transcript"))
+                    .accessibilityLabel(uiText("meeting live"))
             }
         }
     }
@@ -1211,6 +1214,7 @@ struct ShortcutReminderView: View {
 
 @available(macOS 13.0, *)
 struct MeetingTranscriptPreview: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var metrics: OverlayMetrics
     let scale: CGFloat
     let onOpenNote: () -> Void
@@ -1232,7 +1236,7 @@ struct MeetingTranscriptPreview: View {
                 Circle()
                     .fill(Color.red)
                     .frame(width: s(7), height: s(7))
-                Text("meeting live")
+                Text(uiText("meeting live"))
                     .font(Brand.swiftUIMonoFont(size: 9 * scale, weight: .semibold))
                     .foregroundColor(.white.opacity(0.92))
                     .lineLimit(1)
@@ -1265,17 +1269,17 @@ struct MeetingTranscriptPreview: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(metrics.meetingPinned ? "unpin transcript" : "pin transcript")
+                .accessibilityLabel(metrics.meetingPinned ? uiText("unpin transcript") : uiText("pin transcript"))
                 .help(
                     metrics.meetingPinned
-                        ? "unpin — the card hides again when the pointer leaves"
-                        : "pin — keep this card open after the pointer leaves"
+                        ? uiText("unpin — the card hides again when the pointer leaves")
+                        : uiText("pin — keep this card open after the pointer leaves")
                 )
                 Button(action: onOpenNote) {
                     HStack(spacing: s(4)) {
                         Image(systemName: "doc.text")
                             .font(.system(size: 8 * scale, weight: .medium))
-                        Text("note")
+                        Text(uiText("note"))
                             .font(Brand.swiftUIMonoFont(size: 8 * scale, weight: .semibold))
                             .lineLimit(1)
                             .fixedSize()
@@ -1288,7 +1292,7 @@ struct MeetingTranscriptPreview: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("open meeting note")
+                .help(uiText("open meeting note"))
                 Button(action: onStop) {
                     HStack(spacing: s(4)) {
                         if metrics.meetingStopping {
@@ -1299,7 +1303,7 @@ struct MeetingTranscriptPreview: View {
                             Image(systemName: "stop.fill")
                                 .font(.system(size: 7 * scale, weight: .medium))
                         }
-                        Text(metrics.meetingStopping ? "stopping" : "stop")
+                        Text(metrics.meetingStopping ? uiText("stopping") : uiText("stop"))
                             .font(Brand.swiftUIMonoFont(size: 8 * scale, weight: .semibold))
                             .lineLimit(1)
                             .fixedSize()
@@ -1313,7 +1317,7 @@ struct MeetingTranscriptPreview: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(metrics.meetingStopping)
-                .help("stop this meeting")
+                .help(uiText("stop this meeting"))
             }
             .padding(.horizontal, s(10))
             .frame(height: s(34))
@@ -1336,7 +1340,7 @@ struct MeetingTranscriptPreview: View {
                         ProgressView()
                             .scaleEffect(0.45 * scale)
                             .frame(width: s(10), height: s(10))
-                        Text("listening for speech…")
+                        Text(uiText("listening for speech…"))
                             .font(Brand.swiftUIMonoFont(size: 8 * scale))
                             .foregroundColor(.white.opacity(0.48))
                     }
@@ -1373,6 +1377,7 @@ struct MeetingTranscriptPreview: View {
 
 @available(macOS 13.0, *)
 private struct DockIconButton: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let icon: String
     let active: Bool
     let scale: CGFloat
@@ -1393,6 +1398,7 @@ private struct DockIconButton: View {
 
 @available(macOS 13.0, *)
 private struct DockAppIconButton: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let active: Bool
     let meetingActive: Bool
     let scale: CGFloat
@@ -1419,12 +1425,13 @@ private struct DockAppIconButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("screenpipe — right-click for options")
+        .help(uiText("screenpipe — right-click for options"))
     }
 }
 
 @available(macOS 13.0, *)
 private struct DockStatusCell<Content: View>: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let active: Bool
     @ViewBuilder let content: () -> Content
 
@@ -1441,6 +1448,7 @@ private struct DockStatusCell<Content: View>: View {
 /// standalone notification panel, so it reads as the overlay speaking up.
 @available(macOS 13.0, *)
 private struct OverlayNotificationView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let notification: OverlayNotification
     let scale: CGFloat
     let onAction: (OverlayNotificationAction) -> Void
@@ -1501,7 +1509,7 @@ private struct OverlayNotificationView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("dismiss notification")
+            .accessibilityLabel(uiText("dismiss notification"))
         }
         .padding(.horizontal, s(10))
         .frame(
@@ -1517,6 +1525,7 @@ private struct OverlayNotificationView: View {
 @available(macOS 13.0, *)
 // App icon button shown at rest. Click opens the timeline.
 struct CollapsedAppIconButton: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let scale: CGFloat
     let action: () -> Void
 
@@ -1653,7 +1662,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     private var healthToolTip: String? {
         guard metrics.healthState == "failure" else { return nil }
         return metrics.healthDetail.isEmpty
-            ? "recording stopped unexpectedly"
+            ? uiText("recording stopped unexpectedly")
             : metrics.healthDetail
     }
 
@@ -1931,7 +1940,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
                 meetingStopTimeoutWorkItem?.cancel()
                 meetingStopTimeoutWorkItem = nil
                 metrics.meetingStopping = false
-                metrics.meetingStopError = "meeting did not stop — try again"
+                metrics.meetingStopError = uiText("meeting did not stop — try again")
             }
             refreshTranscriptPanelVisibility()
         }
@@ -2073,7 +2082,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
                   self.metrics.meetingActive,
                   self.metrics.meetingStopping else { return }
             self.metrics.meetingStopping = false
-            self.metrics.meetingStopError = "still active — try stop again"
+            self.metrics.meetingStopError = uiText("still active — try stop again")
             self.refreshTranscriptPanelVisibility()
         }
         meetingStopTimeoutWorkItem = timeout
@@ -3181,11 +3190,11 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     /// behavior from macOS.
     private func showShortcutContextMenu(at point: NSPoint) {
         guard let contentView = panel?.contentView else { return }
-        let menu = NSMenu(title: "shortcut reminder")
+        let menu = NSMenu(title: uiText("shortcut reminder"))
         menu.autoenablesItems = false
 
         let snooze = NSMenuItem(
-            title: "Hide for 1 hour",
+            title: uiText("Hide for 1 hour"),
             action: #selector(hideShortcutReminderForHour),
             keyEquivalent: ""
         )
@@ -3195,7 +3204,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         menu.addItem(.separator())
 
         let settings = NSMenuItem(
-            title: "Settings…",
+            title: uiText("Settings…"),
             action: #selector(openShortcutReminderSettings),
             keyEquivalent: ""
         )
@@ -3777,4 +3786,9 @@ public func shortcutGetFrame(
         return 0
     }
     return -2
+}
+
+@_cdecl("shortcut_set_ui_locale")
+public func shortcut_set_ui_locale(_ json: UnsafePointer<CChar>?) {
+    UILocalization.shared.update(json)
 }

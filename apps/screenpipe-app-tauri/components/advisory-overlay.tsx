@@ -6,6 +6,8 @@
 import { AlertTriangle, Info, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAdvisoryStore, type Advisory } from "@/lib/advisories";
+import { useGT } from "gt-react";
+
 
 /**
  * Renders the active advisories — a calm, non-modal stack in the bottom-right
@@ -19,6 +21,8 @@ import { useAdvisoryStore, type Advisory } from "@/lib/advisories";
 const MAX_VISIBLE = 3;
 
 function AdvisoryCard({ advisory }: { advisory: Advisory }) {
+
+  const ui = useGT();
   const remove = useAdvisoryStore((s) => s.remove);
   const Icon = advisory.severity === "info" ? Info : AlertTriangle;
 
@@ -34,13 +38,13 @@ function AdvisoryCard({ advisory }: { advisory: Advisory }) {
       <div className="flex items-start gap-2.5">
         <Icon className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground" aria-hidden="true" />
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium lowercase text-foreground">{advisory.title}</div>
+          <div className="text-[13px] font-medium normal-case text-foreground">{advisory.title}</div>
           {advisory.body && (
             <div className="mt-0.5 text-xs leading-snug text-muted-foreground">{advisory.body}</div>
           )}
           {advisory.details && advisory.details.items.length > 0 && (
             <details className="mt-1.5 text-[11px] text-muted-foreground">
-              <summary className="cursor-pointer select-none lowercase transition-colors duration-150 hover:text-foreground">
+              <summary className="cursor-pointer select-none normal-case transition-colors duration-150 hover:text-foreground">
                 {advisory.details.label}
               </summary>
               <ul className="mt-1.5 max-h-28 space-y-1 overflow-y-auto border-l border-border pl-2 font-mono">
@@ -57,7 +61,7 @@ function AdvisoryCard({ advisory }: { advisory: Advisory }) {
               type="button"
               onClick={() => void advisory.action?.run()}
               className={cn(
-                "mt-2 text-[11px] uppercase tracking-wide",
+                "mt-2 text-[11px] normal-case tracking-wide",
                 "border border-border px-2 py-0.5",
                 "transition-colors duration-150 hover:bg-foreground hover:text-background",
               )}
@@ -69,7 +73,7 @@ function AdvisoryCard({ advisory }: { advisory: Advisory }) {
         <button
           type="button"
           onClick={() => remove(advisory.id)}
-          aria-label="dismiss"
+          aria-label={ui("Dismiss")}
           className="shrink-0 text-muted-foreground/60 transition-colors hover:text-foreground"
         >
           <X className="h-3.5 w-3.5" />
@@ -80,6 +84,7 @@ function AdvisoryCard({ advisory }: { advisory: Advisory }) {
 }
 
 export function AdvisoryOverlay() {
+
   const advisories = useAdvisoryStore((s) => s.advisories);
   if (advisories.length === 0) return null;
 
@@ -94,7 +99,7 @@ export function AdvisoryOverlay() {
         <AdvisoryCard key={advisory.id} advisory={advisory} />
       ))}
       {overflow > 0 && (
-        <div className="pointer-events-none text-right text-[11px] lowercase text-muted-foreground/70">
+        <div className="pointer-events-none text-right text-[11px] normal-case text-muted-foreground/70">
           +{overflow} more
         </div>
       )}

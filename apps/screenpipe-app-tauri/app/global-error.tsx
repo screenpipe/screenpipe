@@ -7,14 +7,19 @@
 import { useEffect } from "react";
 import { writeBrowserLogNow } from "@/lib/logging/browser-log";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
+import { useGT } from "gt-react";
+import { EmergencyLocalizationProvider } from "@/lib/i18n/provider";
 
-export default function GlobalError({
+
+function GlobalErrorContent({
   error,
   reset,
 }: {
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+
+  const ui = useGT();
   useEffect(() => {
     // Write immediately because error boundaries can tear down providers
     // before a batched log flush has time to run.
@@ -38,9 +43,9 @@ export default function GlobalError({
       <body style={{ margin: 0, backgroundColor: "#0a0a0a", color: "#fff", fontFamily: "system-ui, sans-serif" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
           <div style={{ textAlign: "center", padding: "2rem" }}>
-            <h2 style={{ fontSize: "1.25rem", marginBottom: "0.5rem" }}>something went wrong</h2>
+            <h2 style={{ fontSize: "1.25rem", marginBottom: "0.5rem" }}>Something went wrong</h2>
             <p style={{ fontSize: "0.875rem", color: "#999", marginBottom: "1.5rem" }}>
-              {error.message || "an unexpected error occurred"}
+              {error.message || ui("An unexpected error occurred")}
             </p>
             <div style={{ display: "flex", gap: "0.75rem", justifyContent: "center" }}>
               <button
@@ -55,7 +60,7 @@ export default function GlobalError({
                   fontSize: "0.875rem",
                 }}
               >
-                try again
+                Try again
               </button>
               <button
                 onClick={() => window.location.reload()}
@@ -69,7 +74,7 @@ export default function GlobalError({
                   fontSize: "0.875rem",
                 }}
               >
-                reload
+                Reload
               </button>
               <button
                 onClick={() => {
@@ -89,15 +94,20 @@ export default function GlobalError({
                   fontSize: "0.875rem",
                 }}
               >
-                get help
+                Get help
               </button>
             </div>
             <p style={{ fontSize: "0.75rem", color: "#666", marginTop: "0.75rem" }}>
-              error: {error.message || "unknown"}
+              Error: {error.message || ui("unknown")}
             </p>
           </div>
         </div>
       </body>
     </html>
   );
+}
+
+
+export default function GlobalError(props: {error: Error & {digest?: string}; reset: () => void}) {
+  return <EmergencyLocalizationProvider><GlobalErrorContent {...props} /></EmergencyLocalizationProvider>;
 }

@@ -93,7 +93,7 @@ describe("LinkPreviewAnchor", () => {
     });
 
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "loading public details",
+      "Loading public details",
     );
     expect(fetchRichLinkPreviewMock).toHaveBeenCalledTimes(1);
 
@@ -109,8 +109,8 @@ describe("LinkPreviewAnchor", () => {
     expect(tooltip).toHaveTextContent(
       "Show useful context before opening a link.",
     );
-    expect(tooltip).toHaveTextContent("by @screenpipe");
-    expect(screen.getByText("open")).toHaveClass("uppercase");
+    expect(tooltip).toHaveTextContent("By @screenpipe");
+    expect(screen.getByText("open")).toHaveClass("normal-case");
     expect(posthogCaptureMock).toHaveBeenCalledWith(
       "chat_link_preview_opened",
       {
@@ -145,7 +145,7 @@ describe("LinkPreviewAnchor", () => {
 
     const tooltip = screen.getByRole("tooltip");
     expect(tooltip).toHaveTextContent("feat(chat): add conversation coding worktrees");
-    expect(screen.getByText("closed")).toHaveClass("uppercase");
+    expect(screen.getByText("closed")).toHaveClass("normal-case");
     expect(tooltip).not.toHaveTextContent("draft");
   });
 
@@ -187,7 +187,7 @@ describe("LinkPreviewAnchor", () => {
     const tooltip = screen.getByRole("tooltip");
     expect(tooltip).toHaveTextContent("Embedded Web Player Customization");
     expect(tooltip).toHaveTextContent("YouTube · video");
-    expect(tooltip).toHaveTextContent("by Google for Developers");
+    expect(tooltip).toHaveTextContent("By Google for Developers");
     expect(tooltip.querySelector("img")).toHaveAttribute(
       "src",
       "https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg",

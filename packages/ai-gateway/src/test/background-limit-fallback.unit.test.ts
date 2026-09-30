@@ -6,6 +6,7 @@ import { describe, expect, it, mock } from 'bun:test';
 import { runChain, tryBackgroundFallback, trySafetyRefusalFallback } from '../handlers/chat';
 import {
 	BACKGROUND_FALLBACK_MODEL,
+	ALLOWANCE_FALLBACK_MODEL,
 	SafetyRefusalError,
 	hasUnsupportedFallbackInput,
 	isAccountLocalAllowanceError,
@@ -119,7 +120,7 @@ describe('paid background Pipe rescue fallback', () => {
 		});
 
 		expect(fallbackBody).not.toBeNull();
-		expect(fallbackBody?.model).toBe(BACKGROUND_FALLBACK_MODEL);
+		expect(fallbackBody?.model).toBe(ALLOWANCE_FALLBACK_MODEL);
 		// Pi's own `developer` role and full output budget survive the swap.
 		expect(fallbackBody?.messages[0].role).toBe('developer');
 		expect(fallbackBody?.max_completion_tokens).toBe(32_000);
@@ -141,8 +142,8 @@ describe('paid background Pipe rescue fallback', () => {
 				_flex: boolean,
 				gatewayContext: unknown,
 			) => {
-				expect(model).toBe(BACKGROUND_FALLBACK_MODEL);
-				expect(request.model).toBe(BACKGROUND_FALLBACK_MODEL);
+				expect(model).toBe(ALLOWANCE_FALLBACK_MODEL);
+				expect(request.model).toBe(ALLOWANCE_FALLBACK_MODEL);
 				expect(request.stream).toBe(stream);
 				expect(gatewayContext).toBeUndefined();
 				return new Response(stream ? 'data: [DONE]\n\n' : JSON.stringify({ choices: [] }));
@@ -155,8 +156,8 @@ describe('paid background Pipe rescue fallback', () => {
 				attempt as any,
 			);
 			expect(response?.status).toBe(200);
-			expect(response?.headers.get('x-screenpipe-model')).toBe(BACKGROUND_FALLBACK_MODEL);
-			expect(response?.headers.get('x-screenpipe-background-fallback')).toBe(BACKGROUND_FALLBACK_MODEL);
+			expect(response?.headers.get('x-screenpipe-model')).toBe(ALLOWANCE_FALLBACK_MODEL);
+			expect(response?.headers.get('x-screenpipe-background-fallback')).toBe(ALLOWANCE_FALLBACK_MODEL);
 			expect(attempt).toHaveBeenCalledTimes(1);
 		}
 	});

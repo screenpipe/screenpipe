@@ -41,6 +41,9 @@ const SWEEP_MAX_AGE_MINUTES: i64 = 60;
 const REQUEUE_MAX_AGE_HOURS: i64 = 24;
 /// At most this many interrupted summaries are requeued per boot.
 const REQUEUE_MAX: usize = 3;
+/// Initial attempt plus two recovery attempts. Persisted executions enforce
+/// this across restarts; manual retries remain available after exhaustion.
+const MAX_SUMMARY_ATTEMPTS: i64 = 3;
 
 static SPAWNED: AtomicBool = AtomicBool::new(false);
 
@@ -91,11 +94,37 @@ fn finished_after(finished_at: Option<&str>, cutoff: DateTime<Utc>) -> bool {
         .is_some_and(|t| t.with_timezone(&Utc) >= cutoff)
 }
 
+/// A resumed meeting must not inherit a completed run from its previous end.
+/// Modern keys carry the end timestamp (optionally followed by a retry suffix);
+/// legacy keys fall back to the run's start time, allowing SQLite's second precision.
+fn run_matches_meeting_end(run: &CompletedRun, meeting_end: &str) -> bool {
+    let Ok(end) = DateTime::parse_from_rfc3339(meeting_end) else {
+        return false;
+    };
+    if let Some((_, generation)) = run
+        .trigger_key
+        .as_deref()
+        .and_then(|key| key.split_once('@'))
+    {
+        let timestamp = DateTime::parse_from_rfc3339(generation).ok().or_else(|| {
+            generation
+                .rsplit_once(':')
+                .and_then(|(time, _)| DateTime::parse_from_rfc3339(time).ok())
+        });
+        return timestamp.is_some_and(|time| time == end);
+    }
+    finished_after(
+        run.started_at.as_deref(),
+        end.with_timezone(&Utc) - Duration::seconds(1),
+    )
+}
+
 #[derive(sqlx::FromRow)]
 struct CompletedRun {
     id: i64,
     trigger_key: Option<String>,
     stdout: Option<String>,
+    started_at: Option<String>,
     finished_at: Option<String>,
 }
 
@@ -105,12 +134,12 @@ async fn sweep_completed_runs(
     processed: &mut std::collections::HashSet<i64>,
 ) {
     let runs = sqlx::query_as::<_, CompletedRun>(
-        r#"SELECT id, trigger_key, stdout, finished_at
+        r#"SELECT id, trigger_key, stdout, started_at, finished_at
            FROM pipe_executions
            WHERE pipe_name = ?1
              AND trigger_event = 'meeting_ended'
-             AND status = 'completed'
-             AND (error_type IS NULL OR error_type = '')
+             AND ((status = 'completed' AND (error_type IS NULL OR error_type = ''))
+                  OR (status = 'failed' AND error_type = 'summary_not_saved'))
            ORDER BY id DESC
            LIMIT ?2"#,
     )
@@ -134,6 +163,12 @@ async fn sweep_completed_runs(
         let Ok(meeting) = db.get_meeting_by_id(meeting_id).await else {
             continue;
         };
+        let Some(end) = meeting.meeting_end.as_deref() else {
+            continue;
+        };
+        if !run_matches_meeting_end(&run, end) {
+            continue;
+        }
         if note_has_summary_section(meeting.note.as_deref().unwrap_or("")) {
             continue;
         }
@@ -154,11 +189,15 @@ async fn sweep_completed_runs(
                 }
             }
             None => {
-                let segments = db
-                    .count_meeting_transcript_segments(meeting_id)
-                    .await
-                    .unwrap_or(0);
-                let (error_type, error_message) = if segments == 0 {
+                // Use the same transcript as the meeting page, including its
+                // background-audio fallback. A routed-row count alone can be
+                // zero even while the user is looking at a full transcript.
+                let Ok(segments) = db.list_meeting_transcript_segments(meeting_id).await else {
+                    processed.remove(&run.id);
+                    continue;
+                };
+                let has_transcript = segments.iter().any(|segment| !segment.transcript.trim().is_empty());
+                let (error_type, error_message) = if !has_transcript {
                     (
                         "nothing_to_summarize",
                         "no speech was captured for this meeting, so there is no summary",
@@ -170,6 +209,9 @@ async fn sweep_completed_runs(
                     )
                 };
                 mark_run_outcome(db, run.id, error_type, error_message).await;
+                if has_transcript {
+                    retry_missing_summary(db, run.id, meeting_id, meeting.meeting_end.as_deref()).await;
+                }
                 info!(
                     "summary finalizer: run {} for meeting {} produced no saved summary — marked {}",
                     run.id, meeting_id, error_type
@@ -177,6 +219,52 @@ async fn sweep_completed_runs(
             }
         }
     }
+}
+
+/// Retry only the newest run for this ended meeting. A deterministic generation
+/// key makes re-emission after a restart idempotent in the scheduler's durable
+/// claims. Never rebroadcast meeting_ended to recording/lifecycle consumers.
+async fn retry_missing_summary(
+    db: &DatabaseManager,
+    run_id: i64,
+    meeting_id: i64,
+    meeting_end: Option<&str>,
+) -> bool {
+    let Some(end) = meeting_end else { return false };
+    let Ok((attempts, latest)) = sqlx::query_as::<_, (i64, Option<i64>)>(
+        r#"SELECT COUNT(*), MAX(id) FROM pipe_executions
+           WHERE pipe_name = ?1 AND trigger_event = 'meeting_ended'
+             AND (trigger_key = ?2 OR trigger_key LIKE ?3)
+             AND julianday(started_at) >= julianday(?4, '-1 second')"#,
+    )
+    .bind(SUMMARY_PIPE)
+    .bind(meeting_id.to_string())
+    .bind(format!("{}@%", meeting_id))
+    .bind(end)
+    .fetch_one(&db.pool)
+    .await
+    else {
+        return false;
+    };
+    if latest != Some(run_id) || !(1..MAX_SUMMARY_ATTEMPTS).contains(&attempts) {
+        return false;
+    }
+    if let Err(error) = screenpipe_events::send_event(
+        "meeting_summary_refresh_requested",
+        serde_json::json!({
+            "meeting_id": meeting_id,
+            "meeting_end": end,
+            "summary_generation": format!("{}:summary-recovery-{}", end, attempts),
+            "reason": "summary_not_saved",
+        }),
+    ) {
+        warn!(
+            "summary finalizer: could not queue recovery for meeting {}: {}",
+            meeting_id, error
+        );
+        return false;
+    }
+    true
 }
 
 /// Re-mark a run that claimed success but left nothing on the meeting.
@@ -378,6 +466,30 @@ mod db_tests {
         .unwrap()
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recovery_has_three_attempt_budget_and_ignores_old_or_live_runs() {
+        let (_dir, db) = test_db().await;
+        let store = SqlitePipeStore::new(db.clone());
+        let meeting = ended_meeting(&db).await;
+        let end = db
+            .get_meeting_by_id(meeting)
+            .await
+            .unwrap()
+            .meeting_end
+            .unwrap();
+        let first = completed_run(&store, &format!("{meeting}@{end}"), "").await;
+        assert!(retry_missing_summary(&db, first, meeting, Some(&end)).await);
+        assert!(!retry_missing_summary(&db, first, meeting, None).await);
+        let second =
+            completed_run(&store, &format!("{meeting}@{end}:summary-recovery-1"), "").await;
+        assert!(!retry_missing_summary(&db, first, meeting, Some(&end)).await);
+        assert!(retry_missing_summary(&db, second, meeting, Some(&end)).await);
+        let third = completed_run(&store, &format!("{meeting}@{end}:summary-recovery-2"), "").await;
+        assert!(!retry_missing_summary(&db, third, meeting, Some(&end)).await);
+        // A restart reads the persisted attempts and cannot reset the budget.
+        assert!(!retry_missing_summary(&db, third, meeting, Some(&end)).await);
+    }
+
     /// The production failure end to end: a completed run whose summary never
     /// reached the meeting gets it recovered and saved by the engine.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -421,9 +533,15 @@ mod db_tests {
         let (_dir, db) = test_db().await;
         let store = SqlitePipeStore::new(db.clone());
         let meeting_id = ended_meeting(&db).await;
+        let end = db
+            .get_meeting_by_id(meeting_id)
+            .await
+            .unwrap()
+            .meeting_end
+            .unwrap();
         completed_run(
             &store,
-            &format!("{}@2026-08-25T20:17:43.382Z", meeting_id),
+            &format!("{meeting_id}@{end}"),
             &agent_end_stdout("## Summary\nGeneration-keyed run body long enough to persist."),
         )
         .await;
@@ -437,6 +555,33 @@ mod db_tests {
             .note
             .unwrap();
         assert!(note.contains("Generation-keyed run body"));
+    }
+
+    #[tokio::test]
+    async fn sweep_does_not_restore_or_retry_a_previous_meeting_generation() {
+        let (_dir, db) = test_db().await;
+        let store = SqlitePipeStore::new(db.clone());
+        let id = ended_meeting(&db).await;
+        let old = (Utc::now() - Duration::minutes(5)).to_rfc3339();
+        let stale = completed_run(
+            &store,
+            &format!("{id}@{old}"),
+            &agent_end_stdout(
+                "## Summary\nThis stale summary belongs to the previous meeting end.",
+            ),
+        )
+        .await;
+        let empty = completed_run(&store, &format!("{id}@{old}:summary-recovery-1"), "").await;
+        sweep_completed_runs(&db, &mut std::collections::HashSet::new()).await;
+        assert!(db.get_meeting_by_id(id).await.unwrap().note.is_none());
+        assert_eq!(
+            execution_state(&db, stale).await,
+            ("completed".into(), None)
+        );
+        assert_eq!(
+            execution_state(&db, empty).await,
+            ("completed".into(), None)
+        );
     }
 
     /// No summary anywhere + no transcript → the run stops claiming success.
@@ -492,6 +637,59 @@ mod db_tests {
         let (status, error_type) = execution_state(&db, run).await;
         assert_eq!(status, "failed");
         assert_eq!(error_type.as_deref(), Some("summary_not_saved"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn empty_summary_with_only_archived_speech_is_retryable_not_silence() {
+        let (_dir, db) = test_db().await;
+        let store = SqlitePipeStore::new(db.clone());
+        let meeting = db
+            .insert_meeting("Zoom", "manual", None, None)
+            .await
+            .unwrap();
+        let time = Utc::now();
+        let chunk = db
+            .insert_audio_chunk("Meeting Tap (output)_fixture.mp4", Some(time))
+            .await
+            .unwrap();
+        db.insert_audio_transcription(
+            chunk,
+            "We agreed to finish the draft on Friday.",
+            0,
+            "fixture",
+            &screenpipe_db::AudioDevice {
+                name: "Meeting Tap".into(),
+                device_type: screenpipe_db::DeviceType::Output,
+            },
+            None,
+            Some(0.0),
+            Some(3.0),
+            Some(time),
+        )
+        .await
+        .unwrap();
+        db.end_meeting(meeting, &Utc::now().to_rfc3339(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            db.list_meeting_transcript_segments(meeting)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.count_meeting_transcript_segments(meeting).await.unwrap(),
+            0
+        );
+        let run = completed_run(&store, &meeting.to_string(), &agent_end_stdout(
+            "## Summary\nI couldn't produce a reliable summary for this meeting. The evidence appears mismatched.")).await;
+        sweep_completed_runs(&db, &mut std::collections::HashSet::new()).await;
+        assert_eq!(
+            execution_state(&db, run).await,
+            ("failed".into(), Some("summary_not_saved".into()))
+        );
+        assert_eq!(db.get_meeting_by_id(meeting).await.unwrap().note, None);
     }
 
     /// A note that already carries a summary is left alone entirely.
@@ -575,6 +773,11 @@ mod db_tests {
         while let Ok(Some(event)) =
             tokio::time::timeout(std::time::Duration::from_millis(500), refresh_rx.next()).await
         {
+            // Other DB fixtures also use meeting id 1 and legitimately emit
+            // summary recovery events on this process-global bus.
+            if event.data.get("reason").and_then(|v| v.as_str()) != Some("interrupted_by_restart") {
+                continue;
+            }
             if let Some(id) = event.data.get("meeting_id").and_then(|v| v.as_i64()) {
                 if [needs_requeue, retried, already_summarized].contains(&id) {
                     requeued_ids.push(id);

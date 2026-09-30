@@ -11,6 +11,13 @@ import { mockLocalApiResponse, createMockHealth } from "./browser-engine-mock";
 import { createBrowserIpcMock } from "./browser-tauri-mock";
 
 describe("browser development runtime", () => {
+  it("supplies startup authentication only for the fictional mock environment", () => {
+    const mock = createBrowserIpcMock({ mode: "mock", apiPort: 3030 });
+    const live = createBrowserIpcMock({ mode: "live", apiPort: 3030 });
+    expect(mock("get_env", { name: "SCREENPIPE_STARTUP_AUTHENTICATION_STATUS" })).toBe("authenticated");
+    expect(live("get_env", { name: "SCREENPIPE_STARTUP_AUTHENTICATION_STATUS" })).toBe("");
+    expect(mock("get_env", { name: "UNRELATED" })).toBe("");
+  });
   it("provides a stateful Tauri store", async () => {
     const onStoreChange = vi.fn();
     const invoke = createBrowserIpcMock({

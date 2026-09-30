@@ -129,10 +129,10 @@ function meetingScene(ctx: CanvasRenderingContext2D, w: number, h: number): Pain
 
 function timelineScene(ctx: CanvasRenderingContext2D, w: number, h: number): Painter {
   const segs = [
-    { a: 0.1, b: 0.26, label: "cursor" },
-    { a: 0.3, b: 0.44, label: "meeting" },
-    { a: 0.5, b: 0.62, label: "firefox" },
-    { a: 0.68, b: 0.9, label: "figma" },
+    { a: 0.1, b: 0.26, label: "Cursor" },
+    { a: 0.3, b: 0.44, label: "Meeting" },
+    { a: 0.5, b: 0.62, label: "Firefox" },
+    { a: 0.68, b: 0.9, label: "Figma" },
   ];
   return (f) => {
     ctx.clearRect(0, 0, w, h);

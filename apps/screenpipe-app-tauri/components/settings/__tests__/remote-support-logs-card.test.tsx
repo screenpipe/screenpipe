@@ -78,6 +78,16 @@ describe("RemoteSupportLogsCard", () => {
     expect(screen.getByText(/deleted after 30 days/i)).toBeInTheDocument();
   });
 
+  it("enables the device default after sign-in without an account binding", () => {
+    mocks.settings = {
+      user: { id: "user_123" },
+      remoteLogCollectionEnabled: true,
+      remoteLogCollectionUserId: null,
+    };
+    render(<RemoteSupportLogsCard />);
+    expect(screen.getByRole("switch", { name: "Allow remote support logs" })).toBeChecked();
+  });
+
   it("persists an explicit consumer opt-in", async () => {
     render(<RemoteSupportLogsCard />);
 

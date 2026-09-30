@@ -22,11 +22,16 @@ import {
   IN_APP_SHORTCUTS,
   OPEN_SHORTCUT_GUIDE_EVENT,
   globalShortcutHint,
+  conflictsWithGlobalShortcut,
   inAppShortcutLabel,
   matchesInAppShortcut,
   type InAppShortcutSection,
 } from "@/lib/shortcuts";
 import { useExperimentalFeaturesEnabled } from "@/lib/experimental-features";
+import { useGT, useMessages } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+import { useUiLocale as useLocale } from "@/lib/i18n/provider";
+
 
 const SECTION_LABELS: Record<InAppShortcutSection, string> = {
   chat: "chat",
@@ -49,6 +54,10 @@ export function ShortcutGuide({
   open: controlledOpen,
   onOpenChange,
 }: ShortcutGuideProps = {}) {
+  const uiLanguage = useLocale();
+  const ui = useGT();
+
+  const uiMessages = useMessages();
   const { settings } = useSettings();
   const { isMac } = usePlatform();
   const storedOpen = useShortcutGuideStore((state) => state.isOpen);
@@ -76,9 +85,9 @@ export function ShortcutGuide({
     () =>
       (["chat", "navigation", "app"] as const).map((section) => ({
         section,
-        items: IN_APP_SHORTCUTS.filter((item) => item.section === section),
+        items: localizeDefinitions(IN_APP_SHORTCUTS, uiMessages).filter((item) => item.section === section),
       })),
-    [],
+    [uiLanguage],
   );
 
   return (
@@ -92,13 +101,13 @@ export function ShortcutGuide({
         <DialogHeader className="border-b border-border px-6 py-5 pr-14 text-left">
           <div className="mb-2 flex items-center gap-2 text-muted-foreground">
             <Keyboard className="h-3.5 w-3.5" aria-hidden="true" />
-            <span className="font-mono text-[10px] uppercase tracking-[0.18em]">
-              keyboard map
+            <span className="font-mono text-[10px] normal-case tracking-[0.18em]">
+              Keyboard map
             </span>
           </div>
-          <DialogTitle className="text-xl">keyboard shortcuts</DialogTitle>
+          <DialogTitle className="text-xl">Keyboard shortcuts</DialogTitle>
           <DialogDescription className="max-w-xl text-xs leading-relaxed">
-            open tabs are a small working set. recent chats remain in the sidebar,
+            Open tabs are a small working set. Recent chats remain in the sidebar,
             and closing a tab never deletes or stops its conversation.
           </DialogDescription>
         </DialogHeader>
@@ -107,7 +116,7 @@ export function ShortcutGuide({
           <div className="divide-y divide-border sm:border-r sm:border-border">
             {inAppSections.map(({ section, items }) => (
               <section key={section} className="px-6 py-4">
-                <h3 className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                <h3 className="mb-2 font-mono text-[10px] normal-case tracking-[0.18em] text-muted-foreground">
                   {SECTION_LABELS[section]}
                 </h3>
                 <div className="divide-y divide-border/60">
@@ -125,7 +134,7 @@ export function ShortcutGuide({
                         </p>
                       </div>
                       <ShortcutKeycap>
-                        {inAppShortcutLabel(item.id, isMac)}
+                        {["rename_chat", "pin_chat", "branch_chat", "archive_chat", "toggle_right_sidebar"].includes(item.id) && conflictsWithGlobalShortcut(item.id, isMac, settings) ? ui("Assigned globally") : inAppShortcutLabel(item.id, isMac)}
                       </ShortcutKeycap>
                     </div>
                   ))}
@@ -136,15 +145,15 @@ export function ShortcutGuide({
 
           <section className="px-6 py-4">
             <div className="mb-2 flex items-baseline justify-between gap-3">
-              <h3 className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                global
+              <h3 className="font-mono text-[10px] normal-case tracking-[0.18em] text-muted-foreground">
+                Global
               </h3>
               <span className="text-[10px] text-muted-foreground">
-                editable in settings
+                Editable in settings
               </span>
             </div>
             <div className="divide-y divide-border/60">
-              {GLOBAL_SHORTCUTS.map((item) => {
+              {localizeDefinitions(GLOBAL_SHORTCUTS, uiMessages).map((item) => {
                 const hint = globalShortcutHint(settings, item.id, isMac);
                 return (
                   <div
@@ -158,7 +167,7 @@ export function ShortcutGuide({
                       <ShortcutKeycap>{hint}</ShortcutKeycap>
                     ) : (
                       <span className="font-mono text-[10px] text-muted-foreground/70">
-                        disabled
+                        Disabled
                       </span>
                     )}
                   </div>
@@ -166,7 +175,7 @@ export function ShortcutGuide({
               })}
             </div>
             <p className="mt-4 border-t border-border pt-3 text-[11px] leading-relaxed text-muted-foreground">
-              global shortcuts work while screenpipe is in the background. in-app
+              Global shortcuts work while screenpipe is in the background. In-app
               shortcuts apply only to the focused screenpipe window.
             </p>
           </section>

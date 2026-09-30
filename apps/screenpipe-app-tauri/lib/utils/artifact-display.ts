@@ -76,9 +76,9 @@ export function getArtifactCardDisplay(artifact: UnifiedArtifact): ArtifactCardD
   const source = artifact.source_type === "chat" ? "chat" : artifact.source;
   const kind = artifact.kind?.replace(/[-_]+/g, " ") || "file";
   const properties = [
-    { label: "file", value: fileName },
-    { label: "source", value: source },
-    { label: "kind", value: kind },
+    { label: "File", value: fileName },
+    { label: "Source", value: source },
+    { label: "Kind", value: kind },
   ];
 
   const htmlContent =

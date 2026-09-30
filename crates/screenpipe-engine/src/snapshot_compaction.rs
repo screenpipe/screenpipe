@@ -585,7 +585,12 @@ async fn compact_chunk(
     );
 
     // Encode JPEGs → MP4 via ffmpeg (low-priority, capped threads, JPEG passthrough)
-    let (mut child, encoder) = start_ffmpeg_lowpri(&mp4_path_str, fps, video_quality).await?;
+    let operation = screenpipe_core::health_diagnostics::MediaOperation::start("compaction");
+    let started = start_ffmpeg_lowpri(&mp4_path_str, fps, video_quality).await;
+    if started.is_err() {
+        operation.finish(&started);
+    }
+    let (mut child, encoder) = started?;
     let mut stdin = child
         .stdin
         .take()
@@ -682,6 +687,12 @@ async fn compact_chunk(
     // retries next cycle (the output guard removes the partial MP4).
     let encode_ok = write_error.is_none() && exit_status.is_some_and(|status| status.success());
     encoder.record_encode_outcome(encode_ok);
+    operation.finish(&if encode_ok {
+        Ok(())
+    } else {
+        Err("snapshot encoder did not finish successfully")
+    });
+    drop(operation);
     if let Some(error) = write_error {
         return Err(anyhow::anyhow!(
             "failed while feeding snapshots to ffmpeg: {error} — keeping source JPEGs for retry"

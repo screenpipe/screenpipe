@@ -298,6 +298,12 @@ pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
 
     let env = app.env();
     if let Some(binary) = relaunch_binary(&app) {
+        if update_installed {
+            crate::update_diagnostics::record(
+                "relaunch_requested",
+                &format!("executable={}", binary.display()),
+            );
+        }
         #[cfg(target_os = "macos")]
         let mut command = if update_installed {
             macos_updater_relaunch_command(
@@ -317,6 +323,9 @@ pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
             command.args(env.args_os.iter().skip(1));
             command
         };
+        // Startup repoints this variable at recordings. A replacement app must
+        // reopen the original settings store before selecting recordings again.
+        command.env("SCREENPIPE_DATA_DIR", crate::config::app_data_dir());
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -334,7 +343,15 @@ pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
                 binary.display(),
                 child.id()
             ),
-            Err(err) => warn!("safe relaunch: failed to spawn {}: {err}", binary.display()),
+            Err(err) => {
+                if update_installed {
+                    crate::update_diagnostics::record(
+                        "relaunch_spawn_failed",
+                        &format!("executable={} error={err}", binary.display()),
+                    );
+                }
+                warn!("safe relaunch: failed to spawn {}: {err}", binary.display());
+            }
         }
     }
 
@@ -344,6 +361,20 @@ pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
 /// Request a relaunch from async/UI code while allowing IPC replies and logs to
 /// flush briefly before the current process is force-exited.
 pub fn request_app_relaunch(app: AppHandle, reason: &'static str, delay: Duration) {
+    if let Err(error) = crate::search_only::prepare_restart() {
+        warn!("relaunch deferred: could not preserve recording mode: {error}");
+        return;
+    }
+    request_prepared_app_relaunch(app, reason, delay);
+}
+
+/// Updater callers already persisted the session before draining the server.
+/// Do not introduce another fallible write after committing the installer.
+pub(crate) fn request_prepared_app_relaunch(
+    app: AppHandle,
+    reason: &'static str,
+    delay: Duration,
+) {
     QUIT_REQUESTED.store(true, Ordering::SeqCst);
 
     std::thread::spawn(move || {
@@ -542,7 +573,7 @@ fn hide_app_to_tray(app: &AppHandle) {
 ///
 /// Only user-initiated quit paths (app menu Cmd+Q, tray Quit, dock Quit via
 /// `ExitRequested`) go through here — programmatic paths (updater restart,
-/// relaunch) call [`request_app_quit`] / [`request_app_relaunch`] directly so
+/// relaunch) call [`request_full_app_quit`] / [`request_app_relaunch`] directly so
 /// they never block on a dialog.
 #[cfg(target_os = "macos")]
 pub fn confirm_and_request_app_quit(app: AppHandle) {
@@ -598,23 +629,24 @@ pub fn confirm_and_request_app_quit(app: AppHandle) {
 /// to the both-on wording when settings can't be read.
 #[cfg(target_os = "macos")]
 fn quit_message(app: &AppHandle, show_minimize: bool) -> String {
+    use crate::localization::ui_text;
+
     let (audio_on, vision_on) = crate::store::SettingsStore::get(app)
         .ok()
         .flatten()
         .map(|s| (!s.recording.disable_audio, !s.recording.disable_vision))
         .unwrap_or((true, true));
 
-    let stops = match (vision_on, audio_on) {
-        (true, true) => "Screen and audio recording will stop",
-        (true, false) => "Screen recording will stop",
-        (false, true) => "Audio recording will stop",
-        (false, false) => "All recording will stop",
-    };
-
-    if show_minimize {
-        format!("{stops}. Minimize to Tray to keep recording in the background.")
-    } else {
-        format!("{stops} when you quit.")
+    // Translate complete sentences so each locale can choose its own word order.
+    match (vision_on, audio_on, show_minimize) {
+        (true, true, true) => ui_text("Screen and audio recording will stop. Minimize to Tray to keep recording in the background."),
+        (true, false, true) => ui_text("Screen recording will stop. Minimize to Tray to keep recording in the background."),
+        (false, true, true) => ui_text("Audio recording will stop. Minimize to Tray to keep recording in the background."),
+        (false, false, true) => ui_text("All recording will stop. Minimize to Tray to keep recording in the background."),
+        (true, true, false) => ui_text("Screen and audio recording will stop when you quit."),
+        (true, false, false) => ui_text("Screen recording will stop when you quit."),
+        (false, true, false) => ui_text("Audio recording will stop when you quit."),
+        (false, false, false) => ui_text("All recording will stop when you quit."),
     }
 }
 
@@ -623,15 +655,10 @@ fn quit_message(app: &AppHandle, show_minimize: bool) -> String {
 /// `runModal` spins a nested modal loop until the user responds.
 #[cfg(target_os = "macos")]
 fn show_quit_alert(app: &AppHandle, show_minimize: bool, message: &str) {
+    use crate::localization::ui_text;
     use objc::{class, msg_send, sel, sel_impl};
     use tauri_nspanel::cocoa::base::{id, nil};
     use tauri_nspanel::cocoa::foundation::NSString;
-
-    // NSAlert binds Return to the first button and Escape only to a button
-    // titled exactly "Cancel", so the order and the literal label matter.
-    const QUIT_BUTTON: &str = "Quit screenpipe";
-    const MINIMIZE_BUTTON: &str = "Minimize to Tray";
-    const CANCEL_BUTTON: &str = "Cancel";
 
     // NSModalResponse for the first/second added button.
     const FIRST_BUTTON: i64 = 1000;
@@ -645,19 +672,23 @@ fn show_quit_alert(app: &AppHandle, show_minimize: bool, message: &str) {
         // NSAlertStyleInformational — app icon, never a caution-triangle badge.
         let _: () = msg_send![alert, setAlertStyle: 1i64];
 
-        let title = NSString::alloc(nil).init_str("Quit screenpipe?");
+        let title = NSString::alloc(nil).init_str(&ui_text("Quit screenpipe?"));
         let _: () = msg_send![alert, setMessageText: title];
         let message = NSString::alloc(nil).init_str(message);
         let _: () = msg_send![alert, setInformativeText: message];
 
-        let quit = NSString::alloc(nil).init_str(QUIT_BUTTON);
+        let quit = NSString::alloc(nil).init_str(&ui_text("Quit screenpipe"));
         let _: id = msg_send![alert, addButtonWithTitle: quit];
         if show_minimize {
-            let minimize = NSString::alloc(nil).init_str(MINIMIZE_BUTTON);
+            let minimize = NSString::alloc(nil).init_str(&ui_text("Minimize to Tray"));
             let _: id = msg_send![alert, addButtonWithTitle: minimize];
         }
-        let cancel = NSString::alloc(nil).init_str(CANCEL_BUTTON);
-        let _: id = msg_send![alert, addButtonWithTitle: cancel];
+        let cancel = NSString::alloc(nil).init_str(&ui_text("Cancel"));
+        let cancel_button: id = msg_send![alert, addButtonWithTitle: cancel];
+        // AppKit infers Escape from the literal English "Cancel". Keep the
+        // safe keyboard action explicit when that title is translated.
+        let escape = NSString::alloc(nil).init_str("\u{1b}");
+        let _: () = msg_send![cancel_button, setKeyEquivalent: escape];
 
         // Packaged builds inherit the bundle icon automatically; a bare dev
         // binary has none, so load the repo icon explicitly.
@@ -693,8 +724,18 @@ pub fn confirm_and_request_app_quit(app: AppHandle) {
     request_app_quit(app);
 }
 
-/// Shared quit entry point for tray menu, app menu (Cmd+Q), etc.
+/// User Quit may retain search. Programmatic exit, OS logout, and updater
+/// handoffs continue through the existing full-exit path.
 pub fn request_app_quit(app: AppHandle) {
+    if crate::search_only::keep_after_quit(&app) {
+        crate::search_only::request_enter(app);
+    } else {
+        request_full_app_quit(app);
+    }
+}
+
+/// Full exit for confirmed opt-out Quit, updater handoffs, and failed teardown.
+pub(crate) fn request_full_app_quit(app: AppHandle) {
     if crate::db_recovery_notifications::recovery_active() {
         info!("Quit ignored while protected database recovery is active");
         crate::db_recovery_notifications::notify_recovery_quit_blocked();

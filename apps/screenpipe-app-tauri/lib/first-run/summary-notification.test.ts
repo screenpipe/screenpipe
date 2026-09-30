@@ -23,7 +23,7 @@ describe("first-run summary notification", () => {
     expect(payload.transient).toBe(false);
     expect(payload.actions).toEqual([
       expect.objectContaining({
-        label: "open summary",
+        label: "Open summary",
         type: "deeplink",
         url: FIRST_RUN_SUMMARY_DEEPLINK,
         primary: true,

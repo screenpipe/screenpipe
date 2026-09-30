@@ -48,6 +48,7 @@ struct ScrubberLayout {
     }
 }
 struct TimelineScrubberView: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     @ObservedObject var model: TimelineViewModel
 
     /// Room above the bars for the audio rail, hour ticks and memory markers.
@@ -122,25 +123,25 @@ struct TimelineScrubberView: View {
             case .recordingOff:
                 Image(systemName: "display.trianglebadge.exclamationmark")
                     .foregroundStyle(TimelineTheme.trace)
-                Text("screen recording is off — no timeline to show")
+                Text(uiText("screen recording is off — no timeline to show"))
                     .font(TimelineTheme.captionFont)
                     .foregroundStyle(TimelineTheme.trace)
             case .connectionError:
                 Image(systemName: "exclamationmark.triangle")
                     .foregroundStyle(TimelineTheme.trace)
-                Text("can't reach screenpipe — no timeline to show")
+                Text(uiText("can't reach screenpipe — no timeline to show"))
                     .font(TimelineTheme.captionFont)
                     .foregroundStyle(TimelineTheme.trace)
             case .loading:
                 ProgressView().controlSize(.small)
-                Text("loading timeline...")
+                Text(uiText("loading timeline..."))
                     .font(TimelineTheme.captionFont)
                     .foregroundStyle(TimelineTheme.trace)
             case .buildingMemory, .hasFrames:
                 Circle()
                     .fill(TimelineTheme.phosphor)
                     .frame(width: 6, height: 6)
-                Text("recording... timeline will appear soon")
+                Text(uiText("recording... timeline will appear soon"))
                     .font(TimelineTheme.captionFont)
                     .foregroundStyle(TimelineTheme.trace)
             }
@@ -333,6 +334,7 @@ struct TimelineScrubberView: View {
 
 /// The overlapping app/site icons centred on a segment.
 struct TimelineGroupBadge: View {
+    @ObservedObject private var uiLocalization = UILocalization.shared
     let group: TimelineAppGroup
     let isActive: Bool
 

@@ -11,8 +11,39 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::{System, SystemExt};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OnceCell};
 use tokio::time::interval;
+use tracing::instrument::WithSubscriber;
+
+const EVENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug)]
+struct HostInfo {
+    os_name: String,
+    os_version: String,
+    kernel_version: String,
+    host_name: String,
+    cpu_count: usize,
+    total_memory: u64,
+}
+
+impl HostInfo {
+    fn collect() -> Self {
+        // Analytics only needs static host metadata. In particular, new_all()
+        // also opens an IOHID client for unused temperature sensors on macOS.
+        let mut system = System::new();
+        system.refresh_cpu();
+        system.refresh_memory();
+        Self {
+            os_name: system.name().unwrap_or_default(),
+            os_version: system.os_version().unwrap_or_default(),
+            kernel_version: system.kernel_version().unwrap_or_default(),
+            host_name: system.host_name().unwrap_or_default(),
+            cpu_count: system.cpus().len(),
+            total_memory: system.total_memory(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +77,7 @@ pub struct AnalyticsManager {
     local_api_key: Option<String>,
     screenpipe_dir_path: PathBuf,
     attribution: Mutex<Option<Attribution>>,
+    host_info: OnceCell<HostInfo>,
 }
 
 fn pipeline_ocr_cache_hit_rate(health: &serde_json::Value) -> Option<f64> {
@@ -124,6 +156,7 @@ impl AnalyticsManager {
             local_api_key,
             screenpipe_dir_path,
             attribution: Mutex::new(None),
+            host_info: OnceCell::new(),
         }
     }
 
@@ -205,6 +238,24 @@ impl AnalyticsManager {
         let _ = self.client.post(&url).json(&payload).send().await;
     }
 
+    /// Keep best-effort telemetry off the recording-health loop. The request
+    /// timeout bounds delivery even when the analytics service stops responding.
+    pub fn send_event_nonblocking(
+        self: &Arc<Self>,
+        event: &'static str,
+        properties: Option<serde_json::Value>,
+    ) -> tokio::task::JoinHandle<()> {
+        let manager = Arc::clone(self);
+        tokio::spawn(
+            async move {
+                if let Err(error) = manager.send_event(event, properties).await {
+                    tracing::warn!(event, ?error, "analytics delivery failed");
+                }
+            }
+            .with_current_subscriber(),
+        )
+    }
+
     pub async fn send_event(
         &self,
         event: &str,
@@ -215,12 +266,14 @@ impl AnalyticsManager {
         }
 
         let posthog_url = format!("{}/capture/", self.api_host);
-        let system = System::new_all();
+        // Initialize lazily after the consent check, once even for concurrent
+        // events, and keep the synchronous OS queries off async runtime workers.
+        let host = self
+            .host_info
+            .get_or_try_init(|| tokio::task::spawn_blocking(HostInfo::collect))
+            .await?;
 
         let app_version = env!("CARGO_PKG_VERSION");
-
-        let os_name = system.name().unwrap_or_default();
-        let os_version = system.os_version().unwrap_or_default();
 
         let mut payload = json!({
             "api_key": self.posthog_api_key,
@@ -229,19 +282,19 @@ impl AnalyticsManager {
                 "distinct_id": self.distinct_id,
                 "$lib": "rust-reqwest",
                 "$email": self.email,
-                "os_name": os_name,
-                "os_version": os_version,
-                "kernel_version": system.kernel_version().unwrap_or_default(),
-                "host_name": system.host_name().unwrap_or_default(),
-                "cpu_count": system.cpus().len(),
-                "total_memory": system.total_memory(),
+                "os_name": host.os_name,
+                "os_version": host.os_version,
+                "kernel_version": host.kernel_version,
+                "host_name": host.host_name,
+                "cpu_count": host.cpu_count,
+                "total_memory": host.total_memory,
                 "app_version": app_version,
                 // PostHog standard fields for version tracking
                 "release": format!("screenpipe-app@{}", app_version),
                 "$set": {
                     "app_version": app_version,
-                    "os_name": os_name,
-                    "os_version": os_version,
+                    "os_name": host.os_name,
+                    "os_version": host.os_version,
                 },
                 // A successful desktop launch is direct evidence that this is a
                 // real Screenpipe user. Set it once so a server-side fraud
@@ -331,7 +384,13 @@ impl AnalyticsManager {
             TelemetryContext::from_env().insert_posthog_properties(payload_props);
         }
 
-        let response = self.client.post(posthog_url).json(&payload).send().await?;
+        let response = self
+            .client
+            .post(posthog_url)
+            .timeout(EVENT_REQUEST_TIMEOUT)
+            .json(&payload)
+            .send()
+            .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -656,6 +715,190 @@ pub fn start_analytics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn analytics_server(
+        status: axum::http::StatusCode,
+        response_gate: Option<Arc<tokio::sync::Notify>>,
+    ) -> (
+        String,
+        tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let router = axum::Router::new().route(
+            "/capture/",
+            axum::routing::post(move |axum::Json(payload): axum::Json<serde_json::Value>| {
+                let tx = tx.clone();
+                let gate = response_gate.clone();
+                async move {
+                    tx.send(payload).unwrap();
+                    if let Some(gate) = gate {
+                        gate.notified().await;
+                    }
+                    (status, "analytics unavailable")
+                }
+            }),
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = axum::Server::from_tcp(listener)
+            .unwrap()
+            .serve(router.into_make_service());
+        (url, rx, tokio::spawn(async { server.await.unwrap() }))
+    }
+
+    fn test_manager(dir: &std::path::Path, api_host: String, enabled: bool) -> AnalyticsManager {
+        let mut manager = AnalyticsManager::new(
+            "test-key".into(),
+            "test-id".into(),
+            String::new(),
+            6,
+            "http://127.0.0.1:3030".into(),
+            None,
+            dir.to_path_buf(),
+            enabled,
+        );
+        manager.api_host = api_host;
+        manager.client = Client::builder().no_proxy().build().unwrap();
+        manager
+    }
+
+    #[tokio::test]
+    async fn opted_out_events_do_not_collect_host_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = test_manager(dir.path(), "http://127.0.0.1:1".into(), false);
+
+        manager
+            .send_event("capture_stall_detected", None)
+            .await
+            .unwrap();
+
+        assert!(manager.host_info.get().is_none());
+    }
+
+    #[tokio::test]
+    async fn event_burst_reuses_cached_host_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let (url, mut received, server) = analytics_server(axum::http::StatusCode::OK, None).await;
+        let manager = Arc::new(test_manager(dir.path(), url, true));
+        // A distinctive snapshot proves the event path uses the cache rather
+        // than re-enumerating this test machine for each event.
+        manager
+            .host_info
+            .set(HostInfo {
+                os_name: "cached-os".into(),
+                os_version: "cached-version".into(),
+                kernel_version: "cached-kernel".into(),
+                host_name: "cached-host".into(),
+                cpu_count: 7,
+                total_memory: 123_456,
+            })
+            .unwrap();
+        let deliveries: Vec<_> = (0..16)
+            .map(|_| manager.send_event_nonblocking("test_event", None))
+            .collect();
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            for _ in 0..16 {
+                let payload = received.recv().await.unwrap();
+                let props = &payload["properties"];
+                assert_eq!(props["os_name"], "cached-os");
+                assert_eq!(props["os_version"], "cached-version");
+                assert_eq!(props["kernel_version"], "cached-kernel");
+                assert_eq!(props["host_name"], "cached-host");
+                assert_eq!(props["cpu_count"], 7);
+                assert_eq!(props["total_memory"], 123_456);
+                assert_eq!(props["$set"]["os_name"], props["os_name"]);
+                assert_eq!(props["$set"]["os_version"], props["os_version"]);
+            }
+            for delivery in deliveries {
+                delivery.await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn stalled_delivery_returns_to_caller_and_failure_survives_support_collection() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("screenpipe-app.2026-09-22.log");
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(std::fs::File::create(&current).unwrap())
+            .finish();
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let (url, mut received, server) = analytics_server(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            Some(Arc::clone(&gate)),
+        )
+        .await;
+        let manager = Arc::new(test_manager(dir.path(), url, true));
+        let delivery = tracing::subscriber::with_default(subscriber, || {
+            manager.send_event_nonblocking(
+                "capture_stall_detected",
+                Some(json!({
+                    "stale_checks": 90,
+                    "user_active": true,
+                    "loop_stage": "heartbeat",
+                    "loop_stage_age_secs": 150,
+                })),
+            )
+        });
+
+        let payload = tokio::time::timeout(Duration::from_secs(5), received.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(payload["event"], "capture_stall_detected");
+        assert_eq!(payload["properties"]["loop_stage"], "heartbeat");
+        // Delivery remains blocked at the real HTTP boundary while the caller
+        // can continue scheduling work on this single-threaded runtime.
+        for _ in 0..3 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            assert!(!delivery.is_finished());
+        }
+        gate.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), delivery)
+            .await
+            .unwrap()
+            .unwrap();
+        server.abort();
+
+        std::fs::rename(&current, dir.path().join("screenpipe-app.2026-09-22.1.log")).unwrap();
+        std::fs::write(&current, "app restarted\npassword=hunter2\n").unwrap();
+        let report =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+                .await
+                .unwrap();
+        assert!(report.contains("analytics delivery failed"), "{report}");
+        assert!(report.contains("capture_stall_detected"), "{report}");
+        assert!(report.contains("503"), "{report}");
+        assert!(report.contains("analytics unavailable"), "{report}");
+        assert!(!report.contains("hunter2"), "{report}");
+    }
+
+    #[tokio::test]
+    async fn unresponsive_analytics_request_times_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let (url, _received, server) = analytics_server(
+            axum::http::StatusCode::OK,
+            Some(Arc::new(tokio::sync::Notify::new())),
+        )
+        .await;
+        let manager = test_manager(dir.path(), url, true);
+        let error = tokio::time::timeout(
+            EVENT_REQUEST_TIMEOUT + Duration::from_secs(5),
+            manager.send_event("test_event", None),
+        )
+        .await
+        .expect("analytics request outlived its timeout")
+        .unwrap_err();
+        assert!(error.downcast_ref::<reqwest::Error>().unwrap().is_timeout());
+        server.abort();
+    }
 
     #[test]
     fn health_properties_forward_ocr_cache_hit_rate() {

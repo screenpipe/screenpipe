@@ -20,6 +20,7 @@ pub(crate) mod ui_scan;
 pub use audio_process::e2e::{e2e_simulate_back_to_back_rooms, BackToBackRoomsOutcome};
 #[cfg(feature = "e2e")]
 pub use shared::calendar::e2e_start_calendar_matched_meeting;
+pub use shared::calendar::meeting_url_identity;
 pub use shared::profiles::{load_detection_profiles, MeetingDetectionProfile};
 pub use shared::scanner::{MeetingUiScanner, ScanResult};
 pub use shared::state::{advance_state, audio_or_calendar_keepalive, MeetingState, StateAction};

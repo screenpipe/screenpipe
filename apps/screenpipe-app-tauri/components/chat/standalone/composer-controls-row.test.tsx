@@ -127,8 +127,8 @@ describe("ComposerControlsRow", () => {
       />,
     );
 
-    expect(screen.queryByLabelText("worktree")).not.toBeInTheDocument();
-    expect(screen.queryByText("worktree")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Worktree")).not.toBeInTheDocument();
+    expect(screen.queryByText("Worktree")).not.toBeInTheDocument();
   });
 
   it("keeps existing worktree status visible without the checkbox", () => {
@@ -209,9 +209,9 @@ describe("ComposerControlsRow", () => {
       />,
     );
 
-    expect(screen.getByText("preparing worktree")).toBeInTheDocument();
+    expect(screen.getByText("Preparing worktree")).toBeInTheDocument();
     expect(
-      screen.getByRole("status", { name: "preparing worktree" }),
+      screen.getByRole("status", { name: "Preparing worktree" }),
     ).toBeInTheDocument();
     expect(screen.getByTestId("pipe-ai-icon")).toHaveAttribute(
       "data-live",
@@ -258,16 +258,16 @@ describe("ComposerControlsRow", () => {
       />,
     );
 
-    expect(screen.queryByLabelText("worktree")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Worktree")).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "worktree setup failed" }),
+      screen.getByRole("button", { name: "Worktree setup failed" }),
     ).toBeInTheDocument();
     expect(
       screen.queryByText("The AI did not choose a repository in time"),
     ).not.toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "worktree setup failed" }),
+      screen.getByRole("button", { name: "Worktree setup failed" }),
     );
     expect(
       screen.getByText("The AI did not choose a repository in time"),
@@ -309,7 +309,7 @@ describe("ComposerControlsRow", () => {
 
     expect(
       screen
-        .getByRole("button", { name: "send message" })
+        .getByRole("button", { name: "Send message" })
         .querySelector(".lucide-arrow-up"),
     ).toBeInTheDocument();
   });

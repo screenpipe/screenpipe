@@ -3,12 +3,15 @@
 import * as React from "react";
 
 import { cn } from "@/lib/utils";
+import { useGT } from "gt-react";
+
 
 function IconNextChat({
   className,
   inverted,
   ...props
 }: React.ComponentProps<"svg"> & { inverted?: boolean }) {
+
   const id = React.useId();
 
   return (
@@ -105,9 +108,10 @@ function IconOpenAI({ className, ...props }: React.ComponentProps<"svg">) {
 }
 
 function IconVercel({ className, ...props }: React.ComponentProps<"svg">) {
+  const ui = useGT();
   return (
     <svg
-      aria-label="Vercel logomark"
+      aria-label={ui("Vercel logomark")}
       role="img"
       viewBox="0 0 74 64"
       className={cn("size-4", className)}

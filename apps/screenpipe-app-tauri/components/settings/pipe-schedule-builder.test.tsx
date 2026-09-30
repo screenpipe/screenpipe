@@ -67,12 +67,12 @@ function renderBuilder(current: ScheduleConfig | null, scheduleString = "manual"
   return { onSave, onCancel };
 }
 
-const saveButton = () => screen.getByRole("button", { name: "save" });
+const saveButton = () => screen.getByRole("button", { name: "Save" });
 
 describe("PipeScheduleBuilder", () => {
   test("pre-fills weekly config: pills pressed + time value", () => {
     renderBuilder(cfg({ frequency: "weeks", days_of_week: [1, 3, 5], at_hour: 9, at_minute: 30 }));
-    expect(screen.getByLabelText("time")).toHaveValue("09:30");
+    expect(screen.getByLabelText("Time")).toHaveValue("09:30");
     expect(screen.getByLabelText("Monday")).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Wednesday")).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("Tuesday")).toHaveAttribute("aria-pressed", "false");
@@ -87,14 +87,14 @@ describe("PipeScheduleBuilder", () => {
 
   test("changing the time and saving emits at_hour/at_minute", () => {
     const { onSave } = renderBuilder(cfg({ frequency: "days", at_hour: 9, at_minute: 0 }));
-    fireEvent.change(screen.getByLabelText("time"), { target: { value: "06:30" } });
+    fireEvent.change(screen.getByLabelText("Time"), { target: { value: "06:30" } });
     fireEvent.click(saveButton());
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ at_hour: 6, at_minute: 30 }));
   });
 
   test("changing the interval and saving emits it", () => {
     const { onSave } = renderBuilder(cfg({ frequency: "minutes", interval: 5, days_of_week: [] }));
-    fireEvent.change(screen.getByLabelText("interval"), { target: { value: "30" } });
+    fireEvent.change(screen.getByLabelText("Interval"), { target: { value: "30" } });
     fireEvent.click(saveButton());
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({ frequency: "minutes", interval: 30 })
@@ -104,7 +104,7 @@ describe("PipeScheduleBuilder", () => {
   test("weekly with no days disables save and warns", () => {
     renderBuilder(cfg({ frequency: "weeks", days_of_week: [] }));
     expect(saveButton()).toBeDisabled();
-    expect(screen.getByText("pick at least one day")).toBeInTheDocument();
+    expect(screen.getByText("Pick at least one day")).toBeInTheDocument();
   });
 
   test("manual ('don't run') saves null", () => {
@@ -122,7 +122,7 @@ describe("PipeScheduleBuilder", () => {
 
   test("'after N runs' ending shows the count input and saves max_occurrences", () => {
     const { onSave } = renderBuilder(cfg({ frequency: "days", at_hour: 9, max_occurrences: 3 }));
-    const input = screen.getByLabelText("max occurrences");
+    const input = screen.getByLabelText("Max occurrences");
     expect(input).toHaveValue(3);
     fireEvent.change(input, { target: { value: "10" } });
     fireEvent.click(saveButton());
@@ -131,18 +131,18 @@ describe("PipeScheduleBuilder", () => {
 
   test("'on date' ending shows a date input", () => {
     renderBuilder(cfg({ frequency: "days", ending: "2099-06-10T23:59:59Z" }));
-    expect(screen.getByLabelText("ending date")).toBeInTheDocument();
+    expect(screen.getByLabelText("Ending date")).toBeInTheDocument();
   });
 
   test("cancel calls onCancel", () => {
     const { onCancel } = renderBuilder(cfg({ frequency: "days" }));
-    fireEvent.click(screen.getByRole("button", { name: "cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onCancel).toHaveBeenCalled();
   });
 
   test("shows the next occurrence from the preview endpoint", async () => {
     renderBuilder(cfg({ frequency: "days", at_hour: 9 }));
-    await waitFor(() => expect(screen.getByText(/next occurrence:/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Next occurrence:/)).toBeInTheDocument());
     expect(fetch).toHaveBeenCalledWith(
       "http://localhost:3030/pipes/schedule/preview",
       expect.objectContaining({ method: "POST" })

@@ -1,0 +1,45 @@
+/* screenpipe — AI that knows everything you've seen, said, or heard */
+/* https://screenpipe.com */
+.stack { position: relative; width: 88px; height: 28px; }
+.stack .stackTrigger { position: absolute; inset: 0 auto 0 0; z-index: 2; width: 52px !important; padding: 0 !important; background: transparent; }
+.stackLogos { display: flex; align-items: center; padding-left: 2px; }
+.stackLogos > span { display: grid; place-items: center; width: 24px; height: 24px; border: 1px solid var(--line, #dedfd8); border-radius: 6px; background: var(--paper, hsl(var(--background))); }
+.stackLogos > span + span { margin-left: -11px; }
+.stackLogos > span:nth-child(1) { z-index: 3; }
+.stackLogos > span:nth-child(2) { z-index: 2; }
+.stackLogos img, .stackLogos svg { width: 14px; height: 14px; }
+.choices { display: flex; align-items: center; gap: 2px; }
+.stack .choices > button { opacity: 0; visibility: hidden; pointer-events: none; transform: translateX(calc(var(--agent-index) * -17px)); transition: transform 300ms cubic-bezier(.22, 1, .36, 1), opacity 220ms ease-out, background-color 150ms; }
+.stack[data-expanded="true"] .choices > button { opacity: 1; visibility: visible; pointer-events: auto; transform: translateX(0); }
+.stack[data-expanded="true"] .stackTrigger { opacity: 0; pointer-events: none; }
+.stack:has(.stackTrigger:focus-visible) { outline: 1px solid currentColor; outline-offset: 3px; border-radius: 4px; }
+@media (prefers-reduced-motion: reduce) { .stack .choices > button { transition: none; } }
+/* Card actions occupy only the reserved trailing slot. Choices open below it,
+   so the card title stays visible and its primary action stays clickable. */
+.stack.cardStack { position: absolute; z-index: 30; right: 8px; top: 50%; transform: translateY(-50%); width: 40px; height: 28px; }
+.cardStack .stackTrigger { width: 40px !important; height: 28px; border-radius: 4px; }
+.cardStack .stackLogos { padding-left: 0; }
+.cardStack .stackLogos > span { width: 18px; height: 20px; border-radius: 4px; }
+.cardStack .stackLogos > span + span { margin-left: -9px; }
+.cardStack .stackLogos img, .cardStack .stackLogos svg { width: 12px; height: 12px; }
+.cardStack .choices { position: absolute; top: calc(100% + 4px); right: 0; padding: 4px; border: 1px solid hsl(var(--border)); border-radius: 6px; background: hsl(var(--background)); box-shadow: 0 3px 10px #0000000d; visibility: hidden; }
+.cardStack[data-expanded="true"] .choices { visibility: visible; }
+.cardStack .choices > button { width: 26px; height: 26px; }
+.cardStack .choices > button img, .cardStack .choices > button svg { width: 13px; height: 13px; }
+.cardStack[data-expanded="true"] .stackTrigger { opacity: 1; pointer-events: auto; }
+.cardStack[data-expanded="true"]::after { content: ""; position: absolute; top: 100%; right: 0; width: 100%; height: 4px; }
+.stack.cardStack[data-placement="card"] { top: 0; height: 100%; transform: none; }
+.cardStack[data-placement="card"] .stackTrigger { top: 50%; bottom: auto; transform: translateY(-50%); }
+/* Reveal the compact launcher only when its card is being used. */
+.stack.cardStack { opacity: 0; pointer-events: none; transition: opacity 180ms ease; }
+:global(.group\/home-card):hover > .cardStack,
+:global(.group\/home-card):focus-within > .cardStack,
+.stack.cardStack[data-expanded="true"] { opacity: 1; pointer-events: auto; }
+@media (hover: none) { .stack.cardStack { opacity: 1; pointer-events: auto; } }
+@media (prefers-reduced-motion: reduce) { .stack.cardStack { transition: none; } }
+
+/* Anchor the collapsed toolbar stack beside SOP; expansion uses the reserved
+   space to its left instead of moving the neighboring action. */
+.stack[data-placement="toolbar"] .stackTrigger { left: auto; right: 0; }
+.stack[data-placement="toolbar"] .choices > button { transform: translateX(calc(34px - var(--agent-index) * 17px)); }
+.stack[data-placement="toolbar"][data-expanded="true"] .choices > button { transform: translateX(0); }

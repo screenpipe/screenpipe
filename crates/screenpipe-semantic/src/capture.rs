@@ -25,6 +25,10 @@ pub struct CapturedAccessibilityNode {
     pub bounds: Option<NodeBounds>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_screen: Option<bool>,
+    /// Native geometry proved this node is outside the window before bounds
+    /// normalization discarded it. Absent in legacy captures.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub offscreen_geometry: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub automation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -108,7 +112,9 @@ pub struct AdaptedSemanticTree {
 /// (`aria-live` regions, visually-hidden labels) land here and describe what
 /// IS on screen, so treating them as scrollback deleted visible content. On
 /// real Windows captures that cost ~85% of Claude desktop conversation
-/// extraction. No geometry is therefore unknown visibility, and fails open.
+/// extraction. No geometry is therefore unknown visibility, and fails open,
+/// unless the native walker retained explicit `offscreen_geometry` evidence
+/// before screenshot normalization discarded an off-window rectangle.
 pub fn adapt_captured_accessibility_tree(
     nodes: &[CapturedAccessibilityNode],
     budget: TreeBudget,
@@ -162,7 +168,8 @@ pub fn adapt_captured_accessibility_tree(
             class_count += 1;
         }
         let classes = &class_buffer[..class_count];
-        let known_offscreen = node.on_screen == Some(false) && node.bounds.is_some();
+        let known_offscreen =
+            node.on_screen == Some(false) && (node.bounds.is_some() || node.offscreen_geometry);
         let source_description = node
             .help_text
             .as_deref()

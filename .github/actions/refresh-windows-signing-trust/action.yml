@@ -1,0 +1,21 @@
+# screenpipe — AI that knows everything you've seen, said, or heard
+# https://screenpipe.com
+
+name: Refresh Windows signing trust
+description: Give CodeSignTool current Java CA roots and verify its actual JVM can reach SSL.com
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '11'
+        check-latest: true
+        # CodeSignTool bundles an x64 JVM on both Windows release architectures.
+        architecture: x64
+    - name: Refresh bundled roots and verify signing TLS
+      shell: pwsh
+      env:
+        SIGNING_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        & "$env:SIGNING_ACTION_PATH/refresh.ps1" -ToolPath $env:CODESIGNTOOL_PATH -TrustedJavaHome $env:JAVA_HOME

@@ -12,6 +12,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+use std::{future::Future, time::Duration};
+use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 #[derive(Clone, Copy)]
@@ -27,6 +29,7 @@ impl DeviceResolution {
 }
 
 pub struct DeviceManager {
+    operations: DashMap<AudioDevice, Arc<Mutex<()>>>,
     streams: Arc<DashMap<AudioDevice, Arc<AudioStream>>>,
     states: Arc<DashMap<AudioDevice, Arc<AtomicBool>>>,
     /// When true, System Audio (output) uses the CoreAudio Process Tap path
@@ -54,6 +57,7 @@ impl DeviceManager {
         let states = Arc::new(DashMap::new());
 
         Ok(Self {
+            operations: DashMap::new(),
             streams,
             states,
             use_coreaudio_tap: AtomicBool::new(use_coreaudio_tap),
@@ -61,6 +65,34 @@ impl DeviceManager {
             macos_input_vpio: AtomicBool::new(macos_input_vpio),
             vpio_health: VpioHealthTracker::new(),
         })
+    }
+
+    /// Serialize the complete stream/recording-handle transition. Once admitted,
+    /// an operation owns its guard in a task so a cancelled API request or monitor
+    /// cannot release the device while native startup/teardown is still running.
+    pub(crate) async fn run_device_operation<F>(
+        &self,
+        device: &AudioDevice,
+        operation: F,
+    ) -> Result<()>
+    where
+        F: Future<Output = Result<()>> + Send + 'static,
+    {
+        let lock = self.operations.entry(device.clone()).or_default().clone();
+        let guard = tokio::time::timeout(Duration::from_secs(10), lock.lock_owned())
+            .await
+            .map_err(|_| anyhow!("device {device} is still completing a previous operation"))?;
+        let task = tokio::spawn(async move {
+            let _guard = guard;
+            operation.await
+        });
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .map_err(|_| {
+                anyhow!(
+                    "device {device} operation timed out; native teardown/startup is still owned"
+                )
+            })??
     }
 
     pub fn configure_backend_flags(
@@ -155,6 +187,17 @@ impl DeviceManager {
         tap_pids: Option<Vec<i32>>,
         resolution: DeviceResolution,
     ) -> Result<()> {
+        // A published stream owns the native device even before its recording
+        // loop has set is_running. Never replace that stream during startup.
+        if let Some(stream) = self.stream(device) {
+            if !stream.is_disconnected() {
+                return Err(anyhow!("Device {} already running.", device));
+            }
+            // A timed-out stop retains its worker. Retry teardown before opening
+            // a replacement; abort() cannot stop a running spawn_blocking task.
+            self.stop_device(device).await?;
+        }
+
         // Generic starts validate against the inventory. Meeting-session
         // starts carry stronger, live process-resolution evidence and bypass
         // the cached inventory (the tap is virtual; a resolved mic may have
@@ -203,15 +246,25 @@ impl DeviceManager {
             .unwrap_or(false)
     }
 
-    pub async fn stop_all_devices(&self) -> Result<()> {
-        for pair in self.states.iter() {
-            let device = pair.key();
-            let _ = self.stop_device(device).await;
+    pub async fn stop_all_devices(self: &Arc<Self>) -> Result<()> {
+        // Include admitted starts that have not published their stream yet.
+        let mut devices: Vec<_> = self.operations.iter().map(|p| p.key().clone()).collect();
+        devices.extend(self.streams.iter().map(|p| p.key().clone()));
+        let mut seen = std::collections::HashSet::new();
+        let mut failure = None;
+        for device in devices.into_iter().filter(|d| seen.insert(d.clone())) {
+            let manager = self.clone();
+            let target = device.clone();
+            if let Err(e) = self
+                .run_device_operation(&device, async move { manager.stop_device(&target).await })
+                .await
+            {
+                failure = Some(e);
+            }
         }
-
-        self.states.clear();
-        self.streams.clear();
-
+        if let Some(e) = failure {
+            return Err(e);
+        }
         Ok(())
     }
 
@@ -240,8 +293,10 @@ impl DeviceManager {
             is_running.store(false, Ordering::Relaxed)
         }
 
-        if let Some(p) = self.streams.get(device) {
-            let _ = p.value().stop().await;
+        // Never hold a DashMap guard across native teardown. Retain the stream
+        // on timeout so a later start cannot orphan a still-running worker.
+        if let Some(stream) = self.stream(device) {
+            stream.stop().await?;
         }
 
         self.streams.remove(device);
@@ -259,6 +314,117 @@ mod tests {
     use super::*;
     use crate::core::device::DeviceType;
     use crate::core::stream::AudioStream;
+
+    #[tokio::test]
+    async fn published_stream_is_not_reopened_before_recording_handle_registration() {
+        let dm = DeviceManager::new(false, false, false).await.unwrap();
+        let device = mic();
+        let (stream, _tx) = AudioStream::from_sender_for_test(Arc::new(device.clone()), 48_000, 1);
+        let stream = Arc::new(stream);
+        dm.streams.insert(device.clone(), stream.clone());
+        dm.states
+            .insert(device.clone(), Arc::new(AtomicBool::new(false)));
+        let error = dm.start_process_resolved_device(&device).await.unwrap_err();
+        assert!(error.to_string().contains("already running"));
+        assert!(Arc::ptr_eq(&stream, &dm.stream(&device).unwrap()));
+        dm.stop_device(&device).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelled_request_keeps_device_owned_until_transition_finishes() {
+        let dm = Arc::new(DeviceManager::new(false, false, false).await.unwrap());
+        let device = mic();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let first_manager = dm.clone();
+        let first_device = device.clone();
+        let first = tokio::spawn(async move {
+            first_manager
+                .run_device_operation(&first_device, async move {
+                    entered_tx.send(()).unwrap();
+                    release_rx.await.unwrap();
+                    Ok(())
+                })
+                .await
+        });
+        entered_rx.await.unwrap();
+        first.abort();
+        let _ = first.await;
+
+        let (second_tx, mut second_rx) = tokio::sync::oneshot::channel();
+        let second_manager = dm.clone();
+        let second = tokio::spawn(async move {
+            second_manager
+                .run_device_operation(&device, async move {
+                    second_tx.send(()).unwrap();
+                    Ok(())
+                })
+                .await
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut second_rx)
+                .await
+                .is_err()
+        );
+        // The mic's stalled operation must not block independent system audio.
+        let output = AudioDevice::new("System Audio".into(), DeviceType::Output);
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            dm.run_device_operation(&output, async { Ok(()) }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        release_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), second_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        second.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn global_stop_waits_for_startup_before_removing_the_stream() {
+        let dm = Arc::new(DeviceManager::new(false, false, false).await.unwrap());
+        let device = mic();
+        let (stream, _tx) = AudioStream::from_sender_for_test(Arc::new(device.clone()), 48_000, 1);
+        let stream = Arc::new(stream);
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let owner = dm.clone();
+        let starting = dm.clone();
+        let target = device.clone();
+        let starting_stream = stream.clone();
+        let start = tokio::spawn(async move {
+            owner
+                .run_device_operation(&target.clone(), async move {
+                    entered_tx.send(()).unwrap();
+                    release_rx.await.unwrap();
+                    starting.streams.insert(target.clone(), starting_stream);
+                    starting
+                        .states
+                        .insert(target, Arc::new(AtomicBool::new(true)));
+                    Ok(())
+                })
+                .await
+        });
+        entered_rx.await.unwrap();
+        let stopping = dm.clone();
+        let mut stop = tokio::spawn(async move { stopping.stop_all_devices().await });
+        assert!(tokio::time::timeout(Duration::from_millis(50), &mut stop)
+            .await
+            .is_err());
+        release_tx.send(()).unwrap();
+        start.await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(1), stop)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(stream.is_disconnected());
+        assert!(dm.stream(&device).is_none());
+        assert!(!dm.is_running(&device));
+    }
 
     #[test]
     fn process_resolved_meeting_devices_bypass_inventory_validation() {

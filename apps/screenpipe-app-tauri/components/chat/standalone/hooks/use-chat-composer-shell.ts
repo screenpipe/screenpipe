@@ -24,6 +24,7 @@ export interface ConnectionChip {
 }
 
 interface UseChatComposerShellActionsOptions {
+  globalShortcutsEnabled?: boolean;
   input: string;
   setInput: React.Dispatch<React.SetStateAction<string>>;
   inputRef: React.RefObject<HTMLTextAreaElement>;
@@ -117,6 +118,7 @@ export function useChatComposerShell() {
 }
 
 export function useChatComposerShellActions({
+  globalShortcutsEnabled = true,
   input,
   setInput,
   inputRef,
@@ -263,6 +265,7 @@ export function useChatComposerShellActions({
   ]);
 
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.defaultPrevented) return;
     if (event.key === "/") {
       event.stopPropagation();
     }
@@ -326,7 +329,7 @@ export function useChatComposerShellActions({
       historyIndexRef.current = null;
     }
 
-    if (event.key === "Enter" && !event.shiftKey && !mentions.isOpen) {
+    if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && !event.repeat && !event.defaultPrevented && !mentions.isOpen) {
       event.preventDefault();
       sendComposerMessage();
       return;
@@ -369,6 +372,10 @@ export function useChatComposerShellActions({
 
   useEffect(() => {
     const handleComposerSteerShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const targetPane = event.target instanceof Element ? event.target.closest("[data-chat-pane-id]") : null;
+      const ownPane = inputRef.current?.closest("[data-chat-pane-id]");
+      if (targetPane ? targetPane !== ownPane : !globalShortcutsEnabled) return;
       if (mentions.isOpen) return;
       if (isComposing || event.isComposing || event.keyCode === 229) return;
       if (!isComposerSteerShortcut(event, isMac)) return;
@@ -382,6 +389,7 @@ export function useChatComposerShellActions({
     window.addEventListener("keydown", handleComposerSteerShortcut, true);
     return () => window.removeEventListener("keydown", handleComposerSteerShortcut, true);
   }, [
+    globalShortcutsEnabled,
     handleSteerShortcut,
     inputRef,
     isComposing,

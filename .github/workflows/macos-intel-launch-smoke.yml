@@ -176,7 +176,11 @@ jobs:
         env:
           NEXT_PUBLIC_SCREENPIPE_E2E: "true"
         with:
-          args: "--no-bundle -- --profile debug-dev --features e2e"
+          # The default macOS config includes the arm64-only MLX sidecar.
+          # Match the Intel release's external binaries without requiring MLX.
+          args: >-
+            --config '{"bundle":{"externalBin":["bun","ffmpeg","ffprobe"]}}'
+            --no-bundle -- --profile debug-dev --features e2e
           projectPath: "./apps/screenpipe-app-tauri"
           tauriScript: bunx tauri -v
 

@@ -74,6 +74,7 @@ import {
   dedupeConversationMetas,
   listConversations,
   loadConversationFile,
+  reassignConversationPreset,
   saveConversationFile,
   searchConversations,
   type ConversationDedupCandidate,
@@ -81,6 +82,23 @@ import {
 } from "../chat-storage";
 
 const CHATS_DIR = "/Users/test/.screenpipe/chats";
+
+it("reassigns a deleted chat preset without changing messages or a newer selection", async () => {
+  putConversation("reassigned", { updatedAt: 100, content: "keep these messages" });
+  const path = `${CHATS_DIR}/reassigned.json`;
+  const original = JSON.parse(fsMock.files.get(path)!.text);
+  fsMock.files.set(path, { text: JSON.stringify({ ...original, presetId: "removed" }), mtime: 100 });
+
+  await reassignConversationPreset("reassigned", new Set(["removed"]), "default");
+  const saved = await loadConversationFile("reassigned");
+  expect(saved?.presetId).toBe("default");
+  expect(saved?.messages).toEqual(original.messages);
+  expect(saved?.updatedAt).toBe(original.updatedAt);
+
+  // A later user choice must survive even if deletion discovered the old ID.
+  await reassignConversationPreset("reassigned", new Set(["removed"]), "other");
+  expect((await loadConversationFile("reassigned"))?.presetId).toBe("default");
+});
 
 function putConversation(
   id: string,

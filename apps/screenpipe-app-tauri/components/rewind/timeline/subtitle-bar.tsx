@@ -5,6 +5,9 @@
 import { useMemo, useRef, useEffect, useState } from "react";
 import { Mic, Volume2, ChevronDown, X, Loader2, MessageSquareText } from "lucide-react";
 import { StreamTimeSeriesResponse, AudioData } from "@/components/rewind/timeline";
+import { timelineAudioKey } from "@/lib/hooks/timeline-frame-merge";
+import { useGT } from "gt-react";
+
 
 interface SubtitleBarProps {
 	frames: StreamTimeSeriesResponse[];
@@ -32,6 +35,8 @@ const LINGER_SECS = 4;
 const LOOKAHEAD_MS = 30_000;
 
 export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcriptionPaused, meetingApp }: SubtitleBarProps) {
+
+  const ui = useGT();
 	const [isHovered, setIsHovered] = useState(false);
 	const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -59,7 +64,7 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 					entries.push({
 						...audio,
 						transcription: audio.transcription?.trim() || "",
-						timestamp: new Date(ft),
+						timestamp: new Date(audio.captured_at || ft),
 					});
 				}
 			}
@@ -67,14 +72,14 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 
 		if (entries.length === 0) return [];
 
-		// Dedup pass 1: by audio_chunk_id — keep earliest timestamp
-		const byChunk = new Map<number, AudioEntry>();
+		// Dedup pass 1: by audio chunk and speech time — keep distinct turns
+		const byChunk = new Map<string | null, AudioEntry>();
 		for (const entry of entries) {
-			const existing = byChunk.get(entry.audio_chunk_id);
+			const existing = byChunk.get(timelineAudioKey(entry));
 			if (!existing) {
-				byChunk.set(entry.audio_chunk_id, entry);
+				byChunk.set(timelineAudioKey(entry), entry);
 			} else if (entry.timestamp < existing.timestamp) {
-				byChunk.set(entry.audio_chunk_id, { ...existing, timestamp: entry.timestamp });
+				byChunk.set(timelineAudioKey(entry), { ...existing, timestamp: entry.timestamp });
 			}
 		}
 
@@ -84,7 +89,7 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 		const byPrefix = new Map<string, AudioEntry>();
 		for (const entry of byChunk.values()) {
 			const key = entry.transcription
-				? `${entry.is_input}-${normalize(entry.transcription).slice(0, 60)}`
+				? `${entry.is_input}-${entry.captured_at ?? ""}-${normalize(entry.transcription).slice(0, 60)}`
 				: `pending-${entry.audio_chunk_id}`;
 			const existing = byPrefix.get(key);
 			if (!existing) {
@@ -147,10 +152,10 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 						setIsCollapsed(false);
 					}}
 					className="flex items-center gap-1.5 px-2.5 py-1 bg-background/80 backdrop-blur-sm rounded-full border border-border/50 shadow-sm hover:bg-background/90 hover:border-border hover:shadow-md transition-all duration-200 text-muted-foreground hover:text-foreground"
-					title="Show captions"
+					title={ui("Show captions")}
 				>
 					<MessageSquareText className="w-3.5 h-3.5" />
-					<span className="text-[10px] font-medium">captions</span>
+					<span className="text-[10px] font-medium">Captions</span>
 				</button>
 			</div>
 		);
@@ -171,10 +176,10 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 						setIsCollapsed(true);
 					}}
 					className="px-2 py-0.5 rounded-full bg-black/60 hover:bg-black/80 text-white/70 hover:text-white text-[10px] font-medium backdrop-blur-sm transition-colors flex items-center gap-1"
-					title="Hide captions"
+					title={ui("Hide captions")}
 				>
 					<X className="w-3 h-3" />
-					<span>hide</span>
+					<span>Hide</span>
 				</button>
 			</div>
 			<div
@@ -189,7 +194,7 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 							<span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
 							<span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-500"></span>
 						</span>
-						<span>transcription paused{meetingApp ? ` (${meetingApp})` : ""}</span>
+						<span>Transcription paused{meetingApp ? ` (${meetingApp})` : ""}</span>
 					</div>
 				)}
 
@@ -227,7 +232,7 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 				{/* CTA hint */}
 				<div className={`flex items-center justify-center gap-1 transition-all duration-200 overflow-hidden ${isHovered ? "max-h-6 opacity-100 pt-0.5" : "max-h-0 opacity-0"}`}>
 					<ChevronDown className="w-3 h-3 text-muted-foreground/60" />
-					<span className="text-[10px] text-muted-foreground/60">click for full transcript</span>
+					<span className="text-[10px] text-muted-foreground/60">Click for full transcript</span>
 				</div>
 			</div>
 		</div>
@@ -249,6 +254,7 @@ function SubtitleLine({
 	isHovered: boolean;
 	isLookahead: boolean;
 }) {
+
 	const speakerLabel = entry.is_input
 		? "You"
 		: entry.speaker_name || entry.device_name || "Speaker";
@@ -285,7 +291,7 @@ function SubtitleLine({
 			{isPending ? (
 				<span className="text-sm text-muted-foreground/50 flex-1 flex items-center gap-1.5 italic">
 					<Loader2 className="w-3 h-3 animate-spin" />
-					transcribing…
+					Transcribing…
 				</span>
 			) : (
 				<span className={`text-sm text-muted-foreground flex-1 transition-all duration-200 ${isHovered || isLookahead ? "whitespace-normal" : "whitespace-normal line-clamp-2"}`}>

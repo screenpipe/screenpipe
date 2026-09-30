@@ -111,7 +111,7 @@ describe("announcement bubble", () => {
     );
     expect(onShown).toHaveBeenCalledOnce();
 
-    fireEvent.click(screen.getByRole("button", { name: "dismiss" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(onDismiss).toHaveBeenCalledOnce();
   });
 

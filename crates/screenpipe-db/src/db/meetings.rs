@@ -1049,8 +1049,10 @@ impl DatabaseManager {
                     // In-window chunks (false) sort before out-of-window (true); the
                     // nearest wins within each group. So an in-window chunk is always
                     // preferred, but a far same-device chunk still beats dropping.
-                    let dt = (c.1 - seg_ms).abs();
-                    (dt > window_ms, dt)
+                    let dt = seg_ms - c.1;
+                    // Chunk timestamps mark their START. Nearest-by-distance
+                    // picks the next file for the second half of each chunk.
+                    (!(0..=window_ms).contains(&dt), dt.unsigned_abs())
                 });
             let Some(chunk) = pick else {
                 continue;
@@ -1061,7 +1063,7 @@ impl DatabaseManager {
                 "INSERT OR IGNORE INTO audio_transcriptions \
                  (audio_chunk_id, transcription, offset_index, timestamp, transcription_engine, \
                   device, is_input_device, speaker_id, start_time, end_time, text_length) \
-                 VALUES (?1, ?2, 0, ?3, 'live', ?4, ?5, NULL, 0, 0, ?6)",
+                 VALUES (?1, ?2, 0, ?3, 'live', ?4, ?5, NULL, ?7, NULL, ?6)",
             )
             .bind(chunk_id)
             .bind(&s.transcript)
@@ -1069,6 +1071,7 @@ impl DatabaseManager {
             .bind(&s.device_name)
             .bind(s.is_input)
             .bind(text_length)
+            .bind((seg_ms >= chunk.1).then_some((seg_ms - chunk.1) as f64 / 1000.0))
             .execute(&mut **tx.conn())
             .await?;
             inserted += res.rows_affected();
@@ -1194,7 +1197,7 @@ impl DatabaseManager {
 
         let candidate_rows = sqlx::query(
             "SELECT at.transcription, at.timestamp, at.audio_chunk_id, \
-                    at.is_input_device, ac.file_path \
+                    at.is_input_device, ac.file_path, ac.timestamp AS chunk_timestamp \
              FROM audio_transcriptions at \
              JOIN audio_chunks ac ON ac.id = at.audio_chunk_id \
              WHERE at.transcription_engine = 'live' \
@@ -1207,8 +1210,10 @@ impl DatabaseManager {
         .await?;
 
         // (is_input, text) → [(ts_ms, chunk_id, file_path)]
-        let mut candidates: std::collections::HashMap<(bool, String), Vec<(i64, i64, String)>> =
-            std::collections::HashMap::new();
+        let mut candidates: std::collections::HashMap<
+            (bool, String),
+            Vec<(i64, i64, String, Option<f64>)>,
+        > = std::collections::HashMap::new();
         for row in &candidate_rows {
             let (Ok(text), Ok(ts), Ok(chunk_id)) = (
                 row.try_get::<String, _>("transcription"),
@@ -1222,7 +1227,16 @@ impl DatabaseManager {
             candidates
                 .entry((is_input, text.trim().to_string()))
                 .or_default()
-                .push((ts.timestamp_millis(), chunk_id, file_path));
+                .push((
+                    ts.timestamp_millis(),
+                    chunk_id,
+                    file_path,
+                    row.try_get::<DateTime<Utc>, _>("chunk_timestamp")
+                        .ok()
+                        .and_then(|start| {
+                            (ts >= start).then_some((ts - start).num_milliseconds() as f64 / 1000.0)
+                        }),
+                ));
         }
 
         for (idx, seg_ms) in unresolved.drain(..) {
@@ -1234,13 +1248,14 @@ impl DatabaseManager {
             let Some(matches) = candidates.get(&key) else {
                 continue;
             };
-            if let Some((_, chunk_id, file_path)) = matches
+            if let Some((_, chunk_id, file_path, offset)) = matches
                 .iter()
-                .filter(|(ts, _, _)| (ts - seg_ms).abs() <= WINDOW_MS)
-                .min_by_key(|(ts, _, _)| (ts - seg_ms).abs())
+                .filter(|(ts, _, _, _)| (ts - seg_ms).abs() <= WINDOW_MS)
+                .min_by_key(|(ts, _, _, _)| (ts - seg_ms).abs())
             {
                 seg.audio_chunk_id = Some(*chunk_id);
                 seg.audio_file_path = Some(file_path.clone());
+                seg.audio_start_time_secs = *offset;
             }
         }
         Ok(())
@@ -1292,6 +1307,7 @@ impl DatabaseManager {
                     NULL AS audio_transcription_id,
                     NULL AS audio_chunk_id,
                     NULL AS audio_file_path,
+                    NULL AS audio_start_time_secs,
                     mts.speaker_id AS speaker_id,
                     mts.session_speaker_id AS session_speaker_id,
                     -- Prefer the resolved global speaker's name, then preserve
@@ -1322,6 +1338,7 @@ impl DatabaseManager {
                     at.id AS audio_transcription_id,
                     at.audio_chunk_id AS audio_chunk_id,
                     ac.file_path AS audio_file_path,
+                    at.start_time AS audio_start_time_secs,
                     at.speaker_id AS speaker_id,
                     NULL AS session_speaker_id,
                     s.name AS speaker_name,

@@ -5,6 +5,7 @@
 import { homeDir } from "@tauri-apps/api/path";
 import { getVersion } from "@tauri-apps/api/app";
 import { commands } from "@/lib/utils/tauri";
+import { saveWithPresetReassignment } from "@/lib/ai-preset-deletion";
 import { platform } from "@tauri-apps/plugin-os";
 import { Store } from "@tauri-apps/plugin-store";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -294,6 +295,9 @@ export interface ChatHistoryStore {
 
 // Extend SettingsStore with fields added before Rust types are regenerated
 export type Settings = SettingsStore & {
+	/** Explicit consent on this device. Content is never stored in this field. */
+	workflowSharingPromptSeen?: Record<string, string>;
+	workflowSharing?: { accountId: string; epoch: string; enabledAt: number; priorBackend: "local" | "tinfoil" } | null;
 	/** Enable account data sync for this device. Default false. */
 	dataSyncEnabled?: boolean;
 	/** Friendly name used to partition this device's synced data. */
@@ -310,6 +314,8 @@ export type Settings = SettingsStore & {
 	activitiesAiPresetId?: string;
 	/** Next native Activity generation run as an ISO timestamp. */
 	activitiesNextRunAt?: string;
+	/** Native account allowance backoff; null clears it for an explicit retry. */
+	activitiesQuotaPause?: { context: string; code: string; retry_at: string | null } | null;
 	/** Goal used to prioritize the Home cards. Persisted in store.bin. */
 	userGoalCategory?: UserGoalCategory;
 	/** Where the user says they found screenpipe, answered once during setup.
@@ -495,6 +501,10 @@ export type Settings = SettingsStore & {
 		displayChanges?: boolean;
 		/** Live-note prompt when a meeting is detected. Default true. */
 		meetingLiveNotes?: boolean;
+		/** Calendar join reminders; missing inherits meetingLiveNotes. */
+		meetingReminders?: boolean;
+		/** Seconds before start, clamped to 1–1800 by the scheduler. Default 30. */
+		meetingReminderLeadSeconds?: number;
 		/** OS notification when a meeting starts but no audio frames arrive within 60s. Default true. */
 		audioCaptureStalled?: boolean;
 		/** In-app /notify when audio is captured but no live transcript arrives within 60s. Default true. */
@@ -708,12 +718,17 @@ const applyProCloudAudioDefaults = (settings: Settings): Settings => {
 };
 
 let DEFAULT_SETTINGS: Settings = {
+            uiLocale: "system",
+            uiLocalizationEnabled: process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock"
+              && typeof window !== "undefined"
+              && new URLSearchParams(window.location.search).get("mockLocalization") === "true",
 			dataSyncEnabled: false,
 			activitiesEnabled: false,
 			activitiesIntervalMinutes: 15,
 			aiPresets: makeDefaultPresets(false) as any,
 			userGoalCategory: DEFAULT_USER_GOAL_CATEGORY,
-			deviceId: crypto.randomUUID(),
+			// Native startup persists the device identity before opening a webview.
+			deviceId: "",
 			deepgramApiKey: "",
 			isLoading: false,
 			userId: "",
@@ -750,7 +765,7 @@ let DEFAULT_SETTINGS: Settings = {
 			teamFilters: { ignoredWindows: [], includedWindows: [], ignoredUrls: [] },
 
 			analyticsEnabled: true,
-			remoteLogCollectionEnabled: false,
+			remoteLogCollectionEnabled: true,
 			remoteLogCollectionUserId: null,
 			audioChunkDuration: 30,
 			useChineseMirror: false,
@@ -798,7 +813,7 @@ let DEFAULT_SETTINGS: Settings = {
 			lockVaultShortcut: "Super+Shift+L",
 			disableVision: false,
 			disableScreenshots: false,
-			enableSemanticContext: false,
+			enableSemanticContext: true,
 			remoteControlPreferences: {
 				...NEW_INSTALL_REMOTE_CONTROL_PREFERENCES,
 			},
@@ -851,6 +866,7 @@ let DEFAULT_SETTINGS: Settings = {
 			hdRecordingIntervalMs: 100,
 			headless: false,
 			headlessRecordOnly: false,
+			keepSearchAvailableAfterQuit: true,
 			fontSize: "16px",
 		};
 
@@ -963,9 +979,9 @@ export const getStore = async () => {
 	if (!_store) {
 		_store = (async () => {
 			// Resolve the base dir via the backend so the webview opens the same
-			// store.bin as Rust (get_base_dir honors SCREENPIPE_DATA_DIR); a
-			// hardcoded ~/.screenpipe here splits the settings store in two
-			// whenever that override is set.
+			// store.bin as Rust. The backend pins this to the launch directory,
+			// even when recordings use another folder or SCREENPIPE_DATA_DIR
+			// was supplied to isolate the entire app at launch.
 			let baseDir: string | null = null;
 			try {
 				const res = await commands.getScreenpipeBaseDir();
@@ -1426,6 +1442,9 @@ function createSettingsStore() {
 			const store = await getStore();
 			const current = await get();
 			const managedValues = await activeManagedValues(current);
+			if (current.workflowSharing && value.workflowSharing !== null && value.piiBackend !== undefined && value.piiBackend !== "tinfoil") {
+				throw new Error("Turn off Workflows sharing before changing cloud redaction.");
+			}
 			let newSettings = { ...current, ...value } as Settings;
 			if ("user" in value) {
 				// On logout / Pro→non-Pro transition, clear the V2 marker so a future
@@ -1441,8 +1460,10 @@ function createSettingsStore() {
 			) as Settings;
 			if (managedValues) newSettings.enterpriseManagedSettings = managedValues;
 			else delete newSettings.enterpriseManagedSettings;
-			await setSettingsStripped(store, newSettings);
-			await saveAndEncrypt(store);
+			await saveWithPresetReassignment(current, newSettings, async (reassigned) => {
+				await setSettingsStripped(store, reassigned);
+				await saveAndEncrypt(store);
+			});
 		});
 
 	const reset = () =>
@@ -1451,7 +1472,7 @@ function createSettingsStore() {
 			const current = await get();
 			const managedValues = await activeManagedValues(current);
 			const defaults = applyManagedOverrides(
-				createDefaultSettingsObject() as Record<string, unknown>,
+				{ ...createDefaultSettingsObject(), deviceId: current.deviceId } as Record<string, unknown>,
 				managedValues
 			) as Settings;
 			if (managedValues) defaults.enterpriseManagedSettings = managedValues;
@@ -1460,6 +1481,7 @@ function createSettingsStore() {
 		});
 
 	const resetSetting = async <K extends keyof Settings>(key: K) => {
+		if (key === "deviceId") return;
 		const current = await get();
 		const defaultValue = createDefaultSettingsObject()[key];
 		await set({ [key]: defaultValue } as Partial<Settings>);
@@ -1852,6 +1874,10 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 	}, [settings.fontSize]);
 
 	const updateSettings = async (updates: Partial<Settings>) => {
+		if (settingsRef.current.workflowSharing && updates.workflowSharing !== null &&
+			updates.piiBackend !== undefined && updates.piiBackend !== "tinfoil") {
+			throw new Error("Turn off Workflows sharing before changing cloud redaction.");
+		}
 		assertValidAiPresetUpdate(updates);
 		const updateGeneration = ++settingsUpdateGenerationRef.current;
 		const settingsBeforeUpdate = settingsRef.current;
@@ -2121,4 +2147,9 @@ export function useSettings(): SettingsContextType {
 		throw new Error("useSettings must be used within a SettingsProvider");
 	}
 	return context;
+}
+
+/** Optional access for reusable shortcut menus rendered outside the app shell. */
+export function useOptionalSettings(): SettingsContextType | undefined {
+  return useContext(SettingsContext);
 }

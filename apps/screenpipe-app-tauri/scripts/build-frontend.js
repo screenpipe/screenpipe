@@ -31,6 +31,7 @@ import crypto from 'crypto'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
+import { prepareLocalization } from './i18n/prepare.mjs'
 
 const appRoot = path.resolve(__dirname, '..')
 const outDir = path.join(appRoot, 'out')
@@ -55,13 +56,13 @@ const MAX_CACHE_ENTRIES = 8
 // pointlessly rebuilding an identical frontend.
 const SKIP_DIRS = new Set([
 	'src-tauri', 'node_modules', '.next', 'out', 'target', '.git', '.turbo', '.vercel',
-	'coverage', '.e2e-data', '.e2e', 'videos', 'screenshots', 'results',
+	'coverage', '.e2e-data', '.e2e', 'videos', 'screenshots', 'results', '.localization',
 ])
 const SKIP_FILES = new Set(['.DS_Store', 'tsconfig.tsbuildinfo'])
 
 // Env vars that change the emitted bundle (see next.config.mjs). Fold them into
 // the hash so toggling one invalidates the cache.
-const INPUT_ENV = ['SHIP_SOURCE_MAPS', 'NODE_ENV']
+const INPUT_ENV = ['SHIP_SOURCE_MAPS', 'NODE_ENV', 'SCREENPIPE_I18N_MODE']
 
 // Next inlines EVERY `NEXT_PUBLIC_*` var into the emitted chunks at build
 // time, so each one is a bundle input — enumerated dynamically because a
@@ -96,6 +97,17 @@ async function walk(dir, files) {
 export async function computeInputHash(root = appRoot) {
 	const files = []
 	await walk(root, files)
+	// Local packages are frontend inputs even though node_modules is excluded.
+	const manifestPath = path.join(root, 'package.json')
+	const manifest = await fs.readFile(manifestPath, 'utf8').then(JSON.parse).catch((error) => {
+		if (error.code === 'ENOENT') return {}
+		throw error
+	})
+	for (const spec of Object.values({ ...manifest.dependencies, ...manifest.devDependencies })) {
+		if (typeof spec === 'string' && spec.startsWith('file:')) {
+			await walk(path.resolve(root, spec.slice(5)), files)
+		}
+	}
 	files.sort() // deterministic regardless of readdir order
 
 	const hash = crypto.createHash('sha256')
@@ -177,18 +189,22 @@ async function pruneCache() {
 }
 
 async function main() {
+	// Finalize the generated bundle before inspecting any frontend artifact cache.
+	const localization = await prepareLocalization()
 	const forced = ['1', 'true'].includes(String(process.env.SCREENPIPE_FORCE_FRONTEND_BUILD).toLowerCase())
 	const key = await computeInputHash()
 	const entry = cacheRoot ? path.join(cacheRoot, key) : null
 
 	// 1) out/ is already this exact build.
 	if (!forced && (await readOutKey()) === key && (await hasIndex(outDir))) {
+		await verifyLocalizationArtifact(outDir, localization)
 		console.log('[build-frontend] out/ already current — nothing to build')
 		return
 	}
 
 	// 2) A matching build is in the local cache — restore it, no `next build`.
 	if (!forced && entry && (await hasIndex(entry))) {
+		await verifyLocalizationArtifact(entry, localization)
 		console.log(`[build-frontend] restoring frontend from cache: ${entry}`)
 		await swapInOut((tmp) => fs.cp(entry, tmp, { recursive: true }))
 		await fs.utimes(entry, new Date(), new Date()).catch(() => {}) // bump LRU
@@ -209,6 +225,7 @@ async function main() {
 		await fs.rm(outDir, { recursive: true, force: true })
 		await $`bun x next build`.cwd(appRoot)
 		if (!(await hasIndex(outDir))) throw new Error('[build-frontend] `next build` produced no out/index.html')
+		await verifyLocalizationArtifact(outDir, localization)
 		await fs.writeFile(path.join(outDir, MARKER), key)
 		await fs.rename(outDir, tmp)
 	})
@@ -228,6 +245,23 @@ async function main() {
 		}
 	} else {
 		console.log('[build-frontend] built (artifact cache disabled)')
+	}
+}
+
+export async function verifyLocalizationArtifact(directory, snapshot) {
+	if (snapshot.mode === 'off') return
+	const files = []
+	await walk(path.join(directory, '_next', 'static'), files)
+	let foundRevision = false
+	for (const file of files.filter((file) => file.endsWith('.js'))) {
+		const content = await fs.readFile(file, 'utf8')
+		if (content.includes('"revision":"off"')) {
+			throw new Error('[build-frontend] localized export contains the English-only placeholder snapshot')
+		}
+		foundRevision ||= content.includes(snapshot.revision)
+	}
+	if (!foundRevision) {
+		throw new Error('[build-frontend] finalized localization snapshot is missing from the exported JavaScript')
 	}
 }
 

@@ -13,6 +13,7 @@ export type HostedAiCapacityUpgrade = {
 
 const BASIC_HOSTED_MODELS = [
 	'auto',
+	'gpt-6-luna',
 	'gpt-5.6-luna',
 	'gpt-5.4-mini',
 	'gpt-5.4-nano',

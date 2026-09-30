@@ -1218,7 +1218,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Recent local Codex and Claude histories sync automatically into the same Recents stream as native Screenpipe chats. Isolated real JSONL files prove that a background provider update does not invent an unread dot when the transcript has no provider attention state, that an opened provider chat shows live thinking and running tool feedback, and that tool completion plus later assistant text arrive without a page reload for both providers. A large Claude JSON response stays compact by default and expands into readable, pretty-printed output. The primary sidebar has no import action; right-clicking View all filters by only the sources present, while a hover-only organizer exposes the same filters plus source grouping and priority or latest-update sorting. Captures sparse, crowded mixed-provider, Codex-heavy, and structured-output native UI states with one harness icon per row, expanded pinned rows, and the capped recent working set."
+      "notes": "Recent local Codex and Claude histories sync automatically into the same Recents stream as native Screenpipe chats. Isolated real JSONL files prove that a background provider update does not invent an unread dot when the transcript has no provider attention state, that an opened provider chat shows live thinking and running tool feedback, and that tool completion plus later assistant text arrive without a page reload for both providers. A large Claude JSON response stays compact by default and expands into readable, pretty-printed output. The primary sidebar has no import action; right-clicking View all filters by only the sources present, while the organizer exposes the same filters plus source grouping and priority or latest-update sorting. Captures sparse, crowded mixed-provider, Codex-heavy, and structured-output native UI states with one harness icon per row, expanded pinned rows, and the capped recent working set."
     },
     {
       "spec": "chat-sidebar-groups.spec.ts",
@@ -1563,7 +1563,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "mixed",
-      "notes": "Mixed Python, JavaScript, Screenpipe API, file, test, recovered-error, and optional live Pi tool flows stay collapsed by default, expose only friendly activity on first expansion, and keep completed tools active while the shared Pi turn is still streaming. Commentary remains visible in transcript order around live and completed tool groups; settled final answers remain distinct from progress, so unrecovered failure, user-stop, and app-interruption states stay truthful. Synthetic MCP startup events stay out of the transcript so the answer remains primary, connection diagnostics never leak into chat, and startup failures never inflate the command rail's failure count."
+      "notes": "Mixed Python, JavaScript, Screenpipe API, file, test, recovered-error, and optional live Pi tool flows stay collapsed by default, expose only friendly activity on first expansion, and keep the trailing tool group active while the shared Pi turn is still streaming. Completed groups retain action and file summaries with secondary duration; earlier groups settle when later prose streams. Commentary remains visible in transcript order around live and completed tool groups; settled final answers remain distinct from progress, so unrecovered failure, user-stop, and app-interruption states stay truthful. Synthetic MCP startup events stay out of the transcript so the answer remains primary, connection diagnostics never leak into chat, and startup failures never inflate the command rail's failure count."
     },
     {
       "spec": "chat-window.spec.ts",
@@ -1736,6 +1736,27 @@
       "ux": "real-user-flow",
       "tests": 2,
       "notes": "Home is the single first-summary lifecycle owner: reset events clear the mounted Home state, while the separate Chat webview neither renders nor claims a second learning window from the shared onboarding completion."
+    },
+    {
+      "spec": "focus-warm-pause.spec.ts",
+      "platforms": [
+        "macos"
+      ],
+      "layers": [
+        "capture-ocr",
+        "local-api",
+        "os-integration",
+        "real-ui-e2e"
+      ],
+      "features": [
+        "app-launch",
+        "capture-ocr",
+        "health"
+      ],
+      "criticality": "high",
+      "confidence": "conditional",
+      "ux": "mixed",
+      "notes": "Opt-in disposable macOS test supplies Warm focus and pause inputs, verifies the real OS capture stream stays released throughout pause while loop heartbeats advance, then proves capture and durable frame writes resume in the same process."
     },
     {
       "spec": "focus-server.spec.ts",
@@ -2122,7 +2143,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Seeds four stored frames, wraps their exact timestamps in an ended meeting, reopens it from the previous-meetings list, and verifies deduped silent playback, pause stability, unobscured frame layout, and a review screenshot."
+      "notes": "Seeds four stored frames, wraps their exact timestamps in an ended meeting, reopens it from the previous-meetings list, and verifies deduped screen-only playback with an explicit No audio state, pause stability, unobscured frame layout, and a review screenshot."
     },
     {
       "spec": "meeting-restart-live-transcription.spec.ts",
@@ -2282,7 +2303,7 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "tests": 9,
-      "notes": "Fresh-install setup walk: the acquisition slide is reachable in the shipped slide order and counted by the progress bar, offers no free-text field, one tap persists through to store.bin via the real settings command, skip records nothing, signed-out users reach recommended setup, verified Free accounts continue without card capture or hosted checkout and land in Home, and existing lifetime owners stay out of mandatory checkout."
+      "notes": "Fresh-install setup walk: signed-out users restoring a post-login step return to login; after account creation, the acquisition slide is reachable in the shipped order and counted by the progress bar, offers no free-text field, one tap persists through to store.bin via the real settings command, skip records nothing, and existing lifetime owners stay out of mandatory checkout."
     },
     {
       "spec": "onboarding-h1-follow-up.spec.ts",
@@ -2349,7 +2370,7 @@
       "confidence": "strong",
       "ux": "real-user-flow",
       "tests": 4,
-      "notes": "Pre-grant reassurance in setup: the login slide carries the storage-locality line and the pause affordance on one line (the only slide every platform sees, since permissions auto-advances on non-mac); the mac permissions slide keeps that promise collapsed to a single line below the permission wheel and on expand renders the data dir the running app actually resolved rather than a reconstructed ~/.screenpipe, with an open action pointed at that path; collapsed and expanded states are both asserted to fit inside the fixed-size onboarding window; and the timeline slide states the capture bounds (incognito skipped, per-app exclusions) where the capture decision is made. The mac assertions share one visit because the slide auto-advances 600ms after all grants land."
+      "notes": "Pre-grant reassurance in setup: the login slide carries the storage-locality line and the pause affordance on one line (the only slide every platform sees, since permissions auto-advances on non-mac); the mac permissions slide keeps that promise collapsed to a single line below the permission wheel and on expand renders the data dir the running app actually resolved rather than a reconstructed ~/.screenpipe, with an open action pointed at that path; collapsed and expanded states are both asserted to fit inside the fixed-size onboarding window; and the screenshot choice slide states the capture bounds (incognito skipped, per-app exclusions) where screenshot capture is chosen independently of sidebar visibility. The mac assertions share one visit because the slide auto-advances 600ms after all grants land."
     },
     {
       "spec": "owned-browser.spec.ts",
@@ -2924,6 +2945,26 @@
       "confidence": "partial",
       "ux": "command",
       "notes": "Viewer window creation and per-path dedupe."
+    },
+    {
+      "spec": "webview-shell-scope.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "tauri-command",
+        "os-integration"
+      ],
+      "features": [
+        "webview-shell-scope",
+        "ai-tools"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "command",
+      "notes": "Calls the shell plugin from a real app webview. The removed exec-sh, sh, cmd and any-argument open entries are rejected by the capability scope. On macOS, a caller-supplied PATH cannot replace the system launcher, and the Claude/Cursor install check still reaches fs exists."
     },
     {
       "spec": "window-activation.spec.ts",

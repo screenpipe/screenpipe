@@ -15,7 +15,7 @@ describe("WebsiteRuleList", () => {
 		fireEvent.change(screen.getByLabelText("Hostname to allow"), {
 			target: { value: " HTTPS://WWW.Example.COM/path " },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "add" }));
+		fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
 		expect(onChange).toHaveBeenCalledWith([
 			{
@@ -33,7 +33,7 @@ describe("WebsiteRuleList", () => {
 		fireEvent.change(screen.getByLabelText("Hostname to block"), {
 			target: { value: "worktrace" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "add" }));
+		fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
 		expect(onChange).not.toHaveBeenCalled();
 		expect(screen.getByRole("alert")).toHaveTextContent("full hostname");
@@ -48,7 +48,7 @@ describe("WebsiteRuleList", () => {
 		fireEvent.change(screen.getByLabelText("Hostname to block"), {
 			target: { value: "docs.example.com" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "add" }));
+		fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
 		expect(onChange).toHaveBeenCalledWith([
 			"legacy.example",
@@ -75,7 +75,7 @@ describe("WebsiteRuleList", () => {
 		fireEvent.change(screen.getByLabelText("Hostname to block"), {
 			target: { value: "example.com" },
 		});
-		fireEvent.click(screen.getByRole("button", { name: "add" }));
+		fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
 		expect(onChange).not.toHaveBeenCalled();
 		expect(screen.getByRole("alert")).toHaveTextContent("already listed");

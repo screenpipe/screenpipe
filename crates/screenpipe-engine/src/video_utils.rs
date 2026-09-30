@@ -1189,7 +1189,12 @@ pub async fn extract_frame_from_video(
 
     debug!("ffmpeg command: {:?}", command);
 
-    let output = command.output().await?;
+    let operation = screenpipe_core::health_diagnostics::MediaOperation::start("extraction");
+    let output = command.output().await;
+    operation.finish(&output);
+    let output = output?;
+    // Nonzero exit can mean a corrupt user media file, not a missing runtime.
+    // Keep that request-specific error in the existing API response.
 
     if !output.status.success() {
         let error_message = String::from_utf8_lossy(&output.stderr);

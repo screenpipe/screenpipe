@@ -624,3 +624,9 @@ describe("adapter relay tags in tool results", () => {
     expect(formatToolResult("plain output")).toBe("plain output");
   });
 });
+
+it("names workflow discovery actions in the shared activity presenter", () => {
+  expect(presentToolActivity({ toolName: "workflow_commit" })).toMatchObject({ runningLabel: "Saving workflows", completedLabel: "Saved workflows" });
+  expect(presentToolActivity({ toolName: "workflow_context" })).toMatchObject({ runningLabel: "Reading saved workflows" });
+  expect(presentToolActivity({ toolName: "workflow_inspect_frame" })).toMatchObject({ runningLabel: "Checking a captured image" });
+});

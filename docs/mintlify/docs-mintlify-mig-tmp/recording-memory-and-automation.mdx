@@ -1,0 +1,54 @@
+---
+title: "Recording, memory, workflows, and automation: what is the difference?"
+sidebarTitle: "Recording to automation"
+description: "Screenpipe captures available screen and audio context while recording is running."
+icon: "workflow"
+---
+
+Screenpipe captures available screen and audio context while recording is running. An AI can retrieve that history, turn it into a report, or use it in an automation. Those are separate stages: a recording does not by itself prove that a report was saved or an action completed.
+
+## Start here
+
+Choose one short work session and one output, such as a reviewed job log. Search for a distinctive phrase from that session before asking for a summary.
+
+## Copy this prompt
+
+Use this in Screenpipe chat or an assistant with the required connections. Replace the brackets with your details. If the assistant lacks access, provide a reviewed excerpt; a prompt alone does not connect it to your history.
+
+```text
+Use my recorded work on [date], [start–end, timezone]. First confirm what
+history is available. Then explain the session using four sections:
+1. Observed activity, with source times.
+2. A concise memory worth keeping.
+3. A possible repeated workflow, marked as a hypothesis.
+4. One suggested automation and how I would verify its result.
+Do not execute the suggestion. If the sources are missing, say what is missing.
+```
+
+## Check the result
+
+Open a source reference. Check that a proposed workflow is labeled as a proposal. If an agent says it saved a report, open that file or destination and inspect its contents.
+
+<AccordionGroup>
+<Accordion title="See a worked example" id="worked-example">
+
+| Stage | Fictional example | Proof to look for |
+| --- | --- | --- |
+| Recording | A request was visible at 10:15. | Search result or source moment. |
+| Memory | The team chose a manual approval step. | Reviewed note with a source. |
+| Workflow | Approved requests become checklists. | Operator-confirmed steps and exceptions. |
+| Automation | Draft a checklist for the next request. | Actual saved output and a successful test. |
+
+</Accordion>
+<Accordion title="Go deeper: setup choices and edge cases" id="details">
+
+A **job** can mean your client assignment, while a **scheduled task** is a configured AI task. Give client jobs stable labels in your notes and prompts. Do not assume that naming a job creates a built-in billing record.
+
+A voice request is another way of expressing intent. It only controls recording, a running AI task, or a schedule if the assistant has the corresponding tool and successfully uses it. Ask it to identify the target and report the resulting state. Stopping a run and disabling future runs are different operations.
+
+</Accordion>
+</AccordionGroup>
+
+## Continue
+
+[First useful result](/first-useful-result) · [AI usage and controls](/ai-usage-and-controls) · [workflow handoff](/workflow-handoff)

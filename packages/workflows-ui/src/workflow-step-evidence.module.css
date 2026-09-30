@@ -1,0 +1,34 @@
+/* screenpipe — AI that knows everything you've seen, said, or heard */
+/* https://screenpipe.com */
+.evidence { margin: 12px 0 4px; min-width: 0; }
+.previewStatus { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 16px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); font-size: 12px; }
+.previewStatus button { text-decoration: underline; }
+.figure { max-width: 360px; margin: 0 0 20px; }
+.figure.expanded { max-width: 100%; }
+.figure .imageButton { display: block; padding: 0; position: relative; width: 100%; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--soft); cursor: zoom-in; }
+.expanded .imageButton { cursor: zoom-out; }
+.imageButton img { display: block; width: 100%; height: auto; object-fit: contain; }
+.zoom { position: absolute; right: 8px; bottom: 8px; display: grid; place-items: center; padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; opacity: 0; }
+.imageButton:hover .zoom, .imageButton:focus-visible .zoom { opacity: 1; }
+.figure figcaption { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; line-height: 1.5; color: var(--muted); }
+.figure figcaption > span { min-width: 0; overflow-wrap: anywhere; }
+.links { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px 12px; font-size: 11px; color: var(--muted); }
+.links > button { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0; font-size: 11px; }
+.player { position: relative; padding-top: 22px; scroll-margin-top: 80px; }
+.player > section { margin: 0 0 8px; border-radius: 6px; }
+.player .close { position: absolute; right: 0; top: -6px; }
+@media (max-width: 560px) { .figure { max-width: 100%; } }
+
+/* Reveal playback without competing with the step. */
+@media (prefers-reduced-motion: no-preference) {
+  .zoom { transition: opacity 150ms ease; }
+  .player { animation: evidenceReveal 150ms ease-out; }
+}
+@keyframes evidenceReveal { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
+
+
+.evidence .recording { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border-radius: 4px; color: var(--muted); flex-shrink: 0; }
+.evidence .recording:hover { background: var(--soft); color: var(--ink); }
+.evidence .recording:focus-visible { outline: 1px solid var(--ink); outline-offset: 2px; }
+.evidence .recording:disabled { opacity: .5; }
+@media (pointer: coarse) { .evidence .recording { width: 44px; height: 44px; } }

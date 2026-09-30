@@ -9,6 +9,8 @@ import { AlertCircle, Check, Download, Loader2, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { commands, type RegistrySkill } from "@/lib/utils/tauri";
 import { skillKey, sourceLabel } from "@/lib/skills-registry";
+import { useGT } from "gt-react";
+
 
 const PROVIDERS = ["anthropic", "openai"] as const;
 const SKILLS_PER_PROVIDER = 2;
@@ -33,6 +35,8 @@ export function ProviderSkillCatalog({
 }: {
   onInstalled?: () => void;
 }) {
+
+  const ui = useGT();
   const [skills, setSkills] = useState<RegistrySkill[]>([]);
   const [installed, setInstalled] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -151,7 +155,7 @@ export function ProviderSkillCatalog({
             onClick={() => void load()}
           >
             <RotateCw className="h-3 w-3" aria-hidden />
-            retry
+            Retry
           </Button>
         </div>
       ) : recommended.length === 0 ? (
@@ -176,7 +180,7 @@ export function ProviderSkillCatalog({
                     <h4 className="text-sm font-medium text-foreground">
                       {skill.name}
                     </h4>
-                    <span className="rounded-full border border-border px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-muted-foreground">
+                    <span className="rounded-full border border-border px-1.5 py-0.5 text-[9px] font-medium normal-case tracking-wide text-muted-foreground">
                       {sourceLabel(skill.source)}
                     </span>
                   </div>
@@ -195,7 +199,7 @@ export function ProviderSkillCatalog({
                 {isInstalled && !isBusy ? (
                   <span className="inline-flex shrink-0 items-center gap-1 px-2 py-1 text-[10px] text-muted-foreground">
                     <Check className="h-3 w-3" aria-hidden />
-                    added
+                    Added
                   </span>
                 ) : (
                   <Button
@@ -210,7 +214,7 @@ export function ProviderSkillCatalog({
                     ) : (
                       <Download className="h-3 w-3" aria-hidden />
                     )}
-                    {installError ? "retry" : isBusy ? "installing" : "install"}
+                    {installError ? ui("Retry") : isBusy ? ui("Installing") : ui("Install")}
                   </Button>
                 )}
               </article>

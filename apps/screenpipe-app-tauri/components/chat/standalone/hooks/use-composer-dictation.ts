@@ -10,6 +10,8 @@ import {
   insertComposerTranscript,
   transcribeComposerAudio,
 } from "@/lib/chat/composer-dictation";
+import { useGT } from "gt-react";
+
 
 export type ComposerDictationStatus =
   | "idle"
@@ -24,6 +26,7 @@ type UseComposerDictationOptions = {
   onValueChange: (value: string) => void;
   disabled: boolean;
   sessionId: string | null;
+  shortcutsEnabled?: boolean;
 };
 
 const MAX_RECORDING_MS = 5 * 60 * 1000;
@@ -67,7 +70,9 @@ export function useComposerDictation({
   onValueChange,
   disabled,
   sessionId,
+  shortcutsEnabled = true,
 }: UseComposerDictationOptions) {
+  const ui = useGT();
   const { settings } = useSettings();
   const [status, setStatus] = React.useState<ComposerDictationStatus>("idle");
   const [error, setError] = React.useState<string | null>(null);
@@ -239,7 +244,7 @@ export function useComposerDictation({
       !navigator.mediaDevices?.getUserMedia ||
       typeof MediaRecorder === "undefined"
     ) {
-      setError("Microphone dictation isn't available on this device.");
+      setError(ui("Microphone dictation isn't available on this device."));
       updateStatus("error");
       return;
     }
@@ -276,7 +281,7 @@ export function useComposerDictation({
         ++generationRef.current;
         recorderStoppingRef.current = false;
         stopStream();
-        setError("The microphone stopped unexpectedly. Try again.");
+        setError(ui("The microphone stopped unexpectedly. Try again."));
         updateStatus("error");
       };
       recorder.onstop = () => {
@@ -296,7 +301,7 @@ export function useComposerDictation({
         });
         chunksRef.current = [];
         if (audio.size === 0) {
-          setError("No audio was captured. Try again.");
+          setError(ui("No audio was captured. Try again."));
           updateStatus("error");
           return;
         }
@@ -390,6 +395,10 @@ export function useComposerDictation({
 
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.repeat) return;
+      const targetPane = event.target instanceof Element ? event.target.closest("[data-chat-pane-id]") : null;
+      const ownPane = inputRef.current?.closest("[data-chat-pane-id]");
+      if (targetPane ? targetPane !== ownPane : !shortcutsEnabled) return;
       const modifier = event.metaKey || event.ctrlKey;
       if (
         event.key.toLowerCase() === "d" &&
@@ -426,7 +435,7 @@ export function useComposerDictation({
     };
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [cancel, disabled, finish, start]);
+  }, [cancel, disabled, finish, start, inputRef, shortcutsEnabled]);
 
   React.useEffect(() => {
     const handleVisibilityChange = () => {

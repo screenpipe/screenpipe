@@ -28,6 +28,9 @@ import {
   type Frequency,
   type ScheduleConfig,
 } from "@/lib/utils/schedule-builder";
+import { useMessages, useGT } from "gt-react";
+import { localizeDefinitions } from "@/lib/i18n/definitions";
+
 
 /** Convert an RFC3339 string to a value for `<input type="date">` (YYYY-MM-DD). */
 function isoToDateInput(iso: string | null): string {
@@ -52,6 +55,9 @@ export function PipeScheduleBuilder({
   onSave: (cfg: ScheduleConfig | null) => void;
   onCancel: () => void;
 }) {
+
+  const uiMessages = useMessages();
+  const ui = useGT();
   const reverseParsed = useMemo(
     () => scheduleStringToConfig(currentScheduleString),
     [currentScheduleString]
@@ -102,7 +108,7 @@ export function PipeScheduleBuilder({
     };
   }, [cfg, manual, weeklyNoDays, apiBase]);
 
-  const summary = preview?.summary || describeScheduleConfig(cfg);
+  const summary = describeScheduleConfig(cfg, uiMessages);
   const nextRun = !manual && preview?.next?.[0]
     ? new Date(preview.next[0]).toLocaleString([], {
         weekday: "short",
@@ -125,7 +131,7 @@ export function PipeScheduleBuilder({
     <div className="w-[320px] space-y-3 p-1 text-xs">
       {/* Run on a schedule toggle — off = manual (runs only on demand) */}
       <div className="flex items-center justify-between gap-2">
-        <Label className="text-xs">run on a schedule</Label>
+        <Label className="text-xs">Run on a schedule</Label>
         <Switch checked={!manual} onCheckedChange={(on) => setManual(!on)} />
       </div>
 
@@ -133,7 +139,7 @@ export function PipeScheduleBuilder({
         <>
           {/* Repeat */}
           <div className="flex items-center justify-between gap-2">
-            <Label className="text-xs">repeat</Label>
+            <Label className="text-xs">Repeat</Label>
             <Select
               value={cfg.frequency}
               onValueChange={(v) => update({ frequency: v as Frequency })}
@@ -142,9 +148,9 @@ export function PipeScheduleBuilder({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {FREQUENCY_OPTIONS.map((f) => (
+                {localizeDefinitions(FREQUENCY_OPTIONS, uiMessages).map((f) => (
                   <SelectItem key={f.value} value={f.value}>
-                    every {f.label.replace(/s$/, "")}
+                    Every {f.label.replace(/s$/, "")}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -153,13 +159,13 @@ export function PipeScheduleBuilder({
 
           {/* Every N <unit> */}
           <div className="flex items-center justify-between gap-2">
-            <Label className="text-xs">every</Label>
+            <Label className="text-xs">Every</Label>
             <div className="flex items-center gap-1.5">
               <Input
                 type="number"
                 min={1}
                 max={999}
-                aria-label="interval"
+                aria-label={ui("Interval")}
                 value={cfg.interval}
                 onChange={(e) => update({ interval: Math.max(1, Number(e.target.value) || 1) })}
                 className="h-8 w-16 text-xs"
@@ -171,9 +177,9 @@ export function PipeScheduleBuilder({
           {/* Weekday pills (weeks) */}
           {cfg.frequency === "weeks" && (
             <div>
-              <Label className="text-xs mb-1 block">on</Label>
+              <Label className="text-xs mb-1 block">On</Label>
               <div className="flex items-center gap-1">
-                {WEEKDAYS.map((d) => {
+                {localizeDefinitions(WEEKDAYS, uiMessages).map((d) => {
                   const on = cfg.days_of_week.includes(d.key);
                   return (
                     <button
@@ -201,7 +207,7 @@ export function PipeScheduleBuilder({
                 })}
               </div>
               {weeklyNoDays && (
-                <p className="mt-1 text-[11px] text-destructive">pick at least one day</p>
+                <p className="mt-1 text-[11px] text-destructive">Pick at least one day</p>
               )}
             </div>
           )}
@@ -209,7 +215,7 @@ export function PipeScheduleBuilder({
           {/* Day of month (months) */}
           {cfg.frequency === "months" && (
             <div className="flex items-center justify-between gap-2">
-              <Label className="text-xs">on the</Label>
+              <Label className="text-xs">On the</Label>
               <Select
                 value={String(cfg.day_of_month ?? 1)}
                 onValueChange={(v) => update({ day_of_month: Number(v) })}
@@ -231,10 +237,10 @@ export function PipeScheduleBuilder({
           {/* At <time> */}
           {showTime && (
             <div className="flex items-center justify-between gap-2">
-              <Label className="text-xs">at</Label>
+              <Label className="text-xs">At</Label>
               <input
                 type="time"
-                aria-label="time"
+                aria-label={ui("Time")}
                 value={timeValue}
                 onChange={(e) => {
                   const [h, m] = e.target.value.split(":").map(Number);
@@ -248,7 +254,7 @@ export function PipeScheduleBuilder({
           {/* Timezone */}
           {showTimezone && (
             <div className="flex items-center justify-between gap-2">
-              <Label className="text-xs">timezone</Label>
+              <Label className="text-xs">Timezone</Label>
               <Select
                 value={cfg.timezone ?? detectTimezone()}
                 onValueChange={(v) => update({ timezone: v })}
@@ -269,10 +275,10 @@ export function PipeScheduleBuilder({
 
           {/* Starting / Ending */}
           <div className="flex items-center justify-between gap-2">
-            <Label className="text-xs">starting</Label>
+            <Label className="text-xs">Starting</Label>
             <input
               type="date"
-              aria-label="starting"
+              aria-label={ui("Starting")}
               value={isoToDateInput(cfg.starting)}
               onChange={(e) =>
                 update({ starting: e.target.value ? `${e.target.value}T00:00:00Z` : null })
@@ -281,7 +287,7 @@ export function PipeScheduleBuilder({
             />
           </div>
           <div className="flex items-center justify-between gap-2">
-            <Label className="text-xs">ending</Label>
+            <Label className="text-xs">Ending</Label>
             <Select
               value={endMode}
               onValueChange={(v) => {
@@ -295,9 +301,9 @@ export function PipeScheduleBuilder({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="never">never</SelectItem>
-                <SelectItem value="on">on date</SelectItem>
-                <SelectItem value="after">after N runs</SelectItem>
+                <SelectItem value="never">Never</SelectItem>
+                <SelectItem value="on">On date</SelectItem>
+                <SelectItem value="after">After N runs</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -305,7 +311,7 @@ export function PipeScheduleBuilder({
             <div className="flex items-center justify-end">
               <input
                 type="date"
-                aria-label="ending date"
+                aria-label={ui("Ending date")}
                 value={isoToDateInput(cfg.ending)}
                 onChange={(e) =>
                   update({ ending: e.target.value ? `${e.target.value}T23:59:59Z` : null })
@@ -320,14 +326,14 @@ export function PipeScheduleBuilder({
                 type="number"
                 min={1}
                 max={9999}
-                aria-label="max occurrences"
+                aria-label={ui("Max occurrences")}
                 value={cfg.max_occurrences ?? 5}
                 onChange={(e) =>
                   update({ max_occurrences: Math.max(1, Number(e.target.value) || 1) })
                 }
                 className="h-8 w-20 text-xs"
               />
-              <span className="text-muted-foreground">runs</span>
+              <span className="text-muted-foreground">Runs</span>
             </div>
           )}
         </>
@@ -337,15 +343,15 @@ export function PipeScheduleBuilder({
       <div className="rounded border border-border bg-muted/30 px-2 py-1.5">
         {manual ? (
           <p className="text-[11px]">
-            moves to <span className="text-foreground">manual</span> — runs only when you trigger it
+            Moves to <span className="text-foreground">Manual</span> — runs only when you trigger it
           </p>
         ) : (
           <>
             <p className="text-[11px]">
-              runs <span className="text-foreground">{summary}</span>
+              Runs <span className="text-foreground">{summary}</span>
             </p>
             {nextRun && (
-              <p className="text-[11px] text-muted-foreground">next occurrence: {nextRun}</p>
+              <p className="text-[11px] text-muted-foreground">Next occurrence: {nextRun}</p>
             )}
           </>
         )}
@@ -353,10 +359,10 @@ export function PipeScheduleBuilder({
 
       <div className="flex items-center justify-end gap-1.5">
         <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={onCancel}>
-          cancel
+          Cancel
         </Button>
         <Button size="sm" className="h-8 px-3 text-xs" disabled={weeklyNoDays} onClick={save}>
-          save
+          Save
         </Button>
       </div>
     </div>

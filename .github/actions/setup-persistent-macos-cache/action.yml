@@ -60,12 +60,8 @@ runs:
 
         {
           echo "CARGO_HOME=$CACHE_ROOT/cargo"
-          echo "SCCACHE_DIR=$CACHE_ROOT/sccache"
-          echo "RUSTC_WRAPPER=sccache"
           echo "BUN_INSTALL_CACHE_DIR=$CACHE_ROOT/bun"
           echo "SCREENPIPE_NATIVE_CACHE_DIR=$CACHE_ROOT/native-deps"
         } >> "$GITHUB_ENV"
 
-        command -v sccache >/dev/null
-        sccache --start-server
-        sccache --show-stats
+        bash "${{ github.action_path }}/../../scripts/setup-release-sccache.sh" "$CACHE_ROOT/sccache"

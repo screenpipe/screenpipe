@@ -1,0 +1,83 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+
+import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { pruneRuntimeState } from '../services/runtime-state-maintenance';
+let db: Database;
+let env: any;
+beforeEach(() => {
+  db = new Database(':memory:');
+  db.exec(`CREATE TABLE usage (device_id TEXT PRIMARY KEY, user_id TEXT, daily_count INTEGER DEFAULT 0,
+    last_reset TEXT NOT NULL, tier TEXT, updated_at TEXT, created_at TEXT, daily_cost_usd REAL DEFAULT 0);
+    CREATE TABLE cost_daily (date TEXT, requests INTEGER);
+    CREATE TABLE transcription_daily (date TEXT, requests INTEGER);
+    CREATE TABLE model_health_window (bucket_epoch INTEGER, model TEXT);
+    CREATE TABLE hosted_ai_settlements (settlement_id TEXT PRIMARY KEY, created_at TEXT);`);
+  const prepare = (sql: string) => {
+    let bindings: any[] = [];
+    const statement: any = {
+      bind(...values: any[]) { bindings = values; return statement; },
+      async run() { const result = db.query(sql).run(...bindings); return { success: true, meta: { changes: result.changes } }; },
+      async first() { return db.query(sql).get(...bindings); },
+      async all() { return { success: true, results: db.query(sql).all(...bindings) }; },
+    };
+    return statement;
+  };
+  // Real SQLite executes the production SQL. This sequential adapter is not workerd/D1 concurrency.
+  env = { DB: { prepare, batch: async (statements: any[]) => {
+    const results = []; for (const statement of statements) results.push(await statement.run()); return results;
+  } } };
+});
+afterEach(() => db.close());
+function seed(id: string, tier: string, resetDays: number, updatedDays: number, count = 41) {
+  db.query(`INSERT INTO usage(device_id,tier,last_reset,updated_at,daily_count)
+    VALUES (?, ?, date('now', ?), datetime('now', ?), ?)`).run(id, tier, `${resetDays} days`, `${updatedDays} days`, count);
+}
+const rows = () => db.query('SELECT device_id,tier,last_reset,updated_at,daily_count FROM usage ORDER BY device_id').all();
+const ids = () => rows().map((r: any) => r.device_id);
+test('active IP quota survives stale update metadata with its count intact', async () => {
+  seed('ip:active', 'ip_tracking', 0, -120, 913); const before = rows();
+  await pruneRuntimeState(env); expect(rows()).toEqual(before);
+});
+test('IP retention includes the seven-day boundary and future reset dates', async () => {
+  seed('ip:boundary', 'ip_tracking', -7, -120); seed('ip:future', 'ip_tracking', 1, -120);
+  const before = rows(); await pruneRuntimeState(env); expect(rows()).toEqual(before);
+});
+test('expired IP rows are removed despite recently touched metadata', async () => {
+  seed('ip:expired', 'ip_tracking', -8, 0); seed('ip:recent', 'ip_tracking', -6, -8);
+  await pruneRuntimeState(env); expect(ids()).toEqual(['ip:recent']);
+});
+test('maintenance replay does not reset an active quota or resurrect old rows', async () => {
+  seed('ip:active', 'ip_tracking', 0, -8, 713); seed('ip:expired', 'ip_tracking', -10, -10);
+  await pruneRuntimeState(env); const first = rows();
+  expect(ids()).toEqual(['ip:active']); expect((first[0] as any).daily_count).toBe(713);
+  await pruneRuntimeState(env); expect(rows()).toEqual(first);
+});
+test('in-flight and free-chat counters keep their updated-time retention', async () => {
+  for (const tier of ['free_chat_in_flight_v1','free_chat_turn_v2:synthetic','free_chat_budget_v2:synthetic']) {
+    seed(`${tier}:old`, tier, 0, -8); seed(`${tier}:recent`, tier, -100, -6);
+  }
+  await pruneRuntimeState(env);
+  expect(ids()).toEqual(['free_chat_budget_v2:synthetic:recent','free_chat_in_flight_v1:recent','free_chat_turn_v2:synthetic:recent']);
+});
+test('ordinary usage keeps its separate ninety-day retention and quota values', async () => {
+  seed('user:old', 'subscribed', 0, -91); seed('user:retained', 'subscribed', -100, -89, 517);
+  await pruneRuntimeState(env); expect(ids()).toEqual(['user:retained']); expect((rows()[0] as any).daily_count).toBe(517);
+});
+test('one cleanup makes bounded progress on an oversized expired IP backlog', async () => {
+  const insert = db.query(`INSERT INTO usage(device_id,tier,last_reset,updated_at) VALUES (?,'ip_tracking',date('now','-8 days'),datetime('now','-8 days'))`);
+  db.transaction(() => { for(let i=0;i<5001;i++) insert.run(`ip:old:${i}`); })();
+  seed('ip:active', 'ip_tracking', 0, 0);
+  await pruneRuntimeState(env);
+  const remaining = (db.query("SELECT COUNT(*) AS n FROM usage WHERE device_id LIKE 'ip:old:%'").get() as any).n;
+  expect(remaining).toBeGreaterThanOrEqual(1); expect(remaining).toBeLessThan(5001);
+  expect(ids()).toContain('ip:active');
+});
+test('aggregate cleanup still removes old data and retains recent data', async () => {
+  for(const table of ['cost_daily','transcription_daily']) db.exec(`INSERT INTO ${table} VALUES(date('now','-91 days'),11),(date('now','-89 days'),17)`);
+  db.exec(`INSERT INTO model_health_window VALUES((CAST(strftime('%s','now') AS INTEGER)-7200)/10,'old'),(CAST(strftime('%s','now') AS INTEGER)/10,'recent')`);
+  await pruneRuntimeState(env);
+  for(const table of ['cost_daily','transcription_daily']) expect(db.query(`SELECT requests FROM ${table}`).all()).toEqual([{requests:17}]);
+  expect(db.query('SELECT model FROM model_health_window').all()).toEqual([{model:'recent'}]);
+});

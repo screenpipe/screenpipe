@@ -16,24 +16,67 @@ use tauri_plugin_store::StoreBuilder;
 use tracing::{error, warn};
 
 #[cfg(windows)]
-const WINDOWS_STORE_RETRY_ATTEMPTS: usize = 6;
+const WINDOWS_STORE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
 #[cfg(windows)]
-const WINDOWS_STORE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+const WINDOWS_STORE_RETRY_ATTEMPTS: usize = 101;
 
 /// Windows scanners and sync providers can briefly open the canonical store
 /// without write/delete sharing. Retry only the Win32 errors produced by that
-/// conflict; a persistent ACL/CFA denial uses the same ACCESS_DENIED code, so
-/// it receives the same short bound and then returns the original error.
+/// conflict. Real-time antivirus can retain that handle for several seconds
+/// while scanning a changed store, so keep retrying for up to ten seconds.
+/// Persistent ACL/CFA denial uses the same ACCESS_DENIED code and still fails
+/// closed at that bound.
 #[cfg(windows)]
 fn is_retryable_windows_store_error(error: &(dyn std::error::Error + 'static)) -> bool {
     let mut source = Some(error);
     while let Some(current) = source {
+        if let Some(tauri_plugin_store::Error::Io(io_error)) =
+            current.downcast_ref::<tauri_plugin_store::Error>()
+        {
+            return matches!(io_error.raw_os_error(), Some(5 | 32 | 33));
+        }
         if let Some(io_error) = current.downcast_ref::<std::io::Error>() {
             return matches!(io_error.raw_os_error(), Some(5 | 32 | 33));
         }
         source = current.source();
     }
     false
+}
+
+#[cfg(windows)]
+fn windows_store_raw_os_code(error: &(dyn std::error::Error + 'static)) -> Option<i32> {
+    let mut source = Some(error);
+    while let Some(current) = source {
+        if let Some(tauri_plugin_store::Error::Io(io_error)) =
+            current.downcast_ref::<tauri_plugin_store::Error>()
+        {
+            return io_error.raw_os_error();
+        }
+        if let Some(io_error) = current.downcast_ref::<std::io::Error>() {
+            return io_error.raw_os_error();
+        }
+        source = current.source();
+    }
+    None
+}
+
+#[cfg(windows)]
+fn windows_store_attribute_class(path: &Path) -> String {
+    use std::os::windows::fs::MetadataExt;
+    match std::fs::metadata(path) {
+        Ok(metadata) => {
+            let value = metadata.file_attributes();
+            format!(
+                "readonly={},hidden={},system={},reparse={}",
+                value & 0x1 != 0,
+                value & 0x2 != 0,
+                value & 0x4 != 0,
+                value & 0x400 != 0
+            )
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "missing".into(),
+        Err(_) => "unavailable".into(),
+    }
 }
 
 fn retry_windows_store_io<T, E>(mut operation: impl FnMut() -> Result<T, E>) -> Result<T, E>
@@ -65,12 +108,36 @@ where
     }
 }
 
+#[cfg(windows)]
+fn retry_windows_store_io_with_initial_code<T, E>(
+    mut operation: impl FnMut() -> Result<T, E>,
+) -> Result<(T, Option<i32>), E>
+where
+    E: std::error::Error + 'static,
+{
+    let first_error = match operation() {
+        Ok(value) => return Ok((value, None)),
+        Err(error) if is_retryable_windows_store_error(&error) => error,
+        Err(error) => return Err(error),
+    };
+    let initial_code = windows_store_raw_os_code(&first_error);
+    for _ in 1..WINDOWS_STORE_RETRY_ATTEMPTS {
+        std::thread::sleep(WINDOWS_STORE_RETRY_DELAY);
+        match operation() {
+            Ok(value) => return Ok((value, initial_code)),
+            Err(error) if is_retryable_windows_store_error(&error) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(first_error)
+}
+
 fn read_store_file(path: &Path) -> std::io::Result<Vec<u8>> {
     retry_windows_store_io(|| std::fs::read(path))
 }
 
 #[cfg(windows)]
-fn reset_windows_store_file_permissions(path: &Path) -> anyhow::Result<()> {
+pub(crate) fn reset_windows_store_file_permissions(path: &Path) -> anyhow::Result<()> {
     use std::os::windows::process::CommandExt;
 
     let mut permissions = match std::fs::metadata(path) {
@@ -82,46 +149,88 @@ fn reset_windows_store_file_permissions(path: &Path) -> anyhow::Result<()> {
         permissions.set_readonly(false);
         std::fs::set_permissions(path, permissions)?;
     }
+    let attributes = windows_store_attribute_class(path);
+
+    // Cloud-backed and virtual filesystems may reject `icacls /reset` even
+    // though the current process can already update the file. Do not make a
+    // Windows-specific ACL utility a startup dependency for a writable store.
+    let write_probe_error = match retry_windows_store_io_with_initial_code(|| {
+        std::fs::OpenOptions::new().write(true).open(path)
+    }) {
+        Ok((_, initial_code)) => {
+            if let Some(raw_os_code) = initial_code {
+                tracing::warn!(operation = "settings_store_access", stage = "write_probe", raw_os_code, attributes = %attributes, recovery = "retry_succeeded", "Windows settings store access recovery");
+            }
+            return Ok(());
+        }
+        Err(error) => error,
+    };
+    let raw_os_code = write_probe_error.raw_os_error().unwrap_or(0);
+    tracing::warn!(operation = "settings_store_access", stage = "write_probe", raw_os_code, attributes = %attributes, recovery = "acl_repair_started", "Windows settings store access recovery");
 
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let status = std::process::Command::new("icacls.exe")
         .arg(path)
-        .args(["/reset", "/Q"])
+        .args(["/inheritance:e", "/Q"])
         .creation_flags(CREATE_NO_WINDOW)
-        .status()?;
+        .status()
+        .map_err(|error| {
+            tracing::error!(operation = "settings_store_access", stage = "inheritance_repair_start", raw_os_code, attributes = %attributes, recovery = "failed", repair_os_code = error.raw_os_error().unwrap_or(0), "Windows settings store access recovery");
+            anyhow::anyhow!("write probe failed with raw Windows error {raw_os_code}; failed to start inherited settings permission repair: {error}")
+        })?;
     if !status.success() {
+        tracing::error!(operation = "settings_store_access", stage = "inheritance_repair", raw_os_code, attributes = %attributes, recovery = "failed", repair_exit_code = status.code().unwrap_or(-1), "Windows settings store access recovery");
         return Err(anyhow::anyhow!(
-            "failed to reset settings permissions for {}: icacls exited with {}",
-            path.display(),
-            status
+            "write probe failed with raw Windows error {raw_os_code}; failed to enable inherited settings permissions: icacls exited with {status}"
         ));
     }
+
+    let status = std::process::Command::new("icacls.exe")
+        .arg(path)
+        .args(["/reset", "/Q"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map_err(|error| {
+            tracing::error!(operation = "settings_store_access", stage = "acl_reset_start", raw_os_code, attributes = %attributes, recovery = "failed", repair_os_code = error.raw_os_error().unwrap_or(0), "Windows settings store access recovery");
+            anyhow::anyhow!("write probe failed with raw Windows error {raw_os_code}; failed to start settings permission reset: {error}")
+        })?;
+    if !status.success() {
+        tracing::error!(operation = "settings_store_access", stage = "acl_reset", raw_os_code, attributes = %attributes, recovery = "failed", repair_exit_code = status.code().unwrap_or(-1), "Windows settings store access recovery");
+        return Err(anyhow::anyhow!(
+            "write probe failed with raw Windows error {raw_os_code}; failed to reset settings permissions: icacls exited with {status}"
+        ));
+    }
+    std::fs::OpenOptions::new().write(true).open(path).map_err(|error| {
+        tracing::error!(operation = "settings_store_access", stage = "verification", raw_os_code, attributes = %attributes, recovery = "failed", verification_os_code = error.raw_os_error().unwrap_or(0), "Windows settings store access recovery");
+        anyhow::anyhow!("write probe failed with raw Windows error {raw_os_code}; ACL repair completed but verification failed: {error}")
+    })?;
+    tracing::warn!(operation = "settings_store_access", stage = "write_probe", raw_os_code, attributes = %attributes, recovery = "acl_repair_succeeded", "Windows settings store access recovery");
     Ok(())
 }
 
 /// Repair only the settings files whose permissions may have been carried
-/// forward from an older installation. The canonical bytes are captured
-/// before any mutation and atomically republished afterward so store.bin
-/// inherits the directory's current ACL without risking settings loss.
+/// forward from an older installation. `icacls /reset` reapplies the
+/// directory's inherited ACL in place, so the canonical bytes never need to
+/// be replaced while the old ACL may still deny delete/replace access.
 #[cfg(windows)]
 fn normalize_windows_store_permissions(store_path: &Path) -> anyhow::Result<()> {
-    let canonical = match read_store_file(store_path) {
-        Ok(bytes) => Some(bytes),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error.into()),
-    };
+    reset_windows_store_file_permissions(store_path)?;
 
     for path in [
-        store_path.to_path_buf(),
         store_path.with_extension(LAST_GOOD_SUFFIX),
         store_path.with_extension(LAST_GOOD_PREV_SUFFIX),
     ] {
-        reset_windows_store_file_permissions(&path)?;
+        if let Err(error) = reset_windows_store_file_permissions(&path) {
+            // Snapshots are recovery aids. A stale sidecar ACL must not stop
+            // an otherwise readable and writable canonical settings store.
+            tracing::warn!(
+                "failed to repair settings recovery sidecar permissions at {}: {}",
+                path.display(),
+                error
+            );
+        }
     }
 
-    if let Some(bytes) = canonical {
-        durable_write(store_path, &bytes)?;
-    }
     Ok(())
 }
 
@@ -286,22 +395,48 @@ pub(crate) fn durable_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         }
         let mut f = opts.open(&tmp)?;
         f.write_all(bytes)?;
-        f.sync_all()?; // contents + metadata to stable storage before the rename
+        screenpipe_fs::sync_all(&f)?; // contents + metadata to stable storage before the rename
     }
-    if let Err(e) = retry_windows_store_io(|| std::fs::rename(&tmp, path)) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
+    replace_store_temp(&tmp, path)?;
     // fsync the directory so the rename itself survives a crash. Best-effort:
     // not all platforms allow opening a dir for sync (Windows), and rename is
     // already atomic there via MoveFileEx.
     #[cfg(unix)]
     if let Some(dir) = path.parent() {
         if let Ok(d) = std::fs::File::open(dir) {
-            let _ = d.sync_all();
+            let _ = screenpipe_fs::sync_all(&d);
         }
     }
     Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_store_temp(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    std::fs::rename(tmp, path)
+}
+
+#[cfg(windows)]
+fn replace_store_temp(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    let deadline = std::time::Instant::now()
+        + WINDOWS_STORE_RETRY_DELAY * (WINDOWS_STORE_RETRY_ATTEMPTS as u32 - 1);
+    let mut delay = std::time::Duration::from_millis(1);
+    let mut temporary = tempfile::TempPath::try_from_path(tmp)?;
+
+    loop {
+        match temporary.persist(path) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                if error.error.kind() != std::io::ErrorKind::PermissionDenied
+                    || std::time::Instant::now() >= deadline
+                {
+                    return Err(error.error);
+                }
+                temporary = error.path;
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(std::time::Duration::from_millis(50));
+            }
+        }
+    }
 }
 
 /// Like [`durable_write`], but skip the temp/fsync/rename if `path` already
@@ -469,6 +604,16 @@ pub fn auto_restore_if_wiped(store_path: &Path) -> bool {
     if store_json_has_presets(&cur) {
         return false; // current state is healthy, nothing to do
     }
+    if read_healthy_snapshot(store_path).is_none() {
+        // A valid legacy document can predate aiPresets. SettingsStore's serde
+        // defaults recover it below and init_store persists the non-empty
+        // invariant; absence of a snapshot is not itself a recovery failure.
+        tracing::warn!(
+            "settings recovery: store.bin has no aiPresets and no healthy snapshot; \
+             the settings migration will persist the default preset"
+        );
+        return false;
+    }
     restore_snapshot_over(
         store_path,
         "store.bin is degraded (parses but has no aiPresets)",
@@ -524,7 +669,7 @@ fn decrypt_store_file(path: &Path) -> DecryptOutcome {
             // user's settings instead of silently resetting them.
             let backup = path.with_extension("bin.encrypted.bak");
             let _ = std::fs::copy(path, &backup);
-            tracing::error!(
+            tracing::warn!(
                 "store.bin is encrypted but keychain access was denied — \
                  ciphertext preserved at {}. Grant keychain access and \
                  restart to use it.",
@@ -746,8 +891,59 @@ pub async fn reencrypt_store(app: AppHandle) -> Result<(), String> {
 
 fn save_store_to_disk<R: tauri::Runtime>(
     store: &tauri_plugin_store::Store<R>,
+) -> Result<(), tauri_plugin_store::Error> {
+    retry_windows_store_io(|| store.save())
+}
+
+pub(crate) fn save_store_at_with_permission_repair<R: tauri::Runtime>(
+    store_path: &Path,
+    store: &tauri_plugin_store::Store<R>,
 ) -> Result<(), String> {
-    retry_windows_store_io(|| store.save()).map_err(|e| e.to_string())
+    match save_store_to_disk(store) {
+        Ok(()) => Ok(()),
+        Err(first_error) => {
+            #[cfg(not(windows))]
+            return Err(first_error.to_string());
+
+            #[cfg(windows)]
+            {
+                let raw_os_code = windows_store_raw_os_code(&first_error).unwrap_or(0);
+                tracing::warn!(operation = "settings_store_save", stage = "create_truncate", raw_os_code, attributes = %windows_store_attribute_class(store_path), recovery = "permission_repair_started", "Windows settings store access recovery");
+                normalize_windows_store_permissions(store_path).map_err(|repair_error| {
+                    tracing::error!(operation = "settings_store_save", stage = "permission_repair", raw_os_code, attributes = %windows_store_attribute_class(store_path), recovery = "failed", "Windows settings store access recovery");
+                    format!("settings save failed ({first_error}); permission repair also failed: {repair_error}")
+                })?;
+                match save_store_to_disk(store) {
+                    Ok(()) => {
+                        tracing::warn!(operation = "settings_store_save", stage = "create_truncate", raw_os_code, attributes = %windows_store_attribute_class(store_path), recovery = "retry_succeeded", "Windows settings store access recovery");
+                        Ok(())
+                    }
+                    Err(retry_error) => {
+                        tracing::error!(operation = "settings_store_save", stage = "create_truncate_retry", raw_os_code, attributes = %windows_store_attribute_class(store_path), recovery = "failed", retry_os_code = windows_store_raw_os_code(&retry_error).unwrap_or(0), "Windows settings store access recovery");
+                        Err(format!("settings save failed ({first_error}); permission repair completed but retry failed: {retry_error}"))
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn save_store_with_permission_repair(
+    app: &AppHandle,
+    store: &tauri_plugin_store::Store<tauri::Wry>,
+) -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        save_store_to_disk(store).map_err(|error| error.to_string())
+    }
+    #[cfg(windows)]
+    {
+        let store_path = get_base_dir(app, None)
+            .map_err(|error| error.to_string())?
+            .join("store.bin");
+        save_store_at_with_permission_repair(&store_path, store)
+    }
 }
 
 /// Flush the process-shared store to durable, encrypted storage before a
@@ -757,7 +953,7 @@ fn save_store_to_disk<R: tauri::Runtime>(
 /// makes any already-applied setting durable before the process exits.
 pub fn persist_store_before_restart(app: &AppHandle) -> Result<(), String> {
     let store = get_store(app, None).map_err(|e| format!("Failed to get store: {e}"))?;
-    save_store_to_disk(store.as_ref())?;
+    save_store_to_disk(store.as_ref()).map_err(|error| error.to_string())?;
     reencrypt_store_file(app);
     Ok(())
 }
@@ -779,7 +975,7 @@ fn build_store(app: &AppHandle) -> anyhow::Result<Arc<tauri_plugin_store::Store<
 /// out so the recovery layers can be tested against `tauri::test::MockRuntime`
 /// — the registry the L5 guard must clean up lives in tauri-managed state,
 /// unreachable from pure path-based tests.
-fn build_store_at<R: tauri::Runtime>(
+pub(crate) fn build_store_at<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     store_path: std::path::PathBuf,
 ) -> anyhow::Result<Arc<tauri_plugin_store::Store<R>>> {
@@ -1176,7 +1372,7 @@ impl OnboardingStore {
         let mut onboarding = Self::get(app)?.unwrap_or_default();
         update(&mut onboarding);
         store.set("onboarding", json!(onboarding));
-        save_store_to_disk(store.as_ref())?;
+        save_store_with_permission_repair(app, store.as_ref())?;
         reencrypt_store_file(app);
         Ok(())
     }
@@ -1187,7 +1383,7 @@ impl OnboardingStore {
         };
 
         store.set("onboarding", json!(self));
-        save_store_to_disk(store.as_ref())?;
+        save_store_with_permission_repair(app, store.as_ref())?;
         reencrypt_store_file(app);
         Ok(())
     }
@@ -1273,6 +1469,14 @@ pub struct SettingsStore {
     #[serde(rename = "isLoading")]
     pub is_loading: bool,
 
+    /// Interface language only. "system" follows the OS; never changes capture.
+    #[serde(rename = "uiLocale")]
+    pub ui_locale: String,
+
+    /// Last resolved PostHog rollout decision, shared with all native surfaces.
+    #[serde(rename = "uiLocalizationEnabled")]
+    pub ui_localization_enabled: bool,
+
     #[serde(rename = "devMode")]
     pub dev_mode: bool,
     #[serde(rename = "ocrEngine")]
@@ -1351,13 +1555,13 @@ pub struct SettingsStore {
     /// Better quality but sends activity context to the cloud (zero data retention).
     #[serde(rename = "enhancedAI", default)]
     pub enhanced_ai: bool,
-    /// Explicit consumer opt-in for on-demand remote diagnostic log requests.
+    /// Default-enabled on-demand remote diagnostic log requests.
     /// Enterprise builds enforce remote log collection separately; this stored
-    /// value remains false unless a consumer chooses to enable it.
-    #[serde(rename = "remoteLogCollectionEnabled", default)]
+    /// value can be disabled by the user after the one-time default migration.
+    #[serde(rename = "remoteLogCollectionEnabled", default = "default_true")]
     pub remote_log_collection_enabled: bool,
-    /// Account that granted remote log collection consent on this device.
-    /// Consumer collection is allowed only while this matches the current user.
+    /// Account for an explicit enable; None uses the device-wide default.
+    /// An explicit account binding must match the current user; None uses the device default.
     #[serde(rename = "remoteLogCollectionUserId", default)]
     pub remote_log_collection_user_id: Option<String>,
     /// Timeline overlay mode: "fullscreen" (floating panel above everything) or
@@ -1429,6 +1633,10 @@ pub struct SettingsStore {
     /// and the local server continue in the background.
     #[serde(rename = "headlessRecordOnly", default)]
     pub headless_record_only: bool,
+
+    /// Quit stops capture and closes the UI while the existing process serves history.
+    #[serde(rename = "keepSearchAvailableAfterQuit", default = "default_true")]
+    pub keep_search_available_after_quit: bool,
 }
 
 fn generate_device_id() -> String {
@@ -1529,6 +1737,8 @@ pub struct AIPreset {
     pub model: String,
     #[serde(rename = "defaultPreset")]
     pub default_preset: bool,
+    #[serde(rename = "enterpriseManaged", default)]
+    pub enterprise_managed: bool,
     #[serde(rename = "apiKey")]
     pub api_key: Option<String>,
     #[serde(rename = "maxContextChars")]
@@ -1551,6 +1761,7 @@ impl Default for AIPreset {
             url: "https://api.screenpipe.com/v1".to_string(),
             model: "qwen/qwen3.5-flash-02-23".to_string(),
             default_preset: false,
+            enterprise_managed: false,
             api_key: None,
             max_context_chars: 512000,
             max_tokens: 4096,
@@ -1824,12 +2035,13 @@ Rules:
             url: "https://api.screenpipe.com/v1".to_string(),
             model: "auto".to_string(),
             default_preset: true,
+            enterprise_managed: false,
             api_key: None,
             max_context_chars: 128000,
             max_tokens: 4096,
         };
 
-        // Rust persists store.bin before the frontend mounts. All-null values
+        // Rust persists store.bin before the frontend mounts. Null values
         // identify a genuinely new install that may inherit remote defaults;
         // legacy stores lack this object and are migrated from their current
         // effective values. The persisted policy also lets Rust enforce every
@@ -1838,7 +2050,7 @@ Rules:
             (
                 "remoteControlPreferences".to_string(),
                 json!({
-                    "semanticContext": null,
+                    "semanticContext": true,
                     "coreAudioSystemAudio": null,
                     "smartRecording": null,
                     "filterMusic": null,
@@ -1852,7 +2064,7 @@ Rules:
                     "schemaVersion": 1,
                     "boolean": {
                         "semanticContext": {
-                            "defaultEnabled": false,
+                            "defaultEnabled": true,
                             "forceDisabled": false,
                         },
                         "coreAudioSystemAudio": {
@@ -1886,6 +2098,7 @@ Rules:
         Self {
             // App-specific defaults override RecordingSettings::default() where needed
             recording: screenpipe_config::RecordingSettings {
+                enable_semantic_context: true,
                 audio_transcription_engine: "whisper-large-v3-turbo-quantized".to_string(),
                 monitor_ids: vec!["default".to_string()],
                 audio_devices: vec!["default".to_string()],
@@ -1896,6 +2109,8 @@ Rules:
             },
             ai_presets: vec![default_free_preset],
             is_loading: false,
+            ui_locale: "system".to_string(),
+            ui_localization_enabled: false,
             dev_mode: false,
             #[cfg(target_os = "macos")]
             ocr_engine: "apple-native".to_string(),
@@ -1952,7 +2167,7 @@ Rules:
             update_channel: default_update_channel(),
             auto_update_pipes: true,
             enhanced_ai: false,
-            remote_log_collection_enabled: false,
+            remote_log_collection_enabled: true,
             remote_log_collection_user_id: None,
             #[cfg(target_os = "macos")]
             overlay_mode: "fullscreen".to_string(),
@@ -1972,6 +2187,7 @@ Rules:
             minimize_to_tray_on_close: false,
             headless: false,
             headless_record_only: false,
+            keep_search_available_after_quit: true,
             extra: remote_control,
         }
     }
@@ -2150,6 +2366,9 @@ impl SettingsStore {
 
     pub fn to_recording_settings(&self) -> screenpipe_config::RecordingSettings {
         let mut settings = self.recording.clone();
+        // App context is built in, even for old stores with the toggle off.
+        // The remote emergency shutoff below still takes precedence.
+        settings.enable_semantic_context = true;
         // Automatic meeting capture also applies before the frontend mounts,
         // including old stores with the former opt-in saved as false.
         settings.experimental_meeting_piggyback =
@@ -2473,7 +2692,43 @@ impl SettingsStore {
         };
 
         store.set("settings", json!(self));
-        save_store_to_disk(store.as_ref())?;
+        save_store_with_permission_repair(app, store.as_ref())?;
+        reencrypt_store_file(app);
+        Ok(())
+    }
+
+    /// Startup refresh replaces account evidence before any gate or webview
+    /// consumes it. Preserve other settings and response fields used by the UI.
+    pub(crate) fn replace_startup_user(
+        &mut self,
+        app: &AppHandle,
+        user: Value,
+    ) -> Result<(), String> {
+        self.user = serde_json::from_value(user.clone()).map_err(|e| e.to_string())?;
+        let store = get_store(app, None).map_err(|e| e.to_string())?;
+        let mut settings = store.get("settings").ok_or("settings unavailable")?;
+        settings["user"] = user;
+        store.set("settings", settings);
+        save_store_with_permission_repair(app, store.as_ref())?;
+        reencrypt_store_file(app);
+        Ok(())
+    }
+
+    /// Update only identity, preserving the latest settings and rejecting a
+    /// concurrent identity change. The server association and cursor must already
+    /// be durable before the enterprise uploader calls this.
+    pub fn migrate_device_id(app: &AppHandle, legacy: &str, stable: &str) -> Result<(), String> {
+        let store = get_store(app, None).map_err(|e| e.to_string())?;
+        let mut settings = store.get("settings").ok_or("settings unavailable")?;
+        let current = settings["deviceId"]
+            .as_str()
+            .ok_or("device identity unavailable")?;
+        if current != legacy && current != stable {
+            return Err("device identity changed during migration".into());
+        }
+        settings["deviceId"] = json!(stable);
+        store.set("settings", settings);
+        save_store_to_disk(store.as_ref()).map_err(|error| error.to_string())?;
         reencrypt_store_file(app);
         Ok(())
     }
@@ -2495,6 +2750,39 @@ fn restore_headed_mode_for_consumer(
 
     settings.headless = false;
     settings.headless_record_only = false;
+    true
+}
+
+/// Retire the consumer timeline switch in favor of sidebar customization.
+/// Preserve screenshot consent and custom layout, and clear the legacy gate so
+/// users can restore Timeline from the sidebar without restarting capture.
+fn migrate_timeline_visibility_to_sidebar(
+    settings: &mut SettingsStore,
+    is_enterprise_build: bool,
+) -> bool {
+    if is_enterprise_build || !settings.recording.disable_timeline {
+        return false;
+    }
+    let layout = settings
+        .extra
+        .entry("sidebarNavLayout".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !layout.is_object() {
+        *layout = serde_json::json!({});
+    }
+    let hidden = layout
+        .as_object_mut()
+        .unwrap()
+        .entry("hidden".to_string())
+        .or_insert_with(|| serde_json::json!(["brain"]));
+    if !hidden.is_array() {
+        *hidden = serde_json::json!(["brain"]);
+    }
+    let hidden = hidden.as_array_mut().unwrap();
+    if !hidden.iter().any(|id| id.as_str() == Some("timeline")) {
+        hidden.push(Value::String("timeline".to_string()));
+    }
+    settings.recording.disable_timeline = false;
     true
 }
 
@@ -2525,6 +2813,26 @@ fn migrate_windows_timeline_to_window_mode(settings: &mut SettingsStore) -> bool
     true
 }
 
+/// Enable diagnostics once for existing installs. Later opt-outs stay off.
+fn migrate_remote_logs_default_enabled(settings: &mut SettingsStore) -> bool {
+    const MARKER: &str = "remoteLogsDefaultEnabledV1";
+    if settings.extra.get(MARKER).and_then(Value::as_bool) == Some(true) {
+        return false;
+    }
+    settings.remote_log_collection_enabled = true;
+    settings.remote_log_collection_user_id = None;
+    settings.extra.insert(MARKER.to_string(), Value::Bool(true));
+    true
+}
+
+fn backfill_default_ai_preset(settings: &mut SettingsStore) -> bool {
+    if !settings.ai_presets.is_empty() {
+        return false;
+    }
+    settings.ai_presets = SettingsStore::default().ai_presets;
+    true
+}
+
 pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
     println!("Initializing settings store");
 
@@ -2540,16 +2848,35 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         .as_ref()
         .map(|obj| !obj.contains_key("restartNotificationsDefaultedOff"))
         .unwrap_or(false);
+    let should_persist_ai_preset_backfill = raw_obj.as_ref().is_some_and(|obj| {
+        obj.get("aiPresets")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+    });
 
     let is_new_store;
     let (mut store, mut should_save, can_run_settings_migrations) = match SettingsStore::get(app) {
-        Ok(Some(store)) => {
+        Ok(Some(mut store)) => {
             is_new_store = false;
-            (store, should_persist_restart_notification_migration, true)
+            if should_persist_ai_preset_backfill {
+                // At least one preset is a UI and persistence invariant. Keep
+                // every other setting from the valid document and repair only
+                // the missing/null/empty list.
+                backfill_default_ai_preset(&mut store);
+                tracing::warn!("settings migration: restored the default AI preset");
+            }
+            (
+                store,
+                should_persist_restart_notification_migration
+                    || should_persist_ai_preset_backfill,
+                true,
+            )
         }
         Ok(None) => {
             is_new_store = true;
-            (SettingsStore::default(), true, true) // New store, save defaults
+            let mut settings = SettingsStore::default();
+            settings.device_id = crate::enterprise::host_identity::new_install_device_id()?;
+            (settings, true, true)
         }
         Err(e) => {
             is_new_store = false;
@@ -2675,7 +3002,7 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
     // app-config dir. So additionally require that the data dir holds no existing
     // recordings — retention may only default on when there is nothing to delete.
     if is_new_store && !store.extra.contains_key("localRetentionEnabled") {
-        let (data_dir, _) = crate::config::resolve_data_dir(&store.data_dir)
+        let data_dir = crate::config::resolve_data_dir(&store.data_dir)
             .map_err(|error| format!("failed to prepare Screenpipe data directory: {error}"))?;
         let has_existing_recordings = data_dir.join("db.sqlite").exists();
         if has_existing_recordings {
@@ -2700,6 +3027,12 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         should_save = true;
     }
 
+    if can_run_settings_migrations
+        && migrate_timeline_visibility_to_sidebar(&mut store, cfg!(feature = "enterprise-build"))
+    {
+        should_save = true;
+    }
+
     if cfg!(target_os = "windows")
         && can_run_settings_migrations
         && migrate_windows_timeline_to_window_mode(&mut store)
@@ -2707,6 +3040,13 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         tracing::info!(
             "settings migration: selected window mode for the Windows timeline overlay"
         );
+        should_save = true;
+    }
+
+    if !cfg!(feature = "enterprise-build")
+        && can_run_settings_migrations
+        && migrate_remote_logs_default_enabled(&mut store)
+    {
         should_save = true;
     }
 
@@ -2813,7 +3153,7 @@ impl CloudSyncSettingsStore {
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
         store.set("cloud_sync", json!(self));
-        save_store_to_disk(store.as_ref())?;
+        save_store_to_disk(store.as_ref()).map_err(|error| error.to_string())?;
         reencrypt_store_file(app);
         Ok(())
     }
@@ -2848,7 +3188,7 @@ impl CloudArchiveSettingsStore {
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
         store.set("cloud_archive", json!(self));
-        save_store_to_disk(store.as_ref())?;
+        save_store_to_disk(store.as_ref()).map_err(|error| error.to_string())?;
         reencrypt_store_file(app);
         Ok(())
     }
@@ -2884,7 +3224,7 @@ impl IcsCalendarSettingsStore {
     pub fn save(&self, app: &AppHandle) -> Result<(), String> {
         let store = get_store(app, None).map_err(|e| e.to_string())?;
         store.set("ics_calendars", json!(self));
-        save_store_to_disk(store.as_ref())?;
+        save_store_to_disk(store.as_ref()).map_err(|error| error.to_string())?;
         reencrypt_store_file(app);
         Ok(())
     }
@@ -3240,6 +3580,19 @@ mod tests {
     }
 
     #[test]
+    fn search_after_quit_defaults_on_and_preserves_explicit_opt_out() {
+        assert!(SettingsStore::default().keep_search_available_after_quit);
+        let missing: SettingsStore = serde_json::from_value(json!({"aiPresets": []})).unwrap();
+        assert!(missing.keep_search_available_after_quit);
+        let opted_out: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": [], "keepSearchAvailableAfterQuit": false
+        })).unwrap();
+        assert!(!opted_out.keep_search_available_after_quit);
+        let round_trip: SettingsStore = serde_json::from_value(serde_json::to_value(opted_out).unwrap()).unwrap();
+        assert!(!round_trip.keep_search_available_after_quit);
+    }
+
+    #[test]
     fn headless_record_only_defaults_off_and_respects_saved_value() {
         assert!(!SettingsStore::default().headless_record_only);
 
@@ -3273,6 +3626,61 @@ mod tests {
         assert!(!restore_headed_mode_for_consumer(&mut enterprise, true));
         assert!(enterprise.headless);
         assert!(enterprise.headless_record_only);
+    }
+
+    #[test]
+    fn timeline_visibility_migration_preserves_capture_and_custom_layout() {
+        for screenshots_disabled in [true, false] {
+            let mut settings = SettingsStore::default();
+            settings.recording.disable_timeline = true;
+            settings.recording.disable_screenshots = screenshots_disabled;
+            settings.extra.insert(
+                "sidebarNavLayout".into(),
+                serde_json::json!({
+                    "order": ["timeline", "home", "meetings"], "hidden": ["pipes"]
+                }),
+            );
+            assert!(migrate_timeline_visibility_to_sidebar(&mut settings, false));
+            assert!(!settings.recording.disable_timeline);
+            assert_eq!(settings.recording.disable_screenshots, screenshots_disabled);
+            assert_eq!(
+                settings.extra["sidebarNavLayout"],
+                serde_json::json!({
+                    "order": ["timeline", "home", "meetings"], "hidden": ["pipes", "timeline"]
+                })
+            );
+            // Persisted migration must not hide the item again after the user restores it.
+            let mut reloaded: SettingsStore =
+                serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
+            reloaded.extra.get_mut("sidebarNavLayout").unwrap()["hidden"] = serde_json::json!([]);
+            assert!(!migrate_timeline_visibility_to_sidebar(
+                &mut reloaded,
+                false
+            ));
+            assert_eq!(
+                reloaded.extra["sidebarNavLayout"]["hidden"],
+                serde_json::json!([])
+            );
+        }
+    }
+
+    #[test]
+    fn timeline_visibility_migration_preserves_defaults_and_enterprise() {
+        let mut settings = SettingsStore::default();
+        assert!(!migrate_timeline_visibility_to_sidebar(
+            &mut settings,
+            false
+        ));
+        assert!(!settings.extra.contains_key("sidebarNavLayout"));
+        settings.recording.disable_timeline = true;
+        assert!(!migrate_timeline_visibility_to_sidebar(&mut settings, true));
+        assert!(settings.recording.disable_timeline);
+        assert!(!settings.extra.contains_key("sidebarNavLayout"));
+        assert!(migrate_timeline_visibility_to_sidebar(&mut settings, false));
+        assert_eq!(
+            settings.extra["sidebarNavLayout"]["hidden"],
+            serde_json::json!(["brain", "timeline"])
+        );
     }
 
     #[test]
@@ -3310,22 +3718,38 @@ mod tests {
     }
 
     #[test]
-    fn remote_log_collection_defaults_to_disabled() {
-        assert!(!SettingsStore::default().remote_log_collection_enabled);
+    fn remote_log_collection_defaults_to_enabled() {
+        assert!(SettingsStore::default().remote_log_collection_enabled);
         assert!(SettingsStore::default()
             .remote_log_collection_user_id
             .is_none());
     }
 
     #[test]
-    fn missing_remote_log_collection_deserializes_disabled() {
+    fn missing_remote_log_collection_deserializes_enabled() {
         let settings: SettingsStore = serde_json::from_value(json!({
             "aiPresets": []
         }))
         .unwrap();
 
-        assert!(!settings.remote_log_collection_enabled);
+        assert!(settings.remote_log_collection_enabled);
         assert!(settings.remote_log_collection_user_id.is_none());
+    }
+
+    #[test]
+    fn remote_log_collection_migration_runs_once_and_preserves_later_opt_out() {
+        let mut settings = SettingsStore::default();
+        settings.remote_log_collection_enabled = false;
+        settings.remote_log_collection_user_id = Some("old-account".to_string());
+        assert!(migrate_remote_logs_default_enabled(&mut settings));
+        assert!(settings.remote_log_collection_enabled);
+        assert!(settings.remote_log_collection_user_id.is_none());
+        settings.remote_log_collection_enabled = false;
+        // Exercise persistence: the migration marker must survive reload.
+        let mut reloaded: SettingsStore =
+            serde_json::from_value(serde_json::to_value(settings).unwrap()).unwrap();
+        assert!(!migrate_remote_logs_default_enabled(&mut reloaded));
+        assert!(!reloaded.remote_log_collection_enabled);
     }
 
     #[test]
@@ -3917,6 +4341,23 @@ mod tests {
         assert!(!store_json_has_presets(&invalid_json));
     }
 
+    #[test]
+    fn valid_settings_without_presets_restore_one_default_and_preserve_other_fields() {
+        let raw = json!({
+            "autoUpdate": false,
+            "aiPresets": [],
+        });
+        let mut settings: SettingsStore = serde_json::from_value(raw).unwrap();
+
+        assert!(settings.ai_presets.is_empty());
+        let preserved_auto_update = settings.auto_update;
+        assert!(backfill_default_ai_preset(&mut settings));
+
+        assert_eq!(settings.ai_presets.len(), 1);
+        assert_eq!(settings.auto_update, preserved_auto_update);
+        assert!(!backfill_default_ai_preset(&mut settings));
+    }
+
     /// Any `<name>.durable.<pid>.<seq>.tmp` still sitting in `dir`.
     fn lingering_durable_temps(dir: &std::path::Path) -> Vec<String> {
         std::fs::read_dir(dir)
@@ -4247,11 +4688,113 @@ mod tests {
         let elapsed = started.elapsed();
 
         assert!(result.is_err(), "persistent denial must fail closed");
-        assert!(elapsed < std::time::Duration::from_secs(2));
+        assert!(elapsed < std::time::Duration::from_secs(12));
         drop(_lock);
         assert_eq!(std::fs::read(&store_path).unwrap(), canonical_before);
         assert_eq!(std::fs::read(&snapshot_path).unwrap(), snapshot_before);
         assert!(app.get_store(&store_path).is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn startup_build_retries_transient_windows_write_probe_lock_and_reopens() {
+        let tmp = tempfile::tempdir().unwrap();
+        let canonical = json!({"settings": {"aiPresets": presets_n(2)}});
+        let store_path = write_store(tmp.path(), &canonical);
+        let canonical_before = std::fs::read(&store_path).unwrap();
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_store::Builder::default().build())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let lock = open_with_share_mode(&store_path, 1);
+        let unlocker = std::thread::spawn(move || {
+            std::thread::sleep(WINDOWS_STORE_RETRY_DELAY * 2);
+            drop(lock);
+        });
+
+        let store = build_store_at(app.handle(), store_path.clone())
+            .expect("startup must outlast a transient write-probe lock");
+        unlocker.join().unwrap();
+        assert_eq!(std::fs::read(&store_path).unwrap(), canonical_before);
+        drop(store);
+        drop(app);
+
+        let reopened_app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_store::Builder::default().build())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let reopened = build_store_at(reopened_app.handle(), store_path.clone())
+            .expect("settings must reopen after the transient lock recovery");
+        assert_eq!(
+            reopened.get("settings").unwrap()["aiPresets"],
+            canonical["settings"]["aiPresets"]
+        );
+        assert_eq!(std::fs::read(&store_path).unwrap(), canonical_before);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn plugin_save_repairs_readonly_onboarding_store_and_reopens() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store_path = tmp.path().join("store.bin");
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_store::Builder::default().build())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let store = StoreBuilder::new(app.handle(), store_path.clone())
+            .disable_auto_save()
+            .build()
+            .unwrap();
+        store.set(
+            "settings",
+            json!({"aiPresets": presets_n(2), "openaiApiKey": "representative-secret"}),
+        );
+        store.set("onboarding", json!(OnboardingStore::default()));
+        save_store_to_disk(store.as_ref()).unwrap();
+        let mut permissions = std::fs::metadata(&store_path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&store_path, permissions).unwrap();
+
+        let mut onboarding = OnboardingStore::default();
+        onboarding.complete();
+        store.set("onboarding", json!(onboarding));
+        save_store_at_with_permission_repair(&store_path, store.as_ref())
+            .expect("permission normalization must make plugin save possible");
+        drop(store);
+        drop(app);
+
+        let on_disk: Value =
+            serde_json::from_slice(&std::fs::read(&store_path).unwrap()).unwrap();
+        assert_eq!(on_disk.pointer("/onboarding/isCompleted"), Some(&json!(true)));
+        assert!(on_disk.pointer("/onboarding/completedAt").is_some());
+        assert_eq!(
+            on_disk.pointer("/settings/openaiApiKey"),
+            Some(&json!("representative-secret"))
+        );
+
+        let reopened_app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_store::Builder::default().build())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let reopened = StoreBuilder::new(reopened_app.handle(), store_path.clone())
+            .disable_auto_save()
+            .build()
+            .unwrap();
+        let reopened_onboarding: OnboardingStore =
+            serde_json::from_value(reopened.get("onboarding").unwrap()).unwrap();
+        assert!(reopened_onboarding.is_completed);
+        assert!(reopened_onboarding.completed_at.is_some());
+        assert_eq!(
+            reopened.get("settings").unwrap()["aiPresets"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            reopened.get("settings").unwrap()["openaiApiKey"],
+            "representative-secret"
+        );
     }
 
     #[cfg(windows)]
@@ -4271,7 +4814,7 @@ mod tests {
         assert!(matches!(error.raw_os_error(), Some(5 | 32 | 33)));
         assert!(
             elapsed >= WINDOWS_STORE_RETRY_DELAY * (WINDOWS_STORE_RETRY_ATTEMPTS as u32 - 1)
-                && elapsed < std::time::Duration::from_secs(2),
+                && elapsed < std::time::Duration::from_secs(12),
             "retry bound was not respected: {elapsed:?}"
         );
         assert_eq!(std::fs::read(&store_path).unwrap(), b"canonical-before");
@@ -4298,7 +4841,9 @@ mod tests {
 
         let lock = open_with_restrictive_sharing(&store_path);
         let unlocker = std::thread::spawn(move || {
-            std::thread::sleep(WINDOWS_STORE_RETRY_DELAY * 2);
+            // Bitdefender held the current production user's store for longer
+            // than the old 250 ms retry window. Model a multi-second scan lock.
+            std::thread::sleep(std::time::Duration::from_secs(3));
             drop(lock);
         });
 
@@ -4333,14 +4878,12 @@ mod tests {
         let elapsed = started.elapsed();
 
         assert!(
-            error.contains("os error 5")
-                || error.contains("os error 32")
-                || error.contains("os error 33"),
+            matches!(windows_store_raw_os_code(&error), Some(5 | 32 | 33)),
             "unexpected persistent-denial error: {error}"
         );
         assert!(
             elapsed >= WINDOWS_STORE_RETRY_DELAY * (WINDOWS_STORE_RETRY_ATTEMPTS as u32 - 1)
-                && elapsed < std::time::Duration::from_secs(2),
+                && elapsed < std::time::Duration::from_secs(12),
             "retry bound was not respected: {elapsed:?}"
         );
         let saved: Value = serde_json::from_slice(&std::fs::read(&store_path).unwrap()).unwrap();
@@ -4955,6 +5498,40 @@ mod tests {
     }
 
     #[test]
+    fn enterprise_managed_preset_survives_settings_persistence() {
+        let settings: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": [
+                {
+                    "id": "company-assistant",
+                    "provider": "anthropic",
+                    "model": "company-model",
+                    "defaultPreset": true,
+                    "enterpriseManaged": true
+                },
+                {
+                    "id": "employee-assistant",
+                    "provider": "anthropic",
+                    "model": "employee-model"
+                }
+            ]
+        }))
+        .expect("settings with managed and legacy employee presets should deserialize");
+
+        // Native saves serialize the typed settings, which must retain the
+        // marker the frontend uses when employee-created presets are disabled.
+        let saved = serde_json::to_value(settings).expect("settings should serialize");
+        assert_eq!(saved["aiPresets"][0]["enterpriseManaged"], json!(true));
+        assert_eq!(saved["aiPresets"][0]["defaultPreset"], json!(true));
+        assert_ne!(saved["aiPresets"][1]["enterpriseManaged"], json!(true));
+
+        let reloaded: SettingsStore =
+            serde_json::from_value(saved).expect("saved settings should reload");
+        let saved_again = serde_json::to_value(reloaded).expect("settings should serialize again");
+        assert_eq!(saved_again["aiPresets"][0]["enterpriseManaged"], json!(true));
+        assert_ne!(saved_again["aiPresets"][1]["enterpriseManaged"], json!(true));
+    }
+
+    #[test]
     fn acp_cloud_billing_route_survives_preset_persistence() {
         let preset: AIPreset = serde_json::from_value(json!({
             "id": "claude code",
@@ -5059,6 +5636,28 @@ mod tests {
         assert_eq!(settings.user.token, None);
         assert_eq!(settings.embedded_llm.enabled, false);
         assert_eq!(settings.ai_presets.len(), 0);
+    }
+
+    #[test]
+    fn structured_context_is_automatic_before_frontend_startup() {
+        let mut store = SettingsStore::default();
+        assert!(store.recording.enable_semantic_context);
+        assert!(store.to_recording_settings().enable_semantic_context);
+        store.recording.enable_semantic_context = false;
+        store.extra.insert(
+            "remoteControlPreferences".into(),
+            json!({"semanticContext": false}),
+        );
+        assert!(store.to_recording_settings().enable_semantic_context);
+        store.extra.insert(
+            "remoteControlPolicy".into(),
+            json!({"schemaVersion": 1, "boolean": {
+                "semanticContext": {"defaultEnabled": false, "forceDisabled": true}
+            }}),
+        );
+        assert!(!store.to_recording_settings().enable_semantic_context);
+        store.extra.remove("remoteControlPolicy");
+        assert!(store.to_recording_settings().enable_semantic_context);
     }
 
     #[test]

@@ -273,6 +273,13 @@ fn default_switch_retry_backoff_active(
     elapsed < delay
 }
 
+fn default_input_is_enumerated(
+    currently_available_devices: &[AudioDevice],
+    new_default: &AudioDevice,
+) -> bool {
+    currently_available_devices.contains(new_default)
+}
+
 /// Returns true if the error from `default_output_device()` indicates a
 /// permanent condition that won't resolve without hardware changes.
 fn is_permanent_output_error(err: &anyhow::Error) -> bool {
@@ -1162,26 +1169,42 @@ pub async fn start_device_monitor(
                                 );
                                 false
                             } else if let Ok(new_device) = parse_audio_device(&new_default_input) {
-                                match audio_manager.start_device(&new_device).await {
-                                    Ok(()) => {
-                                        failed_devices.remove(&new_default_input);
-                                        info!(
-                                            "switched to new system default input: {}",
-                                            new_default_input
-                                        );
-                                        true
-                                    }
-                                    Err(e) => {
-                                        let count = failed_devices
-                                            .entry(new_default_input.clone())
-                                            .or_insert((0, Instant::now()));
-                                        count.0 += 1;
-                                        count.1 = Instant::now();
-                                        warn!(
+                                if !default_input_is_enumerated(
+                                    &currently_available_devices,
+                                    &new_device,
+                                ) {
+                                    // CoreAudio can publish a new system
+                                    // default before device enumeration catches
+                                    // up. Keep the old mic and retry next tick
+                                    // instead of opening a device that cannot
+                                    // yet be found.
+                                    debug!(
+                                        "[DEVICE_RECOVERY] new default input is not enumerated yet: {}",
+                                        new_default_input
+                                    );
+                                    false
+                                } else {
+                                    match audio_manager.start_device(&new_device).await {
+                                        Ok(()) => {
+                                            failed_devices.remove(&new_default_input);
+                                            info!(
+                                                "switched to new system default input: {}",
+                                                new_default_input
+                                            );
+                                            true
+                                        }
+                                        Err(e) => {
+                                            let count = failed_devices
+                                                .entry(new_default_input.clone())
+                                                .or_insert((0, Instant::now()));
+                                            count.0 += 1;
+                                            count.1 = Instant::now();
+                                            warn!(
                                             "failed to start new default input {}: {} — keeping current input(s) running (will back off)",
                                             new_default_input, e
                                         );
-                                        false
+                                            false
+                                        }
                                     }
                                 }
                             } else {
@@ -2957,6 +2980,22 @@ mod tests {
             "failed default-device switches must stay pending and retry even when the old mic is still running"
         );
         assert_eq!(repro.running_input, krisp);
+    }
+
+    #[test]
+    fn default_input_switch_waits_for_device_enumeration() {
+        let built_in = AudioDevice::new("MacBook Pro Microphone".to_string(), DeviceType::Input);
+        let airpods = AudioDevice::new("yolanda airpod".to_string(), DeviceType::Input);
+
+        assert!(!default_input_is_enumerated(&[], &built_in));
+        assert!(!default_input_is_enumerated(
+            std::slice::from_ref(&airpods),
+            &built_in
+        ));
+        assert!(default_input_is_enumerated(
+            &[airpods, built_in.clone()],
+            &built_in
+        ));
     }
 
     fn build_inputs<'a>(

@@ -84,7 +84,7 @@ describe("MessageContent — MCP startup status", () => {
     );
 
     const workSummary = screen.getByTestId("tool-activity-summary");
-    expect(workSummary).not.toHaveTextContent("failed");
+    expect(workSummary).not.toHaveTextContent("Failed");
     fireEvent.click(workSummary);
     expect(screen.getByTestId("tool-activity-list")).toHaveTextContent(
       "Reviewed a file",
@@ -112,7 +112,7 @@ describe("MessageContent — MCP startup status", () => {
     render(<MessageContent message={message} />);
 
     const workSummary = screen.getByTestId("tool-activity-summary");
-    expect(workSummary).not.toHaveTextContent("failed");
+    expect(workSummary).not.toHaveTextContent("Failed");
     expect(screen.getByText("I recovered and finished the answer.")).toBeTruthy();
     fireEvent.click(workSummary);
     expect(screen.getByTestId("tool-activity-list")).toHaveTextContent(

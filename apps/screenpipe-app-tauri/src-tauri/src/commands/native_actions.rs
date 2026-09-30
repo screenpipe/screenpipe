@@ -254,8 +254,9 @@ fn native_timeline_action_callback_inner(action_ptr: *const std::os::raw::c_char
             // in the app that wants to react (toasts, analytics).
             let _ = app.emit("timeline-tag-applied", tag);
         }
-        TimelineAction::DeleteRange => {
-            let _ = app.emit("timeline-delete-range", ());
+        TimelineAction::DeleteRange { result } => {
+            // Swift already deleted the range; the webview only reports it.
+            emit_timeline_event(&app, target.as_deref(), "timeline-delete-range", result);
         }
         TimelineAction::Unknown { raw } => {
             // Forwarded rather than dropped so a newer Swift build is not
@@ -835,6 +836,10 @@ pub(crate) fn dispatch_notification_action(json: String) {
             return;
         }
 
+        if crate::notifications::workflow::open_review(app, &url) {
+            return;
+        }
+
         let is_in_app = url.starts_with("screenpipe://");
         let app_clone = app.clone();
         std::thread::spawn(move || {
@@ -953,6 +958,10 @@ pub(crate) fn dispatch_notification_action(json: String) {
         // Guard against senders putting a browser URL into "deeplink" or a
         // screenpipe:// URL into "link". We route on actual scheme, not on
         // the declared type, so a typo doesn't break the click.
+        if crate::notifications::workflow::open_review(app, &url) {
+            return;
+        }
+
         let is_in_app = url.starts_with("screenpipe://");
         let app_clone = app.clone();
         std::thread::spawn(move || {

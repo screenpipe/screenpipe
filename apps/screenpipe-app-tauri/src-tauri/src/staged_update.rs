@@ -163,16 +163,43 @@ pub fn staged_version() -> Option<String> {
 /// the exit path; a failure only means the app comes back on the current
 /// version and the checker re-stages later.
 pub fn install_staged_if_any<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
+    install_staged_with_diagnostics(
+        app,
+        crate::config::app_data_dir(),
+        std::env::current_exe().ok().as_deref(),
+    )
+}
+
+fn install_staged_with_diagnostics<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    diagnostic_root: &std::path::Path,
+    executable: Option<&std::path::Path>,
+) -> bool {
     let staged = STAGED.lock().unwrap().take();
     let Some(Staged { update, path }) = staged else {
         return false;
     };
 
     let started = std::time::Instant::now();
+    let diagnostic = |event: &str, detail: &str| {
+        crate::update_diagnostics::append(
+            diagnostic_root,
+            event,
+            &format!(
+                "from={} target={} {detail}",
+                update.current_version, update.version
+            ),
+        );
+    };
+    diagnostic(
+        "install_started",
+        &format!("archive={} executable={executable:?}", path.display()),
+    );
 
     let bytes = match std::fs::read(&path) {
         Ok(b) => b,
         Err(e) => {
+            diagnostic("archive_read_failed", &e.to_string());
             warn!(
                 "staged update v{}: failed to read {}: {}",
                 update.version,
@@ -187,6 +214,7 @@ pub fn install_staged_if_any<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bo
     // signature at download time and `install()` trusts its input, but
     // these bytes sat on disk in the meantime.
     if let Err(e) = verify_signature(app, &bytes, &update.signature) {
+        diagnostic("signature_verification_failed", &e);
         warn!(
             "staged update v{}: signature re-verification failed ({}); discarding",
             update.version, e
@@ -196,9 +224,33 @@ pub fn install_staged_if_any<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bo
     }
 
     let result = update.install(&bytes);
+    let bundle = executable.and_then(|exe| {
+        exe.ancestors()
+            .find(|p| p.extension().is_some_and(|ext| ext == "app"))
+    });
+    if let Some(bundle) = bundle {
+        let installed_version = plist::Value::from_file(bundle.join("Contents/Info.plist"))
+            .map_err(|error| error.to_string())
+            .and_then(|value| {
+                value
+                    .as_dictionary()
+                    .and_then(|dict| dict.get("CFBundleShortVersionString"))
+                    .and_then(|value| value.as_string())
+                    .map(str::to_owned)
+                    .ok_or_else(|| "CFBundleShortVersionString missing".to_string())
+            });
+        diagnostic(
+            "installed_bundle",
+            &format!("path={} version={installed_version:?}", bundle.display()),
+        );
+    }
     let _ = std::fs::remove_file(&path);
     match result {
         Ok(()) => {
+            diagnostic(
+                "installer_returned_ok",
+                &format!("elapsed_ms={}", started.elapsed().as_millis()),
+            );
             info!(
                 "staged update v{} installed in {:?}",
                 update.version,
@@ -207,6 +259,7 @@ pub fn install_staged_if_any<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bo
             true
         }
         Err(e) => {
+            diagnostic("installer_failed", &e.to_string());
             warn!("staged update v{} install failed: {}", update.version, e);
             false
         }
@@ -253,7 +306,7 @@ fn verify_signature<R: tauri::Runtime>(
 /// against a throwaway minisign key, a localhost HTTP server, and fake .app
 /// bundles in a temp dir. No screenpipe process, no real bundle, no network.
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use base64::Engine;
     use std::io::Read;
@@ -288,6 +341,7 @@ mod tests {
         let mut ctx = tauri::test::mock_context(tauri::test::noop_assets());
         ctx.config_mut().identifier = "pe.screenpi.staged-update-test".into();
         ctx.config_mut().version = Some("1.0.0".into());
+        ctx.package_info_mut().version = "1.0.0".parse().unwrap();
         ctx.config_mut().plugins.0.insert(
             "updater".into(),
             serde_json::json!({
@@ -312,6 +366,7 @@ mod tests {
         let newapp = newdir.join("FakeApp.app");
         std::fs::create_dir_all(newapp.join("Contents/MacOS")).unwrap();
         std::fs::write(newapp.join("Contents/MacOS/app"), b"new-binary").unwrap();
+        std::fs::write(newapp.join("Contents/Info.plist"), r#"<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleShortVersionString</key><string>99.0.0</string></dict></plist>"#).unwrap();
         std::fs::write(newapp.join("marker.txt"), marker).unwrap();
         // A symlink, because real bundles contain them (Frameworks/Versions)
         // and the updater installer must preserve them.
@@ -425,6 +480,26 @@ mod tests {
         current
     }
 
+    /// A real signed archive reaches the installer, whose destination vanished.
+    /// Reusable by the support-upload test; every filesystem write is isolated.
+    pub(crate) async fn failed_install_fixture(root: &Path) {
+        let _guard = STAGED_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (archive, signature, pubkey, _) = build_signed_fake_bundle(root, b"NEW");
+        let (port, stop) = serve_update(archive, &signature);
+        let app = mock_app_with_updater(&pubkey);
+        let exe = root.join("missing/FakeApp.app/Contents/MacOS/app");
+        let (update, bytes) = check_and_download(app.handle(), &exe, &pubkey, port).await;
+        stage(app.handle(), update, &bytes).unwrap();
+        assert!(!install_staged_with_diagnostics(
+            app.handle(),
+            root,
+            Some(&exe)
+        ));
+        stop.store(true, Ordering::SeqCst);
+        let _ = std::net::TcpStream::connect(("127.0.0.1", port));
+        clear_stage_dir(app.handle());
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn staged_update_full_cycle_uses_verified_installer() {
         let _guard = STAGED_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -457,7 +532,16 @@ mod tests {
         );
 
         // Install at "exit" through tauri-plugin-updater's verified path.
-        assert!(install_staged_if_any(&handle), "install should succeed");
+        assert!(
+            install_staged_with_diagnostics(&handle, tmp.path(), Some(&fake_exe)),
+            "install should succeed"
+        );
+        let diagnostic =
+            std::fs::read_to_string(tmp.path().join(crate::update_diagnostics::LOG_NAME)).unwrap();
+        assert!(
+            diagnostic.contains("version=Ok(\"99.0.0\")"),
+            "{diagnostic}"
+        );
         assert_eq!(
             std::fs::read(current.join("marker.txt")).unwrap(),
             b"NEW",
@@ -474,11 +558,14 @@ mod tests {
             "installed bundle must keep its symlinks"
         );
         assert!(
-            !stage_dir(&handle).unwrap().join("replaced/previous.app").exists(),
+            !stage_dir(&handle)
+                .unwrap()
+                .join("replaced/previous.app")
+                .exists(),
             "the TCC-breaking previous.app path must never be created"
         );
         assert!(
-            !install_staged_if_any(&handle),
+            !install_staged_with_diagnostics(&handle, tmp.path(), Some(&fake_exe)),
             "second install call must no-op"
         );
 
@@ -516,5 +603,4 @@ mod tests {
             "tampered staged bytes must fail re-verification"
         );
     }
-
 }

@@ -212,3 +212,15 @@ describe("mergeMeetingAudioChunks", () => {
     expect(merged).toHaveLength(2);
   });
 });
+
+
+describe("cross-device speech preservation", () => {
+  it.each([
+    ["Do not send the revised proposal on Tuesday.", "Send the revised proposal on Tuesday."],
+    ["The approved budget is twenty thousand dollars.", "The approved budget is twenty thousand dollars."],
+  ])("keeps both speakers after reopening: %s / %s", (remote, local) => {
+    const output = chunk({ transcription: remote, timestamp: "2026-06-04T15:00:00Z" });
+    const input = chunk({ audioChunkId: 2, isInput: true, deviceType: "input", transcription: local, timestamp: "2026-06-04T15:00:03Z" });
+    expect(mergeMeetingAudioChunks([output, input], [], 100)).toEqual([output, input]);
+  });
+});

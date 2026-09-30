@@ -542,6 +542,7 @@ pub fn start_speaker_identification(
     {
         let db2 = db.clone();
         tokio::spawn(async move {
+            screenpipe_core::background_work::wait_until_resumed().await;
             deduplicate_existing_speaker_aliases(&db2).await;
         });
     }
@@ -573,6 +574,10 @@ async fn auto_name_input_speaker(db: Arc<screenpipe_db::DatabaseManager>, user_n
 
     loop {
         interval.tick().await;
+
+        if screenpipe_core::background_work::is_suspended() {
+            continue;
+        }
 
         match db
             .get_dominant_unnamed_input_speaker(min_transcriptions)
@@ -665,6 +670,9 @@ async fn run_speaker_identification_loop(
                     break;
                 }
                 _ = interval.tick() => {
+                    if screenpipe_core::background_work::is_suspended() {
+                        continue;
+                    }
                     match db.get_active_speakers_in_timerange(
                         meeting.started_at,
                         Utc::now(),

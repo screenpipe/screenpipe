@@ -22,7 +22,15 @@ STATE_DIR="/Library/Application Support/screenpipe/persistence"
 /usr/bin/touch "${STATE_DIR}/enabled"
 /usr/sbin/chown root:wheel "${STATE_DIR}/enabled"
 /bin/chmod 644 "${STATE_DIR}/enabled"
-/bin/rm -f "${STATE_DIR}/maintenance" "${STATE_DIR}/active-console-uid"
+/bin/rm -f "${STATE_DIR}/active-console-uid"
+# A separately loaded update runner owns maintenance until `/usr/sbin/installer`
+# returns. This postinstall reloads only the supervisor; clearing early would
+# let that new supervisor accept another request while installd is still
+# finishing the first transaction. External administrator installs have no
+# runner and complete maintenance here.
+if [ ! -e "/Library/LaunchDaemons/screenpi.pe.enterprise.persistence-update.plist" ]; then
+  /bin/rm -f "${STATE_DIR}/maintenance" "${STATE_DIR}/failed-update-version"
+fi
 
 /bin/launchctl bootout "system/${DAEMON_LABEL}" >/dev/null 2>&1 || true
 /bin/launchctl bootstrap system "$DAEMON_PLIST"

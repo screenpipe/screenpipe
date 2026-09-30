@@ -6,6 +6,8 @@ import { useState, useEffect, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { localFetch } from "@/lib/api";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { useGT } from "gt-react";
+
 
 export interface TemplatePipe {
   name: string;
@@ -37,6 +39,7 @@ interface PipeStatus {
 }
 
 export function usePipes() {
+  const ui = useGT();
   const [pipes, setPipes] = useState<PipeStatus[]>([]);
   const [templatePipes, setTemplatePipes] = useState<TemplatePipe[]>([]);
   const [promptPipes, setPromptPipes] = useState<TemplatePipe[]>([]);
@@ -74,7 +77,7 @@ export function usePipes() {
         .map(toTemplatePipe);
       setPromptPipes(withPrompt);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "failed to fetch scheduled tasks");
+      setError(e instanceof Error ? e.message : ui("failed to fetch scheduled tasks"));
     } finally {
       setLoading(false);
     }

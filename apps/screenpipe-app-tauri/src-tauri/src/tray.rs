@@ -10,6 +10,7 @@ use crate::health::{
     HighFpsCacheEntry, RecordingStatus,
 };
 use crate::process_exit;
+use crate::localization::{ui_text, ui_format};
 use crate::recording::{local_api_context_from_app, RecordingState};
 use crate::store::{OnboardingStore, SettingsStore};
 use crate::updates::{is_enterprise_build, is_source_build};
@@ -31,6 +32,7 @@ use tauri::{
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_store::StoreExt;
 
 use tracing::{debug, error, info, warn};
 
@@ -42,6 +44,7 @@ pub use crate::process_exit::QUIT_REQUESTED;
 /// the lightweight menu-item construction runs on the main thread.
 #[derive(Clone)]
 struct TrayMenuData {
+    workflows_mode: bool,
     onboarding_completed: bool,
     trial_activation_locked: bool,
     show_shortcut: String,
@@ -60,10 +63,7 @@ struct TrayMenuData {
 /// Gather all data needed by `create_dynamic_menu` on the current (non-main)
 /// thread so the main-thread closure does zero I/O.
 fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
-    let onboarding = OnboardingStore::get(app)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    let onboarding = OnboardingStore::get(app).ok().flatten().unwrap_or_default();
     let onboarding_completed = onboarding.is_completed;
     let trial_activation_locked =
         !crate::should_skip_onboarding() && onboarding.blocks_trial_activation_app();
@@ -138,7 +138,15 @@ fn prefetch_tray_menu_data(app: &AppHandle) -> TrayMenuData {
         false
     };
 
+    let workflows_mode = screenpipe_core::workflows::pipeline::rollout_enabled()
+        && app
+            .store("workflows-entry.bin")
+            .ok()
+            .and_then(|store| store.get("mode"))
+            .is_some_and(|mode| mode.as_str() == Some("workflows"));
+
     TrayMenuData {
+        workflows_mode,
         onboarding_completed,
         trial_activation_locked,
         show_shortcut,
@@ -222,6 +230,14 @@ static HD_STOP_MENU_ITEM: Lazy<Mutex<Option<MenuItem<Wry>>>> = Lazy::new(|| Mute
 // Track last known state to avoid unnecessary updates
 static LAST_MENU_STATE: Lazy<Mutex<MenuState>> = Lazy::new(|| Mutex::new(MenuState::default()));
 
+static MENU_REFRESH_REQUESTED: Lazy<tokio::sync::Notify> = Lazy::new(tokio::sync::Notify::new);
+
+/// Wake the existing updater for a language change. Keep menu installation on
+/// its normal safe path; never replace an open menu or recreate the tray icon.
+pub(crate) fn request_menu_refresh() {
+    MENU_REFRESH_REQUESTED.notify_one();
+}
+
 /// Optimistic recording status override — set on start/stop click for instant UI feedback.
 /// Tuple of (status, expiry_instant). Cleared when real status matches or after timeout.
 static OPTIMISTIC_STATUS: Lazy<Mutex<Option<(RecordingStatus, std::time::Instant)>>> =
@@ -279,14 +295,14 @@ fn format_remaining(d: std::time::Duration) -> String {
         let h = secs / 3600;
         let m = (secs % 3600) / 60;
         if m == 0 {
-            format!("{}h", h)
+            ui_format("{hours}h", &[("hours", h.to_string())])
         } else {
-            format!("{}h {}m", h, m)
+            ui_format("{hours}h {minutes}m", &[("hours", h.to_string()), ("minutes", m.to_string())])
         }
     } else if secs >= 60 {
-        format!("{}m", (secs + 59) / 60) // round up
+        ui_format("{minutes}m", &[("minutes", ((secs + 59) / 60).to_string())]) // round up
     } else {
-        format!("{}s", secs.max(1))
+        ui_format("{seconds}s", &[("seconds", secs.max(1).to_string())])
     }
 }
 
@@ -333,16 +349,12 @@ where
     }
 }
 
-fn database_is_quarantined(database_path: &std::path::Path) -> Result<bool, String> {
-    let marker_path = screenpipe_db::sqlite_quarantine_marker_path(database_path)
-        .ok_or_else(|| "the database path cannot be quarantined".to_string())?;
-    match std::fs::symlink_metadata(marker_path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(format!(
-            "could not check whether the database needs recovery: {error}"
-        )),
-    }
+fn database_has_confirmed_damage(database_path: &std::path::Path) -> Result<bool, String> {
+    // Legacy or unreadable markers require normal startup diagnosis; they do
+    // not prove that repair is necessary or prohibit the user's Resume action.
+    Ok(screenpipe_db::sqlite_confirmed_corruption_exists(
+        database_path,
+    ))
 }
 
 impl TrayRecordingAction {
@@ -360,10 +372,10 @@ impl TrayRecordingAction {
         }
     }
 
-    fn failure_copy(self) -> (&'static str, &'static str) {
+    fn failure_copy(self) -> (String, &'static str) {
         match self {
-            Self::Start => ("recording could not resume", "resume"),
-            Self::Stop => ("recording could not pause", "pause"),
+            Self::Start => (crate::localization::ui_text("recording could not resume"), crate::localization::source_text("screenpipe could not resume capture: {error}")),
+            Self::Stop => (crate::localization::ui_text("recording could not pause"), crate::localization::source_text("screenpipe could not pause capture: {error}")),
         }
     }
 }
@@ -385,7 +397,7 @@ async fn run_tray_recording_action(
         TrayRecordingAction::Start => {
             let data_dir = crate::db_recovery_notifications::effective_recovery_data_dir(app)?;
             let database_path = data_dir.join("db.sqlite");
-            match tray_start_route_with(|| database_is_quarantined(&database_path))? {
+            match tray_start_route_with(|| database_has_confirmed_damage(&database_path))? {
                 TrayStartRoute::StartCapture => {
                     crate::recording::start_capture(state, app.clone()).await?
                 }
@@ -438,15 +450,15 @@ fn dispatch_tray_recording_action(
                 if let Some((title, body)) =
                     success_notification_for_outcome(outcome, success_notification)
                 {
-                    send_notify(title, body);
+                    send_notify(crate::localization::ui_text(title), crate::localization::ui_text(body));
                 }
             }
             Err(error) => {
-                let (title, verb) = action.failure_copy();
+                let (title, message) = action.failure_copy();
                 tracing::error!(?action, %error, "native tray recording action failed");
                 send_notify(
                     title,
-                    format!("screenpipe could not {verb} capture: {error}"),
+                    crate::localization::ui_format(message, &[("error", error)]),
                 );
             }
         }
@@ -470,12 +482,46 @@ async fn tray_recording_action(app: &AppHandle) -> TrayRecordingAction {
 }
 
 fn toggle_recording_from_tray(app: &AppHandle) {
+    toggle_recording_native(app);
+}
+
+/// Toggle capture through the native path, independent of the tray icon and of
+/// any webview.
+///
+/// This is what keeps a pause control reachable when enterprise policy suppresses
+/// the tray. The tray's own Pause item routes to this same function, so removing
+/// the icon removes a menu entry — not the ability to stop recording. Safe to
+/// call with no tray present: the post-action tray rebuild is already a no-op
+/// when `tray_by_id` returns `None`.
+pub fn toggle_recording_native(app: &AppHandle) {
     cancel_pause_timer();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let action = tray_recording_action(&app).await;
         dispatch_tray_recording_action(app, action, None);
     });
+}
+
+/// Resume capture natively. Used by the hidden-UI shortcut path, where the
+/// `shortcut-start-recording` webview event has no listener to consume it.
+pub fn start_recording_native(app: &AppHandle) {
+    cancel_pause_timer();
+    dispatch_tray_recording_action(
+        app.clone(),
+        TrayRecordingAction::Start,
+        Some(("recording started", "screen recording has been initiated")),
+    );
+}
+
+/// Pause capture natively. This is the user-facing pause control when no tray
+/// icon and no window exists, so it must work with every webview destroyed.
+pub fn stop_recording_native(app: &AppHandle) {
+    cancel_pause_timer();
+    dispatch_tray_recording_action(
+        app.clone(),
+        TrayRecordingAction::Stop,
+        Some(("recording paused", "capture paused — pipes and search still available")),
+    );
 }
 
 #[cfg(feature = "e2e")]
@@ -490,6 +536,13 @@ pub(crate) async fn toggle_recording_from_harness(app: AppHandle) -> Result<(), 
 
 /// Immediately rebuild the tray menu (called from main thread after optimistic status set).
 pub(crate) fn force_tray_rebuild(app: &AppHandle) -> Result<()> {
+    // Reachable from the native recording path, which still runs when the tray is
+    // suppressed. Bail before prefetching menu data (a DB read) to build a menu
+    // that would be discarded by the `tray_by_id` check at the end anyway.
+    if tray_suppressed_by_policy() {
+        return Ok(());
+    }
+
     let update_item = UPDATE_MENU_ITEM
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -849,6 +902,8 @@ fn snapshot_menu_state(data: &TrayMenuData, effective_status: RecordingStatus) -
     let recording_info = get_recording_info();
     let hd = get_high_fps_status();
     MenuState {
+        ui_locale: crate::localization::resolved_locale(),
+        workflows_mode: data.workflows_mode,
         shortcuts: {
             let mut m = HashMap::new();
             m.insert("show".to_string(), data.show_shortcut.clone());
@@ -891,13 +946,13 @@ fn hd_stop_menu_label(hd: &HighFpsCacheEntry) -> String {
     let fps = (hd.interval_ms > 0).then(|| 1000 / hd.interval_ms);
     let remaining = format_remaining_secs(hd.remaining_secs);
     let why = match hd.session_kind.as_str() {
-        "meeting" => "until call ends",
-        "prewarm_pending" => "awaiting call",
-        _ => "left",
+        "meeting" => ui_text("until call ends"),
+        "prewarm_pending" => ui_text("awaiting call"),
+        _ => ui_text("left"),
     };
     match fps {
-        Some(f) => format!("Stop HD recording (~{} fps, {} {})", f, remaining, why),
-        None => format!("Stop HD recording ({} {})", remaining, why),
+        Some(f) => ui_format("Stop HD recording (~{fps} fps, {time} {reason})", &[("fps", f.to_string()), ("time", remaining.clone()), ("reason", why.clone())]),
+        None => ui_format("Stop HD recording ({time} {reason})", &[("time", remaining), ("reason", why)]),
     }
 }
 
@@ -1000,6 +1055,8 @@ mod menu_refresh_observer {
 
 #[derive(Default, PartialEq, Clone)]
 struct MenuState {
+    ui_locale: String,
+    workflows_mode: bool,
     shortcuts: HashMap<String, String>,
     recording_status: Option<RecordingStatus>,
     audio_capture_status: Option<AudioCaptureStatus>,
@@ -1019,10 +1076,132 @@ struct MenuState {
     all_capture_disabled: bool,
 }
 
+/// True when enterprise policy forbids the tray icon from existing at all.
+///
+/// The tray is created by Tauri config at launch, so suppressing it is an active
+/// removal rather than simply declining to build one — see [`remove_tray`].
+pub fn tray_suppressed_by_policy() -> bool {
+    crate::enterprise_policy::is_tray_hidden()
+}
+
+/// Remove the tray icon without recreating it.
+///
+/// Must run on the main thread: dropping an `NSStatusItem` from a tokio thread
+/// fires `NSStatusBar _removeStatusItem` off-thread and crashes, which is the
+/// same hazard `recreate_tray` guards against.
+pub fn remove_tray(app: &AppHandle) {
+    let app_for_thread = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::window::with_autorelease_pool(|| {
+                if app_for_thread.tray_by_id("screenpipe_main").is_none() {
+                    return;
+                }
+                info!("tray: removing icon (suppressed by enterprise policy)");
+                let _old = app_for_thread.remove_tray_by_id("screenpipe_main");
+                drop(_old);
+            });
+        })) {
+            let panic_msg = if let Some(s) = e.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                format!("{:?}", e)
+            };
+            error!("panic caught while removing tray icon: {}", panic_msg);
+        }
+    });
+}
+
+/// Re-assert the tray against the current enterprise policy.
+///
+/// Called on every policy reconciliation. Removing the tray is the easy half;
+/// restoring it needs `setup_tray` after the icon is rebuilt, because
+/// `recreate_tray` deliberately does not re-register click handlers (it assumes
+/// they survived an icon swap) and installs no poller. A tray that was fully
+/// removed has neither.
+///
+/// When the icon is missing we rebuild and install the menu inside a single main
+/// thread hop. `recreate_tray` only *schedules* its work, so calling it and then
+/// calling `setup_tray` from this thread would let the menu install look for an
+/// icon the scheduled closure has not built yet — `tray_by_id` returns `None` and
+/// `setup_tray` returns `Ok(())` having installed nothing, leaving a live icon
+/// with no menu for a full poll interval.
+pub fn enforce_tray_visibility(app: &AppHandle) {
+    if tray_suppressed_by_policy() {
+        remove_tray(app);
+        return;
+    }
+
+    let update_item = UPDATE_MENU_ITEM
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+
+    if app.tray_by_id("screenpipe_main").is_some() {
+        // Icon is already there; just make sure its menu and handlers are current.
+        if let Err(error) = setup_tray(app, update_item.as_ref()) {
+            error!("failed to reinstall tray menu: {error:#}");
+        }
+        return;
+    }
+
+    let app_for_thread = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Re-check on the main thread: the policy can flip again between the
+            // caller's check and this closure actually running.
+            if tray_suppressed_by_policy() {
+                return;
+            }
+            recreate_tray_on_main_thread(&app_for_thread);
+
+            // Only install if the rebuild actually produced an icon.
+            if app_for_thread.tray_by_id("screenpipe_main").is_none() {
+                error!("tray: rebuild produced no icon, skipping menu install");
+                return;
+            }
+
+            let update_item = UPDATE_MENU_ITEM
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if let Err(error) = setup_tray(&app_for_thread, update_item.as_ref()) {
+                error!("failed to reinstall tray menu: {error:#}");
+            }
+        }));
+
+        if let Err(e) = result {
+            let panic_msg = if let Some(s) = e.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                format!("{:?}", e)
+            };
+            error!("panic caught while restoring tray icon: {}", panic_msg);
+        }
+    });
+}
+
 pub fn setup_tray(app: &AppHandle, update_item: Option<&tauri::menu::MenuItem<Wry>>) -> Result<()> {
-    // Store update_item globally so recreate_tray can use it (None for enterprise)
+    // Store update_item globally so recreate_tray can use it (None for enterprise).
+    // Do this even when suppressed: `enforce_tray_visibility` needs the item to
+    // rebuild a full tray if the policy is later relaxed, and skipping the store
+    // would silently downgrade the restored tray.
     if let Ok(mut guard) = UPDATE_MENU_ITEM.lock() {
         *guard = update_item.cloned();
+    }
+
+    // An admin may suppress the tray outright. Tauri already built the icon
+    // from `tauri.conf.json`, so take it back down and install nothing: no
+    // menu, no click handlers, and no 5s poller rebuilding a menu for an icon
+    // the org removed.
+    if tray_suppressed_by_policy() {
+        info!("tray: suppressed by enterprise policy, skipping tray setup");
+        remove_tray(app);
+        return Ok(());
     }
 
     if let Some(main_tray) = app.tray_by_id("screenpipe_main") {
@@ -1050,6 +1229,16 @@ pub fn setup_tray(app: &AppHandle, update_item: Option<&tauri::menu::MenuItem<Wr
         // intentionally omit the self-update menu item, but they still need the
         // poller or the startup "Starting…" menu is never rebuilt.
         setup_tray_menu_updater(app.clone(), update_item);
+    }
+    sync_search_visibility(app)?;
+    Ok(())
+}
+
+/// Confirmed Quit leaves no tray UI. Reopening restores the same tray item.
+/// Call on the main thread, including after a search-only updater relaunch.
+pub(crate) fn sync_search_visibility(app: &AppHandle) -> Result<()> {
+    if let Some(tray) = app.tray_by_id("screenpipe_main") {
+        tray.set_visible(!crate::search_only::is_active())?;
     }
     Ok(())
 }
@@ -1084,6 +1273,101 @@ pub fn log_tray_position(app: &AppHandle) {
     }
 }
 
+/// Body of [`recreate_tray`]. **Must run on the main thread** — dropping or
+/// building an `NSStatusItem` off-thread crashes, the same hazard the
+/// `run_on_main_thread` wrapper in `recreate_tray` exists to avoid.
+///
+/// Split out from [`recreate_tray`] so a caller that must recreate *and then*
+/// install the menu can do both in one ordered hop. `recreate_tray` schedules,
+/// so following it with a `setup_tray` on the calling thread would race: the
+/// menu install would look for an icon that the scheduled closure has not built
+/// yet and silently no-op.
+#[allow(dead_code)] // reached only via the macOS/Windows tray paths
+fn recreate_tray_on_main_thread(app: &AppHandle) {
+    crate::window::with_autorelease_pool(|| {
+        // Never resurrect a tray the admin removed. recreate_tray runs on
+        // every enterprise-policy reconciliation and from the menu-refresh
+        // path, so without this guard a suppressed icon would reappear on
+        // the next poll. Take it down instead and stop.
+        if tray_suppressed_by_policy() {
+            if app.tray_by_id("screenpipe_main").is_some() {
+                info!("recreate_tray: suppressed by enterprise policy, removing instead");
+                let _old = app.remove_tray_by_id("screenpipe_main");
+                drop(_old);
+            }
+            return;
+        }
+
+        let update_item = match UPDATE_MENU_ITEM.lock() {
+            Ok(guard) => guard.clone(),
+            Err(_) => {
+                error!("failed to lock UPDATE_MENU_ITEM for tray recreation");
+                return;
+            }
+        };
+
+        // Remove the old tray icon (must be on main thread for NSStatusBar)
+        debug!("recreate_tray: removing old tray icon");
+        let _old = app.remove_tray_by_id("screenpipe_main");
+        // Drop the old tray icon explicitly on main thread
+        drop(_old);
+        debug!("recreate_tray: old tray removed, building new one");
+
+        // Create a new tray icon — macOS assigns it the rightmost position
+        let icon = match app.path().resolve(
+            "assets/screenpipe-logo-tray-white.png",
+            tauri::path::BaseDirectory::Resource,
+        ) {
+            Ok(path) => tauri::image::Image::from_path(path).ok(),
+            Err(_) => tauri::image::Image::from_path("assets/screenpipe-logo-tray-white.png").ok(),
+        };
+
+        let mut builder = TrayIconBuilder::<Wry>::with_id("screenpipe_main")
+            .icon_as_template(true)
+            .show_menu_on_left_click(!cfg!(target_os = "windows"));
+
+        if let Some(ref icon) = icon {
+            if icon.width() > 0 && icon.height() > 0 {
+                builder = builder.icon(icon.clone());
+            } else {
+                error!(
+                    "tray icon has zero dimensions ({}x{}), skipping",
+                    icon.width(),
+                    icon.height()
+                );
+            }
+        } else {
+            error!("failed to load tray icon for recreation");
+        }
+
+        debug!("recreate_tray: calling builder.build()");
+        match builder.build(app) {
+            Ok(new_tray) => {
+                debug!("recreate_tray: build succeeded, setting menu");
+                // Setup menu
+                let data = prefetch_tray_menu_data(app);
+                if let Ok(menu) = create_dynamic_menu(
+                    app,
+                    &MenuState::default(),
+                    update_item.as_ref(),
+                    &data,
+                ) {
+                    let _ = install_tray_menu(&new_tray, menu);
+                    clear_pending_tray_menu();
+                }
+                // NOTE: do NOT re-register click handlers here.
+                // The handler from setup_tray() is keyed by tray ID and persists
+                // across tray icon recreation. Re-registering causes double-firing.
+
+                info!("tray icon recreated at rightmost position");
+            }
+            Err(e) => {
+                error!("failed to recreate tray icon: {}", e);
+            }
+        }
+    }); // with_autorelease_pool
+}
+
 #[allow(dead_code)] // called only on macOS
 pub fn recreate_tray(app: &AppHandle) {
     let app_for_thread = app.clone();
@@ -1091,78 +1375,7 @@ pub fn recreate_tray(app: &AppHandle) {
     // across the FFI boundary (nounwind → abort). catch_unwind prevents this.
     let _ = app.run_on_main_thread(move || {
         if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::window::with_autorelease_pool(|| {
-                let app = app_for_thread;
-                let update_item = match UPDATE_MENU_ITEM.lock() {
-                    Ok(guard) => guard.clone(),
-                    Err(_) => {
-                        error!("failed to lock UPDATE_MENU_ITEM for tray recreation");
-                        return;
-                    }
-                };
-
-                // Remove the old tray icon (must be on main thread for NSStatusBar)
-                debug!("recreate_tray: removing old tray icon");
-                let _old = app.remove_tray_by_id("screenpipe_main");
-                // Drop the old tray icon explicitly on main thread
-                drop(_old);
-                debug!("recreate_tray: old tray removed, building new one");
-
-                // Create a new tray icon — macOS assigns it the rightmost position
-                let icon = match app.path().resolve(
-                    "assets/screenpipe-logo-tray-white.png",
-                    tauri::path::BaseDirectory::Resource,
-                ) {
-                    Ok(path) => tauri::image::Image::from_path(path).ok(),
-                    Err(_) => {
-                        tauri::image::Image::from_path("assets/screenpipe-logo-tray-white.png").ok()
-                    }
-                };
-
-                let mut builder = TrayIconBuilder::<Wry>::with_id("screenpipe_main")
-                    .icon_as_template(true)
-                    .show_menu_on_left_click(!cfg!(target_os = "windows"));
-
-                if let Some(ref icon) = icon {
-                    if icon.width() > 0 && icon.height() > 0 {
-                        builder = builder.icon(icon.clone());
-                    } else {
-                        error!(
-                            "tray icon has zero dimensions ({}x{}), skipping",
-                            icon.width(),
-                            icon.height()
-                        );
-                    }
-                } else {
-                    error!("failed to load tray icon for recreation");
-                }
-
-                debug!("recreate_tray: calling builder.build()");
-                match builder.build(&app) {
-                    Ok(new_tray) => {
-                        debug!("recreate_tray: build succeeded, setting menu");
-                        // Setup menu
-                        let data = prefetch_tray_menu_data(&app);
-                        if let Ok(menu) = create_dynamic_menu(
-                            &app,
-                            &MenuState::default(),
-                            update_item.as_ref(),
-                            &data,
-                        ) {
-                            let _ = install_tray_menu(&new_tray, menu);
-                            clear_pending_tray_menu();
-                        }
-                        // NOTE: do NOT re-register click handlers here.
-                        // The handler from setup_tray() is keyed by tray ID and persists
-                        // across tray icon recreation. Re-registering causes double-firing.
-
-                        info!("tray icon recreated at rightmost position");
-                    }
-                    Err(e) => {
-                        error!("failed to recreate tray icon: {}", e);
-                    }
-                }
-            }); // with_autorelease_pool
+            recreate_tray_on_main_thread(&app_for_thread);
         })) {
             // The panic hook already sent the panic message + backtrace to Sentry
             // (as a Fatal-level capture_message). Log here for local diagnostics.
@@ -1200,23 +1413,23 @@ fn recording_status_text(
     status: RecordingStatus,
     all_capture_disabled: bool,
     audio_capture_status: Option<AudioCaptureStatus>,
-) -> &'static str {
+) -> String {
     match (status, all_capture_disabled, audio_capture_status) {
-        (RecordingStatus::Recording, true, _) => "○ Stopped",
+        (RecordingStatus::Recording, true, _) => ui_text("○ Stopped"),
         (RecordingStatus::Recording, false, Some(AudioCaptureStatus::WaitingForMeeting)) => {
-            "● Screen recording · audio waiting for meeting"
+            ui_text("● Screen recording · audio waiting for meeting")
         }
         (
             RecordingStatus::Recording,
             false,
             Some(AudioCaptureStatus::MeetingDetectorUnavailable),
-        ) => "● Screen recording · meeting detection unavailable",
-        (RecordingStatus::Starting, _, _) => "○ Starting…",
-        (RecordingStatus::Recording, _, _) => "● Recording",
-        (RecordingStatus::Paused, _, _) => "◐ Paused",
-        (RecordingStatus::ScheduledPause, _, _) => "○ Outside work hours",
-        (RecordingStatus::Stopped, _, _) => "○ Stopped",
-        (RecordingStatus::Error, _, _) => "○ Error",
+        ) => ui_text("● Screen recording · meeting detection unavailable"),
+        (RecordingStatus::Starting, _, _) => ui_text("○ Starting…"),
+        (RecordingStatus::Recording, _, _) => ui_text("● Recording"),
+        (RecordingStatus::Paused, _, _) => ui_text("◐ Paused"),
+        (RecordingStatus::ScheduledPause, _, _) => ui_text("○ Outside work hours"),
+        (RecordingStatus::Stopped, _, _) => ui_text("○ Stopped"),
+        (RecordingStatus::Error, _, _) => ui_text("○ Error"),
     }
 }
 
@@ -1247,14 +1460,18 @@ fn create_dynamic_menu(
             .item(&PredefinedMenuItem::separator(app)?);
         if data.trial_activation_locked {
             menu_builder = menu_builder
-                .item(&MenuItemBuilder::with_id("open_app", "Open first summary").build(app)?)
-                .item(&MenuItemBuilder::with_id("settings", "Settings...").build(app)?)
+                .item(&MenuItemBuilder::with_id("open_app", ui_text("Open first summary")).build(app)?)
+                .item(&MenuItemBuilder::with_id("settings", ui_text("Settings...")).build(app)?)
                 .item(&PredefinedMenuItem::separator(app)?);
         }
-        menu_builder = menu_builder
-            .item(&MenuItemBuilder::with_id("quit", "Quit screenpipe").build(app)?);
+        menu_builder =
+            menu_builder.item(&MenuItemBuilder::with_id("quit", ui_text("Quit screenpipe")).build(app)?);
 
         return menu_builder.build().map_err(Into::into);
+    }
+
+    if data.workflows_mode && !data.app_ui_hidden {
+        return create_workflows_menu(app, data);
     }
 
     let show_shortcut = &data.show_shortcut;
@@ -1264,28 +1481,28 @@ fn create_dynamic_menu(
     // --- Open screenpipe ---
     if !data.app_ui_hidden {
         menu_builder = menu_builder
-            .item(&MenuItemBuilder::with_id("open_app", "Open screenpipe").build(app)?)
+            .item(&MenuItemBuilder::with_id("open_app", ui_text("Open screenpipe")).build(app)?)
             .item(&PredefinedMenuItem::separator(app)?);
     }
 
     // --- Primary actions (most-used first) ---
     // Use native accelerators for right-aligned shortcut display (like Notion Calendar)
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_chat") {
-        let mut item = MenuItemBuilder::with_id("show_chat", "Chat");
+        let mut item = MenuItemBuilder::with_id("show_chat", ui_text("Chat"));
         if !chat_shortcut.is_empty() {
             item = item.accelerator(&to_accelerator(chat_shortcut));
         }
         menu_builder = menu_builder.item(&item.build(app)?);
     }
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_search") {
-        let mut item = MenuItemBuilder::with_id("show_search", "Search");
+        let mut item = MenuItemBuilder::with_id("show_search", ui_text("Search"));
         if !search_shortcut.is_empty() {
             item = item.accelerator(&to_accelerator(search_shortcut));
         }
         menu_builder = menu_builder.item(&item.build(app)?);
     }
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_timeline") && !data.disable_timeline {
-        let mut item = MenuItemBuilder::with_id("show", "Timeline");
+        let mut item = MenuItemBuilder::with_id("show", ui_text("Timeline"));
         if !show_shortcut.is_empty() {
             item = item.accelerator(&to_accelerator(show_shortcut));
         }
@@ -1308,7 +1525,7 @@ fn create_dynamic_menu(
             || effective_status == RecordingStatus::Starting)
     {
         menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("privacy_info", "Your data stays local")
+            &MenuItemBuilder::with_id("privacy_info", ui_text("Your data stays local"))
                 .enabled(false)
                 .build(app)?,
         );
@@ -1396,7 +1613,7 @@ fn create_dynamic_menu(
     // Show "fix permissions" when recording is in error state
     if effective_status == RecordingStatus::Error && data.has_permission_issue {
         menu_builder = menu_builder
-            .item(&MenuItemBuilder::with_id("fix_permissions", "⚠ Fix permissions").build(app)?);
+            .item(&MenuItemBuilder::with_id("fix_permissions", ui_text("⚠ Fix permissions")).build(app)?);
     }
 
     // --- Plan / usage info ---
@@ -1405,7 +1622,7 @@ fn create_dynamic_menu(
         let has_cloud = data.cloud_subscribed;
         menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
         menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("plan_info", format!("{} plan", plan_label))
+            &MenuItemBuilder::with_id("plan_info", ui_format("{plan} plan", &[("plan", plan_label.to_string())]))
                 .enabled(false)
                 .build(app)?,
         );
@@ -1416,7 +1633,7 @@ fn create_dynamic_menu(
         // "Business Ultra plan" reads as a bug to the person paying for Ultra.
         if !has_cloud && !plan_includes_business(data.subscription_plan.as_deref()) {
             menu_builder = menu_builder
-                .item(&MenuItemBuilder::with_id("upgrade", "⚡ Upgrade to Business").build(app)?);
+                .item(&MenuItemBuilder::with_id("upgrade", ui_text("⚡ Upgrade to Business")).build(app)?);
         }
     }
 
@@ -1449,15 +1666,15 @@ fn create_dynamic_menu(
 
         let is_recording = effective_status == RecordingStatus::Recording && !all_capture_disabled;
         let label = if all_capture_disabled {
-            "Stopped — no devices enabled"
+            ui_text("Stopped — no devices enabled")
         } else {
             match effective_status {
-                RecordingStatus::Recording => "Recording",
-                RecordingStatus::Paused => "Paused — click to resume",
-                RecordingStatus::ScheduledPause => "Outside work hours — paused by schedule",
-                RecordingStatus::Starting => "Starting…",
-                RecordingStatus::Error => "Error — click to retry",
-                _ => "Stopped — click to record",
+                RecordingStatus::Recording => ui_text("Recording"),
+                RecordingStatus::Paused => ui_text("Paused — click to resume"),
+                RecordingStatus::ScheduledPause => ui_text("Outside work hours — paused by schedule"),
+                RecordingStatus::Starting => ui_text("Starting…"),
+                RecordingStatus::Error => ui_text("Error — click to retry"),
+                _ => ui_text("Stopped — click to record"),
             }
         };
         let toggle = CheckMenuItemBuilder::with_id("toggle_recording", label)
@@ -1466,15 +1683,15 @@ fn create_dynamic_menu(
             .build(app)?;
         menu_builder = menu_builder.item(&toggle);
 
-        // "Pause for…" submenu — only meaningful while currently recording.
+        // ui_text("Pause for…") submenu — only meaningful while currently recording.
         // Each click stops capture immediately, then a tokio task auto-resumes
         // after the chosen interval. See cancel_pause_timer / handle_menu_event.
         if is_recording {
-            let pause_submenu = SubmenuBuilder::new(app, "Pause for…")
-                .item(&MenuItemBuilder::with_id("pause_5", "5 minutes").build(app)?)
-                .item(&MenuItemBuilder::with_id("pause_15", "15 minutes").build(app)?)
-                .item(&MenuItemBuilder::with_id("pause_30", "30 minutes").build(app)?)
-                .item(&MenuItemBuilder::with_id("pause_60", "1 hour").build(app)?)
+            let pause_submenu = SubmenuBuilder::new(app, ui_text("Pause for…"))
+                .item(&MenuItemBuilder::with_id("pause_5", ui_text("5 minutes")).build(app)?)
+                .item(&MenuItemBuilder::with_id("pause_15", ui_text("15 minutes")).build(app)?)
+                .item(&MenuItemBuilder::with_id("pause_30", ui_text("30 minutes")).build(app)?)
+                .item(&MenuItemBuilder::with_id("pause_60", ui_text("1 hour")).build(app)?)
                 .build()?;
             menu_builder = menu_builder.item(&pause_submenu);
         }
@@ -1494,17 +1711,17 @@ fn create_dynamic_menu(
             // the most common "one more demo / one more topic" extension;
             // bigger bumps go via the API or restart timer from scratch.
             menu_builder = menu_builder.item(
-                &MenuItemBuilder::with_id("extend_hd_30", "Extend HD by +30 min").build(app)?,
+                &MenuItemBuilder::with_id("extend_hd_30", ui_text("Extend HD by +30 min")).build(app)?,
             );
         } else if !all_capture_disabled {
             *HD_STOP_MENU_ITEM.lock().unwrap_or_else(|e| e.into_inner()) = None;
             // Idle: offer timer-bound sessions only. The meeting-bound path
             // is reached via the meeting-start notification's "+ HD" action.
-            let submenu = SubmenuBuilder::new(app, "Record HD")
-                .item(&MenuItemBuilder::with_id("hd_timer_15", "15 minutes").build(app)?)
-                .item(&MenuItemBuilder::with_id("hd_timer_30", "30 minutes").build(app)?)
-                .item(&MenuItemBuilder::with_id("hd_timer_60", "1 hour").build(app)?)
-                .item(&MenuItemBuilder::with_id("hd_timer_120", "2 hours").build(app)?)
+            let submenu = SubmenuBuilder::new(app, ui_text("Record HD"))
+                .item(&MenuItemBuilder::with_id("hd_timer_15", ui_text("15 minutes")).build(app)?)
+                .item(&MenuItemBuilder::with_id("hd_timer_30", ui_text("30 minutes")).build(app)?)
+                .item(&MenuItemBuilder::with_id("hd_timer_60", ui_text("1 hour")).build(app)?)
+                .item(&MenuItemBuilder::with_id("hd_timer_120", ui_text("2 hours")).build(app)?)
                 .build()?;
             menu_builder = menu_builder.item(&submenu);
         } else {
@@ -1524,18 +1741,77 @@ fn create_dynamic_menu(
     menu_builder = menu_builder.item(&PredefinedMenuItem::separator(app)?);
     if !data.app_ui_hidden && !is_tray_item_hidden("tray_settings") {
         menu_builder = menu_builder.item(
-            &MenuItemBuilder::with_id("settings", "Settings...")
+            &MenuItemBuilder::with_id("settings", ui_text("Settings..."))
                 .accelerator("CmdOrCtrl+,")
                 .build(app)?,
         );
     }
     menu_builder = menu_builder.item(
-        &MenuItemBuilder::with_id("quit", "Quit screenpipe")
+        &MenuItemBuilder::with_id("quit", ui_text("Quit screenpipe"))
             .accelerator("CmdOrCtrl+Q")
             .build(app)?,
     );
 
     menu_builder.build().map_err(Into::into)
+}
+
+/// Workflows keeps the tray focused on opening the app and controlling capture.
+/// Reuse the normal recording action IDs, timers, settings and Help handlers.
+fn create_workflows_menu(app: &AppHandle, data: &TrayMenuData) -> Result<tauri::menu::Menu<Wry>> {
+    let mut menu = MenuBuilder::new(app)
+        .item(&MenuItemBuilder::with_id("open_app", ui_text("Open Screenpipe")).build(app)?)
+        .item(&PredefinedMenuItem::separator(app)?);
+    if !is_tray_item_hidden("tray_recording_controls") {
+        let status = get_effective_recording_status();
+        let recording = status == RecordingStatus::Recording && !data.all_capture_disabled;
+        let mut controls = SubmenuBuilder::new(
+            app,
+            recording_status_text(
+                status,
+                data.all_capture_disabled,
+                get_recording_info().audio_capture_status,
+            ),
+        );
+        if recording {
+            controls = controls
+                .item(&MenuItemBuilder::with_id("pause_15", ui_text("Pause for 15 minutes")).build(app)?)
+                .item(&MenuItemBuilder::with_id("pause_60", ui_text("Pause for 1 hour")).build(app)?);
+        }
+        let label = if recording {
+            ui_text("Pause until resumed")
+        } else if status == RecordingStatus::Starting {
+            ui_text("Starting…")
+        } else {
+            ui_text("Resume recording")
+        };
+        controls = controls.item(
+            &MenuItemBuilder::with_id("toggle_recording", label)
+                .enabled(!data.all_capture_disabled && status != RecordingStatus::Starting)
+                .build(app)?,
+        );
+        if status == RecordingStatus::Error && data.has_permission_issue {
+            controls = controls
+                .item(&MenuItemBuilder::with_id("fix_permissions", ui_text("Fix permissions…")).build(app)?);
+        }
+        menu = menu
+            .item(&controls.build()?)
+            .item(&PredefinedMenuItem::separator(app)?);
+    }
+    if !is_tray_item_hidden("tray_settings") {
+        menu = menu.item(
+            &MenuItemBuilder::with_id("settings", ui_text("Settings…"))
+                .accelerator("CmdOrCtrl+,")
+                .build(app)?,
+        );
+    }
+    menu = menu
+        .item(&MenuItemBuilder::with_id("feedback", ui_text("Help")).build(app)?)
+        .item(
+            &MenuItemBuilder::with_id("quit", ui_text("Quit Screenpipe"))
+                .accelerator("CmdOrCtrl+Q")
+                .build(app)?,
+        );
+    menu.build().map_err(Into::into)
 }
 
 fn setup_tray_click_handlers(main_tray: &TrayIcon) -> Result<()> {
@@ -1764,7 +2040,7 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                 dispatch_tray_recording_action(
                     app_for_resume,
                     TrayRecordingAction::Start,
-                    Some(("Recording resumed", "screenpipe is recording again.")),
+                    Some((crate::localization::source_text("Recording resumed"), crate::localization::source_text("screenpipe is recording again."))),
                 );
             });
             *PAUSE_TIMER.lock().unwrap_or_else(|e| e.into_inner()) = Some(PauseTimer {
@@ -1778,16 +2054,16 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
             let pretty = if mins >= 60 {
                 let h = mins / 60;
                 if h == 1 {
-                    "1 hour".to_string()
+                    ui_text("1 hour")
                 } else {
-                    format!("{} hours", h)
+                    ui_format("{count} hours", &[("count", h.to_string())])
                 }
             } else {
-                format!("{} minutes", mins)
+                ui_format("{count} minutes", &[("count", mins.to_string())])
             };
             send_notify(
-                "Recording paused",
-                format!("screenpipe will auto-resume in {}.", pretty),
+                ui_text("Recording paused"),
+                ui_format("screenpipe will auto-resume in {duration}.", &[("duration", pretty)]),
             );
             // Repaint the tray so "Recording" flips to "Paused" immediately.
             let app_for_rebuild = app_handle.clone();
@@ -2025,11 +2301,8 @@ fn handle_menu_event(app_handle: &AppHandle, event: tauri::menu::MenuEvent) {
                     tauri::async_runtime::spawn(async move {
                         let dialog = app
                             .dialog()
-                            .message(
-                                "auto-updates are only available in the pre-built version.\n\n\
-                                source builds require manual updates from github.",
-                            )
-                            .title("source build detected")
+                            .message(crate::localization::ui_text("auto-updates are only available in the pre-built version.\n\nsource builds require manual updates from github."))
+                            .title(crate::localization::ui_text("source build detected"))
                             .buttons(MessageDialogButtons::OkCancelCustom(
                                 "download pre-built".to_string(),
                                 "view on github".to_string(),
@@ -2154,22 +2427,22 @@ async fn update_menu_if_needed(
     let has_perm_issue = new_state.has_permission_issue;
     let audio_capture_status = get_recording_info().audio_capture_status;
     let tooltip: String = if has_perm_issue {
-        "screenpipe — ⚠️ permissions needed".to_string()
+        ui_text("screenpipe — ⚠️ permissions needed")
     } else if effective_status == RecordingStatus::Recording
         && audio_capture_status == Some(AudioCaptureStatus::MeetingDetectorUnavailable)
     {
-        "screenpipe — screen recording; meeting detection unavailable".to_string()
+        ui_text("screenpipe — screen recording; meeting detection unavailable")
     } else if effective_status == RecordingStatus::Recording
         && audio_capture_status == Some(AudioCaptureStatus::WaitingForMeeting)
     {
-        "screenpipe — screen recording; audio waiting for meeting".to_string()
+        ui_text("screenpipe — screen recording; audio waiting for meeting")
     } else if effective_status == RecordingStatus::Paused {
         match pause_remaining() {
-            Some(d) => format!("screenpipe — paused, resumes in {}", format_remaining(d)),
-            None => "screenpipe — paused".to_string(),
+            Some(d) => ui_format("screenpipe — paused, resumes in {duration}", &[("duration", format_remaining(d))]),
+            None => ui_text("screenpipe — paused"),
         }
     } else if effective_status == RecordingStatus::ScheduledPause {
-        "screenpipe — outside work hours (paused by schedule)".to_string()
+        ui_text("screenpipe — outside work hours (paused by schedule)")
     } else {
         "screenpipe".to_string()
     };
@@ -2276,11 +2549,23 @@ pub(crate) async fn set_recording_status_from_harness(
 }
 
 pub fn setup_tray_menu_updater(app: AppHandle, update_item: Option<&tauri::menu::MenuItem<Wry>>) {
+    // Spawn exactly once per process. The tray can be removed and reinstalled
+    // when enterprise policy flips, and each reinstall re-enters setup_tray —
+    // without this guard every flip would leave another 5s poller running.
+    static POLLER_STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if POLLER_STARTED.set(()).is_err() {
+        debug!("tray menu updater already running, skipping duplicate spawn");
+        return;
+    }
+
     let update_item = update_item.cloned();
     tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
-            interval.tick().await;
+            tokio::select! {
+                _ = interval.tick() => {},
+                _ = MENU_REFRESH_REQUESTED.notified() => {},
+            }
             if QUIT_REQUESTED.load(Ordering::SeqCst) {
                 info!("Tray menu updater received quit request, shutting down.");
                 break;
@@ -2331,11 +2616,15 @@ mod tests {
         let data_dir = tempfile::tempdir().expect("tray quarantine tempdir");
         let database_path = data_dir.path().join("db.sqlite");
         std::fs::write(&database_path, b"quarantined generation").expect("write database");
-        screenpipe_db::persist_sqlite_quarantine(&database_path, Some(11), "database corrupt")
-            .expect("persist quarantine");
+        screenpipe_db::persist_verified_sqlite_quarantine(
+            &database_path,
+            Some(11),
+            "verified database damage",
+        )
+        .expect("persist quarantine");
 
         assert_eq!(
-            tray_start_route_with(|| database_is_quarantined(&database_path)),
+            tray_start_route_with(|| database_has_confirmed_damage(&database_path)),
             Ok(TrayStartRoute::OfferDatabaseRecovery)
         );
     }
@@ -2345,12 +2634,31 @@ mod tests {
         let data_dir = tempfile::tempdir().expect("healthy tray tempdir");
         let database_path = data_dir.path().join("db.sqlite");
         assert_eq!(
-            tray_start_route_with(|| database_is_quarantined(&database_path)),
+            tray_start_route_with(|| database_has_confirmed_damage(&database_path)),
             Ok(TrayStartRoute::StartCapture)
         );
         assert_eq!(
             tray_start_route_with(|| Err("lookup failed".to_string())),
             Err("lookup failed".to_string())
+        );
+    }
+
+    #[test]
+    fn tray_resume_sends_unverified_markers_to_startup_diagnosis() {
+        let dir = tempfile::tempdir().unwrap();
+        let database_path = dir.path().join("db.sqlite");
+        std::fs::write(&database_path, b"existing generation").unwrap();
+        screenpipe_db::persist_sqlite_quarantine(&database_path, Some(11), "legacy observation")
+            .unwrap();
+        assert_eq!(
+            tray_start_route_with(|| database_has_confirmed_damage(&database_path)),
+            Ok(TrayStartRoute::StartCapture)
+        );
+        let marker = screenpipe_db::sqlite_quarantine_marker_path(&database_path).unwrap();
+        std::fs::write(marker, b"unreadable legacy marker").unwrap();
+        assert_eq!(
+            tray_start_route_with(|| database_has_confirmed_damage(&database_path)),
+            Ok(TrayStartRoute::StartCapture)
         );
     }
 
@@ -2429,6 +2737,21 @@ mod tests {
         assert_eq!(tray_telemetry_item("monitor_Private display name"), None);
         assert_eq!(tray_telemetry_item("pause_user_supplied_value"), None);
         assert_eq!(tray_telemetry_item("future_action"), None);
+    }
+
+    #[test]
+    fn product_mode_change_refreshes_tray_without_recording_change() {
+        let mut current = MenuState::default();
+        let workflows = MenuState {
+            workflows_mode: true,
+            ..current.clone()
+        };
+        assert!(replace_menu_state_if_changed(
+            &mut current,
+            workflows.clone()
+        ));
+        assert!(!menu_state_needs_update(&current, &workflows));
+        assert!(menu_state_needs_update(&current, &MenuState::default()));
     }
 
     #[test]
