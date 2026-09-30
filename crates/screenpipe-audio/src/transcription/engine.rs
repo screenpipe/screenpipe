@@ -1001,7 +1001,8 @@ impl TranscriptionSession {
     /// Detect the dominant language of a live chunk on a local Whisper session,
     /// used to lock the language once instead of re-detecting every chunk.
     /// Returns `Some` only when whisper is confident and unambiguous (see
-    /// [`live_lock_accepts`]); returns `None` for non-Whisper sessions, silent
+    /// [`live_lock_accepts`]); returns `None` for non-Whisper sessions, an unloaded
+    /// model, silent
     /// audio, or a weak/ambiguous detection, so the caller keeps re-detecting
     /// rather than locking onto a bad guess.
     pub fn detect_live_language(&mut self, audio: &[f32]) -> Option<Language> {
@@ -1011,6 +1012,7 @@ impl TranscriptionSession {
         else {
             return None;
         };
+        let state = state.as_mut()?;
         let scored =
             crate::transcription::whisper::batch::detect_whisper_language(audio, languages, state)
                 .ok()
