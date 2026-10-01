@@ -40,7 +40,7 @@ it("renders the native recording dot and opens device controls in Workflows", as
   fireEvent.click(await screen.findByRole("button", { name: "Recording" }));
   expect(await screen.findByTestId("recording-status-popover")).toBeVisible();
   expect(screen.getByText("Display 1")).toBeVisible();
-  expect(screen.getByRole("button", { name: "pause all recording" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Pause all recording" })).toBeVisible();
   expect(screen.queryByText("Starting")).not.toBeInTheDocument();
 });
 
