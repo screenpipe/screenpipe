@@ -23,6 +23,9 @@ use tauri::{Emitter, Manager, State};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
+#[cfg(feature = "enterprise-build")]
+mod authorized_start;
+
 pub const DEFAULT_LOCAL_API_PORT: u16 = 3030;
 
 #[derive(Clone, Debug)]
@@ -349,6 +352,8 @@ pub struct RecordingState {
     /// — it's reset to 0 on a failed spawn too, and never sees the tray toggle.
     pub wants_recording: Arc<AtomicBool>,
     pub(crate) deferred_account_start: crate::startup_auth::DeferredAccountStart,
+    #[cfg(feature = "enterprise-build")]
+    pub(crate) authorization_recovery: authorized_start::Recovery,
     /// Recently active meeting to revive when capture is immediately restarted.
     pub(crate) interrupted_meeting: Arc<Mutex<Option<InterruptedMeeting>>>,
     /// App-scoped cloud-auth token (Clerk JWT). Outlives the Server (which
@@ -387,6 +392,8 @@ impl RecordingState {
         // An explicit start owns the lifecycle now; an explicit stop must not
         // be undone by a later background account refresh.
         self.deferred_account_start.cancel();
+        #[cfg(feature = "enterprise-build")]
+        self.authorization_recovery.cancel();
         self.wants_recording.store(
             on && !crate::search_only::capture_paused() && !crate::search_only::is_active(),
             Ordering::SeqCst,
@@ -1090,6 +1097,78 @@ pub(crate) fn resume_deferred_account_start(app: tauri::AppHandle) {
     });
 }
 
+/// Schedule one bounded native recovery request for this intent generation.
+/// Policy refresh remains free to revoke access while startup is retrying.
+#[cfg(feature = "enterprise-build")]
+pub(crate) async fn resume_enterprise_recording(app: &tauri::AppHandle) {
+    let generation = app
+        .state::<RecordingState>()
+        .authorization_recovery
+        .generation();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<RecordingState>();
+        let allowed = || {
+            state.authorization_recovery.is_current(generation)
+                && state.capture_intended()
+                && crate::enterprise_policy::recording_authorized()
+                && !crate::process_exit::QUIT_REQUESTED.load(Ordering::SeqCst)
+                && !crate::db_relaunch::manual_recovery_required()
+        };
+        let delays = [1, 5, 15, 30].map(std::time::Duration::from_secs);
+        let result = state
+            .authorization_recovery
+            .run(
+                generation,
+                allowed,
+                || async {
+                    // Settings failures belong to the same retry budget. Do not
+                    // abandon first login or start from the previous policy.
+                    crate::enterprise::managed_settings::apply(&app).await?;
+                    authorized_start::attempt(&state.server_lifecycle, allowed, || async {
+                        // Drop each slot guard before acquiring the other;
+                        // capture teardown can itself need the server slot.
+                        let server_running = state.server.lock().await.is_some();
+                        let capture_running = state.capture.lock().await.is_some();
+                        if server_running && capture_running {
+                            return Ok(());
+                        }
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        let last = state.last_spawn_epoch.load(Ordering::SeqCst);
+                        if last > 0 && now.saturating_sub(last) < RESTART_COOLDOWN_SECS {
+                            // The general spawn command defers through a webview event.
+                            // Keep ownership here when no webview exists.
+                            return Err("recording restart cooldown is still active".into());
+                        }
+                        spawn_screenpipe_inner(&state, app.clone()).await?;
+                        let server_running = state.server.lock().await.is_some();
+                        let capture_running = state.capture.lock().await.is_some();
+                        if allowed() && (!server_running || !capture_running) {
+                            return Err(
+                                "native startup completed without an active capture session".into(),
+                            );
+                        }
+                        Ok(())
+                    })
+                    .await
+                },
+                &delays,
+            )
+            .await;
+        if let Err(error) = result {
+            recovery_log::append(
+                &crate::db_relaunch::active_data_dir(),
+                "enterprise_start_exhausted",
+                &error,
+            );
+            warn!("enterprise: native authorization recovery exhausted: {error}");
+        }
+    });
+}
+
 /// Automatic retry preserves capture intent; unlike the user command it must
 /// not turn recording back on after the user stopped it.
 #[tauri::command]
@@ -1488,7 +1567,7 @@ async fn spawn_screenpipe_after_migration(
         return Err(error.to_string());
     }
 
-    if state.capture_intended() && !disable_audio && !permissions_check.microphone.permitted() {
+    if state.capture_intended() && crate::permissions::microphone_required(&store.recording) && !permissions_check.microphone.permitted() {
         warn!(
             "Microphone permission not granted: {:?}. Audio recording will not work.",
             permissions_check.microphone
@@ -1999,6 +2078,11 @@ mod shutdown_storage_tests {
                 "engine_started",
                 "old and new recording payloads verified after database reopen",
             );
+            crate::process_exit::configure_relaunch_home(
+                &mut std::process::Command::new("unused-test-replacement"),
+                Some(false),
+                root.path(),
+            );
             // Simulate app-log rotation/restart and enough noisy logs to fill
             // the normal five-file support limit. Lifecycle evidence persists.
             for day in 1..=7 {
@@ -2017,6 +2101,7 @@ mod shutdown_storage_tests {
             assert!(report.contains("cleanup continues and database reopen must wait"));
             assert!(report.contains("shutdown_completed"));
             assert!(report.contains("engine_started"));
+            assert!(report.contains("relaunch_window_state: home_visible=Some(false)"));
             assert!(!report.contains("hunter2"));
         }
     }
@@ -2061,7 +2146,10 @@ mod spawn_lifecycle_lock_tests {
             .find(fn_needle)
             .expect("spawn_screenpipe renamed — repoint this guard at it");
         let body = &source[start..];
-        let end = body.find("\n}\n").expect("unterminated function body");
+        let end = body
+            .find("\n}\n")
+            .or_else(|| body.find("\r\n}\r\n"))
+            .expect("unterminated function body");
         let body = &body[..end];
 
         assert!(

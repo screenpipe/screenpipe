@@ -447,8 +447,9 @@ pub fn set_enterprise_policy(hidden_sections: Vec<String>, enforce_auto_start: b
 
 /// Update the process-local Enterprise recording grant. This is intentionally
 /// not a Tauri command: webview callers must pass through the native
-/// control-plane verification in `enterprise_recording_access`.
-pub(crate) fn update_recording_authorized(authorized: bool) {
+/// control-plane verification in `enterprise_recording_access`. Returns true
+/// only for a transition, so concurrent grants cannot each resume capture.
+pub(crate) fn update_recording_authorized(authorized: bool) -> bool {
     let previous = RECORDING_AUTHORIZED.swap(authorized, Ordering::SeqCst);
     if previous != authorized {
         tracing::info!(
@@ -456,6 +457,7 @@ pub(crate) fn update_recording_authorized(authorized: bool) {
             if authorized { "granted" } else { "revoked" }
         );
     }
+    previous != authorized
 }
 
 /// Current process-local Enterprise recording grant.

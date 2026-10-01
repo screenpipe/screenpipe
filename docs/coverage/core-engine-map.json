@@ -318,6 +318,7 @@
         "src/pipe_stream.rs",
         "src/routes/activity_summary.rs",
         "src/routes/activity_summary_key_text_tests.rs",
+        "src/routes/activity_summary_hybrid_tests.rs",
         "src/routes/activity_ledger.rs",
         "src/routes/artifacts.rs",
         "src/routes/connect_broker.rs",
@@ -1223,6 +1224,7 @@
       "crate": "screenpipe-screen",
       "files": [
         "src/microsoft.rs",
+        "src/ocr_worker.rs",
         "tests/windows_vision_test.rs"
       ],
       "platforms": [
@@ -1238,7 +1240,7 @@
       "criticality": "high",
       "confidence": "partial",
       "kind": "integration",
-      "notes": "Windows OCR fixture coverage plus an ignored continuous-capture probe that requires a live desktop."
+      "notes": "Windows OCR fixture and STA-pool regression tests, portable bounded-worker tests, plus an ignored continuous-capture probe that requires a live desktop. Native OCR tests require an installed English recognizer."
     },
     {
       "id": "screen-custom-ocr",

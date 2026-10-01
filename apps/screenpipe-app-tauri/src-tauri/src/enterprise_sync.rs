@@ -1416,7 +1416,7 @@ mod imp {
     ) -> Result<(), String> {
         let Some(credential_value) = credential.map(str::trim).filter(|value| !value.is_empty())
         else {
-            crate::enterprise_policy::update_recording_authorized(false);
+            let _ = crate::enterprise_recording_access::revoke_enterprise_recording(app).await;
             return Err("no enterprise credential was provided".to_string());
         };
         let credential = match credential_type {
@@ -1427,7 +1427,7 @@ mod imp {
                 EnterprisePolicyCredential::AccountToken(credential_value.to_string())
             }
             _ => {
-                crate::enterprise_policy::update_recording_authorized(false);
+                let _ = crate::enterprise_recording_access::revoke_enterprise_recording(app).await;
                 return Err("unsupported enterprise credential type".to_string());
             }
         };
@@ -1457,11 +1457,20 @@ mod imp {
                         // completing a restart must not hold authentication IPC.
                         crate::enterprise::managed_settings::prepare(app, &policy.locked_settings)
                             .await?;
-                        crate::enterprise_policy::update_recording_authorized(true);
-                        let apply_app = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let _ = crate::enterprise::managed_settings::apply(&apply_app).await;
-                        });
+                        let newly_authorized =
+                            crate::enterprise_policy::update_recording_authorized(true);
+                        if newly_authorized {
+                            app.state::<crate::recording::RecordingState>()
+                                .set_capture_intent(true);
+                        }
+                        if newly_authorized {
+                            crate::recording::resume_enterprise_recording(app).await;
+                        } else {
+                            let apply_app = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let _ = crate::enterprise::managed_settings::apply(&apply_app).await;
+                            });
+                        }
                         crate::enterprise_policy::set_enterprise_policy(
                             policy.hidden_sections,
                             policy.enforce_auto_start,
@@ -1469,11 +1478,13 @@ mod imp {
                         Ok(())
                     }
                     Err(NativePolicyFetchError::RecordingDisabled) => {
-                        crate::enterprise_policy::update_recording_authorized(false);
+                        let _ = crate::enterprise_recording_access::revoke_enterprise_recording(app)
+                            .await;
                         Err(RECORDING_DISABLED_BY_ADMIN_CODE.to_string())
                     }
                     Err(NativePolicyFetchError::CredentialRejected(_)) => {
-                        crate::enterprise_policy::update_recording_authorized(false);
+                        let _ = crate::enterprise_recording_access::revoke_enterprise_recording(app)
+                            .await;
                         Err("enterprise enrollment was rejected".to_string())
                     }
                     Err(NativePolicyFetchError::Unavailable(error)) => {
@@ -1482,19 +1493,19 @@ mod imp {
                 }
             }
             Ok(policy) if !policy.recording_allowed => {
-                crate::enterprise_policy::update_recording_authorized(false);
+                let _ = crate::enterprise_recording_access::revoke_enterprise_recording(app).await;
                 Err(RECORDING_DISABLED_BY_ADMIN_CODE.to_string())
             }
             Ok(_) => {
-                crate::enterprise_policy::update_recording_authorized(false);
+                let _ = crate::enterprise_recording_access::revoke_enterprise_recording(app).await;
                 Err("organization requires account sign-in".to_string())
             }
             Err(NativePolicyFetchError::CredentialRejected(_)) => {
-                crate::enterprise_policy::update_recording_authorized(false);
+                let _ = crate::enterprise_recording_access::revoke_enterprise_recording(app).await;
                 Err("enterprise credential was rejected".to_string())
             }
             Err(NativePolicyFetchError::RecordingDisabled) => {
-                crate::enterprise_policy::update_recording_authorized(false);
+                let _ = crate::enterprise_recording_access::revoke_enterprise_recording(app).await;
                 Err(RECORDING_DISABLED_BY_ADMIN_CODE.to_string())
             }
             Err(NativePolicyFetchError::Unavailable(error)) => {
@@ -1561,6 +1572,7 @@ mod imp {
                         let was_authorized = crate::enterprise_policy::recording_authorized();
                         // Save before granting access so a concurrent app
                         // start cannot capture with the previous policy.
+                        let mut newly_authorized = false;
                         let settings_applied = if crate::enterprise::managed_settings::prepare(
                             &app,
                             &policy.locked_settings,
@@ -1568,10 +1580,21 @@ mod imp {
                         .await
                         .is_ok()
                         {
-                            crate::enterprise_policy::update_recording_authorized(true);
-                            crate::enterprise::managed_settings::apply(&app)
-                                .await
-                                .is_ok()
+                            newly_authorized =
+                                crate::enterprise_policy::update_recording_authorized(true);
+                            if newly_authorized {
+                                app.state::<crate::recording::RecordingState>()
+                                    .set_capture_intent(true);
+                            }
+                            if newly_authorized {
+                                // The recovery owner retries both settings and
+                                // startup without blocking policy revocation.
+                                true
+                            } else {
+                                crate::enterprise::managed_settings::apply(&app)
+                                    .await
+                                    .is_ok()
+                            }
                         } else {
                             false
                         };
@@ -1598,15 +1621,8 @@ mod imp {
 
                         // Autostart and hidden-UI launches can have no webview,
                         // so AppEntitlementGate cannot perform the usual resume.
-                        if !was_authorized && settings_applied {
-                            let state = app.state::<crate::recording::RecordingState>();
-                            if let Err(error) =
-                                crate::recording::spawn_screenpipe(state, app.clone(), None).await
-                            {
-                                warn!(
-                                    "enterprise: failed to resume recording after native authorization: {error}"
-                                );
-                            }
+                        if newly_authorized && settings_applied {
+                            crate::recording::resume_enterprise_recording(&app).await;
                         }
                         // Hidden installs may never create the migration UI.
                         // This returns after scheduling native maintenance so
@@ -1614,18 +1630,13 @@ mod imp {
                         crate::storage_migration::maybe_start_hidden_ui_migration(app.clone()).await;
                     }
                     NativeAuthorizationResult::RecordingDisabled => {
-                        crate::enterprise_policy::update_recording_authorized(false);
                         info!("enterprise: recording paused for this device by workspace admin");
-                        // The frontend policy poll may have revoked the grant
-                        // first. An explicit admin pause must still stop an
-                        // already-running recorder, so do not condition this
-                        // teardown on the current grant bit.
-                        let state = app.state::<crate::recording::RecordingState>();
-                        let _ = crate::recording::stop_screenpipe(state, app.clone()).await;
+                        let _ = crate::enterprise_recording_access::revoke_enterprise_recording(
+                            &app,
+                        )
+                        .await;
                     }
                     NativeAuthorizationResult::RequiresAccount => {
-                        let was_authorized = crate::enterprise_policy::recording_authorized();
-                        crate::enterprise_policy::update_recording_authorized(false);
                         warn!(
                             "enterprise: organization requires account sign-in; device key cannot authorize recording"
                         );
@@ -1636,24 +1647,22 @@ mod imp {
                             crate::enterprise_policy::set_enterprise_policy(Vec::new(), false);
                             let _ = crate::commands::apply_enterprise_ui_visibility(app.clone());
                         }
-                        if was_authorized {
-                            let state = app.state::<crate::recording::RecordingState>();
-                            let _ = crate::recording::stop_screenpipe(state, app.clone()).await;
-                        }
+                        let _ = crate::enterprise_recording_access::revoke_enterprise_recording(
+                            &app,
+                        )
+                        .await;
                         show_enterprise_auth_recovery(&app);
                     }
                     NativeAuthorizationResult::Rejected
                     | NativeAuthorizationResult::NoCredential => {
-                        let was_authorized = crate::enterprise_policy::recording_authorized();
-                        crate::enterprise_policy::update_recording_authorized(false);
                         if was_hidden {
                             crate::enterprise_policy::set_enterprise_policy(Vec::new(), false);
                             let _ = crate::commands::apply_enterprise_ui_visibility(app.clone());
                         }
-                        if was_authorized {
-                            let state = app.state::<crate::recording::RecordingState>();
-                            let _ = crate::recording::stop_screenpipe(state, app.clone()).await;
-                        }
+                        let _ = crate::enterprise_recording_access::revoke_enterprise_recording(
+                            &app,
+                        )
+                        .await;
                         show_enterprise_auth_recovery(&app);
                     }
                     NativeAuthorizationResult::Unavailable(error) => {

@@ -66,9 +66,9 @@ screenpipe capture all your computer work locally and power your agents
 <img width="360" height="311" alt="image" src="https://github.com/user-attachments/assets/cfbf0fd3-84ef-4feb-8c6d-2779d67058a7" />
 
 - **search with ai** - find anything using natural language
-- **100% local** - your data lives on your machine only
+- **Local-first** - capture history stays on your device by default. Cloud AI, sync, integrations, and managed team storage have separate data paths; see [Privacy and security](#privacy-and-security).
 - **source-available** - inspect, modify, audit ([LICENSE.md](LICENSE.md))
-  **company brain** - share knowledge with your team without turning it into surveillance
+- **Team knowledge** - share reviewed outputs or configure managed storage with agreed access rules; see [Teams & enterprise](#teams--enterprise).
 
 <p align="center">
    <a href ="https://screenpi.pe">
@@ -79,7 +79,7 @@ screenpipe capture all your computer work locally and power your agents
 
 ## install
 
-[download the desktop app](https://screenpipe.com/how-to-install?download=1) — all features, auto-updates
+[Download the desktop app](https://screenpipe.com/how-to-install?download=1) for macOS, Windows, or Linux. Available features depend on your [plan](https://screenpipe.com/pricing).
 
 or run the CLI:
 
@@ -118,12 +118,12 @@ The skill covers the recorder-first service default, explicit API-only server mo
 ## specs
 
 - captures full accessibility tree, OCR as fallback, transcription, speakers, keyboard inputs, app switches
-- 5-10% cpu usage
-- 0.5-3gb ram
-- ~20gb storage/month
+- CPU: approximately 5-20%; varies with hardware, capture settings, transcription, and AI workloads
+- RAM: approximately 0.5-3 GB for capture; local models and additional workloads can use more
+- Storage: varies with activity, displays, audio, capture settings, and retention. Measure a representative day on your device before sizing storage.
 - filters (window, app, chrome extensions, passwords, proprietary AI PII model)
 - optional encryption at rest
-- works offline
+- Local capture and search work offline after setup. Cloud AI, sync, and connected services require network access.
 
 ---
 
@@ -197,7 +197,7 @@ Want to translate screenpipe into another language? See [`docs/translations/`](d
 
 ## About screenpipe
 
-screenpipe is a source-available application that continuously captures your screen and audio, creating a searchable, AI-powered memory of everything you do on your computer. All data is stored locally on your device. It is the leading source-available alternative to Rewind.ai (now Limitless), Microsoft Recall, Granola, and Otter.ai. If you're looking for a rewind alternative, recall alternative, or a private local screen recorder with AI, screenpipe is the most popular option you can fully audit.
+screenpipe is a source-available application that continuously captures your screen and audio, creating a searchable, AI-powered memory of everything you do on your computer. Capture history is stored locally by default; optional cloud and team features can send data off-device. It is the leading source-available alternative to Rewind.ai (now Limitless), Microsoft Recall, Granola, and Otter.ai. If you're looking for a rewind alternative, recall alternative, or a private local screen recorder with AI, screenpipe is the most popular option you can fully audit.
 
 - **Website**: https://screenpi.pe
 - **Documentation**: https://docs.screenpi.pe
@@ -221,9 +221,9 @@ screenpipe is a source-available application that continuously captures your scr
 | macOS (Apple Silicon) | ✅ Full support | Native .dmg installer |
 | macOS (Intel) | ✅ Full support | Native .dmg installer |
 | Windows 10/11 | ✅ Full support | Native .exe installer |
-| Linux | ✅ Supported | Build from source |
+| Linux (x86_64) | Desktop app available | [AppImage download](https://screenpipe.com/how-to-install); source builds also available |
 
-Minimum requirements: 8 GB RAM recommended. ~5–10 GB disk space per month. CPU usage typically 5–10% on modern hardware thanks to event-driven capture.
+8 GB of system RAM is recommended. Resource estimates are listed in [Specs](#specs). They are planning estimates, not fixed limits or a benchmark for every machine. Linux capture behavior depends on the distribution, desktop environment, and permissions; validate your intended setup before a rollout.
 
 ## Core features
 
@@ -278,9 +278,9 @@ Full REST API running on localhost (default port 3030). Endpoints for searching 
 
 ## Privacy and security
 
-- **100% local by default**: All data stored on your device in a local SQLite database. Nothing sent to external servers.
+- **Local capture storage**: Screen frames, audio, transcripts, and the search index are stored on your device by default. Cloud AI, transcription, sync, integrations, exports, and enterprise storage can send data off-device. See the [cloud and telemetry FAQ](#does-screenpipe-send-my-data-to-the-cloud).
 - **Source-available**: fully auditable codebase; personal, non-commercial use permitted.
-- **Local AI support**: Use Ollama or any local model — no data sent to any cloud.
+- **Local AI support**: Use a supported local model such as Ollama for inference on your device. Configure transcription, sync, integrations, and telemetry separately to control other network traffic.
 - **No account required**: Core application works without any sign-up.
 - **You own your data**: Export, delete, or back up at any time.
 - **Optional encrypted sync**: End-to-end encrypted sync between devices (zero-knowledge encryption).
@@ -292,22 +292,22 @@ Full REST API running on localhost (default port 3030). Endpoints for searching 
 |---------|-----------|-------------------|-----------------|---------|
 | Source-available | ✅ fully auditable | ❌ | ❌ | ❌ |
 | Platforms | macOS, Windows, Linux | macOS, Windows | Windows only | macOS only |
-| Data storage | 100% local | Cloud required | Local (Windows) | Cloud |
+| Data storage | Local by default; optional cloud and team storage | Cloud required | Local (Windows) | Cloud |
 | Multi-monitor | ✅ All monitors | ❌ Active window only | ✅ | ❌ Meetings only |
 | Audio transcription | ✅ Local Whisper | ✅ | ❌ | ✅ Cloud |
 | Developer API | ✅ Full REST API + SDK | Limited | ❌ | ❌ |
 | Plugin system | ✅ Pipes (AI agents) | ❌ | ❌ | ❌ |
 | AI model choice | Any (local or cloud) | Proprietary | Microsoft AI | Proprietary |
 | Team deployment | ✅ Central config, AI permissions | ❌ | ❌ | ❌ |
-| Pricing | Source-available · app from $25/mo | Subscription | Bundled with Windows | Subscription |
+| Pricing | Free and paid plans; custom Enterprise pricing | Subscription | Bundled with Windows | Subscription |
 
 ## Pricing
 
-The source is available for personal, non-commercial use (see [LICENSE.md](LICENSE.md)). The signed desktop app uses a subscription:
+The desktop app has **Free**, **Basic**, and **Business** plans. Use the [current pricing page](https://screenpipe.com/pricing) for rates, monthly versus annual billing, capacity options, and included features.
 
-- **Standard**: $25/month. Local-first capture, search, and timeline, all on your device.
-- **Pro**: $50/seat/month. Everything in Standard plus cloud sync, cloud AI, and integrations. Teams buy 5+ seats self-serve.
-- **Enterprise**: $150/seat/month. Managed deployment, central config, shared pipes, per-pipe AI data permissions, admin dashboard, SSO/SAML, MDM ready (Intune / SCCM). Sales-led. See [screenpi.pe/team](https://screenpi.pe/team).
+Business includes personal device sync and team seat management; shared context across teammates is not currently included. **Enterprise pricing is scoped per deployment**, including seats, duration, storage, support, and implementation work. Request a [deployment proposal](https://screenpipe.com/enterprise) for the total cost and included services.
+
+Source builds are governed by [LICENSE.md](LICENSE.md), which permits personal, non-commercial use, nonprofit/educational/research use, and a limited organizational evaluation. Commercial use requires a commercial license. Official builds have separate terms under the [Terms of Service](https://screenpipe.com/terms) and the applicable subscription or app license.
 
 Existing lifetime licenses remain valid; new lifetime purchases are no longer sold.
 
@@ -326,16 +326,20 @@ screenpipe Teams lets organizations deploy AI agents across their team with full
 - **Central config management**: Push capture settings (app filters, schedules, URL rules) to every device from an admin dashboard.
 - **Shared pipes**: Deploy AI workflows (auto-standups, meeting-to-tickets, time tracking) team-wide.
 - **Per-pipe AI data permissions**: YAML frontmatter controls what each pipe can access — apps, windows, content types, time ranges, endpoints. Enforced deterministically at the OS level via three layers (skill gating, agent interception, server middleware with per-pipe cryptographic tokens).
-- **Privacy boundary**: Admins control what gets captured and what AI accesses. They never see the actual data — everything stays on each employee's device.
+- **Administrator visibility**: Access depends on the deployment. Local-only capture keeps history on each device. Organization-managed shared storage, enterprise sync, exports, and shared outputs can make captured data available to authorized administrators. Agree on storage, access, retention, and employee controls before rollout.
 - **Override rules**: Employees can add stricter filters (e.g. also block personal email) but cannot weaken admin-set rules.
 - **MDM ready**: Deploy via Intune, SCCM, Robopack, or any MDM solution.
-- **Enterprise**: SSO/SAML, audit logs, SLA, SOC 2 / HIPAA compliance ready.
+- **Enterprise controls and support**: SSO/SAML, audit logs, and SLA options are available for enterprise deployments. Confirm the included controls, configuration, and support commitments in your deployment agreement.
+
+### Compliance and security review
+
+Enterprise features are separate from compliance evidence. The [security page](https://screenpipe.com/security) describes a SOC 2 Type 2 report available under NDA; request the current report and verify its scope and audit period. SOC 2 is an attestation, not a product certification. HIPAA suitability depends on your deployment, data flows, safeguards, and applicable agreements, including a BAA where required. Review current materials through the [Trust Center](https://trust.screenpipe.com) rather than treating this README as a blanket compliance guarantee.
 
 ## Technical architecture
 
 1. **Event-driven capture**: Listens for OS events (app switch, click, typing pause, scroll, clipboard). When something meaningful happens, captures a screenshot + accessibility tree together with the same timestamp. Falls back to OCR when accessibility data isn't available. Idle fallback captures periodically when nothing is happening.
 2. **Audio processing**: Whisper (local) or Deepgram (cloud) for speech-to-text. Speaker identification and diarization.
-3. **Storage**: Local SQLite with FTS5 full-text search. Screenshots saved as JPEGs on disk (~300 MB/8hr vs ~2 GB with continuous recording).
+3. **Storage**: Local SQLite with FTS5 full-text search and media files on disk. Storage use depends on capture settings and retention; see [Specs](#specs).
 4. **API layer**: REST API on localhost:3030. Search, frames, audio, elements, health, pipe management.
 5. **Plugin layer**: Pipes — scheduled AI agents as markdown files. Agent executes prompts with access to screenpipe API.
 6. **UI layer**: Desktop app built with Tauri (Rust + TypeScript).
@@ -373,22 +377,25 @@ Make sure to understand the main branch is moving fast and breaking things, if y
 ## Frequently asked questions
 
 **How much does screenpipe cost?**
-The signed desktop app uses a subscription starting at $25/month; existing lifetime licenses remain valid. The source is available for personal, non-commercial use, so you can build and run it yourself (see [LICENSE.md](LICENSE.md)); commercial use of the source requires a license.
+The desktop app has Free, Basic, and Business plans; Enterprise pricing is scoped per deployment. See [current pricing](https://screenpipe.com/pricing) for rates, billing periods, and included features. Source builds have separate terms in [LICENSE.md](LICENSE.md).
+
+<a id="does-screenpipe-send-my-data-to-the-cloud"></a>
 
 **Does screenpipe send my data to the cloud?**
 Screen frames, audio, transcripts, and the search index are stored locally by default. That does not mean the desktop app makes no network requests:
 
 - Product analytics is enabled by default through PostHog. It uses a stable installation identifier and, when you sign in, may associate account details such as your email with app, hostname, operating-system, hardware, and other device or feature metadata.
 - Sentry receives crash and error diagnostics while telemetry is enabled.
-- If you choose cloud transcription, screenpipe cloud AI, or cloud sync, the audio, prompts and selected context, or synced data needed for that feature is processed remotely by the configured service.
+- Cloud transcription, cloud AI, and sync send the audio, prompts, context, or synced data needed for that feature to the configured service. Integrations and exports can send selected data to other destinations.
+- In managed deployments, organization policies and enterprise storage determine what is uploaded and which administrators can access it. Personal encrypted sync and organization-managed storage are different data paths.
 
 You can disable telemetry in **Settings → Privacy → Analytics**, then apply the settings change. To keep capture and AI processing local, leave cloud sync off and select local transcription and a local AI provider such as Ollama.
 
 **How much disk space does it use?**
-~5–10 GB per month. Event-driven capture only stores frames when something changes, dramatically reducing storage compared to continuous recording.
+Storage depends on your activity, displays, audio, capture settings, and retention. Measure a representative day of use and set retention for your available disk space. See [Specs](#specs).
 
 **Does it slow down my computer?**
-Typical CPU usage is 5–10% on modern hardware. Event-driven capture only processes frames when something changes, and accessibility tree extraction is much lighter than OCR.
+The current capture estimate is approximately 5-20% CPU and 0.5-3 GB RAM. Usage varies by machine and settings, and local transcription or AI can increase it. Measure CPU, memory, and battery impact on your own workload before a rollout.
 
 **Can I use it with ChatGPT/Claude/Cursor?**
 Yes. screenpipe runs as an MCP server, allowing Claude Desktop, Cursor, and other AI assistants to directly query your screen history.
@@ -400,7 +407,7 @@ Yes. screenpipe captures all connected monitors simultaneously.
 screenpipe primarily uses the OS accessibility tree to get structured text (buttons, labels, text fields) — this is faster and more accurate than OCR. When accessibility data isn't available (remote desktops, games, some Linux apps), it falls back to OCR: Apple Vision on macOS, Windows native OCR, or Tesseract on Linux.
 
 **Can I deploy screenpipe to my team?**
-Yes. Screenpipe Teams provides central config management, shared AI pipes, and per-pipe data permissions. Admins control what gets captured and what AI can access — employees' actual data never leaves their devices. See [screenpi.pe/team](https://screenpi.pe/team).
+Yes. Enterprise deployments support central configuration and managed workflows. Administrator access to captured data depends on the configured storage and sharing paths. Business seat management does not by itself include shared context across teammates. See [Teams & enterprise](#teams--enterprise) and the [enterprise page](https://screenpipe.com/enterprise).
 
 **How do AI data permissions work?**
 Each pipe supports YAML frontmatter fields (allow-apps, deny-apps, deny-windows, allow-content-types, time-range, days, allow-raw-sql, allow-frames) that deterministically control what data the AI agent can access. Enforcement happens at three OS-level layers — not by prompting the AI to behave. Even a compromised agent cannot access denied data.

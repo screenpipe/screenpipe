@@ -294,10 +294,28 @@ async fn collect_log_text_from_files(files: Vec<crate::log_files::LogFile>) -> S
 
 async fn probe_recording_endpoint(client: &Client, url: String) -> Value {
     match timeout(DIAGNOSTIC_PROBE_TIMEOUT, client.get(url).send()).await {
-        Ok(Ok(response)) => json!({
-            "ok": response.status().is_success(),
-            "status": response.status().as_u16(),
-        }),
+        Ok(Ok(response)) => {
+            let success = response.status().is_success();
+            let mut probe = json!({
+                "ok": success,
+                "status": response.status().as_u16(),
+            });
+            // A status code alone loses the originating discovery failure.
+            // Keep only error text, never successful device/health payloads;
+            // the enclosing feedback bundle still passes through redaction.
+            if !success {
+                if let Ok(Ok(body)) =
+                    timeout(DIAGNOSTIC_PROBE_TIMEOUT, response.json::<Value>()).await
+                {
+                    for key in ["error", "message"] {
+                        if let Some(text) = body.get(key).and_then(Value::as_str) {
+                            probe[key] = Value::String(text.chars().take(2048).collect());
+                        }
+                    }
+                }
+            }
+            probe
+        }
         Ok(Err(error)) => json!({ "ok": false, "error": error.to_string() }),
         Err(_) => json!({ "ok": false, "error": "timeout" }),
     }
@@ -758,6 +776,90 @@ mod tests {
             video_path: None,
             video_ext: None,
         }
+    }
+
+    #[tokio::test]
+    async fn monitor_discovery_failure_reaches_support_after_collection_and_redaction() {
+        let server = MockServer::start().await;
+        let cause = screenpipe_screen::monitor::MonitorListError::Other(
+            "ScreenCaptureKit monitor enumeration timed out; email=private@example.com".into(),
+        );
+        Mock::given(method("GET"))
+            .and(path("/vision/device/status"))
+            .respond_with(ResponseTemplate::new(503).set_body_json(json!({
+                "error": "monitor_discovery_unavailable",
+                "message": cause.to_string(),
+                "unrelated": "private device payload",
+            })))
+            .mount(&server)
+            .await;
+        let probe = probe_recording_endpoint(
+            &Client::new(),
+            format!("{}/vision/device/status", server.uri()),
+        )
+        .await;
+        assert_eq!(probe["status"], 503);
+        assert_eq!(probe["ok"], false);
+        assert!(probe.get("unrelated").is_none());
+        // The snapshot is collected at support-submission time, so it remains
+        // available even when the original discovery log has rotated away.
+        let raw = format!(
+            "[no log files found]\n=== Recording Diagnostics ===\n{}",
+            json!({"probes": {"visionDeviceStatus": probe}})
+        );
+        let redacted = crate::feedback_redact::redact_pii_for_feedback(raw, "{}".into())
+            .await
+            .unwrap();
+        assert!(redacted.contains("monitor_discovery_unavailable"));
+        assert!(redacted.contains("ScreenCaptureKit monitor enumeration timed out"));
+        assert!(!redacted.contains("private@example.com"));
+        assert!(!redacted.contains("private device payload"));
+
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "signedUrl": format!("{}/upload/log", server.uri()), "path": "logs/report.log"
+            }})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"id": 42}})))
+            .mount(&server)
+            .await;
+        upload_report(
+            &Client::new(),
+            &server.uri(),
+            &request(),
+            redacted.clone(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let upload = requests.iter().find(|r| r.method == "PUT").unwrap();
+        assert_eq!(upload.body, redacted.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn recording_probe_does_not_collect_successful_device_payloads() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "message": "private device payload",
+            })))
+            .mount(&server)
+            .await;
+        assert_eq!(
+            probe_recording_endpoint(&Client::new(), server.uri()).await,
+            json!({"ok": true, "status": 200})
+        );
     }
 
     #[tokio::test]
@@ -1309,6 +1411,7 @@ mod tests {
                 "target=99.0.0",
                 "relaunch_observed",
                 "running=1.0.0",
+                "home_visible=Some(false)",
                 "outcome=Failed",
             ] {
                 assert!(bundle.contains(expected), "missing {expected}: {bundle}");
