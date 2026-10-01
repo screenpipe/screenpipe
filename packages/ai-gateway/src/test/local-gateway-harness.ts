@@ -192,7 +192,7 @@ export class LocalGatewayHarness {
 				port: options.port ?? 0,
 				bindings: {
 					...jsonBindings(options.privateCostControls),
-					...(options.ttsStatus !== undefined ? { TTS_ENABLED: 'true', ELEVENLABS_VOICE_ID: 'fictionalVoice123', ELEVENLABS_USD_PER_CHARACTER: '0.0001' } : {}),
+					...(options.ttsStatus !== undefined ? { TTS_ENABLED: 'true', ELEVENLABS_VOICE_ID: 'fictionalVoice123', ELEVENLABS_USD_PER_CHARACTER: '0.0001', SOP_TTS_USD_PER_CHARACTER: '0.0001' } : {}),
 					OPENAI_API_KEY: 'screenpipe-local-e2e-only',
 					ADMIN_SECRET: 'screenpipe-local-e2e-admin-only',
 					AI_GATEWAY_SERVICE_TOKEN: LOCAL_GATEWAY_SERVICE_TOKEN,
@@ -229,7 +229,7 @@ export class LocalGatewayHarness {
 					const gatewayAnalytics = cloudflareSpendRules &&
 						request.method === 'POST' &&
 						request.url === 'https://api.cloudflare.com/client/v4/graphql';
-					const narration = options.ttsStatus !== undefined && request.method === 'POST' && request.url === `${cloudflareGatewayRoot}/elevenlabs/v1/text-to-speech/fictionalVoice123?output_format=mp3_44100_128`;
+					const narration = options.ttsStatus !== undefined && request.method === 'POST' && [`${cloudflareGatewayRoot}/elevenlabs/v1/text-to-speech/fictionalVoice123?output_format=mp3_44100_128`, `${cloudflareGatewayRoot}/openai/audio/speech`].includes(request.url);
 					const override = await options.outboundResponse?.(request, body);
 					const expected = override !== undefined || narration || gatewayProvider || gatewaySettings || gatewayAnalytics;
 					harness.outboundRequests.push({

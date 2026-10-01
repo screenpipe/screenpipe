@@ -415,8 +415,23 @@ async function rasterizeFixture(workflow: Pick<WorkflowMap, "stages">) {
 }
 
 // Maintained browser-only guide fixture. No model, recorder or native filesystem access.
+export const fixtureLibrary: NonNullable<WorkflowsPlatform["library"]> = {
+  listSkillDrafts: async () => JSON.parse(localStorage.getItem("workflow-skill-preview") || "[]"),
+  saveSkillDraft: async (workflowKey, draft) => {
+    const entries = await fixtureLibrary.listSkillDrafts();
+    localStorage.setItem("workflow-skill-preview", JSON.stringify([...entries.filter(e => e.workflowKey !== workflowKey), { workflowKey, draft }]));
+  },
+};
+
 export function fixtureGuides(): NonNullable<WorkflowsPlatform["guides"]> {
   return {
+    video: {
+      generate: async () => { throw new Error("Video rendering is unavailable in this fictional browser preview. Use the desktop app to create an MP4."); },
+      edit: async () => { throw new Error("Video editing is unavailable in this fictional browser preview."); },
+      export: async () => false,
+      release: async () => {},
+    },
+    list: async () => Object.keys(localStorage).filter(key => key.startsWith("workflow-guide-preview:")).map(key => parseGuide(JSON.parse(localStorage.getItem(key)!))),
     openWeb: async () => {
       throw new Error("This fictional preview does not publish. Use the website preview to try editing and sharing.");
     },
@@ -530,7 +545,12 @@ export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixt
     loadWorkProfile: async () => profile,
     saveWorkProfile: async (nextProfile) => (profile = nextProfile),
     guides: fixtureGuides(),
-    generateWorkflowSkill: async (workflow, _profile, onProgress) => fixtureSkillDraftWithProgress(workflow, onProgress),
+    library: fixtureLibrary,
+    generateWorkflowSkill: async (workflow, _profile, onProgress) => {
+      const draft = await fixtureSkillDraftWithProgress(workflow, onProgress);
+      await fixtureLibrary.saveSkillDraft(guideKey(workflow), draft);
+      return draft;
+    },
     saveWorkflowSkill: async (draft) => fixtureSkillReceipt(draft),
     skillInstallMode: "preview",
   };

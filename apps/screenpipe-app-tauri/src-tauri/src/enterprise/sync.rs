@@ -1501,8 +1501,11 @@ pub async fn fulfill_frame_requests(
     if mode == crate::enterprise_policy::FrameImagesMode::Off {
         return report;
     }
-    if !matches!(cfg.upload_mode, EnterpriseUploadMode::HostedIngest) {
-        debug!("frame fulfillment skipped: direct-upload org stays zero-knowledge");
+    if !matches!(
+        cfg.upload_mode,
+        EnterpriseUploadMode::HostedIngest | EnterpriseUploadMode::DirectReadable(_)
+    ) {
+        debug!("frame fulfillment skipped: storage mode does not permit hosted processing");
         return report;
     }
     let prepared = match prepare_upload_identity(cfg, local, http).await {
@@ -1626,7 +1629,7 @@ pub async fn fulfill_frame_requests(
         };
         if !resp.status().is_success() {
             warn!(
-                "frame fulfillment: POST {} -> {}",
+                "frame fulfillment: POST {} -> {}; screenshots remain pending; retry next sync",
                 uploads_url,
                 resp.status()
             );
@@ -2219,7 +2222,7 @@ pub(crate) async fn sleep_or_shutdown(
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use base64::Engine;
     use enterprise_upload::DirectUploadConfig;
@@ -4532,81 +4535,118 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn readable_direct_upload_puts_jsonl_body() {
-        let server = wiremock::MockServer::start().await;
-        wiremock::Mock::given(wiremock::matchers::method("POST"))
-            .and(wiremock::matchers::path("/ticket"))
-            .and(wiremock::matchers::body_string_contains(
-                "\"mode\":\"direct_upload_readable\"",
-            ))
-            .respond_with(
-                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "ok": true,
-                    "method": "PUT",
-                    "upload_url": format!("{}/blob", server.uri()),
-                    "headers": {
-                        "Content-Type": enterprise_upload::DIRECT_UPLOAD_CONTENT_TYPE,
-                        "x-ms-blob-type": "BlockBlob"
+    async fn direct_upload_completion_auto_cites_only_readable_all_images() {
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
+        let _restore = RestoreDefaultSyncStreams;
+        for readable in [false, true] {
+            for frame_mode in ["off", "cited", "all"] {
+                let mode_json = format!(
+                    "\"mode\":\"{}\"",
+                    if readable {
+                        "direct_upload_readable"
+                    } else {
+                        "direct_upload_write_only"
                     }
-                })),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
-        wiremock::Mock::given(wiremock::matchers::method("PUT"))
-            .and(wiremock::matchers::path("/blob"))
-            .and(wiremock::matchers::body_string_contains(
-                "customer-readable",
-            ))
-            .respond_with(wiremock::ResponseTemplate::new(201))
-            .expect(1)
-            .mount(&server)
-            .await;
-        wiremock::Mock::given(wiremock::matchers::method("POST"))
-            .and(wiremock::matchers::path("/complete"))
-            .and(wiremock::matchers::body_string_contains(
-                "\"mode\":\"direct_upload_readable\"",
-            ))
-            .respond_with(wiremock::ResponseTemplate::new(200))
-            .expect(1)
-            .mount(&server)
-            .await;
+                );
+                crate::enterprise_policy::set_sync_streams(
+                    true,
+                    false,
+                    true,
+                    true,
+                    true,
+                    true,
+                    "off".to_string(),
+                    frame_mode.to_string(),
+                );
+                let server = wiremock::MockServer::start().await;
+                wiremock::Mock::given(wiremock::matchers::method("POST"))
+                    .and(wiremock::matchers::path("/ticket"))
+                    .and(wiremock::matchers::body_string_contains(mode_json.clone()))
+                    .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                        serde_json::json!({
+                            "ok": true,
+                            "method": "PUT",
+                            "upload_url": format!("{}/blob", server.uri()),
+                            "headers": {
+                                "Content-Type": enterprise_upload::DIRECT_UPLOAD_CONTENT_TYPE,
+                                "x-ms-blob-type": "BlockBlob"
+                            }
+                        }),
+                    ))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                wiremock::Mock::given(wiremock::matchers::method("PUT"))
+                    .and(wiremock::matchers::path("/blob"))
+                    .and(wiremock::matchers::body_string_contains(
+                        "customer-readable",
+                    ))
+                    .respond_with(wiremock::ResponseTemplate::new(201))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                wiremock::Mock::given(wiremock::matchers::method("POST"))
+                    .and(wiremock::matchers::path("/complete"))
+                    .and(wiremock::matchers::body_string_contains(mode_json.clone()))
+                    .respond_with(wiremock::ResponseTemplate::new(200))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
 
-        let dir = TempDir::new().unwrap();
-        let cfg = readable_direct_test_cfg(
-            &dir,
-            format!("{}/ticket", server.uri()),
-            format!("{}/complete", server.uri()),
-        );
-        let mut cursor = Cursor {
-            source_id: None,
-            last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
-            last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
-            last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
-            last_memory_ts: None,
-            last_feedback_ts: None,
-            last_parsed_ts: None,
-            boundary: CursorBoundary::default(),
-        };
-        let local = MockLocal::new(
-            vec![vec![frame(
-                1,
-                "2026-05-07T10:00:00Z",
-                "Arc",
-                "customer-readable text",
-            )]],
-            vec![vec![]],
-        );
-        let http = reqwest::Client::new();
-        let report = run_one_sync(&cfg, &mut cursor, &local, &http)
-            .await
-            .unwrap();
+                let dir = TempDir::new().unwrap();
+                let make_cfg = if readable {
+                    readable_direct_test_cfg
+                } else {
+                    direct_test_cfg
+                };
+                let cfg = make_cfg(
+                    &dir,
+                    format!("{}/ticket", server.uri()),
+                    format!("{}/complete", server.uri()),
+                );
+                let mut cursor = Cursor {
+                    source_id: None,
+                    last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
+                    last_audio_ts: Some("2026-05-07T09:00:00Z".to_string()),
+                    last_ui_ts: Some("2026-05-07T09:00:00Z".to_string()),
+                    last_memory_ts: None,
+                    last_feedback_ts: None,
+                    last_parsed_ts: None,
+                    boundary: CursorBoundary::default(),
+                };
+                let local = MockLocal::new(
+                    vec![vec![frame(
+                        1,
+                        "2026-05-07T10:00:00Z",
+                        "Arc",
+                        "customer-readable text",
+                    )]],
+                    vec![vec![]],
+                );
+                let http = reqwest::Client::new();
+                let report = run_one_sync(&cfg, &mut cursor, &local, &http)
+                    .await
+                    .unwrap();
 
-        assert_eq!(report.frames, 1);
-        assert_eq!(
-            cursor.last_frame_ts.as_deref(),
-            Some("2026-05-07T10:00:00Z")
-        );
+                assert_eq!(report.frames, 1);
+                assert_eq!(
+                    cursor.last_frame_ts.as_deref(),
+                    Some("2026-05-07T10:00:00Z")
+                );
+                let requests = server.received_requests().await.unwrap();
+                let complete = requests
+                    .iter()
+                    .find(|r| r.url.path() == "/complete")
+                    .unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&complete.body).unwrap();
+                if readable && frame_mode == "all" {
+                    assert_eq!(body["frame_ids"], serde_json::json!([1]));
+                } else {
+                    assert!(body.get("frame_ids").is_none());
+                }
+                assert!(!String::from_utf8_lossy(&complete.body).contains("customer-readable text"));
+            }
+        }
     }
 
     #[tokio::test]
@@ -5148,6 +5188,14 @@ mod tests {
 
     #[tokio::test]
     async fn fulfill_frame_requests_end_to_end() {
+        for readable in [false, true] {
+            for frame_mode in ["cited", "all"] {
+                check_frame_fulfillment(readable, frame_mode).await;
+            }
+        }
+    }
+
+    async fn check_frame_fulfillment(readable: bool, frame_mode: &str) {
         let _guard = crate::enterprise_policy::sync_streams_test_lock();
         crate::enterprise_policy::set_sync_streams(
             true,
@@ -5157,7 +5205,7 @@ mod tests {
             true,
             true,
             "off".to_string(),
-            "cited".to_string(),
+            frame_mode.to_string(),
         );
 
         let server = wiremock::MockServer::start().await;
@@ -5184,7 +5232,14 @@ mod tests {
             .await;
 
         let tmp = TempDir::new().unwrap();
-        let cfg = frame_test_cfg(&server.uri(), &tmp);
+        let mut cfg = frame_test_cfg(&server.uri(), &tmp);
+        if readable {
+            cfg.upload_mode = EnterpriseUploadMode::DirectReadable(DirectUploadConfig {
+                ticket_url: format!("{}/ticket", server.uri()),
+                complete_url: format!("{}/complete", server.uri()),
+                pinned_hosts: Vec::new(),
+            });
+        }
         let http = reqwest::Client::new();
         let report = fulfill_frame_requests(&cfg, &FrameMock, &http).await;
 
@@ -5228,6 +5283,86 @@ mod tests {
             true,
             "off".to_string(),
             "off".to_string(),
+        );
+    }
+
+    #[tokio::test]
+    async fn readable_frame_upload_failure_retries() {
+        let tmp = TempDir::new().unwrap();
+        check_readable_frame_failure(tmp.path()).await;
+    }
+
+    // Also exercised by diagnostic_logs' real collection/redaction test.
+    pub(crate) async fn check_readable_frame_failure(log_dir: &std::path::Path) {
+        use tracing::instrument::WithSubscriber;
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
+        let _restore = RestoreDefaultSyncStreams;
+        crate::enterprise_policy::set_sync_streams(
+            true,
+            false,
+            true,
+            true,
+            true,
+            true,
+            "off".to_string(),
+            "all".to_string(),
+        );
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/enterprise/frame-requests"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"frame_ids": [1]})),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+        let attempts = AtomicUsize::new(0);
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/enterprise/frame-uploads"))
+            .respond_with(move |_: &wiremock::Request| {
+                if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    wiremock::ResponseTemplate::new(503)
+                } else {
+                    wiremock::ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"stored": [1], "failed": []}))
+                }
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = frame_test_cfg(&server.uri(), &tmp);
+        cfg.upload_mode = EnterpriseUploadMode::DirectReadable(DirectUploadConfig {
+            ticket_url: format!("{}/ticket", server.uri()),
+            complete_url: format!("{}/complete", server.uri()),
+            pinned_hosts: Vec::new(),
+        });
+        let file = std::fs::File::create(log_dir.join("screenpipe-app.2026-10-01.log")).unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(file))
+            .finish();
+        let http = reqwest::Client::new();
+        let failed = fulfill_frame_requests(&cfg, &FrameMock, &http)
+            .with_subscriber(subscriber)
+            .await;
+        assert_eq!(
+            failed,
+            FrameFulfillReport {
+                requested: 1,
+                uploaded: 0,
+                failed: 1
+            }
+        );
+        let retried = fulfill_frame_requests(&cfg, &FrameMock, &http).await;
+        assert_eq!(
+            retried,
+            FrameFulfillReport {
+                requested: 1,
+                uploaded: 1,
+                failed: 0
+            }
         );
     }
 
@@ -5356,9 +5491,9 @@ mod tests {
 
         let tmp = TempDir::new().unwrap();
         let mut cfg = frame_test_cfg(&server.uri(), &tmp);
-        // Direct-upload orgs keep telemetry out of our cloud; frames must
-        // follow the same promise even with the stream flag on.
-        cfg.upload_mode = EnterpriseUploadMode::DirectReadable(DirectUploadConfig {
+        // Write-only and unresolved/customer-hosted policies must never
+        // send screenshots through our cloud, even with frame_images enabled.
+        cfg.upload_mode = EnterpriseUploadMode::DirectWriteOnly(DirectUploadConfig {
             ticket_url: format!("{}/ticket", server.uri()),
             complete_url: format!("{}/complete", server.uri()),
             pinned_hosts: Vec::new(),
@@ -5366,6 +5501,12 @@ mod tests {
         let http = reqwest::Client::new();
         let report = fulfill_frame_requests(&cfg, &FrameMock, &http).await;
         assert_eq!(report, FrameFulfillReport::default());
+        cfg.upload_mode = EnterpriseUploadMode::Blocked("customer_hosted".to_string());
+        assert_eq!(
+            fulfill_frame_requests(&cfg, &FrameMock, &http).await,
+            FrameFulfillReport::default()
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
 
         crate::enterprise_policy::set_sync_streams(
             true,

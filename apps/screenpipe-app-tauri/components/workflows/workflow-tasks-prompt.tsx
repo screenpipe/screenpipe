@@ -136,20 +136,25 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady
   }
 
   const partial = !!setup && !setup.enabled && !!setup.tasks?.some(task => task.enabled);
+  const status = busy ? ui("Saving…") : error ? (failedTarget !== null ? ui("Couldn’t save changes") : ui("Couldn’t check status")) : !backendReady ? ui("Connecting…") : !setup ? ui("Checking…") : partial ? ui("Some tasks are off") : "";
+  const pending = busy || !backendReady || (!setup && !error);
   return <>
-    {active && <div className={styles.control}>
+    {active && <div className={styles.control} title={error || status || undefined}>
       <label className={styles.label}>
         <span>Automatic updates</span>
+        <span className={styles.switchSlot} data-pending={pending || !!error}>
         <Switch aria-label={ui("Automatic updates")} checked={setup?.enabled ?? false} disabled={busy || !setup || !backendReady}
-          aria-describedby="workflow-schedule-status"
+          aria-describedby="workflow-schedule-status" aria-busy={pending}
           onCheckedChange={enabled => {
             if (!enabled) { void save(false); return; }
             if (!canEnable) { onEnableUnavailable?.(); return; }
             setError(""); setStep("tasks"); setOpen(true);
           }} />
+        {pending && !error && <Loader2 size={13} className={styles.spinner} aria-hidden="true" />}
+        </span>
       </label>
       <span id="workflow-schedule-status" role="status" title={error || undefined} className={styles.status}>
-        {busy ? ui("Saving…") : error ? (failedTarget !== null ? ui("Couldn’t save changes") : ui("Couldn’t check status")) : !backendReady ? ui("Connecting…") : !setup ? ui("Checking…") : partial ? ui("Some tasks are off") : ""}
+        {status}
       </span>
       {error && <button className={styles.retry} type="button" aria-label={ui("Retry automatic updates")} title={ui("Try again")}
         disabled={busy || !backendReady} onClick={() => { if (failedTarget !== null) void save(failedTarget); else setRetry(value => value + 1); }}><RefreshCw size={14} /></button>}

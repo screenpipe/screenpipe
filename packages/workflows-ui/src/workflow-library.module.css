@@ -1,0 +1,31 @@
+/* screenpipe — AI that knows everything you've seen, said, or heard
+   https://screenpipe.com */
+.library { max-width: 960px; margin: 0 auto; color: var(--ink); }
+.library h1 { font-size: 30px; font-weight: 600; margin: 0 0 8px; }
+.subtitle, .row small, .installed small { color: var(--muted); }
+.controls { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); margin: 30px 0 8px; }
+.tabs { display: flex; gap: 22px; }
+.tabs button { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); padding: 14px 0; font: inherit; cursor: pointer; }
+.tabs button[aria-pressed="true"] { color: var(--ink); border-color: var(--ink); }
+.search { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.search input { background: transparent; color: var(--ink); border: 0; font: inherit; width: 180px; padding: 8px 0; }
+.row, .installed { border: 0; border-bottom: 1px solid var(--line); padding: 20px 6px; background: transparent; color: inherit; text-align: left; font: inherit; width: 100%; }
+.row, .installed summary { display: flex; align-items: center; gap: 16px; cursor: pointer; }
+.row:hover, .installed:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.row > span, .installed summary > span { flex: 1; min-width: 0; display: grid; gap: 6px; }
+.row strong, .installed strong { font-size: 16px; font-weight: 550; overflow-wrap: anywhere; }
+.row small, .installed small { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.installed code { overflow-wrap: anywhere; }
+.empty { text-align: center; padding: 70px 24px; color: var(--muted); }
+.empty h2 { font-size: 18px; color: var(--ink); }
+.back, .actions button { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; background: transparent; border: 1px solid var(--line); border-radius: 6px; color: inherit; font: inherit; cursor: pointer; }
+.back { border: 0; padding-left: 0; margin-bottom: 32px; }
+.editor { display: grid; gap: 24px; margin: 32px 0; }
+.editor label { display: grid; gap: 8px; color: var(--muted); font-size: 14px; }
+.editor input, .editor textarea { width: 100%; box-sizing: border-box; padding: 12px; font: inherit; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; background: transparent; }
+.instructions { min-height: 320px; line-height: 1.6; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.actions span { color: var(--muted); font-size: 13px; }
+.library button:disabled { opacity: .5; cursor: default; }
+.library button:focus-visible, .library input:focus-visible, .library textarea:focus-visible { outline: 2px solid var(--muted); outline-offset: 3px; }
+@media (max-width: 680px) { .controls { align-items: stretch; flex-direction: column-reverse; gap: 4px; } .search input { width: 100%; } }

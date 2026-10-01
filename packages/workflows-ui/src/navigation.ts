@@ -9,13 +9,14 @@ export const appViews = [
   "workflow",
   "bottlenecks",
   "profile",
+  "library",
   "evidence",
   "privacy",
 ] as const;
 
 export type AppView = (typeof appViews)[number];
 
-export const primaryAppViews = ["workflows", "profile"] as const satisfies readonly AppView[];
+export const primaryAppViews = ["workflows", "profile", "library"] as const satisfies readonly AppView[];
 
 export function isPrimaryAppView(value: string | null): value is (typeof primaryAppViews)[number] {
   return primaryAppViews.includes(value as (typeof primaryAppViews)[number]);

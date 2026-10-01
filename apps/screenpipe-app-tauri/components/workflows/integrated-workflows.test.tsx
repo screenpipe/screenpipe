@@ -15,7 +15,11 @@ vi.mock("@/lib/workflows/desktop-platform", async () => {
     // jsdom cannot rasterize the browser fixture's SVG screenshots.
     loadCapturedWork: async () => {
       const catalog = structuredClone(fixtureWorkflowAnalysis);
-      catalog.analysis.workflows.forEach((workflow, index) => { workflow.id = `wf-fixture-${index}`; });
+      catalog.analysis.workflows.forEach((workflow, index) => {
+        workflow.id = `wf-fixture-${index}`;
+        // The persisted catalog represents unanswered corrections as null.
+        workflow.userCorrection = null;
+      });
       return catalog;
     },
   } };
@@ -112,25 +116,20 @@ it("hands off workflow identity without embedding captured content", async () =>
 });
 
 
-it("opens quiet header filters and restores the catalog after clearing them", async () => {
+it("keeps catalog search and refresh without the advanced filter controls", async () => {
   window.history.replaceState(null, "", "/home?mode=workflows");
   render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
-  const filters = await screen.findByRole("button", { name: "Filters", exact: true });
-  expect(filters).toHaveAttribute("title", "Filters");
-  expect(screen.queryByRole("combobox", { name:"Workflow activity period" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Update now" })).toHaveAttribute("title", "Update now");
-  fireEvent.click(filters);
-  const panel = screen.getByRole("region", { name: "Workflow filters" });
-  expect(filters).toHaveAttribute("aria-controls", panel.id);
-  fireEvent.change(within(panel).getByLabelText("Evidence quality"), { target: { value: "strong" } });
-  expect(screen.getByRole("button", { name: "Filters (1)" })).toHaveAttribute("aria-expanded", "true");
-  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
-  expect(within(panel).getByLabelText("Evidence quality")).toHaveValue("all");
-  expect(screen.queryByRole("button", { name: "Clear filters" })).not.toBeInTheDocument();
-  fireEvent.click(filters);
+  await screen.findByRole("heading", { name: "Research synthesis" });
+  expect(screen.queryByRole("button", { name: /^Filters/ })).not.toBeInTheDocument();
   expect(screen.queryByRole("region", { name: "Workflow filters" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Update now" })).toHaveAttribute("title", "Update now");
+  const search = screen.getByPlaceholderText("Search workflows");
+  fireEvent.change(search, { target: { value: "no-such-workflow-xyz" } });
+  expect(screen.getByText("No workflows match your search")).toBeVisible();
+  fireEvent.click(screen.getAllByRole("button", { name: "Clear search" })[0]);
+  expect(screen.getByRole("heading", { name: "Research synthesis" })).toBeVisible();
+  expect(search).toHaveValue("");
 });
-
 
 
 it("waits for the catalog then opens the exact workflow once across delivery retries", async () => {

@@ -779,6 +779,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pi_transport_cause_reaches_support_after_rotation_and_redaction() {
+        let logs = tempfile::tempdir().unwrap();
+        // The transport eval exports actual Pi terminal events when this env is
+        // set; the default keeps this collector contract runnable on its own.
+        let failure = std::env::var("SCREENPIPE_TRANSPORT_REPORT_FIXTURE")
+            .map(|path| std::fs::read_to_string(path).unwrap())
+            .unwrap_or_else(|_| {
+                "[Pi] LLM error via message_end : Connection error. [transport_code=ECONNRESET]\n\
+                 [Pi] Auto-retry failed: Connection error. [transport_code=ECONNRESET]\n"
+                    .into()
+            });
+        let current = logs.path().join("screenpipe-app.2026-10-01.log");
+        std::fs::write(&current, failure).unwrap();
+        std::fs::rename(&current, logs.path().join("screenpipe-app.2026-10-01.1.log"))
+            .unwrap();
+        std::fs::write(&current, "contact=private-person@example.com\npassword=hunter2\n")
+            .unwrap();
+        let files = crate::log_files::collect_log_files(&[logs.path().to_path_buf()]).await;
+        let raw = collect_log_text_from_files(files).await;
+        let redacted = crate::feedback_redact::redact_diagnostics_locally(raw)
+            .await
+            .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "signedUrl": format!("{}/upload/log", server.uri()), "path": "logs/report.log"
+            }})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"id": 42}})))
+            .mount(&server)
+            .await;
+        upload_report(&Client::new(), &server.uri(), &request(), redacted, None, None)
+            .await
+            .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let upload = requests.iter().find(|r| r.method == "PUT").unwrap();
+        let report = String::from_utf8_lossy(&upload.body);
+        assert!(report.contains("LLM error via message_end : Connection error. [transport_code=ECONNRESET]"));
+        assert!(report.contains("Auto-retry failed: Connection error. [transport_code=ECONNRESET]"));
+        assert!(!report.contains("private-person"));
+        assert!(!report.contains("hunter2"));
+    }
+
+    #[tokio::test]
     async fn monitor_discovery_failure_reaches_support_after_collection_and_redaction() {
         let server = MockServer::start().await;
         let cause = screenpipe_screen::monitor::MonitorListError::Other(

@@ -3,7 +3,9 @@
 /** Answers share the existing user-owned correction storage and learning path. */
 export type WorkflowAnswer = { question: string; answer: string };
 const prefix = "\n\nWorkflow answers (user supplied):\n";
-export function readWorkflowAnswers(correction = ""): WorkflowAnswer[] {
+export function readWorkflowAnswers(correction?: string | null): WorkflowAnswer[] {
+  // Persisted catalogs use null when no correction has been supplied.
+  if (typeof correction !== "string") return [];
   const start = correction.lastIndexOf(prefix);
   if (start < 0) return [];
   try {
@@ -12,7 +14,7 @@ export function readWorkflowAnswers(correction = ""): WorkflowAnswer[] {
       a && typeof a.question === "string" && typeof a.answer === "string") : [];
   } catch { return []; }
 }
-export function writeWorkflowAnswers(correction: string | undefined, answers: WorkflowAnswer[]): string {
+export function writeWorkflowAnswers(correction: string | null | undefined, answers: WorkflowAnswer[]): string {
   let text = correction ?? "";
   const start = text.lastIndexOf(prefix);
   if (start >= 0 && (readWorkflowAnswers(text).length || text.slice(start + prefix.length).split("\n")[0] === "[]")) {

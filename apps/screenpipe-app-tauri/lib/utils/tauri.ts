@@ -140,6 +140,14 @@ async cancelStorageMigration(root: string) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async cancelWorkflowVideo(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("cancel_workflow_video", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async chatgptOauthCheckToken() : Promise<Result<boolean, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("chatgpt_oauth_check_token") };
@@ -381,6 +389,14 @@ async copyTextToClipboard(text: string) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async createWorkflowVideo(id: string, scenes: WorkflowVideoScene[]) : Promise<Result<WorkflowVideoResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("create_workflow_video", { id, scenes }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async deleteBrainView(id: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("delete_brain_view", { id }) };
@@ -444,6 +460,17 @@ async disableKeychainEncryption() : Promise<Result<KeychainStatus, string>> {
 async disableOverlayClickThrough() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("disable_overlay_click_through") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Outputs remain available while reviewing. Explicit discard bounds permanent local storage.
+ */
+async discardWorkflowVideo(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("discard_workflow_video", { id }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -4029,8 +4056,8 @@ includedWindows: string[];
  */
 ignoredUrls?: UrlRule[];
 /**
- * Strict browser hostname allowlist. When non-empty, native apps and
- * browser windows without a positively detected matching URL are skipped.
+ * Strict browser hostname allowlist. Browser windows without a positively
+ * detected matching URL are skipped; native apps follow app/window rules.
  */
 includedUrls?: DomainRule[];
 /**
@@ -4473,6 +4500,9 @@ word: string;
  * Optional replacement — if set, the transcribed `word` is replaced with this.
  */
 replace_with?: string | null }
+export type WorkflowVideoFocus = { x: number; y: number; zoom: number }
+export type WorkflowVideoResult = { path: string; captionsPath: string }
+export type WorkflowVideoScene = { title: string; narration: string; image: string | null; pace?: number; focus: WorkflowVideoFocus | null }
 
 /** tauri-specta globals **/
 

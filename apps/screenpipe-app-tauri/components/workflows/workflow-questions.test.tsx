@@ -16,6 +16,17 @@ import { fixtureWorkflowAnalysis } from "@screenpipe/workflows-ui/fixture";
 const question = "Who reviews the synthesis?";
 const workflow = { ...fixtureWorkflowAnalysis.analysis.workflows[0], id: "wf-review", revision: 4, userCorrection: "Keep the reviewed step.", openQuestions: [question, question, "Where is it saved?"] };
 
+it.each([null, undefined, ""])("opens and saves answers when the catalog correction is %s", async userCorrection => {
+  expect(readWorkflowAnswers(userCorrection)).toEqual([]);
+  const source = { ...workflow, userCorrection };
+  const save = vi.fn(async (note: string) => ({ ...source, userCorrection: note }));
+  render(<WorkflowQuestions workflow={source} save={save} />);
+  fireEvent.change(screen.getByLabelText(question), { target: { value: "The reviewer" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save answers" }));
+  await screen.findByText("Answers saved for the next workflow update.");
+  expect(readWorkflowAnswers(save.mock.calls[0][0])).toEqual([{ question, answer: "The reviewer" }]);
+});
+
 it("preserves existing notes and old questions, replaces edited answers, and supports clearing", () => {
   const old = writeWorkflowAnswers(workflow.userCorrection, [{ question: "Old question?", answer: "Old answer" }, { question, answer: "First" }]);
   const next = writeWorkflowAnswers(old + "\n\nUser feedback: Keep screenshots.", [{ question, answer: "Second\nwith detail" }]);

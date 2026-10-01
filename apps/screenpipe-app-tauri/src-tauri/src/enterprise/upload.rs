@@ -365,6 +365,10 @@ struct DirectUploadCompleteRequest {
     batch_id: String,
     content_length: usize,
     plaintext_sha256: String,
+    // Only readable storage with the all-images policy auto-cites frames.
+    // Write-only completions must never initiate hosted screenshot processing.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    frame_ids: Vec<i64>,
 }
 
 /// Build the manifest for a plaintext JSONL batch. Shared by both direct
@@ -482,6 +486,25 @@ async fn run_ticketed_upload(
         batch_id: manifest.batch_id.clone(),
         content_length: manifest.content_length,
         plaintext_sha256: manifest.plaintext_sha256.clone(),
+        frame_ids: if manifest.mode == DIRECT_UPLOAD_READABLE_MODE
+            && crate::enterprise_policy::current_sync_streams().frame_images
+                == crate::enterprise_policy::FrameImagesMode::All
+        {
+            screenpipe_telemetry_wire::parse_jsonl(body)
+                .records
+                .into_iter()
+                .filter_map(|record| match record {
+                    screenpipe_telemetry_wire::TelemetryRecord::Frame { frame, .. }
+                        if frame.frame_id > 0 =>
+                    {
+                        Some(frame.frame_id)
+                    }
+                    _ => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
     };
 
     let ticket_json = serde_json::to_value(manifest)

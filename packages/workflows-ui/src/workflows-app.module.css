@@ -447,13 +447,6 @@
 .filterButtonActive { border-color: #b8c58f; background: #f2f7e4; color: #455526; }
 .filterButton svg:last-child, .filterButtonActive svg:last-child { margin-left: 2px; }
 .clearButton { border: 0; color: #81857c; }
-.filterPanel { display: grid; grid-template-columns: repeat(6,minmax(100px,1fr)) auto; gap: 10px; align-items: end; margin: 0 0 13px; padding: 14px; border: 1px solid #dfe1d9; border-radius: 9px; background: #f4f5f0; }
-.filterPanel label { display: flex; flex-direction: column; gap: 6px; }
-.filterPanel label > span { color: #7e8277; font-size: 7px; font-weight: 720; letter-spacing: .08em; text-transform: none; }
-.filterPanel select { width: 100%; height: 32px; padding: 0 26px 0 9px; border: 1px solid #d7d9d1; border-radius: 6px; outline: 0; background: #fff; color: #484c44; font-size: 9px; }
-.filterPanel select:focus { border-color: #a8b47e; box-shadow: 0 0 0 2px #e7edda; }
-.filterPanel > button { height: 32px; padding: 0 10px; border: 0; background: transparent; color: #73776e; font-size: 9px; cursor: pointer; }
-.filterPanel > button:disabled { opacity: .4; cursor: default; }
 .workflowCard { position: relative; min-width: 0; display: flex; flex-direction: column; padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: inherit; text-align: left; cursor: pointer; transition: border-color .15s ease; }
 .workflowCard:hover { border-color: var(--muted); }
 .workflowCard h2 { margin: 0 0 8px; font-size: 19px; line-height: 1.4; font-weight: 600; letter-spacing: -.035em; overflow-wrap: anywhere; }
@@ -755,8 +748,6 @@
   .heroProof { max-width: 330px; }
   .timeMap > button { grid-template-columns: minmax(230px,1fr) minmax(180px,.9fr) 22px; }
   .timeLegend { display: none; }
-  .filterPanel { grid-template-columns: repeat(2,minmax(150px,1fr)); }
-  .filterPanel > button { justify-self: start; }
   .qualityDetails { grid-template-columns: repeat(2,1fr); }
   .qualityDetails > div { border-right: 1px solid #e7ebdf; border-bottom: 1px solid #e7ebdf; }
   .qualityDetails > div:nth-child(2n) { border-right: 0; }
@@ -822,7 +813,6 @@
   .bottleneckTime { grid-column: 2; padding: 10px 0 0; border: 0; }
   .filterBar { align-items: flex-start; flex-wrap: wrap; }
   .filterBar > div { width: 100%; }
-  .filterPanel { grid-template-columns: 1fr; }
   .qualityPanel summary { align-items: flex-start; flex-direction: column; }
   .qualityMetrics { width: 100%; justify-content: space-between; }
   .qualityDetails { grid-template-columns: 1fr; }
@@ -1046,11 +1036,9 @@
 .filterBar > div span { font-size: 11px; }
 .filterButton, .filterButtonActive, .clearButton { font-size: 12px; min-height: 36px; font-weight: 500; }
 .filterButtonActive { background: var(--soft); border-color: var(--muted); color: var(--ink); }
-.filterPanel label > span, .filterPanel select, .filterPanel > button { font-size: 12px; }
 @media (max-width: 680px) {
   .workflowCard { padding: 18px; }
   .cardSummary { gap: 6px; }
-  .filterPanel { grid-template-columns: 1fr; }
 }
 
 /* Motion marks a user opening a surface, never an idle decoration. */
@@ -1072,7 +1060,6 @@
 .quietIconButton:hover, .quietIconButton[aria-expanded="true"] { background: var(--soft); color: var(--ink); }
 .quietIconButton:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .quietIconButton:disabled { opacity: .4; cursor: default; }
-.filterCount { position: absolute; top: -1px; right: -2px; min-width: 15px; padding: 1px 3px; border-radius: 4px; background: var(--ink); color: var(--panel); font-size: 10px; }
 .quietRefreshControls .runProgress { grid-column: 1 / -1; grid-row: 2; justify-self: start; max-width: 100%; }
 .quietRefreshControls > [role="status"]:empty { display: none; }
 .quietRefreshControls .runToggle { max-width: 100%; min-height: 28px; padding: 0; text-align: left; font-size: 12px; }

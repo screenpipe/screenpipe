@@ -1,0 +1,1 @@
+Fictional browser preview of the shared desktop/web SOP UI, 1440 × 1000 (collapsed and expanded) and 900 × 800 (compact). No private workflow data. Run apps/screenpipe-workflows-web/scripts/eval-source-review.cjs against the maintained /preview route. The default view keeps screenshot reconciliation collapsed; opening and closing retains unsaved choices. Saving is explicit.
