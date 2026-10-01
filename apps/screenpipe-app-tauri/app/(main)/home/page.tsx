@@ -1209,6 +1209,7 @@ function HomeContent() {
     onPauseRecording: pauseRecording,
     onResumeRecording: resumeRecording,
     isGloballyPaused: isCapturePaused,
+    onRefreshDevices: refreshRecordingDevices,
     allCaptureDisabled: !!(settings.disableAudio && settings.disableVision),
     onOpenRecordingSettings: () => openSettings("recording"),
   };
