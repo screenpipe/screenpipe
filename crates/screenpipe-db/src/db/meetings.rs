@@ -1089,7 +1089,9 @@ impl DatabaseManager {
         since: DateTime<Utc>,
         _coverage_window_secs: f64,
     ) -> Result<u64, SqlxError> {
-        // Keep the bounded timestamp-index scan and small write transaction.
+        // Keep each mirror lookup bounded by the timestamp index. Limit eligible
+        // updates, not unresolved candidates: newer unknown turns must not starve
+        // older turns whose exact mirrors have since acquired an identity.
         // The old proximity window is retained in the API for callers but cannot
         // widen identity evidence beyond an exact timestamp match.
         const PER_PASS_LIMIT: i64 = 500;
@@ -1101,7 +1103,6 @@ impl DatabaseManager {
                 FROM meeting_transcript_segments
                 WHERE speaker_id IS NULL AND julianday(captured_at) >= julianday(?1)
                   AND TRIM(transcript) != ''
-                ORDER BY captured_at DESC LIMIT ?3
             ), matches AS (
                 SELECT c.id AS seg_id, MIN(a.speaker_id) AS sid
                 FROM cand c
@@ -1123,6 +1124,7 @@ impl DatabaseManager {
                         AND other.transcript = c.transcript
                   )
                 GROUP BY c.id HAVING COUNT(DISTINCT a.speaker_id) = 1
+                ORDER BY c.captured_at DESC, c.id DESC LIMIT ?3
             )
             UPDATE meeting_transcript_segments SET speaker_id = (
                 SELECT sid FROM matches WHERE matches.seg_id = meeting_transcript_segments.id

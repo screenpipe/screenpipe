@@ -1019,8 +1019,8 @@ impl DatabaseManager {
             r#"
             WITH chunk_rows AS (
                 SELECT * FROM audio_transcriptions WHERE audio_chunk_id = ?1
-            ), live_identities AS (
-                SELECT DISTINCT m.meeting_id, m.stream_id, m.device_type, m.speaker_id,
+            ), live_evidence AS (
+                SELECT m.meeting_id, m.stream_id, m.device_name, m.device_type, m.speaker_id,
                        COALESCE(m.session_speaker_id, m.speaker_name) AS identity
                 FROM chunk_rows a
                 JOIN meeting_transcript_segments m
@@ -1029,6 +1029,9 @@ impl DatabaseManager {
                  AND m.device_type = CASE WHEN a.is_input_device = 1 THEN 'input' ELSE 'output' END
                  AND m.transcript = a.transcription
                 WHERE a.transcription_engine = 'live'
+            ), live_identities AS (
+                SELECT DISTINCT meeting_id, stream_id, device_name, device_type, identity
+                FROM live_evidence
             )
             UPDATE audio_transcriptions SET speaker_id = ?2
             WHERE audio_chunk_id = ?1 AND speaker_id IS NULL
@@ -1048,7 +1051,7 @@ impl DatabaseManager {
                   OR (
                       (SELECT COUNT(*) FROM live_identities) = 1
                       AND NOT EXISTS (
-                          SELECT 1 FROM live_identities
+                          SELECT 1 FROM live_evidence
                           WHERE identity IS NULL OR TRIM(identity) = '' OR speaker_id != ?2
                       )
                       AND NOT EXISTS (

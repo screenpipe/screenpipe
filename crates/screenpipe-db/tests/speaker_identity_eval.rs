@@ -361,6 +361,7 @@ async fn speaker_identity_chunk_backfill_eval() {
         "unmirrored_live",
         "unknown_live_label",
         "confirmed_meeting_identity",
+        "partly_confirmed_same_identity",
         "overlapping_diarization",
         "conflicting_diarization",
         "multiple_provider_labels",
@@ -447,6 +448,15 @@ async fn speaker_identity_chunk_backfill_eval() {
                 .await
                 .unwrap();
         }
+        if case == "partly_confirmed_same_identity" {
+            sqlx::query(
+                "UPDATE meeting_transcript_segments SET speaker_id = ?1 WHERE item_id = 'turn-0'",
+            )
+            .bind(inferred)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
         if case == "confirmed_meeting_identity" {
             sqlx::query("UPDATE meeting_transcript_segments SET speaker_id = ?1")
                 .bind(confirmed)
@@ -487,7 +497,9 @@ async fn speaker_identity_chunk_backfill_eval() {
         .unwrap();
         let expected = match case {
             "single_unassigned" => vec![Some(inferred)],
-            "single_live_speaker" | "agreeing_diarization" => vec![Some(inferred), Some(inferred)],
+            "single_live_speaker" | "agreeing_diarization" | "partly_confirmed_same_identity" => {
+                vec![Some(inferred), Some(inferred)]
+            }
             "existing_assignment" => vec![Some(confirmed), None],
             _ => vec![None, None],
         };
@@ -508,4 +520,78 @@ async fn speaker_identity_chunk_backfill_eval() {
         failures.is_empty(),
         "speaker chunk backfill failures: {failures:?}"
     );
+}
+
+/// Unknown recent turns must not permanently hide older, resolvable turns.
+/// Exercise a backlog and a concurrent capture write at the production boundary.
+#[tokio::test]
+async fn speaker_identity_backfill_progress_eval() {
+    let db = db().await;
+    let base = Utc::now() - Duration::days(1);
+    let speaker = db.create_speaker_with_name("Known voice").await.unwrap().id;
+    let meeting = db.insert_meeting("Meet", "test", None, None).await.unwrap();
+    let chunk = db
+        .insert_audio_chunk("Meeting Tap (output)_backlog.mp4", Some(base))
+        .await
+        .unwrap();
+    sqlx::query(
+        "WITH RECURSIVE seq(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < 20600)
+         INSERT INTO meeting_transcript_segments
+             (meeting_id, provider, item_id, device_name, device_type, transcript, captured_at, speaker_name)
+         SELECT ?1, 'test', printf('backlog-%d', x), 'Meeting Tap', 'output', printf('turn %d', x),
+                strftime('%Y-%m-%dT%H:%M:%f+00:00', ?2, printf('+%d seconds', x)), 'speaker 1'
+         FROM seq",
+    ).bind(meeting).bind(base).execute(&db.pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO audio_transcriptions
+             (audio_chunk_id, offset_index, timestamp, transcription, device, is_input_device, speaker_id, transcription_engine)
+         SELECT ?1, id, captured_at, transcript, device_name, 0, ?2, 'live'
+         FROM meeting_transcript_segments WHERE meeting_id = ?3 ORDER BY captured_at LIMIT 600",
+    ).bind(chunk).bind(speaker).bind(meeting).execute(&db.pool).await.unwrap();
+
+    let started = std::time::Instant::now();
+    let (mapped, captured) = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        tokio::join!(
+            db.backfill_meeting_segment_speakers(base, 15.0),
+            db.insert_audio_chunk("continued_capture.mp4", Some(Utc::now())),
+        )
+    })
+    .await
+    .expect("identity backlog must not stall capture writes for seconds");
+    let mapped = mapped.unwrap();
+    let captured = captured.unwrap();
+    println!(
+        "{}",
+        json!({"eval":"speaker_backfill_progress","first_pass":mapped,"expected":500,"seconds":started.elapsed().as_secs_f64()})
+    );
+    assert_eq!(
+        mapped, 500,
+        "skip unresolved recent turns and fill eligible older turns"
+    );
+    assert_eq!(
+        db.backfill_meeting_segment_speakers(base, 15.0)
+            .await
+            .unwrap(),
+        100
+    );
+    assert_eq!(
+        db.backfill_meeting_segment_speakers(base, 15.0)
+            .await
+            .unwrap(),
+        0
+    );
+    let unknown: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meeting_transcript_segments WHERE meeting_id = ?1 AND speaker_id IS NULL")
+        .bind(meeting).fetch_one(&db.pool).await.unwrap();
+    assert_eq!(
+        unknown, 20000,
+        "preserve uncertainty and captured transcripts"
+    );
+    let durable: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM audio_chunks WHERE id = ?1 AND file_path = 'continued_capture.mp4'",
+    )
+    .bind(captured)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(durable, 1);
 }
