@@ -4886,6 +4886,50 @@
         ],
         "command": "cargo test --locked -p screenpipe-redact --test eval_ocr_derived -- --test-threads=1"
       }
+    },
+    {
+      "id": "app-enterprise-local-policy-waits",
+      "name": "Finish enterprise verification despite stalled local policy work",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "6b48cdbc6bd445f6ce0389aa00fd40c642872f65",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/7435"
+      },
+      "base_ref": "959f7e46559620b9df4666553379d26d21da8760",
+      "oracle_ref": "6b48cdbc6bd445f6ce0389aa00fd40c642872f65",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/lib/hooks/use-enterprise-policy.ts"
+      ],
+      "gate": "advisory",
+      "trigger_paths": [
+        "apps/screenpipe-app-tauri/lib/hooks/use-enterprise-policy.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "enterprise",
+        "auth",
+        "deadline",
+        "preserved-behavior"
+      ],
+      "prompt": "Enterprise startup can stay on checking access forever when local policy work stalls, even though the service can verify the saved license key. Ensure verification finishes within 10 seconds when one store-open, settings-read, AI-preset write/save, install-metadata lookup, or app-update settings-save operation never settles and the other operations respond promptly. Continue real policy verification and native authorization before reporting success. Keep key requests free of account authorization headers. Ignore install metadata that arrives after its wait has ended so it cannot overwrite settings or a newly selected account. Preserve credential choice with no credentials, denied and expired credentials even after a local read stall, account-login requirements, administrator recording pauses, and native authorization failure. Healthy policy application must still persist update policy and timely install metadata while retaining allowed employee presets, account identity, and unrelated settings.",
+      "agent_timeout_seconds": 900,
+      "grader_dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/enterprise-policy-waits.fixture.tsx.txt",
+            "destination_path": "apps/screenpipe-app-tauri/lib/hooks/__tests__/eval-enterprise-policy-waits.test.tsx"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && NODE_OPTIONS=--localstorage-file=.eval-localstorage bun x vitest run --config vitest.config.ts lib/hooks/__tests__/eval-enterprise-policy-waits.test.tsx"
+      }
     }
   ]
 }

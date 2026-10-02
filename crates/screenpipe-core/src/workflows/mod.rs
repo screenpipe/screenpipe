@@ -691,6 +691,7 @@ pub fn normalize_analysis(
             stages.push(json!({
                 "name": name,
                 "description": stage_description,
+                "timing": timing::normalize_timing(stage, catalog)?,
                 "procedure": procedure,
                 "openQuestions": open_questions,
                 "activeMinutes": 0,

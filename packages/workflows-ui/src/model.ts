@@ -93,6 +93,7 @@ export type WorkflowScreenshot = {
 };
 
 export type WorkflowStage = {
+  timing?: WorkflowTiming | null;
   userEdited?: boolean;
   name: string;
   description: string;

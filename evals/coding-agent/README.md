@@ -1467,3 +1467,9 @@ continuity, old-row backfill, whitespace-split entities, live model providers,
 agent isolation or model capability. Run the shared runner with
 `--case app-ocr-derived-copy-retry --verify`; compilation and extraction failures
 must remain infrastructure errors, not evidence of the historical defect.
+
+### Enterprise local policy waits
+
+`app-enterprise-local-policy-waits` runs the actual enterprise authentication hook with synthetic HTTP, settings and native-command boundaries. Fourteen outcomes cover six stalled local operations, late install metadata, rejected/expired credentials, credential choice, account-only access, recording pause, native denial and healthy policy persistence. The task allows ten seconds for one stalled operation; it does not require a particular timer helper or warning message.
+
+Run `bun test evals/coding-agent/calibrate-enterprise-policy-waits.test.js` to check the broken parent, historical reference, current hook, equivalent helper names, disconnected correct source, omitted persistence, excessive wait, native/pause bypasses and missing-source infrastructure failure. These checks do not establish native recording enforcement, real disk durability, host isolation or model performance.

@@ -221,6 +221,37 @@ async fn build_bundle(files: &[LogFile]) -> String {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn enterprise_access_timeout_survives_support_collection_and_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("screenpipe-app.2026-10-02.log");
+        let file = std::fs::File::create(&current).unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(file))
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            crate::commands::write_browser_log(
+                "warn".into(),
+                "[enterprise] failed to apply AI preset policy; continuing credential verification: enterprise save policy settings timed out after 8000ms".into(),
+            );
+            tracing::info!("contact=private-person@example.com");
+        });
+        tokio::fs::rename(&current, dir.path().join("screenpipe-app.2026-10-02.1.log"))
+            .await
+            .unwrap();
+        tokio::fs::write(&current, "INFO recorder restarted\n")
+            .await
+            .unwrap();
+        let report = collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+            .await
+            .unwrap();
+        assert!(report.contains("enterprise save policy settings timed out after 8000ms"));
+        assert!(report.contains("continuing credential verification"));
+        assert!(report.contains("recorder restarted"));
+        assert!(!report.contains("private-person@example.com"));
+    }
+
     #[cfg(feature = "enterprise-build")]
     #[tokio::test]
     async fn readable_screenshot_failure_survives_support_collection_and_redaction() {

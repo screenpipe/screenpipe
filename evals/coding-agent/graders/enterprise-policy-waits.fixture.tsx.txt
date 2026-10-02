@@ -1,0 +1,271 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => {
+  const webBaseOverride = { value: null as string | null };
+  const settings: Record<string, unknown> = { deviceId: "device-1" };
+  const store = {
+    get: vi.fn(async (key: string) => (key === "settings" ? settings : undefined)),
+    set: vi.fn(async (key: string, value: unknown) => {
+      if (key === "settings") {
+        Object.keys(settings).forEach((k) => delete settings[k]);
+        Object.assign(settings, value as Record<string, unknown>);
+      }
+    }),
+    save: vi.fn(async () => undefined),
+  };
+
+  return {
+    webBaseOverride,
+    settings,
+    store,
+    isEnterprise: { value: true },
+    commands: {
+      getEnterpriseLicenseKey: vi.fn(async () => null as string | null),
+      saveEnterpriseLicenseKey: vi.fn(async () => ({ status: "ok" as const })),
+      getEnterpriseInstallMetadata: vi.fn(async () => ({
+        install_source: "unknown",
+        update_manager: "unknown",
+        managed: false,
+        detected_by: [],
+      })),
+      getEnterpriseHostIdentity: vi.fn(async () => ({
+        machine_id_hash: "sp_machine_v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        os_user_id_hash: "sp_os_user_v1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      })),
+      getCloudToken: vi.fn(async () => null as string | null),
+      stopScreenpipe: vi.fn(async () => undefined),
+      spawnScreenpipe: vi.fn(async () => undefined),
+      setEnterprisePolicy: vi.fn(async () => undefined),
+      setEnterpriseRecordingAuthorized: vi.fn(async () => ({ status: "ok", data: null })),
+      applyEnterpriseUiVisibility: vi.fn(async () => undefined),
+      setSyncStreams: vi.fn(async () => undefined),
+      setActivitySyncEnabled: vi.fn(async () => undefined),
+      saveEnterpriseTeamConfig: vi.fn(async () => null),
+      syncManagedTeamSkills: vi.fn(async () => ({ status: "ok" as const, data: [] })),
+    },
+    tauriFetch: vi.fn(),
+    localFetch: vi.fn(),
+    getVersion: vi.fn(async () => "2.5.99"),
+    platform: vi.fn(() => "windows"),
+    syncManagedPipes: vi.fn(async () => undefined),
+    gatherPipeStatuses: vi.fn(async () => []),
+  };
+});
+
+vi.mock("@/lib/hooks/use-is-enterprise-build", () => ({
+  useEnterpriseBuildStatus: () => ({
+    isEnterprise: mocks.isEnterprise.value,
+    resolved: true,
+    error: false,
+  }),
+}));
+
+vi.mock("@/lib/hooks/use-settings", () => ({
+  getStore: vi.fn(async () => mocks.store),
+  useSettings: () => ({ settings: mocks.settings }),
+}));
+
+vi.mock("@/lib/utils/tauri", () => ({
+  commands: mocks.commands,
+}));
+
+vi.mock("@tauri-apps/plugin-http", () => ({
+  fetch: mocks.tauriFetch,
+}));
+
+// The baked control-plane base is read at module load from a NEXT_PUBLIC env
+// var, so it has to be mocked to be varied per test. Both the hook and the
+// shared fetch wrapper import this module, so overriding it here exercises the
+// real chain: web base -> isLocalControlPlaneBase() -> which deadline applies.
+vi.mock("@/lib/web-url", () => ({
+  PROD_WEB_BASE: "https://screenpipe.com",
+  screenpipeWebBase: (fallbackHost: string) => mocks.webBaseOverride.value ?? fallbackHost,
+  screenpipeWebUrl: (path: string, fallbackHost: string) =>
+    `${mocks.webBaseOverride.value ?? fallbackHost}${path.startsWith("/") ? path : `/${path}`}`,
+}));
+
+vi.mock("@tauri-apps/api/app", () => ({
+  getVersion: mocks.getVersion,
+}));
+
+vi.mock("@tauri-apps/plugin-os", () => ({
+  platform: mocks.platform,
+}));
+
+vi.mock("@/lib/api", () => ({
+  localFetch: mocks.localFetch,
+}));
+
+vi.mock("@/lib/hooks/use-enterprise-pipes", () => ({
+  syncManagedPipes: mocks.syncManagedPipes,
+  gatherPipeStatuses: mocks.gatherPipeStatuses,
+}));
+
+import { useEnterprisePolicyRuntime } from "@/lib/hooks/use-enterprise-policy";
+import { getStore } from "@/lib/hooks/use-settings";
+
+
+const KEY = "ENT-TEST-ONLY-HOOK-0001";
+
+function policyResponse(overrides: Record<string, unknown> = {}) {
+  return new Response(
+    JSON.stringify({
+      hiddenSections: [],
+      lockedSettings: {},
+      managedPipes: [],
+      orgName: "Synthetic Harbor",
+      ...overrides,
+    }),
+    { status: 200 }
+  );
+}
+
+function heartbeatResponse(status = 200, code?: string) {
+  return new Response(
+    JSON.stringify(status === 200 ? { ok: true } : { error: "x", code }),
+    { status },
+  );
+}
+
+function mockEnterpriseApi(opts: {
+  policyStatus?: number;
+  policy?: Record<string, unknown>;
+  heartbeatStatus?: number;
+  heartbeatCode?: string;
+}) {
+  mocks.tauriFetch.mockImplementation(async (url: string) => {
+    if (url.includes("/api/enterprise/policy")) {
+      if (opts.policyStatus && opts.policyStatus !== 200) {
+        return new Response(JSON.stringify({ error: "bad credential" }), {
+          status: opts.policyStatus,
+        });
+      }
+      return policyResponse(opts.policy);
+    }
+    if (url.includes("/api/enterprise/heartbeat")) {
+      return heartbeatResponse(opts.heartbeatStatus ?? 200, opts.heartbeatCode);
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+}
+
+
+// Test only the public hook. Native, store and HTTP boundaries are synthetic.
+const stages = ["store open", "settings read", "AI preset write", "AI preset save", "install metadata", "app update save"];
+function stall(stage: string) {
+  const pending = new Promise<never>(() => {});
+  if (stage === "store open") vi.mocked(getStore).mockReturnValueOnce(pending);
+  if (stage === "settings read") mocks.store.get.mockReturnValueOnce(pending);
+  if (stage === "AI preset write") mocks.store.set.mockReturnValueOnce(pending);
+  if (stage === "AI preset save") mocks.store.save.mockReturnValueOnce(pending);
+  if (stage === "install metadata") mocks.commands.getEnterpriseInstallMetadata.mockReturnValueOnce(pending);
+  if (stage === "app update save") mocks.store.save.mockResolvedValueOnce(undefined).mockReturnValueOnce(pending);
+}
+async function start() {
+  const hook = renderHook(() => useEnterprisePolicyRuntime());
+  await act(async () => {});
+  await act(async () => { await vi.advanceTimersByTimeAsync(10_001); });
+  return hook;
+}
+function noGrant() {
+  expect(mocks.commands.setEnterpriseRecordingAuthorized.mock.calls.some(args => args[0] === true)).toBe(false);
+}
+describe("enterprise local policy wait outcomes", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    localStorage.clear();
+    vi.mocked(getStore).mockReset().mockResolvedValue(mocks.store as any);
+    mocks.store.get.mockReset().mockImplementation(async key => key === "settings" ? mocks.settings : undefined);
+    mocks.store.set.mockReset().mockImplementation(async (key, value) => {
+      if (key === "settings") {
+        Object.keys(mocks.settings).forEach(k => delete mocks.settings[k]);
+        Object.assign(mocks.settings, value);
+      }
+    });
+    mocks.store.save.mockReset().mockResolvedValue(undefined);
+    mocks.commands.getEnterpriseInstallMetadata.mockReset().mockResolvedValue({install_source:"unknown", update_manager:"unknown", managed:false, detected_by:[]});
+    mocks.commands.getEnterpriseLicenseKey.mockReset().mockResolvedValue(KEY);
+    mocks.commands.setEnterpriseRecordingAuthorized.mockReset().mockResolvedValue({status:"ok", data:null});
+    mocks.webBaseOverride.value = null;
+    mocks.isEnterprise.value = true;
+    Object.keys(mocks.settings).forEach(k => delete mocks.settings[k]);
+    Object.assign(mocks.settings, {deviceId:"device-1"});
+    mocks.localFetch.mockResolvedValue(new Response(JSON.stringify({frame_status:"ok",audio_status:"ok",hostname:"synthetic-host"})));
+    mockEnterpriseApi({});
+  });
+  afterEach(() => { cleanup(); vi.useRealTimers(); });
+
+  it.each(stages)("finishes a valid saved-key verification with stalled %s", async stage => {
+    stall(stage);
+    const {result} = await start();
+    expect(result.current.authenticationState).toBe("authenticated");
+    expect(result.current.isEnterpriseAuthenticated).toBe(true);
+    expect(mocks.commands.setEnterpriseRecordingAuthorized).toHaveBeenCalledWith(true,"license_key",KEY);
+    const call = mocks.tauriFetch.mock.calls.find(([url]) => String(url).includes("/api/enterprise/policy"));
+    expect(call?.[1]?.headers["X-License-Key"]).toBe(KEY);
+    expect(call?.[1]?.headers.Authorization).toBeUndefined();
+  });
+
+  it("ignores metadata delivered after its wait ended without overwriting a newer account", async () => {
+    let resolve!: (value:any) => void;
+    mocks.commands.getEnterpriseInstallMetadata.mockReturnValueOnce(new Promise(r => {resolve=r;}));
+    const {result} = await start();
+    expect(result.current.isEnterpriseAuthenticated).toBe(true);
+    mocks.settings.user = {token:"synthetic-new-account"};
+    const before = JSON.stringify(mocks.settings);
+    await act(async () => { resolve({install_source:"mdm",update_manager:"mdm",managed:true,detected_by:[]}); });
+    expect(JSON.stringify(mocks.settings)).toBe(before);
+  });
+
+  it.each([401,402])("keeps HTTP %s credentials unauthorized despite a stalled settings read", async status => {
+    stall("settings read"); mockEnterpriseApi({policyStatus:status});
+    const {result} = await start();
+    expect(result.current.authenticationState).not.toBe("checking");
+    expect(result.current.isEnterpriseAuthenticated).toBe(false);
+    noGrant();
+  });
+  it("offers a credential choice without credentials", async () => {
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(null);
+    const {result} = await start();
+    expect(result.current.authenticationState).toBe("choice");
+    expect(result.current.isEnterpriseAuthenticated).toBe(false);
+    expect(mocks.tauriFetch).not.toHaveBeenCalled(); noGrant();
+  });
+  it("preserves an administrator's recording pause", async () => {
+    mockEnterpriseApi({policy:{recordingAllowed:false},heartbeatStatus:403,heartbeatCode:"recording_disabled_by_admin"});
+    const {result} = await start();
+    expect(result.current.isEnterpriseAuthenticated).toBe(true);
+    expect(result.current.policy.recordingAllowed).toBe(false); noGrant();
+  });
+  it("requires account sign-in when key-only access is prohibited", async () => {
+    mockEnterpriseApi({policy:{requireAccountLogin:true}});
+    const {result} = await start();
+    expect(result.current.authenticationState).toBe("account");
+    expect(result.current.isEnterpriseAuthenticated).toBe(false); noGrant();
+  });
+  it("does not declare success when native authorization fails", async () => {
+    mocks.commands.setEnterpriseRecordingAuthorized.mockResolvedValue({status:"error",error:"synthetic-denial"} as any);
+    const {result} = await start();
+    expect(result.current.isEnterpriseAuthenticated).toBe(false);
+    expect(result.current.authenticationState).not.toBe("checking");
+  });
+  it("preserves healthy policy application, employee settings and authentication", async () => {
+    const preset = {id:"employee-local",provider:"custom",model:"synthetic-model",url:"http://localhost:9999",defaultPreset:true};
+    Object.assign(mocks.settings,{user:{token:"synthetic-account"},autoUpdate:true,aiPresets:[preset],unrelated:"keep"});
+    mocks.commands.getEnterpriseInstallMetadata.mockResolvedValue({install_source:"mdm",update_manager:"mdm",managed:true,detected_by:[]});
+    mockEnterpriseApi({policy:{appUpdatePolicy:{mode:"manual",default_auto_update:false,allow_employee_override:false}}});
+    const {result} = await start();
+    expect(result.current.isEnterpriseAuthenticated).toBe(true);
+    expect(mocks.settings.autoUpdate).toBe(false);
+    expect(mocks.settings.enterpriseInstallMetadata).toMatchObject({managed:true,update_manager:"mdm"});
+    expect(mocks.settings.aiPresets).toEqual([preset]);
+    expect(mocks.settings.user).toEqual({token:"synthetic-account"});
+    expect(mocks.settings.unrelated).toBe("keep");
+    expect(mocks.store.save).toHaveBeenCalled();
+  });
+});

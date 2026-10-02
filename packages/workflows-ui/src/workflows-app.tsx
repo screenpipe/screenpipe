@@ -19,7 +19,8 @@ import { WorkflowAssistant } from "./workflow-assistant";
 import { PageAssistantContext, type PageAssistant } from "./page-assistant";
 import { useWorkflowRunActivity, type WorkflowActivityState } from "./use-workflow-run-activity";
 import { WorkflowRunProgress } from "./workflow-run-progress";
-import { workflowTiming } from "./timing";
+import { workflowTiming, formatTimingMinutes as formatMinutes } from "./timing";
+import { TimingDisclosure } from "./timing-disclosure";
 import { CapturedMomentButton } from "./workflow-replay";
 import type { AssistantContext, AssistantState } from "./assistant";
 
@@ -150,19 +151,6 @@ async function completedJobResult(platform: WorkflowsPlatform, initialJob: Workf
   throw new Error("The workflow report is still processing. You can leave this page and refresh later.");
 }
 
-function formatMinutes(value: number) {
-  if (value > 0 && value < 1) return "<1m";
-  const minutes = Math.max(0, Math.round(value || 0));
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const remainder = minutes % 60;
-  return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
-}
-
-function formatEstimatedMinutes(value: number) {
-  return value < 1 ? "<1m" : `~${formatMinutes(value)}`;
-}
-
 function formatCurrency(value: number, currency: string) {
   try {
     return new Intl.NumberFormat(undefined, {
@@ -217,7 +205,7 @@ function hasMeasuredDuration(workflow: WorkflowMap) {
 
 function workflowDurationLabel(workflow: WorkflowMap) {
   const timing = workflowTiming(workflow.timing);
-  if (timing) return `${formatEstimatedMinutes(timing.averageMinutes)} ${timing.sampleCount > 1 ? "avg. per run" : "for one run"}`;
+  if (timing) return `${timing.averageMinutes < 1 ? "" : "~"}${formatMinutes(timing.averageMinutes)} ${timing.sampleCount > 1 ? "avg. per run" : "for one run"}`;
   return hasMeasuredDuration(workflow) ? formatMinutes(workflow.totalMinutes) : "Not measured";
 }
 
@@ -731,9 +719,9 @@ function WorkflowsView({ reviewIds, workflows, knownWorkflowCount, query, setQue
                 <div className={styles.cardSummary}>
                   {workflow.id && reviewIds?.has(workflow.id) && <><span className={styles.readyToReview}>{ui("Ready to review")}</span><span aria-hidden="true">·</span></>}
                   {workflow.stages.length} steps
-                  {timing && <><span aria-hidden="true">·</span>{`${formatEstimatedMinutes(timing.averageMinutes)} / run · estimated`}</>}
                 </div>
                 <div className={styles.cardActions}>
+                  {timing && <TimingDisclosure label={`Timing for ${workflow.title}`} value={timing} />}
                   <button type="button" className={styles.cardOpen} onClick={() => openWorkflow(originalIndex)}><span className={styles.cardOpenLabel}>{ui("Open map")}</span><ChevronRight size={14} /></button>
                 </div>
               </div>
@@ -976,8 +964,7 @@ function WorkflowDetail({ canSaveAnswers, composerAccessory, active, onAnswersSa
   }, [platform, skillDraft]);
   if (workflow && guideOpen && platform.guides) return <WorkflowGuide key={workflow.id || workflow.title} workflow={workflow} platform={platform.guides} close={() => setGuideOpen(false)} />;
   if (!workflow) return <section className={styles.emptyState}><ListTree size={23} /><h2>No workflow selected</h2><button className={styles.primaryButton} onClick={() => navigate("workflows")}>View workflows</button></section>;
-  const measuredDuration = hasMeasuredDuration(workflow);
-  const timing = workflowTiming(workflow.timing);
+
   const allStagesOpen = expandedStages.size === workflow.stages.length;
   const actionableFriction = workflow.bottlenecks.filter(isActionableBottleneck);
   const constraints = workflow.bottlenecks.filter((item) => !isActionableBottleneck(item));
@@ -994,7 +981,7 @@ function WorkflowDetail({ canSaveAnswers, composerAccessory, active, onAnswersSa
       <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
       {saveEdits ? <WorkflowEditor key={workflow.id || workflow.title} workflow={workflow} save={saveEdits} actions={workflowActions} renderSource={stage => <WorkflowStepEvidence workflow={workflow} stage={stage} platform={platform} />} /> : <section className={styles.detailHeader}>
         <div><Pill>Evidence on {workflow.repetitions} captured day{workflow.repetitions === 1 ? "" : "s"}</Pill><h1>{workflow.title}</h1><p>{workflow.description}</p>{workflowActions}</div>
-        {timing ? <div className={styles.detailTotal}><span>{timing.sampleCount > 1 ? ui("Avg. time / run") : ui("Time for one run")}</span><strong>{formatEstimatedMinutes(timing.averageMinutes)}</strong><small>{ui("{count, plural, one {# run} other {# runs}}", { count: timing.sampleCount })} · estimated elapsed time</small></div> : measuredDuration && <div className={styles.detailTotal}><span>Observed meeting duration</span><strong>{workflowDurationLabel(workflow)}</strong></div>}
+        <TimingDisclosure label="Workflow timing" value={workflow.timing} measured={hasMeasuredDuration(workflow) ? { minutes: workflow.totalMinutes, samples: workflow.durationSampleCount ?? 0 } : undefined} />
       </section>}
       <div className={styles.workflowNotes}>
       <p className={styles.workflowReviewState}>{workflow.userEditedAt ? ui("Edited by you · sources kept as references") : workflow.evidenceStatus === "supported-steps" ? ui("Source-backed steps · not execution-tested") : ui("Needs review")}</p>
@@ -1009,11 +996,14 @@ function WorkflowDetail({ canSaveAnswers, composerAccessory, active, onAnswersSa
             const constraint = stageFriction.find((item) => !isActionableBottleneck(item));
             const open = expandedStages.has(index);
             return <article key={`${stage.name}-${index}`} className={`${actionableStageFriction ? styles.stageBottleneck : ""} ${constraint ? styles.stageConstraint : ""} ${open ? styles.stageOpen : ""}`}>
+              <div className={styles.stageHeadingRow}>
               <button className={styles.stageSummary} onClick={() => toggleStage(index)} aria-expanded={open}>
                 <div className={styles.stageNumber}>{index + 1}</div>
                 <div className={styles.stageBody}><div><h3>{stage.name}</h3>{actionableStageFriction && <Pill tone="warm"><AlertTriangle size={11} />Actionable friction</Pill>}{!actionableStageFriction && constraint && <Pill><ShieldCheck size={11} />{controlLabel(constraint)}</Pill>}</div><p>{stage.description}</p><span>{stage.apps.join(" · ") || ui("App not clear")} · {ui("{count, plural, one {# observation} other {# observations}}", { count: stage.observedOccurrences })} across {ui("{count, plural, one {# day} other {# days}}", { count: stage.observedDays })}</span></div>
                 <ChevronDown className={styles.stageChevron} size={15} />
               </button>
+              <TimingDisclosure label={`Timing for step ${index + 1}`} value={stage.timing} />
+              </div>
               {open && <div className={styles.stageDisclosure}>
                 <section className={styles.procedureDetails} aria-label={ui("Procedure details for {value1}", { value1: stage.name })}>
                   {stage.procedure?.length ? <ol>{stage.procedure.map((detail, detailIndex) => <li key={`${detail.kind}-${detailIndex}`}>

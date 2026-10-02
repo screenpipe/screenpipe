@@ -23,7 +23,8 @@ fn fixture() -> Value {
     // Publication must validate this fifth reference before applying UI limits.
     stages[0]["evidence"] = json!(rows);
     stages[0]["procedure"].as_array_mut().unwrap().push(json!({"kind":"check","text":"Verify the receipt total.","timestamp":rows[4]["timestamp"],"app":"Receipts","quote":rows[4]["quote"]}));
-    json!({"rows":rows,"expectedAverageMinutes":7,"expectedSamples":2,"payload":{"id":"wf-receipts","title":"Record vendor invoice receipts","description":"Enter vendor invoices and confirm the receipts are saved.","trigger":"A vendor invoice arrives","outcome":"Receipt saved","apps":["Receipts"],"confidence":90,"timingRuns":runs,"stages":stages,"evidence":rows,"captureSequence":[rows[0],rows[1]],"limitations":[],"openQuestions":[],"variations":[],"bottlenecks":[]}})
+    stages[0]["timingRuns"] = json!([{"start":rows[0],"end":rows[4],"summary":"Invoice entry ends when the total is verified."}]);
+    json!({"rows":rows,"expectedStepAverageMinutes":4,"expectedAverageMinutes":7,"expectedSamples":2,"payload":{"id":"wf-receipts","title":"Record vendor invoice receipts","description":"Enter vendor invoices and confirm the receipts are saved.","trigger":"A vendor invoice arrives","outcome":"Receipt saved","apps":["Receipts"],"confidence":90,"timingRuns":runs,"stages":stages,"evidence":rows,"captureSequence":[rows[0],rows[1]],"limitations":[],"openQuestions":[],"variations":[],"bottlenecks":[]}})
 }
 
 async fn post(client: &reqwest::Client, base: &str, body: Value) -> (u16, Value) {
@@ -225,6 +226,17 @@ async fn timing_survives_verified_publication_retries_and_disk_reload() {
     assert_eq!(timing["minMinutes"], 6.0);
     assert_eq!(timing["maxMinutes"], 8.0);
     assert_eq!(timing["basis"], "estimated-elapsed");
+    if let Some(expected) = input.get("expectedStepAverageMinutes") {
+        let stage = &saved["analysis"]["workflows"][0]["stages"][0];
+        assert_eq!(stage["timing"]["averageMinutes"].as_f64(), expected.as_f64());
+        assert_eq!(stage["timing"]["sampleCount"], 1);
+        assert!(saved["analysis"]["workflows"][0]["stages"][1]["timing"].is_null());
+        let context = get(&client, &base, "/workflows/context").await;
+        assert_eq!(
+            context["workflows"][0]["stages"][0]["timingRuns"],
+            stage["timing"]["runs"]
+        );
+    }
     let disk: Value = serde_json::from_slice(&tokio::fs::read(&path).await.unwrap()).unwrap();
     // HTTP localizes timestamps; disk stores UTC. Compare instants, not offsets.
     let canonical = |mut value: Value| {
@@ -256,6 +268,10 @@ async fn timing_survives_verified_publication_retries_and_disk_reload() {
     }
     let reloaded = get(&client, &base, "/workflows/catalog").await;
     assert_eq!(reloaded["analysis"]["workflows"][0]["timing"], *timing);
+    assert_eq!(
+        reloaded["analysis"]["workflows"][0]["stages"][0]["timing"],
+        saved["analysis"]["workflows"][0]["stages"][0]["timing"]
+    );
     assert_eq!(reloaded["agentWorkspace"]["cycle"]["status"], "complete");
     if let Ok(output) = std::env::var("WORKFLOW_TIMING_CATALOG_OUTPUT") {
         tokio::fs::write(output, reloaded.to_string())

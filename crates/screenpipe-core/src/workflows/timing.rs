@@ -14,7 +14,7 @@ pub fn normalize_timing(value: &Value, catalog: &EvidenceCatalog) -> Result<Valu
         return Ok(Value::Null);
     }
     if proposed.len() > 30 {
-        return Err("Keep at most 30 representative timing runs per workflow".into());
+        return Err("Keep at most 30 representative timing runs per workflow or step".into());
     }
     let boundary = |value: &Value| -> Result<(DateTime<Utc>, Value), String> {
         let at = value["timestamp"]
@@ -51,7 +51,7 @@ pub fn normalize_timing(value: &Value, catalog: &EvidenceCatalog) -> Result<Valu
             return Err("A timing run must finish after it starts".into());
         }
         let summary = non_empty_string(run, "summary")
-            .ok_or("Explain why the timing boundaries belong to one complete workflow run")?;
+            .ok_or("Explain why the timing boundaries belong to one complete occurrence")?;
         runs.push((
             start,
             end,
@@ -128,6 +128,8 @@ mod tests {
             json!({"name":key,"description":"A source-backed review step","evidence":[boundary],
                 "procedure":[{"kind":"action","text":"Review research","timestamp":boundary["timestamp"],"app":boundary["app"],"quote":boundary["quote"]}]})
         }).collect::<Vec<_>>());
+        // Each step has independent samples; unknown steps must stay unknown.
+        workflow["stages"][0]["timingRuns"] = json!([workflow["timingRuns"][0]]);
         let result = normalize_analysis(
             json!({"evidenceVersion":2,"workflows":[workflow.clone()]}),
             90,
@@ -135,6 +137,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result["workflows"][0]["timing"]["averageMinutes"], 30.0);
+        assert_eq!(
+            result["workflows"][0]["stages"][0]["timing"]["averageMinutes"],
+            10.0
+        );
+        assert_eq!(
+            result["workflows"][0]["stages"][0]["timing"]["sampleCount"],
+            1
+        );
+        assert!(result["workflows"][0]["stages"][1]["timing"].is_null());
+        let mut bad_step = workflow.clone();
+        bad_step["stages"][0]["timingRuns"][0]["end"]["quote"] =
+            json!("Fabricated step completion");
+        assert!(normalize_analysis(
+            json!({"evidenceVersion":2,"workflows":[bad_step]}),
+            90,
+            &catalog
+        )
+        .is_err());
         // Timing does not promote elapsed time to active time or verified steps.
         assert_eq!(result["workflows"][0]["activeMinutes"], 0);
         workflow["timingRuns"][0]["start"]["timestamp"] = json!("2020-01-01T00:00:00Z");

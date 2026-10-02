@@ -18,6 +18,7 @@ import type {
 import type { WorkflowsPlatform } from "./platform";
 import { isAssistantState, type AssistantState, type WorkflowsAssistantPlatform } from "./assistant";
 import { guideKey, parseGuide, type WorkflowGuide } from "./guide";
+import { isUnchangedStage } from "./workflow-edits";
 import { workflowTiming } from "./timing";
 
 function fixtureAssistant(): WorkflowsAssistantPlatform {
@@ -124,6 +125,13 @@ function fixtureWorkflow(input: FixtureWorkflow, index: number): WorkflowMap {
       name,
       description: input.stageDetails?.[stageIndex]?.description ?? [`Gather the inputs needed to begin ${input.title.toLowerCase()}.`, "Work through the main decision and supporting context.", "Review the result and close the loop."][stageIndex],
       procedure: input.stageDetails?.[stageIndex]?.blocks.map(block => ({ ...block, quote: "", timestamp: "", app: "" })),
+      // Explicit fictional step occurrences, independent of the workflow totals.
+      timing: workflowTiming({ basis: "estimated-elapsed", runs: index === 4 && stageIndex === 0 ? [4, 6].map((minutes, i) => {
+        const start = new Date(Date.UTC(2026, 8, i + 1, 16));
+        return { start: { timestamp: start.toISOString(), app: input.apps[0], quote: "Started gathering fictional research inputs" },
+          end: { timestamp: new Date(start.getTime() + minutes * 60_000).toISOString(), app: input.apps[0], quote: "Finished gathering fictional research inputs" },
+          summary: "One uninterrupted fictional input gathering step" };
+      }) : [] }),
       activeMinutes: stageActive,
       waitingMinutes: stageIndex === 1 ? input.waitingMinutes : 0,
       apps: [input.apps[Math.min(stageIndex, input.apps.length - 1)]],
@@ -532,11 +540,13 @@ export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixt
       const stages = draft.stages.map(s => {
         const prior = s.sourceIndex === null ? null : workflow.stages[s.sourceIndex];
         return { ...(prior ?? { activeMinutes: 0, waitingMinutes: 0, apps: [], confidence: 0, observedOccurrences: 0, observedDays: 0, evidence: [] }),
+          timing: isUnchangedStage(s, prior ?? undefined) ? prior?.timing : null,
           name: s.name.trim(), description: s.description.trim(), userEdited: true,
           procedure: s.procedure.map(p => ({ ...(p.sourceIndex === null ? { quote: "", timestamp: "", app: "" } : prior?.procedure?.[p.sourceIndex] ?? { quote: "", timestamp: "", app: "" }), kind: p.kind, text: p.text.trim(), userEdited: true })),
         };
       });
-      const saved = { ...workflow, id: draft.id, revision: draft.expected_revision + 1, title: draft.title.trim(), description: draft.description.trim(), trigger: draft.trigger.trim(), outcome: draft.outcome.trim(), stages, userEditedAt: new Date().toISOString() };
+      const unchangedStages = draft.stages.length === workflow.stages.length && draft.stages.every((s, i) => s.sourceIndex === i && isUnchangedStage(s, workflow.stages[i]));
+      const saved = { ...workflow, ...(unchangedStages ? {} : { timing: null, durationSource: "unknown" as const, durationSampleCount: 0 }), id: draft.id, revision: draft.expected_revision + 1, title: draft.title.trim(), description: draft.description.trim(), trigger: draft.trigger.trim(), outcome: draft.outcome.trim(), stages, userEditedAt: new Date().toISOString() };
       const next = { ...current, analysis: { workflows: current.analysis.workflows.map(w => w === workflow ? saved : w) } };
       localStorage.setItem(storageKey, JSON.stringify(next));
       current = next;
