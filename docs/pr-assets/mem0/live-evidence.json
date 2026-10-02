@@ -1,0 +1,505 @@
+{
+  "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+  "records": [
+    {
+      "step": "connection-test",
+      "at": "2026-10-02T21:23:04.167Z",
+      "value": {
+        "success": true,
+        "message": "Connected to Mem0. No recordings were uploaded."
+      }
+    },
+    {
+      "step": "public-config-hides-key",
+      "at": "2026-10-02T21:23:04.170Z",
+      "value": {
+        "config": {
+          "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3"
+        }
+      }
+    },
+    {
+      "step": "before-empty",
+      "at": "2026-10-02T21:23:04.412Z",
+      "value": {
+        "count": 0,
+        "next": null,
+        "previous": null,
+        "results": []
+      }
+    },
+    {
+      "step": "synthetic-input",
+      "at": "2026-10-02T21:23:04.412Z",
+      "value": {
+        "input": "For the fictional Cedar project, I prefer written status updates on Fridays. I use Rust for its backend and TypeScript for its dashboard. Please remember these working preferences.",
+        "metadata": {
+          "source": "screenpipe",
+          "source_kind": "synthetic-acceptance",
+          "source_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+          "observed_at": "2026-10-02T21:23:04.412Z"
+        }
+      }
+    },
+    {
+      "step": "add-acknowledgment",
+      "at": "2026-10-02T21:23:04.720Z",
+      "value": {
+        "event_id": "75bd4e55-dcca-4552-a0c7-2fa1baabb7ab",
+        "status": "PENDING"
+      }
+    },
+    {
+      "step": "completed-extraction",
+      "at": "2026-10-02T21:23:09.955Z",
+      "value": {
+        "id": "75bd4e55-dcca-4552-a0c7-2fa1baabb7ab",
+        "event_type": "ADD",
+        "payload": {
+          "app_id": null,
+          "run_id": null,
+          "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+          "agent_id": null,
+          "excludes": null,
+          "includes": null,
+          "messages": [
+            {
+              "role": "user",
+              "content": "For the fictional Cedar project, I prefer written status updates on Fridays. I use Rust for its backend and TypeScript for its dashboard. Please remember these working preferences."
+            }
+          ],
+          "metadata": {
+            "source": "screenpipe",
+            "source_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+            "observed_at": "2026-10-02T21:23:04.412Z",
+            "source_kind": "synthetic-acceptance"
+          },
+          "timezone": "UTC",
+          "immutable": false,
+          "enable_graph": false,
+          "output_format": null,
+          "observation_date": "2026-10-02",
+          "custom_categories": null,
+          "instruction_scope": "user",
+          "prompt_profile_id": null,
+          "temporal_reasoning": true,
+          "custom_instructions": null,
+          "observation_datetime": "2026-10-02T21:23:04.626999+00:00",
+          "structured_data_schema": null,
+          "agent_custom_instructions": null
+        },
+        "metadata": {
+          "source": "screenpipe",
+          "source_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+          "agent_mode": true,
+          "observed_at": "2026-10-02T21:23:04.412Z",
+          "source_kind": "synthetic-acceptance",
+          "temporal_reasoning": true
+        },
+        "results": [
+          {
+            "id": "89fdf4ad-429d-448f-9aac-45281cb5ff21",
+            "data": {
+              "memory": "User prefers written status updates on Fridays for the fictional Cedar project"
+            },
+            "event": "ADD",
+            "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+            "event_end": null,
+            "event_date": null,
+            "event_start": null,
+            "memory_type": null,
+            "plan_status": null,
+            "attributed_to": "user"
+          },
+          {
+            "id": "f2e878a0-5290-4000-95ff-29b09a263054",
+            "data": {
+              "memory": "User uses Rust for the backend of the fictional Cedar project"
+            },
+            "event": "ADD",
+            "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+            "event_end": null,
+            "event_date": null,
+            "event_start": null,
+            "memory_type": null,
+            "plan_status": null,
+            "attributed_to": "user"
+          },
+          {
+            "id": "6e40ae47-ae35-4bcb-b0ee-ecc28b2a6555",
+            "data": {
+              "memory": "User uses TypeScript for the dashboard of the fictional Cedar project"
+            },
+            "event": "ADD",
+            "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+            "event_end": null,
+            "event_date": null,
+            "event_start": null,
+            "memory_type": null,
+            "plan_status": null,
+            "attributed_to": "user"
+          }
+        ],
+        "created_at": "2026-10-02T14:23:04.627367-07:00",
+        "updated_at": "2026-10-02T14:23:09.422303-07:00",
+        "latency": 4533.9130000000005,
+        "status": "SUCCEEDED",
+        "graph_status": null,
+        "error": null,
+        "source": "MEM0"
+      }
+    },
+    {
+      "step": "persisted-facts",
+      "at": "2026-10-02T21:23:10.209Z",
+      "value": {
+        "count": 3,
+        "next": null,
+        "previous": null,
+        "results": [
+          {
+            "id": "6e40ae47-ae35-4bcb-b0ee-ecc28b2a6555",
+            "memory": "User uses TypeScript for the dashboard of the fictional Cedar project",
+            "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+            "metadata": {
+              "source": "screenpipe",
+              "source_kind": "synthetic-acceptance",
+              "source_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+              "observed_at": "2026-10-02T21:23:04.412Z"
+            },
+            "categories": null,
+            "created_at": "2026-10-02T14:23:04-07:00",
+            "updated_at": "2026-10-02T14:23:08-07:00",
+            "expiration_date": null,
+            "structured_attributes": {
+              "year": 2026,
+              "month": 10,
+              "day": 2,
+              "hour": 21,
+              "minute": 23,
+              "day_of_week": "friday",
+              "week_of_year": 40,
+              "day_of_year": 275,
+              "quarter": 4,
+              "is_weekend": false
+            },
+            "replaced_by": null,
+            "synthesized": false
+          },
+          {
+            "id": "89fdf4ad-429d-448f-9aac-45281cb5ff21",
+            "memory": "User prefers written status updates on Fridays for the fictional Cedar project",
+            "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+            "metadata": {
+              "source": "screenpipe",
+              "source_kind": "synthetic-acceptance",
+              "source_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+              "observed_at": "2026-10-02T21:23:04.412Z"
+            },
+            "categories": null,
+            "created_at": "2026-10-02T14:23:04-07:00",
+            "updated_at": "2026-10-02T14:23:08-07:00",
+            "expiration_date": null,
+            "structured_attributes": {
+              "year": 2026,
+              "month": 10,
+              "day": 2,
+              "hour": 21,
+              "minute": 23,
+              "day_of_week": "friday",
+              "week_of_year": 40,
+              "day_of_year": 275,
+              "quarter": 4,
+              "is_weekend": false
+            },
+            "replaced_by": null,
+            "synthesized": false
+          },
+          {
+            "id": "f2e878a0-5290-4000-95ff-29b09a263054",
+            "memory": "User uses Rust for the backend of the fictional Cedar project",
+            "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+            "metadata": {
+              "source": "screenpipe",
+              "source_kind": "synthetic-acceptance",
+              "source_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+              "observed_at": "2026-10-02T21:23:04.412Z"
+            },
+            "categories": null,
+            "created_at": "2026-10-02T14:23:04-07:00",
+            "updated_at": "2026-10-02T14:23:08-07:00",
+            "expiration_date": null,
+            "structured_attributes": {
+              "year": 2026,
+              "month": 10,
+              "day": 2,
+              "hour": 21,
+              "minute": 23,
+              "day_of_week": "friday",
+              "week_of_year": 40,
+              "day_of_year": 275,
+              "quarter": 4,
+              "is_weekend": false
+            },
+            "replaced_by": null,
+            "synthesized": false
+          }
+        ]
+      }
+    },
+    {
+      "step": "semantic-recall",
+      "at": "2026-10-02T21:23:10.510Z",
+      "value": {
+        "results": [
+          {
+            "id": "89fdf4ad-429d-448f-9aac-45281cb5ff21",
+            "memory": "User prefers written status updates on Fridays for the fictional Cedar project",
+            "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+            "agent_id": null,
+            "app_id": null,
+            "run_id": null,
+            "score": 0.2233,
+            "score_breakdown": {
+              "semantic": 0.5429,
+              "bm25": 0.0154,
+              "entity": 0
+            },
+            "metadata": {
+              "source": "screenpipe",
+              "source_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+              "observed_at": "2026-10-02T21:23:04.412Z",
+              "source_kind": "synthetic-acceptance"
+            },
+            "categories": [],
+            "created_at": "2026-10-02T21:23:04+00:00",
+            "updated_at": "2026-10-02T21:23:08+00:00",
+            "expiration_date": null
+          },
+          {
+            "id": "6e40ae47-ae35-4bcb-b0ee-ecc28b2a6555",
+            "memory": "User uses TypeScript for the dashboard of the fictional Cedar project",
+            "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+            "agent_id": null,
+            "app_id": null,
+            "run_id": null,
+            "score": 0.1713,
+            "score_breakdown": {
+              "semantic": 0.4128,
+              "bm25": 0.0155,
+              "entity": 0
+            },
+            "metadata": {
+              "source": "screenpipe",
+              "source_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+              "observed_at": "2026-10-02T21:23:04.412Z",
+              "source_kind": "synthetic-acceptance"
+            },
+            "categories": [],
+            "created_at": "2026-10-02T21:23:04+00:00",
+            "updated_at": "2026-10-02T21:23:08+00:00",
+            "expiration_date": null
+          },
+          {
+            "id": "f2e878a0-5290-4000-95ff-29b09a263054",
+            "memory": "User uses Rust for the backend of the fictional Cedar project",
+            "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+            "agent_id": null,
+            "app_id": null,
+            "run_id": null,
+            "score": 0.1473,
+            "score_breakdown": {
+              "semantic": 0.3528,
+              "bm25": 0.0155,
+              "entity": 0
+            },
+            "metadata": {
+              "source": "screenpipe",
+              "source_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+              "observed_at": "2026-10-02T21:23:04.412Z",
+              "source_kind": "synthetic-acceptance"
+            },
+            "categories": [],
+            "created_at": "2026-10-02T21:23:04+00:00",
+            "updated_at": "2026-10-02T21:23:08+00:00",
+            "expiration_date": null
+          }
+        ]
+      }
+    },
+    {
+      "step": "other-user-empty",
+      "at": "2026-10-02T21:23:10.819Z",
+      "value": {
+        "results": []
+      }
+    },
+    {
+      "step": "correction-read-back",
+      "at": "2026-10-02T21:23:11.608Z",
+      "value": {
+        "id": "89fdf4ad-429d-448f-9aac-45281cb5ff21",
+        "memory": "For the fictional Cedar project, the user now prefers written status updates on Mondays.",
+        "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+        "metadata": {
+          "source": "screenpipe",
+          "source_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+          "observed_at": "2026-10-02T21:23:04.412Z",
+          "source_kind": "synthetic-acceptance"
+        },
+        "categories": null,
+        "created_at": "2026-10-02T14:23:04-07:00",
+        "updated_at": "2026-10-02T14:23:11.090579-07:00",
+        "expiration_date": null,
+        "structured_attributes": {
+          "day": 2,
+          "hour": 21,
+          "year": 2026,
+          "month": 10,
+          "minute": 23,
+          "quarter": 4,
+          "is_weekend": false,
+          "day_of_week": "friday",
+          "day_of_year": 275,
+          "week_of_year": 40
+        },
+        "replaced_by": null,
+        "synthesized": false,
+        "lifecycle_state": "active"
+      }
+    },
+    {
+      "step": "corrected-semantic-recall",
+      "at": "2026-10-02T21:23:11.900Z",
+      "value": {
+        "results": [
+          {
+            "id": "89fdf4ad-429d-448f-9aac-45281cb5ff21",
+            "memory": "For the fictional Cedar project, the user now prefers written status updates on Mondays.",
+            "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+            "agent_id": null,
+            "app_id": null,
+            "run_id": null,
+            "score": 0.255,
+            "score_breakdown": {
+              "semantic": 0.6222,
+              "bm25": 0.0154,
+              "entity": 0
+            },
+            "metadata": {
+              "source": "screenpipe",
+              "source_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+              "observed_at": "2026-10-02T21:23:04.412Z",
+              "source_kind": "synthetic-acceptance"
+            },
+            "categories": [],
+            "created_at": "2026-10-02T21:23:04+00:00",
+            "updated_at": "2026-10-02T21:23:11.090579+00:00",
+            "expiration_date": null
+          },
+          {
+            "id": "6e40ae47-ae35-4bcb-b0ee-ecc28b2a6555",
+            "memory": "User uses TypeScript for the dashboard of the fictional Cedar project",
+            "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+            "agent_id": null,
+            "app_id": null,
+            "run_id": null,
+            "score": 0.1707,
+            "score_breakdown": {
+              "semantic": 0.4113,
+              "bm25": 0.0155,
+              "entity": 0
+            },
+            "metadata": {
+              "source": "screenpipe",
+              "source_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+              "observed_at": "2026-10-02T21:23:04.412Z",
+              "source_kind": "synthetic-acceptance"
+            },
+            "categories": [
+              "technology"
+            ],
+            "created_at": "2026-10-02T21:23:04+00:00",
+            "updated_at": "2026-10-02T21:23:10.627360+00:00",
+            "expiration_date": null
+          },
+          {
+            "id": "f2e878a0-5290-4000-95ff-29b09a263054",
+            "memory": "User uses Rust for the backend of the fictional Cedar project",
+            "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+            "agent_id": null,
+            "app_id": null,
+            "run_id": null,
+            "score": 0.1519,
+            "score_breakdown": {
+              "semantic": 0.3643,
+              "bm25": 0.0155,
+              "entity": 0
+            },
+            "metadata": {
+              "source": "screenpipe",
+              "source_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+              "observed_at": "2026-10-02T21:23:04.412Z",
+              "source_kind": "synthetic-acceptance"
+            },
+            "categories": [],
+            "created_at": "2026-10-02T21:23:04+00:00",
+            "updated_at": "2026-10-02T21:23:08+00:00",
+            "expiration_date": null
+          }
+        ]
+      }
+    },
+    {
+      "step": "delete-proxy-boundary",
+      "at": "2026-10-02T21:23:11.901Z",
+      "value": {
+        "error": "DELETE method not allowed through proxy — use the API directly if you need to delete resources"
+      }
+    },
+    {
+      "step": "invalid-key-rejected",
+      "at": "2026-10-02T21:23:11.956Z",
+      "value": {
+        "error": "HTTP status client error (401 Unauthorized) for url (https://api.mem0.ai/v1/ping/)"
+      }
+    },
+    {
+      "step": "result",
+      "at": "2026-10-02T21:23:11.956Z",
+      "value": {
+        "passed": true,
+        "user_id": "screenpipe-acceptance-23138acb-40d9-46f5-a892-d779274cd6c3",
+        "memory_count": 3
+      }
+    },
+    {
+      "step": "synthetic-data-cleanup",
+      "at": "2026-10-02T21:23:13.394Z",
+      "value": [
+        {
+          "id": "6e40ae47-ae35-4bcb-b0ee-ecc28b2a6555",
+          "status": 200
+        },
+        {
+          "id": "89fdf4ad-429d-448f-9aac-45281cb5ff21",
+          "status": 200
+        },
+        {
+          "id": "f2e878a0-5290-4000-95ff-29b09a263054",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "step": "after-cleanup-empty",
+      "at": "2026-10-02T21:23:13.654Z",
+      "value": {
+        "count": 0,
+        "next": null,
+        "previous": null,
+        "results": []
+      }
+    }
+  ]
+}

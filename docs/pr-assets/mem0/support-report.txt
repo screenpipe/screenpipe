@@ -1,0 +1,43 @@
+
+
+=== screenpipe-app.log ===
+File modified at: 2026-10-02T21:26:19Z
+application restarted
+
+
+=== screenpipe-app.1.log ===
+File modified at: 2026-10-02T21:26:19Z
+Mem0 acceptance server: http://127.0.0.1:3047 (isolated connection state, no recording)
+2026-10-02T21:19:47.059871Z  INFO screenpipe_engine::connections_api: proxy: POST v3/memories/ → https://api.mem0.ai/v3/memories/?page=1&page_size=50 (connection: mem0, instance: None)
+2026-10-02T21:19:47.381670Z  INFO screenpipe_engine::connections_api: proxy: POST v3/memories/add/ → https://api.mem0.ai/v3/memories/add/ (connection: mem0, instance: None)
+2026-10-02T21:19:47.692583Z  INFO screenpipe_engine::connections_api: proxy: GET v1/event/1a6b9bf5-df89-4703-9420-405603a1830d/ → https://api.mem0.ai/v1/event/1a6b9bf5-df89-4703-9420-405603a1830d/ (connection: mem0, instance: None)
+2026-10-02T21:19:49.392889Z  INFO screenpipe_engine::connections_api: proxy: GET v1/event/1a6b9bf5-df89-4703-9420-405603a1830d/ → https://api.mem0.ai/v1/event/1a6b9bf5-df89-4703-9420-405603a1830d/ (connection: mem0, instance: None)
+2026-10-02T21:19:51.075410Z  INFO screenpipe_engine::connections_api: proxy: GET v1/event/1a6b9bf5-df89-4703-9420-405603a1830d/ → https://api.mem0.ai/v1/event/1a6b9bf5-df89-4703-9420-405603a1830d/ (connection: mem0, instance: None)
+2026-10-02T21:19:52.775635Z  INFO screenpipe_engine::connections_api: proxy: GET v1/event/1a6b9bf5-df89-4703-9420-405603a1830d/ → https://api.mem0.ai/v1/event/1a6b9bf5-df89-4703-9420-405603a1830d/ (connection: mem0, instance: None)
+2026-10-02T21:19:54.461401Z  INFO screenpipe_engine::connections_api: proxy: GET v1/event/1a6b9bf5-df89-4703-9420-405603a1830d/ → https://api.mem0.ai/v1/event/1a6b9bf5-df89-4703-9420-405603a1830d/ (connection: mem0, instance: None)
+2026-10-02T21:19:54.671832Z  INFO screenpipe_engine::connections_api: proxy: POST v3/memories/ → https://api.mem0.ai/v3/memories/?page=1&page_size=50 (connection: mem0, instance: None)
+2026-10-02T21:19:55.027833Z  INFO screenpipe_engine::connections_api: proxy: POST v3/memories/search/ → https://api.mem0.ai/v3/memories/search/ (connection: mem0, instance: None)
+2026-10-02T21:19:55.381017Z  INFO screenpipe_engine::connections_api: proxy: POST v3/memories/search/ → https://api.mem0.ai/v3/memories/search/ (connection: mem0, instance: None)
+2026-10-02T21:19:55.690395Z  INFO screenpipe_engine::connections_api: proxy: PUT v1/memories/10c51e3b-0b89-4aa2-93d7-320a31600055/ → https://api.mem0.ai/v1/memories/10c51e3b-0b89-4aa2-93d7-320a31600055/ (connection: mem0, instance: None)
+2026-10-02T21:19:56.580484Z  INFO screenpipe_engine::connections_api: proxy: GET v1/memories/10c51e3b-0b89-4aa2-93d7-320a31600055/ → https://api.mem0.ai/v1/memories/10c51e3b-0b89-4aa2-93d7-320a31600055/ (connection: mem0, instance: None)
+2026-10-02T21:19:56.897110Z  INFO screenpipe_engine::connections_api: proxy: POST v3/memories/search/ → https://api.mem0.ai/v3/memories/search/ (connection: mem0, instance: None)
+2026-10-02T21:19:57.208054Z  WARN screenpipe_engine::connections_api: proxy: blocked DELETE request to mem0/v1/memories/10c51e3b-0b89-4aa2-93d7-320a31600055/ — destructive methods not allowed
+2026-10-02T21:19:57.266066Z  WARN screenpipe_connect::connections::mem0: mem0: connection check failed; credentials were not saved status=Some(401) timeout=false connect=false
+2026-10-02T21:19:58.772559Z  INFO screenpipe_engine::connections_api: proxy: POST v3/memories/ → https://api.mem0.ai/v3/memories/?page=1&page_size=50 (connection: mem0, instance: None)
+2026-10-02T21:23:04.171255Z  INFO screenpipe_engine::connections_api: proxy: POST v3/memories/ → https://api.mem0.ai/v3/memories/?page=1&page_size=50 (connection: mem0, instance: None)
+2026-10-02T21:23:04.415143Z  INFO screenpipe_engine::connections_api: proxy: POST v3/memories/add/ → https://api.mem0.ai/v3/memories/add/ (connection: mem0, instance: None)
+2026-10-02T21:23:04.722751Z  INFO screenpipe_engine::connections_api: proxy: GET v1/event/75bd4e55-dcca-4552-a0c7-2fa1baabb7ab/ → https://api.mem0.ai/v1/event/75bd4e55-dcca-4552-a0c7-2fa1baabb7ab/ (connection: mem0, instance: None)
+2026-10-02T21:23:06.410316Z  INFO screenpipe_engine::connections_api: proxy: GET v1/event/75bd4e55-dcca-4552-a0c7-2fa1baabb7ab/ → https://api.mem0.ai/v1/event/75bd4e55-dcca-4552-a0c7-2fa1baabb7ab/ (connection: mem0, instance: None)
+2026-10-02T21:23:08.115635Z  INFO screenpipe_engine::connections_api: proxy: GET v1/event/75bd4e55-dcca-4552-a0c7-2fa1baabb7ab/ → https://api.mem0.ai/v1/event/75bd4e55-dcca-4552-a0c7-2fa1baabb7ab/ (connection: mem0, instance: None)
+2026-10-02T21:23:09.781827Z  INFO screenpipe_engine::connections_api: proxy: GET v1/event/75bd4e55-dcca-4552-a0c7-2fa1baabb7ab/ → https://api.mem0.ai/v1/event/75bd4e55-dcca-4552-a0c7-2fa1baabb7ab/ (connection: mem0, instance: None)
+2026-10-02T21:23:09.958266Z  INFO screenpipe_engine::connections_api: proxy: POST v3/memories/ → https://api.mem0.ai/v3/memories/?page=1&page_size=50 (connection: mem0, instance: None)
+2026-10-02T21:23:10.212095Z  INFO screenpipe_engine::connections_api: proxy: POST v3/memories/search/ → https://api.mem0.ai/v3/memories/search/ (connection: mem0, instance: None)
+2026-10-02T21:23:10.512791Z  INFO screenpipe_engine::connections_api: proxy: POST v3/memories/search/ → https://api.mem0.ai/v3/memories/search/ (connection: mem0, instance: None)
+2026-10-02T21:23:10.822554Z  INFO screenpipe_engine::connections_api: proxy: PUT v1/memories/89fdf4ad-429d-448f-9aac-45281cb5ff21/ → https://api.mem0.ai/v1/memories/89fdf4ad-429d-448f-9aac-45281cb5ff21/ (connection: mem0, instance: None)
+2026-10-02T21:23:11.292250Z  INFO screenpipe_engine::connections_api: proxy: GET v1/memories/89fdf4ad-429d-448f-9aac-45281cb5ff21/ → https://api.mem0.ai/v1/memories/89fdf4ad-429d-448f-9aac-45281cb5ff21/ (connection: mem0, instance: None)
+2026-10-02T21:23:11.610207Z  INFO screenpipe_engine::connections_api: proxy: POST v3/memories/search/ → https://api.mem0.ai/v3/memories/search/ (connection: mem0, instance: None)
+2026-10-02T21:23:11.900689Z  WARN screenpipe_engine::connections_api: proxy: blocked DELETE request to mem0/v1/memories/89fdf4ad-429d-448f-9aac-45281cb5ff21/ — destructive methods not allowed
+2026-10-02T21:23:11.956101Z  WARN screenpipe_connect::connections::mem0: mem0: connection check failed; credentials were not saved status=Some(401) timeout=false connect=false
+2026-10-02T21:23:13.397195Z  INFO screenpipe_engine::connections_api: proxy: POST v3/memories/ → https://api.mem0.ai/v3/memories/?page=1&page_size=50 (connection: mem0, instance: None)
+
+email=[EMAIL] [SECRET]

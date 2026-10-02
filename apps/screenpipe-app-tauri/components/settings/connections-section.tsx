@@ -723,6 +723,7 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
     financialsense: <img src="/images/financialsense.png" alt="Financial Sense" className="w-5 h-5 rounded" />,
     loops: <img src="/images/loops.svg" alt="Loops" className="w-5 h-5" />,
     resend: <img src="/images/resend.svg" alt="Resend" className="w-5 h-5 dark:invert" />,
+    mem0: <span className="font-mono text-sm font-semibold" aria-label="Mem0">m0</span>,
     readwise: <img src="/images/readwise.svg" alt="Readwise" className="w-5 h-5 dark:invert" />,
     supabase: (
       <svg viewBox="0 0 24 24" className="w-5 h-5" fill="#3ECF8E" aria-hidden>
@@ -769,6 +770,7 @@ const SETTINGS_CONNECTION_IDS = new Set(["custom-mcp", "skills", "pi-extensions"
 
 // Per-connection quickstart prompts shown when "Try in Chat" is clicked.
 export const TRY_IN_CHAT_PROMPTS: Record<string, string> = {
+  mem0: "What useful facts do you remember about me in Mem0?",
   slack: "Summarize recent Slack discussions",
   "google-calendar": "What's on my calendar this week?",
   "google-docs": "Summarize my recent documents",

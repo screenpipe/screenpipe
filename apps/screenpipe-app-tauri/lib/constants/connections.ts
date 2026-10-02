@@ -31,6 +31,7 @@ export const CONNECTION_CATEGORY_BY_ID: Record<string, string> = {
   // AI — assistants, local model runtimes & AI search
   perplexity: "AI",
   glean: "AI",
+  mem0: "AI",
   anythingllm: "AI",
   ollama: "AI",
   lmstudio: "AI",

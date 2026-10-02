@@ -40,6 +40,7 @@ pub mod linear;
 pub mod logseq;
 pub mod loops;
 pub mod make;
+pub mod mem0;
 pub mod microsoft365;
 pub mod mochi;
 pub mod monday;
@@ -428,6 +429,7 @@ pub fn all_integrations() -> Vec<Box<dyn Integration>> {
         Box::new(google_docs::GoogleDocs),
         Box::new(quickbooks::QuickBooks),
         Box::new(readwise::Readwise),
+        Box::new(mem0::Mem0),
         Box::new(mochi::Mochi),
         Box::new(loops::Loops),
         Box::new(resend::Resend),

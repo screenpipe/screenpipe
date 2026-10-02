@@ -832,6 +832,68 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires the real Mem0 acceptance server log in SCREENPIPE_MEM0_REPORT_FIXTURE"]
+    async fn mem0_failure_reaches_support_after_rotation_and_redaction() {
+        let fixture = std::env::var("SCREENPIPE_MEM0_REPORT_FIXTURE").unwrap();
+        let failure = std::fs::read_to_string(fixture).unwrap();
+        assert!(failure.contains("mem0: connection check failed"));
+        assert!(failure.contains("401"));
+        let logs = tempfile::tempdir().unwrap();
+        let current = logs.path().join("screenpipe-app.log");
+        std::fs::write(
+            &current,
+            format!("{failure}\nemail=private@example.com password=hunter2\n"),
+        )
+        .unwrap();
+        std::fs::rename(&current, logs.path().join("screenpipe-app.1.log")).unwrap();
+        std::fs::write(&current, "application restarted\n").unwrap();
+        let files = crate::log_files::collect_log_files(&[logs.path().to_path_buf()]).await;
+        let raw = collect_log_text_from_files(files).await;
+        let redacted = crate::feedback_redact::redact_diagnostics_locally(raw)
+            .await
+            .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "signedUrl": format!("{}/upload/log", server.uri()), "path": "logs/mem0-report.log"
+            }})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload/log"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/logs/confirm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":{"id":42}})))
+            .mount(&server)
+            .await;
+        upload_report(
+            &Client::new(),
+            &server.uri(),
+            &request(),
+            redacted,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let upload = requests.iter().find(|r| r.method == "PUT").unwrap();
+        let report = String::from_utf8_lossy(&upload.body);
+        assert!(report.contains("mem0: connection check failed"));
+        assert!(report.contains("401"));
+        assert!(report.contains("credentials were not saved"));
+        assert!(!report.contains("private@example.com"));
+        assert!(!report.contains("hunter2"));
+        if let Ok(output) = std::env::var("SCREENPIPE_MEM0_REPORT_OUTPUT") {
+            std::fs::write(output, report.as_bytes()).unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn monitor_discovery_failure_reaches_support_after_collection_and_redaction() {
         let server = MockServer::start().await;
         let cause = screenpipe_screen::monitor::MonitorListError::Other(
