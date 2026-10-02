@@ -145,9 +145,10 @@ async function latestTasks() {
   }));
 }
 export async function latestWorkflowJob(): Promise<WorkflowAnalysisJob | null> {
-  const latest = (await latestTasks()).filter(item => item.execution)
+  const tasks = await latestTasks();
+  const latest = tasks.filter(item => item.execution)
     .sort((a,b) => Date.parse(b.execution.started_at) - Date.parse(a.execution.started_at))[0];
-  return latest ? getWorkflowJob(`${latest.task}:${latest.execution.id}`) : null;
+  return latest ? resolveWorkflowJob(`${latest.task}:${latest.execution.id}`, tasks, false) : null;
 }
 
 async function workspace() {
@@ -155,7 +156,11 @@ async function workspace() {
 }
 
 export async function getWorkflowJob(id: string): Promise<WorkflowAnalysisJob> {
-  const [state, tasks] = await Promise.all([workspace(), latestTasks()]);
+  return resolveWorkflowJob(id, await latestTasks(), true);
+}
+
+async function resolveWorkflowJob(id: string, tasks: Awaited<ReturnType<typeof latestTasks>>, includeResult: boolean): Promise<WorkflowAnalysisJob> {
+  const state = await workspace();
   const ws = state.workspace;
   const cycleId = typeof ws.cycle?.id === "string" ? ws.cycle.id : undefined;
   const running = tasks.find(item => ["running", "queued"].includes(item.execution?.status));
@@ -163,6 +168,7 @@ export async function getWorkflowJob(id: string): Promise<WorkflowAnalysisJob> {
   const startedAt = ws.cycle?.end;
   if (ws.cycle?.status === "paused") return { id, cycleId, startedAt, status: "incomplete", message: "Update stopped. Resume to continue from saved progress." };
   if (ws.cycle?.status === "complete") {
+    if (!includeResult) return { id, cycleId, startedAt, status: "complete" };
     const result = await loadScheduledCatalog();
     // Completion is the atomic receipt for this exact requested interval.
     if (result && result.checkedThrough === ws.cycle.end) return { id, cycleId, startedAt, status: "complete", result };

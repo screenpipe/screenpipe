@@ -11,7 +11,7 @@ import {
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
 import type { WorkProfile, WorkflowAnalysis, WorkflowSkillDraft } from "@screenpipe/workflows-ui";
-import { parseGuide, type WorkflowGuide, isAssistantState, type AssistantState } from "@screenpipe/workflows-ui";
+import { serializeWorkflowData, parseGuide, type WorkflowGuide, isAssistantState, type AssistantState } from "@screenpipe/workflows-ui";
 
 const STORAGE_DIRECTORY = "workflows";
 const CATALOG_PATH = `${STORAGE_DIRECTORY}/catalog.json`;
@@ -69,16 +69,24 @@ async function readValidated<T>(
   return null;
 }
 
-async function replaceWithBackup(path: string, backupPath: string, value: unknown) {
+async function replaceWithBackup(path: string, backupPath: string, value: unknown, validate: (value: unknown) => boolean) {
   await mkdir(STORAGE_DIRECTORY, { ...BASE_OPTIONS, recursive: true });
   const temporaryPath = `${path}.${Date.now()}.${Math.random().toString(36).slice(2, 10)}.tmp`;
-  await writeTextFile(temporaryPath, JSON.stringify(value), BASE_OPTIONS);
-
+  // Resolve the last valid value before touching either file. A corrupt primary
+  // must never replace the good backup that allowed recovery.
+  const previous = await readValidated(path, backupPath, (v): v is unknown => validate(v), "data");
   let movedPrevious = false;
   try {
-    if (await exists(path, BASE_OPTIONS)) {
-      if (await exists(backupPath, BASE_OPTIONS)) await remove(backupPath, BASE_OPTIONS);
-      await rename(path, backupPath, RENAME_OPTIONS);
+    await writeTextFile(temporaryPath, serializeWorkflowData(value), BASE_OPTIONS);
+    if (previous !== null) {
+      // Preserve the validated recovery value even when the current primary is corrupt.
+      const backupTemporary = `${temporaryPath}.backup`;
+      try {
+        await writeTextFile(backupTemporary, serializeWorkflowData(previous), BASE_OPTIONS);
+        await rename(backupTemporary, backupPath, RENAME_OPTIONS);
+      } finally {
+        if (await exists(backupTemporary, BASE_OPTIONS)) await remove(backupTemporary, BASE_OPTIONS);
+      }
       movedPrevious = true;
     }
     await rename(temporaryPath, path, RENAME_OPTIONS);
@@ -112,7 +120,7 @@ export function loadWorkflowAnalysisFromDisk() {
 }
 
 export function saveWorkflowAnalysisToDisk(analysis: WorkflowAnalysis) {
-  return queueWrite(() => replaceWithBackup(CATALOG_PATH, CATALOG_BACKUP_PATH, analysis));
+  return queueWrite(() => replaceWithBackup(CATALOG_PATH, CATALOG_BACKUP_PATH, analysis, isStoredWorkflowAnalysis));
 }
 
 export function loadWorkProfileFromDisk() {
@@ -120,7 +128,7 @@ export function loadWorkProfileFromDisk() {
 }
 
 export function saveWorkProfileToDisk(profile: WorkProfile) {
-  return queueWrite(() => replaceWithBackup(PROFILE_PATH, PROFILE_BACKUP_PATH, profile));
+  return queueWrite(() => replaceWithBackup(PROFILE_PATH, PROFILE_BACKUP_PATH, profile, isStoredWorkProfile));
 }
 
 export function resetWorkflowDiskStorageForTests() {
@@ -132,7 +140,7 @@ export function loadAssistantFromDisk() {
 }
 
 export function saveAssistantToDisk(state: AssistantState) {
-  return queueWrite(() => replaceWithBackup("workflows/assistant.json", "workflows/assistant.backup.json", state));
+  return queueWrite(() => replaceWithBackup("workflows/assistant.json", "workflows/assistant.backup.json", state, isAssistantState));
 }
 
 // Guide drafts share the app's serialized, recoverable file writes.
@@ -153,7 +161,7 @@ export function saveGuideToDisk(guide: WorkflowGuide) {
   return queueWrite(async () => {
     const validated = parseGuide(guide);
     const guides = await readGuides();
-    await replaceWithBackup("workflows/guides.json", "workflows/guides.backup.json", { ...guides, [validated.workflowKey]: validated });
+    await replaceWithBackup("workflows/guides.json", "workflows/guides.backup.json", { ...guides, [validated.workflowKey]: validated }, isGuideStore);
   });
 }
 
@@ -180,6 +188,6 @@ export function saveSkillDraftToDisk(workflowKey: string, draft: WorkflowSkillDr
   return queueWrite(async () => {
     if (!workflowKey || !isSkillDraftStore({ [workflowKey]: draft })) throw new Error("Invalid skill draft");
     const drafts = await readSkillDrafts();
-    await replaceWithBackup("workflows/skill-drafts.json", "workflows/skill-drafts.backup.json", { ...drafts, [workflowKey]: draft });
+    await replaceWithBackup("workflows/skill-drafts.json", "workflows/skill-drafts.backup.json", { ...drafts, [workflowKey]: draft }, isSkillDraftStore);
   });
 }

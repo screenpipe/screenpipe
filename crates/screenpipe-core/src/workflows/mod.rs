@@ -1266,6 +1266,34 @@ pub fn measured_time_profile(
     })
 }
 
+/// Catalogs retain capture identity, never independent copies of recorder pixels.
+/// Recursing also covers retained workflow revisions and workspace drafts.
+/// Keep the empty field for older readers that expect a string.
+pub fn discard_screenshot_pixels(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            if object
+                .get("frameId")
+                .and_then(Value::as_i64)
+                .is_some_and(|id| id > 0)
+                && object.get("timestamp").and_then(Value::as_str).is_some()
+                && object.contains_key("dataUrl")
+            {
+                object.insert("dataUrl".into(), json!(""));
+            }
+            for child in object.values_mut() {
+                discard_screenshot_pixels(child);
+            }
+        }
+        Value::Array(array) => {
+            for child in array {
+                discard_screenshot_pixels(child);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Requested exact frames, in display order. Old clients may send a single ID.
 pub fn screenshot_frame_ids(stage: &Value) -> Vec<i64> {
     let mut seen = HashSet::new();

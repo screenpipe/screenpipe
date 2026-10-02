@@ -35,14 +35,9 @@ pub async fn prepare_segments(
         filter_music_frames(&mut audio_data);
     }
 
-    // Silero VAD v5 expects continuous 512-sample chunks at 16kHz (32ms).
-    // On Windows, WASAPI delivers lower audio levels than CoreAudio, so we
-    // must feed Silero at its native frame size to preserve its LSTM temporal
-    // state — using 1600 caused 68ms gaps that broke speech detection.
-    #[cfg(target_os = "windows")]
-    let frame_size = 512;
-    #[cfg(not(target_os = "windows"))]
-    let frame_size = 1600;
+    // Feed every sample to the selected engine at its native window size.
+    // Oversized Silero input is truncated internally, creating detection gaps.
+    let frame_size = vad_engine.lock().await.frame_size();
     let vad_engine = vad_engine.clone();
 
     // Use a lower speech threshold for output/system audio devices.
@@ -60,11 +55,20 @@ pub async fn prepare_segments(
     let mut total_frames = 0;
     let mut speech_frame_count = 0;
 
+    let mut final_frame = vec![0.0; frame_size];
     for chunk in audio_data.chunks(frame_size) {
         total_frames += 1;
 
         let mut new_chunk = chunk.to_vec();
-        let status = vad_engine.lock().await.audio_type(chunk);
+        // Pad only the final analysis window. Keep the original samples and
+        // duration for persistence/transcription, including a short final cue.
+        let vad_frame = if chunk.len() < frame_size {
+            final_frame[..chunk.len()].copy_from_slice(chunk);
+            &final_frame[..]
+        } else {
+            chunk
+        };
+        let status = vad_engine.lock().await.audio_type(vad_frame);
         match status {
             Ok(VadStatus::Speech) => {
                 if let Ok(processed_audio) = spectral_subtraction(chunk, noise) {

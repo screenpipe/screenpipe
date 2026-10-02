@@ -24,9 +24,6 @@ use vad_rs::VadStatus;
 /// The thresholds to sweep. Includes the current production value (0.05).
 const THRESHOLDS: &[f32] = &[0.005, 0.01, 0.02, 0.03, 0.04, 0.05, 0.10, 0.20];
 
-/// Frame size matching prepare_segments.rs (100ms at 16kHz).
-const FRAME_SIZE: usize = 1600;
-
 /// Chunk duration matching the audio pipeline (30 seconds).
 const CHUNK_DURATION_SECS: f64 = 30.0;
 
@@ -52,7 +49,7 @@ fn compute_speech_ratio(audio_chunk: &[f32], vad: &mut SileroVad) -> f32 {
     let mut total_frames = 0u32;
     let mut speech_frame_count = 0u32;
 
-    for chunk in audio_chunk.chunks(FRAME_SIZE) {
+    for chunk in audio_chunk.chunks(vad.frame_size()) {
         total_frames += 1;
         let status = vad.audio_type(chunk);
         if let Ok(VadStatus::Speech) = status {
