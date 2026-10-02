@@ -155,6 +155,14 @@ describe("starred sessions", () => {
     expect(mocks.fetch.mock.calls.filter((c) => c[1]?.method === "POST")).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "Edit times" })).toBeNull();
   });
+  it("does not truncate stored milliseconds when leaving an unchanged time", async () => {
+    saved = [{ ...session, end: "2026-10-02T17:18:00.456Z" }];
+    render(<Panel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit session end" }));
+    fireEvent.blur(screen.getByLabelText("Session end"));
+    expect(saved[0].end).toBe("2026-10-02T17:18:00.456Z");
+    expect(mocks.fetch.mock.calls.filter((c) => c[1]?.method === "POST")).toHaveLength(0);
+  });
   it("saves a start time on blur and cancels an end edit with Escape", async () => {
     saved = [session];
     render(<Panel />);

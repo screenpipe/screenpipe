@@ -54,7 +54,7 @@ export function StarredSessionPanel({
       setError("End time must be after start time.");
       return;
     }
-    if (next[edit.key] === edit.session[edit.key]) {
+    if (value === localTime(edit.session[edit.key])) {
       closeEditor(focus);
       return;
     }
