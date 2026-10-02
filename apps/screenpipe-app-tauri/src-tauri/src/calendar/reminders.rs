@@ -141,11 +141,11 @@ impl Ledger {
         for (source, events) in &snapshot.sources {
             let current: BTreeMap<_, _> = events
                 .iter()
-                .filter_map(|event| Occurrence::from_event(*source, event))
+                .filter_map(|event| Occurrence::from_event(source.clone(), event))
                 .filter(|event| event.end + RETENTION_SECONDS > now)
                 .map(|event| (event.provider_key.clone(), event))
                 .collect();
-            if let Some(previous) = self.observed.insert(*source, current.clone()) {
+            if let Some(previous) = self.observed.insert(source.clone(), current.clone()) {
                 for (key, occurrence) in previous {
                     if !current.contains_key(&key) && occurrence.start > now {
                         self.record(&occurrence, Disposition::Removed);
@@ -164,7 +164,7 @@ impl Ledger {
         let mut due = BTreeMap::new();
         for (source, events) in &snapshot.sources {
             for event in events {
-                let Some(occurrence) = Occurrence::from_event(*source, event) else {
+                let Some(occurrence) = Occurrence::from_event(source.clone(), event) else {
                     continue;
                 };
                 // Never catch up a reminder for a call that has already started
@@ -385,7 +385,7 @@ fn matches_bound_event(
         && snapshot.sources.iter().any(|(source, events)| {
             events.iter().any(|event| {
                 event.id == bound
-                    && Occurrence::from_event(*source, event)
+                    && Occurrence::from_event(source.clone(), event)
                         .is_some_and(|candidate| candidate.room_key == occurrence.room_key)
             })
         })
