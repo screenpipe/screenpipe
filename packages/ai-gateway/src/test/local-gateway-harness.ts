@@ -21,6 +21,7 @@ type PrivateControlName = keyof typeof TEST_PRIVATE_COST_CONTROLS;
 
 export interface LocalGatewayHarnessOptions {
 	port?: number;
+	sentryDsn?: string;
 	privateCostControls?: Partial<Record<PrivateControlName, string | undefined>>;
 	providerReply?: string;
 	cloudflareSpendRules?: boolean;
@@ -192,6 +193,7 @@ export class LocalGatewayHarness {
 				port: options.port ?? 0,
 				bindings: {
 					...jsonBindings(options.privateCostControls),
+					...(options.sentryDsn ? { SENTRY_DSN: options.sentryDsn } : {}),
 					...(options.ttsStatus !== undefined ? { TTS_ENABLED: 'true', ELEVENLABS_VOICE_ID: 'fictionalVoice123', ELEVENLABS_USD_PER_CHARACTER: '0.0001', SOP_TTS_USD_PER_CHARACTER: '0.0001' } : {}),
 					OPENAI_API_KEY: 'screenpipe-local-e2e-only',
 					ADMIN_SECRET: 'screenpipe-local-e2e-admin-only',

@@ -25,6 +25,7 @@ import { handleRealtimeTranscriptionUpgrade } from './handlers/realtime-transcri
 import { handleVoiceTranscription, handleVoiceQuery, handleTextToSpeech, handleVoiceChat } from './handlers/voice';
 import { handleVertexProxy, handleVertexModels } from './handlers/vertex-proxy';
 import { handleWebSearch } from './handlers/web-search';
+import { handleDecisions, DECISION_MAX_REQUEST_BYTES } from './handlers/decisions';
 import { handleTinfoilAttestation, handleTinfoilProxy, parseTinfoilUsageMetrics } from './handlers/tinfoil-proxy';
 import { handleGlmEncryptedProxy } from './handlers/glm-encrypted-proxy';
 import {
@@ -759,6 +760,19 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			}
 		}
 
+		// Decisions use the existing authenticated, rate-limited hosted AI boundary.
+		if (path === '/v1/decisions' && request.method === 'POST') {
+			const gate = paidHostedAiRouteError(authResult);
+			if (gate) return gate;
+			const parsed = await readBoundedJson(request, DECISION_MAX_REQUEST_BYTES);
+			if (!parsed.ok) {
+				return addCorsHeaders(Response.json({
+					error: parsed.tooLarge ? 'request_too_large' : 'invalid_json',
+				}, { status: parsed.tooLarge ? 413 : 400 }));
+			}
+			return await handleDecisions(parsed.value, request, env, authResult);
+		}
+
 		// Web search endpoint - uses Gemini's Google Search grounding
 		if (path === '/v1/web-search' && request.method === 'POST') {
 			const gate = paidHostedAiRouteError(authResult);
@@ -1372,6 +1386,7 @@ export default {
 					dsn: env.SENTRY_DSN,
 					tracesSampleRate: 0.1,
 					beforeSend: scrubSentryEvent,
+					beforeSendTransaction: scrubSentryEvent,
 					// release must match the value passed to `sentry-cli sourcemaps
 					// upload --release=<R>` at deploy time, otherwise Sentry can't
 					// symbolicate stack frames and every event shows `index.js:NNN`
