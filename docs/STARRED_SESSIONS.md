@@ -12,6 +12,7 @@ A star marks a saved time interval. Capture settings, exclusions, pauses, histor
 
 - `GET /starred-sessions?start_time=...&end_time=...&limit=10&offset=0` lists overlapping intervals, newest first. The limit is capped at 100. `id=UUID` retrieves one interval.
 - `POST /starred-sessions` creates or edits `{id, start, end, hd_requested, revision}`. Use a UUID and RFC3339 timestamps. Revision 0 creates; edits use the last returned revision. Identical retries are idempotent. A stale revision or another active session returns 409.
+- `GET /search?starred_only=true&start_time=...&end_time=...&limit=10` retrieves captured starred work directly. Intervals are merged before pagination to avoid duplicates. More than 100 disjoint intervals returns an actionable error to narrow the time range.
 - `GET /search?starred_session_id=UUID&limit=10` intersects normal search filters with that session's `[start,end)` interval. Search hits include `starred: boolean`, including after cached searches are invalidated by an edit.
 
 Responses include `has_audio: boolean`, indicating indexed audio chunks beginning in the interval. It does not enable capture or guarantee retained media files. Export includes whatever audio was captured automatically; there is no separate audio checkbox.
@@ -28,4 +29,6 @@ HD uses a separate bounded lease. Ending a star leaves an unrelated meeting/time
 
 ## Agents
 
-MCP exposes `list-starred-sessions`; the bundled ACP bridge exposes `starred_sessions`. Workflow activity classification reads at most ten intervals for its current review window, then prioritizes their captured evidence. Skills route specific starred-work requests to bounded retrieval. Interval history is not added to standing prompts. A star alone does not establish task completion, repeated behavior, or time savings.
+The existing MCP `search-content` tool accepts `starred_only=true`; no dedicated starred-session tool is added. `activity-summary` includes at most ten recent `starred_sessions` and `starred_sessions_has_more`, including sessions without captured content. Narrow the review window to inspect more metadata; starred-only search independently covers the whole requested window. Set `include_starred=false` to omit this context. Session metadata is omitted for app/data-restricted summary reads and intervals spanning inaccessible history.
+
+The bundled ACP SQL tool describes the starred interval table and EXISTS predicate; HTTP activity-summary includes the same bounded metadata. Workflow activity classification uses the existing summary response to prioritize evidence. Skills describe direct retrieval and keep interval history out of standing prompts. A star alone does not establish task completion, repeated behavior, or time savings.

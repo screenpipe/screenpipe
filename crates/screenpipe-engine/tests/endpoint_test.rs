@@ -80,6 +80,181 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn starred_search_paginates_union_and_summary_includes_empty_sessions() {
+        let (app, db) = setup_test_app().await;
+        let base = Utc::now() - Duration::hours(2);
+        let stamp = |minute| {
+            (base + Duration::minutes(minute)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        };
+        // The first two intervals overlap; the third is disjoint; fourth has no capture.
+        for (id, start, end) in [("a", 0, 15), ("b", 5, 20), ("c", 30, 40), ("empty", 50, 55)] {
+            db.save_starred_session(id, &stamp(start), &stamp(end), false, 0, &stamp(60))
+                .await
+                .unwrap();
+        }
+        for minute in [1, 10, 20, 25, 35] {
+            let t = DateTime::parse_from_rfc3339(&stamp(minute))
+                .unwrap()
+                .with_timezone(&Utc);
+            let chunk = db.insert_audio_chunk("fixture.wav", Some(t)).await.unwrap();
+            db.insert_audio_transcription(
+                chunk,
+                &format!("sentinel minute {minute}"),
+                0,
+                "test",
+                &screenpipe_db::AudioDevice {
+                    name: "fixture".into(),
+                    device_type: screenpipe_db::DeviceType::Input,
+                },
+                None,
+                None,
+                None,
+                Some(t),
+            )
+            .await
+            .unwrap();
+        }
+        let get = |uri: String| {
+            let app = app.clone();
+            async move {
+                let response = app
+                    .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                serde_json::from_slice::<serde_json::Value>(
+                    &to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+                )
+                .unwrap()
+            }
+        };
+        let first = get("/search?content_type=audio&starred_only=true&limit=1".into()).await;
+        assert_eq!(first["pagination"]["total"], 3);
+        assert_eq!(
+            first["data"][0]["content"]["transcription"],
+            "sentinel minute 35"
+        );
+        assert_eq!(first["data"][0]["starred"], true);
+        let second =
+            get("/search?content_type=audio&starred_only=true&limit=1&offset=1".into()).await;
+        assert_eq!(
+            second["data"][0]["content"]["transcription"],
+            "sentinel minute 10"
+        );
+        let asc =
+            get("/search?content_type=audio&starred_only=true&limit=10&order=ascending".into())
+                .await;
+        assert_eq!(asc["data"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            asc["data"][0]["content"]["transcription"],
+            "sentinel minute 1"
+        );
+        let ordinary = get("/search?content_type=audio&limit=10".into()).await;
+        assert_eq!(ordinary["pagination"]["total"], 5);
+        let unrelated =
+            get("/search?content_type=audio&starred_only=true&q=absent&limit=10".into()).await;
+        assert_eq!(unrelated["pagination"]["total"], 0);
+        let exact = get(format!(
+            "/search?content_type=audio&starred_only=true&starred_session_id=c&limit=10"
+        ))
+        .await;
+        assert_eq!(exact["pagination"]["total"], 1);
+        let range = format!("start_time={}&end_time={}", stamp(0), stamp(60));
+        let summary = get(format!("/activity-summary?{range}")).await;
+        assert_eq!(summary["starred_sessions"].as_array().unwrap().len(), 4);
+        assert_eq!(summary["starred_sessions"][0]["id"], "empty");
+        assert_eq!(summary["starred_sessions"][0]["has_audio"], false);
+        assert_eq!(summary["starred_sessions_has_more"], false);
+        let lean = get(format!("/activity-summary?{range}&include_starred=false")).await;
+        assert!(lean.get("starred_sessions").is_none());
+        assert_eq!(
+            lean["total_active_minutes"],
+            summary["total_active_minutes"]
+        );
+        let app_filtered = get(format!("/activity-summary?{range}&app_name=Other")).await;
+        assert!(app_filtered.get("starred_sessions").is_none());
+        let perms = screenpipe_core::pipes::permissions::PipePermissions {
+            pipe_name: "restricted-fixture".into(),
+            allow_rules: vec![screenpipe_core::pipes::permissions::PermissionRule::App { value: "Other".into() }],
+            deny_rules: vec![],
+            use_default_allowlist: true,
+            time_range: None,
+            days: None,
+            pipe_token: None,
+            pipe_dir: None,
+            privacy_filter: false,
+        };
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/activity-summary?{range}"))
+                    .extension(Arc::new(perms))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let restricted: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert!(restricted.get("starred_sessions").is_none());
+        assert!(restricted.get("starred_sessions_has_more").is_none());
+        for i in 0..11 {
+            db.save_starred_session(
+                &format!("extra-{i}"),
+                &stamp(60 + i * 2),
+                &stamp(61 + i * 2),
+                false,
+                0,
+                &stamp(90),
+            )
+            .await
+            .unwrap();
+        }
+        let many = get(format!(
+            "/activity-summary?start_time={}&end_time={}",
+            stamp(60),
+            stamp(90)
+        ))
+        .await;
+        assert_eq!(many["starred_sessions"].as_array().unwrap().len(), 10);
+        assert_eq!(many["starred_sessions_has_more"], true);
+        // Broad requests fail explicitly rather than silently searching only a prefix.
+        for i in 0..101 {
+            db.save_starred_session(
+                &format!("old-{i}"),
+                &stamp(-500 + i * 2),
+                &stamp(-499 + i * 2),
+                false,
+                0,
+                &stamp(90),
+            )
+            .await
+            .unwrap();
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/search?starred_only=true&content_type=audio")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert!(error["error"]
+            .as_str()
+            .unwrap()
+            .contains("narrow start_time/end_time"));
+    }
+
+    #[tokio::test]
     async fn starred_api_creates_edits_and_reports_audio() {
         let (app, db) = setup_test_app().await;
         let now = Utc::now();

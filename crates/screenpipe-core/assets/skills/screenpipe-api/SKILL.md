@@ -1,6 +1,6 @@
 ---
 name: screenpipe-api
-description: Query the user's local and synced-device data via the screenpipe REST API at localhost:3030 — recordings, audio, UI, meetings, connected services, and memory. Use for screen activity, other-device or cross-device history, productivity, media export, connections, durable memory, or discovering and automating saved workflows.
+description: Query the user's local and synced-device data via the screenpipe REST API at localhost:3030 — recordings, audio, UI, meetings, connected services, and memory. Use for starred work, screen activity, other-device or cross-device history, productivity, media export, connections, durable memory, or discovering and automating saved workflows.
 ---
 
 # Screenpipe API
@@ -654,6 +654,8 @@ Show a search result's `file_path` as inline code to make it a playable video: `
 
 ## Starred work
 
-For explicitly starred work, use `GET /starred-sessions?limit=10&start_time=...&end_time=...` (or MCP `starred_sessions` / `list-starred-sessions`). Each interval has `id`, `start`, `end`, `has_audio`, `hd_requested`, and `revision`. Retrieve evidence with `GET /search?starred_session_id=ID&limit=10`; each search hit also carries `starred: boolean`. Stars signal user intent, not complete capture or accuracy. Audio presence describes indexed chunks, not a recording permission or a guarantee that media survives retention. Do not load intervals for unrelated searches.
+For captured starred work, use MCP `search-content` with `starred_only=true` and a time range, or `GET /search?starred_only=true&start_time=...&end_time=...&limit=10`. Filtering happens before pagination; hits carry `starred: boolean`. Omit the filter for unrelated searches. If only `query_recordings` is available, use `EXISTS (SELECT 1 FROM starred_sessions s WHERE julianday(s.start) <= julianday(frames.timestamp) AND julianday(frames.timestamp) < julianday(s.end))` in a bounded frames query before LIMIT.
 
-User-authorized marking uses `POST /starred-sessions` with UUID `id`, RFC3339 `start`/`end`, `hd_requested`, and `revision` (0 to create, returned revision to edit). A 409 requires reloading before editing. Timed ranges expire without a UI running. HD is optional, bounded, and does not override pauses or exclusions.
+Activity summaries include up to ten recent `starred_sessions` with exact bounds, IDs and `has_audio`, including sessions with no captured content. `starred_sessions_has_more` means narrow the time range to list the remainder. These are time-range context, not matches for a keyword. Global interval metadata is omitted for app/data-restricted reads. For one known session, search with `starred_session_id=ID`. Stars indicate intent, not completion, repetition or time savings; `has_audio` indicates indexed chunks, not capture permission or retained media.
+
+User-authorized marking uses `POST /starred-sessions` with UUID `id`, RFC3339 `start`/`end`, `hd_requested`, and `revision` (0 to create, returned revision to edit). Reload on 409. `GET /starred-sessions` remains the paginated API for session management. HD is optional and respects pauses/exclusions.

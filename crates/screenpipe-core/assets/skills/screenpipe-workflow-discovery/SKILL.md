@@ -1,6 +1,6 @@
 ---
 name: screenpipe-workflow-discovery
-description: "Identify repeated work from recorded activity and assess which steps could be automated."
+description: "Identify repeated work from recorded activity or starred examples and assess which steps could be automated."
 ---
 
 # workflow discovery
@@ -11,4 +11,4 @@ Count independent occurrences, not repeated frames or repeated discussion of one
 
 Assess a small automation candidate by its available tools, permissions, reversible boundaries, and observable completion criterion. Identify the decisions that still require a person. Do not claim time savings without a baseline or create a schedule, integration, or external action merely from discovering a pattern.
 
-When the user refers to starred work, or when selecting workflow examples, first fetch a small page of starred intervals via screenpipe-api. Prefer those exact bounds as candidates, then verify captured steps and gaps. A star does not prove repetition or time savings. Keep this lookup task-specific; do not add the user's interval history to standing prompts.
+For starred work, retrieve captured evidence directly with screenpipe-api's starred-only search and a bounded time range. For broader workflow review, use the activity summary's starred intervals to prioritize existing evidence; retrieve missing steps only when needed. A star indicates intent, not repetition, completion or time savings. Do not add interval history to standing prompts.

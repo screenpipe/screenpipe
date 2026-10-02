@@ -29,6 +29,27 @@ impl DatabaseManager {
             .fetch_all(&mut *self.acquire_read().await?).await
     }
 
+    /// Merge overlapping intervals before pagination so a capture is returned once.
+    /// Return one extra range so callers can reject overly broad work explicitly.
+    pub async fn starred_search_ranges(
+        &self,
+        start: &str,
+        end: &str,
+    ) -> Result<Vec<(String, String)>, SqlxError> {
+        sqlx::query_as(
+            "WITH clipped AS (
+                SELECT MAX(start, ?1) AS start, MIN(end, ?2) AS end
+                FROM starred_sessions WHERE end > ?1 AND start < ?2
+            ), preceding AS (
+                SELECT *, MAX(end) OVER (ORDER BY start, end ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS previous_end FROM clipped
+            ), grouped AS (
+                SELECT *, SUM(CASE WHEN previous_end IS NULL OR start > previous_end THEN 1 ELSE 0 END) OVER (ORDER BY start, end) AS island FROM preceding
+            ) SELECT MIN(start), MAX(end) FROM grouped GROUP BY island ORDER BY MIN(start) LIMIT 101",
+        )
+        .bind(start).bind(end)
+        .fetch_all(&mut *self.acquire_read().await?).await
+    }
+
     pub async fn get_starred_session(&self, id: &str) -> Result<Option<StarredSession>, SqlxError> {
         sqlx::query_as("SELECT s.*, EXISTS(SELECT 1 FROM audio_chunks a WHERE a.timestamp >= substr(s.start,1,19) AND a.timestamp < substr(s.end,1,19) || '~' AND julianday(a.timestamp) >= julianday(s.start) AND julianday(a.timestamp) < julianday(s.end) AND a.file_path <> '') AS has_audio FROM starred_sessions s WHERE s.id = ?1")
             .bind(id).fetch_optional(&mut *self.acquire_read().await?).await

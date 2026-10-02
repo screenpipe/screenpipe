@@ -289,4 +289,4 @@ Reads `~/.screenpipe/pipes/<pipe-name>/pipe.md`, extracts title/description/icon
 
 ## Starred sessions
 
-Use `star list --limit 10`, `star start --minutes 15` (5/15/30/60; optional `--hd`), `star end`, or `star edit ID --start TIME --end TIME` with the invocation prefix above. These commands use the running engine, return JSON, and respect `SCREENPIPE_API_URL` / `SCREENPIPE_LOCAL_API_URL` and `SCREENPIPE_LOCAL_API_KEY`. Read intervals before retrieving their exact bounds; marking requires the user's request.
+Use `star list --limit 10`, `star start --minutes 15` (5/15/30/60; optional `--hd`), `star end`, or `star edit ID --start TIME --end TIME` with the invocation prefix above. These commands use the running engine, return JSON, and respect `SCREENPIPE_API_URL` / `SCREENPIPE_LOCAL_API_URL` and `SCREENPIPE_LOCAL_API_KEY`. For captured starred work, prefer screenpipe-api starred-only search without a preliminary list call; marking requires the user's request.

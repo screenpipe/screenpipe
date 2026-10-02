@@ -1,6 +1,6 @@
 ---
 name: screenpipe-process-guide
-description: "Convert a demonstrated procedure into a reusable guide with verified steps and explicit gaps."
+description: "Convert a recorded or starred procedure into a reusable guide with verified steps and explicit gaps."
 ---
 
 # process guide
@@ -11,4 +11,4 @@ Write prerequisites, the trigger, steps with observable results, meaningful bran
 
 Remove account-specific identifiers, secrets, and private examples. Distinguish instructions captured from a demonstration from a procedure independently tested. Return the guide in the requested destination; packaging it as a persistent skill or publishing it requires that scope to be authorized.
 
-When the user refers to starred work, or when selecting workflow examples, first fetch a small page of starred intervals via screenpipe-api. Prefer those exact bounds as candidates, then verify captured steps and gaps. A star does not prove repetition or time savings. Keep this lookup task-specific; do not add the user's interval history to standing prompts.
+For starred work, retrieve captured evidence directly with screenpipe-api's starred-only search and a bounded time range. For broader workflow review, use the activity summary's starred intervals to prioritize existing evidence; retrieve missing steps only when needed. A star indicates intent, not repetition, completion or time savings. Do not add interval history to standing prompts.
