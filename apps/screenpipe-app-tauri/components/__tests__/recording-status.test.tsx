@@ -38,6 +38,39 @@ beforeEach(() => {
 });
 
 describe("RecordingStatus", () => {
+  it("shows low storage without opening the status dot and routes to cleanup", () => {
+    const props = openStatus({ isGloballyPaused: true,
+      storageWarning: { availableBytes: 3 * 1024 ** 3, thresholdBytes: 5 * 1024 ** 3 },
+      onOpenStorageSettings: vi.fn(), onRefreshStorage: vi.fn() });
+    expect(screen.getByTestId("recording-status-trigger")).toHaveTextContent("Low storage");
+    expect(screen.getByText("3.0 GB free. Recording needs more than 5.0 GB.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Resume all recording" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Manage storage" }));
+    expect(props.onOpenStorageSettings).toHaveBeenCalledOnce();
+    expect(props.onResumeRecording).not.toHaveBeenCalled();
+  });
+
+  it("rechecks storage without starting capture or deleting anything", () => {
+    const props = openStatus({ isGloballyPaused: true, onRefreshStorage: vi.fn(), storageError: true });
+    expect(screen.getByText(/Could not check free space/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Check free space" }));
+    expect(props.onRefreshStorage).toHaveBeenCalledOnce();
+    expect(props.onResumeRecording).not.toHaveBeenCalled();
+    expect(localFetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps resume disabled during a fresh space check", () => {
+    openStatus({ isGloballyPaused: true, storageChecking: true, onRefreshStorage: vi.fn() });
+    expect(screen.getByRole("button", { name: "Resume all recording" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Checking space..." })).toBeDisabled();
+  });
+
+  it("does not mislabel active capture from an old storage warning", () => {
+    openStatus({ storageWarning: { availableBytes: 0, thresholdBytes: 5 * 1024 ** 3 } });
+    expect(screen.getByTestId("recording-status-trigger")).toHaveAccessibleName("Recording");
+    expect(screen.queryByText("Low storage")).not.toBeInTheDocument();
+  });
+
   it("does not infer stopped capture or offer pause from an empty device list", () => {
     const props = openStatus({ devices: [] });
     expect(screen.getByTestId("recording-status-trigger")).toHaveAccessibleName("Recording status unavailable");

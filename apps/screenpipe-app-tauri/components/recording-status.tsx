@@ -5,7 +5,7 @@
 "use client";
 
 import React from "react";
-import { Monitor, MonitorOff, Mic, MicOff, Volume2, VolumeX, Pause, Play } from "lucide-react";
+import { Monitor, MonitorOff, Mic, MicOff, Volume2, VolumeX, Pause, Play, AlertTriangle } from "lucide-react";
 import posthog from "posthog-js";
 import {
   Popover,
@@ -33,7 +33,14 @@ export interface RecordingDevice {
   id?: number;
 }
 
+import type { RecordingStorageWarning } from "@/lib/hooks/use-recording-storage";
+
 interface RecordingStatusProps {
+  storageWarning?: RecordingStorageWarning | null;
+  storageChecking?: boolean;
+  storageError?: boolean;
+  onRefreshStorage?: () => void;
+  onOpenStorageSettings?: () => void;
   devices: RecordingDevice[];
   onDevicesChange: React.Dispatch<React.SetStateAction<RecordingDevice[]>>;
   meetingActive: boolean;
@@ -73,6 +80,7 @@ const KIND_ICONS: Record<
  */
 export function RecordingStatus({
   devices,
+  storageWarning, storageChecking, storageError, onRefreshStorage, onOpenStorageSettings,
   onDevicesChange,
   meetingActive,
   onPauseRecording,
@@ -103,8 +111,11 @@ export function RecordingStatus({
 
   const statusUnavailable = !allCaptureDisabled && !isGloballyPaused && visibleDevices.length === 0;
   const allPaused = !allCaptureDisabled && (isGloballyPaused || (visibleDevices.length > 0 && !canPauseRecording));
+  const lowStorage = isGloballyPaused && !allCaptureDisabled && storageWarning;
   const summary = allCaptureDisabled
     ? ui("Recording disabled")
+    : lowStorage
+      ? ui("Recording paused: low storage")
     : isGloballyPaused
       ? ui("Recording paused")
       : statusUnavailable
@@ -216,13 +227,14 @@ export function RecordingStatus({
               aria-label={label}
               data-testid="recording-status-trigger"
               className={cn(
-                "flex items-center justify-center h-5 w-5 rounded-md transition-colors",
+                "flex items-center justify-center rounded-md transition-colors",
+                lowStorage ? "h-6 gap-1 px-1.5 border border-border text-xs" : "h-5 w-5",
                 floatingOverMedia
                   ? "backdrop-blur-sm bg-background/80 shadow-sm hover:bg-background"
                   : isTranslucent ? "hover:bg-white/10" : "hover:bg-muted/60"
               )}
             >
-              <span
+              {lowStorage ? <><AlertTriangle aria-hidden="true" className="h-3 w-3" /><span>{ui("Low storage")}</span></> : <span
                 aria-hidden="true"
                 className={cn(
                   "h-2 w-2 rounded-full transition-all",
@@ -242,7 +254,7 @@ export function RecordingStatus({
                   visibleDevices.length === 0 && "opacity-40",
                   meetingActive && "animate-pulse"
                 )}
-              />
+              />}
             </button>
           </PopoverTrigger>
         </TooltipTrigger>
@@ -259,12 +271,32 @@ export function RecordingStatus({
         <div className="px-3 py-2 border-b border-border">
           <span className="text-xs font-medium text-foreground">{label}</span>
         </div>
-        {(onPauseRecording || onResumeRecording) && !allCaptureDisabled && !statusUnavailable && (
+        {lowStorage && (
+          <div className="px-3 py-3 space-y-2 border-b border-border" role="status">
+            <p className="text-xs text-muted-foreground">{ui("{free} GB free. Recording needs more than {reserve} GB.", {
+              free: (lowStorage.availableBytes / 1024 ** 3).toFixed(1),
+              reserve: (lowStorage.thresholdBytes / 1024 ** 3).toFixed(1),
+            })}</p>
+            <p className="text-xs text-muted-foreground">{ui("Review cache and retention to free space. You choose what to remove.")}</p>
+            {onOpenStorageSettings && <button type="button" className="w-full rounded-md bg-foreground px-2 py-1.5 text-xs text-background"
+              onClick={() => { onOpenStorageSettings(); setOpen(false); }}>{ui("Manage storage")}</button>}
+          </div>
+        )}
+        {isGloballyPaused && !allCaptureDisabled && onRefreshStorage && (
+          <div className="px-3 py-2 border-b border-border text-xs">
+            {storageError && <p role="status" className="mb-2 text-muted-foreground">{ui("Could not check free space. Try again or review storage settings.")}</p>}
+            <button type="button" disabled={storageChecking} className="underline disabled:opacity-50"
+              onClick={onRefreshStorage}>{storageChecking ? ui("Checking space...") : ui("Check free space")}</button>
+            {storageError && onOpenStorageSettings && <button type="button" className="ml-3 underline"
+              onClick={() => { onOpenStorageSettings(); setOpen(false); }}>{ui("Manage storage")}</button>}
+          </div>
+        )}
+        {(onPauseRecording || onResumeRecording) && !allCaptureDisabled && !statusUnavailable && !lowStorage && (
           <div className="px-3 py-2 border-b border-border">
             <button
               type="button"
               onClick={() => void toggleAllRecording()}
-              disabled={pauseLoading || (allPaused ? (isGloballyPaused && !onResumeRecording) : !onPauseRecording)}
+              disabled={pauseLoading || (allPaused && storageChecking) || (allPaused ? (isGloballyPaused && !onResumeRecording) : !onPauseRecording)}
               data-testid="recording-status-pause-all"
               title={allPaused ? ui("Resume all recording") : ui("Pause all screen and audio recording. Resume anytime.")}
               className="flex w-full items-center justify-center gap-1.5 rounded-md bg-foreground px-2 py-1.5 text-[11px] font-medium text-background transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
@@ -286,6 +318,8 @@ export function RecordingStatus({
               <p>
                 {allCaptureDisabled
                   ? ui("Screen and audio recording are disabled in settings.")
+                  : lowStorage
+                    ? ui("Free space, then check again before resuming.")
                   : isGloballyPaused
                     ? ui("Resume to start capturing screen and audio again.")
                     : ui("Screenpipe has not reported any capture devices. Check the status again or review recording settings.")}

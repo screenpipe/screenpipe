@@ -249,6 +249,8 @@ mod tests {
         assert!(!is_low_disk(LOW_DISK_THRESHOLD_BYTES + 1));
         assert!(is_low_disk(LOW_DISK_THRESHOLD_BYTES));
         assert!(is_low_disk(0));
+        // Small-drive regression: usable space below the former 20 GiB reserve.
+        assert!(!is_low_disk(12 * 1024 * 1024 * 1024));
         assert!(!has_recovered(LOW_DISK_RECOVERY_THRESHOLD_BYTES - 1));
         assert!(has_recovered(LOW_DISK_RECOVERY_THRESHOLD_BYTES));
     }
