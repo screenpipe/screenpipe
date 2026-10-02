@@ -108,9 +108,22 @@ The extension exposes only three tools:
 
 | Tool | Behavior |
 | --- | --- |
-| `learning_context` | At most four queries per run, five items each, recent activity or external chat previews. Activity uses server PII filtering. |
-| `learning_inventory` | Existing skill summaries plus this task's unchanged, previously owned learned skills. |
-| `learning_save` | One attempted change, two new returned evidence references, activity corroboration, three authored scenario checks, a compact method, and a `screenpipe-learned-*` name. |
+| `learning_context` | At most four calls per run. Starts without a literal-text filter; follow-ups use a source term. Samples up to twenty activity rows and returns at most five distinct items. Identical queries and evidence are not repeated within a run. Activity uses server PII filtering. |
+| `learning_inventory` | Cached inventory with twenty summaries per page, optional trigger search, and at most two explicitly requested owned skill bodies. Protected skills remain summaries only. |
+| `learning_save` | One attempted change, two new returned evidence references, activity corroboration, three authored scenario checks, and a `screenpipe-learned-*` name. New bodies are limited to 3000 characters; older longer bodies may be maintained or shortened without growing further. |
+
+The inventory reports a pending-write warning only when a pending receipt exists;
+that state blocks context reads as well as writes. A tool failure stops further
+operations for the current run, without altering the next scheduled run.
+
+The prompt prefers repairing a verified gap in the closest owned skill. Creation
+requires a distinct recurring need; an already-covered method, one-off request,
+ordinary advice or unchanged watch item produces no change. The runtime rejects
+new names with an identical existing trigger description, rejects exact copies of
+an inspected owned method, and returns an unchanged result for an identical update.
+It does not claim to detect all semantic overlap. Updates require reading the
+current body and rechecking ownership and hash. No background pruning or deletion
+is introduced. Summaries and owned bodies remain untrusted input.
 
 Other tool calls, including shell, arbitrary file writes, messages, profile
 updates, and general skill management, are blocked for this task. Calls to the
