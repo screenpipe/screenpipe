@@ -16,7 +16,7 @@
   "six_word_summary": "Search screen and audio history locally.",
   "who": "Maintained by the Screenpipe team at Negentropy Labs, Inc.",
   "what": "Search locally captured screen text and audio transcripts through MCP for recall, meeting notes and work summaries. The stdio server also exposes meeting, memory and recording controls.",
-  "where": "Runs alongside a Screenpipe recorder and its local API, normally at http://localhost:3030. Uses stdio by default; optional Streamable HTTP currently exposes search_content only.",
+  "where": "Runs alongside a Screenpipe recorder and its local API, normally at http://localhost:3030. Uses stdio by default; optional Streamable HTTP exposes a smaller tool set.",
   "when": "Use when an assistant needs context from previously captured desktop activity or conversations.",
   "why": "Ground answers and summaries in searchable work history instead of asking users to reconstruct it manually.",
   "with": "A running Screenpipe recorder and an MCP client. Desktop Settings > Connections configures the bundled runtime and local API key. Manual setup uses Node.js 18 or later, npx -y screenpipe-mcp@latest and SCREENPIPE_LOCAL_API_KEY.",
