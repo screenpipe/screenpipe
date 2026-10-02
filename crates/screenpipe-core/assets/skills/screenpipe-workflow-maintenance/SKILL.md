@@ -75,6 +75,13 @@ replace measurements with [] because this interval has no new occurrence. If tim
 stays unknown, preserve the procedure and explain the missing boundary, interruption
 or failed lookup in limitations. Investigate first; never invent a UI number.
 
+For individual steps, save optional stages[].timingRuns using the same boundary
+format and continuity checks. Investigate the start and completion of that step,
+not just the whole job. Keep valid prior step runs and leave [] when boundaries
+are missing. Never divide a workflow total among steps or sum step averages into
+a workflow average: samples and gaps can differ. The app computes each average
+independently. A single run is labeled as one observation, not a typical average.
+
 ## Older installed pipeline tasks
 
 Only without workflow_workspace and when explicitly assigned the legacy pipeline:

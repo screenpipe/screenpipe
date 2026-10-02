@@ -1,0 +1,146 @@
+/* screenpipe — AI that knows everything you've seen, said, or heard */
+/* https://screenpipe.com */
+.document {
+  min-width: 0;
+}
+.block {
+  position: relative;
+  min-width: 0;
+  padding: 8px 0;
+  border-top: 2px solid transparent;
+}
+.drop {
+  border-top-color: var(--ink, #171815);
+}
+.controls {
+  position: absolute;
+  right: 100%;
+  top: 10px;
+  display: flex;
+  padding-right: 5px;
+  opacity: 0;
+  pointer-events: none;
+}
+.block:hover > .controls,
+.block:focus-within > .controls {
+  opacity: 1;
+  pointer-events: auto;
+}
+.controls button {
+  width: 26px;
+  min-height: 28px !important;
+  padding: 3px !important;
+  background: transparent !important;
+  border: 0 !important;
+  color: var(--muted, #777b70) !important;
+}
+.controls button:hover {
+  color: var(--ink, #171815) !important;
+  background: var(--soft, #f1f2ec) !important;
+}
+.controls button[data-block-handle] {
+  cursor: grab;
+}
+.controls button:active {
+  cursor: grabbing;
+}
+.menu {
+  position: absolute;
+  left: 0;
+  top: 38px;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  width: 180px;
+  border: 1px solid var(--line, #dfe1d9);
+  border-radius: 8px;
+  padding: 4px;
+  background: var(--panel, #fff);
+  box-shadow: 0 4px 16px #00000014;
+}
+.menu button {
+  justify-content: flex-start !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+.menu button:hover {
+  background: var(--soft, #f1f2ec) !important;
+}
+.media {
+  margin: 0;
+}
+.media img,
+.media video {
+  display: block;
+  max-width: 100%;
+  width: 100%;
+  border-radius: 8px;
+}
+.media form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 20px;
+  background: var(--soft, #f1f2ec);
+  border-radius: 8px;
+}
+.media input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: inherit;
+  border: 1px solid var(--line, #dfe1d9);
+  border-radius: 4px;
+  padding: 8px;
+  background: var(--panel, #fff);
+}
+.media figcaption {
+  text-align: center;
+  color: var(--muted, #777b70);
+}
+.heading {
+  font-weight: 600;
+  font-size: 24px;
+  line-height: 1.4;
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+@media (hover: none), (max-width: 650px) {
+  .controls {
+    position: static;
+    opacity: 1;
+    pointer-events: auto;
+    justify-content: flex-end;
+  }
+}
+.block figure {
+  margin: 0;
+}
+.block img,
+.block video {
+  max-width: 100%;
+  height: auto;
+}
+.block textarea {
+  width: 100%;
+  resize: none;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 3px 5px;
+}
+.block textarea:hover {
+  background: var(--soft, #f1f2ec);
+}
+.block textarea:focus-visible {
+  outline: 1px solid var(--muted, #777b70);
+}
+
+.block textarea.heading { font-size:24px; font-weight:600; line-height:1.4; }

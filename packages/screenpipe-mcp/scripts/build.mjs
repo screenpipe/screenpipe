@@ -6,6 +6,8 @@ import { rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+await import("./gen-bundled-skills.mjs");
+
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outdir = path.join(packageRoot, "dist");
 

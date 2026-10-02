@@ -1,0 +1,35 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import { beforeEach, afterAll, expect, mock, test } from 'bun:test';
+let state: any;
+const originalFetch = globalThis.fetch;
+// Install before importing SDKs, which capture fetch at module initialization.
+globalThis.fetch = (...args: any[]) => { if (!state?.fetch) throw Error("network denied before fixture setup"); return state.fetch(...args); };
+mock.module('@clerk/backend',()=>({verifyToken:async(token:string)=>{
+ if(token==='eyJ.synthetic.user')return {sub:state.subject};throw Error('synthetic invalid token');
+}}));
+const {handleRequest}=await import('../index');
+const auth=await import('../utils/auth');
+const env:any={NODE_ENV:'production',AI_GATEWAY_SERVICE_TOKEN:'synthetic-machine-token',CLERK_SECRET_KEY:'synthetic-clerk',OPENAI_API_KEY:'synthetic-provider',CLOUDFLARE_AI_GATEWAY_ID:'synthetic',AI:{gateway:()=>({getUrl:async()=> 'https://provider.example.invalid/v1'})},
+ RATE_LIMITER:{idFromName:(x:any)=>x,get:()=>({fetch:async()=>Response.json({allowed:!state.rateDenied,standing:'good',remaining:10,reset_in:60,tier:'subscribed',rpm_limit:25})})},
+ DB:{prepare:(sql:string)=>({bind:(...values:any[])=>({first:async()=>null,run:async()=>({success:true,meta:{changes:1}}),all:async()=>({results:[]})}),run:async()=>({success:true})})}};
+const ctx={waitUntil:(p:Promise<any>)=>state.pending.push(p),passThroughOnException:()=>{}};
+let serial=0;
+beforeEach(()=>{env.AI_GATEWAY_SERVICE_TOKEN='synthetic-machine-token';state={subject:'user_synthetic_'+(++serial),plan:'pro',dispatch:[],pending:[],unexpected:[],rateDenied:false};auth.__resetAuthEntitlementCacheForTests?.();
+ state.fetch=async(input:any,init:any)=>{const url=input instanceof Request?input.url:String(input);if(['https://api.openai.com/v1/chat/completions','https://provider.example.invalid/v1/chat/completions'].includes(url)){state.dispatch.push({body:JSON.parse(init?.body ?? await input.text())});return Response.json({id:'synthetic-response',model:'gpt-5.6-sol',created:1,object:'chat.completion',choices:[{index:0,message:{role:'assistant',content:'synthetic accepted response'},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}});}if(url==='https://screenpipe.com/api/user')return Response.json({success:true,user:state.unknown?{clerk_id:state.subject}:{clerk_id:state.subject,cloud_subscribed:state.plan==='pro',app_entitled:state.plan!=='none',subscription_plan:state.plan,entitlement:{active:state.plan!=='none',plan:state.plan,features:{app:state.plan!=='none',cloud:state.plan==='pro'}}}});
+ state.unexpected.push(url);throw Error('unexpected network forbidden');};});
+afterAll(()=>{globalThis.fetch=originalFetch;});
+async function request(token?:string,headers:any={},override:any={}){const r=await handleRequest(new Request('https://gateway.example.invalid/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json',...(token?{authorization:'Bearer '+token}:{}),...headers},body:JSON.stringify({model:'gpt-5.6-sol',messages:[{role:'user',content:'synthetic task'}],...override})}),env,ctx);await Promise.all(state.pending);expect(state.unexpected).toEqual([]);return r;}
+async function accepted(token:string,headers:any={}){const r=await request(token,headers);expect(r.status).toBe(200);expect((await r.json()).choices[0].message.content).toBe('synthetic accepted response');expect(state.dispatch).toHaveLength(1);expect(state.dispatch[0].body.messages).toContainEqual({role:'user',content:'synthetic task'});}
+for(const background of [false,true])test('trusted machine successful dispatch background='+background,async()=>{await accepted(env.AI_GATEWAY_SERVICE_TOKEN,background?{'x-screenpipe-latency':'background'}:{});expect(state.dispatch[0].body.model).toBe('gpt-5.6-sol');});
+for(const token of [undefined,'synthetic-machine-token-wrong','user_public_fixture'])test('untrusted caller denied '+token,async()=>{const r=await request(token,{'x-screenpipe-latency':'background','x-screenpipe-workload':'pipe','x-device-id':'cloud-runner'});expect(r.status).toBe(401);expect(state.dispatch).toEqual([]);});
+test('Free user cannot spoof background authority',async()=>{state.plan='none';const r=await request('eyJ.synthetic.user',{'x-screenpipe-latency':'background'});expect(r.status).toBe(403);expect(state.dispatch).toEqual([]);});
+test('paid human still dispatches',()=>accepted('eyJ.synthetic.user'));
+test('machine obeys rate refusal',async()=>{state.rateDenied=true;const r=await request(env.AI_GATEWAY_SERVICE_TOKEN);expect(r.status).toBe(429);expect(state.dispatch).toEqual([]);});
+test('machine malformed model never dispatches',async()=>{const r=await request(env.AI_GATEWAY_SERVICE_TOKEN,{}, {model:''});expect(r.status).toBe(400);expect(state.dispatch).toEqual([]);});
+
+test('unconfigured service token cannot authorize',async()=>{env.AI_GATEWAY_SERVICE_TOKEN='';const r=await request('synthetic-machine-token');expect(r.status).toBe(401);expect(state.dispatch).toEqual([]);});
+test('unsupported credential scheme cannot authorize',async()=>{const r=await request(undefined,{authorization:'Basic synthetic-machine-token'});expect(r.status).toBe(401);expect(state.dispatch).toEqual([]);});
+test('paid human rate refusal remains enforced',async()=>{state.rateDenied=true;const r=await request('eyJ.synthetic.user');expect(r.status).toBe(429);expect(state.dispatch).toEqual([]);});
+test('unknown human plan cannot dispatch',async()=>{state.unknown=true;const r=await request('eyJ.synthetic.user');expect(r.status).toBe(503);expect(state.dispatch).toEqual([]);});
+test('empty machine messages remain invalid',async()=>{const r=await request(env.AI_GATEWAY_SERVICE_TOKEN,{}, {messages:[]});expect(r.status).toBe(400);expect(state.dispatch).toEqual([]);});

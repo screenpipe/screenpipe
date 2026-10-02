@@ -95,6 +95,14 @@ export const NOTIFICATION_CATEGORIES: NotificationCategory[] = [
     keywords: ["recording needs help", "recording stopped", "capture health", "stall", "frozen"],
   },
   {
+    id: "meetingReminders",
+    label: msg("Meeting reminders", {}),
+    description: msg("Remind you to join upcoming calendar meetings", {}),
+    group: "meetings",
+    default: true,
+    keywords: ["calendar", "join", "reminder", "seconds", "minutes", "before"],
+  },
+  {
     id: "meetingLiveNotes",
     label: msg("Meeting live notes", {}),
     description: msg("Prompt to open a live note when a meeting is detected", {}),

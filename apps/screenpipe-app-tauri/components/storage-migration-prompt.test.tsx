@@ -30,7 +30,10 @@ beforeEach(() => {
   commands.startStorageMigration.mockResolvedValue({ status: "ok", data: null });
   commands.cancelStorageMigration.mockResolvedValue({ status: "ok", data: null });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe("automatic storage migration prompt", () => {
   it.each([
@@ -192,6 +195,50 @@ describe("automatic storage migration prompt", () => {
     app.rerender(<StorageMigrationPrompt activity={{ ...idle, busy: true, message: "pausing recording" }} />);
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(commands.startStorageMigration).toHaveBeenCalledOnce();
+  });
+
+  it.each(["started", "failed"])("keeps Start now loading through startup status polls until migration has %s", async (outcome) => {
+    vi.useFakeTimers();
+    let finishStartup!: () => void;
+    commands.startStorageMigration.mockImplementationOnce(() => new Promise((resolve) => {
+      finishStartup = () => resolve(outcome === "started"
+        ? { status: "ok", data: null }
+        : { status: "error", error: "Could not prevent sleep. Migration has not started." });
+    }));
+    const app = render(<StorageMigrationPrompt activity={idle} />);
+    await act(async () => {});
+    // Begin a refresh before the click, so its now-stale startup response can
+    // also arrive after the explicit request has started waiting.
+    let finishStatus!: () => void;
+    commands.getStorageMigrationStatus.mockImplementationOnce(() => new Promise((resolve) => {
+      finishStatus = () => resolve({ status: "ok", data: { ...status } });
+    }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    fireEvent.click(screen.getByRole("button", { name: "Start now" }));
+    Object.assign(status, { can_migrate: false,
+      blocked_reason: "Screenpipe is restarting or restoring recording. Wait for startup to finish.",
+    });
+    await act(async () => {
+      finishStatus();
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(screen.getByRole("button", { name: "Starting…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Do later" })).toBeDisabled();
+    expect(commands.startStorageMigration).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    Object.assign(status, { can_migrate: true, blocked_reason: null });
+    await act(async () => finishStartup());
+    if (outcome === "failed") {
+      expect(screen.getByRole("alert")).toHaveTextContent("Could not prevent sleep");
+      expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
+    } else {
+      app.rerender(<StorageMigrationPrompt activity={{ ...idle, busy: true, message: "pausing recording" }} />);
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    }
+    expect(commands.startStorageMigration).toHaveBeenCalledOnce();
+    expect(commands.cancelStorageMigration).not.toHaveBeenCalled();
+    expect(commands.deleteOriginalStorageDatabase).not.toHaveBeenCalled();
   });
 
   it("offers recovery for an interrupted migration", async () => {

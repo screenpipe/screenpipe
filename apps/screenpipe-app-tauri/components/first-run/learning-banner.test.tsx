@@ -260,7 +260,7 @@ describe("first-run learning banner", () => {
     expect(screen.queryByText("Reading from")).not.toBeInTheDocument();
   });
 
-  it("opens the seeded chat and retires the learning result", async () => {
+  it("requests the seeded chat without treating event delivery as a render", async () => {
     const dismiss = vi.fn();
     mocks.view = view({
       phase: "ready",
@@ -276,7 +276,21 @@ describe("first-run learning banner", () => {
         conversationId: "first-run-1",
       }),
     );
-    expect(dismiss).toHaveBeenCalledTimes(1);
+    expect(dismiss).not.toHaveBeenCalled();
+    expect(mocks.view.markSummaryOpened).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the ready card when the open request fails", async () => {
+    mocks.emit.mockRejectedValueOnce(new Error("event delivery failed"));
+    mocks.view = view({ phase: "ready", chatId: "first-run-1" });
+    render(<FirstRunLearningBanner />);
+
+    fireEvent.click(screen.getByTestId("first-run-open-summary"));
+
+    await waitFor(() => expect(mocks.emit).toHaveBeenCalled());
+    expect(mocks.view.dismiss).not.toHaveBeenCalled();
+    expect(mocks.view.markSummaryOpened).not.toHaveBeenCalled();
+    expect(screen.getByTestId("first-run-open-summary")).toBeInTheDocument();
   });
 
   it("does not repeat onboarding setup after learning resolves", () => {

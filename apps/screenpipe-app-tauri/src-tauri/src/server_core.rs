@@ -1308,6 +1308,10 @@ impl ServerCore {
                 let database_error_hook = redact_database_error_hook.clone();
                 tokio::spawn(async move {
                     let policy = TextRedactionPolicy::from_labels(&labels);
+                    tokio::select! {
+                        _ = shutdown.notified() => return,
+                        _ = screenpipe_core::background_work::wait_until_resumed() => {}
+                    }
                     // Prefer the local ONNX text redactor (~278 MB INT8,
                     // sub-10 ms p50, gets CoreML on macOS / DirectML on
                     // Windows / CPU on Linux via the redact-onnx-* CI
@@ -1436,6 +1440,10 @@ impl ServerCore {
                 let labels = pii_labels.clone();
                 let database_error_hook = redact_database_error_hook.clone();
                 tokio::spawn(async move {
+                    tokio::select! {
+                        _ = shutdown.notified() => return,
+                        _ = screenpipe_core::background_work::wait_until_resumed() => {}
+                    }
                     match RfdetrRedactor::load_or_download(RfdetrConfig::default()).await {
                         Ok(detector) => {
                             info!(

@@ -214,6 +214,9 @@ pub async fn auto_start_scheduler(app: AppHandle, state: &SuggestionsState) {
             }
 
             // Read current enhanced AI config (picks up setting changes each cycle)
+            if crate::search_only::is_active() {
+                continue;
+            }
             let enhanced = enhanced_ai.lock().await.clone();
 
             // Fetch activity & generate suggestions

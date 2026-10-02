@@ -5,7 +5,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { createGlmEncryptedFetch, GLM_SECURE_API } from "./lib/tinfoil-transport";
+import { createGlmEncryptedFetch, GLM_SECURE_API, workflowRequestOptions } from "./lib/tinfoil-transport";
 import { compactGlmSkillCatalog, compactGlmToolResultText } from "./lib/glm-protocol";
 
 // Replaced with the managed runtime package.json path when installed by Rust.
@@ -78,7 +78,7 @@ export default async function (pi: ExtensionAPI) {
       }
       return streamSimple({
         ...model, api: "openai-completions", baseUrl: `${baseURL}/tinfoil/glm`,
-      }, context, { ...options, fetch: transport });
+      }, context, { ...workflowRequestOptions(options ?? {}, process.env.SCREENPIPE_PIPE_NAME), fetch: transport });
     },
   });
 }

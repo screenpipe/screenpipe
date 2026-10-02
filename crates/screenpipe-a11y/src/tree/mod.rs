@@ -908,7 +908,10 @@ impl TreeWalkerPlatform for UrlFilteredWalker {
     fn walk_focused_window(&self) -> Result<TreeWalkResult> {
         let result = self.inner.walk_focused_window()?;
         if let TreeWalkResult::Found(ref snapshot) = result {
-            if !self.policy.should_capture(snapshot.browser_url.as_deref()) {
+            if !self
+                .policy
+                .should_capture_window(Some(&snapshot.app_name), snapshot.browser_url.as_deref())
+            {
                 return Ok(TreeWalkResult::Skipped(SkipReason::BlockedUrl));
             }
         }
@@ -1050,11 +1053,33 @@ mod tests {
     }
 
     #[test]
-    fn test_url_filtered_walker_passes_non_browser_windows() {
+    fn test_url_filtered_walker_rejects_browser_without_url() {
         let walker = UrlFilteredWalker::new(
             Box::new(FakeWalker(None)),
             vec![UrlRule::Legacy("chase.com".into())],
             vec![],
+        );
+        assert!(matches!(
+            walker.walk_focused_window().unwrap(),
+            TreeWalkResult::Skipped(SkipReason::BlockedUrl)
+        ));
+    }
+
+    #[test]
+    fn url_allowlist_preserves_native_accessibility_snapshots() {
+        struct NativeWalker;
+        impl TreeWalkerPlatform for NativeWalker {
+            fn walk_focused_window(&self) -> Result<TreeWalkResult> {
+                let mut snapshot = snapshot_with_url(None);
+                snapshot.app_name = "Notepad".into();
+                snapshot.app_id = None;
+                Ok(TreeWalkResult::Found(snapshot))
+            }
+        }
+        let walker = UrlFilteredWalker::new(
+            Box::new(NativeWalker),
+            vec![],
+            vec![domain_rule("en.wikipedia.org", false)],
         );
         assert!(matches!(
             walker.walk_focused_window().unwrap(),
@@ -1076,13 +1101,13 @@ mod tests {
             TreeWalkResult::Found(_)
         ));
 
-        let native = UrlFilteredWalker::new(
+        let missing_browser_url = UrlFilteredWalker::new(
             Box::new(FakeWalker(None)),
             vec![],
             vec![domain_rule("docs.google.com", false)],
         );
         assert!(matches!(
-            native.walk_focused_window().unwrap(),
+            missing_browser_url.walk_focused_window().unwrap(),
             TreeWalkResult::Skipped(SkipReason::BlockedUrl)
         ));
 

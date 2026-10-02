@@ -30,7 +30,7 @@ type ActivePipeExecution = {
 } | null;
 
 interface ChatMainPaneProps {
-  /** Only Home presents the first-summary lifecycle owned by the main layout. */
+  /** Only visible Home presents the first-summary lifecycle owned by the main layout. */
   firstRunLearningEnabled?: boolean;
   hideInlineHistory?: boolean;
   showHistory: boolean;
@@ -114,7 +114,7 @@ export function ChatMainPane({
   React.useEffect(() => {
     if (
       !firstRunLearningEnabled ||
-      learning?.activationState !== "summary" ||
+      learning?.phase !== "ready" ||
       !learning.chatId ||
       conversationId !== learning.chatId ||
       isLoading ||
@@ -126,8 +126,8 @@ export function ChatMainPane({
     ) {
       return;
     }
-    summaryRenderedRef.current = learning.chatId;
     const frame = requestAnimationFrame(() => {
+      summaryRenderedRef.current = learning.chatId;
       void learning.markSummaryRendered().catch(() => {
         summaryRenderedRef.current = null;
       });

@@ -96,7 +96,16 @@ export type WorkflowsPlatform = {
     profile: WorkProfile,
     scope?: WorkflowScope,
   ) => Promise<WorkProfile>;
+  library?: {
+    listSkillDrafts: () => Promise<Array<{ workflowKey: string; draft: WorkflowSkillDraft }>>;
+    saveSkillDraft: (workflowKey: string, draft: WorkflowSkillDraft) => Promise<void>;
+    listInstalledSkills?: () => Promise<Array<{ name: string; description: string; path: string }>>;
+  };
   guides?: {
+    list?: () => Promise<WorkflowGuide[]>;
+    loadSourceScreenshot?: WorkflowsPlatform["loadWorkflowScreenshot"];
+    loadScreenshot?: (frameId: number, signal: AbortSignal) => Promise<string>;
+    video?: import("./guide-video").GuideVideoPlatform;
     generate: (
       workflow: WorkflowMap,
       signal: AbortSignal,

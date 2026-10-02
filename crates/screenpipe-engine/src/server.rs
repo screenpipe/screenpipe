@@ -175,6 +175,8 @@ pub struct AppState {
     pub ws_connection_count: Arc<AtomicUsize>,
     /// LRU cache for search results (10x faster for repeated queries)
     pub search_cache: SearchCache,
+    pub starred_session_writes: tokio::sync::Mutex<()>,
+    pub starred_revision: std::sync::atomic::AtomicU64,
     /// Fail-fast admission for uncached `/search` requests. Cache hits bypass
     /// this gate; misses return 503 when the pool-derived budget is occupied.
     pub search_query_semaphore: Arc<tokio::sync::Semaphore>,
@@ -812,6 +814,8 @@ impl SCServer {
             // Search cache: short-lived and byte-bounded. Search payloads can
             // contain large OCR/audio text blobs, so an entry-count capacity
             // still allowed hundreds of MB of typed + serialized responses.
+            starred_session_writes: tokio::sync::Mutex::new(()),
+            starred_revision: std::sync::atomic::AtomicU64::new(0),
             search_cache: MokaCache::builder()
                 .weigher(|_key: &u64, value: &Arc<SearchCacheEntry>| value.weight())
                 .max_capacity(SEARCH_CACHE_MAX_BYTES)
@@ -1023,6 +1027,8 @@ impl SCServer {
                 "/workflows/corrections",
                 crate::routes::workflow_catalog::correct,
             )
+            .get("/starred-sessions", crate::routes::starred::list)
+            .post("/starred-sessions", crate::routes::starred::save)
             .get("/workflows", crate::routes::workflows::list_workflows)
             .get("/workflows/:id", crate::routes::workflows::get_workflow)
             .get("/activity-summary", get_activity_summary)
@@ -1433,7 +1439,7 @@ impl SCServer {
         // (bundled sidecar → install dirs → PATH).
         {
             let wa_lock = wa.lock().await;
-            if wa_lock.has_session() {
+            if wa_lock.has_session() && !screenpipe_core::background_work::is_suspended() {
                 tracing::info!("whatsapp: found existing session, auto-reconnecting...");
                 if let Err(e) = wa_lock.start_pairing("").await {
                     tracing::warn!("whatsapp: auto-reconnect failed: {:?}", e);
@@ -1531,6 +1537,7 @@ impl SCServer {
             )
             .layer(Extension(crate::routes::workflows::WorkflowCatalogSource(self.workflow_catalog_dir.clone())))
             .with_state(app_state.clone())
+            .layer(axum::middleware::from_fn(crate::search_only::history_only))
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 crate::routes::search::storage_snapshot_middleware,

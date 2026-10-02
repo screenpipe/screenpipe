@@ -229,20 +229,7 @@ const EXCLUDED_APPS: &[&str] = &[
 ];
 
 /// Known browser process names for URL extraction.
-const BROWSER_NAMES: &[&str] = &[
-    "chrome",
-    "chromium",
-    "firefox",
-    "brave",
-    "vivaldi",
-    "opera",
-    "edge",
-    "epiphany",
-    "zen",
-    "comet",
-    "google-chrome",
-    "microsoft-edge",
-];
+use crate::url_filter::BROWSER_NAMES;
 
 fn is_browser(app_lower: &str) -> bool {
     BROWSER_NAMES.iter().any(|b| app_lower.contains(b))

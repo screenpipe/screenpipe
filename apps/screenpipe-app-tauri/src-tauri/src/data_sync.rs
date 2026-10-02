@@ -792,6 +792,9 @@ mod imp {
         };
         let mut cursor = Cursor::load(&config.cursor_path);
         loop {
+            if crate::search_only::is_active() {
+                return;
+            }
             match run_page(app, &config, &mut cursor, local, http).await {
                 Ok(true) => continue,
                 Ok(false) => {
@@ -816,7 +819,9 @@ mod imp {
                 .expect("data sync ingest client builds");
             tokio::time::sleep(STARTUP_DELAY).await;
             loop {
-                sync_once(&app, &local, &http).await;
+                if !crate::search_only::is_active() {
+                    sync_once(&app, &local, &http).await;
+                }
                 tokio::time::sleep(SYNC_INTERVAL).await;
             }
         });

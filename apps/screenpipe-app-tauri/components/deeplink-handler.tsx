@@ -4,7 +4,7 @@
 "use client";
 
 import { workflowReviewLink } from "@/lib/workflows/notification";
-import { routeNotificationDeeplink } from "@/lib/notifications/actions";
+import { CALENDAR_CONNECTIONS_URL, routeNotificationDeeplink } from "@/lib/notifications/actions";
 import { useEffect } from "react";
 import { useToast } from "@/components/ui/use-toast";
 import { useChangelogDialog } from "@/lib/hooks/use-changelog-dialog";
@@ -34,7 +34,7 @@ import {
 } from "@/lib/first-run/agent-handoff";
 import {
   LEARNING_SUMMARY_OPENED_EVENT,
-  markLearningDone,
+  markLearningSummaryOpened,
   readLearningWindow,
 } from "@/lib/first-run/learning-window";
 import { trackFirstRunSummaryNotificationOpened } from "@/lib/first-run/telemetry";
@@ -127,14 +127,14 @@ export function DeeplinkHandler() {
         // opened. Preserve the requested conversation across that remount so
         // a notification can never land on the generic Chat starter.
         localStorage.setItem("pending-chat-conversation", chatId);
+        markLearningSummaryOpened();
+        await emit(LEARNING_SUMMARY_OPENED_EVENT);
         await commands.showWindowActivated({ Home: { page: "home" } });
         await new Promise((resolve) => setTimeout(resolve, 150));
         await emit("chat-load-conversation", {
           conversationId: chatId,
           targetWindow: "home",
         });
-        markLearningDone();
-        await emit(LEARNING_SUMMARY_OPENED_EVENT);
         posthog.capture("first_run_summary_opened", {
           source: "notification",
         });
@@ -353,6 +353,11 @@ export function DeeplinkHandler() {
             variant: "destructive",
           });
         }
+      }
+
+      if (url === CALENDAR_CONNECTIONS_URL) {
+        await routeNotificationDeeplink(url);
+        return;
       }
 
       if (url.includes("settings") || url.includes("home")) {

@@ -5,21 +5,15 @@
 import type { Env, RequestBody } from '../types';
 import { isHostedChatAllowanceError } from './cloudflare-ai-gateway';
 
-/**
- * Rescue model for unattended background Pipes whose account allowance is gone.
- *
- * This lane deliberately calls the provider directly (the caller passes no
- * Cloudflare gateway context), so it is not blocked by the same spend limit
- * that just rejected the primary request.
- *
- * Previously this was `argus-trace-1` (self-hosted Qwen). Its 8k window and
- * 512-token output ceiling forced heavy prompt truncation, and in practice it
- * returned HTTP 200 with no structured tool calls — a silent failure that a
- * Pipe records as a successful run. gpt-5.4-nano is ~$0.20/$1.25 per Mtok with
- * a normal context window and reliable tool calling, which is cheap enough to
- * serve over-allowance work without the false-success failure mode.
- */
+/** Existing rescue for provider quota and safety responses. */
 export const BACKGROUND_FALLBACK_MODEL = 'gpt-5.4-nano';
+
+/**
+ * Account allowance rejection happens before inference. Eligible background
+ * requests can use Luna directly without changing model quality or paying the
+ * higher nano token rate. Provider failures retain their separate rescue path.
+ */
+export const ALLOWANCE_FALLBACK_MODEL = 'gpt-6-luna';
 
 export class SafetyRefusalError extends Error {
 	readonly code = 'safety_refusal';
@@ -63,14 +57,10 @@ export function hasUnsupportedFallbackInput(body: RequestBody): boolean {
 
 /**
  * Swap in the rescue model and otherwise preserve the Pipe's request exactly.
- *
- * The old Argus lane rewrote roles, clipped tool descriptions, truncated the
- * oldest context, and clamped output to 512 tokens. All of that existed only to
- * fit an 8k self-hosted window. gpt-5.4-nano takes the request as Pi built it,
- * so the rescued run behaves like the primary one.
+ * Both rescue models support the original context, tool schema and output budget.
  */
-export function prepareBackgroundFallbackBody(body: RequestBody): RequestBody {
-	return { ...body, model: BACKGROUND_FALLBACK_MODEL };
+export function prepareBackgroundFallbackBody(body: RequestBody, model = BACKGROUND_FALLBACK_MODEL): RequestBody {
+	return { ...body, model };
 }
 
 function errorText(error: unknown): string {
@@ -143,7 +133,10 @@ export function shouldUseBackgroundFallback(input: {
 	env: Pick<Env, 'OPENAI_API_KEY'>;
 }): boolean {
 	return input.enabled &&
-		input.body.model !== BACKGROUND_FALLBACK_MODEL &&
+		// An allowance rejected the gateway route, not the model. One direct
+		// attempt is valid even when the caller explicitly selected that model.
+		((isHostedChatAllowanceError(input.error) || isAccountLocalAllowanceError(input.error))
+			|| input.body.model !== BACKGROUND_FALLBACK_MODEL) &&
 		!hasUnsupportedFallbackInput(input.body) &&
 		isBackgroundFallbackConfigured(input.env) &&
 		(isHostedChatAllowanceError(input.error) ||
@@ -164,5 +157,9 @@ export function resolveBackgroundFallbackBody(input: {
 	env: Pick<Env, 'OPENAI_API_KEY'>;
 }): RequestBody | null {
 	if (!shouldUseBackgroundFallback(input)) return null;
-	return prepareBackgroundFallbackBody(input.body);
+	return prepareBackgroundFallbackBody(input.body,
+		isHostedChatAllowanceError(input.error) || isAccountLocalAllowanceError(input.error)
+			? ALLOWANCE_FALLBACK_MODEL
+			: BACKGROUND_FALLBACK_MODEL,
+	);
 }

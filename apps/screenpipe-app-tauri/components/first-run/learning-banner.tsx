@@ -176,6 +176,7 @@ export function FirstRunLearningBanner(
     chatId,
     showProgress,
     markReadyShown,
+    markSummaryOpened,
     dismiss,
   } = learning;
   const { targets: handoffTargets, hint: handoffHint, askAgent } = handoff;
@@ -203,7 +204,7 @@ export function FirstRunLearningBanner(
     posthog.capture("first_run_summary_opened");
     try {
       await emit("chat-load-conversation", { conversationId: chatId });
-      dismiss();
+      markSummaryOpened();
     } catch {
       // Keep the result card so the user can retry if the summary did not open.
     }

@@ -7,6 +7,15 @@ export const GLM_ENCLAVE = "https://pii.screenpipe.containers.tinfoil.dev";
 export const GLM_CONFIG_REPO = "screenpipe/privacy-filter";
 export const GLM_SECURE_API = "screenpipe-tinfoil";
 
+/** Avoid stacking SDK retries underneath Pi's existing bounded retry loop.
+ * Workflow turns share a 15-minute run; three 5-minute requests exhausted it
+ * before any workspace write. Interactive chat keeps its existing policy.
+ */
+export function workflowRequestOptions<T extends { timeoutMs?: number; maxRetries?: number }>(options: T, task?: string): T {
+  if (!["workflow-discover", "workflow-deepen", "workflow-review", "workflow-maintain"].includes(task || "")) return options;
+  return { ...options, timeoutMs: Math.min(options.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : 120_000, 120_000), maxRetries: 0 };
+}
+
 export type VerificationUpdate = { requestId: string; state: "verifying" | "attested" | "response_verified" | "failed"; document?: Record<string, unknown> };
 type VerifiedClient = { ready(): Promise<unknown>; fetch: typeof fetch; getVerificationDocument?(): unknown };
 type ClientFactory = (options: {
@@ -73,7 +82,17 @@ export function createGlmEncryptedFetch(baseURL: string, createClient: ClientFac
         clientAuth = auth;
       }
       const verifiedClient = client;
-      await verifiedClient.ready();
+      // Attestation can stall before fetch sees the caller's AbortSignal.
+      // Respect stop and the SDK request timeout during this phase too.
+      await new Promise((resolve, reject) => {
+        const cleanup = () => request.signal.removeEventListener("abort", abort);
+        const abort = () => { cleanup(); reject(request.signal.reason); };
+        request.signal.addEventListener("abort", abort, { once: true });
+        Promise.resolve().then(() => {
+          request.signal.throwIfAborted();
+          return verifiedClient.ready();
+        }).then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
+      });
       const proof = verifiedClient.getVerificationDocument?.() as Record<string, unknown> | undefined;
       if (proof?.securityVerified === true) {
         // Only public attestation evidence crosses the UI boundary.

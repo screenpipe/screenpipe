@@ -11,6 +11,8 @@ import { commands } from "@/lib/utils/tauri";
 import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 import TrustDisclosure from "./trust-disclosure";
 import { usePlatform } from "@/lib/hooks/use-platform";
+import { useSettings } from "@/lib/hooks/use-settings";
+import { isMicrophoneRequired } from "@/lib/utils/permission-requirements";
 import { motion } from "framer-motion";
 import posthog from "posthog-js";
 import { onboardingFunnel } from "@/lib/analytics/onboarding-funnel";
@@ -139,6 +141,7 @@ export default function PermissionsStep({
 }: PermissionsStepProps) {
 
   const ui = useGT();
+  const { settings, isSettingsLoaded } = useSettings();
   const { isMac, isLoading: isPlatformLoading } = usePlatform();
   const [statuses, setStatuses] = useState<Record<string, boolean>>({});
   const [requesting, setRequesting] = useState(false);
@@ -150,6 +153,7 @@ export default function PermissionsStep({
   const requestStartedAtRef = useRef<Record<string, number>>({});
   const pollInFlightRef = useRef(false);
   const pollAgainRef = useRef(false);
+  const permissionPolicyEpoch = useRef(0);
   // Accessibility is polled silently (AXIsProcessTrusted) until the user
   // actively requests it. Only then do we switch to the live tccd probe,
   // which enrolls the app in the Accessibility list / can surface the system
@@ -203,8 +207,12 @@ export default function PermissionsStep({
     },
   ];
 
+  const microphoneRequired = isSettingsLoaded && isMicrophoneRequired(settings);
+
   // Filter permissions for this platform
-  const activePermissions = permissions.filter((p) => !p.macOnly || isMac);
+  const activePermissions = permissions.filter((p) =>
+    (!p.macOnly || isMac) && (p.id !== "mic" || microphoneRequired)
+  );
   const activePermissionsRef = useRef(activePermissions);
   activePermissionsRef.current = activePermissions;
 
@@ -240,6 +248,7 @@ export default function PermissionsStep({
     try {
       do {
         pollAgainRef.current = false;
+        const policyEpoch = permissionPolicyEpoch.current;
         const results: Record<string, boolean> = {};
         let nextScreenRestartRequired: boolean | undefined;
         await Promise.all(
@@ -258,6 +267,10 @@ export default function PermissionsStep({
             }
           })
         );
+        if (policyEpoch !== permissionPolicyEpoch.current) {
+          pollAgainRef.current = true;
+          continue;
+        }
         if (nextScreenRestartRequired !== undefined) {
           setScreenRestartRequired(nextScreenRestartRequired);
         }
@@ -308,6 +321,18 @@ export default function PermissionsStep({
     }
   }, [isMac, isPlatformLoading, handleNextSlide]);
 
+  // A mic grant cached before audio was disabled cannot satisfy a new policy.
+  useEffect(() => {
+    permissionPolicyEpoch.current += 1;
+    delete statusesRef.current.mic;
+    setStatuses((previous) => {
+      if (!("mic" in previous)) return previous;
+      const next = { ...previous };
+      delete next.mic;
+      return next;
+    });
+  }, [microphoneRequired]);
+
   // Start polling
   useEffect(() => {
     if (isPlatformLoading || !isMac) return;
@@ -316,26 +341,27 @@ export default function PermissionsStep({
     pollPermissions();
     const interval = setInterval(pollPermissions, 1000);
     return () => clearInterval(interval);
-  }, [isPlatformLoading, isMac, pollPermissions]);
+  }, [isPlatformLoading, isMac, pollPermissions, microphoneRequired]);
 
   // Report per-permission sub-progress for the split progress-bar segment
   useEffect(() => {
     onProgressChange?.(grantedCount, activePermissions.length);
   }, [grantedCount, activePermissions.length, onProgressChange]);
 
-  // Auto-advance when all required permissions granted
+  // Advance only if the required grants still hold after the animation delay.
   useEffect(() => {
-    if (allRequiredGranted && !hasAdvancedRef.current && !isPlatformLoading) {
+    if (!allRequiredGranted || !isSettingsLoaded || hasAdvancedRef.current || isPlatformLoading) return;
+    const timeout = setTimeout(() => {
       hasAdvancedRef.current = true;
       posthog.capture("onboarding_permissions_granted", {
         time_spent_ms: Date.now() - mountTimeRef.current,
-        statuses,
+        statuses: statusesRef.current,
       });
       onboardingFunnel.permissionsGranted();
-      // Small delay so the user sees the last checkmark animate
-      setTimeout(() => handleNextSlide(), 600);
-    }
-  }, [allRequiredGranted, isPlatformLoading, handleNextSlide, statuses]);
+      handleNextSlide();
+    }, 600);
+    return () => clearTimeout(timeout);
+  }, [allRequiredGranted, isSettingsLoaded, isPlatformLoading, handleNextSlide]);
 
   // Handle grant click with immediate refresh
   const handleGrant = async (perm: PermissionDef) => {

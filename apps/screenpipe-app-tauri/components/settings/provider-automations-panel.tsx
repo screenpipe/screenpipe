@@ -222,7 +222,7 @@ const defaultProviderOpenDependencies: ProviderOpenDependencies = {
   openUrl,
   getPlatform: platform,
   openMacUrl: async (url) => {
-    const output = await Command.create("open", [
+    const output = await Command.create("open-codex-url", [
       "-b",
       "com.openai.codex",
       url,

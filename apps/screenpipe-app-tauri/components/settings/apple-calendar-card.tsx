@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useInterval } from "@/lib/hooks/use-interval";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { dismissCalendarNudge } from "@/lib/calendar-nudge";
 import { commands } from "@/lib/utils/tauri";
 import {
   AlertTriangle,
@@ -155,6 +156,7 @@ export function AppleCalendarCard({
     setBusy("revoke");
     setError(null);
     try {
+      await dismissCalendarNudge().catch((error) => console.error("calendar nudge: disconnect suppression could not be saved", error));
       const reset = await commands.resetPermission("calendar");
       if (reset.status === "error") throw new Error(String(reset.error));
       await refresh();

@@ -365,6 +365,10 @@ struct DirectUploadCompleteRequest {
     batch_id: String,
     content_length: usize,
     plaintext_sha256: String,
+    // Only readable storage with the all-images policy auto-cites frames.
+    // Write-only completions must never initiate hosted screenshot processing.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    frame_ids: Vec<i64>,
 }
 
 /// Build the manifest for a plaintext JSONL batch. Shared by both direct
@@ -432,7 +436,7 @@ pub async fn upload_direct_write_only_batch(
     cursors: DirectUploadCursors,
 ) -> Result<DirectUploadManifest, EnterpriseSyncError> {
     let manifest = write_only_direct_upload_manifest(cfg, &plaintext, counts, cursors)?;
-    run_ticketed_upload(http, cfg, direct, &manifest, &plaintext).await?;
+    run_ticketed_upload(http, cfg, direct, &manifest, &plaintext, false).await?;
     Ok(manifest)
 }
 
@@ -443,9 +447,10 @@ pub async fn upload_direct_readable_batch(
     plaintext: Vec<u8>,
     counts: DirectUploadRecordCounts,
     cursors: DirectUploadCursors,
+    backfill: bool,
 ) -> Result<DirectUploadManifest, EnterpriseSyncError> {
     let manifest = readable_direct_upload_manifest(cfg, &plaintext, counts, cursors)?;
-    run_ticketed_upload(http, cfg, direct, &manifest, &plaintext).await?;
+    run_ticketed_upload(http, cfg, direct, &manifest, &plaintext, backfill).await?;
     Ok(manifest)
 }
 
@@ -460,6 +465,7 @@ async fn run_ticketed_upload(
     direct: &DirectUploadConfig,
     manifest: &DirectUploadManifest,
     body: &[u8],
+    backfill: bool,
 ) -> Result<(), EnterpriseSyncError> {
     let mut control_headers = HeaderMap::new();
     control_headers.insert(
@@ -468,6 +474,12 @@ async fn run_ticketed_upload(
             .parse()
             .map_err(|e| EnterpriseSyncError::Ingest(format!("bad license-key header: {e}")))?,
     );
+
+    // Same historical-replay contract as hosted ingest. Keep it on control
+    // requests only; the customer-storage PUT retains its signed headers.
+    if backfill {
+        control_headers.insert("x-screenpipe-backfill", "1".parse().unwrap());
+    }
 
     let pipeline_cfg = TicketedConfig::new(direct.ticket_url.clone(), direct.complete_url.clone())
         .with_control_headers(control_headers)
@@ -482,6 +494,25 @@ async fn run_ticketed_upload(
         batch_id: manifest.batch_id.clone(),
         content_length: manifest.content_length,
         plaintext_sha256: manifest.plaintext_sha256.clone(),
+        frame_ids: if manifest.mode == DIRECT_UPLOAD_READABLE_MODE
+            && crate::enterprise_policy::current_sync_streams().frame_images
+                == crate::enterprise_policy::FrameImagesMode::All
+        {
+            screenpipe_telemetry_wire::parse_jsonl(body)
+                .records
+                .into_iter()
+                .filter_map(|record| match record {
+                    screenpipe_telemetry_wire::TelemetryRecord::Frame { frame, .. }
+                        if frame.frame_id > 0 =>
+                    {
+                        Some(frame.frame_id)
+                    }
+                    _ => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
     };
 
     let ticket_json = serde_json::to_value(manifest)

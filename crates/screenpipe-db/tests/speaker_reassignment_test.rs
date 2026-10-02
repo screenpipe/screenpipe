@@ -147,7 +147,7 @@ mod speaker_reassignment_tests {
     // =========================================================================
 
     #[tokio::test]
-    async fn test_update_transcriptions_speaker() {
+    async fn test_background_backfill_preserves_existing_speaker() {
         let db = setup_test_db().await;
 
         // Create speaker and audio
@@ -165,7 +165,15 @@ mod speaker_reassignment_tests {
             .await
             .unwrap();
 
-        assert!(rows_updated > 0);
+        assert_eq!(rows_updated, 0);
+        let actual: Option<i64> = sqlx::query_scalar(
+            "SELECT speaker_id FROM audio_transcriptions WHERE audio_chunk_id = ?1",
+        )
+        .bind(audio_chunk_id)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(actual, Some(speaker_id));
     }
 
     // =========================================================================

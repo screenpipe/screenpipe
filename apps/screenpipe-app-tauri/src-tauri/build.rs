@@ -784,6 +784,8 @@ fn main() {
         }
     }
 
+    // A custom capabilities_path_pattern disables tauri-build's default watch.
+    println!("cargo:rerun-if-changed=capabilities");
     let mut attributes = tauri_build::Attributes::new();
     if std::env::var_os("CARGO_FEATURE_E2E").is_some() {
         validate_e2e_command_inventory();

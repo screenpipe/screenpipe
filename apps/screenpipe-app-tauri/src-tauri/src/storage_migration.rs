@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-use crate::{recording::RecordingState, store::SettingsStore};
+use crate::{recording::RecordingState, server_core::ServerCore, store::SettingsStore};
 use screenpipe_db::storage::{migration_report, MigrationProgress, StorageDescriptor};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -312,8 +312,7 @@ pub(crate) async fn resume_before_startup(
         // Own recovery before ServerCore opens the database. It can rebuild a
         // large index: expose that work and keep retry unavailable until the
         // server and saved capture preference have actually been restored.
-        let awake =
-            screenpipe_engine::power::KeepAwakeGuard::acquire_async().await?;
+        let awake = screenpipe_engine::power::KeepAwakeGuard::acquire_async().await?;
         update_operation(app, |operation| {
             *operation = Operation {
                 root: Some(root.clone()),
@@ -574,6 +573,20 @@ pub async fn get_storage_migration_status(
     storage_migration_status(&app, &recording, lifecycle.is_err()).await
 }
 
+async fn lock_migration_server(
+    server: &tokio::sync::Mutex<Option<ServerCore>>,
+    lifecycle_busy: bool,
+) -> Option<tokio::sync::MutexGuard<'_, Option<ServerCore>>> {
+    if lifecycle_busy {
+        // Status polling must remain responsive while startup owns storage.
+        server.try_lock().ok()
+    } else {
+        // The caller owns the lifecycle lock, so a server reader cannot be a
+        // restart. Wait for it instead of rejecting an explicit migration.
+        Some(server.lock().await)
+    }
+}
+
 async fn storage_migration_status(
     app: &tauri::AppHandle,
     recording: &RecordingState,
@@ -609,11 +622,8 @@ async fn storage_migration_status(
     let mut using_new_storage = None;
     let mut can_delete_source = false;
     {
-        let server = recording.server.try_lock();
-        if server.is_err() && !operation.busy {
-            blocked_reason = Some("Screenpipe is restarting. Wait for startup to finish.".into());
-        }
-        if let Ok(server) = server {
+        if let Some(server) = lock_migration_server(&recording.server, lifecycle_busy).await {
+            require_selected_root(app, &root.display().to_string())?;
             if let Some(server) = server.as_ref() {
                 if server.data_dir.canonicalize().map_err(|e| e.to_string())? != root {
                     blocked_reason = Some(
@@ -1117,6 +1127,43 @@ mod tests {
         properties["error"] = serde_json::Value::Null;
         redact_migration_diagnostic_error(&mut properties);
         assert!(properties["error"].is_null());
+    }
+
+    #[tokio::test]
+    async fn migration_status_waits_for_server_readers_after_startup() {
+        let server = tokio::sync::Mutex::new(None);
+        let reader = server.lock().await;
+        let status = lock_migration_server(&server, false);
+        tokio::pin!(status);
+        tokio::select! {
+            biased;
+            _ = &mut status => panic!("a server reader must not be treated as a restart"),
+            _ = std::future::ready(()) => {}
+        }
+        drop(reader);
+        let guard = tokio::time::timeout(std::time::Duration::from_secs(1), status)
+            .await
+            .expect("migration must proceed when the reader releases the server")
+            .expect("the lifecycle owner must obtain the server state");
+        assert!(
+            guard.is_none(),
+            "an idle or paused server is still inspectable"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_status_does_not_wait_when_startup_owns_storage() {
+        let server = tokio::sync::Mutex::new(None);
+        let startup = server.lock().await;
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            lock_migration_server(&server, true),
+        )
+        .await
+        .expect("status must remain available during startup")
+        .is_none());
+        drop(startup);
+        assert!(lock_migration_server(&server, true).await.is_some());
     }
 
     #[tokio::test]

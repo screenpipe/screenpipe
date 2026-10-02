@@ -9,9 +9,124 @@ This is an agent eval suite, not a unit-test suite. Every case contains:
 - saved prompt, transcript, candidate patch, grader output, runtime fingerprint, and result;
 - repeated-trial reporting with success rate, `pass@k`, and `pass^k`.
 
+`app-search-focus-lifecycle` runs the actual search page, focus hook and DOM
+listener hook with synthetic native events and a small search-view shell. Ten
+outcomes cover hidden prewarm, hide/show cycles, focus recovery, query resets,
+navigation, close and unmount. The parent fails three hidden-focus outcomes and
+preserves seven; the historical page fix and current source pass ten. Run
+`bun test evals/coding-agent/calibrate-search-focus.test.js` for twelve controls,
+including a mounted-but-inactive equivalent, unused correct code, blanket
+inactivity, ignored hide events and lost query/focus/handoff behavior. Missing
+source is a setup failure. Fixtures and runtime links appear only at grading.
+This does not execute the full search modal, native window events, macOS focus,
+real IPC, execution isolation or model trials. Current cache prewarm is checked
+separately and is allowed while the view is hidden.
+
+`app-mixed-note-paste` mounts the actual React and TipTap meeting-note editor
+with synthetic image conversion and inert menus/localization. Five outcomes cover
+mixed text/image paste, ordinary text, image-only files and HTML, and a delayed
+image after a keyed meeting switch. The parent loses mixed-paste text; four nearby
+outcomes pass. The historical fix and current source pass all five. Run
+`bun test evals/coding-agent/calibrate-note-paste.test.js` for calibration,
+including unused correct code, equivalent paragraph construction, lost text or
+images, blanket paste refusal and missing-source classification. Fixtures and
+dependency links appear only when grading begins. This does not execute native
+clipboard delivery, image encoding, disk autosave, agent isolation or model trials.
+
 The current app corpus contains 80 git-mined regressions. See
 [DESIGN.md](./DESIGN.md) for the Anthropic guidance, source contract, and
 history-mining workflow. The companion website manifest uses this same harness.
+
+`ai-gateway-auth-log-privacy` runs the actual authentication entry points with
+synthetic Clerk and account-service replies. Eight checks reject credentials,
+account identifiers, emails and upstream error details in console output;
+four nearby outcomes preserve verified and legacy access and anonymous fallback.
+The broken parent fails eight checks and preserves four. The auth-only historical
+fix and current source pass all twelve. Run
+`bun test evals/coding-agent/calibrate-auth-log-privacy.test.js` for eleven
+controls, including equivalent diagnostics, silence, unused correct source,
+raw-value logging, blanket access/denial and missing-source classification.
+Fixtures are installed only when grading begins. This does not test real JWT
+cryptography, the HTTP router, external log sinks, native model policy, execution
+isolation or model capability. Public-identifier authentication from the historical
+source is superseded and is not required by this case.
+
+
+`app-permission-recovery-audio-policy` renders permission recovery, onboarding
+and the status banner with synthetic settings and native command ports. Fourteen
+outcomes cover audio-off policy, loading, policy changes during delayed completion,
+unmount and ordinary audio-on requests. The parent fails eight outcomes and
+preserves six; the historical fix and current source pass fourteen. Run
+`bun test evals/coding-agent/calibrate-audio-policy.test.js` for ten controls,
+including an equivalent policy implementation, unused correct interfaces and
+blanket microphone requirements or suppression. Explicit DOM cleanup keeps tests
+independent. Fixtures and dependency links appear only at grading. Native pause
+and recording behavior, OS permission enforcement, execution isolation and model
+improvement are outside this evidence. Recognized Vitest collection failures stay
+infrastructure errors when neighboring suites pass or skip. Executed test failures
+and assertion headers retain their behavior classification. The shared runner's
+`bun test evals/coding-agent/run.test.ts` controls cover both verification arms
+and exclusion from scored trials. Unknown diagnostics still need log inspection;
+a nonzero process exit alone does not establish a behavior regression.
+
+`app-model-catalog-session-freshness` runs the actual model-catalog hook with
+synthetic settings and HTTP ports. Ten outcomes cover hydration, token changes,
+late responses and bodies, loading ownership, failure recovery and preserved
+anonymous access and metadata. The parent fails five outcomes and preserves five;
+the reference and current hook pass ten. Run
+`bun test evals/coding-agent/calibrate-model-catalog.test.js` for eleven controls,
+including equivalent guards, unused correct code, stale state, empty catalogs,
+lost metadata and missing-source classification. The current check also runs the
+actual gateway URL adapter with synthetic native ports. Fixtures and dependency
+links appear only at grading. This does not establish native credential security,
+live entitlement delivery, execution isolation or model improvement.
+
+`app-shared-running-pipes-lifecycle` mounts the actual React hook and Zustand
+store with synthetic HTTP/event ports and timers. Ten outcomes cover overlapping
+consumers, final unmount, remount, delayed fetch and event-bus completion, pipe
+events, filtering and poll recovery. The parent fails six lifecycle outcomes and
+preserves four; the reference and current source pass ten. Run
+`bun test evals/coding-agent/calibrate-running-pipes.test.js` for calibration.
+The fixture and runtime links appear only at grading. This does not establish
+native event delivery, real-server behavior, memory usage, execution isolation or
+model improvement.
+
+`app-capture-cadence-durable-before-restart` drives the actual recording-settings
+change/apply callbacks, local write queue and apply bar with synthetic hook state,
+settings storage and native ports. Four outcomes cover a delayed save, a later
+accepted edit, failed-save recovery and Auto cadence. The parent fails three and
+preserves one; the reference and current caller pass four. Run
+`bun test evals/coding-agent/calibrate-capture-cadence.test.js` for calibration.
+The grader checks saved values at both capture handoffs. It does not execute
+React mount effects, a browser DOM, native persistence, pause/authorization
+policy or real capture. Fixtures are installed only at grading. This is not
+execution-isolation evidence or a model trial.
+
+`app-workflow-sharing-entry-consent` renders the real workspace prompt and sharing
+controls with synthetic settings, consent-service and native-token ports. Nine
+outcomes cover independent entry, backend readiness, account hydration/switching,
+notice persistence, reconnects and preserved explicit consent and schedule actions.
+The parent fails six entry outcomes and preserves three; the reference and current
+source pass nine. Run `bun test evals/coding-agent/calibrate-sharing-entry.test.js`
+for eleven controls, including equivalent conditions, unused correct code, local
+consent granted by skipping, missing account notices and lost positive consent.
+Missing source remains a setup error. Fixtures and dependency links are installed
+only at grading. This does not establish server enforcement, native durability,
+real uploads, execution isolation or model improvement.
+
+`app-workflow-voice-immutable-response` runs the actual gateway and Durable Object
+in the existing local Workers harness, with local D1 and synthetic account and
+voice-provider replies. The parent returns 500 instead of the intended 400;
+the reference preserves invalid-request JSON, session creation and empty session
+termination, with cache and CORS headers. Service-only rejection is preserved.
+Run `bun test evals/coding-agent/calibrate-workflow-voice-response.test.js` for ten
+controls, including equivalent response reconstruction, unused correct code,
+lost status/body/headers and missing-source setup classification. Install the
+gateway dependencies, including Miniflare and Wrangler, before verification.
+Wrangler only bundles with `--dry-run`; no deployment or real provider call runs.
+Fixtures and runtime links are installed only when grading starts. This is local
+Workers evidence, not production delivery, billing safety, agent isolation or
+model improvement.
 
 `app-chat-foreground-save-ownership` runs the real foreground event hook and
 React lifecycle with synthetic event, persistence and native ports. Four outcomes
@@ -1169,3 +1284,205 @@ parent/reference/current, an equivalent anchor scheme, unused fix, bypass, empty
 output, one-role-only repair, dropped safe HTML, styles, broken fragments and
 missing-source setup failure. These are corpus/grader checks, not agent trials,
 a full browser exploit defense or proof of execution isolation.
+
+`ai-gateway-trusted-runner-admission` runs the actual HTTP entrypoint, authentication,
+Free-plan gates, chat handler and provider adapter with synthetic external ports.
+Fourteen outcomes cover successful machine and paid-human replies, forged or
+unconfigured credentials, Free background refusal, unknown plans, rate limits
+and invalid input. The parent fails five outcomes and preserves nine; the
+reference and current source pass fourteen. Twelve calibration controls reject
+partial fixes, header/prefix bypasses, unused correct code, fabricated success
+and blanket refusal, and accept an equivalent guard expression. Run
+`bun test evals/coding-agent/calibrate-trusted-runner.test.js` with gateway
+dependencies installed. The fetch boundary is installed before SDK imports,
+which can capture fetch at initialization. Graders and dependency links are
+installed only after the trajectory. These checks do not establish JWT
+cryptography, live inference, concurrent spend safety, complete current billing
+integration, agent isolation or model performance.
+
+## Unicode migration search probes
+
+`app-migration-unicode-search-probe` converts temporary synthetic SQLite histories
+through the actual storage API. Seven outcomes cover control characters, diagram
+glyphs, non-Latin text, symbol-only and ordinary histories, missing-index refusal,
+low-disk refusal and external-reader refusal followed by explicit retry. The
+historical parent fails three conversion outcomes and preserves four; the fix
+passes all seven. Reopened payloads, search results, frame counts, completion state
+and storage verification are checked without requiring a tokenization helper.
+
+Run `bun test evals/coding-agent/calibrate-migration-unicode.test.js` for the
+parent/reference, equivalent implementation, unused fix, skipped search checks,
+lost payloads, fabricated success and missing-source controls. Calibration uses
+an ordinary task-local target directory and independent temporary databases.
+The corpus case has no dependency or build-cache links, and its fixture is
+installed only when grading starts. Its offline Cargo command has a 180-second
+limit. Compilation and setup errors cannot establish the intended regression.
+
+This case tests explicitly requested offline conversion correctness. It does not
+establish native rollout authority, cohort/stop controls, recovery-copy deletion
+policy, all interruption paths, live recording continuity, execution isolation
+or model performance. See [the rollout review](MIGRATION-ROLLOUT-REVIEW.md) for the
+separate authority requirements.
+
+## Trial state after a paid upgrade
+
+`app-trial-upgrade-expiration` runs the historical Account component with a fixed
+clock and synthetic settings, billing, entitlement-refresh and native event ports.
+Nine outcomes cover stale trial notice suppression, saved expiry and entitlement
+after confirmed checkout, unconfirmed checkout preservation, manual-trial billing,
+Basic account behavior and signed-out/tokenless accounts. The parent fails two
+intended outcomes and preserves seven; the reference passes all nine.
+
+Run `bun test evals/coding-agent/calibrate-trial-upgrade.test.js` for nine controls.
+Equivalent DOM attributes and split persistence writes pass. Unused correct code,
+blanket countdown suppression, retained expiry, missing refresh and unconfirmed
+activation fail. Missing active source is a Vitest collection error. The grader
+checks visible account behavior and the settings port's final snapshot, without
+requiring test IDs or a particular sequence of persistence calls.
+
+Only the Account, expiration component and entitlement helper are oracle paths.
+Home integration, real settings durability, live billing/refresh delivery and
+current full application integration are outside this case. Dependencies and the
+fixture are materialized only for grading. No model trial or enforced-isolation
+claim follows from this verification.
+
+## Capture startup retry
+
+`app-capture-start-rejection-recovery` runs the actual onboarding component with
+synthetic native, health and clock ports. Eight outcomes cover returned and thrown
+startup failures, successful-session reuse, pending-session serialization, permanent
+refusal, idle media, authenticated health and unrelated health responses. The
+parent fails both recovery outcomes and preserves six; reference and current source
+pass eight.
+
+Run `bun test evals/coding-agent/calibrate-capture-recovery.test.js` with desktop
+test dependencies installed. Ten controls include unused corrected code, fabricated
+startup success, overlapping attempts, premature advancement, capture disruption,
+equivalent private bindings and missing-source classification. Hidden fixtures
+and dependency links appear only at grading. This checks the React/native-command
+boundary; it does not establish native capture, permission delivery, full UI
+unmount/skip recovery, migration authority, agent isolation or model performance.
+
+## Session verification schedule
+
+`app-auth-verification-schedule` runs the actual React auth guard with synthetic
+settings, native credential and clock ports. Twelve outcomes cover stable startup
+and periodic checks, callback refresh, token changes, sign-out, focus cooldown,
+hidden windows, unmount and session-expiry ownership. The parent fails three
+scheduling outcomes and preserves nine; reference and current source pass twelve.
+
+Run `bun test evals/coding-agent/calibrate-auth-schedule.test.js` for thirteen
+controls. A recursive timer implementation passes; unused fixed code, disabled
+checks, stale callbacks, lost token resets, cross-account logout and missing native
+credential cleanup fail. Missing source is a collection error. Fixtures and
+dependencies are installed only when grading starts. This checks the React port
+boundary, not live account refresh, native credential persistence, recording,
+execution isolation or model performance.
+
+The bounded first-run preview case exercises the actual hook with synthetic native status, activity reads and clock. Its calibration command is `bun test evals/coding-agent/calibrate-bounded-preview.test.js`. This checks corpus outcomes and grader controls; it does not execute native history queries or measure agent performance.
+
+
+### Gateway response-lifetime accounting
+
+`app-gateway-response-lifetime-cost-settlement` exercises the real HTTP handler
+and daily cost writer with synthetic provider and database ports. Both JSON and
+SSE responses must retain exactly one write with actual input, output, and cached
+input counts through request completion. Three nearby outcomes preserve tool
+responses and unauthenticated rejection. The parent loses two deferred writes;
+the historical fix passes all five outcomes. Twelve calibration controls include
+synchronous JSON accounting, equivalent background scheduling, detached work,
+unused fixed code, missing writes, lost cached counts, reordered SQL, and a missing-module
+infrastructure failure. Run `bun test evals/coding-agent/calibrate-cost-lifetime.test.js`.
+
+The simulated lifetime ends after the handler, response body, and registered work
+complete; the database operation completes on a later scheduler turn. Actual SQL executes
+against an in-memory SQLite ledger; assertions inspect the resulting row. This is
+not native Workers termination, live D1 durability, retry or concurrent billing
+coverage. Hidden fixtures and dependency links appear only at grading time;
+execution isolation and model performance remain unproven.
+
+## Recording resume controls
+
+`app-recording-global-device-resume` renders the actual `RecordingStatus`
+component with real Radix popover and tooltip controls in jsdom. Synthetic API
+and callback ports observe global session resume separately from per-device
+resume. Eight outcomes cover both resume modes, global pause, mixed device
+states, legacy monitors without IDs, missing callbacks and request-failure
+rollback. The parent fails three resume outcomes and preserves five; applying
+only the historical component fix passes all eight.
+
+Run `bun test evals/coding-agent/calibrate-recording-resume.test.js` with the
+frontend dependencies installed. Eleven controls include the current component,
+an equivalent private-name change, unused correct code, reversed mode routing,
+broken pause, lost rollback and missing-source classification. A separate
+current-only check preserves disabled-capture settings recovery; that newer
+prop is not required by the historical task. The grading config uses a plain
+translation port, so translation delivery is outside this evidence.
+
+This case covers frontend decisions and synthetic effect boundaries. It does
+not establish Home callback wiring, native recording resumption, operating-system
+capture, agent isolation or model improvement. The hidden fixture and dependency
+link are installed only after the trajectory ends. No evaluated agent runs in
+calibration or baseline/reference verification.
+
+## OpenAI streaming tool policy regression
+
+`app-openai-stream-tool-choice` executes the historical OpenAI provider with a synthetic SDK transport. The broken parent loses explicit tool choices on four streams and the unsupported-usage retry; seven neighboring outcomes still pass. The provider-only historical repair and current source pass all twelve checks.
+
+The grader checks caller-selected policy, tool schemas, model/messages, input preservation, retry behavior, native tool fragments, content, usage and stream termination. Eleven calibration controls include equivalent code, an unused repair, forced policies, lost schemas/fragments and a missing-source setup error.
+
+```sh
+bun test evals/coding-agent/calibrate-openai-tool-choice.test.js
+```
+
+This covers the provider boundary with synthetic transport. It does not establish model adherence, actual tool execution, gateway authentication, native Pi policy, agent isolation or model gains. The existing GLM case covers response conversion and remains separate.
+
+## Repeated chat prompts
+
+`app-chat-repeat-prompt-identity` runs the actual sidebar selector with synthetic
+in-memory records. Independent sends and legacy records stay separate; true
+message copies still collapse. Twelve outcomes also preserve wrappers, branches,
+pipe runs, the existing creation window, visible survivors and input records.
+
+Run `bun test evals/coding-agent/calibrate-chat-repeat-identity.test.js` with
+frontend dependencies installed. Controls include an equivalent identity encoding,
+unused correct code, disabled deduplication, identity-field omissions, a hidden
+survivor and missing-source classification. Fixtures and dependency links appear
+only at grading. This does not execute disk history/search, metadata transport,
+a mounted sidebar, native delivery, agent isolation or model trials.
+
+## OCR derived-copy retry
+
+`app-ocr-derived-copy-retry` runs the real native redaction worker against a
+temporary SQLite database and local regex redactors. Five outcomes cover map
+and spanless OCR scrubbing, geometry and clean-text preservation, optional-column
+opt-outs, and a rejected OCR write followed by a worker restart and successful
+retry. The fixture is installed only when grading starts. No dependency or build
+cache links are declared. The hidden grader accepts replacement labels and JSON
+formatting that preserve the required behavior.
+
+The case supplies a synthetic schema with the relevant completion columns. It
+does not verify migrations, process death or database reopening, capture
+continuity, old-row backfill, whitespace-split entities, live model providers,
+agent isolation or model capability. Run the shared runner with
+`--case app-ocr-derived-copy-retry --verify`; compilation and extraction failures
+must remain infrastructure errors, not evidence of the historical defect.
+
+### Enterprise local policy waits
+
+`app-enterprise-local-policy-waits` runs the actual enterprise authentication hook with synthetic HTTP, settings and native-command boundaries. Fourteen outcomes cover six stalled local operations, late install metadata, rejected/expired credentials, credential choice, account-only access, recording pause, native denial and healthy policy persistence. The task allows ten seconds for one stalled operation; it does not require a particular timer helper or warning message.
+
+Run `bun test evals/coding-agent/calibrate-enterprise-policy-waits.test.js` to check the broken parent, historical reference, current hook, equivalent helper names, disconnected correct source, omitted persistence, excessive wait, native/pause bypasses and missing-source infrastructure failure. These checks do not establish native recording enforcement, real disk durability, host isolation or model performance.
+
+`app-learning-save-readback` runs the actual opted-in learning extension with
+synthetic service replies and temporary local state. Five outcomes reject a
+mismatched saved identity, origin or content despite matching response hashes.
+Seven nearby outcomes cover hash failures, uncertain writes, restart protection,
+successful creation, whitespace normalization and owned updates. The parent fails
+five and preserves seven; the reference and current source pass all twelve.
+Run `bun test evals/coding-agent/calibrate-learning-save-readback.test.js` for ten
+controls, including equivalent helper naming, unused correct code, blanket save
+refusal, lost reports, ignored hashes, lost pending state and missing source.
+Fixtures appear only at grading. This checks the extension and its local receipts;
+real skill-store durability, native authorization, context privacy filtering,
+execution isolation and model performance remain outside this evidence.

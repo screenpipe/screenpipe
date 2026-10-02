@@ -33,6 +33,7 @@ regex = { workspace = true, optional = true }
 lazy_static = { workspace = true, optional = true }
 
 tracing = { workspace = true }
+screenpipe-resource = { path = "../screenpipe-resource" }
 
 
 dirs = { workspace = true }

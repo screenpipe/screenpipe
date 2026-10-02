@@ -16,7 +16,7 @@ export function VoiceMemosCard() {
 
   const ui = useGT();
   const openFullDiskAccess = async () => {
-    await Command.create("open", [
+    await Command.create("open-full-disk-access", [
       "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
     ]).execute();
   };

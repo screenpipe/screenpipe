@@ -35,7 +35,9 @@ export interface ApiRouteAudit {
 	served_tier?: string | null;
 	router_tier?: string | null;
 	workload: 'interactive' | 'background';
-	gateway_mode: 'cloudflare';
+	gateway_mode: 'cloudflare' | 'direct';
+	fallback_model?: string | null;
+	fallback_reason?: string | null;
 	latency_ms: number;
 	status_code: number;
 }

@@ -9,5 +9,6 @@ export type PageAssistant = {
   context: AssistantContext;
   promptRequest?: { id: string; text: string };
   ask: WorkflowsAssistantPlatform["ask"];
+  onBusyChange?: (busy: boolean) => void;
 };
 export const PageAssistantContext = createContext<Dispatch<SetStateAction<PageAssistant | null>> | null>(null);

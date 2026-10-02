@@ -96,6 +96,11 @@ export function NotificationsSettings() {
     ...DEFAULT_NOTIFICATION_PREFS,
     ...(settings.notificationPrefs as Prefs | undefined),
   };
+  // Existing users who muted the shared meeting toggle keep that choice until
+  // they explicitly configure the new reminder category.
+  if (settings.notificationPrefs?.meetingReminders === undefined) {
+    prefs.meetingReminders = settings.notificationPrefs?.meetingLiveNotes ?? true;
+  }
 
   const masterOn = prefs[MASTER_NOTIFICATIONS_KEY] !== false;
   const mutedPipes = Array.isArray(prefs.mutedPipes) ? prefs.mutedPipes : [];
@@ -255,6 +260,24 @@ export function NotificationsSettings() {
                   writePrefs({ [category.id]: v });
                 }}
               >
+                {category.id === "meetingReminders" && (
+                  <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                    {ui("Remind me")}
+                    <select
+                      aria-label={ui("Meeting reminder timing")}
+                      className="border border-border bg-background px-2 py-1 text-foreground disabled:opacity-50"
+                      disabled={!categoryEnabled(prefs, category)}
+                      value={Number(prefs.meetingReminderLeadSeconds ?? 30)}
+                      onChange={(event) => writePrefs({ meetingReminderLeadSeconds: Number(event.target.value) })}
+                    >
+                      <option value={15}>{ui("15 seconds before")}</option>
+                      <option value={30}>{ui("30 seconds before")}</option>
+                      <option value={60}>{ui("1 minute before")}</option>
+                      <option value={120}>{ui("2 minutes before")}</option>
+                      <option value={300}>{ui("5 minutes before")}</option>
+                    </select>
+                  </label>
+                )}
                 {/* Progressive disclosure: pipe notifications expand into
                     a searchable per-pipe override list. */}
                 {category.hasPerPipe && (

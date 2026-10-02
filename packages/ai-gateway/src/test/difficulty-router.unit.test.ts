@@ -150,8 +150,8 @@ describe('config sanity', () => {
   });
   it('keeps Auto on GPT-5.6 and reserves Sol for hard prompts', () => {
     expect(TIER_HEAD).toEqual({
-      trivial: 'gpt-5.6-luna',
-      normal: 'gpt-5.6-luna',
+      trivial: 'gpt-6-luna',
+      normal: 'gpt-6-luna',
       hard: 'gpt-5.6-sol',
     });
   });

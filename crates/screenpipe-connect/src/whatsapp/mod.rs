@@ -164,6 +164,9 @@ impl WhatsAppGateway {
     /// easy (it can just pass `"bun"`) and still works on fresh Macs where bun
     /// isn't on the user's PATH.
     pub async fn start_pairing(&self, bun_hint: &str) -> Result<()> {
+        if screenpipe_core::background_work::is_suspended() {
+            anyhow::bail!("Open Screenpipe to connect WhatsApp");
+        }
         let bun_path = resolve_bun_path(Some(bun_hint))?;
 
         // Bump generation so any existing watchdog exits on its next check
@@ -344,6 +347,15 @@ impl WhatsAppGateway {
                 if generation.load(Ordering::SeqCst) != my_generation {
                     info!("whatsapp: watchdog exiting (superseded by newer generation)");
                     return;
+                }
+
+                // Preserve the session, but stop connected-service work after Quit.
+                if screenpipe_core::background_work::is_suspended() {
+                    if let Some(mut process) = child.lock().await.take() {
+                        let _ = process.kill().await;
+                    }
+                    *http_port.lock().await = None;
+                    continue;
                 }
 
                 // Check if process is still alive

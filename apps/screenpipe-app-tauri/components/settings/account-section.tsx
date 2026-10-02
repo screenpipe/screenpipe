@@ -13,7 +13,8 @@ export const searchIndex: SettingsField[] = [
   { label: msg("Sign in to Screenpipe", {}), keywords: ["login", "log in", "sign in"] },
   { label: msg("Logout", {}), keywords: ["signout", "sign out", "log out"] },
   { label: msg("Screenpipe Business", {}), keywords: ["subscription", "billing", "plan", "pro", "business", "max", "ultra", "upgrade", "manage"] },
-  { label: msg("AI connections", {}), keywords: ["data sync", "allow data sync", "cloud", "account", "codex", "claude"] },
+  { label: msg("Data sync", {}), keywords: ["allow data sync", "sync this device", "cloud", "account", "upload"] },
+  { label: msg("AI connections", {}), keywords: ["codex", "claude", "connect"] },
   { label: msg("Device name", {}), keywords: ["data sync", "hostname", "computer"] },
   { label: msg("Sync scheduled tasks across devices", {}), keywords: ["scheduled sync", "pipe sync", "sync"] },
   { label: msg("Memories sync across devices", {}), keywords: ["memories sync", "sync", "facts"] },
@@ -1109,7 +1110,7 @@ export function AccountSection() {
           enabled={settings.dataSyncEnabled ?? false}
           saving={dataSyncSaving}
           error={dataSyncError}
-          onRetry={() => setDataSyncError(null)}
+          onRetry={() => void setDataSyncEnabled(!settings.dataSyncEnabled)}
           onEnabledChange={setDataSyncEnabled}
           deviceName={settings.dataSyncDeviceName ?? ""}
           onDeviceNameChange={(name) => void updateSettings({ dataSyncDeviceName: name })}

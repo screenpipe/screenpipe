@@ -274,6 +274,42 @@ fn relaunch_binary(app: &AppHandle) -> Option<PathBuf> {
     Some(current_binary)
 }
 
+const RELAUNCH_HOME_VISIBLE: &str = "SCREENPIPE_RELAUNCH_HOME_VISIBLE";
+
+pub(crate) fn home_window_visible(app: &AppHandle) -> Option<bool> {
+    match app.get_webview_window("home") {
+        Some(window) => window
+            .is_visible()
+            .and_then(|visible| window.is_minimized().map(|minimized| visible && !minimized))
+            .ok(),
+        None => Some(false),
+    }
+}
+
+/// Consume before spawning any children, so a later ordinary launch cannot
+/// inherit the previous recovery's window preference.
+pub(crate) fn take_relaunch_home_visibility() -> Option<bool> {
+    let value = std::env::var(RELAUNCH_HOME_VISIBLE).ok();
+    std::env::remove_var(RELAUNCH_HOME_VISIBLE);
+    value.and_then(|value| value.parse().ok())
+}
+
+pub(crate) fn configure_relaunch_home(
+    command: &mut Command,
+    visible: Option<bool>,
+    data_dir: &std::path::Path,
+) {
+    command.env_remove(RELAUNCH_HOME_VISIBLE);
+    if let Some(visible) = visible {
+        command.env(RELAUNCH_HOME_VISIBLE, visible.to_string());
+    }
+    crate::recording::recovery_log::append(
+        data_dir,
+        "relaunch_window_state",
+        &format!("home_visible={visible:?}"),
+    );
+}
+
 /// Spawn a replacement app process, then terminate the current process without
 /// running C/C++ atexit handlers. Tauri's built-in restart uses
 /// `std::process::exit`, which can abort in ORT/ggml teardown after the new app
@@ -282,6 +318,10 @@ fn relaunch_binary(app: &AppHandle) -> Option<PathBuf> {
 /// The replacement gets its own process group: launchd kills a job's whole
 /// process group when the job exits, so an inherited group dies with us.
 pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
+    force_app_relaunch_with_home(app, status, Some(true))
+}
+
+fn force_app_relaunch_with_home(app: AppHandle, status: i32, home_visible: Option<bool>) -> ! {
     // Apply a staged update now, at the last moment before this process goes
     // away — installing any earlier orphans the running bundle and kills TCC
     // attribution (see staged_update.rs). Idempotent with the RunEvent::Exit
@@ -326,6 +366,11 @@ pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
         // Startup repoints this variable at recordings. A replacement app must
         // reopen the original settings store before selecting recordings again.
         command.env("SCREENPIPE_DATA_DIR", crate::config::app_data_dir());
+        configure_relaunch_home(
+            &mut command,
+            home_visible,
+            &crate::db_relaunch::active_data_dir(),
+        );
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -361,12 +406,51 @@ pub fn force_app_relaunch(app: AppHandle, status: i32) -> ! {
 /// Request a relaunch from async/UI code while allowing IPC replies and logs to
 /// flush briefly before the current process is force-exited.
 pub fn request_app_relaunch(app: AppHandle, reason: &'static str, delay: Duration) {
+    if let Err(error) = crate::search_only::prepare_restart() {
+        warn!("relaunch deferred: could not preserve recording mode: {error}");
+        return;
+    }
+    request_prepared_relaunch_with_home(app, reason, delay, Some(true));
+}
+
+/// Automatic recovery must not bring back a window the user closed. Explicit
+/// restarts continue through request_app_relaunch with normal startup behavior.
+pub(crate) fn request_recovery_relaunch(app: AppHandle, reason: &'static str, delay: Duration) {
+    if let Err(error) = crate::search_only::prepare_restart() {
+        warn!("relaunch deferred: could not preserve recording mode: {error}");
+        return;
+    }
+    let home_visible = home_window_visible(&app);
+    request_prepared_relaunch_with_home(app, reason, delay, home_visible);
+}
+
+/// Updater callers already persisted the session before draining the server.
+/// Do not introduce another fallible write after committing the installer.
+pub(crate) fn request_prepared_app_relaunch(
+    app: AppHandle,
+    reason: &'static str,
+    delay: Duration,
+) {
+    request_prepared_relaunch_with_home(app, reason, delay, None);
+}
+
+fn request_prepared_relaunch_with_home(
+    app: AppHandle,
+    reason: &'static str,
+    delay: Duration,
+    home_visible: Option<bool>,
+) {
     QUIT_REQUESTED.store(true, Ordering::SeqCst);
 
     std::thread::spawn(move || {
         std::thread::sleep(delay);
         info!("safe relaunch requested: {reason}");
-        force_app_relaunch(app, 0);
+        crate::recording::recovery_log::append(
+            &crate::db_relaunch::active_data_dir(),
+            "app_relaunch_requested",
+            reason,
+        );
+        force_app_relaunch_with_home(app, 0, home_visible);
     });
 }
 
@@ -559,7 +643,7 @@ fn hide_app_to_tray(app: &AppHandle) {
 ///
 /// Only user-initiated quit paths (app menu Cmd+Q, tray Quit, dock Quit via
 /// `ExitRequested`) go through here — programmatic paths (updater restart,
-/// relaunch) call [`request_app_quit`] / [`request_app_relaunch`] directly so
+/// relaunch) call [`request_full_app_quit`] / [`request_app_relaunch`] directly so
 /// they never block on a dialog.
 #[cfg(target_os = "macos")]
 pub fn confirm_and_request_app_quit(app: AppHandle) {
@@ -710,8 +794,18 @@ pub fn confirm_and_request_app_quit(app: AppHandle) {
     request_app_quit(app);
 }
 
-/// Shared quit entry point for tray menu, app menu (Cmd+Q), etc.
+/// User Quit may retain search. Programmatic exit, OS logout, and updater
+/// handoffs continue through the existing full-exit path.
 pub fn request_app_quit(app: AppHandle) {
+    if crate::search_only::keep_after_quit(&app) {
+        crate::search_only::request_enter(app);
+    } else {
+        request_full_app_quit(app);
+    }
+}
+
+/// Full exit for confirmed opt-out Quit, updater handoffs, and failed teardown.
+pub(crate) fn request_full_app_quit(app: AppHandle) {
     if crate::db_recovery_notifications::recovery_active() {
         info!("Quit ignored while protected database recovery is active");
         crate::db_recovery_notifications::notify_recovery_quit_blocked();
@@ -747,6 +841,52 @@ pub fn request_app_quit(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{extract_cf_bundle_executable, macos_updater_relaunch_command};
+
+    #[test]
+    fn relaunch_home_visibility_child() {
+        let Ok(expected) = std::env::var("SCREENPIPE_TEST_RELAUNCH_HOME") else {
+            return;
+        };
+        assert_eq!(super::take_relaunch_home_visibility(), expected.parse().ok());
+        assert_eq!(super::take_relaunch_home_visibility(), None);
+        assert!(std::env::var_os(super::RELAUNCH_HOME_VISIBLE).is_none());
+    }
+
+    #[test]
+    fn recovery_relaunch_home_visibility_crosses_process_boundary_once() {
+        let root = tempfile::tempdir().unwrap();
+        for (scenario, visible) in [
+            ("closed recovery", Some(false)),
+            ("visible recovery", Some(true)),
+            ("explicit restart", Some(true)),
+            ("ordinary quit and reopen", None),
+        ] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", "process_exit::tests::relaunch_home_visibility_child"])
+                .env(
+                    "SCREENPIPE_TEST_RELAUNCH_HOME",
+                    visible.map_or("none", |v| if v { "true" } else { "false" }),
+                )
+                // A fresh snapshot must replace any stale inherited preference.
+                .env(super::RELAUNCH_HOME_VISIBLE, (!visible.unwrap_or(false)).to_string());
+            super::configure_relaunch_home(&mut command, visible, root.path());
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{scenario}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "process_exit::tests::relaunch_home_visibility_child"])
+            .env("SCREENPIPE_TEST_RELAUNCH_HOME", "none")
+            .env(super::RELAUNCH_HOME_VISIBLE, "invalid")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+    }
 
     #[test]
     fn extracts_bundle_executable_from_xml_plist() {

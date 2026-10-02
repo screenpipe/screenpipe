@@ -10,9 +10,9 @@ and layer declared in the manifest, weighted by confidence and criticality.
 
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
-- Mapped specs: 141
-- Declared test blocks: 406
-- Weighted coverage points: 326.5
+- Mapped specs: 142
+- Declared test blocks: 411
+- Weighted coverage points: 331.5
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -23,9 +23,9 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 107 | 343 | 286.1 | 15 | 122 | 85% |
-| macos | 137 | 368 | 296.3 | 17 | 132 | 88% |
-| linux | 95 | 301 | 255.5 | 14 | 119 | 80% |
+| windows | 108 | 348 | 291.1 | 15 | 123 | 85% |
+| macos | 138 | 373 | 301.3 | 17 | 133 | 88% |
+| linux | 96 | 306 | 260.5 | 14 | 120 | 80% |
 
 ## Runtime Results
 
@@ -46,13 +46,13 @@ pass/fail/skip counts.
 | local-api | 29 specs / 121 tests / 102.0 pts | 40 specs / 119 tests / 101.9 pts | 24 specs / 89 tests / 80.2 pts |
 | notifications | 4 specs / 26 tests / 17.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
 | onboarding | 9 specs / 39 tests / 34.8 pts | 11 specs / 43 tests / 38.2 pts | 9 specs / 39 tests / 34.8 pts |
-| os-integration | 7 specs / 32 tests / 26.9 pts | 16 specs / 31 tests / 18.8 pts | 2 specs / 15 tests / 10.8 pts |
+| os-integration | 8 specs / 37 tests / 31.9 pts | 17 specs / 36 tests / 23.8 pts | 3 specs / 20 tests / 15.8 pts |
 | performance | 3 specs / 45 tests / 45.0 pts | 5 specs / 36 tests / 31.8 pts | 2 specs / 30 tests / 30.0 pts |
 | pipes | 6 specs / 20 tests / 20.0 pts | 8 specs / 26 tests / 26.0 pts | 6 specs / 20 tests / 20.0 pts |
 | real-ui-e2e | 80 specs / 241 tests / 204.9 pts | 98 specs / 260 tests / 220.3 pts | 74 specs / 217 tests / 190.9 pts |
 | settings | 15 specs / 42 tests / 39.0 pts | 17 specs / 36 tests / 31.7 pts | 14 specs / 33 tests / 30.0 pts |
 | storage-privacy | 10 specs / 44 tests / 35.3 pts | 10 specs / 29 tests / 28.1 pts | 7 specs / 22 tests / 21.1 pts |
-| tauri-command | 23 specs / 64 tests / 50.9 pts | 35 specs / 87 tests / 69.3 pts | 22 specs / 65 tests / 51.8 pts |
+| tauri-command | 24 specs / 69 tests / 55.9 pts | 36 specs / 92 tests / 74.3 pts | 23 specs / 70 tests / 56.8 pts |
 | window-lifecycle | 22 specs / 71 tests / 59.5 pts | 23 specs / 55 tests / 40.9 pts | 16 specs / 44 tests / 34.4 pts |
 
 ## Critical Feature Matrix
@@ -207,7 +207,7 @@ pass/fail/skip counts.
 | onboarding-trust-affordances.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, tauri-command | onboarding, settings-privacy-api-auth, storage-retention | high | strong | real-user-flow | 4 | Pre-grant reassurance in setup: the login slide carries the storage-locality line and the pause affordance on one line (the only slide every platform sees, since permissions auto-advances on non-mac); the mac permissions slide keeps that promise collapsed to a single line below the permission wheel and on expand renders the data dir the running app actually resolved rather than a reconstructed ~/.screenpipe, with an open action pointed at that path; collapsed and expanded states are both asserted to fit inside the fixed-size onboarding window; and the screenshot choice slide states the capture bounds (incognito skipped, per-app exclusions) where screenshot capture is chosen independently of sidebar visibility. The mac assertions share one visit because the slide auto-advances 600ms after all grants land. |
 | owned-browser-tabs.spec.ts | windows, macos | chat-ai, real-ui-e2e | owned-browser, right-panel-tabs, native-child-webviews | high | strong | command | 0 | A surviving app window drives two native child webviews after the home automation context is replaced, then verifies retained per-tab URLs and close cleanup through the E2E harness. |
 | owned-browser.spec.ts | windows, macos | os-integration, window-lifecycle | owned-browser, window-lifecycle | low | smoke | command | 1 | Embedded agent browser hides safely without an attached child. |
-| permission-recovery.spec.ts | macos | os-integration, real-ui-e2e, window-lifecycle | permission-recovery, window-lifecycle | high | conditional | real-user-flow | 2 | macOS-only recovery window for missing TCC permissions. |
+| permission-recovery.spec.ts | macos | os-integration, real-ui-e2e, window-lifecycle | permission-recovery, window-lifecycle | high | conditional | real-user-flow | 2 | macOS-only recovery window for required TCC permissions. Reads persisted audio policy so audio-disabled seeds require no microphone row; covers Screen Recording restart UI and reuse after hiding. Native capture visibility is not established because E2E bypasses content protection. |
 | pi-extensions.spec.ts | windows, macos, linux | real-ui-e2e, settings | ai-tools, connections, pi-extensions | medium | strong | real-user-flow | 1 | Opens Home -> Connections, opens the first AI tools setting, verifies the common tool toggles are first and directly visible in the modal, checks plain-language built-ins and compatibility labels, filters the package search, and captures a screenshot. Read-only smoke: does not install packages. |
 | pii-redaction-coordination.spec.ts | windows, macos, linux | real-ui-e2e, local-api, performance | app-launch, health, local-api-load | high | strong | api | 1 | Starts the opt-in local ONNX text reconciliation worker in the desktop app, redacts a 24-row SQLite backlog, and probes WebDriver plus health responsiveness while it runs. |
 | pipe-continuous-chat.spec.ts | macos | pipes, chat-ai, real-ui-e2e, local-api, storage-privacy | pipes, chat | high | strong | real-user-flow | 5 | Five native desktop journeys cover failed-save rollback and retry, stable one-chat continuity across real Pipe runs, a human follow-up carried into the next scheduled run, explicit pause/resume behavior with a read-only old chat, reset rejection during an active human reply, and a confirmed clean run without prior scheduled or human context. |
@@ -234,6 +234,7 @@ pass/fail/skip counts.
 | tray-search.spec.ts | windows, macos, linux | window-lifecycle, tauri-command, real-ui-e2e | tray-search, home-search, window-lifecycle | high | partial | command | 2 | Invokes open_search_window and verifies focused floating Search. |
 | updater-banner.spec.ts | windows, macos, linux | real-ui-e2e, settings | update-surfacing, settings-persistence | high | partial | mixed | 2 | Synthetic update-available event surfaces the restart-to-update banner. A real Auto-update toggle plus delayed store save verifies restart waits for preference persistence and survives settings-store re-hydration; an E2E-only handoff suppresses the destructive relaunch. Real check/download/install + rollback stay manual via e2e/mock-updates because the debug E2E build disables updater checks. |
 | viewer-deeplink.spec.ts | windows, macos, linux | window-lifecycle, tauri-command | viewer-deeplink, window-lifecycle | medium | partial | command | 3 | Viewer window creation and per-path dedupe. |
+| webview-shell-scope.spec.ts | windows, macos, linux | tauri-command, os-integration | webview-shell-scope, ai-tools | high | strong | command | 5 | Calls the shell plugin from a real app webview. The removed exec-sh, sh, cmd and any-argument open entries are rejected by the capability scope. On macOS, a caller-supplied PATH cannot replace the system launcher, and the Claude/Cursor install check still reaches fs exists. |
 | window-activation.spec.ts | macos | window-lifecycle, tauri-command, real-ui-e2e | window-lifecycle, chat | medium | conditional | real-user-flow | 2 | macOS-only show_window_activated focus coverage. |
 | window-lifecycle.spec.ts | windows, macos, linux | window-lifecycle, tauri-command, real-ui-e2e | window-lifecycle, onboarding, tray-search | high | strong | mixed | 3 | Home, Search, and onboarding window routing. |
 | windows-core-recording.spec.ts | windows | capture-ocr, local-api, audio-device, notifications, storage-privacy, real-ui-e2e | capture-ocr, local-api-auth, local-api-search, audio-device-health, timeline, low-disk-recording-guard | high | conditional | mixed | 13 | Windows recording-enabled lane; low-disk coverage requires teardown of a real CaptureSession and continued API/search availability, while hosted runners can skip only frame-dependent OCR assertions. |

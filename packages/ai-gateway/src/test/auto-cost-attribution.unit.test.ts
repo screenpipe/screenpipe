@@ -76,7 +76,7 @@ describe('routing chains stay priceable (no silent $0.01 fallback rows)', () => 
 	});
 
 	it('uses Luna as the current Auto primary for text, vision, and pipes', () => {
-		const luna = 'gpt-5.6-luna';
+		const luna = 'gpt-6-luna';
 		expect(AUTO_WATERFALL[0]).toBe(luna);
 		expect(AUTO_WATERFALL_VISION[0]).toBe(luna);
 		expect(AUTO_WATERFALL_BACKGROUND[0]).toBe(luna);

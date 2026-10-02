@@ -10,6 +10,7 @@
 //! All EventKit calls go through `spawn_blocking` (EKEventStore is !Send).
 
 mod snapshots;
+pub(crate) mod reminders;
 pub(crate) use snapshots::{publish_calendar_events, CalendarSource};
 
 use serde::{Deserialize, Serialize};
@@ -349,25 +350,27 @@ pub async fn calendar_get_current_meeting() -> Result<Vec<CalendarEventItem>, St
 /// Background loop that publishes calendar events to the event bus every 60s.
 /// Consumed by meetings.rs for meeting detection signal #5.
 ///
-/// Publishes on every cycle — even an empty list when there are no events or
-/// no auth — so subscribers can distinguish "publisher hasn't run yet" from
+/// Publishes every successful snapshot, including empty lists or no auth.
+/// Read failures preserve the previous snapshot, rather than reporting events
+/// as deleted to the reminder scheduler. Subscribers can distinguish
+/// "publisher hasn't run yet" from
 /// "publisher ran and there's nothing." Subscribers (meeting_live_notes) use
 /// the first publication to mark their cache as authoritative and stop
 /// duplicating the fetch.
 pub async fn start_calendar_events_publisher() {
     info!("calendar events publisher: started");
     loop {
-        let items: Vec<CalendarEventItem> = collect_calendar_events().await;
-
-        if let Err(e) = publish_calendar_events(CalendarSource::Native, items) {
-            debug!("calendar publisher: failed to send event: {}", e);
+        if let Some(items) = collect_calendar_events().await {
+            if let Err(e) = publish_calendar_events(CalendarSource::Native, items) {
+                debug!("calendar publisher: failed to send event: {}", e);
+            }
         }
 
         tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
     }
 }
 
-async fn collect_calendar_events() -> Vec<CalendarEventItem> {
+async fn collect_calendar_events() -> Option<Vec<CalendarEventItem>> {
     #[cfg(target_os = "macos")]
     {
         use screenpipe_connect::calendar::ScreenpipeCalendar;
@@ -380,7 +383,7 @@ async fn collect_calendar_events() -> Vec<CalendarEventItem> {
         if format!("{}", status) != "Full Access"
             && !ScreenpipeCalendar::access_granted_this_session()
         {
-            return Vec::new();
+            return Some(Vec::new());
         }
 
         match tokio::task::spawn_blocking(|| {
@@ -389,17 +392,17 @@ async fn collect_calendar_events() -> Vec<CalendarEventItem> {
         })
         .await
         {
-            Ok(Ok(events)) => events.into_iter().map(calendar_event_to_item).collect(),
+            Ok(Ok(events)) => Some(events.into_iter().map(calendar_event_to_item).collect()),
             Ok(Err(e)) => {
                 warn!(
                     "calendar publisher: fetch failed (status={}): {}",
                     status, e
                 );
-                Vec::new()
+                None
             }
             Err(e) => {
                 error!("calendar publisher: task panicked: {}", e);
-                Vec::new()
+                None
             }
         }
     }
@@ -422,22 +425,22 @@ async fn collect_calendar_events() -> Vec<CalendarEventItem> {
         {
             Ok(Ok(events)) => {
                 info!("calendar publisher: fetched {} events", events.len());
-                events.into_iter().map(calendar_event_to_item_win).collect()
+                Some(events.into_iter().map(calendar_event_to_item_win).collect())
             }
             Ok(Err(e)) => {
                 warn!("calendar publisher: fetch failed: {}", e);
-                Vec::new()
+                None
             }
             Err(e) => {
                 error!("calendar publisher: task panicked: {}", e);
-                Vec::new()
+                None
             }
         }
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        Vec::new()
+        Some(Vec::new())
     }
 }
 

@@ -1,10 +1,14 @@
 /* screenpipe — AI that knows everything you've seen, said, or heard
  * https://screenpipe.com */
-.control { --foreground: 80 4% 9%; --background: 60 9% 97%; --border: 70 10% 85%; --ring: 80 4% 9%; position: relative; flex: 0 0 auto; color: var(--ink, #171815); font: inherit; }
-.label { display: flex; align-items: center; gap: 10px; font-size: 13px; cursor: pointer; white-space: nowrap; }
-.status { position: absolute; top: calc(100% + 4px); right: 0; font-size: 11px; line-height: 1.3; color: var(--muted, #73766d); white-space: nowrap; }
-.status:empty { display: none; }
-.control:has(.retry) .status { right: 22px; white-space: nowrap; }
-.retry { position: absolute; right: 0; top: calc(100% + 2px); padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.control { --foreground: 80 4% 9%; --background: 60 9% 97%; --border: 70 10% 85%; --ring: 80 4% 9%; position: relative; display: inline-flex; align-items: center; min-height: 36px; flex: 0 0 auto; color: var(--ink, #171815); font: inherit; }
+.label { display: flex; align-items: center; gap: 10px; font-size: 13px; line-height: 20px; cursor: pointer; white-space: nowrap; }
+.switchSlot { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 24px; flex: 0 0 44px; }
+.switchSlot[data-pending="true"] > button { background: transparent; border-color: var(--muted, #73766d); opacity: .45; }
+.switchSlot[data-pending="true"] > button > span { visibility: hidden; }
+.spinner { position: absolute; pointer-events: none; color: var(--muted, #73766d); animation: spin 1s linear infinite; }
+.status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.retry { position: absolute; right: 0; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
 .retry:focus-visible { outline: 1px solid currentColor; outline-offset: 3px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 @media (max-width: 680px) { .label { gap: 6px; font-size: 12px; } }
