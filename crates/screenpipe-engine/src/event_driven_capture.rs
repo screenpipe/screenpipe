@@ -52,8 +52,8 @@ const CAPTURE_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
 const TREE_WALK_WORKER_TIMEOUT_GRACE: Duration = Duration::from_millis(750);
 const WARM_VISUAL_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 const WARM_FOCUS_BACKSTOP_INTERVAL: Duration = Duration::from_secs(1);
-#[cfg(target_os = "windows")]
-const WINDOWS_CONTEXT_CAPTURE_SETTLE: Duration = Duration::from_millis(750);
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+const CONTEXT_CAPTURE_SETTLE: Duration = Duration::from_millis(750);
 
 fn tree_walk_worker_timeout(config: &TreeWalkerConfig) -> Duration {
     config
@@ -1127,8 +1127,8 @@ pub(crate) async fn event_driven_capture_loop(
     // originating `ui_events` rows never sit at `frame_id=NULL`.
     let mut pending_checkpoint: Option<CaptureTrigger> = None;
     let mut pending_checkpoint_corr_ids: Vec<crate::frame_linker::CorrelationId> = Vec::new();
-    #[cfg(target_os = "windows")]
-    let mut windows_context_settle_until: Option<Instant> = None;
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    let mut context_settle_until: Option<Instant> = None;
 
     // Track content hash for dedup across captures
     let mut last_content_hash: Option<i64> = None;
@@ -1710,7 +1710,7 @@ pub(crate) async fn event_driven_capture_loop(
         // valid Click correlation ids and the click rows would lose
         // their frame_id link.
         let mut correlation_ids: Vec<crate::frame_linker::CorrelationId> = Vec::new();
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         let mut context_transition_observed = false;
         let mut trigger: Option<CaptureTrigger>;
         if let Some(warm) = warm_trigger_override.take() {
@@ -1827,7 +1827,7 @@ pub(crate) async fn event_driven_capture_loop(
 
             // A later key/click/scroll message may win reduction, but it must
             // not erase the fact that this batch crossed a focus boundary.
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             {
                 context_transition_observed = drained.iter().any(|msg| {
                     matches!(
@@ -1836,8 +1836,7 @@ pub(crate) async fn event_driven_capture_loop(
                     )
                 });
                 if context_transition_observed {
-                    windows_context_settle_until =
-                        Some(Instant::now() + WINDOWS_CONTEXT_CAPTURE_SETTLE);
+                    context_settle_until = Some(Instant::now() + CONTEXT_CAPTURE_SETTLE);
                 }
             }
 
@@ -1963,10 +1962,9 @@ pub(crate) async fn event_driven_capture_loop(
         }
 
         if let Some(trigger) = trigger {
-            #[cfg(target_os = "windows")]
-            if windows_capture_needs_context_settle(&trigger, context_transition_observed) {
-                windows_context_settle_until =
-                    Some(Instant::now() + WINDOWS_CONTEXT_CAPTURE_SETTLE);
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            if capture_needs_context_settle(&trigger, context_transition_observed) {
+                context_settle_until = Some(Instant::now() + CONTEXT_CAPTURE_SETTLE);
             }
             // Reset content hash on app/window change so the first frame
             // of a new context is never deduped by a stale hash
@@ -2060,12 +2058,12 @@ pub(crate) async fn event_driven_capture_loop(
                 // focus-aware Warm/Cold idling.
                 record_capture_attempt(&vision_metrics, &monitor_liveness);
 
-                // Win32 foreground ownership changes before DWM necessarily presents the
-                // replacement pixels. Capturing immediately can therefore persist the last
+                // Foreground ownership changes before DWM/WindowServer necessarily presents
+                // the replacement window. Capturing immediately can therefore persist the last
                 // frame of an excluded window under the newly focused app's identity. Keep
                 // this off the input hooks and wait only at app/window boundaries.
-                #[cfg(target_os = "windows")]
-                if let Some(deadline) = windows_context_settle_until.take() {
+                #[cfg(any(target_os = "windows", target_os = "macos"))]
+                if let Some(deadline) = context_settle_until.take() {
                     tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
                 }
 
@@ -2560,8 +2558,8 @@ fn capture_needs_fresh_pixels(trigger: &CaptureTrigger) -> bool {
     )
 }
 
-#[cfg(any(target_os = "windows", test))]
-fn windows_capture_needs_context_settle(
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+fn capture_needs_context_settle(
     trigger: &CaptureTrigger,
     context_transition_observed: bool,
 ) -> bool {
@@ -4394,8 +4392,8 @@ mod tests {
             CaptureTrigger::Manual,
             CaptureTrigger::VisualChange,
         ] {
-            assert!(windows_capture_needs_context_settle(&trigger, true));
-            assert!(!windows_capture_needs_context_settle(&trigger, false));
+            assert!(capture_needs_context_settle(&trigger, true));
+            assert!(!capture_needs_context_settle(&trigger, false));
         }
     }
 
