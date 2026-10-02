@@ -686,7 +686,8 @@ mod imp {
             frame_id: i64,
         ) -> Result<Option<Vec<u8>>, EnterpriseSyncError> {
             if !self.image_uploads_allowed() {
-                return Ok(None);
+                // A settings refusal is not evidence that the local image is missing.
+                return Err(EnterpriseSyncError::BackfillImages("screenshot_policy_disabled"));
             }
 
             // Same image `/frames/{id}` serves in the UI — decoded from local
@@ -700,8 +701,7 @@ mod imp {
                 .await
                 .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
             if resp.status() == reqwest::StatusCode::NOT_FOUND {
-                // Expired from retention or never existed — report back so the
-                // server drops the id from the manifest instead of looping.
+                // Exact local lookup returned 404; its underlying cause is unknown.
                 return Ok(None);
             }
             if !resp.status().is_success() {

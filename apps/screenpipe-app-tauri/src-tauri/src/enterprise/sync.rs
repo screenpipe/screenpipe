@@ -256,6 +256,8 @@ struct CursorBoundary {
     /// Recovery-only counter, checkpointed atomically with the acknowledged cursor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     backfill_records: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    backfill_images: Option<backfill::ImageProgress>,
     frames: u32,
     audio: u32,
     ui: u32,
@@ -465,6 +467,8 @@ pub use screenpipe_telemetry_wire::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnterpriseSyncError {
+    #[error("historical screenshots: {0}")]
+    BackfillImages(&'static str),
     #[error("local api request failed: {0}")]
     LocalApi(String),
     #[error("ingest request failed: {0}")]
@@ -783,6 +787,24 @@ async fn run_one_sync_inner(
     }
 
     let prepared = prepare_upload_identity(cfg, local, http).await?;
+    if backfill.is_some_and(|request| request.images_only)
+        && !matches!(
+            prepared.upload_mode,
+            EnterpriseUploadMode::HostedIngest | EnterpriseUploadMode::DirectReadable(_)
+        )
+    {
+        return Err(EnterpriseSyncError::BackfillImages(
+            "screenshot_storage_mode_blocked",
+        ));
+    }
+    if backfill
+        .and_then(|request| request.source_id.as_deref())
+        .is_some_and(|source| source != prepared.device_id)
+    {
+        return Err(EnterpriseSyncError::BackfillImages(
+            "screenshot_source_changed",
+        ));
+    }
     let export = local.begin_export().await?;
     let cfg = &prepared;
     if cfg.stable_device_id.is_none()
@@ -1063,6 +1085,21 @@ async fn run_one_sync_inner(
     ));
     let bytes = body.len();
 
+    // The history cursor is the retry checkpoint for images as well as text.
+    // Store this page's images first: the existing server sees them as already
+    // resolved, so it need not accumulate another historical request backlog.
+    let images = if backfill.is_some()
+        && streams.frame_images == crate::enterprise_policy::FrameImagesMode::All
+        && matches!(
+            cfg.upload_mode,
+            EnterpriseUploadMode::HostedIngest | EnterpriseUploadMode::DirectReadable(_)
+        )
+        && !frames.is_empty()
+    {
+        Some(backfill::upload_page_images(cfg, local, http, &frames).await?)
+    } else {
+        None
+    };
     let mut next_cursor = cursor.clone();
     advance_timestamp_boundary(
         &mut next_cursor.last_frame_ts,
@@ -1102,88 +1139,94 @@ async fn run_one_sync_inner(
         |row| &row.timestamp,
     );
 
-    match &cfg.upload_mode {
-        EnterpriseUploadMode::HostedIngest => {
-            for request_body in split_jsonl_requests(body, HOSTED_INGEST_REQUEST_BYTES) {
+    if !backfill.is_some_and(|request| request.images_only) {
+        match &cfg.upload_mode {
+            EnterpriseUploadMode::HostedIngest => {
+                for request_body in split_jsonl_requests(body, HOSTED_INGEST_REQUEST_BYTES) {
+                    let admission = match &export {
+                        Some(token) => token.admit().await?,
+                        None => None,
+                    };
+                    let upload = post_jsonl_with_identity(
+                        http,
+                        &cfg.ingest_url,
+                        &cfg.license_key,
+                        request_body,
+                        cfg.stable_device_id.as_deref(),
+                        backfill.is_some(),
+                    );
+                    drop(admission);
+                    upload.await?;
+                }
+            }
+            EnterpriseUploadMode::DirectWriteOnly(direct) => {
+                let counts = DirectUploadRecordCounts {
+                    frames: frames.len(),
+                    parsed: parsed.len(),
+                    activities: activities.len(),
+                    audio: audio.len(),
+                    ui: ui.len(),
+                    snapshots: snapshots.len(),
+                    memories: memories.len(),
+                    feedback: feedback.len(),
+                };
                 let admission = match &export {
                     Some(token) => token.admit().await?,
                     None => None,
                 };
-                let upload = post_jsonl_with_identity(
+                let upload = upload_direct_write_only_batch(
                     http,
-                    &cfg.ingest_url,
-                    &cfg.license_key,
-                    request_body,
-                    cfg.stable_device_id.as_deref(),
+                    cfg,
+                    direct,
+                    body,
+                    counts,
+                    enterprise_upload::direct_upload_cursors(&next_cursor),
+                );
+                drop(admission);
+                upload.await?;
+            }
+            EnterpriseUploadMode::DirectReadable(direct) => {
+                let counts = DirectUploadRecordCounts {
+                    frames: frames.len(),
+                    parsed: parsed.len(),
+                    activities: activities.len(),
+                    audio: audio.len(),
+                    ui: ui.len(),
+                    snapshots: snapshots.len(),
+                    memories: memories.len(),
+                    feedback: feedback.len(),
+                };
+                let admission = match &export {
+                    Some(token) => token.admit().await?,
+                    None => None,
+                };
+                let upload = upload_direct_readable_batch(
+                    http,
+                    cfg,
+                    direct,
+                    body,
+                    counts,
+                    enterprise_upload::direct_upload_cursors(&next_cursor),
                     backfill.is_some(),
                 );
                 drop(admission);
                 upload.await?;
             }
-        }
-        EnterpriseUploadMode::DirectWriteOnly(direct) => {
-            let counts = DirectUploadRecordCounts {
-                frames: frames.len(),
-                parsed: parsed.len(),
-                activities: activities.len(),
-                audio: audio.len(),
-                ui: ui.len(),
-                snapshots: snapshots.len(),
-                memories: memories.len(),
-                feedback: feedback.len(),
-            };
-            let admission = match &export {
-                Some(token) => token.admit().await?,
-                None => None,
-            };
-            let upload = upload_direct_write_only_batch(
-                http,
-                cfg,
-                direct,
-                body,
-                counts,
-                enterprise_upload::direct_upload_cursors(&next_cursor),
-            );
-            drop(admission);
-            upload.await?;
-        }
-        EnterpriseUploadMode::DirectReadable(direct) => {
-            let counts = DirectUploadRecordCounts {
-                frames: frames.len(),
-                parsed: parsed.len(),
-                activities: activities.len(),
-                audio: audio.len(),
-                ui: ui.len(),
-                snapshots: snapshots.len(),
-                memories: memories.len(),
-                feedback: feedback.len(),
-            };
-            let admission = match &export {
-                Some(token) => token.admit().await?,
-                None => None,
-            };
-            let upload = upload_direct_readable_batch(
-                http,
-                cfg,
-                direct,
-                body,
-                counts,
-                enterprise_upload::direct_upload_cursors(&next_cursor),
-                backfill.is_some(),
-            );
-            drop(admission);
-            upload.await?;
-        }
-        EnterpriseUploadMode::Blocked(reason) => {
-            return Err(EnterpriseSyncError::Configuration(reason.clone()));
+            EnterpriseUploadMode::Blocked(reason) => {
+                return Err(EnterpriseSyncError::Configuration(reason.clone()));
+            }
         }
     }
-
     if backfill.is_some() {
         let records =
             frames.len() + audio.len() + ui.len() + parsed.len() + memories.len() + feedback.len();
         next_cursor.boundary.backfill_records =
             Some(cursor.boundary.backfill_records.unwrap_or(0) + records as u64);
+        if let Some(images) = images {
+            let total = next_cursor.boundary.backfill_images.get_or_insert_default();
+            total.uploaded += images.uploaded;
+            total.unavailable += images.unavailable;
+        }
     }
 
     // Advance cursor only on success — partial failure must not skip records.
@@ -4539,7 +4582,7 @@ pub(crate) mod tests {
     async fn direct_upload_completion_auto_cites_only_readable_all_images() {
         let _guard = crate::enterprise_policy::sync_streams_test_lock();
         let _restore = RestoreDefaultSyncStreams;
-        for (readable, historical) in [(false, false), (true, false), (true, true)] {
+        for (readable, historical) in [(false, false), (false, true), (true, false), (true, true)] {
             for frame_mode in ["off", "cited", "all"] {
                 let mode_json = format!(
                     "\"mode\":\"{}\"",
@@ -4600,11 +4643,20 @@ pub(crate) mod tests {
                 } else {
                     direct_test_cfg
                 };
-                let cfg = make_cfg(
+                let mut cfg = make_cfg(
                     &dir,
                     format!("{}/ticket", server.uri()),
                     format!("{}/complete", server.uri()),
                 );
+                cfg.ingest_url = format!("{}/api/enterprise/ingest", server.uri());
+                wiremock::Mock::given(wiremock::matchers::method("POST"))
+                    .and(wiremock::matchers::path("/api/enterprise/frame-uploads"))
+                    .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                        serde_json::json!({"stored": [], "unavailable": [1], "failed": []}),
+                    ))
+                    .expect(usize::from(readable && historical && frame_mode == "all") as u64)
+                    .mount(&server)
+                    .await;
                 let mut cursor = Cursor {
                     source_id: None,
                     last_frame_ts: Some("2026-05-07T09:00:00Z".to_string()),
@@ -4648,7 +4700,7 @@ pub(crate) mod tests {
                     .unwrap();
                 assert_eq!(
                     complete.headers.contains_key("x-screenpipe-backfill"),
-                    historical
+                    readable && historical
                 );
                 for request in &requests {
                     if request.url.path() == "/blob" {
@@ -5108,6 +5160,100 @@ pub(crate) mod tests {
             upload_mode: EnterpriseUploadMode::HostedIngest,
             log_dirs: vec![tmp.path().to_path_buf()],
         }
+    }
+
+    #[tokio::test]
+    async fn historical_images_require_matching_durable_ack_and_preserve_policy_source_gates() {
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
+        let _restore = RestoreDefaultSyncStreams;
+        crate::enterprise_policy::set_sync_streams(
+            true,
+            false,
+            true,
+            true,
+            true,
+            true,
+            "off".into(),
+            "all".into(),
+        );
+        let server = wiremock::MockServer::start().await;
+        let attempt = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls = attempt.clone();
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/enterprise/frame-uploads"))
+            .respond_with(move |r: &wiremock::Request| {
+                let body: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+                assert_eq!(body["frames"][0]["frame_id"], 1);
+                assert!(body["frames"][0]["image_b64"].as_str().unwrap().len() > 100);
+                assert_eq!(body["frames"][1]["error"], "not_found");
+                if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    wiremock::ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"stored": [2], "unavailable": [1]}))
+                } else {
+                    wiremock::ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"stored": [1], "unavailable": [2]}))
+                }
+            })
+            .mount(&server)
+            .await;
+        let dir = TempDir::new().unwrap();
+        let mut cfg = frame_test_cfg(&server.uri(), &dir);
+        let rows = vec![
+            frame(1, "2026-01-01T00:00:00Z", "test", ""),
+            frame(2, "2026-01-01T00:00:00Z", "test", ""),
+        ];
+        let http = reqwest::Client::new();
+        assert!(backfill::upload_page_images(&cfg, &FrameMock, &http, &rows)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("screenshot_ack_incomplete"));
+        let result = backfill::upload_page_images(&cfg, &FrameMock, &http, &rows)
+            .await
+            .unwrap();
+        assert_eq!((result.uploaded, result.unavailable), (1, 1));
+        let failed = vec![frame(3, "2026-01-01T00:00:00Z", "test", "")];
+        assert!(
+            backfill::upload_page_images(&cfg, &FrameMock, &http, &failed)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("screenshot_fetch_failed")
+        );
+        cfg.device_id = "33333333-3333-4333-8333-333333333333".into();
+        assert!(backfill::upload_page_images(&cfg, &FrameMock, &http, &rows)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("screenshot_source_changed"));
+        cfg.upload_mode =
+            EnterpriseUploadMode::DirectWriteOnly(enterprise_upload::DirectUploadConfig {
+                ticket_url: format!("{}/ticket", server.uri()),
+                complete_url: format!("{}/complete", server.uri()),
+                pinned_hosts: vec![],
+            });
+        assert!(backfill::upload_page_images(&cfg, &FrameMock, &http, &rows)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("screenshot_storage_mode_blocked"));
+        cfg.upload_mode = EnterpriseUploadMode::HostedIngest;
+        crate::enterprise_policy::set_sync_streams(
+            true,
+            false,
+            true,
+            true,
+            true,
+            true,
+            "off".into(),
+            "off".into(),
+        );
+        assert!(backfill::upload_page_images(&cfg, &FrameMock, &http, &rows)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("screenshot_policy_disabled"));
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 
     #[test]

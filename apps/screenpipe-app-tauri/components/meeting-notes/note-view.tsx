@@ -102,6 +102,7 @@ import {
 } from "@/lib/utils/calendar";
 import { cn } from "@/lib/utils";
 import { AttendeesPill } from "./attendees-pill";
+import { CalendarNudge } from "./calendar-nudge";
 import { Receipts } from "./receipts";
 import { ReplayStrip } from "./replay-strip";
 import { ListeningSticks } from "./listening-sticks";
@@ -247,6 +248,7 @@ interface NoteViewProps {
   captureDevices?: LiveCaptureDevice[];
   onCaptureDevicesRefresh?: () => void | Promise<void>;
   calendarEvents?: CalendarEvent[];
+  onOpenCalendarConnections?: () => void;
   transcriptOpenIntent?: TranscriptOpenIntent;
   transcriptOpenRequestKey?: number;
   initialWorkspaceTab?: MeetingWorkspaceTab;
@@ -300,6 +302,7 @@ export function NoteView({
   captureDevices = [],
   onCaptureDevicesRefresh,
   calendarEvents = [],
+  onOpenCalendarConnections,
   transcriptOpenIntent,
   transcriptOpenRequestKey,
   initialWorkspaceTab,
@@ -2310,6 +2313,8 @@ export function NoteView({
               />
             </span>
           </div>
+
+          {onOpenCalendarConnections && <CalendarNudge meeting={meeting} onConnect={onOpenCalendarConnections} />}
 
           <MeetingWorkspaceTabs
             value={activeTab}
