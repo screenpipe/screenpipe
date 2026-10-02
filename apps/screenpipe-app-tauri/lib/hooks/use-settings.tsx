@@ -340,6 +340,7 @@ export type Settings = SettingsStore & {
 	categoryOwnedFilters?: { apps: string[]; domains: string[] };
 	searchShortcut?: string;
 	lockVaultShortcut?: string;
+	starSessionShortcut?: string;
 	/** When true, audio devices follow system default and auto-switch on changes */
 	useSystemDefaultAudio?: boolean;
 	/** Enable AI workflow event detection (cloud, triggers event-based pipes) */
@@ -811,6 +812,7 @@ let DEFAULT_SETTINGS: Settings = {
 			showChatShortcut: "Control+Super+L",
 			searchShortcut: "Control+Super+K",
 			lockVaultShortcut: "Super+Shift+L",
+			starSessionShortcut: "Control+Super+B",
 			disableVision: false,
 			disableScreenshots: false,
 			enableSemanticContext: true,
@@ -882,6 +884,7 @@ export function createDefaultSettingsObject(): Settings {
 		DEFAULT_SETTINGS.searchShortcut = p === "windows" ? "Alt+K" : "Control+Super+K";
 		DEFAULT_SETTINGS.startAudioShortcut = p === "windows" ? "Alt+Shift+A" : "Control+Super+A";
 		DEFAULT_SETTINGS.stopAudioShortcut = p === "windows" ? "Alt+Shift+Z" : "Control+Super+Z";
+		DEFAULT_SETTINGS.starSessionShortcut = p === "windows" ? "Alt+Shift+B" : "Control+Super+B";
 		DEFAULT_SETTINGS.lockVaultShortcut = p === "windows" ? "Ctrl+Shift+L" : "Super+Shift+L";
 
 		if (p === "windows") {
@@ -1274,6 +1277,11 @@ function createSettingsStore() {
 				activeConversationId: null,
 				historyEnabled: true,
 			};
+			needsUpdate = true;
+		}
+
+		if (!settings.starSessionShortcut?.trim()) {
+			settings.starSessionShortcut = platform() === "windows" ? "Alt+Shift+B" : "Control+Super+B";
 			needsUpdate = true;
 		}
 

@@ -122,6 +122,7 @@ describe("screenpipe-tools MCP server", () => {
     expect(tools.map((t) => t.name).sort()).toEqual(
       [
         "query_recordings",
+        "starred_sessions",
         "list_connections",
         "live_view",
         "save_artifact",
@@ -156,6 +157,27 @@ describe("screenpipe-tools MCP server", () => {
     expect(sendProperties.properties?.confirmed?.description).toContain(
       "explicit user authorization",
     );
+  });
+
+  it("retrieves a bounded starred interval page through the authenticated engine", async () => {
+    let requested = "";
+    let authorization = "";
+    const api = createServer((req,res) => {
+      requested = req.url ?? "";
+      authorization = String(req.headers.authorization ?? "");
+      res.setHeader("content-type","application/json");
+      res.end(JSON.stringify({data:[{id:"test",start:"2026-10-02T10:00:00Z",end:"2026-10-02T10:15:00Z",has_audio:true}]}));
+    });
+    const port = await listenOnLoopback(api);
+    try {
+      server = new Server({SCREENPIPE_API_URL:`http://127.0.0.1:${port}`,SCREENPIPE_LOCAL_API_KEY:"test-only-token"});
+      await server.request(1,"initialize",{});
+      const reply = await server.request(2,"tools/call",{name:"starred_sessions",arguments:{limit:5,start_time:"2026-10-02T00:00:00Z"}});
+      expect(requested).toContain("/starred-sessions?");
+      expect(new URL(requested,"http://test").searchParams.get("limit")).toBe("5");
+      expect(authorization).toBe("Bearer test-only-token");
+      expect(JSON.stringify(reply)).toContain("has_audio");
+    } finally { await closeServer(api); }
   });
 
   it("errors clearly on an unknown tool", async () => {

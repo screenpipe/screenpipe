@@ -10,3 +10,5 @@ Resolve the work area and review period. Use screenpipe-api to find multiple dis
 Count independent occurrences, not repeated frames or repeated discussion of one occurrence. Separate observed steps from inferred steps. If timing matters, use authoritative active time where available and label missing coverage; frame counts are not effort.
 
 Assess a small automation candidate by its available tools, permissions, reversible boundaries, and observable completion criterion. Identify the decisions that still require a person. Do not claim time savings without a baseline or create a schedule, integration, or external action merely from discovering a pattern.
+
+When the user refers to starred work, or when selecting workflow examples, first fetch a small page of starred intervals via screenpipe-api. Prefer those exact bounds as candidates, then verify captured steps and gaps. A star does not prove repetition or time savings. Keep this lookup task-specific; do not add the user's interval history to standing prompts.

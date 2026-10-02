@@ -326,6 +326,11 @@ const TOOLS: Tool[] = [
   ...WORKFLOW_TOOLS,
   BUNDLED_SKILLS_TOOL,
   {
+    name: "list-starred-sessions",
+    description: "List user-marked important work intervals, with exact start/end and has_audio. For starred work or workflow discovery, retrieve a small page then search-content with starred_session_id. Stars indicate intent, not complete capture or measured productivity.",
+    inputSchema: {type:"object", properties:{start_time:{type:"string"},end_time:{type:"string"},limit:{type:"integer",default:10,minimum:1,maximum:100},offset:{type:"integer",minimum:0},id:{type:"string"}}},
+  },
+  {
     name: "search-content",
     description:
       "Search screen text, audio transcriptions, input events, memories, and parsed app data. Returns timestamped results with app context. " +
@@ -358,6 +363,7 @@ const TOOLS: Tool[] = [
           type: "string",
           description: "ISO 8601, relative time, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD'). Defaults to now.",
         },
+        starred_session_id: {type:"string",description:"Exact interval ID from list-starred-sessions. Keeps ordinary capture permissions and filters."},
         app_name: { type: "string", description: "Filter by app name (e.g. 'Google Chrome', 'Slack', 'zoom.us'). Case-sensitive." },
         window_name: { type: "string", description: "Filter by window title substring" },
         frame_id: { type: "integer", description: "With content_type='parsed', return parsed data attached to one frame." },
@@ -1598,6 +1604,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case "list-starred-sessions": {
+        const params = new URLSearchParams();
+        for (const [key,value] of Object.entries(normalizeTimeFields(args))) if (value != null) params.set(key,String(value));
+        if (!params.has("limit")) params.set("limit","10");
+        const response = await callAPI(`/starred-sessions?${params}`);
+        return {content:[{type:"text",text:JSON.stringify(await response.json())}]};
+      }
       case "search-content": {
         const includeFrames = args.include_frames === true;
         const normalized = normalizeTimeFields(args);
@@ -1646,6 +1659,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         for (const result of results) {
           const content = result.content;
           if (!content) continue;
+          if (result.starred) formattedResults.push("[Starred moment]");
 
           if (result.type === "OCR") {
             const tagsStr = content.tags?.length ? `\nTags: ${content.tags.join(", ")}` : "";

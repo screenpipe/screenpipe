@@ -1,0 +1,28 @@
+<!-- screenpipe — AI that knows everything you've seen, said, or heard -->
+<!-- https://screenpipe.com -->
+
+# Starred work sessions
+
+A star marks a saved time interval. Capture settings, exclusions, pauses, history access, and retention still apply. The engine stores intervals in SQLite so desktop windows, API clients, CLI commands, and agents see the same boundaries.
+
+## API
+
+- `GET /starred-sessions?start_time=...&end_time=...&limit=10&offset=0` lists overlapping intervals, newest first. The limit is capped at 100. `id=UUID` retrieves one interval.
+- `POST /starred-sessions` creates or edits `{id, start, end, hd_requested, revision}`. Use a UUID and RFC3339 timestamps. Revision 0 creates; edits use the last returned revision. Identical retries are idempotent. A stale revision or another active session returns 409.
+- `GET /search?starred_session_id=UUID&limit=10` intersects normal search filters with that session's `[start,end)` interval. Search hits include `starred: boolean`, including after cached searches are invalidated by an edit.
+
+Responses include `has_audio: boolean`, indicating indexed audio chunks beginning in the interval. It does not enable capture or guarantee retained media files. Export includes whatever audio was captured automatically; there is no separate audio checkbox.
+
+Only one session may be active. Intervals start in the past, span at most 24 hours, and end no more than two hours ahead. Timed sessions expire without a frontend timer. Users may edit historical boundaries or end an active interval early. Restricted agent readers cannot retrieve global session metadata; writes require an owner request. Existing history access also applies.
+
+## Desktop and CLI
+
+The timeline lists recent starred intervals and seeks to their start when selected. Session controls offer 5, 15, 30, and 60 minutes, early ending, extension, optional HD, editable start/end times, chat context, and export. The configurable shortcut defaults to Control+Command+B on macOS and Alt+Shift+B on Windows. The macOS overlay also has a timed menu; the webview overlay scales its session panel with the widget setting.
+
+`screenpipe star list --limit 10`, `star start --minutes 15 [--hd]`, `star end`, and `star edit UUID --start TIME --end TIME` use the running engine. They honor the configured local API URL/key and return JSON.
+
+HD uses a separate bounded lease. Ending a star leaves an unrelated meeting/timer lease intact. An explicit HD stop clears both leases. HD capture is ephemeral and does not automatically resume after an engine restart; `hd_requested` records the user's selection, not proof of actual HD frames.
+
+## Agents
+
+MCP exposes `list-starred-sessions`; the bundled ACP bridge exposes `starred_sessions`. Workflow activity classification reads at most ten intervals for its current review window, then prioritizes their captured evidence. Skills route specific starred-work requests to bounded retrieval. Interval history is not added to standing prompts. A star alone does not establish task completion, repeated behavior, or time savings.

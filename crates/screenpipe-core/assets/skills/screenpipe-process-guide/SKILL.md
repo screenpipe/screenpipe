@@ -10,3 +10,5 @@ Identify the procedure and intended audience. Use screenpipe-api to recover a co
 Write prerequisites, the trigger, steps with observable results, meaningful branches, and a final verification. Use exact UI labels only when visible in the source or verified in the current app. Keep unexplained gaps explicit; do not fill them with invented clicks, commands, or permissions.
 
 Remove account-specific identifiers, secrets, and private examples. Distinguish instructions captured from a demonstration from a procedure independently tested. Return the guide in the requested destination; packaging it as a persistent skill or publishing it requires that scope to be authorized.
+
+When the user refers to starred work, or when selecting workflow examples, first fetch a small page of starred intervals via screenpipe-api. Prefer those exact bounds as candidates, then verify captured steps and gaps. A star does not prove repetition or time savings. Keep this lookup task-specific; do not add the user's interval history to standing prompts.

@@ -6,7 +6,6 @@ import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
-vi.mock("@/components/starred-sessions/starred-session-button", () => ({ StarredSessionButton: () => null }));
 
 import { SidebarFooter } from "@/components/sidebar-footer";
 import { useFeedbackStore } from "@/lib/stores/feedback-store";

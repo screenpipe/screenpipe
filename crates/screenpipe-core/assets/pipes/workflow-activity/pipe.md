@@ -15,6 +15,7 @@ permissions:
     - Api(POST /workflows/pipeline)
     - Api(GET /activity-summary)
     - Api(GET /search)
+    - Api(GET /starred-sessions)
     - Api(GET /meetings)
     - Api(GET /meetings/*)
     - Api(GET /frames/*)
@@ -40,6 +41,10 @@ workflows, connect accounts, install skills or send messages.
 2. Read /activity-summary for that interval using start_time/end_time,
    include_key_texts=false and bounded timestamped snippets. Check data_status,
    query_status and time_range. This overview establishes the reviewed interval.
+   Fetch /starred-sessions for the same interval once, with limit=10. Prioritize
+   snippets inside these user-marked intervals; use starred_session_id in a
+   focused /search only when their evidence is missing. A star indicates intent,
+   not completion or elapsed effort. Keep the full response on disk.
 3. Turn the useful timestamped snippets DIRECTLY into modest observations.
    Copy their literal text and metadata programmatically from the saved response.
    Do not search for or reread a source that already supports an observation.

@@ -84,6 +84,7 @@ struct ShortcutConfig {
     show_chat: String,
     search: String,
     lock_vault: String,
+    star_session: String,
     disabled: Vec<String>,
 }
 
@@ -121,6 +122,16 @@ impl ShortcutConfig {
             show_chat: store.show_chat_shortcut,
             search: store.search_shortcut,
             lock_vault: store.lock_vault_shortcut,
+            star_session: if store.star_session_shortcut.is_empty() {
+                if cfg!(target_os = "windows") {
+                    "Alt+Shift+B"
+                } else {
+                    "Control+Super+B"
+                }
+                .to_string()
+            } else {
+                store.star_session_shortcut
+            },
             disabled: store.disabled_shortcuts,
         })
     }
@@ -135,6 +146,7 @@ impl ShortcutConfig {
             "show_chat" => "showChatShortcut",
             "search" => "searchShortcut",
             "lock_vault" => "lockVaultShortcut",
+            "star_session" => "starSessionShortcut",
             _ => shortcut_type,
         };
         self.disabled.contains(&shortcut_type.to_string())
@@ -200,6 +212,7 @@ pub async fn update_global_shortcuts(
         show_chat: store_config.show_chat,
         search: store_config.search,
         lock_vault: store_config.lock_vault,
+        star_session: store_config.star_session,
         disabled: store_config.disabled,
     };
     apply_shortcuts(&app, &config).await
@@ -350,7 +363,10 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
             // invisible when the main window is hidden — i.e. exactly when a
             // global hotkey is used. Fire a notification panel so the user gets
             // glance-level confirmation regardless of window visibility.
-            crate::notifications::client::send(crate::localization::ui_text("recording started"), crate::localization::ui_text("screen recording has been initiated"));
+            crate::notifications::client::send(
+                crate::localization::ui_text("recording started"),
+                crate::localization::ui_text("screen recording has been initiated"),
+            );
         },
     )
     .await?;
@@ -362,7 +378,10 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         |app| {
             track_shortcut_used(app, "stop_recording");
             let _ = app.emit("shortcut-stop-recording", ());
-            crate::notifications::client::send(crate::localization::ui_text("recording paused"), crate::localization::ui_text("capture paused — pipes and search still available"));
+            crate::notifications::client::send(
+                crate::localization::ui_text("recording paused"),
+                crate::localization::ui_text("capture paused — pipes and search still available"),
+            );
         },
     )
     .await?;
@@ -453,6 +472,26 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
             emit_search_shortcut_outcome_after_settle(app);
         });
     })
+    .await?;
+
+    register_shortcut(
+        app,
+        &config.star_session,
+        config.is_disabled("star_session"),
+        |app| {
+            track_shortcut_used(app, "star_session");
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Err(e) = (ShowRewindWindow::Home {
+                    page: Some("timeline&starred=1".into()),
+                })
+                .show(&handle)
+                {
+                    error!("failed to open starred sessions: {e}");
+                }
+            });
+        },
+    )
     .await?;
 
     Ok(())

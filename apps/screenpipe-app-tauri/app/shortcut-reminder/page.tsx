@@ -793,7 +793,7 @@ export default function ShortcutReminderPage() {
           className="relative w-full h-full flex items-center justify-center border border-white/25 hover:opacity-100 transition-opacity"
           style={{
             background: "rgba(0, 0, 0, 0.88)",
-            borderRadius: `${4 * overlayScale}px`,
+            borderRadius: `${8 * overlayScale}px`,
             opacity: 0.5,
             cursor: "grab",
             WebkitAppRegion: "no-drag",
@@ -849,6 +849,8 @@ export default function ShortcutReminderPage() {
         // The side anchors ride the vertical middle with room either way, so
         // they keep the dock on top like the top anchor does.
         flexDirection: dockAbove ? "column" : "column-reverse",
+        height: starPanelOpen ? "100vh" : undefined,
+        overflow: starPanelOpen ? "hidden" : undefined,
       }}
       onMouseLeave={() => {
         if (starPanelOpen) return;
@@ -863,7 +865,7 @@ export default function ShortcutReminderPage() {
         style={{
           height: `${30 * overlayScale}px`,
           background: "rgba(0, 0, 0, 0.94)",
-          borderRadius: `${4 * overlayScale}px`,
+          borderRadius: `${8 * overlayScale}px`,
           cursor: "grab",
         }}
       >
@@ -898,17 +900,6 @@ export default function ShortcutReminderPage() {
           <MessageCircle style={{ width: `${12 * overlayScale}px`, height: `${12 * overlayScale}px` }} />
         </button>
         <button
-          title={ui("Open timeline")}
-          className={dockButtonClass}
-          style={dockButtonStyle}
-          onMouseEnter={() => setHoveredControl("timeline")}
-          onMouseDown={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={openTimeline}
-        >
-          <PanelLeft style={{ width: `${12 * overlayScale}px`, height: `${12 * overlayScale}px` }} />
-        </button>
-        <button
           title={ui("Starred work sessions")}
           aria-label={ui("Starred work sessions")}
           aria-expanded={starPanelOpen}
@@ -920,6 +911,17 @@ export default function ShortcutReminderPage() {
           onClick={() => { setStarPanelOpen(!starPanelOpen); setSettingsOpen(false); }}
         >
           <Star className={starredSessions.active ? "fill-white" : ""} style={{ width: `${12 * overlayScale}px`, height: `${12 * overlayScale}px` }} />
+        </button>
+        <button
+          title={ui("Open timeline")}
+          className={dockButtonClass}
+          style={dockButtonStyle}
+          onMouseEnter={() => setHoveredControl("timeline")}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={openTimeline}
+        >
+          <PanelLeft style={{ width: `${12 * overlayScale}px`, height: `${12 * overlayScale}px` }} />
         </button>
         <div className="my-1 bg-white/25" style={{ width: "1px" }} />
         <div
@@ -961,9 +963,9 @@ export default function ShortcutReminderPage() {
       </div>
 
       {starPanelOpen ? (
-        <div className="min-h-0 flex-1 w-full overflow-auto" style={{ marginTop: dockAbove ? 4 : 0, marginBottom: dockAbove ? 0 : 4 }}>
-          <StarredSessionPanel state={starredSessions} />
-          <button className="w-full bg-black/95 py-1 text-xs text-white/60 hover:text-white" onClick={() => setStarPanelOpen(false)}>Close session controls</button>
+        <div className="flex min-h-0 flex-1 w-full flex-col rounded-lg bg-black" style={{ marginTop: dockAbove ? 4 * overlayScale : 0, marginBottom: dockAbove ? 0 : 4 * overlayScale }}>
+          <div className="min-h-0 flex-1 overflow-auto"><div style={{ zoom: overlayScale }}><StarredSessionPanel state={starredSessions} /></div></div>
+          <button className="w-full shrink-0 rounded-b-lg bg-black/95 py-1 text-xs text-white/60 hover:text-white" style={{ zoom: overlayScale }} onClick={() => setStarPanelOpen(false)}>Close session controls</button>
         </div>
       ) : settingsOpen ? (
         <div
@@ -974,7 +976,7 @@ export default function ShortcutReminderPage() {
             marginTop: dockAbove ? `${4 * overlayScale}px` : 0,
             marginBottom: dockAbove ? 0 : `${4 * overlayScale}px`,
             background: "rgba(0, 0, 0, 0.96)",
-            borderRadius: `${4 * overlayScale}px`,
+            borderRadius: `${8 * overlayScale}px`,
             fontSize: `${fontPx}px`,
           }}
         >
@@ -1014,7 +1016,7 @@ export default function ShortcutReminderPage() {
           marginBottom: dockAbove ? 0 : `${4 * overlayScale}px`,
           background: disclosure ? "rgba(0, 0, 0, 0.9)" : "transparent",
           border: `1px solid ${disclosure ? "rgba(255, 255, 255, 0.25)" : "transparent"}`,
-          borderRadius: `${4 * overlayScale}px`,
+          borderRadius: `${8 * overlayScale}px`,
           fontSize: `${fontPx}px`,
           }}
         >

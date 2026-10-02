@@ -406,6 +406,18 @@ const WORKTREE_ROUTE_TOOL = {
 };
 
 const TOOLS = [
+  {
+    name: "starred_sessions",
+    description: "List user-marked important work intervals with start/end and has_audio. For starred work or workflow discovery, fetch a small page and use its exact bounds for retrieval. Stars indicate user intent, not complete capture or measured productivity.",
+    inputSchema: {type:"object",properties:{start_time:{type:"string"},end_time:{type:"string"},id:{type:"string"},limit:{type:"integer",minimum:1,maximum:100},offset:{type:"integer",minimum:0}},additionalProperties:false},
+    async run(args) {
+      const params = new URLSearchParams({limit:String(Math.min(100,Math.max(1,Number(args?.limit)||10)))});
+      for (const key of ["start_time","end_time","id","offset"]) if (args?.[key] != null) params.set(key,String(args[key]));
+      const res = await fetch(`${apiBase()}/starred-sessions?${params}`,{headers:authHeaders()});
+      const text = await res.text();
+      return res.ok ? text : JSON.stringify({error:`starred sessions returned ${res.status}`,detail:text.slice(0,1000)});
+    },
+  },
   ...(chatSessionId().startsWith("__worktree-route:") ? [WORKTREE_ROUTE_TOOL] : []),
   {
     name: "query_recordings",

@@ -651,3 +651,9 @@ Reference real moments with clickable links (only IDs/timestamps from actual res
 - `[meeting at 3pm](screenpipe://timeline?timestamp=ISO8601)` — audio results (use `timestamp`)
 
 Show a search result's `file_path` as inline code to make it a playable video: `` `/Users/name/.screenpipe/data/monitor_1_..._10-30-00.mp4` ``.
+
+## Starred work
+
+For explicitly starred work, use `GET /starred-sessions?limit=10&start_time=...&end_time=...` (or MCP `starred_sessions` / `list-starred-sessions`). Each interval has `id`, `start`, `end`, `has_audio`, `hd_requested`, and `revision`. Retrieve evidence with `GET /search?starred_session_id=ID&limit=10`; each search hit also carries `starred: boolean`. Stars signal user intent, not complete capture or accuracy. Audio presence describes indexed chunks, not a recording permission or a guarantee that media survives retention. Do not load intervals for unrelated searches.
+
+User-authorized marking uses `POST /starred-sessions` with UUID `id`, RFC3339 `start`/`end`, `hd_requested`, and `revision` (0 to create, returned revision to edit). A 409 requires reloading before editing. Timed ranges expire without a UI running. HD is optional, bounded, and does not override pauses or exclusions.
