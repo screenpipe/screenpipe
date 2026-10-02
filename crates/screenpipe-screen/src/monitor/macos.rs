@@ -627,19 +627,72 @@ struct CachedMonitorList {
     valid_for_lookup: bool,
 }
 
-static MONITOR_LOOKUP_CACHE: Lazy<RwLock<Option<CachedMonitorList>>> =
-    Lazy::new(|| RwLock::new(None));
+struct MonitorLookupCache {
+    last_known: Option<CachedMonitorList>,
+    // Status readers must not mistake retained focus geometry for a successful
+    // discovery after a failure or display reconfiguration.
+    discovery: std::result::Result<(), MonitorListError>,
+}
+
+impl Default for MonitorLookupCache {
+    fn default() -> Self {
+        Self {
+            last_known: None,
+            discovery: Err(MonitorListError::Other(
+                "monitor discovery pending".to_string(),
+            )),
+        }
+    }
+}
+
+impl MonitorLookupCache {
+    fn store_lookup(&mut self, monitors: &[SafeMonitor]) {
+        self.last_known = Some(CachedMonitorList {
+            monitors: monitors.to_vec(),
+            captured_at: Instant::now(),
+            valid_for_lookup: true,
+        });
+    }
+
+    fn record_discovery(
+        &mut self,
+        result: &std::result::Result<Vec<SafeMonitor>, MonitorListError>,
+    ) {
+        self.discovery = match result {
+            Ok(monitors) => {
+                self.store_lookup(monitors);
+                Ok(())
+            }
+            Err(error) => Err(error.clone()),
+        };
+    }
+
+    fn status(&self) -> std::result::Result<Vec<SafeMonitor>, MonitorListError> {
+        self.discovery.clone()?;
+        Ok(self
+            .last_known
+            .as_ref()
+            .map(|cached| cached.monitors.clone())
+            .unwrap_or_default())
+    }
+
+    fn invalidate(&mut self) {
+        if let Some(cached) = self.last_known.as_mut() {
+            cached.valid_for_lookup = false;
+        }
+        self.discovery = Self::default().discovery;
+    }
+}
+
+static MONITOR_LOOKUP_CACHE: Lazy<RwLock<MonitorLookupCache>> =
+    Lazy::new(|| RwLock::new(MonitorLookupCache::default()));
 
 /// Record a fresh enumeration as the answer for subsequent lookups.
 fn store_monitor_lookup_cache(monitors: &[SafeMonitor]) {
     let mut guard = MONITOR_LOOKUP_CACHE
         .write()
         .unwrap_or_else(|e| e.into_inner());
-    *guard = Some(CachedMonitorList {
-        monitors: monitors.to_vec(),
-        captured_at: Instant::now(),
-        valid_for_lookup: true,
-    });
+    guard.store_lookup(monitors);
 }
 
 /// Run `f` against a valid cached enumeration when it is younger than `ttl`.
@@ -655,7 +708,7 @@ fn with_fresh_monitor_cache<T>(
     let guard = MONITOR_LOOKUP_CACHE
         .read()
         .unwrap_or_else(|e| e.into_inner());
-    let cached = guard.as_ref()?;
+    let cached = guard.last_known.as_ref()?;
     if !cached.valid_for_lookup || now.duration_since(cached.captured_at) >= ttl {
         return None;
     }
@@ -681,6 +734,7 @@ fn last_known_monitor_list() -> Vec<SafeMonitor> {
     MONITOR_LOOKUP_CACHE
         .read()
         .unwrap_or_else(|e| e.into_inner())
+        .last_known
         .as_ref()
         .map(|cached| cached.monitors.clone())
         .unwrap_or_default()
@@ -696,16 +750,14 @@ pub fn invalidate_monitor_lookup_cache() {
     let mut guard = MONITOR_LOOKUP_CACHE
         .write()
         .unwrap_or_else(|e| e.into_inner());
-    if let Some(cached) = guard.as_mut() {
-        cached.valid_for_lookup = false;
-    }
+    guard.invalidate();
 }
 
 #[cfg(test)]
 fn clear_monitor_lookup_cache() {
     *MONITOR_LOOKUP_CACHE
         .write()
-        .unwrap_or_else(|e| e.into_inner()) = None;
+        .unwrap_or_else(|e| e.into_inner()) = MonitorLookupCache::default();
 }
 
 fn monitor_lookup_timeout() -> Duration {
@@ -848,10 +900,13 @@ pub async fn list_monitors_detailed() -> std::result::Result<Vec<SafeMonitor>, M
 
     if let Ok(monitors) = &result {
         update_monitor_cache(monitors);
-        // Fresh truth from the full enumeration also answers pending lookups,
-        // so the watcher's own polling keeps the lookup cache warm.
-        store_monitor_lookup_cache(monitors);
     }
+    // Publish failures as well as successful topology. UI status polls must
+    // neither initiate discovery nor conceal its latest failure with old data.
+    MONITOR_LOOKUP_CACHE
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .record_discovery(&result);
     result
 }
 
@@ -870,6 +925,17 @@ pub async fn list_monitors() -> Vec<SafeMonitor> {
 /// Before its first successful enumeration this returns an empty list.
 pub async fn list_monitors_cached() -> Vec<SafeMonitor> {
     last_known_monitor_list()
+}
+
+/// Read the latest discovery outcome for status UI without calling the OS.
+/// Unlike focus geometry, status is unavailable before discovery, after
+/// invalidation, or after a failed enumeration. The monitor watcher owns
+/// refresh/recovery; polling this function must never become a retry loop.
+pub fn cached_monitor_status() -> std::result::Result<Vec<SafeMonitor>, MonitorListError> {
+    MONITOR_LOOKUP_CACHE
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .status()
 }
 
 pub async fn get_default_monitor() -> Option<SafeMonitor> {
@@ -1045,6 +1111,78 @@ mod tests {
             .build()
             .expect("test runtime")
             .block_on(list_monitors_cached())
+    }
+
+    #[test]
+    fn status_polling_never_discovers_monitors_on_a_cold_or_invalidated_cache() {
+        let _guard = lock_lookup_cache_tests();
+        clear_monitor_lookup_cache();
+        for _ in 0..100 {
+            assert!(matches!(
+                cached_monitor_status(),
+                Err(MonitorListError::Other(_))
+            ));
+        }
+
+        MONITOR_LOOKUP_CACHE
+            .write()
+            .unwrap()
+            .record_discovery(&Ok(vec![cache_test_monitor(1)]));
+        assert_eq!(cached_monitor_status().unwrap()[0].id(), 1);
+        invalidate_monitor_lookup_cache();
+        for _ in 0..100 {
+            assert!(matches!(
+                cached_monitor_status(),
+                Err(MonitorListError::Other(_))
+            ));
+        }
+        assert_eq!(read_focus_monitor_cache()[0].id(), 1);
+        assert!(cached_monitor_by_id(1, Instant::now()).is_none());
+        clear_monitor_lookup_cache();
+    }
+
+    #[test]
+    fn status_reports_discovery_failure_until_full_discovery_recovers() {
+        let mut cache = MonitorLookupCache::default();
+        for error in [
+            MonitorListError::PermissionDenied,
+            MonitorListError::NoMonitorsFound,
+            MonitorListError::Other("ScreenCaptureKit monitor enumeration timed out".into()),
+        ] {
+            cache.record_discovery(&Ok(vec![cache_test_monitor(1)]));
+            cache.record_discovery(&Err(error.clone()));
+            assert_eq!(cache.status().err().unwrap().to_string(), error.to_string());
+            // Focus geometry survives, but a capture lookup (including a CG
+            // fallback) cannot erase the watcher's failed discovery verdict.
+            cache.store_lookup(&[cache_test_monitor(1)]);
+            assert_eq!(cache.status().err().unwrap().to_string(), error.to_string());
+            assert_eq!(cache.last_known.as_ref().unwrap().monitors[0].id(), 1);
+            cache.record_discovery(&Ok(vec![cache_test_monitor(2)]));
+            assert_eq!(cache.status().unwrap()[0].id(), 2);
+        }
+    }
+
+    #[test]
+    fn status_tracks_display_replacement_and_empty_discovery_without_capture_tasks() {
+        let mut cache = MonitorLookupCache::default();
+        // Discovery includes paused displays: it does not depend on which
+        // displays have active capture tasks. The route adds live pause state.
+        cache.record_discovery(&Ok(vec![cache_test_monitor(1), cache_test_monitor(2)]));
+        assert_eq!(cache.status().unwrap().len(), 2);
+        cache.record_discovery(&Ok(vec![cache_test_monitor(2)]));
+        assert_eq!(
+            cache
+                .status()
+                .unwrap()
+                .iter()
+                .map(SafeMonitor::id)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+        cache.record_discovery(&Ok(vec![]));
+        assert!(cache.status().unwrap().is_empty());
+        cache.record_discovery(&Ok(vec![cache_test_monitor(1), cache_test_monitor(2)]));
+        assert_eq!(cache.status().unwrap().len(), 2);
     }
 
     /// The production failure this cache exists for: a caller asking for the

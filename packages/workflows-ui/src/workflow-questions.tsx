@@ -43,6 +43,8 @@ export function WorkflowQuestions({ workflow, save, voice, active = true }: {
   const saving = useRef(false);
   const session = useRef<QuestionnaireVoiceSession>();
   const filler = useRef<LiveVoiceFill>();
+  const finishVoice = useRef<() => void>();
+  const [voiceSession, setVoiceSession] = useState(0);
   const prefix = useRef("");
   const id = useId();
   const recording = voiceState.status === "connecting" || voiceState.status === "listening";
@@ -80,8 +82,21 @@ export function WorkflowQuestions({ workflow, save, voice, active = true }: {
       transcriptRef.current = combined; setTranscript(combined); fill.enqueue(combined);
     });
     session.current = connection;
-    return () => { mounted = false; connection.stop(); fill.dispose(); abort.abort(); session.current = undefined; filler.current = undefined; setVoiceState(s => ({ ...s, status: "stopped", level: undefined })); };
-  }, [voice, active]);
+    const dispose = () => {
+      mounted = false;
+      // Invalidate callbacks before stopping: Stop normally queues a final fill.
+      connection.stop(); fill.dispose(); abort.abort();
+      session.current = undefined; filler.current = undefined; finishVoice.current = undefined;
+      setFilling(false);
+      setVoiceState(s => ({ ...s, status: "stopped", level: undefined }));
+    };
+    finishVoice.current = () => {
+      dispose();
+      // A later recording gets a fresh controller and cannot revive stale fills.
+      setVoiceSession(value => value + 1);
+    };
+    return dispose;
+  }, [voice, active, voiceSession]);
   function manual(question: string, value: string) {
     locked.current.add(question);
     setAnswers(a => ({ ...a, [question]: value })); setNotice("");
@@ -93,7 +108,8 @@ export function WorkflowQuestions({ workflow, save, voice, active = true }: {
     void session.current?.start(workflow.title.slice(0, 300), questions.slice(0, 30));
   }
   async function submit() {
-    if (!save || !changed || recording || filling || saving.current) return;
+    if (!save || !changed || saving.current) return;
+    if (recording || filling) finishVoice.current?.();
     saving.current = true; setBusy(true); setError(""); setNotice("");
     try {
       const next = await save(writeWorkflowAnswers(workflow.userCorrection, fields.filter(q => (answers[q] ?? "").trim() !== (saved[q] ?? "").trim()).map(question => ({ question, answer: answers[question] ?? "" }))));
@@ -136,7 +152,7 @@ export function WorkflowQuestions({ workflow, save, voice, active = true }: {
         </div>
       </div>)}
       {error && <p className={styles.error} role="alert">{error}</p>}
-      {save && <div className={styles.actions}><span role="status">{notice || "Review before saving. Saved answers refine future workflow updates."}</span><button type="submit" disabled={!changed || busy || recording || filling}>{busy ? "Saving…" : "Save answers"}</button></div>}
+      {save && <div className={styles.actions}><span role="status">{notice || (recording || filling ? "Saving stops voice and keeps the answers shown here." : "Saved answers refine future workflow updates.")}</span><button type="submit" disabled={!changed || busy}>{busy ? "Saving…" : "Save answers"}</button></div>}
     </form>
   </section>;
 }

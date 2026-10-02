@@ -222,3 +222,18 @@ test("retryable publication state is visible in the draft index and full record"
   const selected = JSON.parse((await tool.execute("id", {action:"context",draft_id:"draft-a"}, new AbortController().signal)).content[0].text);
   expect(selected.draft.publicationRetry).toEqual({retryable:true});
 });
+
+test("checkpoint uses the existing durable writer without finishing or publishing", async () => {
+  expect(tool.parameters.properties.action.enum).toContain("checkpoint");
+  const result = await tool.execute("id", {action:"checkpoint",expected_revision:1,note:"Inspected first interval. Next: retry the narrower failed query."}, new AbortController().signal);
+  expect(JSON.parse(result.content[0].text).saved).toBe(true);
+  expect(requests[0]).toMatchObject({action:"checkpoint",task:"workflow-review",expected_revision:1});
+  expect(requests.filter(Boolean)).toHaveLength(1);
+});
+test("resumed context exposes unfinished checkpoints", async () => {
+  server.reload({fetch:(req:Request)=>Response.json(req.url.endsWith("/context") ? {workflows:[],profile:{}} : {
+    workspace:{revision:3,cycle:{status:"running",checkpoints:{"workflow-discover":{note:"Read interval A; B failed",savedAt:"2026-09-29T10:00:00Z"}}}},catalogRevision:1,
+  })});
+  const result = await tool.execute("id",{action:"context"},new AbortController().signal);
+  expect(JSON.parse(result.content[0].text).cycle.checkpoints["workflow-discover"].note).toBe("Read interval A; B failed");
+});

@@ -35,6 +35,10 @@ test("process and setup failures cannot prove a regression or count as scored fa
       { id: "playwright-partial-run", baseline: "fail", oracle: "pass", valid: true },
       { id: "playwright-incomplete-diagnostic", baseline: "fail", oracle: "pass", valid: true },
       { id: "both-pass-playwright-diagnostic", baseline: "pass", oracle: "pass", valid: false },
+      { id: "baseline-vitest-mixed-collection", baseline: "error", oracle: "pass", valid: false },
+      { id: "reference-vitest-mixed-collection", baseline: "fail", oracle: "error", valid: false },
+      { id: "vitest-mixed-assertion", baseline: "fail", oracle: "pass", valid: true },
+      { id: "both-pass-vitest-mixed", baseline: "pass", oracle: "pass", valid: false },
       { id: "baseline-vitest-resolve", baseline: "error", oracle: "pass", valid: false },
       { id: "reference-vitest-resolve", baseline: "fail", oracle: "error", valid: false },
       { id: "baseline-vitest-resolve-ansi", baseline: "error", oracle: "pass", valid: false },
@@ -106,6 +110,15 @@ if (((id === "baseline-playwright-load" || id === "reference-playwright-export" 
   if (id !== "playwright-incomplete-diagnostic") process.stderr.write("✗ Build failed in 1.2s\\n");
   process.exit(id === "both-pass-playwright-diagnostic" ? 0 : 1);
 } else if (id === "reference-playwright-export" && broken) assert.fail("synthetic broken behavior");
+else if ((id.endsWith("vitest-mixed-collection") && affected) || (id === "vitest-mixed-assertion" && broken) || id === "both-pass-vitest-mixed") {
+  process.stdout.write(" RUN v1.6.1 /synthetic\\nTest Files 1 failed | 2 passed (3)\\nTests 7 passed (7)\\n");
+  process.stderr.write('Failed Suites 1\\nError: Failed to resolve import "./missing" from "fixture.test.ts". Does the file exist?\\n');
+  if (id === "vitest-mixed-assertion") {
+    process.stdout.write("Test Files 2 failed | 1 passed (3)\\nTests 1 failed | 6 passed (7)\\n");
+    process.stderr.write("AssertionError: preserved behavior failed\\n");
+  }
+  process.exit(id === "both-pass-vitest-mixed" ? 0 : 1);
+} else if (id === "reference-vitest-mixed-collection" && broken) assert.fail("synthetic broken behavior");
 else if ((id.endsWith("vitest-resolve") && affected) || (id === "baseline-vitest-resolve-ansi" && broken) ||
     (["vitest-assertion-with-quoted-resolve", "node-assertion-with-quoted-resolve", "resolve-without-test-summary"].includes(id) && broken) || id === "both-pass-resolve-diagnostic") {
   const summary = "Test Files 1 failed (1)\\nTests no tests\\n";
@@ -226,7 +239,7 @@ else process.exit(id === "intended-failure" && broken ? 1 : 0);
         if (control.id.endsWith("timeout")) expect(errored.grader_error).toContain("ETIMEDOUT");
       }
     }
-    const scored = invoke("scoring", "--mode", "baseline", "--case", "baseline-signal,baseline-missing-module,baseline-rust-compile,baseline-vitest-bun-build,baseline-vitest-resolve,baseline-playwright-load,baseline-playwright-export-ansi");
+    const scored = invoke("scoring", "--mode", "baseline", "--case", "baseline-signal,baseline-missing-module,baseline-rust-compile,baseline-vitest-bun-build,baseline-vitest-resolve,baseline-playwright-load,baseline-playwright-export-ansi,baseline-vitest-mixed-collection");
     expect(scored.error).toBeUndefined();
     expect(scored.status).toBe(0);
     const summary = JSON.parse(readFileSync(join(repo, "scoring/summary.json"), "utf8"));
@@ -256,4 +269,36 @@ test("Playwright build classification requires complete unexecuted evidence", as
   expect(classifyGraderError({ ...build, stderr: "" })).toBeNull();
   expect(classifyGraderError({ ...build, stderr: build.stderr + "AssertionError: real behavior failed\n" })).toBeNull();
   expect(classifyGraderError({ ...build, status: 0 })).toBeNull();
+});
+
+
+test("Vitest collection classification preserves executed failures and requires diagnostics", async () => {
+  const { classifyGraderError } = await import("./grader-outcome.mjs");
+  const collection = {
+    status: 1,
+    stdout: " RUN v1.6.1 /synthetic\n Test Files 1 failed | 2 passed (3)\n Tests 7 passed (7)\n",
+    stderr: 'Failed Suites 1\nError: Failed to resolve import "./missing" from "fixture.test.ts". Does the file exist?\n',
+  };
+  expect(classifyGraderError(collection)).toBe("vitest_collection_error");
+  for (const summary of ["no tests", "7 passed | 2 skipped (9)", "2 skipped (2)"]) {
+    expect(classifyGraderError({ ...collection, stdout: collection.stdout.replace("7 passed (7)", summary) })).toBe("vitest_collection_error");
+  }
+  for (const diagnostic of [
+    "Error: Failed to load url ./missing (resolved id: ./missing). Does the file exist?",
+    "Error: Cannot find module '@/missing' imported from '/synthetic/fixture.test.ts'.",
+    "Error: [vitest] There was an error when mocking a module.\nCaused by: Error: Failed to load url ./missing. Does the file exist?",
+  ]) expect(classifyGraderError({ ...collection, stderr: "Failed Suites 1\n" + diagnostic + "\n" })).toBe("vitest_collection_error");
+  expect(classifyGraderError({ ...collection, stdout: "\x1b[31m" + collection.stdout + "\x1b[0m" })).toBe("vitest_collection_error");
+  for (const stdout of [
+    collection.stdout + "Tests 1 failed | 6 passed (7)\n",
+    collection.stdout.replace("Tests 7 passed (7)", "Tests 1 failed | 6 passed (7)"),
+    collection.stdout.replace("Tests 7 passed (7)", "Tests unknown"),
+    collection.stdout.replace("Tests 7 passed (7)", ""),
+    collection.stdout.replace("Test Files 1 failed | 2 passed (3)", "Test Files 3 passed (3)"),
+    collection.stdout + "AssertionError: actual did not equal expected\n",
+  ]) expect(classifyGraderError({ ...collection, stdout })).toBeNull();
+  for (const stderr of ["", "Failed Suites 1\nError: arbitrary failure\n", collection.stderr.replace("Failed Suites 1", ""), collection.stderr + "AssertionError: actual did not equal expected\n"]) {
+    expect(classifyGraderError({ ...collection, stderr })).toBeNull();
+  }
+  expect(classifyGraderError({ ...collection, status: 0 })).toBeNull();
 });

@@ -1,6 +1,10 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
+import { findWorkflowScreenshot } from "./source-screenshot";
+import { loadOriginalWorkflowScreenshot } from "./original-screenshot";
 import { trackWorkflowOutcome } from "./notification";
+import { editGuideVideo } from "./guide-video-edit";
+import { desktopGuideVideo } from "./guide-video";
 import {
   guideKey,
   guideMarkdown,
@@ -10,7 +14,7 @@ import {
 } from "@screenpipe/workflows-ui";
 import { runWorkflowAgent } from "./agent-runner";
 import { assistantProviderConfig, ASSISTANT_TOOLS } from "./assistant";
-import { loadGuideFromDisk, saveGuideToDisk } from "./disk-storage";
+import { loadGuideFromDisk, saveGuideToDisk, listGuidesFromDisk } from "./disk-storage";
 import { save } from "@tauri-apps/plugin-dialog";
 import { commands } from "@/lib/utils/tauri";
 import { open } from "@tauri-apps/plugin-shell";
@@ -41,6 +45,13 @@ async function requireSopGenerationAccess(signal: AbortSignal) {
 }
 
 export const desktopGuides: NonNullable<WorkflowsPlatform["guides"]> = {
+  video: { ...desktopGuideVideo, edit: editGuideVideo },
+  loadSourceScreenshot: async (timestamp, app, signal) => {
+    const frame = await findWorkflowScreenshot(timestamp, app, signal);
+    if (!frame) return null;
+    return { ...frame, dataUrl: URL.createObjectURL(await loadOriginalWorkflowScreenshot(frame.frameId, signal)) };
+  },
+  loadScreenshot: async (frameId, signal) => URL.createObjectURL(await loadOriginalWorkflowScreenshot(frameId, signal)),
   async openWeb(guide) {
     const token = await commands.getCloudToken();
     if (!token)
@@ -67,6 +78,7 @@ export const desktopGuides: NonNullable<WorkflowsPlatform["guides"]> = {
       throw new Error("The web editor returned an invalid page.");
     await open(screenpipeWebUrl(`/sops/${result.id}`, PROD_WEB_BASE));
   },
+  list: listGuidesFromDisk,
   load: (workflow) => loadGuideFromDisk(guideKey(workflow)),
   async save(guide) {
     await saveGuideToDisk(guide);
@@ -134,7 +146,7 @@ desktopGuides.edit = async (guide, workflow, instruction, signal, progress) => {
     onProgress: () => progress("Editing your SOP"),
   });
   if (signal.aborted) throw new DOMException("Stopped", "AbortError");
-  return parseGuide(
+  const edited = parseGuide(
     JSON.parse(
       text
         .trim()
@@ -143,4 +155,5 @@ desktopGuides.edit = async (guide, workflow, instruction, signal, progress) => {
     ),
     workflow,
   );
+  return { ...edited, ...(guide.video ? { video: guide.video } : {}) };
 };

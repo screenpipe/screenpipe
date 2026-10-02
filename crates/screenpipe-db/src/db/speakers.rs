@@ -482,29 +482,48 @@ impl DatabaseManager {
         Ok(rows)
     }
 
-    /// Get the dominant unnamed speaker on input devices.
-    /// Returns the speaker_id with the most transcriptions on input that has no name set.
-    /// Requires at least `min_count` transcriptions to be considered reliable.
+    /// Bootstrap a user name only from one recent, input-only voice outside meetings.
+    /// Count independent chunks with useful speech, not repeated live transcript rows.
+    /// Other input identities (including named ones) and any output observation make
+    /// ownership ambiguous. Abstain instead of repeatedly naming each new cluster.
     pub async fn get_dominant_unnamed_input_speaker(
         &self,
         min_count: i32,
     ) -> Result<Option<i64>, SqlxError> {
+        let since = chrono::Utc::now() - chrono::Duration::days(7);
         let result = sqlx::query_scalar::<_, i64>(
             r#"
+            WITH recent_input AS (
+                SELECT speaker_id, audio_chunk_id, timestamp, transcription_engine,
+                       start_time, end_time
+                FROM audio_transcriptions
+                WHERE is_input_device = 1 AND speaker_id IS NOT NULL
+                  AND timestamp >= ?2
+            )
             SELECT at.speaker_id
-            FROM audio_transcriptions at
+            FROM recent_input at
             INNER JOIN speakers s ON at.speaker_id = s.id
-            WHERE at.is_input_device = 1
-                AND at.speaker_id IS NOT NULL
-                AND (s.name IS NULL OR s.name = '')
-                AND (s.hallucination IS NULL OR s.hallucination = 0)
+            WHERE (s.name IS NULL OR s.name = '')
+              AND COALESCE(s.hallucination, 0) = 0
+              AND (SELECT COUNT(DISTINCT speaker_id) FROM recent_input) = 1
+              AND at.transcription_engine != 'live'
+              AND at.end_time - at.start_time >= 2.0
+              AND NOT EXISTS (
+                  SELECT 1 FROM audio_transcriptions remote
+                  WHERE remote.speaker_id = at.speaker_id AND remote.is_input_device = 0
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM meetings m
+                  WHERE julianday(at.timestamp) >= julianday(m.meeting_start)
+                    AND julianday(at.timestamp) <= julianday(COALESCE(m.meeting_end, 'now'))
+              )
             GROUP BY at.speaker_id
-            HAVING COUNT(*) >= ?1
-            ORDER BY COUNT(*) DESC
+            HAVING COUNT(DISTINCT at.audio_chunk_id) >= ?1
             LIMIT 1
             "#,
         )
-        .bind(min_count)
+        .bind(min_count.max(1))
+        .bind(since)
         .fetch_optional(&self.pool)
         .await?;
 
@@ -986,19 +1005,73 @@ impl DatabaseManager {
         Ok(())
     }
 
-    /// Update the speaker_id for all transcriptions in an audio chunk
+    /// Apply a single-voice backfill without replacing existing turn identities.
+    /// A chunk can contain several live speakers or provider reconnects. Their
+    /// scoped labels are negative evidence against stamping the whole chunk with
+    /// one voice, even when the audio model finds a dominant speaker.
     pub async fn update_transcriptions_speaker(
         &self,
         audio_chunk_id: i64,
         new_speaker_id: i64,
     ) -> Result<u64, sqlx::Error> {
         let mut tx = self.begin_immediate_with_retry().await?;
-        let result =
-            sqlx::query("UPDATE audio_transcriptions SET speaker_id = ? WHERE audio_chunk_id = ?")
-                .bind(new_speaker_id)
-                .bind(audio_chunk_id)
-                .execute(&mut **tx.conn())
-                .await?;
+        let result = sqlx::query(
+            r#"
+            WITH chunk_rows AS (
+                SELECT * FROM audio_transcriptions WHERE audio_chunk_id = ?1
+            ), live_evidence AS (
+                SELECT m.meeting_id, m.stream_id, m.device_name, m.device_type, m.speaker_id,
+                       COALESCE(m.session_speaker_id, m.speaker_name) AS identity
+                FROM chunk_rows a
+                JOIN meeting_transcript_segments m
+                  ON julianday(m.captured_at) = julianday(a.timestamp)
+                 AND m.device_name = a.device
+                 AND m.device_type = CASE WHEN a.is_input_device = 1 THEN 'input' ELSE 'output' END
+                 AND m.transcript = a.transcription
+                WHERE a.transcription_engine = 'live'
+            ), live_identities AS (
+                SELECT DISTINCT meeting_id, stream_id, device_name, device_type, identity
+                FROM live_evidence
+            )
+            UPDATE audio_transcriptions SET speaker_id = ?2
+            WHERE audio_chunk_id = ?1 AND speaker_id IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM chunk_rows WHERE speaker_id IS NOT NULL AND speaker_id != ?2
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM diarization_segments
+                  WHERE audio_chunk_id = ?1 AND (overlap = 1 OR speaker_id != ?2)
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM diarization_segments WHERE audio_chunk_id = ?1
+                  GROUP BY diarization_run_id HAVING COUNT(DISTINCT provider_speaker_label) > 1
+              )
+              AND (
+                  NOT EXISTS (SELECT 1 FROM chunk_rows WHERE transcription_engine = 'live')
+                  OR (
+                      (SELECT COUNT(*) FROM live_identities) = 1
+                      AND NOT EXISTS (
+                          SELECT 1 FROM live_evidence
+                          WHERE identity IS NULL OR TRIM(identity) = '' OR speaker_id != ?2
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM chunk_rows a WHERE a.transcription_engine = 'live'
+                          AND NOT EXISTS (
+                              SELECT 1 FROM meeting_transcript_segments m
+                              WHERE julianday(m.captured_at) = julianday(a.timestamp)
+                                AND m.device_name = a.device
+                                AND m.device_type = CASE WHEN a.is_input_device = 1 THEN 'input' ELSE 'output' END
+                                AND m.transcript = a.transcription
+                          )
+                      )
+                  )
+              )
+            "#,
+        )
+        .bind(audio_chunk_id)
+        .bind(new_speaker_id)
+        .execute(&mut **tx.conn())
+        .await?;
         let rows_affected = result.rows_affected();
         tx.commit().await?;
         Ok(rows_affected)

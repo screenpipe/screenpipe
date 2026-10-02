@@ -11,10 +11,12 @@ import {
 } from "@testing-library/react";
 import {
   guideHtml,
+  guideWithBlockIds,
   guidePrompt,
   parseGuide,
   type WorkflowGuide as Guide,
 } from "../../../../packages/workflows-ui/src/guide";
+import { guideVideoScenes } from "../../../../packages/workflows-ui/src/guide-video";
 import { WorkflowGuide } from "../../../../packages/workflows-ui/src/workflow-guide";
 import { fixtureWorkflowAnalysis } from "../../../../packages/workflows-ui/src/fixture-platform";
 import { sanitizeWorkflowAnalysis } from "../../../../packages/workflows-ui/src/catalog";
@@ -120,9 +122,8 @@ describe("guide contracts and export", () => {
       'src="data:image/png;base64,YQ=="',
     );
   });
-  it("omits unverified, remote, and revision-mismatched screenshots", () => {
+  it("shows attached captures while rejecting remote and revision-mismatched screenshots", () => {
     for (const screenshot of [
-      { ...workflow.stages[0].screenshot!, visualVerified: false },
       {
         ...workflow.stages[0].screenshot!,
         dataUrl: "https://example.com/tracker",
@@ -170,7 +171,7 @@ describe("guide contracts and export", () => {
     expect(clean.quality.screenshotCount).toBe(3);
     expect(clean.quality.screenshotCoverage).toBe(33);
   });
-  it("persists human review, but never accepts it from generated output or for another source", () => {
+  it("persists an exact image selection and never silently swaps a missing selection", () => {
     const w = structuredClone(workflow);
     delete w.stages[0].screenshot!.visualVerified;
     const reviewed = structuredClone(guide);
@@ -181,11 +182,11 @@ describe("guide contracts and export", () => {
     const reopened = parseGuide(JSON.parse(JSON.stringify(reviewed)));
     expect(guideHtml(reopened, w, true)).toContain("<img ");
     expect(guideHtml(reopened, w, false)).not.toContain("<img ");
-    expect(guideHtml(parseGuide(reviewed, w), w, true)).not.toContain("<img ");
+    expect(guideHtml(parseGuide(reviewed, w), w, true)).toContain("<img ");
     w.stages[0].screenshot!.frameId = 2;
     expect(guideHtml(reopened, w, true)).not.toContain("<img ");
     w.stages[0].screenshot!.frameId = 1;
-    expect(guideHtml(reopened, { ...w, revision: 4 }, true)).not.toContain(
+    expect(guideHtml(reopened, { ...w, revision: 4 }, true)).toContain(
       "<img ",
     );
     w.stages[0].screenshot!.dataUrl = "https://example.com/tracker";
@@ -230,7 +231,7 @@ describe("guide editor", () => {
       ),
     );
   });
-  it("edits in place and reorders complete steps from the keyboard", async () => {
+  it("edits in place and reorders complete steps from the step menu", async () => {
     const platform = host();
     render(
       <WorkflowGuide
@@ -244,13 +245,11 @@ describe("guide editor", () => {
     fireEvent.change(screen.getByLabelText("Step 1 title"), {
       target: { value: "Find the original sources" },
     });
-    fireEvent.keyDown(screen.getByRole("button", { name: "Reorder step 1" }), {
-      key: "ArrowDown",
-      altKey: true,
-    });
+    fireEvent.click(screen.getByLabelText("Step 1 actions"));
+    fireEvent.click(screen.getByRole("button", {name: "Move step 1 down"}));
     await waitFor(() =>
       expect(platform.save.mock.calls.at(-1)?.[0].steps[1]).toEqual({
-        ...guide.steps[0],
+        ...guideWithBlockIds(guide).steps[0],
         title: "Find the original sources",
       }),
     );
@@ -294,67 +293,82 @@ describe("guide editor", () => {
       "Keep my revision",
     );
   });
-  it("lets an older saved SOP review and include a local screenshot without regenerating", async () => {
+  it("shows legacy captures by default and preserves explicit removal across reloads", async () => {
     const w = structuredClone(workflow);
     delete w.stages[0].screenshot!.visualVerified;
     w.stages[1].screenshot = undefined;
     const oldGuide = structuredClone(guide);
     oldGuide.steps[0].includeImage = false;
     const platform = { ...host(), load: vi.fn(async () => oldGuide) };
-    const view = render(
-      <WorkflowGuide workflow={w} platform={platform} close={() => {}} />,
-    );
-    await screen.findByRole("textbox", { name: "SOP title" });
-    expect(screen.queryByRole("img")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Review screenshot" }));
-    const preview = screen.getByRole("img", {
-      name: "Review source for Collect sources",
-    });
-    const include = screen.getByRole("button", { name: "Include screenshot" });
-    expect(include).toBeDisabled();
-    fireEvent.load(preview);
-    fireEvent.click(include);
+    const view = render(<WorkflowGuide workflow={w} platform={platform} close={() => {}} />);
     await screen.findByRole("img", { name: "Source for Collect sources" });
-    await waitFor(() => expect(platform.save).toHaveBeenCalled());
-    const saved = parseGuide(
-      JSON.parse(JSON.stringify(platform.save.mock.calls.at(-1)![0])),
-    );
-    expect(saved.steps[0].includeImage).toBe(true);
-    expect(saved.steps[0].imageReview?.frameId).toBe(1);
-    view.unmount();
-    render(
-      <WorkflowGuide
-        workflow={w}
-        platform={{ ...platform, load: async () => saved }}
-        close={() => {}}
-      />,
-    );
-    await screen.findByRole("img", { name: "Source for Collect sources" });
-    expect(platform.generate).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Review screenshot" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Hide screenshot" })).toBeNull();
+    expect(guideVideoScenes(oldGuide, w)[0].imageFrameId).toBe(1);
+    expect(platform.save).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Remove screenshot" }));
-    await waitFor(() =>
-      expect(platform.save.mock.calls.at(-1)![0].steps[0].includeImage).toBe(
-        false,
-      ),
-    );
+    await waitFor(() => expect(platform.save).toHaveBeenCalled());
+    const saved = parseGuide(JSON.parse(JSON.stringify(platform.save.mock.calls.at(-1)![0])));
+    expect(saved.steps[0].imageExcluded).toBe(true);
+    expect(guideVideoScenes(saved, w)[0].imageFrameId).toBeUndefined();
+    view.unmount();
+    render(<WorkflowGuide workflow={w} platform={{ ...platform, load: async () => saved }} close={() => {}} />);
+    await screen.findByRole("button", { name: "Restore screenshot" });
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(platform.generate).not.toHaveBeenCalled();
   });
-  it("does not include a screenshot that fails to load", async () => {
+  it("selects another capture, persists it, and uses it in the SOP, export and video", async () => {
     const w = structuredClone(workflow);
-    delete w.stages[0].screenshot!.visualVerified;
-    w.stages[1].screenshot = undefined;
-    render(<WorkflowGuide workflow={w} platform={host()} close={() => {}} />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Review screenshot" }),
-    );
-    fireEvent.error(
-      screen.getByRole("img", { name: "Review source for Collect sources" }),
-    );
-    expect(
-      screen.getByRole("button", { name: "Include screenshot" }),
-    ).toBeDisabled();
-    expect(
-      screen.getByText("This screenshot could not be loaded."),
-    ).toBeInTheDocument();
+    const first = w.stages[0].screenshot!;
+    const second = { ...first, frameId: 2, visualVerified: false, dataUrl: "data:image/png;base64,Yg==" };
+    w.stages[0].screenshots = [first, second];
+    const platform = host();
+    const view = render(<WorkflowGuide workflow={w} platform={platform} close={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Change screenshot" }));
+    const preview = () => screen.getByRole("img", { name: "Review source for Collect sources" });
+    fireEvent.load(preview());
+    expect(screen.getByRole("button", { name: "Use screenshot" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Next screenshot" }));
+    expect(screen.getByRole("button", { name: "Use screenshot" })).toBeDisabled();
+    expect(preview()).toHaveAttribute("src", second.dataUrl);
+    fireEvent.error(preview());
+    expect(screen.getByRole("button", { name: "Use screenshot" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Previous screenshot" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next screenshot" }));
+    fireEvent.load(preview());
+    fireEvent.click(screen.getByRole("button", { name: "Use screenshot" }));
+    await waitFor(() => expect(platform.save).toHaveBeenCalled());
+    const saved = parseGuide(JSON.parse(JSON.stringify(platform.save.mock.calls.at(-1)![0])));
+    expect(saved.steps[0].imageReview?.frameId).toBe(2);
+    expect(guideHtml(saved, w, true)).toContain(`src="${second.dataUrl}"`);
+    expect(guideVideoScenes(saved, w)[0]).toMatchObject({ image: second.dataUrl, imageFrameId: 2 });
+    view.unmount();
+    render(<WorkflowGuide workflow={w} platform={{ ...platform, load: async () => saved }} close={() => {}} />);
+    expect(await screen.findByRole("img", { name: "Source for Collect sources" })).toHaveAttribute("src", second.dataUrl);
+    w.stages[0].screenshots = [first];
+    expect(guideHtml(saved, w, true)).not.toContain("<img ");
+    expect(guideVideoScenes(saved, w)[0].imageFrameId).toBeUndefined();
+  });
+  it("loads originals on demand and revokes their URLs without saving pixels", async () => {
+    const loadScreenshot = vi.fn().mockResolvedValue("blob:original-source");
+    const originalRevoke = URL.revokeObjectURL;
+    const revoke = vi.fn();
+    URL.revokeObjectURL = revoke;
+    const platform = { ...host(), loadScreenshot };
+    const view = render(<WorkflowGuide workflow={workflow} platform={platform} close={() => {}} />);
+    await waitFor(() => expect(screen.getByRole("img", { name: "Source for Collect sources" })).toHaveAttribute("src", "blob:original-source"));
+    expect(loadScreenshot).toHaveBeenCalledWith(1, expect.any(AbortSignal));
+    expect(platform.save).not.toHaveBeenCalled();
+    view.unmount();
+    expect(revoke).toHaveBeenCalledWith("blob:original-source");
+    expect(loadScreenshot.mock.calls[0][1].aborted).toBe(true);
+    URL.revokeObjectURL = originalRevoke;
+  });
+  it("labels a saved preview when the original is unavailable", async () => {
+    const platform = { ...host(), loadScreenshot: vi.fn().mockRejectedValue(new Error("Gone")) };
+    render(<WorkflowGuide workflow={workflow} platform={platform} close={() => {}} />);
+    expect((await screen.findAllByText("Original screenshot unavailable. Showing the saved preview.")).length).toBeGreaterThan(0);
+    expect(screen.getByRole("img", { name: "Source for Collect sources" })).toHaveAttribute("src", workflow.stages[0].screenshot!.dataUrl);
   });
   it("scrolls guide sections without changing the host route", async () => {
     const scroll = vi.fn();
@@ -427,11 +441,11 @@ describe("guide editor", () => {
       <GenerationChat platform={platform} />,
     );
     await screen.findByText("Account unavailable");
-    fireEvent.click(screen.getByRole("button", { name: /Try again|Retry/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Try again|Retry/ }));
     await screen.findByText("disk full");
     expect(screen.queryByText("Saved your SOP on this device. Review its steps on the page.")).toBeNull();
     platform.save.mockResolvedValue(undefined);
-    fireEvent.click(screen.getByRole("button", { name: /Try again|Retry/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Try again|Retry/ }));
     await screen.findByText("Saved your SOP on this device. Review its steps on the page.");
     expect(platform.generate).toHaveBeenCalledTimes(2);
     await screen.findByRole("textbox", { name: "SOP title" });
@@ -458,7 +472,7 @@ describe("SOP assistant and web editor", () => {
     expect(openWeb).not.toHaveBeenCalled();
     expect(screen.queryByText("Create a short video")).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("Continue to web editor"));
-    await waitFor(() => expect(openWeb).toHaveBeenCalledWith(guide));
+    await waitFor(() => expect(openWeb).toHaveBeenCalledWith(guideWithBlockIds(guide)));
   });
   it("edits with the existing harness adapter and cancels an in-flight edit", async () => {
     let signal: AbortSignal | undefined;
@@ -492,4 +506,31 @@ describe("SOP assistant and web editor", () => {
     expect(screen.getAllByText("Shorten the title").length).toBeGreaterThan(0);
   });
 
+});
+
+
+describe("video editor layout and chat handoff", () => {
+  it("uses a separate page region, preserves SOP edits, and returns keyboard focus", async () => {
+    render(<WorkflowGuide workflow={workflow} close={() => {}} platform={{
+      load: async () => guide, generate: vi.fn(), save: vi.fn(), export: vi.fn(),
+      video: { generate: vi.fn(), release: vi.fn(), export: vi.fn(), edit: vi.fn() },
+    }} />);
+    const title = await screen.findByRole("textbox", { name: "SOP title" });
+    const trigger = screen.getByRole("button", { name: "Video SOP" });
+    fireEvent.click(trigger);
+    const panel = screen.getByRole("region", { name: "Video SOP" });
+    expect(panel.closest("header")).toBeNull();
+    expect(title.closest("[hidden]")).not.toBeNull();
+    expect(panel).toHaveFocus();
+    fireEvent.pointerDown(document.body);
+    expect(screen.getByRole("region", { name: "Video SOP" })).toBe(panel);
+    fireEvent.keyDown(panel, { key: "Escape" });
+    expect(screen.queryByRole("region", { name: "Video SOP" })).toBeNull();
+    expect(trigger).toHaveFocus();
+    expect(title.closest("[hidden]")).toBeNull();
+    fireEvent.click(trigger);
+    fireEvent(window, new CustomEvent("workflows:assistant-opened"));
+    expect(screen.getByRole("region", { name: "Video SOP" })).toBeVisible();
+    expect(title.closest("[hidden]")).not.toBeNull();
+  });
 });

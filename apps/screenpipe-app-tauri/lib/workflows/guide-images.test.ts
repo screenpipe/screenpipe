@@ -42,11 +42,11 @@ it("preserves analysis and nested frame references while omitting copied pixels"
   expect(saved.screenshot.dataUrl).toContain("AAAA");
 });
 
-it("does not retrieve an unverified screenshot that has not been reviewed", async () => {
+it("does not retrieve a screenshot explicitly excluded by the editor", async () => {
   const unreviewed = structuredClone(workflow);
   unreviewed.stages[0].screenshot!.visualVerified = false;
   unreviewed.stages[0].screenshots![0].visualVerified = false;
   const load = vi.fn();
-  await exportGuideHtml(guide, unreviewed, true, load);
+  await exportGuideHtml({ ...guide, steps: guide.steps.map(step => ({ ...step, imageExcluded: true })) }, unreviewed, true, load);
   expect(load).not.toHaveBeenCalled();
 });

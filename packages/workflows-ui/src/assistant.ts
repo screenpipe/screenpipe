@@ -4,14 +4,16 @@
 import type { WorkProfile, WorkflowMap } from "./model";
 
 export type AssistantContext = {
-  purpose?: "feedback" | "sop";
+  purpose?: "feedback" | "sop" | "video";
   key: string;
   title: string;
   workflow?: WorkflowMap;
   profile?: WorkProfile | null;
   catalog?: Array<{ title: string; description: string }>;
 };
+export type AssistantToolCall = { id: string; name: string; status: "running" | "complete" | "error" | "stopped"; detail?: string };
 export type AssistantMessage = {
+  toolCalls?: AssistantToolCall[];
   id: string;
   role: "user" | "assistant";
   text: string;
@@ -28,7 +30,7 @@ export type AssistantState = {
   activeId: string;
   conversations: AssistantConversation[];
 };
-export type AssistantProgress = { text: string; activity: "starting" | "searching" | "writing"; workflow?: WorkflowMap };
+export type AssistantProgress = { toolCalls?: AssistantToolCall[]; text: string; activity: "starting" | "searching" | "writing" | "working"; workflow?: WorkflowMap };
 export type WorkflowsAssistantPlatform = {
   learnsFromFeedback?: boolean;
   openLink?: (url: string) => Promise<void>;

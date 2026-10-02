@@ -60,7 +60,7 @@
 .messageActions button { display: grid; place-items: center; width: 27px; height: 27px; padding: 4px; border: 0; color: #96988c; background: transparent; border-radius: 4px; }
 .messageActions button:hover { background: var(--chat-soft); color: var(--chat-ink); }
 .activity { display: flex; align-items: center; gap: 8px; color: var(--chat-muted); font-size: 12px; margin: 8px 0 18px; }
-.activity i, .launcher i { width: 6px; height: 6px; border-radius: 50%; background: #c7ff3e; animation: pulse 1.2s ease-in-out infinite; }
+.activity i, .launcher i { box-sizing: border-box; width: 12px; height: 12px; flex: 0 0 12px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; color: var(--chat-muted, #797b72); animation: activitySpin 1s linear infinite; }
 .composer { flex: 0 0 auto; min-width: 0; padding: 10px 12px 9px; margin: 6px 12px 12px; border: 1px solid var(--chat-line); border-radius: 8px; background: var(--chat-surface); box-shadow: 0 2px 8px #00000004; }
 .composer:focus-within { border-color: #b3b5aa; }
 .context { max-width: 100%; display: flex; align-items: center; gap: 6px; padding: 3px 7px; border: 1px solid var(--chat-line); border-radius: 5px; background: var(--chat-surface); color: #686c60; font-size: 11px; line-height: 1.5; }
@@ -91,7 +91,7 @@
 .error button, .saveError button, .restoring button { border: 0; background: transparent; color: inherit; text-decoration: underline; white-space: nowrap; }
 .saveError { margin: 0 12px 8px; }
 @keyframes reveal { from { opacity: 0; transform: translateY(4px); } }
-@keyframes pulse { 50% { opacity: .45; } }
+@keyframes activitySpin { to { transform: rotate(360deg); } }
 @media (max-width: 959px) { .docked { position: absolute; z-index: 35; top: 0; bottom: 0; right: 0; height: auto; width: min(var(--assistant-width), 100vw); box-shadow: -4px 0 20px #00000008; } }
 @media (max-width: 600px) { .floating { right: 10px; bottom: 10px; width: calc(100vw - 20px); max-height: calc(100svh - 20px); } .launcher { right: 16px; bottom: 16px; } .resizeHandle { display: none; } .body { padding-left: 18px; padding-right: 18px; } }
 @media (prefers-reduced-motion: reduce) {
@@ -111,3 +111,8 @@
 .feedbackActions { display: flex; justify-content: flex-end; padding: 8px 16px 0; }
 .feedbackActions button { padding: 7px 12px; border: 1px solid var(--chat-line); border-radius: 7px; background: var(--chat-soft); color: var(--chat-ink); font: inherit; font-size: 12px; cursor: pointer; }
 .feedbackActions button:disabled { opacity: .5; cursor: wait; }
+
+.toolCall { margin: 10px 0; font-size: 13px; color: var(--wf-muted, #75776e); }
+.toolCall summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; }
+.toolCall summary small { margin-left: auto; font-size: 11px; }
+.toolCall pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: 11px; padding: 10px; border: 1px solid #e6e6e1; border-radius: 6px; }

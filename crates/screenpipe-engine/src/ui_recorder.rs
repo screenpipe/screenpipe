@@ -650,7 +650,8 @@ fn ui_event_is_ignored(
         .unwrap_or_default()
         .to_lowercase();
     window_pattern::matches_any(ignored_patterns, &app_lower, &title_lower)
-        || !url_policy.should_capture(event.browser_url.as_deref())
+        || !url_policy
+            .should_capture_window(event.app_name.as_deref(), event.browser_url.as_deref())
 }
 
 impl UiRecorderHandle {
@@ -1838,8 +1839,35 @@ mod capture_trigger_kind_tests {
         excepted.browser_url = Some("https://deep.private.worktrace.ai".to_string());
         assert!(ui_event_is_ignored(&excepted, &[], &policy));
 
-        let native = evt(UiEventType::Click);
+        let mut native = evt(UiEventType::Click);
+        native.app_name = Some("Notepad".into());
+        assert!(!ui_event_is_ignored(&native, &[], &policy));
+        native.app_name = Some("Microsoft Edge".into());
         assert!(ui_event_is_ignored(&native, &[], &policy));
+    }
+
+    #[test]
+    fn url_blocklist_rejects_title_only_browser_events_but_keeps_native_events() {
+        let policy = screenpipe_a11y::url_filter::UrlPolicy::new(
+            &[UrlRule::Legacy("de.wikipedia.org".into())],
+            &[],
+        );
+        let mut event = evt(UiEventType::WindowFocus);
+        event.app_name = Some("Microsoft Edge".into());
+        event.window_title = Some("Berlin - Wikipedia".into());
+        assert!(ui_event_is_ignored(&event, &[], &policy));
+        event.browser_url = Some("https://de.wikipedia.org/wiki/Berlin".into());
+        assert!(ui_event_is_ignored(&event, &[], &policy));
+        event.browser_url = Some("https://en.wikipedia.org/wiki/Berlin".into());
+        assert!(!ui_event_is_ignored(&event, &[], &policy));
+        event.browser_url = None;
+        event.app_name = Some("Notepad".into());
+        assert!(!ui_event_is_ignored(&event, &[], &policy));
+        assert!(ui_event_is_ignored(
+            &event,
+            &WindowPattern::parse_list(&["Notepad".into()]),
+            &policy
+        ));
     }
 
     fn gates(_keystroke: bool, _clipboard: bool) -> TriggerGates {

@@ -1,0 +1,45 @@
+--- a/dist/core/compaction/compaction.js
++++ b/dist/core/compaction/compaction.js
+@@ -423,6 +423,14 @@
+ - [Preserve important context, add new if needed]
+-
++
+ Keep each section concise. Preserve exact file paths, function names, and error messages.`;
++// screenpipe-summary-validation-v1
++function checkedSummary(response) {
++    const text = contentText(response.content);
++    if (response.stopReason !== "stop" || !text.trim()) {
++        throw new Error(`Summarization incomplete (${response.stopReason}): ${response.errorMessage || "no complete text summary"}`);
++    }
++    return { text, usage: response.usage };
++}
+ function createSummarizationOptions(model, maxTokens, apiKey, headers, env, signal, thinkingLevel) {
+     const options = { maxTokens, signal, apiKey, headers, env };
+     if (model.reasoning && thinkingLevel && thinkingLevel !== "off") {
+@@ -483,11 +491,7 @@
+     ];
+     const completionOptions = createSummarizationOptions(model, maxTokens, apiKey, headers, env, signal, thinkingLevel);
+     const response = await completeSummarization(model, { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages }, completionOptions, streamFn, retry, callbacks);
+-    if (response.stopReason === "error") {
+-        throw new Error(`Summarization failed: ${response.errorMessage || "Unknown error"}`);
+-    }
+-    const textContent = contentText(response.content);
+-    return { text: textContent, usage: response.usage };
++    return checkedSummary(response);
+ }
+ export function prepareCompaction(pathEntries, settings) {
+     if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
+@@ -634,12 +638,6 @@
+         },
+     ];
+     const response = await completeSummarization(model, { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages }, createSummarizationOptions(model, maxTokens, apiKey, headers, env, signal, thinkingLevel), streamFn, retry, callbacks);
+-    if (response.stopReason === "error") {
+-        throw new Error(`Turn prefix summarization failed: ${response.errorMessage || "Unknown error"}`);
+-    }
+-    return {
+-        text: contentText(response.content),
+-        usage: response.usage,
+-    };
++    return checkedSummary(response);
+ }
+ //# sourceMappingURL=compaction.js.map

@@ -47,12 +47,18 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady
     if (account) void updateSettings({ workflowSharingPromptSeen: { ...current.current.workflowSharingPromptSeen, [account]: SHARING_NOTICE_VERSION } }).catch(() => {});
     setOpen(false);
   }, [updateSettings]);
-  function nextStep() {
+  // Sharing is an optional Workflows choice, independent of scheduled discovery.
+  // Account hydration and workspace entry can happen before the recorder is ready.
+  useEffect(() => {
     const value = current.current;
-    if (value.user?.id && value.workflowSharingPromptSeen?.[value.user.id] !== SHARING_NOTICE_VERSION) {
-      setError(""); setStep("sharing");
-    } else setOpen(false);
-  }
+    const account = value.user?.id;
+    setOpen(false);
+    setStep("tasks");
+    if (active && account && value.workflowSharingPromptSeen?.[account] !== SHARING_NOTICE_VERSION) {
+      setStep("sharing");
+      setOpen(true);
+    }
+  }, [active, settings.user?.id]);
   useEffect(() => { if (open) title.current?.focus(); }, [step, open]);
 
   // Read again on reconnection, returning from Chat, and external task changes.
@@ -62,9 +68,6 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady
     let loading = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let attempts = 0;
-    let offeredSharing = false;
-    // Recorder reconnects refresh task status, not an open consent decision.
-    if (!active) { setOpen(false); setStep("tasks"); }
     setSetup(null);
     setError("");
     async function load() {
@@ -82,12 +85,6 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady
           setFailedTarget(null);
         }
         attempts = 0;
-        const account = current.current.user?.id;
-        if (!offeredSharing && value.enabled && account && current.current.workflowSharingPromptSeen?.[account] !== SHARING_NOTICE_VERSION) {
-          offeredSharing = true;
-          setStep("sharing");
-          setOpen(true);
-        }
       } catch {
         if (cancelled || enabling.current || startedRevision !== revision.current) return;
         setSetup(null);
@@ -125,7 +122,7 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady
       if (enabled ? !confirmed.enabled : confirmed.tasks?.some(task => task.enabled) || confirmed.enabled) {
         throw new Error("Some task settings did not change.");
       }
-      if (enabled) nextStep();
+      if (enabled) setOpen(false);
     } catch {
       // A partial write is not success. Re-read the actual group, never make an
       // optimistic all-on/all-off claim or roll a user's off request back on.
@@ -139,20 +136,25 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady
   }
 
   const partial = !!setup && !setup.enabled && !!setup.tasks?.some(task => task.enabled);
+  const status = busy ? ui("Saving…") : error ? (failedTarget !== null ? ui("Couldn’t save changes") : ui("Couldn’t check status")) : !backendReady ? ui("Connecting…") : !setup ? ui("Checking…") : partial ? ui("Some tasks are off") : "";
+  const pending = busy || !backendReady || (!setup && !error);
   return <>
-    {active && <div className={styles.control}>
+    {active && <div className={styles.control} title={error || status || undefined}>
       <label className={styles.label}>
         <span>Automatic updates</span>
+        <span className={styles.switchSlot} data-pending={pending || !!error}>
         <Switch aria-label={ui("Automatic updates")} checked={setup?.enabled ?? false} disabled={busy || !setup || !backendReady}
-          aria-describedby="workflow-schedule-status"
+          aria-describedby="workflow-schedule-status" aria-busy={pending}
           onCheckedChange={enabled => {
             if (!enabled) { void save(false); return; }
             if (!canEnable) { onEnableUnavailable?.(); return; }
             setError(""); setStep("tasks"); setOpen(true);
           }} />
+        {pending && !error && <Loader2 size={13} className={styles.spinner} aria-hidden="true" />}
+        </span>
       </label>
       <span id="workflow-schedule-status" role="status" title={error || undefined} className={styles.status}>
-        {busy ? ui("Saving…") : error ? (failedTarget !== null ? ui("Couldn’t save changes") : ui("Couldn’t check status")) : !backendReady ? ui("Connecting…") : !setup ? ui("Checking…") : partial ? ui("Some tasks are off") : ""}
+        {status}
       </span>
       {error && <button className={styles.retry} type="button" aria-label={ui("Retry automatic updates")} title={ui("Try again")}
         disabled={busy || !backendReady} onClick={() => { if (failedTarget !== null) void save(failedTarget); else setRetry(value => value + 1); }}><RefreshCw size={14} /></button>}
@@ -176,7 +178,7 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady
           {step === "tasks" ? "Discover workflows and keep them accurate with automatic updates." : "Share new Workflows chats to improve workflows and train Screenpipe’s own AI models. Never external providers’ models."}
         </DialogDescription>
       </DialogHeader>
-      {step === "sharing" ? <WorkflowSharingControls compact onDone={finishSharing} onBusyChange={setBusy} /> : <>
+      {step === "sharing" ? <WorkflowSharingControls key={settings.user?.id} compact onDone={finishSharing} onBusyChange={setBusy} /> : <>
         {setup && <div className="flex items-center gap-3 rounded-lg border p-4">
           <Clock3 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           <div className="min-w-0"><p className="text-sm font-medium">{setup.title}</p><p className="text-xs text-muted-foreground">{setup.schedule} · While Screenpipe is open</p></div>
@@ -188,7 +190,7 @@ export function WorkflowTasksPrompt({ active, tasks = desktopTasks, backendReady
         </details>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         <DialogFooter className="gap-2 sm:gap-0">
-          <Button variant="outline" disabled={busy} onClick={nextStep}>Not now</Button>
+          <Button variant="outline" disabled={busy} onClick={() => setOpen(false)}>Not now</Button>
           <Button disabled={busy || !setup} onClick={() => void save(true)}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />} {busy ? ui("Enabling…") : ui("Enable automatic updates")}</Button>
         </DialogFooter>
       </>}

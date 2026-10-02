@@ -20,6 +20,68 @@ afterEach(async () => {
 });
 
 describe('local AI gateway harness', () => {
+	test('recovers allowance blocks on direct Luna with real SDK tool streaming and D1 accounting', async () => {
+		const usage = { prompt_tokens: 100, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 40 } };
+		const call = { id: 'synthetic-lookup', type: 'function', function: { name: 'lookup', arguments: '{"query":"synthetic"}' } };
+		const harness = await startHarness({ outboundResponse: async (request, body) => {
+			if (request.url.startsWith('https://gateway.ai.cloudflare.com/')) {
+				return Response.json({ error: { message: 'Spend limit exceeded', code: 2041 } }, { status: 429 });
+			}
+			if (request.url === 'https://api.openai.com/v1/chat/completions') {
+				expect(body.model).toBe('gpt-6-luna');
+				expect(body.reasoning_effort).toBe('none');
+				expect(body.tools[0].function.name).toBe('lookup');
+				expect(request.headers.has('cf-aig-metadata')).toBe(false);
+				if (!body.stream) return Response.json({ model: body.model, choices: [{ message: { role: 'assistant', content: null, tool_calls: [call] }, finish_reason: 'tool_calls' }], usage });
+				return new Response([
+					{ choices: [{ delta: { role: 'assistant', tool_calls: [{ index: 0, ...call }] }, finish_reason: null }] },
+					{ choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+					{ choices: [], usage },
+				].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } });
+			}
+		} });
+		for (const model of ['auto', 'gpt-6-luna']) {
+			for (const stream of [false, true]) {
+				const response = await harness.fetch('/chat/completions', {
+					method: 'POST', headers: { 'content-type': 'application/json', 'x-screenpipe-latency': 'background' },
+					body: JSON.stringify({ model, stream, messages: [{ role: 'user', content: 'Synthetic lookup' }], tools: [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object', properties: { query: { type: 'string' } } } } }] }),
+				});
+				expect(response.status).toBe(200);
+				expect(response.headers.get('x-screenpipe-model')).toBe('gpt-6-luna');
+				expect(response.headers.get('x-screenpipe-background-fallback-reason')).toBe('account_allowance');
+				expect(await response.text()).toContain('synthetic-lookup');
+			}
+		}
+		expect(harness.outboundRequests).toHaveLength(8);
+		let telemetry = await harness.readInferenceTelemetry();
+		for (let attempt = 0; attempt < 20 && telemetry.costs[0]?.requests !== 4; attempt++) {
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			telemetry = await harness.readInferenceTelemetry();
+		}
+		expect(telemetry.costs).toEqual([{ model: 'gpt-6-luna', requests: 4, input_tokens: 400, output_tokens: 80, cost: expect.closeTo(0.0000656, 10) }]);
+		expect(telemetry.health.some((row) => row.outcome === 'rate_limited')).toBe(false);
+		harness.assertNoUnexpectedOutboundRequests();
+	});
+
+	test('preserves allowance errors for interactive, image, and failed direct-rescue requests', async () => {
+		const harness = await startHarness({ outboundResponse: async (request) => {
+			if (request.url.startsWith('https://gateway.ai.cloudflare.com/')) return Response.json({ error: { message: 'Spend limit exceeded' } }, { status: 429 });
+			if (request.url === 'https://api.openai.com/v1/chat/completions') return Response.json({ error: { message: 'Rate limit reached: requests per minute' } }, { status: 429, headers: { 'x-should-retry': 'false' } });
+		} });
+		for (const variant of ['interactive', 'image', 'rescue-fails']) {
+			const response = await harness.fetch('/chat/completions', {
+				method: 'POST', headers: { 'content-type': 'application/json', ...(variant === 'interactive' ? {} : { 'x-screenpipe-latency': 'background' }) },
+				body: JSON.stringify({ model: 'auto', messages: [{ role: 'user', content: variant === 'image' ? [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }] : 'Synthetic request' }] }),
+			});
+			expect(response.status).toBe(429);
+			expect(await response.text()).toContain('hosted_ai_allowance_exceeded');
+		}
+		expect(harness.outboundRequests.filter((request) => request.url.startsWith('https://api.openai.com/'))).toHaveLength(1);
+		const telemetry = await harness.readInferenceTelemetry();
+		expect(telemetry.costs).toEqual([]);
+		expect(telemetry.health).toEqual([{ model: 'gpt-6-luna', outcome: 'rate_limited', requests: 1 }]);
+		harness.assertNoUnexpectedOutboundRequests();
+	});
 	test('preserves voice responses across the real Durable Object fetch boundary', async () => {
 		const harness = await startHarness({
 			outboundResponse: async (request) => {

@@ -25,6 +25,16 @@ use crate::analytics::AnalyticsManager;
 /// Handle one frame of `permission_lost`, `permission_restored`, or
 /// `permission_needed`. Called from [`super::dispatch`].
 pub(super) fn handle(app: &AppHandle, name: &str, data: &Value) {
+    let kind = data.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    let audio_disabled = crate::store::SettingsStore::get(app)
+        .ok()
+        .flatten()
+        .map(|settings| !crate::permissions::microphone_required(&settings.recording))
+        .unwrap_or(false);
+    if kind == "microphone" && audio_disabled {
+        debug!("microphone permission event ignored while audio capture is disabled");
+        return;
+    }
     match name {
         "permission_lost" => handle_lost(app, data),
         "permission_restored" => handle_restored(app, data),

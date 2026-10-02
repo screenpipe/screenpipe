@@ -1,0 +1,1 @@
+Fictional shared UI preview at 1440 × 1000. Steps have timestamp/app source references and no attached screenshot IDs. The existing source loader resolves the image before rendering a video. Run apps/screenpipe-workflows-web/scripts/eval-source-preview.cjs against /preview?catalog=source-preview. This verifies preview loading, not availability of private recorder frames.

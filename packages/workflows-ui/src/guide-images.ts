@@ -1,6 +1,6 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
-import { guideHtml, guideImage, guideSourceImage, type WorkflowGuide } from "./guide";
+import { guideHtml, guideScreenshot, guideSourceStage, guideStepIncludesImage, type WorkflowGuide } from "./guide";
 import type { WorkflowMap } from "./model";
 import type { WorkflowsPlatform } from "./platform";
 
@@ -12,10 +12,11 @@ export async function exportGuideHtml(guide: WorkflowGuide, workflow: WorkflowMa
   const timeout = setTimeout(() => controller.abort(), 60_000);
   const stages = workflow.stages.map(stage => ({ ...stage }));
   try {
-    const indices = new Set(guide.steps.filter(step => step.includeImage && step.sourceStage !== null
-      && guideImage(workflow, step.sourceStage, step.imageReview) !== null).map(step => step.sourceStage!));
-    for (const index of indices) {
-      const source = guideSourceImage(workflow, index);
+    const selected = guide.steps.filter(guideStepIncludesImage).map(step => {
+      const index = guideSourceStage(guide, step, workflow);
+      return index == null ? null : { index, source: guideScreenshot(workflow, index, step.imageReview) };
+    }).filter((item): item is NonNullable<typeof item> => item !== null);
+    for (const { index, source } of selected) {
       if (!source) continue;
       const image = await load(source.timestamp, source.app, controller.signal, source.frameId);
       if (!image) throw new Error("A selected screenshot is no longer available. Remove it or export without screenshots.");
@@ -28,7 +29,7 @@ export async function exportGuideHtml(guide: WorkflowGuide, workflow: WorkflowMa
           reader.readAsDataURL(blob);
         });
         const capture = { ...source, dataUrl };
-        stages[index] = { ...stages[index], screenshot: capture, screenshots: [capture] };
+        stages[index] = { ...stages[index], screenshot: capture, screenshots: [...(stages[index].screenshots ?? []).filter(image => image.frameId !== capture.frameId || image.timestamp !== capture.timestamp), capture] };
       } finally { if (image.dataUrl.startsWith("blob:")) URL.revokeObjectURL(image.dataUrl); }
     }
     return guideHtml(guide, { ...workflow, stages }, true);

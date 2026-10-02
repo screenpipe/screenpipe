@@ -50,7 +50,7 @@ pub use db::{
     ActivityIntervalRecord, ActivityLedgerObservation, ActivityTaskDraft, DatabaseManager,
     DeleteTimeRangeResult, ImmediateTx, NewMeetingTranscriptSegment, SemanticActor,
     SemanticActorAlias, SemanticActorReference, SemanticAttachResult, SemanticCleanupResult,
-    SemanticContextQuery, SemanticFrameContext, SemanticProjectionWriteResult,
+    SemanticContextQuery, SemanticFrameContext, SemanticProjectionWriteResult, StarredSession,
     MEETING_END_REASON_AUTO_END, MEETING_END_REASON_EXPLICIT_STOP, MEETING_END_REASON_ROOM_CHANGED,
     MEETING_END_REASON_SHUTDOWN,
 };

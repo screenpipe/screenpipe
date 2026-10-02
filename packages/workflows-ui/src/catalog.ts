@@ -145,6 +145,7 @@ export function sanitizeWorkflowAnalysis(analysis: WorkflowAnalysis): WorkflowAn
       frequency: `Observed on ${workflow.quality.distinctDays} captured day${workflow.quality.distinctDays === 1 ? "" : "s"} in a ${workflow.analysisDays}-day scan`,
       stages: workflow.stages.map((stage) => ({
         ...stage,
+        timing: workflowTiming(stage.timing),
         // Keep legacy image bytes for explicit SOP review. Evidence surfaces
         // and coverage counts still require visualVerified.
         activeMinutes: 0,

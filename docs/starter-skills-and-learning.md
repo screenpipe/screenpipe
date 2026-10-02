@@ -1,33 +1,50 @@
 # Starter skills and continuous learning
 
-<!-- doc-covers: crates/screenpipe-core/src/starter_skills.rs, crates/screenpipe-core/assets/extensions/skill-learning.ts, crates/screenpipe-core/assets/pipes/skill-learning -->
-<!-- doc-verified: 695f780ca7ab -->
+<!-- doc-covers: crates/screenpipe-core/src/starter_skills.rs, crates/screenpipe-core/assets/extensions/skill-learning.ts, crates/screenpipe-core/assets/pipes/skill-learning, packages/screenpipe-mcp/src/bundled-skills.ts, scripts/lib/skill-bundle.mjs -->
+<!-- doc-verified: 959f7e465 -->
 
 Implementation notes for the starter-skills and learning-task change, based on the
 above main revision. Native app acceptance is still required before release.
 
 ## Product decisions
 
-Eight portable workflows ship in the public repository: recall, meeting prep,
+Twenty portable workflows ship in the public repository: recall, meeting prep,
 meeting follow-up, worklog, research synthesis, focus review, durable learning,
-and shareable recap. They are newly written general methods. No personal skill
-folders, local scripts, conversations, customer examples, or credentials are
-copied into the bundle.
+shareable recap, decision history, project handoff, resume work, commitment
+review, project status, customer context, bug report, incident timeline,
+workflow discovery, process guide, interview synthesis, and writing context.
+They are newly written general methods. No personal skill folders, local
+scripts, conversations, customer examples, or credentials are copied into the
+bundle.
 
 The bundle lives in `crates/screenpipe-core/assets/skills`. The core registry is
 also the source of the generated UI catalog. The desktop startup path seeds the
 user's `<data_dir>/skills`, normally `~/.screenpipe/skills`. The existing CLI and
 desktop MCP setup paths use the same starter installer for Claude Code, Codex,
-Cursor, Gemini CLI, OpenClaw, and Hermes. MCP-only clients stay MCP-only.
+Cursor, Gemini CLI, OpenClaw, and Hermes. MCP-only clients can list and read the
+public bundle through the read-only
+`screenpipe-skills` tool on both stdio and HTTP transports. Omit `name` for the
+catalog; pass an exact returned name for the full instructions. The catalog
+contains the twenty workflows and the API/CLI guides. It is generated from the
+same native registry and canonical Markdown files at build time and embedded
+in the MCP artifact, so it needs neither filesystem access nor a running engine
+to retrieve instructions. Personal and learned skills are not read or exported.
+The desktop and MCP package must both be updated to deliver these changes;
+existing connected MCP processes may need a restart to discover the new tool.
+
+This makes instructions available to supported connected agents. It does not
+force an agent to load every skill, add missing tools or account access, or
+bypass a task's permissions. Special internal/admin skills keep their existing
+scoping, and disconnected integrations stay disconnected.
 
 Grok Bot uses the same compiled public registry through its existing native/Bun
-gateway bridge. It receives the API skill plus eight separate device-specific
+gateway bridge. It receives the API skill plus twenty separate device-specific
 workflow skills in its private shared store. Every workflow repeats the approved
 local-computer execution boundary; it does not schedule a cloud agent or copy
 private learned skills. This adapter supports macOS and Windows; Linux has no
 credential adapter and remains explicitly unsupported.
 
-Gateway setup verifies all nine entries before reporting connected. A partial
+Gateway setup verifies all twenty-one entries before reporting connected. A partial
 install can be retried without duplicating completed entries. Starter copies
 carry a content/metadata digest; unchanged marked copies can be updated or
 removed. Unmarked or edited starter copies are preserved and reported for review.
@@ -58,7 +75,14 @@ connection is required to enter the app.
 
 Starter skills need no extra action. The full skill catalog remains in Settings.
 Scheduled Tasks is where users manage these automations, their models, schedules,
-and enabled state. The Settings learning card also exposes its own pause control. The learning task starts on its existing
+and enabled state. The Settings learning card also exposes its own pause control. Changing the learning model in Settings saves and reads back the selected preset
+without pausing or enabling the task. The new model applies to future runs.
+Before initial setup, model selection stays local until learning is enabled.
+The card separates included workflows from private learning. Its searchable catalog
+uses a bounded scroll area. The learning controls show the configured cadence and
+last recorded run, with a manual status refresh, model settings link, and route to
+Scheduled Tasks. A successful scheduler run is not presented as a skill change.
+The learning task starts on its existing
 Pipe schedule; pausing prevents future runs, while an in-flight run may finish.
 
 Setup pins the selected compatible Pi preset before enabling each new or paused
@@ -88,9 +112,25 @@ The extension exposes only three tools:
 
 | Tool | Behavior |
 | --- | --- |
-| `learning_context` | At most four queries per run, five items each, recent activity or external chat previews. Activity uses server PII filtering. |
-| `learning_inventory` | Existing skill summaries plus this task's unchanged, previously owned learned skills. |
-| `learning_save` | One attempted change, two new returned evidence references, activity corroboration, three authored scenario checks, a compact method, and a `screenpipe-learned-*` name. |
+| `learning_context` | At most four calls per run. Starts without a literal-text filter; follow-ups use a source term. Samples up to twenty activity rows and returns at most five distinct items. Identical queries and evidence are not repeated within a run. Activity uses server PII filtering. |
+| `learning_inventory` | Cached inventory with twenty summaries per page, optional trigger search, and at most two explicitly requested owned skill bodies. Protected skills remain summaries only. |
+| `learning_save` | One attempted change, two new returned evidence references, activity corroboration, three authored scenario checks, and a `screenpipe-learned-*` name. New bodies are limited to 3000 characters; older longer bodies may be maintained or shortened without growing further. |
+
+The inventory reports a pending-write warning only when a pending receipt exists;
+that state blocks context reads as well as writes. A tool failure stops further
+operations for the current run, without altering the next scheduled run.
+
+The prompt searches a nonempty inventory by trigger before deciding whether to
+create a skill. An unrelated first page does not establish that no method exists.
+It prefers repairing a verified gap in the closest owned skill. An empty inventory
+permits creation; ownership is required only for updates. Creation still requires
+a distinct recurring need; an already-covered method, one-off request,
+ordinary advice or unchanged watch item produces no change. The runtime rejects
+new names with an identical existing trigger description, rejects exact copies of
+an inspected owned method, and returns an unchanged result for an identical update.
+It does not claim to detect all semantic overlap. Updates require reading the
+current body and rechecking ownership and hash. No background pruning or deletion
+is introduced. Summaries and owned bodies remain untrusted input.
 
 Other tool calls, including shell, arbitrary file writes, messages, profile
 updates, and general skill management, are blocked for this task. Calls to the
@@ -99,7 +139,13 @@ created/patched by the existing provenance-aware API. A patch carries the last
 read SHA; manual edits, imported skills, and skills created by another agent
 are not adopted by the learning task.
 
-Successful changes have a verified read-back and a local before/after artifact
+Successful changes verify the read-back hash, skill identity, agent ownership,
+description and instructions against the requested method, allowing the store's
+whitespace normalization. The prompt distinguishes verified saves, skipped or
+unchanged methods, and failures. A failed save must be reported as unverified,
+since a write may already have happened; it must not be reported as no change.
+A mismatch leaves the pending receipt in place without
+consuming evidence or reporting success. Changes have a local before/after artifact
 at `output/latest-change.md`. `output/learning-state.json` records ownership,
 consumed evidence, and the previous version of the last change. A pending receipt
 is written before the API mutation. A timeout or interrupted write leaves the
@@ -150,12 +196,22 @@ From the repository root:
 
 ```sh
 bun test crates/screenpipe-core/assets/extensions/skill-learning.test.ts crates/screenpipe-core/assets/extensions/self-improvement.test.ts
-rustc --edition=2021 --test crates/screenpipe-core/src/starter_skills.rs -o /tmp/screenpipe-starter-tests
-/tmp/screenpipe-starter-tests
+bun scripts/test-starter-skills.mjs
 ```
 
-The standalone installer suite uses real temporary files and symlinks. It proves
-that module's filesystem behavior without compiling the full capture engine.
+From `packages/screenpipe-mcp`:
+
+```sh
+bun run typecheck
+SCREENPIPE_DISABLE_TELEMETRY=1 bun run test --no-file-parallelism src/bundled-skills.test.ts src/bundled-skills-transport.test.ts src/http-server.test.ts src/self-contained-pack.test.ts src/workflow-transport.test.ts
+```
+
+The standalone installer suite compiles the actual installer module with its
+real `screenpipe-fs` dependency and uses temporary files and symlinks, without
+compiling the full capture engine. It checks
+upgrading an eight-skill store without overwriting edits or restoring deletions.
+The MCP transport test reads every bundled skill byte-for-byte through stdio
+and HTTP; the stdio test runs a built artifact outside the source tree.
 The extension suite executes the actual extension with a synthetic Pi host and
 local API responses, including real state/report files. The frontend suite drives
 the real React component with mock IPC/API boundaries. These are regression and

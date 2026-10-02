@@ -45,7 +45,8 @@ static SCREEN_IS_LOCKED: AtomicBool = AtomicBool::new(false);
 static SYSTEM_IS_SUSPENDED: AtomicBool = AtomicBool::new(false);
 
 /// Fired by `CGDisplayRegisterReconfigurationCallback` when the display
-/// topology changes (connect, disconnect, resolution, mirror). Lets
+/// topology changes (connect, disconnect, resolution, mirror), and on wake or
+/// unlock when retained topology needs refreshing. Lets
 /// subsystems react instantly instead of polling SCK on a timer.
 /// Uses `notify_one` semantics so at most one pending permit is buffered
 /// if no waiter is currently parked — the next `.notified().await` returns
@@ -250,6 +251,9 @@ fn handle_screen_unlock_transition() {
     screenpipe_screen::monitor::invalidate_monitor_lookup_cache();
     crate::permission_monitor::notify_wake();
     SCREEN_UNLOCK_NOTIFY.notify_one();
+    // A quick lock/unlock can leave the watcher in its normal topology wait,
+    // rather than its locked-session wait. Refresh status in either case.
+    DISPLAY_RECONFIG_NOTIFY.notify_one();
 }
 
 /// Start the sleep/wake monitor on macOS
@@ -574,9 +578,6 @@ fn on_did_wake(handle: &tokio::runtime::Handle) {
     let locked = check_screen_locked_cgsession();
     let was_locked = SCREEN_IS_LOCKED.swap(locked, Ordering::SeqCst);
     screenpipe_config::set_screen_locked(locked);
-    if was_locked && !locked {
-        // CFNotification missed the unlock — we're fixing it here
-    }
 
     // Invalidate persistent SCStream handles so the capture loop
     // recreates them with fresh frames after wake.
@@ -585,6 +586,15 @@ fn on_did_wake(handle: &tokio::runtime::Handle) {
     // A Mac often wakes into a different display layout than it slept in.
     #[cfg(target_os = "macos")]
     screenpipe_screen::monitor::invalidate_monitor_lookup_cache();
+
+    if was_locked && !locked {
+        // CFNotification missed the unlock. Release a watcher already parked
+        // on the locked-session wait as well as the topology wait below.
+        SCREEN_UNLOCK_NOTIFY.notify_one();
+    }
+    // Status reads no longer enumerate on the tray's one-second timer. Wake
+    // the topology owner so an invalidated snapshot is refreshed promptly.
+    DISPLAY_RECONFIG_NOTIFY.notify_one();
 
     // Invalidate audio streams so the device monitor force-restarts all
     // audio devices. CoreAudio streams can go silent after sleep/wake
@@ -965,9 +975,20 @@ mod tests {
         let _ = screenpipe_audio::stream_invalidation::take();
         let _ = screenpipe_screen::stream_invalidation::take();
         reset_recently_woke();
+        let _ = tokio::time::timeout(
+            std::time::Duration::ZERO,
+            display_reconfig_notify().notified(),
+        )
+        .await;
 
         let handle = tokio::runtime::Handle::current();
         on_did_wake(&handle);
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            display_reconfig_notify().notified(),
+        )
+        .await
+        .expect("wake must refresh status without waiting for the topology backstop");
 
         assert!(
             recently_woke_from_sleep(),
@@ -997,9 +1018,23 @@ mod tests {
     /// `permission_lost`. This is the #1 cause of recurring screen-recording
     /// permission-loss telemetry (users lock/unlock several times a day).
     #[cfg(target_os = "macos")]
-    #[test]
-    fn test_screen_unlock_arms_permission_wake_grace() {
+    #[tokio::test]
+    async fn test_screen_unlock_arms_permission_wake_grace() {
+        let _guard = RECENTLY_WOKE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = tokio::time::timeout(
+            std::time::Duration::ZERO,
+            display_reconfig_notify().notified(),
+        )
+        .await;
         handle_screen_unlock_transition();
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            display_reconfig_notify().notified(),
+        )
+        .await
+        .expect("unlock must also wake a watcher still in its normal topology wait");
         assert!(
             crate::permission_monitor::wake_grace_active(),
             "screen unlock must arm the permission-monitor wake grace"

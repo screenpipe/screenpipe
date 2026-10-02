@@ -1,0 +1,79 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import React from 'react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+const ports = vi.hoisted(() => ({
+  events: new Map<string, Set<(e: {payload: any}) => void>>(),
+  close: vi.fn(async () => undefined), navigate: vi.fn(async () => undefined),
+  prefetch: vi.fn(async () => undefined), clear: vi.fn(), invalidate: vi.fn(),
+}));
+vi.mock('@tauri-apps/api/event', () => ({
+  emit: vi.fn(async () => undefined),
+  listen: vi.fn(async (name: string, callback: (e: {payload: any}) => void) => {
+    const set = ports.events.get(name) || new Set(); set.add(callback); ports.events.set(name,set);
+    return () => { set.delete(callback); if (!set.size) ports.events.delete(name); };
+  }),
+}));
+vi.mock('@/lib/utils/tauri', () => ({commands: {closeWindow: ports.close, searchNavigateToTimeline: ports.navigate}}));
+vi.mock('@/lib/chat-utils', () => ({RECENT_CHAT_SEARCH_HANDOFF_EVENT: 'recent-chat-search-handoff', readSearchOpenedFromChatSurface: () => null}));
+vi.mock('@/lib/chat-storage', () => ({prefetchRecentChats: ports.prefetch, clearRecentChatsCache: ports.clear, invalidateConversationListCache: ports.invalidate}));
+vi.mock('@/lib/experimental-features', () => ({useExperimentalFeaturesEnabled: () => false}));
+vi.mock('@/components/rewind/search-modal', async () => {
+  const { useSearchFocus } = await import('@/components/rewind/hooks/use-search-focus');
+  return { SearchModal: (props: any) => {
+    const {inputRef} = useSearchFocus(props.isOpen);
+    if (!props.isOpen) return null;
+    return <div><input aria-label="Search fixture" ref={inputRef}/>
+      <button onClick={() => props.onClose()}>Close search</button>
+      <button onClick={() => props.onNavigateToTimestamp('2026-01-01T00:00:00Z', 7, ['synthetic'], '[]', 'sample')}>Open result</button>
+    </div>;
+  }};
+});
+import SearchPage from './app/search/page';
+let focus: ReturnType<typeof vi.spyOn>;
+beforeEach(() => {
+  vi.useFakeTimers(); vi.clearAllMocks(); ports.events.clear();
+  window.history.replaceState(null,'','/search?prewarm=1');
+  focus=vi.spyOn(HTMLElement.prototype,'focus');
+});
+afterEach(async () => {cleanup(); await act(async () => {}); document.body.replaceChildren(); vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks();});
+async function event(name: string, payload: any = undefined) { await act(async () => { for(const f of ports.events.get(name)||[]) f({payload}); }); }
+async function tick() { await act(async () => {vi.advanceTimersByTime(2100);}); }
+function moveFocusAway() { const button=document.createElement('button');document.body.append(button);button.focus();focus.mockClear();return button; }
+it('hidden prewarm never focuses or runs the active focus guard', async () => {
+  render(<SearchPage/>);await tick();expect(focus).not.toHaveBeenCalled();
+});
+it('hiding an opened view stops periodic focus reclamation', async () => {
+  render(<SearchPage/>);await event('search-reset',{query:'first'});expect(screen.getByLabelText('Search fixture')).toHaveFocus();
+  await event('search-hidden');const other=moveFocusAway();await tick();expect(focus).not.toHaveBeenCalled();expect(other).toHaveFocus();other.remove();
+});
+it('a hide before first show leaves the prewarm inactive', async () => {
+  render(<SearchPage/>);await event('search-hidden');focus.mockClear();const other=moveFocusAway();await tick();expect(focus).not.toHaveBeenCalled();other.remove();
+});
+it('normal visible open activates real input focus', async () => {
+  window.history.replaceState(null,'','/search');render(<SearchPage/>);await tick();expect(screen.getByLabelText('Search fixture')).toHaveFocus();
+});
+it('visible focus guard still recovers focus from a non-input element', async () => {
+  window.history.replaceState(null,'','/search');render(<SearchPage/>);const other=moveFocusAway();await tick();expect(screen.getByLabelText('Search fixture')).toHaveFocus();other.remove();
+});
+it('reopening after hide restores focus and a fresh encoded query', async () => {
+  render(<SearchPage/>);await event('search-reset',{query:'first'});await event('search-hidden');await event('search-reset',{query:'a & b/雪'});await tick();
+  expect(screen.getByLabelText('Search fixture')).toHaveFocus();expect(new URLSearchParams(window.location.search).get('q')).toBe('a & b/雪');expect(new URLSearchParams(window.location.search).has('prewarm')).toBe(false);
+});
+it('empty reset clears the prior query while keeping the view usable', async () => {
+  render(<SearchPage/>);await event('search-reset',{query:'old'});await event('search-reset',{query:null});
+  expect(new URLSearchParams(window.location.search).get('q')).toBeNull();expect(screen.getByLabelText('Search fixture')).toHaveFocus();
+});
+it('result navigation preserves timestamp, frame and search context', async () => {
+  render(<SearchPage/>);await event('search-reset',{query:'sample'});fireEvent.click(screen.getByText('Open result'));await act(async()=>{});
+  expect(ports.navigate).toHaveBeenCalledTimes(1);expect(ports.navigate.mock.calls[0].slice(0,5)).toEqual(['2026-01-01T00:00:00Z',7,['synthetic'],'[]','sample']);
+});
+it('explicit close preserves the native close handoff', async () => {
+  render(<SearchPage/>);await event('search-reset');fireEvent.click(screen.getByText('Close search'));await act(async()=>{});
+  expect(ports.close).toHaveBeenCalledWith({Search:{query:null}});
+});
+it('unmount removes subscriptions and focus activity', async () => {
+  const view=render(<SearchPage/>);await event('search-reset');view.unmount();await act(async()=>{});focus.mockClear();await tick();
+  expect(ports.events.size).toBe(0);expect(focus).not.toHaveBeenCalled();
+});

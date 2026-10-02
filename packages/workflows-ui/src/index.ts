@@ -19,6 +19,7 @@ export * from "./context-tool";
 export { WorkflowRunProgress } from "./workflow-run-progress";
 
 export * from "./guide";
+export * from "./guide-video";
 
 export { guideMarkdown } from "./guide";
 
@@ -29,3 +30,5 @@ export * from "./workflow-edits";
 export * from "./questionnaire-voice";
 
 export { serializeWorkflowData } from "./screenshots";
+export { videoEditPrompt } from "./video-edit-prompt";
+export { applyVideoEdit, parseVideoEdit, parseVideoDraft, type VideoDraft, type VideoEdit } from "./video-tool";

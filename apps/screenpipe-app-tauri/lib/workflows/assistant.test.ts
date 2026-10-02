@@ -46,9 +46,25 @@ describe("workflow assistant agent transport", () => {
     expect(ASSISTANT_TOOLS).toContain("read");
     expect(ASSISTANT_TOOLS).toContain("bash");
     expect(ASSISTANT_TOOLS).not.toContain("search-content");
-    expect(progress).toHaveBeenCalledWith({ text: "", activity: "searching" });
+    expect(progress).toHaveBeenCalledWith({ text: "", activity: "searching", toolCalls: [] });
     expect(trajectoryCollector.complete).toHaveBeenCalledWith(null, "Find yesterday’s review", "Found a moment.");
     expect(mocks.stop).toHaveBeenCalled(); expect(mocks.handlers.size).toBe(0);
+  });
+  it("keeps actual tool calls across assistant messages and streams tool updates", async () => {
+    mocks.prompt.mockImplementation(async (id: string) => {
+      const emit = (event: AgentEventEnvelope["event"]) => mocks.handlers.get(id)?.({sessionId:id,source:"pi",event});
+      emit({type:"tool_execution_start",toolName:"read",toolCallId:"read-1"});
+      emit({type:"tool_execution_end",toolName:"read",toolCallId:"read-1",result:{content:[{text:"Skill loaded"}]}});
+      emit({type:"message_start",message:{role:"assistant"}});
+      emit({type:"tool_execution_start",toolName:"bash",toolCallId:"render-1"});
+      emit({type:"tool_execution_update",toolName:"bash",toolCallId:"render-1",partialResult:{content:[{text:"Rendering 1 of 3"}]}});
+      emit({type:"tool_execution_end",toolName:"bash",toolCallId:"render-1",isError:true,result:{content:[{text:"Speech unavailable"}]}});
+      emit({type:"message_update",assistantMessageEvent:{type:"text_delta",delta:"Speech unavailable."}});
+      emit({type:"agent_end"});return {status:"ok"};
+    });
+    const progress=vi.fn();await desktopAssistant.ask({question:"Create video",context:null,history:[],signal:new AbortController().signal,onProgress:progress});
+    expect(progress.mock.calls.at(-1)?.[0].toolCalls).toEqual([{id:"read-1",name:"read",status:"complete",detail:"Skill loaded"},{id:"render-1",name:"bash",status:"error",detail:"Speech unavailable"}]);
+    expect(progress.mock.calls.some(([event])=>event.toolCalls?.some((tool:any)=>tool.status==="running" && tool.detail==="Rendering 1 of 3"))).toBe(true);
   });
   it("still rejects tools outside this run's configured scope", async () => {
     mocks.prompt.mockImplementation(async (id: string) => {

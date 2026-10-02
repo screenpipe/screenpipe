@@ -2,10 +2,10 @@
 // https://screenpipe.com
 "use client";
 import { useEffect, useRef, useState } from "react";
-import type { WorkflowStage, WorkflowScreenshot } from "./model";
+import type { WorkflowEvidence, WorkflowScreenshot } from "./model";
 import type { WorkflowsPlatform } from "./platform";
 
-export function useSourceScreenshot(stage: Pick<WorkflowStage, "evidence">, attached: boolean, load: WorkflowsPlatform["loadWorkflowScreenshot"], capture?: WorkflowScreenshot) {
+export function useSourceScreenshot(stage: { evidence: Array<Pick<WorkflowEvidence, "timestamp" | "app" | "source">> }, attached: boolean, load: WorkflowsPlatform["loadWorkflowScreenshot"], capture?: WorkflowScreenshot) {
   const ref = useRef<HTMLElement>(null);
   const [visible, setVisible] = useState(false);
   const [attempt, setAttempt] = useState(0);

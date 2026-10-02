@@ -102,6 +102,8 @@ mod livetext;
 mod livetext_ffi;
 mod enterprise_persistence;
 mod meeting_export;
+mod workflow_video;
+mod workflow_video_cli;
 mod meeting_live_notes;
 mod meeting_stall_notifications;
 mod oauth;
@@ -467,6 +469,18 @@ macro_rules! define_specta_builder {
 
 #[tokio::main]
 async fn main() {
+    // Invoked by the scoped video tool, before any application side effects.
+    let arguments: Vec<String> = std::env::args().collect();
+    if arguments.get(1).is_some_and(|arg| arg == "--render-workflow-video") {
+        let result = match arguments.get(2).filter(|_| arguments.len() == 3) {
+            Some(project) => workflow_video_cli::run(std::path::Path::new(project)).await,
+            None => Err("Expected one video project directory".into()),
+        };
+        if let Err(error) = &result { println!("{}", serde_json::json!({"error":error})); }
+        std::process::exit(if result.is_ok() { 0 } else { 1 });
+    }
+
+    let relaunch_home_visible = process_exit::take_relaunch_home_visibility();
     // Handle private ACP subprocess modes before Tauri initializes. The
     // protocol host lives in core; desktop contributes only schedule projection.
     if let Some(exit_code) = screenpipe_core::agents::acp::run_hidden_mode(Arc::new(
@@ -901,6 +915,8 @@ async fn main() {
         last_spawn_epoch: Arc::new(AtomicU64::new(0)),
         wants_recording: Arc::new(AtomicBool::new(false)),
         deferred_account_start: Default::default(),
+        #[cfg(feature = "enterprise-build")]
+        authorization_recovery: Default::default(),
         interrupted_meeting: Arc::new(tokio::sync::Mutex::new(None)),
         cloud_token: Arc::new(arc_swap::ArcSwap::new(Arc::new(initial_cloud_token))),
         history_access: screenpipe_engine::history_access::HistoryAccessPolicy::unrestricted(),
@@ -932,7 +948,7 @@ async fn main() {
                     let audio_capture_enabled = store::SettingsStore::get(&app)
                         .ok()
                         .flatten()
-                        .map(|settings| !settings.recording.disable_audio)
+                        .map(|settings| permissions::microphone_required(&settings.recording))
                         .unwrap_or(true);
                     if !MIC_FOCUS_RECOVERY.should_restart_capture(
                         permission_granted,
@@ -1679,18 +1695,27 @@ async fn main() {
                 info!("launched from OS startup enrollment; starting in background");
             }
 
-            // Show onboarding/home unless managed background agent, or login
-            // autostart (tray + server only; UI via tray/dock/shortcut).
+            // Recovery and update restarts preserve Home visibility; explicit
+            // restarts show Home, and login-autostart defaults to background.
             // Incomplete onboarding still shows so required enterprise access
             // can finish; an authenticated login launch skips Home below.
+            let restart_home_visible = relaunch_home_visible
+                .or_else(|| updates::update_startup_home_visibility(&app_handle));
             if app_ui_hidden {
                 info!("enterprise: hidden UI mode active, skipping startup app windows");
             } else if headless_startup {
                 info!("headless: starting with UI dormant; use the tray to open screenpipe");
             } else if !onboarding_store.is_completed {
                 let _ = ShowRewindWindow::Onboarding.show(&app.handle());
-            } else if from_autostart {
-                info!("autostart: skipping Home window (background login launch)");
+            } else if !restart_home_visible.unwrap_or(!from_autostart) {
+                info!("background launch: skipping Home window (restart_home_visible={restart_home_visible:?}, autostart={from_autostart})");
+                if restart_home_visible == Some(false) {
+                    recording::recovery_log::append(
+                        &db_relaunch::active_data_dir(),
+                        "startup_window_restore",
+                        "outcome=home_kept_closed",
+                    );
+                }
             } else {
                 let _ = ShowRewindWindow::Home { page: None }.show(&app.handle());
             }
@@ -1791,7 +1816,7 @@ async fn main() {
                 for attempt in 0..3 {
                     let startup_perms = permissions::do_permissions_check(false);
                     screen_ok = startup_perms.screen_recording.permitted();
-                    mic_ok = startup_perms.microphone.permitted();
+                    mic_ok = !permissions::microphone_required(&store.recording) || startup_perms.microphone.permitted();
                     if screen_ok && mic_ok {
                         break;
                     }
@@ -1989,7 +2014,6 @@ async fn main() {
 
                             // Permissions check
                             let permissions_check = permissions::do_permissions_check(false);
-                            let disable_audio = store_clone.recording.disable_audio;
                             let disable_vision = store_clone.recording.disable_vision;
 
                             // Only block server start on missing screen-recording
@@ -2017,7 +2041,7 @@ async fn main() {
                             }
 
                             if wants_recording.load(std::sync::atomic::Ordering::SeqCst)
-                                && !disable_audio && !permissions_check.microphone.permitted() {
+                                && permissions::microphone_required(&store_clone.recording) && !permissions_check.microphone.permitted() {
                                 warn!("Microphone permission not granted: {:?}. Audio recording will not work.", permissions_check.microphone);
                             }
 
@@ -2298,6 +2322,7 @@ async fn main() {
 
             crate::monitor_events::start(app_handle.clone());
             crate::meeting_live_notes::start(app_handle.clone());
+            calendar::reminders::start(app_handle.clone());
             crate::meeting_stall_notifications::start(app_handle.clone());
             crate::db_recovery_notifications::start(app_handle.clone());
             crate::disk_pressure_notifications::start(app_handle.clone());
@@ -2323,7 +2348,25 @@ async fn main() {
             // 1. Collect per-shortcut failures instead of aborting on the first one
             // 2. Emit a user-visible notification listing the conflicting shortcuts
             if app_ui_hidden {
-                info!("enterprise: hidden UI mode active, skipping global app shortcuts");
+                // With windows torn down, the tray is the only pause affordance.
+                // Only when the admin ALSO suppresses the tray does the app have
+                // no way to stop capture at all — and then the start/stop hotkeys
+                // are registered and routed natively, because the usual
+                // `shortcut-*-recording` emits have no webview listener here.
+                if crate::enterprise_policy::is_tray_hidden() {
+                    info!("enterprise: hidden UI and tray suppressed, registering recording control shortcuts only");
+                    let app_handle_clone = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        crate::shortcuts::reconcile_with_enterprise_policy(
+                            &app_handle_clone,
+                            true,
+                            true,
+                        )
+                        .await;
+                    });
+                } else {
+                    info!("enterprise: hidden UI mode active, skipping global app shortcuts");
+                }
             } else if headless_startup {
                 info!("headless: skipping global shortcuts while UI is dormant");
             } else {

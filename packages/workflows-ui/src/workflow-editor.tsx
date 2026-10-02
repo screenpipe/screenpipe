@@ -14,12 +14,14 @@ import {
 import type { WorkflowMap, WorkflowStage } from "./model";
 import {
   moveBlock,
+  isUnchangedStage,
   validWorkflowEdit,
   workflowEdit,
   type WorkflowEdit,
   type StageEdit,
 } from "./workflow-edits";
 import { InlineText } from "./inline-text";
+import { TimingDisclosure } from "./timing-disclosure";
 import styles from "./workflow-editor.module.css";
 
 function Text(props: Parameters<typeof InlineText>[0] & { title?: boolean }) {
@@ -60,6 +62,7 @@ export function WorkflowEditor({ workflow, save, actions, renderSource }: {
     } catch { /* Optional tab-local recovery. */ }
     return initial;
   });
+  const unchangedStages = draft.stages.length === workflow.stages.length && draft.stages.every((stage, index) => stage.sourceIndex === index && isUnchangedStage(stage, workflow.stages[index]));
   const [history, setHistory] = useState<EditorDraft[]>([]);
   const [saving, setSaving] = useState(false);
   const [savedOnce, setSavedOnce] = useState(false);
@@ -253,12 +256,16 @@ export function WorkflowEditor({ workflow, save, actions, renderSource }: {
       )}
       <fieldset>
         <div className={styles.intro}>
+          <div className={styles.titleRow}>
           <Text
             title
             label="Workflow title"
             value={draft.title}
             onChange={(title) => change({ ...draft, title })}
           />
+          <TimingDisclosure label="Workflow timing" value={unchangedStages ? workflow.timing : null}
+            measured={unchangedStages && workflow.durationSource === "measured-meeting" ? { minutes: workflow.totalMinutes, samples: workflow.durationSampleCount ?? 0 } : undefined} />
+          </div>
           <Text
             label="Workflow description"
             value={draft.description}
@@ -336,6 +343,10 @@ export function WorkflowEditor({ workflow, save, actions, renderSource }: {
                 value={stage.name}
                 onChange={(name) => stageChange(index, { ...stage, name })}
               />
+                <div className={styles.stepActions}>
+                <TimingDisclosure label={`Timing for step ${index + 1}`} value={stage.sourceIndex !== null &&
+                  isUnchangedStage(stage, workflow.stages[stage.sourceIndex])
+                    ? workflow.stages[stage.sourceIndex]?.timing : null} />
                 <details data-step-actions className={styles.controls} onKeyDown={event => {
                   if (event.key === "Escape") {
                     event.preventDefault(); event.stopPropagation();
@@ -376,6 +387,7 @@ export function WorkflowEditor({ workflow, save, actions, renderSource }: {
                     <Trash2 size={15} />
                   </button>
                 </div></details>
+                </div>
               </div>
               <Text
                 rich
