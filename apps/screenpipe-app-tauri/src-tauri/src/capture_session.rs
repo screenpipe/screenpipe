@@ -348,8 +348,16 @@ impl CaptureSession {
     /// This is self-contained — no external references needed.
     /// Audio is stopped (not shutdown), keeping the `Arc<AudioManager>` valid
     /// for the next capture session or for HTTP API queries.
-    pub async fn stop(mut self) {
+    pub async fn stop(self) {
+        if let Err(error) = self.stop_checked().await {
+            warn!("Capture shutdown incomplete: {error}");
+        }
+    }
+
+    /// Quit-to-search must report failures before claiming capture is stopped.
+    pub async fn stop_checked(mut self) -> Result<(), String> {
         info!("Stopping capture session");
+        let mut failures = Vec::new();
 
         // Signal UI recorder to stop
         if let Some(ref ui_handle) = self.ui_recorder_handle {
@@ -363,6 +371,7 @@ impl CaptureSession {
         if !self.audio_disabled {
             if let Err(e) = self.audio_manager.stop().await {
                 warn!("Error stopping audio manager: {:?}", e);
+                failures.push(format!("audio_stop: {e}"));
             }
         }
 
@@ -374,9 +383,10 @@ impl CaptureSession {
             info!("Waiting for VisionManager shutdown...");
             match tokio::time::timeout(Duration::from_secs(10), &mut vision_task).await {
                 Ok(Ok(())) => info!("VisionManager shutdown finished cleanly"),
-                Ok(Err(e)) => warn!("VisionManager shutdown task failed: {}", e),
+                Ok(Err(e)) => failures.push(format!("vision_stop: {e}")),
                 Err(_) => {
                     warn!("VisionManager shutdown did not finish within 10s; aborting task");
+                    failures.push("vision_stop_timeout".into());
                     vision_task.abort();
                     let _ = vision_task.await;
                 }
@@ -387,23 +397,30 @@ impl CaptureSession {
             handle.store(Arc::new(None));
         }
 
-        invalidate_macos_screen_streams("capture session stop").await;
+        if let Err(error) = invalidate_macos_screen_streams("capture session stop").await {
+            failures.push(error);
+        }
 
         // Wait for UI recorder tasks to finish
         if let Some(ui_handle) = self.ui_recorder_handle.take() {
             info!("Waiting for UI recorder tasks to finish...");
             match tokio::time::timeout(Duration::from_secs(5), ui_handle.join()).await {
                 Ok(()) => info!("UI recorder tasks finished cleanly"),
-                Err(_) => warn!("UI recorder tasks did not finish within 5s"),
+                Err(_) => failures.push("ui_recorder_stop_timeout".into()),
             }
         }
 
         info!("Capture session stopped");
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join("; "))
+        }
     }
 }
 
 #[cfg(target_os = "macos")]
-async fn invalidate_macos_screen_streams(reason: &str) {
+async fn invalidate_macos_screen_streams(reason: &str) -> Result<(), String> {
     info!("Invalidating macOS ScreenCaptureKit screenshot streams ({reason})");
     let result = tokio::time::timeout(
         Duration::from_secs(5),
@@ -413,17 +430,18 @@ async fn invalidate_macos_screen_streams(reason: &str) {
     )
     .await;
 
-    match result {
-        Ok(Ok(())) => info!("macOS ScreenCaptureKit screenshot streams invalidated"),
-        Ok(Err(e)) => warn!("macOS ScreenCaptureKit invalidation task failed: {}", e),
-        Err(_) => warn!("macOS ScreenCaptureKit stream invalidation timed out after 5s"),
-    }
-
     tokio::time::sleep(Duration::from_millis(500)).await;
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(format!("screen_stream_invalidation: {e}")),
+        Err(_) => Err("screen_stream_invalidation_timeout".into()),
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
-async fn invalidate_macos_screen_streams(_reason: &str) {}
+async fn invalidate_macos_screen_streams(_reason: &str) -> Result<(), String> {
+    Ok(())
+}
 
 fn log_capture_transcription_config(config: &RecordingConfig, options: &AudioManagerOptions) {
     let deepgram_diag = match &config.deepgram_config {

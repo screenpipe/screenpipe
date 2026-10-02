@@ -84,6 +84,7 @@ struct ShortcutConfig {
     show_chat: String,
     search: String,
     lock_vault: String,
+    star_session: String,
     disabled: Vec<String>,
 }
 
@@ -121,6 +122,16 @@ impl ShortcutConfig {
             show_chat: store.show_chat_shortcut,
             search: store.search_shortcut,
             lock_vault: store.lock_vault_shortcut,
+            star_session: if store.star_session_shortcut.is_empty() {
+                if cfg!(target_os = "windows") {
+                    "Alt+Shift+B"
+                } else {
+                    "Control+Super+B"
+                }
+                .to_string()
+            } else {
+                store.star_session_shortcut
+            },
             disabled: store.disabled_shortcuts,
         })
     }
@@ -135,6 +146,7 @@ impl ShortcutConfig {
             "show_chat" => "showChatShortcut",
             "search" => "searchShortcut",
             "lock_vault" => "lockVaultShortcut",
+            "star_session" => "starSessionShortcut",
             _ => shortcut_type,
         };
         self.disabled.contains(&shortcut_type.to_string())
@@ -200,6 +212,7 @@ pub async fn update_global_shortcuts(
         show_chat: store_config.show_chat,
         search: store_config.search,
         lock_vault: store_config.lock_vault,
+        star_session: store_config.star_session,
         disabled: store_config.disabled,
     };
     apply_shortcuts(&app, &config).await
@@ -208,6 +221,77 @@ pub async fn update_global_shortcuts(
 pub async fn initialize_global_shortcuts(app: &AppHandle) -> Result<(), String> {
     let config = ShortcutConfig::from_store(app).await?;
     apply_shortcuts(app, &config).await
+}
+
+/// Register ONLY the start/stop capture shortcuts, and route them through the
+/// native recording path rather than the normal `shortcut-*-recording` webview
+/// events.
+///
+/// Enterprise policy can leave the app with no tray and no windows. In that state
+/// the regular handlers are dead: `shortcut-start-recording` / `-stop-recording`
+/// are consumed by `deeplink-handler` and the home page, and every webview is
+/// destroyed, so the emit lands on nothing and the user cannot pause capture.
+/// The native path is authoritative and needs no webview, which keeps a working
+/// pause control in a fully surface-free deployment.
+pub async fn initialize_recording_control_shortcuts(app: &AppHandle) -> Result<(), String> {
+    let config = ShortcutConfig::from_store(app).await?;
+    let global_shortcut = app.global_shortcut();
+    if let Err(e) = global_shortcut.unregister_all() {
+        error!("failed to unregister all shortcuts for recording-only setup: {}", e);
+    }
+
+    register_shortcut(
+        app,
+        &config.start,
+        config.is_disabled("start_recording"),
+        |app| {
+            track_shortcut_used(app, "start_recording");
+            crate::tray::start_recording_native(app);
+        },
+    )
+    .await?;
+
+    register_shortcut(
+        app,
+        &config.stop,
+        config.is_disabled("stop_recording"),
+        |app| {
+            track_shortcut_used(app, "stop_recording");
+            crate::tray::stop_recording_native(app);
+        },
+    )
+    .await?;
+
+    info!("registered recording control shortcuts only (hidden UI mode)");
+    Ok(())
+}
+
+/// Reconcile the global shortcut set against enterprise policy.
+///
+/// Called at startup and on every enterprise-policy transition, so a policy that
+/// arrives after launch (or is later relaxed) converges on the same state.
+///
+/// - normal mode: the full shortcut set.
+/// - hidden UI, tray visible: nothing registered. The tray carries Pause, and
+///   registering hotkeys here would change behavior for existing deployments and
+///   risk colliding with another app's shortcut.
+/// - hidden UI, tray also suppressed: start/stop capture only, routed natively.
+///   This is the one state with no visible pause affordance at all, so it must
+///   not be left without one.
+pub async fn reconcile_with_enterprise_policy(app: &AppHandle, ui_hidden: bool, tray_hidden: bool) {
+    let result = if ui_hidden && tray_hidden {
+        info!("shortcuts: hidden UI with suppressed tray, recording controls only");
+        initialize_recording_control_shortcuts(app).await
+    } else if ui_hidden {
+        info!("shortcuts: hidden UI, tray retains pause, registering none");
+        Ok(())
+    } else {
+        initialize_global_shortcuts(app).await
+    };
+
+    if let Err(e) = result {
+        error!("failed to reconcile global shortcuts: {}", e);
+    }
 }
 
 async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(), String> {
@@ -279,7 +363,10 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
             // invisible when the main window is hidden — i.e. exactly when a
             // global hotkey is used. Fire a notification panel so the user gets
             // glance-level confirmation regardless of window visibility.
-            crate::notifications::client::send(crate::localization::ui_text("recording started"), crate::localization::ui_text("screen recording has been initiated"));
+            crate::notifications::client::send(
+                crate::localization::ui_text("recording started"),
+                crate::localization::ui_text("screen recording has been initiated"),
+            );
         },
     )
     .await?;
@@ -291,7 +378,10 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         |app| {
             track_shortcut_used(app, "stop_recording");
             let _ = app.emit("shortcut-stop-recording", ());
-            crate::notifications::client::send(crate::localization::ui_text("recording paused"), crate::localization::ui_text("capture paused — pipes and search still available"));
+            crate::notifications::client::send(
+                crate::localization::ui_text("recording paused"),
+                crate::localization::ui_text("capture paused — pipes and search still available"),
+            );
         },
     )
     .await?;
@@ -382,6 +472,26 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
             emit_search_shortcut_outcome_after_settle(app);
         });
     })
+    .await?;
+
+    register_shortcut(
+        app,
+        &config.star_session,
+        config.is_disabled("star_session"),
+        |app| {
+            track_shortcut_used(app, "star_session");
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Err(e) = (ShowRewindWindow::Home {
+                    page: Some("timeline&starred=1".into()),
+                })
+                .show(&handle)
+                {
+                    error!("failed to open starred sessions: {e}");
+                }
+            });
+        },
+    )
     .await?;
 
     Ok(())

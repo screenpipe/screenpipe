@@ -130,6 +130,29 @@ describe("workflow agent workspace adapter",()=>{
     executions["workflow-discover"]={id:20,status:"failed",started_at:"2026-09-18T12:00:00Z"};
     expect(await getWorkflowJob("legacy:20")).toMatchObject({status:"incomplete"});
   });
+  it("idle readiness checks cannot keep an abandoned cycle preparing forever", async () => {
+    executions["workflow-deepen"] = { id: 40, status: "completed", started_at: new Date().toISOString(), finished_at: new Date().toISOString() };
+    expect(await getWorkflowJob("idle:40")).toMatchObject({ status: "incomplete" });
+  });
+  it("gives a recent durable handoff time to wake the next agent", async () => {
+    ws.cycle.id = "current";
+    ws.receipts = { "workflow-discover": { cycle: "current", savedAt: new Date().toISOString() } };
+    expect(await getWorkflowJob("saved:41")).toMatchObject({ status: "queued" });
+    ws.receipts["workflow-discover"].cycle = "previous";
+    expect(await getWorkflowJob("saved:41")).toMatchObject({ status: "incomplete" });
+  });
+  it.each([
+    ["context_compaction", "Auto-compaction failed: 502", "could not prepare its next step"],
+    ["timeout", "execution timed out after 900s", "ran out of time"],
+    ["agent_error", "Request timed out.", "ran out of time"],
+    ["agent_error", "413 Your conversation is too long for the model's context window", "AI context limit"],
+  ])("explains %s without exposing the raw provider error", async (error_type, error_message, message) => {
+    executions["workflow-discover"] = { id: 42, status: "failed", started_at: end, error_type, error_message };
+    const result = await getWorkflowJob("failed:42");
+    expect(result).toMatchObject({ status: "failed", message: expect.stringContaining(message) });
+    expect(result.message).toContain("Try again to continue");
+    expect(result.message).not.toContain(error_message);
+  });
   it("saves only human corrections, never a stale full catalog",async()=>{
     catalog={analyzedAt:end,analysis:{workflows:[{id:"wf-a",title:"Changed elsewhere",userCorrection:"Old"}]}};
     await saveWorkflowCorrections({...catalog,analysis:{workflows:[{id:"wf-a",title:"Stale",userCorrection:"New"}]}});

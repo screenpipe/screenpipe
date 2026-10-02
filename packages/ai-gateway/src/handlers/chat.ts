@@ -22,7 +22,6 @@ import {
 } from '../services/cloudflare-ai-gateway';
 import { classifyCloudflareSpendLimitRule } from '../services/cloudflare-ai-gateway-usage';
 import {
-  BACKGROUND_FALLBACK_MODEL,
   SafetyRefusalError,
   isProviderQuotaOrBillingLimitError,
   isSafetyRefusalError,
@@ -36,14 +35,14 @@ import { getHostedAiCapacityUpgrade } from '../services/hosted-ai-policy';
 // Exported so tests can pin that every chain entry has a MODEL_PRICING match
 // (otherwise served-model cost rows fall into the unknown-model estimate).
 export const AUTO_WATERFALL = [
-  'gpt-5.6-luna',
+  'gpt-6-luna',
   'claude-sonnet-5',
   'gpt-5.4-mini',
 ];
 
 // Vision-capable models for requests containing images
 export const AUTO_WATERFALL_VISION = [
-  'gpt-5.6-luna',
+  'gpt-6-luna',
   'claude-sonnet-5',
   'gpt-5.4-mini',
 ];
@@ -51,7 +50,7 @@ export const AUTO_WATERFALL_VISION = [
 // Background waterfall — for pipes, summaries, and suggestions. All entries
 // support tools; the second entry crosses providers for outage resilience.
 export const AUTO_WATERFALL_BACKGROUND = [
-  'gpt-5.6-luna',
+  'gpt-6-luna',
   'claude-sonnet-5',
   'gpt-5.4-mini',
 ];
@@ -61,12 +60,13 @@ export const AUTO_WATERFALL_BACKGROUND = [
 // the difficulty router's premium tier heads. Keep this list and its attempt cap
 // in sync with the conservative reservation in free-chat-limit.ts.
 export const FREE_PREVIEW_WATERFALL = [
-  'gpt-5.6-luna',
+  'gpt-6-luna',
   'gpt-5.4-mini',
 ];
 export const FREE_PREVIEW_MAX_UPSTREAM_ATTEMPTS = 2;
 
 const NON_FRONTIER_FALLBACK_MODELS = new Set([
+  'gpt-6-luna',
   'gpt-5.6-luna',
   'gpt-5.4-mini',
   'gpt-5.4-nano',
@@ -92,6 +92,7 @@ function isGeminiModel(model: string): boolean {
 export const MODEL_FALLBACKS: Record<string, string[]> = {
   'claude-fable-5': ['claude-opus-5', 'claude-sonnet-5', 'gpt-5.4-mini'],
   'claude-opus-5': ['claude-sonnet-5', 'gpt-5.4-mini'],
+  'gpt-6-luna': ['claude-sonnet-5', 'gpt-5.4-mini'],
   'gpt-5.6-luna': ['claude-sonnet-5', 'gpt-5.4-mini'],
   'claude-sonnet-5': ['gpt-5.4-mini'],
   'gpt-5.4-mini': ['claude-sonnet-5'],
@@ -326,7 +327,8 @@ async function tryModel(
         lane: error.allowance.lane,
         limitScope: error.allowance.limit_scope,
       });
-      logModelOutcome(env, { model, outcome: 'rate_limited' }).catch(() => {});
+      // Account policy rejected the request before the provider ran. This is
+      // observable above, but is not a provider-health failure.
       throw error;
     }
 
@@ -533,7 +535,7 @@ export async function tryBackgroundFallback(
     // No gateway context: call the provider directly so the exhausted
     // Cloudflare spend limit cannot reject the rescue attempt too.
     const response = await attemptModel(
-      BACKGROUND_FALLBACK_MODEL,
+      fallbackBody.model,
       fallbackBody,
       env,
       'fallback',
@@ -542,11 +544,14 @@ export async function tryBackgroundFallback(
     );
     console.warn('background hosted AI request served by rescue model', {
       requestedModel: body.model,
-      fallbackModel: BACKGROUND_FALLBACK_MODEL,
+      fallbackModel: fallbackBody.model,
       reason: isSafetyRefusalError(error) ? 'safety_refusal' : 'allowance_or_quota',
     });
-    const tagged = addModelHeader(response, BACKGROUND_FALLBACK_MODEL);
-    tagged.headers.set('x-screenpipe-background-fallback', BACKGROUND_FALLBACK_MODEL);
+    const tagged = addModelHeader(response, fallbackBody.model);
+    tagged.headers.set('x-screenpipe-background-fallback', fallbackBody.model);
+    tagged.headers.set('x-screenpipe-background-fallback-reason',
+      isHostedChatAllowanceError(error) ? 'account_allowance'
+        : isSafetyRefusalError(error) ? 'safety_refusal' : 'allowance_or_quota');
     return addCorsHeaders(tagged);
   } catch (fallbackError: any) {
     console.error('background rescue fallback failed; preserving original response', {
@@ -810,7 +815,7 @@ function allowanceMessage(canUpgrade: boolean): string {
 
 /** Render the stable terminal contract Pi uses to avoid generic 429 retries. */
 export function allowanceErrorResponse(body: RequestBody, error: HostedChatAllowanceExceededError): Response {
-  const upgrade = error.allowance.plan === 'internal'
+  const upgrade = error.allowance.plan === 'internal' || error.allowance.plan === 'super_admin'
     ? null
     : getHostedAiCapacityUpgrade(error.allowance.plan);
   const payload = {
@@ -897,7 +902,7 @@ export async function handleChatCompletions(
     isFrontierModel(body.model)
   ) {
     if (String((env as any)?.PIPE_FRONTIER_POLICY ?? 'downgrade').toLowerCase() === 'reject') {
-      return errorResponse(body, 403, `"${body.model}" (a frontier model) isn't available for scheduled pipes / background tasks. Use "auto", GPT-5.6 Luna, or GPT-5.4 mini.`);
+      return errorResponse(body, 403, `"${body.model}" (a frontier model) isn't available for scheduled pipes / background tasks. Use "auto", GPT-6 Luna, or GPT-5.4 mini.`);
     }
     const fallback = String((env as any)?.PIPE_FRONTIER_FALLBACK ?? 'auto');
     body = { ...body, model: fallback };

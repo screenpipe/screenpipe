@@ -147,10 +147,17 @@ impl ResourceGovernor {
     /// baseline. Essential capture paths should not use this lane; it is for
     /// deferrable work such as redaction, indexing, and maintenance.
     pub async fn acquire_background_cpu(self: &Arc<Self>) -> CpuBudgetPermit {
-        let lane = Arc::clone(&self.cpu.lane)
-            .acquire_owned()
-            .await
-            .expect("background CPU lane is never closed");
+        let lane = loop {
+            crate::background_work::wait_until_resumed().await;
+            let lane = Arc::clone(&self.cpu.lane)
+                .acquire_owned()
+                .await
+                .expect("background CPU lane is never closed");
+            if !crate::background_work::is_suspended() {
+                break lane;
+            }
+            drop(lane);
+        };
         let idle_cpu_percent = self.cpu.sample();
         CpuBudgetPermit {
             governor: Arc::clone(self),

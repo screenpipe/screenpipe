@@ -4,6 +4,60 @@
 
 use super::*;
 
+// Timeline reads must tolerate malformed historical offsets without losing
+// the transcript or aborting the entire frame request. Never rewrite the source
+// row: fall back to its known chunk timestamp when its segment bounds are invalid.
+fn timeline_audio_range(
+    timestamp: DateTime<Utc>,
+    start: Option<f64>,
+    end: Option<f64>,
+    duration: f64,
+    is_live: bool,
+) -> (DateTime<Utc>, DateTime<Utc>, bool) {
+    let add_seconds = |seconds: f64| {
+        if !seconds.is_finite() || !(seconds * 1000.0).is_finite() {
+            return None;
+        }
+        let delta = chrono::Duration::try_milliseconds((seconds * 1000.0) as i64)?;
+        timestamp.checked_add_signed(delta)
+    };
+    let valid_offsets = start.is_none_or(f64::is_finite)
+        && end.is_none_or(f64::is_finite)
+        && !matches!((start, end), (Some(a), Some(b)) if b < a);
+    if valid_offsets {
+        let from = if is_live {
+            Some(timestamp)
+        } else {
+            add_seconds(start.unwrap_or(0.0))
+        };
+        let to = if let Some(end) = end {
+            add_seconds(if is_live {
+                end - start.unwrap_or(0.0)
+            } else {
+                end
+            })
+        } else {
+            // A known start remains useful when the end is absent or chunk
+            // duration predates it. Treat that segment as a point, not an
+            // invalid offset pair, so we retain its precise capture timestamp.
+            add_seconds(duration).map(|to| from.map_or(to, |from| to.max(from)))
+        };
+        if let (Some(from), Some(to)) = (from, to) {
+            if to >= from {
+                return (from, to, true);
+            }
+        }
+    }
+    let to = if duration >= 0.0 {
+        add_seconds(duration)
+    } else {
+        None
+    }
+    .or_else(|| add_seconds(5.0))
+    .unwrap_or(timestamp);
+    (timestamp, to, false)
+}
+
 impl DatabaseManager {
     pub async fn insert_video_chunk(
         &self,
@@ -1327,37 +1381,42 @@ impl DatabaseManager {
             // share the same aliased columns, so a single loop attaches both to frames.
             for row in audio_rows.into_iter().chain(live_rows) {
                 let audio_timestamp: DateTime<Utc> = row.get("timestamp");
-                let start_offset: Option<f64> = row.try_get("start_time").ok();
-                let end_offset: Option<f64> = row.try_get("end_time").ok();
+                let start_offset = row.try_get::<Option<f64>, _>("start_time").unwrap_or(None);
+                let end_offset = row.try_get::<Option<f64>, _>("end_time").unwrap_or(None);
 
-                // Calculate audio time range
-                // start_time and end_time are offsets in seconds from the audio timestamp
                 let is_live = row.try_get::<bool, _>("is_live").unwrap_or(false);
-                let audio_start = if is_live {
-                    audio_timestamp
-                } else if let Some(start) = start_offset {
-                    audio_timestamp + chrono::Duration::milliseconds((start * 1000.0) as i64)
-                } else {
-                    audio_timestamp
-                };
-
-                let audio_end = if let Some(end) = end_offset {
-                    let remaining = if is_live {
-                        end - start_offset.unwrap_or(0.0)
-                    } else {
-                        end
-                    };
-                    audio_timestamp
-                        + chrono::Duration::milliseconds((remaining.max(0.0) * 1000.0) as i64)
-                } else {
-                    // If no end_time, use duration_secs to calculate end
-                    let duration: f64 = row.try_get("duration_secs").unwrap_or(5.0);
-                    audio_timestamp + chrono::Duration::milliseconds((duration * 1000.0) as i64)
-                };
-
-                // Pad the search range so nearby frames also get the audio indicator
-                let search_start = audio_start - chrono::Duration::seconds(AUDIO_FRAME_PAD_SECS);
-                let search_end = audio_end + chrono::Duration::seconds(AUDIO_FRAME_PAD_SECS);
+                let duration_secs = row
+                    .try_get::<Option<f64>, _>("duration_secs")
+                    .ok()
+                    .flatten()
+                    .filter(|duration| {
+                        duration.is_finite()
+                            && *duration >= 0.0
+                            && chrono::Duration::try_milliseconds((*duration * 1000.0) as i64)
+                                .and_then(|delta| audio_timestamp.checked_add_signed(delta))
+                                .is_some()
+                    })
+                    .unwrap_or(5.0);
+                let (audio_start, audio_end, valid_offsets) = timeline_audio_range(
+                    audio_timestamp,
+                    start_offset,
+                    end_offset,
+                    duration_secs,
+                    is_live,
+                );
+                if !valid_offsets {
+                    warn!(
+                        audio_chunk_id = row.get::<i64, _>("audio_chunk_id"),
+                        "invalid timeline audio offsets; preserving transcript at chunk timestamp"
+                    );
+                }
+                // Checked padding also handles records near DateTime's limits.
+                let search_start = audio_start
+                    .checked_sub_signed(chrono::Duration::seconds(AUDIO_FRAME_PAD_SECS))
+                    .unwrap_or(DateTime::<Utc>::MIN_UTC);
+                let search_end = audio_end
+                    .checked_add_signed(chrono::Duration::seconds(AUDIO_FRAME_PAD_SECS))
+                    .unwrap_or(DateTime::<Utc>::MAX_UTC);
 
                 // Create the audio entry once
                 let audio_entry = AudioEntry {
@@ -1366,12 +1425,12 @@ impl DatabaseManager {
                     device_name: row.get("audio_device"),
                     is_input: row.get("is_input_device"),
                     audio_file_path: row.get("audio_path"),
-                    duration_secs: row.get("duration_secs"),
+                    duration_secs,
                     audio_chunk_id: row.get("audio_chunk_id"),
                     speaker_id: row.try_get("speaker_id").ok(),
                     speaker_name: row.try_get("speaker_name").ok(),
-                    start_time: start_offset,
-                    end_time: end_offset,
+                    start_time: if valid_offsets { start_offset } else { None },
+                    end_time: if valid_offsets { end_offset } else { None },
                 };
 
                 // Find ALL frames within the padded audio time range

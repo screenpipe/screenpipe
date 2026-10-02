@@ -58,3 +58,27 @@ test('provider failure preserves its cost hold without exposing private errors',
 		await harness.dispose();
 	}
 }, 30000);
+
+test('SOP speech uses the enterprise OpenAI profile through Cloudflare and the cost ledger', async () => {
+  const harness = await LocalGatewayHarness.start({ ttsStatus: 200 });
+  try {
+    const response = await harness.fetch('/tts', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({text:'Hello',profile:'sop'}) });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-screenpipe-narration-profile")).toBe("sop-openai-marin-v1");
+    const outbound = harness.outboundRequests.find(r => r.url.endsWith('/audio/speech'))!;
+    expect(outbound).toBeDefined();
+    expect(outbound.headers.authorization).toBeUndefined();
+    expect(outbound.headers['cf-aig-byok-alias']).toBe('default');
+    expect(outbound.headers['cf-aig-collect-log-payload']).toBe('false');
+    expect(outbound.body).toEqual({ input:'Hello', model:'gpt-4o-mini-tts', voice:'marin', response_format:'mp3', instructions:'Read the supplied text exactly. Speak clearly and naturally, like a colleague explaining a task. Use an even conversational pace, with brief pauses between instructions.' });
+    expect((await harness.readCostState()).dailyCostUsd).toBeCloseTo(0.0005,6);
+    expect((await harness.readCostState()).activeReservations).toBe(0);
+    harness.assertNoUnexpectedOutboundRequests();
+  } finally { await harness.dispose(); }
+},30000);
+test('an unconfigured SOP voice fails closed instead of switching voices', async () => {
+  const env = {TTS_ENABLED:'true',ELEVENLABS_VOICE_ID:'fictionalVoice123',ELEVENLABS_USD_PER_CHARACTER:'0.0001'} as Env;
+  const req = (profile:string) => new Request('https://example.com/v1/tts',{method:'POST',body:JSON.stringify({text:'Hello',profile})});
+  expect((await handleTts(req('sop'),env,auth)).status).toBe(503);
+  expect((await handleTts(req('unknown'),env,auth)).status).toBe(400);
+});

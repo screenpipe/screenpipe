@@ -1,0 +1,64 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import React from 'react';
+import {afterEach, beforeEach, expect, test, vi} from 'vitest';
+import {act, cleanup, fireEvent, render} from '@testing-library/react';
+const ports=vi.hoisted(()=>({user:null as any,refresh:vi.fn(),save:vi.fn(),native:vi.fn()}));
+vi.mock('@/lib/hooks/use-settings',()=>({useSettings:()=>{
+ const refresh=ports.refresh;
+ return {settings:{user:ports.user},loadUser:(token:string)=>refresh(token),updateSettings:(v:unknown)=>ports.save(v)};
+}}));
+vi.mock('@/lib/utils/tauri',()=>({commands:{setCloudToken:(v:unknown)=>ports.native(v)}}));
+vi.mock('posthog-js',()=>({default:{capture:vi.fn()}}));
+vi.mock('@/components/ui/use-toast',()=>({toast:vi.fn()}));
+vi.mock('@/components/ui/toast',()=>({ToastAction:()=>null}));
+vi.mock('gt-react',()=>({T:({children}:any)=>children,useGT:()=>((s:string)=>s)}));
+vi.mock('@/lib/web-url',()=>({PROD_WEB_BASE:'https://screenpipe.com',screenpipeWebBase:()=> 'https://screenpipe.com',screenpipeWebUrl:()=> 'https://screenpipe.com/login'}));
+import {AuthGuard} from '@/lib/auth-guard';
+const tree=()=> <AuthGuard><span>Account content</span></AuthGuard>;
+const advance=async(ms:number)=>{await act(async()=>{await vi.advanceTimersByTimeAsync(ms);});};
+const focus=async()=>{await act(async()=>{fireEvent(window,new Event('focus'));});};
+const visibility=(value:string)=>Object.defineProperty(document,'visibilityState',{configurable:true,value});
+const originalVisibility=Object.getOwnPropertyDescriptor(document,'visibilityState');
+beforeEach(()=>{vi.useFakeTimers();vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));ports.user={token:'synthetic-session-a'};ports.refresh=vi.fn().mockResolvedValue(undefined);ports.save.mockReset().mockResolvedValue(undefined);ports.native.mockReset().mockResolvedValue(undefined);visibility('visible');});
+afterEach(()=>{cleanup();vi.useRealTimers();if(originalVisibility)Object.defineProperty(document,'visibilityState',originalVisibility);else delete (document as any).visibilityState;});
+test('successful account refresh keeps the original startup and periodic schedule',async()=>{
+ const view=render(tree());ports.refresh.mockImplementation(async()=>{ports.user={...ports.user};view.rerender(tree());});
+ await advance(4999);expect(ports.refresh).toHaveBeenCalledTimes(0);
+ await advance(1);expect(ports.refresh).toHaveBeenCalledTimes(1);
+ await advance(595000);expect(ports.refresh).toHaveBeenCalledTimes(2);
+ await advance(5000);expect(ports.refresh).toHaveBeenCalledTimes(2);
+ expect(ports.refresh.mock.calls.every(([token])=>token==='synthetic-session-a')).toBe(true);
+});
+test('an unrelated render cannot postpone the startup deadline',async()=>{
+ const view=render(tree());await advance(4000);view.rerender(tree());await advance(1000);expect(ports.refresh).toHaveBeenCalledTimes(1);
+});
+test('scheduled verification uses the latest account refresh callback',async()=>{
+ const previous=ports.refresh;const view=render(tree());await advance(4000);ports.refresh=vi.fn().mockResolvedValue(undefined);view.rerender(tree());await advance(1000);
+ expect(previous).not.toHaveBeenCalled();expect(ports.refresh).toHaveBeenCalledWith('synthetic-session-a');
+});
+test('account switch starts its own schedule without stale scheduled requests',async()=>{
+ const view=render(tree());await advance(4000);ports.user={token:'synthetic-session-b'};view.rerender(tree());await advance(1000);expect(ports.refresh).not.toHaveBeenCalled();
+ await advance(4000);expect(ports.refresh).toHaveBeenCalledTimes(1);expect(ports.refresh).toHaveBeenLastCalledWith('synthetic-session-b');
+});
+test('sign-out stops verification without hiding children',async()=>{
+ const view=render(tree());await advance(5000);ports.user=null;view.rerender(tree());await advance(600000);await focus();expect(ports.refresh).toHaveBeenCalledTimes(1);expect(view.getByText('Account content')).toBeTruthy();
+});
+test('visible focus respects the 30 second cooldown boundary',async()=>{
+ render(tree());await advance(5000);await focus();expect(ports.refresh).toHaveBeenCalledTimes(1);await advance(29999);await focus();expect(ports.refresh).toHaveBeenCalledTimes(1);await advance(1);await focus();expect(ports.refresh).toHaveBeenCalledTimes(2);
+});
+test('hidden visibility changes preserve the session without refreshing',async()=>{
+ render(tree());visibility('hidden');await act(async()=>{fireEvent(document,new Event('visibilitychange'));});expect(ports.refresh).not.toHaveBeenCalled();expect(ports.save).not.toHaveBeenCalled();visibility('visible');await act(async()=>{fireEvent(document,new Event('visibilitychange'));});expect(ports.refresh).toHaveBeenCalledTimes(1);
+});
+test('unmount removes timers and focus listeners',async()=>{
+ const view=render(tree());view.unmount();await advance(600000);await focus();expect(ports.refresh).not.toHaveBeenCalled();
+});
+test('current-session 401 clears the full account and native cloud token',async()=>{
+ ports.refresh.mockRejectedValue(new Error('failed to verify token: 401 Unauthorized'));render(tree());await focus();expect(ports.save).toHaveBeenCalledWith({user:null});expect(ports.native).toHaveBeenCalledWith(null);
+});
+for(const reason of ['failed to verify token: 403 Forbidden','network unavailable'])test('preserves account on '+reason,async()=>{
+ ports.refresh.mockRejectedValue(new Error(reason));render(tree());await focus();expect(ports.refresh).toHaveBeenCalledTimes(1);expect(ports.save).not.toHaveBeenCalled();expect(ports.native).not.toHaveBeenCalled();
+});
+test('old-account delayed 401 cannot clear the newly selected account',async()=>{
+ let reject!: (error:Error)=>void;ports.refresh.mockImplementationOnce(()=>new Promise((_resolve,rejectRequest)=>{reject=rejectRequest;}));const view=render(tree());await focus();ports.user={token:'synthetic-session-b'};view.rerender(tree());await act(async()=>{reject(new Error('failed to verify token: 401 Unauthorized'));});expect(ports.save).not.toHaveBeenCalled();expect(ports.native).not.toHaveBeenCalled();
+});

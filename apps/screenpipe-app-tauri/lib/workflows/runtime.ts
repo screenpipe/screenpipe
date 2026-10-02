@@ -1,6 +1,8 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
+import { saveSkillDraftToDisk } from "./disk-storage";
+import { guideKey } from "@screenpipe/workflows-ui";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
@@ -131,6 +133,7 @@ export const generateWorkflowSkill = async (
       message: "Ready for your review",
       preview: draft.instructions.slice(0, 2_400),
     });
+    await saveSkillDraftToDisk(guideKey(workflow), draft);
     return draft;
   } finally {
     unlisten?.();

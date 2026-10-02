@@ -87,6 +87,8 @@ const ENTERPRISE_DEFAULT_HIDDEN = ["referral"];
 
 // Re-fetch policy every 5 minutes so admin changes propagate without app restart
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
+// The HTTP deadline does not cover local settings or policy application.
+// Bound those waits too so they cannot strand authentication in "checking".
 const LOCAL_POLICY_COMMAND_TIMEOUT_MS = 8_000;
 // Native authorization verifies both policy and seat-bearing enrollment. Each
 // control-plane request has a 9s native timeout, so leave enough room for the
@@ -262,9 +264,36 @@ function toLocalAiPreset(
   };
 }
 
+function readPolicySettings() {
+  return withTimeout(
+    "enterprise read policy settings",
+    (async () => {
+      const store = await getStore();
+      const settings = (await store.get<Record<string, unknown>>("settings")) || {};
+      return { store, settings };
+    })(),
+    LOCAL_POLICY_COMMAND_TIMEOUT_MS,
+  );
+}
+
+async function savePolicySettings(
+  store: Awaited<ReturnType<typeof getStore>>,
+  settings: Record<string, unknown>,
+) {
+  await withTimeout(
+    "enterprise write policy settings",
+    store.set("settings", settings),
+    LOCAL_POLICY_COMMAND_TIMEOUT_MS,
+  );
+  await withTimeout(
+    "enterprise save policy settings",
+    store.save(),
+    LOCAL_POLICY_COMMAND_TIMEOUT_MS,
+  );
+}
+
 async function applyAiPresetPolicy(policy: EnterpriseAiPresetPolicy): Promise<void> {
-  const store = await getStore();
-  const settings = (await store.get<Record<string, unknown>>("settings")) || {};
+  const { store, settings } = await readPolicySettings();
   const currentPresets = ((settings.aiPresets as any[]) || []).filter(
     (preset) => !isEnterpriseManagedPreset(preset)
   );
@@ -309,18 +338,22 @@ async function applyAiPresetPolicy(policy: EnterpriseAiPresetPolicy): Promise<vo
     }));
   }
 
-  await store.set("settings", {
+  await savePolicySettings(store, {
     ...settings,
     aiPresets: nextPresets,
     enterpriseSuppressedAiPresets: nextSuppressedPresets,
   });
-  await store.save();
 }
 
 async function getEnterpriseInstallMetadata(): Promise<EnterpriseInstallMetadata> {
   try {
-    return await commands.getEnterpriseInstallMetadata();
-  } catch {
+    return await withTimeout(
+      "enterprise getEnterpriseInstallMetadata",
+      commands.getEnterpriseInstallMetadata(),
+      LOCAL_POLICY_COMMAND_TIMEOUT_MS,
+    );
+  } catch (error) {
+    console.warn("[enterprise] install metadata unavailable; continuing credential verification:", error);
     return {
       install_source: "unknown",
       update_manager: "unknown",
@@ -331,10 +364,9 @@ async function getEnterpriseInstallMetadata(): Promise<EnterpriseInstallMetadata
 }
 
 async function applyAppUpdatePolicy(policy: EnterpriseAppUpdatePolicy): Promise<EnterpriseInstallMetadata> {
-  const store = await getStore();
-  const settings = (await store.get<Record<string, unknown>>("settings")) || {};
+  const { store, settings } = await readPolicySettings();
   const metadata = await getEnterpriseInstallMetadata();
-  await store.set("settings", {
+  await savePolicySettings(store, {
     ...settings,
     enterpriseAppUpdatePolicy: policy,
     enterpriseInstallMetadata: metadata,
@@ -342,7 +374,6 @@ async function applyAppUpdatePolicy(policy: EnterpriseAppUpdatePolicy): Promise<
       ? settings.autoUpdate ?? policy.default_auto_update
       : policy.default_auto_update,
   });
-  await store.save();
   return metadata;
 }
 
@@ -656,8 +687,7 @@ export function useEnterprisePolicyRuntime() {
         credential.type === "account" ? credential.value : null;
       let deploymentLicenseKey: string | null = null;
       try {
-        const store = await getStore();
-        const settings = (await store.get<Record<string, unknown>>("settings")) || {};
+        const { settings } = await readPolicySettings();
         deviceId = (settings.deviceId as string) || "unknown";
         const user = settings.user as Record<string, unknown> | undefined;
         const token = user?.token;
@@ -668,7 +698,12 @@ export function useEnterprisePolicyRuntime() {
         ) {
           cloudToken = token;
         }
-      } catch {}
+      } catch (error) {
+        console.warn(
+          "[enterprise] policy settings unavailable; continuing credential verification:",
+          error,
+        );
+      }
 
       // Fallback: read directly from ~/.screenpipe/auth.json when the
       // in-memory store hasn't been hydrated yet (dev launches before
@@ -803,7 +838,7 @@ export function useEnterprisePolicyRuntime() {
             `[enterprise] applied AI preset policy: cloud=${result.aiPresetPolicy.allow_screenpipe_cloud}, employee=${result.aiPresetPolicy.allow_employee_custom_presets}, managed=${result.aiPresetPolicy.managed_presets.length}`
           );
         } catch (e) {
-          console.warn("[enterprise] failed to apply AI preset policy:", e);
+          console.warn("[enterprise] failed to apply AI preset policy; continuing credential verification:", e);
         }
       }
 
@@ -813,7 +848,7 @@ export function useEnterprisePolicyRuntime() {
           `[enterprise] applied app update policy: mode=${result.appUpdatePolicy.mode}, manager=${metadata.update_manager}, managed=${metadata.managed}`
         );
       } catch (e) {
-        console.warn("[enterprise] failed to apply app update policy:", e);
+        console.warn("[enterprise] failed to apply app update policy; continuing credential verification:", e);
       }
 
       // Recording settings are applied by the native policy watcher and

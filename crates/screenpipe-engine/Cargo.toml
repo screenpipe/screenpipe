@@ -146,6 +146,7 @@ dhat = { version = "0.3", optional = true }
 tikv-jemallocator = { version = "0.6", optional = true }
 
 [dev-dependencies]
+rusqlite = { workspace = true, features = ["functions"] }
 tokio = { workspace = true, features = ["test-util"] }
 chrono-tz = "0.10"
 env_logger = { workspace = true }

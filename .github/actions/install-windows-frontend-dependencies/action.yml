@@ -25,22 +25,26 @@ runs:
             Remove-Item -LiteralPath $destination -Recurse -Force
           }
         }
-        # Bun's frozen install can retain packages removed from the lockfile.
-        # Tauri scans installed plugins, so an orphan can fail its version gate.
-        # Rebuild the installed tree; the persistent Bun download cache remains.
-        $modules = Join-Path (Get-Location) 'node_modules'
-        if (Test-Path -LiteralPath $modules) {
-          Remove-Item -LiteralPath $modules -Recurse -Force
-        }
         $staged = Join-Path (Get-Location) '.release-workflows-ui'
+        if (Test-Path -LiteralPath $staged) {
+          Remove-Item -LiteralPath $staged -Recurse -Force
+        }
         New-Item -ItemType Directory -Force -Path $staged | Out-Null
         Copy-Item -LiteralPath "$source/package.json" -Destination $staged -Force
         Copy-Item -LiteralPath "$source/src" -Destination $staged -Recurse -Force
         foreach ($file in @('package.json', 'bun.lock')) {
           $path = Join-Path (Get-Location) $file
           $text = [IO.File]::ReadAllText($path)
-          if (-not $text.Contains('file:../../packages/workflows-ui')) { throw "local dependency missing from $file" }
+          if (-not ($text.Contains('file:../../packages/workflows-ui') -or $text.Contains('file:./.release-workflows-ui'))) {
+            throw "local dependency missing from $file"
+          }
           [IO.File]::WriteAllText($path, $text.Replace('file:../../packages/workflows-ui', 'file:./.release-workflows-ui'))
         }
+        # Bun retains removed packages, which Tauri can mistake for live plugins.
+        # Prune only those packages; keep the rest of the installed tree warm.
+        bun "${{ github.action_path }}/prune-dependencies.ts"
+        if ($LASTEXITCODE -ne 0) { throw 'frontend dependency pruning failed' }
+        $installTimer = [Diagnostics.Stopwatch]::StartNew()
         bun install --frozen-lockfile --backend=copyfile
         if ($LASTEXITCODE -ne 0) { throw 'frontend dependency installation failed' }
+        Write-Host ("Frontend install completed in {0:N3}s" -f $installTimer.Elapsed.TotalSeconds)

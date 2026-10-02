@@ -1,0 +1,6 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import {defineConfig} from 'vitest/config';
+import {fileURLToPath} from 'node:url';
+const root=fileURLToPath(new URL('../',import.meta.url));
+export default defineConfig({root,resolve:{alias:{'@':root,'gt-react':fileURLToPath(new URL('./recording-resume-translation.ts',import.meta.url))}},test:{environment:'jsdom',include:['.eval-hidden/recording-resume.test.tsx'],maxWorkers:1,minWorkers:1}});

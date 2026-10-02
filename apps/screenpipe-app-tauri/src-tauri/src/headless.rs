@@ -39,6 +39,9 @@ fn preserve_window_during_dormancy(label: &str, onboarding_completed: bool) -> b
 /// restore shortcuts when the enterprise policy was the reason UI was dormant.
 /// Returns true when the app transitioned back to an interactive UI state.
 pub fn set_enterprise_hidden(app: &AppHandle, hidden: bool) -> bool {
+    if crate::search_only::is_active() {
+        return false;
+    }
     if hidden {
         initialize(true, true);
         return false;
@@ -94,6 +97,9 @@ pub fn should_suppress_pipe_runs(dormant: bool, record_only: bool) -> bool {
 }
 
 pub fn scheduled_pipe_skip_reason() -> Option<String> {
+    if crate::search_only::is_active() {
+        return Some("Screenpipe is serving saved history after Quit".into());
+    }
     should_suppress_pipe_runs(
         UI_DORMANT.load(Ordering::SeqCst),
         RECORD_ONLY.load(Ordering::SeqCst),
@@ -105,7 +111,37 @@ pub fn scheduled_pipe_skip_reason() -> Option<String> {
 /// window synchronously from its own CloseRequested callback can re-enter tao's
 /// event dispatcher on Windows and can invalidate an NSPanel callback on macOS.
 pub fn request_enter(app: AppHandle) {
-    let record_only = crate::enterprise_policy::is_app_ui_hidden()
+    mark_dormant(&app);
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = enter(app).await {
+            warn!("headless: webview teardown failed: {error}");
+        }
+    });
+}
+
+/// Await teardown before allowing a search-only session to reopen its windows.
+pub async fn enter(app: AppHandle) -> Result<(), String> {
+    mark_dormant(&app);
+
+    let _ = crate::commands::hide_shortcut_reminder(app.clone()).await;
+    tokio::task::yield_now().await;
+    let app_for_main = app.clone();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let result = match app.run_on_main_thread(move || {
+        let _ = tx.send(enter_on_main_thread(&app_for_main));
+    }) {
+        Ok(()) => rx.await.map_err(|e| e.to_string()).and_then(|r| r),
+        Err(error) => Err(error.to_string()),
+    };
+    if result.is_err() {
+        UI_DORMANT.store(false, Ordering::SeqCst);
+    }
+    result
+}
+
+fn mark_dormant(app: &AppHandle) {
+    let record_only = crate::search_only::is_active()
+        || crate::enterprise_policy::is_app_ui_hidden()
         || crate::store::SettingsStore::get(&app)
             .ok()
             .flatten()
@@ -116,19 +152,10 @@ pub fn request_enter(app: AppHandle) {
     // Block shortcuts and other non-tray window entry points immediately, while
     // the actual webview destruction is deferred off the close callback.
     UI_DORMANT.store(true, Ordering::SeqCst);
-
-    tauri::async_runtime::spawn(async move {
-        let _ = crate::commands::hide_shortcut_reminder(app.clone()).await;
-        tokio::task::yield_now().await;
-        let app_for_main = app.clone();
-        if let Err(error) = app.run_on_main_thread(move || enter_on_main_thread(&app_for_main)) {
-            UI_DORMANT.store(false, Ordering::SeqCst);
-            warn!("headless: failed to schedule webview teardown: {error}");
-        }
-    });
 }
 
-fn enter_on_main_thread(app: &AppHandle) {
+fn enter_on_main_thread(app: &AppHandle) -> Result<(), String> {
+    crate::tray::sync_search_visibility(app).map_err(|error| error.to_string())?;
     if let Err(error) = app.global_shortcut().unregister_all() {
         warn!("headless: failed to unregister global shortcuts: {error}");
     }
@@ -142,7 +169,7 @@ fn enter_on_main_thread(app: &AppHandle) {
         {
             UI_DORMANT.store(false, Ordering::SeqCst);
             warn!("headless: native keepalive creation failed; preserving webviews: {error}");
-            return;
+            return Err(error.to_string());
         }
     }
 
@@ -165,45 +192,67 @@ fn enter_on_main_thread(app: &AppHandle) {
         .flatten()
         .unwrap_or_default()
         .is_completed;
+    // Explicit Quit closes permission/onboarding UI too. Policy-driven
+    // dormancy continues preserving those recovery surfaces.
+    let preserve = |label: &str| {
+        !crate::search_only::is_active()
+            && preserve_window_during_dormancy(label, onboarding_completed)
+    };
     let mut windows: Vec<_> = app.webview_windows().into_iter().collect();
     windows.sort_by_key(|(label, _)| label == "home");
 
     for (label, window) in &windows {
-        if preserve_window_during_dormancy(label, onboarding_completed) {
+        if preserve(label) {
             continue;
         }
         let _ = window.hide();
     }
 
     let mut count = 0;
+    let mut failures = Vec::new();
     for (label, window) in windows {
-        if preserve_window_during_dormancy(&label, onboarding_completed) {
+        if preserve(&label) {
             info!("headless: preserving incomplete onboarding webview");
             continue;
         }
         #[cfg(target_os = "macos")]
         if let Err(error) = prepare_window_for_destroy(app, &label, &window) {
             warn!("headless: preserving webview '{label}': {error}");
+            failures.push(format!("{label}: {error}"));
             continue;
         }
         if let Err(error) = window.destroy() {
             warn!("headless: failed to destroy webview '{label}': {error}");
+            failures.push(format!("{label}: {error}"));
         } else {
             count += 1;
         }
     }
 
-    info!("headless: UI dormant; destroyed {count} webview(s), tray and recording remain active");
+    info!(
+        "headless: UI dormant; destroyed {count} webview(s), search_only={}",
+        crate::search_only::is_active()
+    );
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
 }
 
 /// Tray UI actions are the sole wake path while dormant.
 pub fn wake_from_tray(app: &AppHandle) -> bool {
     // Enterprise hidden-UI mode has no wake path; the UI stays dormant.
-    if crate::enterprise_policy::is_app_ui_hidden() {
+    if crate::enterprise_policy::is_app_ui_hidden() || crate::search_only::is_entering() {
         return false;
     }
+    crate::search_only::wake();
     if !UI_DORMANT.swap(false, Ordering::SeqCst) {
         return false;
+    }
+
+    if let Err(error) = crate::tray::sync_search_visibility(app) {
+        warn!("headless: failed to restore tray visibility: {error}");
     }
 
     #[cfg(target_os = "macos")]

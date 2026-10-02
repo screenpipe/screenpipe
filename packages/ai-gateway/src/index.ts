@@ -362,7 +362,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			const owner = env.RATE_LIMITER.idFromName(`workflow-voice:${authResult.userId}`);
 			const headers = new Headers(request.headers);
 			headers.set('x-voice-account', authResult.userId);
-			const response = await env.RATE_LIMITER.get(owner).fetch(new Request('https://internal/workflow-voice', { method: request.method, headers, body: request.body }));
+			const upstream = await env.RATE_LIMITER.get(owner).fetch(new Request('https://internal/workflow-voice', { method: request.method, headers, body: request.body }));
+			// Fetch responses have immutable headers in the Workers runtime.
+			const response = new Response(upstream.body, upstream);
 			response.headers.set('Cache-Control', 'no-store');
 			return addCorsHeaders(response);
 		}
@@ -660,7 +662,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					served_tier: response.headers.get('x-screenpipe-served-tier'),
 					router_tier: routerTier,
 					workload: latency,
-					gateway_mode: 'cloudflare',
+					gateway_mode: response.headers.has('x-screenpipe-background-fallback') ? 'direct' : 'cloudflare',
+					fallback_model: response.headers.get('x-screenpipe-background-fallback'),
+					fallback_reason: response.headers.get('x-screenpipe-background-fallback-reason'),
 					latency_ms: latencyMs,
 					status_code: response.status,
 				});
@@ -679,7 +683,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				if (response.ok && body.stream) {
 					const { response: trackedResponse, usage: usagePromise } = trackResponseUsage(response, 'openai');
 					response = trackedResponse;
-					void usagePromise.then(u => logCost(env, {
+					ctx.waitUntil(usagePromise.then(u => logCost(env, {
 						device_id: authResult.deviceId,
 						user_id: authResult.userId,
 						tier: authResult.tier,
@@ -702,9 +706,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						stream: true,
 						latency_ms: latencyMs,
 						router_tier: routerTier,
-					}));
+					})));
 				} else if (response.ok) {
-					void settleActualOrReservedCost(
+					ctx.waitUntil(settleActualOrReservedCost(
 						env,
 						null,
 						reservedCostAttribution(
@@ -745,7 +749,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 								router_tier: routerTier,
 							});
 						},
-					);
+					));
 				}
 
 				return attachLeaseRelease(response);

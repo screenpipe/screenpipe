@@ -1,0 +1,12 @@
+/* screenpipe — AI that knows everything you've seen, said, or heard */
+/* https://screenpipe.com */
+.root { position: relative; display: inline-flex; flex: none; align-self: flex-start; font-size: 12px; }
+.root .trigger { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 4px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
+.root .trigger:hover, .root .trigger[aria-expanded="true"] { color: var(--ink); background: var(--soft); }
+.root .trigger:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.anchor { position: absolute; top: 100%; right: 0; z-index: 20; padding-top: 4px; width: min(250px, calc(100vw - 48px)); }
+.content { box-sizing: border-box; display: flex; flex-direction: column; gap: 5px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); box-shadow: 0 4px 16px #00000012; text-align: left; font-size: 12px; line-height: 1.5; font-weight: 400; }
+.content strong { font-size: 13px; font-weight: 600; }
+.content small { color: var(--muted); font-size: 11px; }
+
+.anchor[data-above] { top: auto; bottom: 100%; padding-top: 0; padding-bottom: 4px; }

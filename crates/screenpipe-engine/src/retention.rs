@@ -348,6 +348,9 @@ fn spawn_retention_loop(
             }
 
             let (retention_days, mode) = {
+                if screenpipe_core::background_work::is_suspended() {
+                    continue;
+                }
                 let guard = state.read().await;
                 match guard.as_ref() {
                     Some(rt) if rt.config.enabled => (rt.config.retention_days, rt.config.mode),
@@ -471,6 +474,9 @@ async fn do_local_cleanup(
     let mut any_deleted = false;
 
     while batch_start < cutoff {
+        if screenpipe_core::background_work::is_suspended() {
+            break;
+        }
         let batch_end = (batch_start + batch_size).min(cutoff);
         // Set on any per-batch DB error below. Before the watermark-resume
         // fix, a failed batch was retried "for free" on the very next cycle

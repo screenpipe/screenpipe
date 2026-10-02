@@ -298,12 +298,13 @@ commits: `d9d43d31`, `620c89a5`, `14acf6f0`
 
 commits: `94531265`, `d794176a`, `9070639c`, `0378cab1`, `4a3313d3`, `7ffdd4f1`, `1b36f62d`
 
-- [ ] **clean quit via tray** — right-click tray → Quit. all processes terminate. no orphaned ffmpeg/bun processes.
+- [ ] **Quit keeps search available (default On)** — preserve the existing recording-aware Quit / Minimize to Tray / Cancel dialog for tray, dock, and Cmd+Q. Cancel changes nothing; Minimize retains recording and the tray. Confirmed Quit stops screen/audio/UI capture, destroys webviews, and hides the tray and dock. A saved-history request still succeeds through the same API; attempts to start capture or workflows fail. Reopen into the same PID with capture paused and the tray restored, then explicitly resume. Repeat after sleep/wake and an update restart. Check idle CPU/memory and that recording devices and child agents are released.
+- [ ] **clean quit via tray (Keep search available after quitting Off)** — right-click tray → Quit. all processes terminate. no orphaned ffmpeg/bun processes. Explicit Off survives restart; OS logout/shutdown exits regardless of the setting.
 - [ ] **clean quit via dock** — right-click dock → Quit. same as above.
 - [ ] **clean quit via Cmd+Q** — same verification.
 - [ ] **force quit recovery** — force quit app. relaunch. database is intact. recording resumes.
 - [ ] **sleep/wake** — close laptop lid, wait 10s, open. recording resumes within 5s. no crash (`9070639c`).
-- [ ] **restart app** — quit and relaunch. all settings preserved. recording starts automatically.
+- [ ] **restart app** — settings and recording authorization are preserved. A search-only updater restart restores hidden UI and paused capture; reopening does not authorize recording. Failed shutdown defers the update, and the originating cause survives in the collected/redacted support report. If Quit cannot safely retain search, it falls back to a full exit.
 - [ ] **Cross-platform autorelease pool** — Verify that Windows and Linux builds compile and run without issues related to macOS-specific autorelease pool calls. (`851b3037c`)
 - [ ] **Main thread safety (macOS)** — Verify that tray icon operations, space monitoring, and frontmost app restoration are dispatched to the main thread to prevent crashes. (`ac46aa437`, `418826dfa`, `274826dfa`)
 - [ ] **ObjC memory management (macOS)** — Verify that all ObjC operations are wrapped in scoped autorelease pools and objects are retained in async callbacks to prevent use-after-free or SIGSEGV crashes. (`4cb9850f7`, `c49350df0`, `139500d52`)
@@ -313,7 +314,7 @@ commits: `94531265`, `d794176a`, `9070639c`, `0378cab1`, `4a3313d3`, `7ffdd4f1`,
 - [ ] **source build update dialog** — source builds show "source build detected" dialog with link to pre-built version.
 - [ ] **owned port release on restart** — restart Screenpipe and verify its internally owned server shuts down gracefully, the shutdown is awaited, and the new server binds port 3030 after the release grace period.
 - [ ] **startup port owner arbitration** — after the single-instance focus handoff has had its chance: (a) a healthy Screenpipe owner on 3030 or 11435 remains alive and exactly one native dialog asks the user to quit it; (b) an owner that fails the Screenpipe health probe is terminated gracefully first, forced only after the release grace period, and Screenpipe binds the released port; (c) if reclaim still fails, Screenpipe does not bind through the conflict and shows one native error dialog (`0378cab1`, `4a3313d3`, `8c435a10`).
-- [ ] **no orphaned processes** — after quit, `ps aux | grep screenpipe` shows nothing. `lsof -i :3030` shows nothing.
+- [ ] **no orphaned processes** — after full quit (search setting Off), no Screenpipe process or API listener remains. With the setting On, only the existing search-serving app remains; no second database owner is created.
 - [ ] **rollback** — user can rollback to previous version via tray menu (`c7fbc3ea`).
 - [ ] **Zombie CPU drain prevention** — Verify that `lsof` calls have a 5-second timeout, preventing zombie CPU drain, especially on quit. Check logs for `lsof` timeouts if applicable.
 - [ ] **Tokio shutdown stability** — Verify that the `tokio` shutdown process is stable and doesn't panic in the tree walker, especially during application exit or process restarts.

@@ -419,8 +419,9 @@ export async function reserveDailyCostCap(
 				: '__no_monthly_cost_baseline__';
 		// Non-Business Auto is constrained to the efficient waterfall. Reserving it
 		// against Sol would reject legitimate requests before the provider runs.
+		// Mini is the most expensive efficient fallback now that Auto starts on GPT-6 Luna.
 		const reservationModel = model === 'auto' && getHostedAiPlan(accountPlan) !== 'business'
-			? 'gpt-5.6-luna'
+			? 'gpt-5.4-mini'
 			: model;
 		const reservedMicroUsd = getCostReservationMicroUsd(reservationModel, shape);
 		const limits = resolveHostedAiTextCostLimits(accountPlan, env, hostedAiTrial);

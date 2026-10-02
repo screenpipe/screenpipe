@@ -70,7 +70,12 @@ fn configured_updater(app: &tauri::AppHandle) -> Result<tauri_plugin_updater::Up
     Ok(builder.build()?)
 }
 
-async fn stop_before_update(app: &tauri::AppHandle) {
+async fn stop_before_update(app: &tauri::AppHandle) -> Result<(), String> {
+    let search_only = crate::search_only::is_active();
+    crate::search_only::prepare_restart().map_err(|error| {
+        UPDATE_RESTART_STARTED.store(false, Ordering::SeqCst);
+        error
+    })?;
     match bounded_teardown(
         PRE_EXIT_TEARDOWN_TIMEOUT,
         stop_screenpipe(app.state::<RecordingState>(), app.clone()),
@@ -78,12 +83,24 @@ async fn stop_before_update(app: &tauri::AppHandle) {
     .await
     {
         TeardownOutcome::Completed => {}
+        outcome if search_only => {
+            let error = format!("search-only shutdown did not complete: {outcome:?}");
+            UPDATE_RESTART_STARTED.store(false, Ordering::SeqCst);
+            crate::search_only::cancel_restart();
+            crate::search_only::recover_after_failed_update(app.clone());
+            crate::update_diagnostics::record(
+                "search_shutdown_failed",
+                &format!("cause={error}; outcome=update_deferred"),
+            );
+            return Err(error);
+        }
         TeardownOutcome::Failed(error) => warn!("update teardown failed (continuing): {error}"),
         TeardownOutcome::TimedOut => warn!(
             "update teardown exceeded {}s — continuing with the update",
             PRE_EXIT_TEARDOWN_TIMEOUT.as_secs()
         ),
     }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -100,13 +117,17 @@ async fn install_windows_update(
     crate::store::persist_store_before_restart(app).map_err(std::io::Error::other)?;
     let recording = app.state::<RecordingState>();
     let wants_recording = recording.capture_intended();
-    stop_before_update(app).await;
+    stop_before_update(app)
+        .await
+        .map_err(std::io::Error::other)?;
     save_pre_update_version(app, update.body.clone());
     record_update_attempt(app, &update.version);
     // The NSIS handoff exits this process. Keep native startup excluded until
     // that exit; an install error drops the guard so startup can continue.
     UPDATE_RESTART_STARTED.store(true, Ordering::SeqCst);
     if let Err(error) = update.install(bytes) {
+        crate::search_only::cancel_restart();
+        crate::search_only::recover_after_failed_update(app.clone());
         UPDATE_RESTART_STARTED.store(false, Ordering::SeqCst);
         recording.set_capture_intent(wants_recording);
         crate::update_diagnostics::record(
@@ -119,7 +140,7 @@ async fn install_windows_update(
         return Err(error);
     }
     std::mem::forget(restart);
-    crate::process_exit::request_app_relaunch(
+    crate::process_exit::request_prepared_app_relaunch(
         app.clone(),
         "windows update restart",
         Duration::from_millis(250),
@@ -595,25 +616,28 @@ pub async fn restart_for_update(
     }) {
         record_update_attempt(&app, &to_version);
     }
-    if persistent_version.is_some() {
-        request_persistent_update_for_restart()?;
-    }
 
     info!("banner restart: gate passed, shutting down for update");
 
-    // Non-fatal AND time-bounded: a wedged capture/audio teardown must not
-    // stall the relaunch (2026-06-26 MacBook Air: VisionManager hung 10s →
-    // ~57s frozen before the update applied). server_core.rs retries the
-    // port bind if the next boot races teardown.
-    stop_before_update(&app).await;
+    // Recording-mode recovery still permits a bounded teardown timeout.
+    // Search-only mode defers the update if the database owner cannot drain.
+    stop_before_update(&app).await?;
+    if persistent_version.is_some() {
+        if let Err(error) = request_persistent_update_for_restart() {
+            UPDATE_RESTART_STARTED.store(false, Ordering::SeqCst);
+            crate::search_only::cancel_restart();
+            crate::search_only::recover_after_failed_update(app.clone());
+            return Err(error);
+        }
+    }
 
     // Off-thread so the IPC reply flushes before runtime teardown.
     // Keep the reservation until process exit, including that IPC delay.
     std::mem::forget(restart);
     if persistent_version.is_some() {
-        crate::process_exit::request_app_quit(app.clone());
+        crate::process_exit::request_full_app_quit(app.clone());
     } else {
-        crate::process_exit::request_app_relaunch(
+        crate::process_exit::request_prepared_app_relaunch(
             app.clone(),
             "banner update restart",
             Duration::from_millis(250),
@@ -646,6 +670,9 @@ pub struct UpdateAttempt {
     pub from_version: String,
     pub to_version: String,
     pub ts_epoch_secs: u64,
+    /// None for markers written by older builds or if visibility was unavailable.
+    #[serde(default)]
+    pub home_visible: Option<bool>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -691,14 +718,16 @@ fn record_update_attempt(app: &tauri::AppHandle, to_version: &str) {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0),
+        home_visible: crate::process_exit::home_window_visible(app),
     };
     crate::update_diagnostics::record(
         "restart_committed",
         &format!(
-            "from={} target={} attempt_ts={} executable={:?}",
+            "from={} target={} attempt_ts={} home_visible={:?} executable={:?}",
             attempt.from_version,
             attempt.to_version,
             attempt.ts_epoch_secs,
+            attempt.home_visible,
             std::env::current_exe()
         ),
     );
@@ -710,6 +739,23 @@ fn record_update_attempt(app: &tauri::AppHandle, to_version: &str) {
         Ok(Err(e)) => warn!("failed to write update-attempt marker: {}", e),
         Err(e) => warn!("failed to serialize update-attempt marker: {}", e),
     }
+}
+
+/// Read before showing startup windows. The updater consumes this same marker
+/// later in setup, preserving failed-install detection and one-launch lifetime.
+pub(crate) fn update_startup_home_visibility(app: &tauri::AppHandle) -> Option<bool> {
+    update_startup_home_visibility_at(
+        &update_attempt_marker_path(app)?,
+        &app.package_info().version.to_string(),
+    )
+}
+
+fn update_startup_home_visibility_at(path: &std::path::Path, current: &str) -> Option<bool> {
+    let attempt: UpdateAttempt = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    if classify_update_attempt(&attempt, current) == UpdateAttemptOutcome::Unrelated {
+        return None;
+    }
+    attempt.home_visible
 }
 
 /// Read + delete the marker left by the previous process. Returns the failed
@@ -736,11 +782,12 @@ fn consume_update_attempt_at(path: &std::path::Path, current: &str) -> Option<Up
         path.parent()?,
         "relaunch_observed",
         &format!(
-            "from={} target={} attempt_ts={} running={} executable={:?} outcome={:?}",
+            "from={} target={} attempt_ts={} running={} home_visible={:?} executable={:?} outcome={:?}",
             attempt.from_version,
             attempt.to_version,
             attempt.ts_epoch_secs,
             current,
+            attempt.home_visible,
             std::env::current_exe(),
             classify_update_attempt(&attempt, &current)
         ),
@@ -1499,7 +1546,28 @@ impl UpdatesManager {
                         }
                     };
                     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-                    let result = update.download_and_install(on_chunk, || {}).await;
+                    let result = match update.download(on_chunk, || {}).await {
+                        Ok(bytes) => {
+                            // Verify the download before stopping the one server.
+                            // Preserve recording-mode update recovery behavior.
+                            let stopped = if crate::search_only::is_active() {
+                                stop_before_update(&self.app).await.map_err(std::io::Error::other)
+                            } else { Ok(()) };
+                            match stopped {
+                                Ok(()) => {
+                                    let installed = update.install(bytes);
+                                    // Linux replaces the executable in place;
+                                    // the current process continues serving until
+                                    // the later automatic or user-driven restart.
+                                    crate::search_only::cancel_restart();
+                                    crate::search_only::recover_after_failed_update(self.app.clone());
+                                    installed
+                                }
+                                Err(error) => Err(error.into()),
+                            }
+                        }
+                        Err(error) => Err(error),
+                    };
 
                     match &result {
                         Ok(_) => break result,
@@ -1703,15 +1771,22 @@ impl UpdatesManager {
                 let persistent_update =
                     enterprise_route == EnterpriseUpdateRoute::PersistentPackage;
 
+                stop_before_update(&self.app)
+                    .await
+                    .map_err(std::io::Error::other)?;
                 if persistent_update {
-                    request_persistent_update_for_restart().map_err(std::io::Error::other)?;
+                    if let Err(error) = request_persistent_update_for_restart() {
+                        UPDATE_RESTART_STARTED.store(false, Ordering::SeqCst);
+                        crate::search_only::cancel_restart();
+                        crate::search_only::recover_after_failed_update(self.app.clone());
+                        return Err(std::io::Error::other(error).into());
+                    }
                 }
-                stop_before_update(&self.app).await;
                 std::mem::forget(restart);
                 if persistent_update {
-                    crate::process_exit::request_app_quit(self.app.clone());
+                    crate::process_exit::request_full_app_quit(self.app.clone());
                 } else {
-                    crate::process_exit::request_app_relaunch(
+                    crate::process_exit::request_prepared_app_relaunch(
                         self.app.clone(),
                         "auto-update restart",
                         Duration::from_millis(0),
@@ -2011,9 +2086,13 @@ pub(crate) mod tests {
         let path = root.join(super::UPDATE_ATTEMPT_MARKER_FILE);
         std::fs::write(
             &path,
-            r#"{"from_version":"1.0.0","to_version":"99.0.0","ts_epoch_secs":1}"#,
+            r#"{"from_version":"1.0.0","to_version":"99.0.0","ts_epoch_secs":1,"home_visible":false}"#,
         )
         .unwrap();
+        assert_eq!(
+            super::update_startup_home_visibility_at(&path, "1.0.0"),
+            Some(false)
+        );
         assert!(super::consume_update_attempt_at(&path, "1.0.0").is_some());
         assert!(!path.exists());
         assert!(super::consume_update_attempt_at(&path, "1.0.0").is_none());
@@ -2022,6 +2101,48 @@ pub(crate) mod tests {
     use super::*;
 
     const HOUR: Duration = Duration::from_secs(3600);
+
+    #[test]
+    fn update_home_visibility_survives_restart_and_is_consumed_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(UPDATE_ATTEMPT_MARKER_FILE);
+        for visible in [false, true] {
+            for running in ["2.6.6", "2.6.7"] {
+                let attempt = UpdateAttempt {
+                    from_version: "2.6.6".into(),
+                    to_version: "2.6.7".into(),
+                    ts_epoch_secs: 1,
+                    home_visible: Some(visible),
+                };
+                std::fs::write(&path, serde_json::to_vec(&attempt).unwrap()).unwrap();
+                assert_eq!(
+                    update_startup_home_visibility_at(&path, running),
+                    Some(visible)
+                );
+                assert_eq!(
+                    consume_update_attempt_at(&path, running).is_some(),
+                    running == "2.6.6",
+                    "window restoration must preserve failed-install detection"
+                );
+                assert_eq!(update_startup_home_visibility_at(&path, running), None);
+            }
+        }
+    }
+
+    #[test]
+    fn update_home_visibility_keeps_normal_startup_for_old_invalid_or_unrelated_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(UPDATE_ATTEMPT_MARKER_FILE);
+        assert_eq!(update_startup_home_visibility_at(&path, "2.6.7"), None);
+        for raw in [
+            r#"{"from_version":"2.6.6","to_version":"2.6.7","ts_epoch_secs":1}"#,
+            r#"{"from_version":"2.6.5","to_version":"2.6.6","ts_epoch_secs":1,"home_visible":false}"#,
+            "{truncated",
+        ] {
+            std::fs::write(&path, raw).unwrap();
+            assert_eq!(update_startup_home_visibility_at(&path, "2.6.7"), None);
+        }
+    }
 
     #[test]
     fn sweep_removes_installer_leftovers_only() {
@@ -2180,6 +2301,7 @@ pub(crate) mod tests {
             from_version: "2.6.77".into(),
             to_version: "2.6.81".into(),
             ts_epoch_secs: 0,
+            home_visible: None,
         };
         let cooldown = cooldown_from_failed_attempt(Some(&attempt));
         assert!(failed_version_in_cooldown(
@@ -2478,6 +2600,7 @@ pub(crate) mod tests {
             from_version: "2.6.6".into(),
             to_version: "2.6.7".into(),
             ts_epoch_secs: 0,
+            home_visible: None,
         };
         // Still on the version we tried to leave → the install didn't apply.
         assert_eq!(

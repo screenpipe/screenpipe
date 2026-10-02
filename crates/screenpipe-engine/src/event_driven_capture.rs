@@ -3500,12 +3500,15 @@ async fn do_capture(
 
     // Final URL gate after metadata resolution. This protects the OCR fallback
     // and every other path that can continue after a missing tree. A non-empty
-    // allowlist requires a fresh, coherent, matching HTTP(S) browser URL;
-    // native apps, internal pages, tab-race mismatches, and missing URLs fail
-    // closed before pixels, OCR, accessibility, or semantic data are stored.
-    if !params
+    // URL policy requires a fresh, coherent HTTP(S) URL for browser content.
+    // Native apps remain governed by app/window filters; unknown ownership,
+    // internal browser pages and missing browser URLs fail closed.
+    if !params.window_filters.is_valid(
+        app_name_owned.as_deref().unwrap_or_default(),
+        window_name_owned.as_deref().unwrap_or_default(),
+    ) || !params
         .window_filters
-        .should_capture_url(browser_url_owned.as_deref())
+        .should_capture_window_url(app_name_owned.as_deref(), browser_url_owned.as_deref())
     {
         debug!(
             "skipping capture: resolved browser URL did not pass policy on monitor {}",
@@ -3566,10 +3569,10 @@ async fn do_capture(
             )
     };
 
-    // URL allowlisting is browser-window capture, not permission to persist
-    // every other visible app on the monitor. Black out pixels outside the
-    // positively identified focused browser window. If the platform cannot
-    // provide trustworthy bounds, keep the allowed accessibility snapshot but
+    // With a URL allowlist, an allowed native app must not expose a blocked
+    // browser elsewhere on the monitor. Black out pixels outside the
+    // positively identified focused window for both native apps and browsers.
+    // If the platform cannot provide trustworthy bounds, keep the allowed snapshot but
     // suppress pixels and OCR for this frame rather than widening capture.
     let mut allowlist_pixels_unverified = false;
     let image = if params.window_filters.has_url_allowlist()

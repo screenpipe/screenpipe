@@ -150,11 +150,29 @@ mod tests {
     use crate::store::SettingsStore;
 
     #[test]
+    fn recovery_is_capturable_for_every_saved_privacy_preference() {
+        for legacy_hidden in [false, true] {
+            for overlay_hidden in [false, true] {
+                for e2e in [false, true] {
+                    let settings = SettingsStore {
+                        hide_app_in_screen_share: legacy_hidden,
+                        hide_overlay_in_screen_recording: overlay_hidden,
+                        ..Default::default()
+                    };
+                    assert!(!should_protect_window(&settings, "permission-recovery", e2e));
+                    assert_eq!(should_protect_window(&settings, "main", e2e), overlay_hidden && !e2e);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn capture_protection_is_limited_to_overlays() {
         let settings = SettingsStore::default();
         assert!(settings.hide_app_in_screen_share);
         assert!(!should_protect_window(&settings, "home", false));
         assert!(!should_protect_window(&settings, "settings", false));
+        assert!(!should_protect_window(&settings, "permission-recovery", false));
         assert!(!should_protect_window(&settings, "main", false));
         assert!(!should_protect_window(&settings, "chat", false));
         assert!(!should_protect_window(&settings, "shortcut-reminder", false));
@@ -164,6 +182,7 @@ mod tests {
         settings.hide_overlay_in_screen_recording = true;
         assert!(should_protect_window(&settings, "main-window", false));
         assert!(should_protect_window(&settings, "chat", false));
+        assert!(!should_protect_window(&settings, "permission-recovery", false));
     }
 
     #[test]

@@ -11,7 +11,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createGlmEncryptedFetch, GLM_CONFIG_REPO, GLM_ENCLAVE } from "../../../../crates/screenpipe-core/assets/extensions/lib/tinfoil-transport";
+import { createGlmEncryptedFetch, GLM_CONFIG_REPO, GLM_ENCLAVE, workflowRequestOptions } from "../../../../crates/screenpipe-core/assets/extensions/lib/tinfoil-transport";
 import { normalizeGlmRequest } from "../../../../crates/screenpipe-core/assets/extensions/lib/glm-protocol";
 
 const endpoint = "https://gateway.test/v1/tinfoil/glm/chat/completions";
@@ -345,4 +345,54 @@ describe("confidential verification status", () => {
     expect(updates.map(v => v.state)).toEqual(["verifying", "failed"]);
     expect(JSON.stringify(updates)).not.toContain("private internal detail");
   });
+});
+
+describe("workflow request recovery", () => {
+  it("bounds workflow requests without changing chat or stricter caller limits", () => {
+    const options = {timeoutMs:300_000,maxRetries:3,signal:new AbortController().signal};
+    for (const task of ["workflow-discover","workflow-deepen","workflow-maintain","workflow-review"]) {
+      expect(workflowRequestOptions(options,task)).toEqual({...options,timeoutMs:120_000,maxRetries:0});
+    }
+    expect(workflowRequestOptions(options,"daily-summary")).toBe(options);
+    expect(workflowRequestOptions(options)).toBe(options);
+    expect(workflowRequestOptions({timeoutMs:5000},"workflow-discover").timeoutMs).toBe(5000);
+  });
+  it("stop interrupts stalled verification before any request is sent", async () => {
+    const controller = new AbortController();
+    let entered!: () => void;
+    const verifying = new Promise<void>(resolve => { entered = resolve; });
+    let sent = false;
+    const fetcher = createGlmEncryptedFetch("https://gateway.test/v1", () => ({
+      ready: () => { entered(); return new Promise(() => {}); },
+      fetch: (async () => { sent = true; throw new Error("must not send"); }) as typeof fetch,
+    }));
+    const pending = fetcher(endpoint,{...init(),signal:controller.signal}).catch(error => error);
+    await verifying;
+    controller.abort();
+    expect(await pending).toMatchObject({name:"AbortError"});
+    expect(sent).toBe(false);
+  });
+});
+
+it("the real Pi SDK times out stalled attestation without nested provider retries", async () => {
+  const { streamSimple } = await import(pathToFileURL(resolve(import.meta.dir,"../../node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js")).href);
+  let attempts = 0;
+  const fetcher = createGlmEncryptedFetch("https://gateway.test/v1", () => ({
+    ready: () => { attempts++; return new Promise(() => {}); },
+    fetch: (async () => { throw new Error("must not reach gateway"); }) as typeof fetch,
+  }));
+  const selected = { id:model, name:"GLM", provider:"screenpipe", api:"openai-completions",baseUrl:"https://gateway.test/v1/tinfoil/glm", contextWindow:32768,maxTokens:8192,reasoning:false,input:["text"],cost:{input:0,output:0,cacheRead:0,cacheWrite:0} };
+  const result = await streamSimple(selected,{messages:[{role:"user",content:"synthetic task",timestamp:Date.now()}]},
+    {...workflowRequestOptions({timeoutMs:20,maxRetries:3},"workflow-discover"),fetch:fetcher,apiKey:"synthetic"}).result();
+  expect(result.stopReason).toBe("error");
+  expect(result.errorMessage.toLowerCase()).toContain("timed out");
+  expect(attempts).toBe(1);
+});
+
+it("routes the private 413 into the pinned Pi overflow classifier", async () => {
+  const { isContextOverflow } = await import("@earendil-works/pi-ai/compat");
+  const { normalizeContextOverflowError } = await import("../../../../crates/screenpipe-core/assets/extensions/context-pruning");
+  const failed:any = {role:"assistant",stopReason:"error",content:[],errorMessage:"413 Your conversation is too long for glm-5.3-flash-reap50-iq3m's context window.",usage:{input:0,output:0,totalTokens:0}};
+  expect(isContextOverflow(failed,32768)).toBe(false);
+  expect(isContextOverflow(normalizeContextOverflowError(failed),32768)).toBe(true);
 });

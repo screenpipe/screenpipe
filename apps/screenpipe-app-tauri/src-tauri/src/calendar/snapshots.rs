@@ -8,17 +8,58 @@
 use super::CalendarEventItem;
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
+use tokio::sync::watch;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub(crate) enum CalendarSource {
     Native,
     Google,
+    GoogleAccount(String),
     Ics,
 }
 
-#[derive(Default)]
-struct CalendarSnapshots {
-    sources: BTreeMap<CalendarSource, Vec<CalendarEventItem>>,
+impl From<CalendarSource> for String {
+    fn from(source: CalendarSource) -> Self {
+        match source {
+            CalendarSource::Native => "Native".into(),
+            CalendarSource::Google => "Google".into(),
+            CalendarSource::Ics => "Ics".into(),
+            CalendarSource::GoogleAccount(key) => format!("GoogleAccount:{key}"),
+        }
+    }
+}
+
+impl TryFrom<String> for CalendarSource {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "Native" => Ok(Self::Native),
+            "Google" => Ok(Self::Google),
+            "Ics" => Ok(Self::Ics),
+            _ => value
+                .strip_prefix("GoogleAccount:")
+                .filter(|key| key.len() == 64 && key.bytes().all(|b| b.is_ascii_hexdigit()))
+                .map(|key| Self::GoogleAccount(key.into()))
+                .ok_or_else(|| "invalid calendar source".into()),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub(super) struct CalendarSnapshots {
+    pub(super) sources: BTreeMap<CalendarSource, Vec<CalendarEventItem>>,
+}
+
+// A watch retains the latest complete snapshot across scheduler startup and
+// lag. The public event bus remains unchanged for meeting detection.
+fn updates() -> &'static watch::Sender<CalendarSnapshots> {
+    static UPDATES: OnceLock<watch::Sender<CalendarSnapshots>> = OnceLock::new();
+    UPDATES.get_or_init(|| watch::channel(CalendarSnapshots::default()).0)
+}
+
+pub(super) fn subscribe() -> watch::Receiver<CalendarSnapshots> {
+    updates().subscribe()
 }
 
 impl CalendarSnapshots {
@@ -44,6 +85,7 @@ pub(crate) fn publish_calendar_events(
         .lock()
         .map_err(|_| anyhow::anyhow!("calendar snapshot lock poisoned"))?;
     let merged = snapshots.replace(source, events);
+    updates().send_replace(snapshots.clone());
     // Keep publication inside the lock. Otherwise concurrent providers could
     // publish an older merged snapshot after a newer one. This is a bounded,
     // synchronous event-bus send; no network/OS calls occur under this lock.
@@ -114,10 +156,10 @@ mod tests {
         let mut forward = CalendarSnapshots::default();
         let mut reverse = CalendarSnapshots::default();
         for (source, name) in sources.iter().zip(["native", "google", "ics"]) {
-            forward.replace(*source, vec![sample(name, name)]);
+            forward.replace(source.clone(), vec![sample(name, name)]);
         }
         for (source, name) in sources.iter().zip(["native", "google", "ics"]).rev() {
-            reverse.replace(*source, vec![sample(name, name)]);
+            reverse.replace(source.clone(), vec![sample(name, name)]);
         }
         assert_eq!(
             serde_json::to_value(forward.replace(CalendarSource::Native, vec![])).unwrap(),

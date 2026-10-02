@@ -107,7 +107,7 @@ curl -sS -X POST "${SCREENPIPE_LOCAL_API_URL:-http://localhost:3030}/raw_sql" \
   -d '{"query":"SELECT COUNT(*) AS frame_count FROM frames LIMIT 1"}'
 ```
 
-Never access live `db.sqlite`, `db.sqlite-wal`, or `db.sqlite-shm` directly. If MCP, API, and CLI are unavailable, report it. Run database checks or recovery only through Screenpipe with the recorder stopped.
+Never access the recorder's live SQLite database, write-ahead log, or shared-memory files directly. If MCP, API, and CLI are unavailable, report it. Run database checks or recovery only through Screenpipe with the recorder stopped.
 
 ## Shell
 
@@ -286,3 +286,7 @@ screenpipe pipe publish <pipe-name>
 ```
 
 Reads `~/.screenpipe/pipes/<pipe-name>/pipe.md`, extracts title/description/icon/category from YAML frontmatter, and publishes to the screenpipe pipe store. Requires auth (SCREENPIPE_API_KEY env var or `~/.screenpipe/auth.json`).
+
+## Starred sessions
+
+Use `star list --limit 10`, `star start --minutes 15` (5/15/30/60; optional `--hd`), `star end`, or `star edit ID --start TIME --end TIME` with the invocation prefix above. These commands use the running engine, return JSON, and respect `SCREENPIPE_API_URL` / `SCREENPIPE_LOCAL_API_URL` and `SCREENPIPE_LOCAL_API_KEY`. For captured starred work, prefer screenpipe-api starred-only search without a preliminary list call; marking requires the user's request.

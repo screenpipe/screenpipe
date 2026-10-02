@@ -14,9 +14,10 @@ import { useGT } from "gt-react";
 
 const FEEDBACK_PROMPT = "Review this workflow and ask me 3 specific questions to help refine it. Also invite any general feedback I have.";
 
-export function WorkflowAssistant({ platform, context, onDockChange, onWidthChange, onOpenChange, onModeChange, headerToggle = false, active = true, composerAccessory, promptRequest }: {
+export function WorkflowAssistant({ platform, context, onDockChange, onWidthChange, onOpenChange, onModeChange, headerToggle = false, active = true, composerAccessory, promptRequest, onBusyChange }: {
   platform: WorkflowsAssistantPlatform;
   promptRequest?: { id: string; text: string };
+  onBusyChange?: (busy: boolean) => void;
   context: AssistantContext;
   onDockChange: (docked: boolean) => void;
   onWidthChange?: (width: number) => void;
@@ -102,7 +103,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
 
   useEffect(() => { if (active && !loadedRef.current && !loadError) void restore(); }, [active, restore, loadError]);
   useEffect(() => {
-    if (context.purpose !== "sop") { selectedSop.current = null; return; }
+    if (context.purpose !== "sop" && context.purpose !== "video") { selectedSop.current = null; return; }
     if (!loaded || busy || selectedSop.current === context.key) return;
     selectedSop.current = context.key;
     // Keep existing feedback and ordinary drafts separate from SOP edits.
@@ -138,11 +139,19 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
     };
   }, [platform]);
 
+  useEffect(() => {
+    if (active && open) window.dispatchEvent(new CustomEvent("workflows:assistant-opened"));
+  }, [active, open]);
+
   const close = useCallback(() => {
     setOpen(false);
     setDisplayOpen(false);
     if (loadedRef.current) void persist(stateRef.current).catch(() => {});
-    requestAnimationFrame(() => (useHeaderToggle ? document.querySelector<HTMLButtonElement>("[data-workflows-assistant-toggle]") : launcher.current)?.focus());
+    const focused = document.activeElement;
+    requestAnimationFrame(() => {
+      if (document.activeElement === focused || document.activeElement === document.body)
+        (useHeaderToggle ? document.querySelector<HTMLButtonElement>("[data-workflows-assistant-toggle]") : launcher.current)?.focus();
+    });
   }, [persist, useHeaderToggle]);
   useEffect(() => {
     if (!active) return;
@@ -161,10 +170,12 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
     window.addEventListener("keydown", onKey);
     const openChat = () => setOpen(true);
     const toggleChat = () => { if (open) close(); else setOpen(true); };
+    window.addEventListener("workflows:minimize-assistant", close);
     window.addEventListener("workflows:open-assistant", openChat);
     window.addEventListener("workflows:toggle-assistant", toggleChat);
     return () => {
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("workflows:minimize-assistant", close);
       window.removeEventListener("workflows:open-assistant", openChat);
       window.removeEventListener("workflows:toggle-assistant", toggleChat);
     };
@@ -228,6 +239,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
     const answerId = crypto.randomUUID();
     const abort = new AbortController();
     controller.current = abort;
+    onBusyChange?.(true);
     setBusy(true); setError(""); setHistoryOpen(false); setActivity("Starting…");
     follow.current = true; setAtBottom(true);
     const snapshot = update((s) => ({ ...s, conversations: s.conversations.map((c) => c.id !== current.id ? c : {
@@ -245,18 +257,20 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
       const text = await platform.ask({ question: question.trim(), context: turnContext, history, signal: abort.signal, onProgress: (progress) => {
         if (abort.signal.aborted || !mounted.current) return;
         if (progress.workflow && current.feedbackContext) update(s => ({ ...s, conversations: s.conversations.map(c => c.id === current.id ? { ...c, feedbackContext: assistantContextSnapshot({ ...c.feedbackContext!, workflow: progress.workflow, title: progress.workflow!.title }) } : c) }));
-        setActivity(progress.activity === "searching" ? "Searching your memory…" : progress.activity === "writing" ? "Writing…" : "Starting…");
-        patchMessage(current.id, answerId, { text: progress.text });
+        setActivity(progress.activity === "working" ? "Working…" : progress.activity === "searching" ? "Searching your memory…" : progress.activity === "writing" ? "Writing…" : "Starting…");
+        patchMessage(current.id, answerId, { text: progress.text, ...(progress.toolCalls ? {toolCalls: progress.toolCalls} : {}) });
       } });
       if (!mounted.current) return;
       patchMessage(current.id, answerId, { text, status: abort.signal.aborted ? "stopped" : undefined });
     } catch (cause) {
       if (!mounted.current) return;
       const stopped = abort.signal.aborted;
-      patchMessage(current.id, answerId, { status: stopped ? "stopped" : "error" });
+      const answer = stateRef.current.conversations.find(c => c.id === current.id)?.messages.find(m => m.id === answerId);
+      patchMessage(current.id, answerId, { status: stopped ? "stopped" : "error", toolCalls: answer?.toolCalls?.map(tool => tool.status === "running" ? {...tool, status: stopped ? "stopped" : "error"} : tool) });
       if (!stopped) setError(cause instanceof Error ? cause.message : ui("Couldn’t finish the answer. Try again."));
     } finally {
       if (controller.current === abort) controller.current = null;
+      onBusyChange?.(false);
       if (mounted.current) {
         setBusy(false);
         if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -286,7 +300,9 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
 
   const lastUser = [...conversation.messages].reverse().find((message) => message.role === "user");
   const lastAnswer = conversation.messages.at(-1);
-  const suggestions = context.purpose === "sop"
+  const suggestions = context.purpose === "video"
+    ? ["Make the narration shorter", "Create video"]
+    : context.purpose === "sop"
     ? ["Make this SOP shorter", "Make the steps easier to follow"]
     : context.workflow
     ? ["Summarize this workflow", "Find recent examples in my memory"]
@@ -307,7 +323,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
     requestAnimationFrame(() => input.current?.focus());
   }
   function newConversation() {
-    const fresh = { ...newAssistantConversation(), ...(context.purpose === "sop" ? { pageKey: context.key } : {}) };
+    const fresh = { ...newAssistantConversation(), ...(["sop", "video"].includes(context.purpose ?? "") ? { pageKey: context.key } : {}) };
     update((current) => ({ ...current, activeId: fresh.id, conversations: [...current.conversations, fresh] }));
     setHistoryOpen(false); setHistoryQuery(""); setError("");
     requestAnimationFrame(() => input.current?.focus());
@@ -370,11 +386,15 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
           {!history.length && <p>{historyQuery ? ui("No matching conversations.") : ui("Your conversations will appear here.")}</p>}
         </div> : loaded && <>
           {!conversation.messages.length && <div className={styles.empty}>
-            <h2>{feedbackContext ? ui("What should change?") : context.purpose === "sop" ? ui("Edit this SOP") : context.workflow ? ui("Ask about this workflow") : ui("Search your memory")}</h2>
+            <h2>{feedbackContext ? ui("What should change?") : context.purpose === "video" ? ui("Edit the video script") : context.purpose === "sop" ? ui("Edit this SOP") : context.workflow ? ui("Ask about this workflow") : ui("Search your memory")}</h2>
             {!feedbackContext && <div>{suggestions.map((question) => <button key={question} onClick={() => void send(question)}><Search size={15} /><span>{question}</span><ArrowUp size={13} /></button>)}</div>}
           </div>}
           {conversation.messages.map((message) => <article key={message.id} className={message.role === "user" ? styles.user : styles.assistant} aria-label={message.role === "user" ? ui("Your question") : ui("Screenpipe answer")}>
             {message.role === "user" ? <p>{message.text}</p> : <ChatMarkdown text={message.text} streaming={busy && message.id === lastAnswer?.id} allowLink={isAssistantLink} onOpenLink={platform.openLink ? openSource : undefined} />}
+            {message.toolCalls?.map(tool => <details key={tool.id} className={styles.toolCall}>
+              <summary><span aria-hidden="true">{tool.status === "running" ? "◌" : tool.status === "complete" ? "✓" : tool.status === "stopped" ? "□" : "!"}</span><span>{tool.name.replace(/_/g, " ")}</span><small>{tool.status === "running" && tool.detail && !tool.detail.startsWith("{") ? tool.detail.slice(0, 80) : tool.status}</small></summary>
+              {tool.detail && <pre>{tool.detail}</pre>}
+            </details>)}
             {message.feedbackSaved && message.id === lastUser?.id && <small>Feedback saved for the next update</small>}
             {message.status === "stopped" && <small>Stopped</small>}
             {message.role === "assistant" && message.text && (!busy || message.id !== lastAnswer?.id) && <div className={styles.messageActions}>
@@ -382,7 +402,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
               {!busy && message.id === lastAnswer?.id && !message.status && lastUser && <button aria-label={ui("Retry answer")} title={ui("Retry answer")} onClick={() => void send(lastUser.text, true)}><RotateCcw size={14} /></button>}
             </div>}
           </article>)}
-          {busy && <div className={styles.activity} role="status"><i />{activity}</div>}
+          {busy && <div className={styles.activity} role="status"><i aria-hidden="true" />{activity}</div>}
           {!busy && (error || lastAnswer?.status === "error" || lastAnswer?.status === "stopped") && <div className={styles.error} role="status"><span>{error || (lastAnswer?.status === "error" ? ui("This answer didn’t finish.") : "")}</span>{lastUser && <button onClick={() => void send(lastUser.text, true)}>Try again</button>}</div>}
         </>}
       </div>
@@ -396,7 +416,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
       {saveError && <div className={styles.saveError} role="alert">Couldn’t save this conversation.<button onClick={() => void persist(stateRef.current).catch(() => {})}>Retry save</button></div>}
       {!historyOpen && <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(conversation.draft); }}>
         {feedbackContext ? <span className={styles.context}><span className={styles.contextDot} /><span>{feedbackContext.title}</span></span> : <button type="button" className={styles.context} aria-pressed={includeContext} title={includeContext ? ui("Remove current page from the next message") : ui("Include current page in the next message")} onClick={() => setIncludeContext(!includeContext)}>{includeContext ? <><span className={styles.contextDot} /><span>{context.title}</span><X size={12} /></> : <><Plus size={13} /><span>Add current page</span></>}</button>}
-        <ComposerTextArea ref={input} aria-label={ui("Ask Screenpipe")} placeholder={feedbackContext ? platform.learnsFromFeedback ? ui("Share feedback to refine this workflow…") : ui("Answer a question or share feedback…") : includeContext && context.purpose === "sop" ? ui("Ask Screenpipe to edit this SOP…") : includeContext && context.workflow ? ui("Ask about this workflow…") : ui("Ask or find anything…")} rows={1}
+        <ComposerTextArea ref={input} aria-label={ui("Ask Screenpipe")} placeholder={feedbackContext ? platform.learnsFromFeedback ? ui("Share feedback to refine this workflow…") : ui("Answer a question or share feedback…") : includeContext && context.purpose === "video" ? ui("Change the narration, screenshots, or pacing…") : includeContext && context.purpose === "sop" ? ui("Ask Screenpipe to edit this SOP…") : includeContext && context.workflow ? ui("Ask about this workflow…") : ui("Ask or find anything…")} rows={1}
           value={conversation.draft} maxLength={8000} disabled={!loaded} onChange={(event) => update((current) => ({
             ...current, conversations: current.conversations.map((item) => item.id === current.activeId ? { ...item, draft: event.target.value } : item),
           }))} onSend={() => void send(conversation.draft)} />

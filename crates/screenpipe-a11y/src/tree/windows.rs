@@ -65,12 +65,7 @@ fn browser_document_kind(app_lower: &str) -> Option<BrowserDocumentKind> {
         .any(|browser| app_lower.contains(browser))
     {
         Some(BrowserDocumentKind::Mozilla)
-    } else if [
-        "msedge", "chrome", "chromium", "brave", "opera", "vivaldi", "arc",
-    ]
-    .iter()
-    .any(|browser| app_lower.contains(browser))
-    {
+    } else if crate::url_filter::is_known_browser(app_lower) {
         Some(BrowserDocumentKind::Chromium)
     } else {
         None
@@ -1321,6 +1316,14 @@ mod tests {
         );
         assert_eq!(
             browser_document_kind("msedge.exe"),
+            Some(BrowserDocumentKind::Chromium)
+        );
+        assert_eq!(
+            browser_document_kind("helium.exe"),
+            Some(BrowserDocumentKind::Chromium)
+        );
+        assert_eq!(
+            browser_document_kind("microsoft edge"),
             Some(BrowserDocumentKind::Chromium)
         );
         assert_eq!(browser_document_kind("notepad.exe"), None);

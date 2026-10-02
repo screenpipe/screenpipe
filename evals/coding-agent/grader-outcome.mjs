@@ -29,13 +29,18 @@ export function classifyGraderError(grader) {
     return "playwright_ct_build_error";
   }
   const summary = [...stdout.matchAll(/^\s*Tests\s+(.+)$/gm)].at(-1)?.[1]?.trim();
-  if (summary === "no tests" && /^\s*Test Files\s+\d+ failed/m.test(stdout) &&
+  // A failed suite can collect zero tests while neighboring suites pass or skip.
+  // Only summaries without executed failures qualify; diagnostic and assertion
+  // guards still apply to both streams, including quoted setup errors.
+  const collectionSummary = summary === "no tests" ||
+    /^(?:\d+ (?:passed|skipped))(?: \| \d+ (?:passed|skipped))* \(\d+\)$/.test(summary ?? "");
+  if (collectionSummary && noAssertion && /^\s*Test Files\s+\d+ failed/m.test(stdout) &&
       /Failed Suites [1-9]/.test(stderr) &&
       ((/^Error: Failed to resolve import ['"][^\r\n]+['"] from ['"][^\r\n]+['"]\. Does the file exist\?\s*$/m.test(stderr) &&
         !/^AssertionError(?: \[[^\]]+\])?:/m.test(stderr)) ||
        /^Error: Failed to load url /m.test(stderr) ||
        // Vitest wraps failures inside vi.mock factories. Require its wrapper,
-       // the caused-by missing URL, zero executed tests, and no assertions.
+       // the caused-by missing URL, no failed tests, and no assertions.
        (/^Error: \[vitest\] There was an error when mocking a module\./m.test(stderr) &&
         /^Caused by: Error: Failed to load url [^\n]+Does the file exist\?\s*$/m.test(stderr) &&
         !/^AssertionError(?: \[[^\]]+\])?:/m.test(stderr)) ||

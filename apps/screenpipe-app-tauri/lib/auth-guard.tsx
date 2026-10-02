@@ -228,9 +228,16 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     }
   }, [loadUser, handleSessionExpired]);
 
+  // A successful loadUser updates settings and recreates these callbacks.
+  // Read the latest callback without restarting the session's timers, which
+  // would otherwise schedule another "initial" check after every success.
+  const verifyTokenRef = useRef(verifyToken);
+  verifyTokenRef.current = verifyToken;
+
   useEffect(() => {
-    const initial = setTimeout(verifyToken, 5000);
-    const interval = setInterval(verifyToken, CHECK_INTERVAL_MS);
+    const verify = () => void verifyTokenRef.current();
+    const initial = setTimeout(verify, 5000);
+    const interval = setInterval(verify, CHECK_INTERVAL_MS);
 
     // Eagerly re-verify entitlement when the user returns to the app — e.g.
     // right after completing checkout in the browser — so a freshly-subscribed
@@ -244,7 +251,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
           typeof document !== "undefined" ? document.visibilityState : undefined
         )
       ) {
-        void verifyToken();
+        verify();
       }
     };
     window.addEventListener("focus", onFocus);
@@ -255,7 +262,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onFocus);
     };
-  }, [verifyToken]);
+  }, [settings.user?.token]);
 
   return <>{children}</>;
 }

@@ -336,7 +336,7 @@ describe('chat handler — current hosted fallback chains', () => {
 
 describe('chat handler — authenticated-free preview lane', () => {
 	it('uses only the dedicated low-cost current chain', () => {
-		expect(FREE_PREVIEW_WATERFALL).toEqual(['gpt-5.6-luna', 'gpt-5.4-mini']);
+		expect(FREE_PREVIEW_WATERFALL).toEqual(['gpt-6-luna', 'gpt-5.4-mini']);
 		expect(FREE_PREVIEW_WATERFALL.some((model) => /opus|pro|gemini|gemma|glm|kimi|qwen/i.test(model))).toBe(false);
 	});
 

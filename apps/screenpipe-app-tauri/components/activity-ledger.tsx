@@ -1509,6 +1509,9 @@ export function ActivityLedger({
     recentEligibilityTick,
     settings.user,
   ]);
+  const pendingHistoryRange = recentRange
+    ? nextActivityHistoryRange(recentRange, historyCoverage, 0)
+    : null;
   const recentActivityAvailable = Boolean(
     recentRange && canAddRecentActivity(recentRange, historyCoverage),
   );
@@ -1739,15 +1742,23 @@ export function ActivityLedger({
           preset,
         );
         if (result.status === "error") throw new Error(result.error);
-        const persisted = result.data;
         if (controller.signal.aborted) return;
+        // Generation returns only its interval. Read the selected view from
+        // the store so filling a gap cannot hide the rest of the day.
+        const snapshot = await commands.getActivityHistory(
+          viewRange.start.toISOString(),
+          viewRange.end.toISOString(),
+        );
+        if (snapshot.status === "error") throw new Error(snapshot.error);
+        if (controller.signal.aborted) return;
+        const persisted = snapshot.data;
         setHistory(historyDocumentFromNative(persisted.entries));
         setHistoryCoverage(persisted.coverage);
         posthog.capture("activity_generation_completed", {
           range: preset,
           source,
           outcome: "generated",
-          activity_count: persisted.entries.length,
+          activity_count: result.data.entries.length,
         });
       } catch (reason) {
         if (controller.signal.aborted) return;
@@ -2023,7 +2034,8 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
               )}
               <Button
                 variant="ghost"
-                size="icon"
+                size="sm"
+                className="gap-2"
                 onClick={() =>
                   history
                     ? addRecentActivity()
@@ -2042,6 +2054,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                     (loading || historyLoading) && "animate-spin",
                   )}
                 />
+                {ui("Refresh history")}
               </Button>
             </div>
           </div>
@@ -2163,6 +2176,29 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
             )
           ) : history ? (
             <section aria-label={ui("Activity history")}>
+              {cacheReady && pendingHistoryRange && recentActivityAvailable ? (
+                <p role="status" className="mb-4 text-sm text-muted-foreground">
+                  {ui(
+                    "Not yet summarized: {value1}. Refresh history to fill this interval.",
+                    {
+                      value1: new Intl.DateTimeFormat(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      }).formatRange(
+                        pendingHistoryRange.start,
+                        pendingHistoryRange.end,
+                      ),
+                    },
+                  )}
+                </p>
+              ) : null}
+              {historyError ? (
+                <p role="alert" className="mb-4 text-sm text-muted-foreground">
+                  {historyError}
+                </p>
+              ) : null}
               {groupedEntries.map(([day, entries]) => (
                 <div key={day} className="mb-12 last:mb-0">
                   <h2 className="border-b border-foreground pb-3 font-sans text-xl font-medium">

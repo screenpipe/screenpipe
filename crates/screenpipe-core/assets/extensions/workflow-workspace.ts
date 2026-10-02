@@ -31,14 +31,14 @@ export function workflowIndex(workflow: any) {
 export default function (pi: ExtensionAPI) {
   const task = process.env.SCREENPIPE_PIPE_NAME || "";
   if (!tasks.includes(task)) return;
-  const actions = ["context", "handoff", "finish"];
+  const actions = ["context", "checkpoint", "handoff", "finish"];
   if (task === "workflow-discover") actions.push("start", "propose");
   if (task === "workflow-maintain") actions.push("propose");
   if (task === "workflow-review") actions.push("reject", "publish");
   pi.registerTool({
     name: "workflow_workspace",
     label: "Workflow drafts",
-    description: "Read shared drafts and durable review decisions, hand a draft to another workflow agent, publish a reviewed draft, or finish your work. Research uses the normal Screenpipe tools and skill. All writes return a durable receipt and remaining work. A draft save is not cycle completion; Review calls finish when remaining.canFinish is true. On conflict, reread context and reconsider before retrying. Publishing requires Review to first inspect original recorder evidence with normal Screenpipe tools, then supply a catalog_revision from context, and an assigned draft matching the catalog output contract.",
+    description: "Read shared drafts and durable review decisions, hand a draft to another workflow agent, publish a reviewed draft, or finish your work. Research uses the normal Screenpipe tools and skill. Use checkpoint to replace your unfinished research note (up to 8000 characters) without finishing the role or advancing coverage. Read it from context on resume. All writes return a durable receipt and remaining work. A draft save is not cycle completion; Review calls finish when remaining.canFinish is true. On conflict, reread context and reconsider before retrying. Publishing requires Review to first inspect original recorder evidence with normal Screenpipe tools, then supply a catalog_revision from context, and an assigned draft matching the catalog output contract.",
     parameters: {
       type: "object", properties: {
         action: {type: "string", enum: actions, description: 'One action name only. To read a draft use {"action":"context","draft_id":"exact-id"}; draft_id is a separate property, never part of action.'},
@@ -96,7 +96,7 @@ export default function (pi: ExtensionAPI) {
           } else {
             result = {task,ready:state.ready,canFinish:state.canFinish,revision:ws.revision,catalogRevision:state.catalogRevision,
               historyStart:catalog.historyStart,
-              cycle:ws.cycle && {id:ws.cycle.id,status:ws.cycle.status,start:ws.cycle.start,end:ws.cycle.end,finished:ws.cycle.finished,changes:ws.cycle.changes},
+              cycle:ws.cycle && {id:ws.cycle.id,status:ws.cycle.status,start:ws.cycle.start,end:ws.cycle.end,finished:ws.cycle.finished,changes:ws.cycle.changes,checkpoints:ws.cycle.checkpoints},
               drafts:Object.values(ws.drafts || {}).map((d:any)=>({id:d.id,status:d.status,assignee:d.assignee,version:d.version,publicationRetry:d.publicationRetry,title:d.payload?.title || d.payload?.name,question:d.history?.at(-1)?.note})),
               workflows:catalog.workflows.map(workflowIndex),
               researchNotes:ws.researchNotes || {},

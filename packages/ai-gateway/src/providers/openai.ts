@@ -130,8 +130,8 @@ function conversationInputRuns(
 }
 
 /**
- * GPT-5.6 explicit prompt caching keeps one stable instruction breakpoint and,
- * for an eligible Pi session, re-marks up to the latest 49 user/tool input
+ * Explicit prompt caching for GPT-5.6 and GPT-6 Luna keeps one stable instruction
+ * breakpoint and, for an eligible Pi session, re-marks the latest 49 user/tool input
  * boundaries. Earlier-turn markers are read-only at OpenAI, while the newest
  * boundary becomes the single growing-history write for the next model call.
  * Older models are deliberately untouched.
@@ -140,7 +140,7 @@ export async function applyGpt56PromptCaching(
 	params: ChatCompletionCreateParams,
 	enableHistory = false,
 ): Promise<void> {
-	if (!/^gpt-5\.6(?:$|[.-])/i.test(params.model)) return;
+	if (!/^gpt-(?:5\.6|6-luna)(?:$|[.-])/i.test(params.model)) return;
 
 	const cached = params as Gpt56CachedChatParams;
 	delete cached.prompt_cache_key;
@@ -293,7 +293,7 @@ export class OpenAIProvider implements AIProvider {
 
 	private usesMaxCompletionTokens(model: string): boolean {
 		const lower = model.toLowerCase();
-		return lower.startsWith('gpt-5') || lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4');
+		return lower.startsWith('gpt-5') || lower.startsWith('gpt-6') || lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4');
 	}
 
 	private applyGenerationOptions(params: ChatCompletionCreateParams, body: RequestBody): void {
@@ -343,7 +343,7 @@ export class OpenAIProvider implements AIProvider {
 		if (!/max_tokens or model output limit was reached/i.test(message)) return false;
 
 		const model = String(current.model ?? '');
-		if (!/^gpt-5(?:$|[.-])/i.test(model)) return false;
+		if (!/^gpt-(?:5|6)(?:$|[.-])/i.test(model)) return false;
 		const key = this.usesMaxCompletionTokens(model) || current.max_completion_tokens !== undefined
 			? 'max_completion_tokens'
 			: 'max_tokens';
@@ -408,13 +408,13 @@ export class OpenAIProvider implements AIProvider {
 	}
 
 	private applyToolCompatibilityOptions(params: ChatCompletionCreateParams, body: RequestBody): void {
-		// The whole GPT-5 family accepts function tools through Chat Completions
+		// The GPT-5 and GPT-6 families accept function tools through Chat Completions
 		// only when reasoning_effort is "none" — including the 5.4 tier, which
 		// background pipes reach with an injected effort (applyBackgroundReasoningDefault).
 		// Pi speaks the Chat Completions protocol, so preserve tool support here
 		// rather than silently cascading the request to another provider. Agentic
 		// callers that need reasoning plus tools can use the Responses API directly.
-		if (/^gpt-5(?:$|[.-])/i.test(body.model) && Array.isArray(body.tools) && body.tools.length > 0) {
+		if (/^gpt-(?:5|6)(?:$|[.-])/i.test(body.model) && Array.isArray(body.tools) && body.tools.length > 0) {
 			Object.assign(params, { reasoning_effort: 'none' });
 		}
 	}

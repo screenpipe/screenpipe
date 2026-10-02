@@ -2408,7 +2408,7 @@
       "criticality": "high",
       "confidence": "conditional",
       "ux": "real-user-flow",
-      "notes": "macOS-only recovery window for missing TCC permissions."
+      "notes": "macOS-only recovery window for required TCC permissions. Reads persisted audio policy so audio-disabled seeds require no microphone row; covers Screen Recording restart UI and reuse after hiding. Native capture visibility is not established because E2E bypasses content protection."
     },
     {
       "spec": "pi-extensions.spec.ts",

@@ -63,7 +63,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.10"
-      - run: bun test ./.github/scripts/release-workflows.test.ts ./.github/scripts/release-performance.test.ts
+      - run: bun test ./.github/scripts/release-workflows.test.ts ./.github/scripts/release-performance.test.ts ./.github/actions/install-windows-frontend-dependencies/prune-dependencies.test.ts
 
   localization-generation:
     if: github.event_name == 'workflow_dispatch'
@@ -161,12 +161,14 @@ jobs:
       matrix:
         os: [windows-latest, windows-11-arm]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.10"
+      - name: Verify selective pruning on Windows
+        run: bun test ./.github/actions/install-windows-frontend-dependencies/prune-dependencies.test.ts
       - name: Reproduce the persistent runner's removed updater package
         shell: pwsh
         working-directory: apps/screenpipe-app-tauri
@@ -174,7 +176,8 @@ jobs:
           $orphan = 'node_modules/@tauri-apps/plugin-updater'
           New-Item -ItemType Directory -Force -Path $orphan | Out-Null
           Set-Content -LiteralPath "$orphan/package.json" -Value '{"name":"@tauri-apps/plugin-updater","version":"2.10.0"}'
-      - uses: ./.github/actions/install-windows-frontend-dependencies
+      - name: Install dependencies from an empty tree
+        uses: ./.github/actions/install-windows-frontend-dependencies
       - name: Verify the installed tree matches the release dependencies
         shell: pwsh
         working-directory: apps/screenpipe-app-tauri
@@ -198,3 +201,37 @@ jobs:
               throw "local dependency differs from release source: $relative"
             }
           }
+      - name: Prepare a warm install with a removed package and changed local source
+        shell: pwsh
+        working-directory: apps/screenpipe-app-tauri
+        run: |
+          $orphan = 'node_modules/@tauri-apps/plugin-updater'
+          New-Item -ItemType Directory -Force -Path $orphan | Out-Null
+          Set-Content -LiteralPath "$orphan/package.json" -Value '{"name":"@tauri-apps/plugin-updater","version":"2.10.0"}'
+          Set-Content -LiteralPath 'node_modules/@tauri-apps/cli/warm-install-marker' -Value 'retain installed dependencies'
+          Set-Content -LiteralPath '.release-workflows-ui/src/removed-release-probe.txt' -Value 'must disappear'
+          Set-Content -LiteralPath 'node_modules/@screenpipe/workflows-ui/src/removed-release-probe.txt' -Value 'must disappear'
+          Set-Content -LiteralPath '../../packages/workflows-ui/src/current-release-probe.txt' -Value 'current release source'
+      - name: Reuse warm dependencies
+        uses: ./.github/actions/install-windows-frontend-dependencies
+      - name: Verify warm reuse and refreshed local source
+        shell: pwsh
+        working-directory: apps/screenpipe-app-tauri
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path -LiteralPath 'node_modules/@tauri-apps/cli/warm-install-marker')) {
+            throw 'warm install rebuilt an unchanged dependency'
+          }
+          if (Test-Path -LiteralPath 'node_modules/@tauri-apps/plugin-updater') {
+            throw 'warm install retained the removed updater plugin'
+          }
+          foreach ($root in @('.release-workflows-ui/src', 'node_modules/@screenpipe/workflows-ui/src')) {
+            if (Test-Path -LiteralPath "$root/removed-release-probe.txt") { throw "stale local source survived: $root" }
+            $probe = Get-Item -LiteralPath "$root/current-release-probe.txt"
+            if ($probe.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'local source uses a symlink' }
+            if ((Get-Content -Raw -LiteralPath $probe.FullName).Trim() -ne 'current release source') {
+              throw "local source was not refreshed: $root"
+            }
+          }
+      - name: Repeat the warm install
+        uses: ./.github/actions/install-windows-frontend-dependencies

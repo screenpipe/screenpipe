@@ -10,7 +10,7 @@ import { advanceMeetingChatStream, emptyStreamState } from "@/components/meeting
 import { INTERNAL_TITLE_PREFIX } from "@/lib/utils/internal-session";
 import type { WorkflowsAssistantPlatform } from "@screenpipe/workflows-ui";
 
-export async function runWorkflowAgent({ name, prompt, config, signal, onProgress, onEvent, allowEmpty = false, timeoutMs = 180000 }: {
+export async function runWorkflowAgent({ name, prompt, config, signal, onProgress, onEvent, allowEmpty = false, timeoutMs = 180000, projectPath }: {
   name: "assistant" | "context" | "guide";
   prompt: string;
   config: PiProviderConfig;
@@ -19,9 +19,11 @@ export async function runWorkflowAgent({ name, prompt, config, signal, onProgres
   onEvent?: (event: AgentInnerEvent) => void;
   allowEmpty?: boolean;
   timeoutMs?: number;
+  projectPath?: string;
 }) {
     const sessionId = `${INTERNAL_TITLE_PREFIX}workflow-${name}-${crypto.randomUUID()}`;
     let stream = emptyStreamState();
+    const toolCalls: NonNullable<import("@screenpipe/workflows-ui").AssistantProgress["toolCalls"]> = [];
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let resolve!: (text: string) => void;
@@ -57,7 +59,16 @@ export async function runWorkflowAgent({ name, prompt, config, signal, onProgres
           !toolName || config.allowedTools?.includes(toolName) === true);
         if (stream.error) { fail(new Error(stream.error)); return; }
         if (envelope.event.type === "message_end" && envelope.event.message?.stopReason === "error") { fail(new Error(envelope.event.message.errorMessage || "Couldn’t finish the answer.")); return; }
-        onProgress?.({ text: stream.text, activity: envelope.event.type?.startsWith("tool_execution") ? "searching" : stream.text ? "writing" : "starting" });
+        const event = envelope.event;
+        if (event.toolCallId && event.toolName && event.type?.startsWith("tool_execution")) {
+          let tool = toolCalls.find(item => item.id === event.toolCallId);
+          if (!tool) { tool = { id: event.toolCallId, name: event.toolName, status: "running" }; toolCalls.push(tool); }
+          if (event.type === "tool_execution_end") tool.status = event.isError ? "error" : "complete";
+          const content = (event.partialResult ?? event.result)?.content;
+          const detail = content?.flatMap(part => typeof part.text === "string" ? [part.text] : []).join("\n");
+          if (detail) tool.detail = detail.slice(0, 2000);
+        }
+        onProgress?.({ toolCalls: toolCalls.map(tool => ({...tool})), text: stream.text, activity: envelope.event.type?.startsWith("tool_execution") ? "searching" : stream.text ? "writing" : "starting" });
         if (stream.done) {
           if (!allowEmpty && !stream.text.trim()) { fail(new Error("No answer came back. Try again.")); return; }
           settled = true; resolve(stream.text);
@@ -67,7 +78,7 @@ export async function runWorkflowAgent({ name, prompt, config, signal, onProgres
       unregister.push(onEvicted((event) => { if (event.sessionId === sessionId) fail(new Error("The conversation was interrupted. Try again.")); }));
       const choice = await workflowModelPreference.load(); assertActive();
       config = { ...config, provider: "screenpipe-cloud", model: WORKFLOW_MODELS[choice].model, url: "", apiKey: null, acpAgent: null, backend: null, maxContextChars: null };
-      const started = await commands.piStart(sessionId, `${base.data}/pi-workflows-${name}`, userToken, config);
+      const started = await commands.piStart(sessionId, projectPath ?? `${base.data}/pi-workflows-${name}`, userToken, config);
       assertActive();
       if (started.status === "error" || !started.data.running) throw new Error(started.status === "error" ? started.error : "Couldn’t start the assistant.");
       const prompted = await commands.piPrompt(sessionId, prompt, null, null);

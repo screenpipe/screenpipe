@@ -80,7 +80,7 @@ PIPE_FRONTIER_POLICY = "reject"
 # - GEMINI_FLEX_INTERACTIVE ("true"): also flex interactive Gemini, not just
 #   background. Set "false" to revert to background-only flex if best-effort
 #   latency hurts user-facing chat.
-# - ROUTER_MODE ("off"): interactive auto difficulty router. "off" = GPT-5.6 Luna
+# - ROUTER_MODE ("off"): interactive auto difficulty router. "off" = GPT-6 Luna
 #   (today's behavior). "heuristic" = regex tiering (0 latency). "embedding" =
 #   bge centroid via Workers AI (best accuracy, +1 embed call). See difficulty-router.ts.
 # - GPT56_HISTORY_CACHE_MODE ("system"): "system" keeps only the stable

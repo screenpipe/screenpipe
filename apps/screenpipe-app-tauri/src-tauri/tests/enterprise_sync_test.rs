@@ -32,6 +32,12 @@ mod enterprise_config_file;
 #[path = "../src/web_base.rs"]
 mod web_base;
 
+// Match search_only::is_active without pulling the Tauri session/UI tree
+// into this isolated sync target. Both call the same shared background gate.
+mod search_only {
+    pub use screenpipe_core::background_work::is_suspended as is_active;
+}
+
 // Credential recovery reads the signed-in account token and persists the
 // refreshed device key through the desktop command boundary. This isolated
 // test target has no Tauri command tree, so keep that boundary inert here;

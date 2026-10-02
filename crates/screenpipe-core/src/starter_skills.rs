@@ -42,6 +42,54 @@ pub const STARTER_SKILLS: &[(&str, &str)] = &[
         "screenpipe-shareable-recap",
         include_str!("../assets/skills/screenpipe-shareable-recap/SKILL.md"),
     ),
+    (
+        "screenpipe-decision-history",
+        include_str!("../assets/skills/screenpipe-decision-history/SKILL.md"),
+    ),
+    (
+        "screenpipe-project-handoff",
+        include_str!("../assets/skills/screenpipe-project-handoff/SKILL.md"),
+    ),
+    (
+        "screenpipe-resume-work",
+        include_str!("../assets/skills/screenpipe-resume-work/SKILL.md"),
+    ),
+    (
+        "screenpipe-commitment-review",
+        include_str!("../assets/skills/screenpipe-commitment-review/SKILL.md"),
+    ),
+    (
+        "screenpipe-project-status",
+        include_str!("../assets/skills/screenpipe-project-status/SKILL.md"),
+    ),
+    (
+        "screenpipe-customer-context",
+        include_str!("../assets/skills/screenpipe-customer-context/SKILL.md"),
+    ),
+    (
+        "screenpipe-bug-report",
+        include_str!("../assets/skills/screenpipe-bug-report/SKILL.md"),
+    ),
+    (
+        "screenpipe-incident-timeline",
+        include_str!("../assets/skills/screenpipe-incident-timeline/SKILL.md"),
+    ),
+    (
+        "screenpipe-workflow-discovery",
+        include_str!("../assets/skills/screenpipe-workflow-discovery/SKILL.md"),
+    ),
+    (
+        "screenpipe-process-guide",
+        include_str!("../assets/skills/screenpipe-process-guide/SKILL.md"),
+    ),
+    (
+        "screenpipe-interview-synthesis",
+        include_str!("../assets/skills/screenpipe-interview-synthesis/SKILL.md"),
+    ),
+    (
+        "screenpipe-writing-context",
+        include_str!("../assets/skills/screenpipe-writing-context/SKILL.md"),
+    ),
 ];
 const MARKER: &str = ".screenpipe-starter-v1";
 
@@ -230,7 +278,7 @@ mod tests {
     fn bundle_installs_and_is_idempotent() {
         let t = Temp::new();
         let paths = install(&t.0).unwrap();
-        assert_eq!(paths.len(), 8);
+        assert_eq!(paths.len(), STARTER_SKILLS.len());
         assert_eq!(install(&t.0).unwrap(), paths);
         for ((name, body), path) in STARTER_SKILLS.iter().zip(paths) {
             assert!(body.contains(&format!("name: {name}")));
@@ -286,6 +334,42 @@ mod tests {
         install_store(&t.0).unwrap();
         assert!(!t.0.join(name).exists());
     }
+    #[test]
+    fn expanded_bundle_upgrades_store_without_resurrecting_deleted_or_edited_skills() {
+        let t = Temp::new();
+        // Simulate the original eight-workflow release and its persisted index.
+        let previous = &STARTER_SKILLS[..8];
+        for (name, body) in previous {
+            install_one(&t.0, name, body).unwrap();
+        }
+        fs::write(
+            t.0.join(".screenpipe-starters-installed-v1"),
+            previous
+                .iter()
+                .map(|(name, _)| format!("{name}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        let deleted = previous[0].0;
+        fs::remove_dir_all(t.0.join(deleted)).unwrap();
+        let edited = t.0.join(previous[1].0).join("SKILL.md");
+        fs::write(&edited, "custom meeting preparation").unwrap();
+
+        install_store(&t.0).unwrap();
+        assert!(!t.0.join(deleted).exists());
+        assert_eq!(
+            fs::read_to_string(edited).unwrap(),
+            "custom meeting preparation"
+        );
+        for (name, body) in &STARTER_SKILLS[8..] {
+            assert_eq!(
+                fs::read_to_string(t.0.join(name).join("SKILL.md")).unwrap(),
+                *body
+            );
+        }
+        assert_eq!(install_store(&t.0).unwrap().len(), STARTER_SKILLS.len() - 1);
+    }
+
     #[test]
     fn reject_unknown_names() {
         let t = Temp::new();

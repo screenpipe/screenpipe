@@ -372,6 +372,10 @@ jobs:
           bun scripts/setup_openblas.js
           "OPENBLAS_PATH=${{ github.workspace }}/apps/screenpipe-app-tauri/src-tauri/openblas" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      - name: Configure Ninja for Windows native dependencies
+        shell: pwsh
+        run: ./.github/scripts/setup-ninja-windows.ps1
+
       - name: Shorten target dir to avoid MAX_PATH
         shell: pwsh
         run: |
@@ -385,6 +389,13 @@ jobs:
 
       - name: Build CLI
         env:
+          # Cargo must pass the short path to CMake; the target junction alone
+          # leaves nested Vulkan compiler probes using the long checkout path.
+          CARGO_TARGET_DIR: "C:/t"
+          # libsamplerate-sys searches build/<profile> on MSVC. Multi-config
+          # Ninja preserves that layout; opt-level="s" requires MinSizeRel.
+          CMAKE_GENERATOR: "Ninja Multi-Config"
+          CMAKE_CONFIGURATION_TYPES: "Debug;Release;RelWithDebInfo;MinSizeRel"
           CARGO_PROFILE_RELEASE_STRIP: "none"
           CARGO_PROFILE_RELEASE_PANIC: "abort"
           CARGO_PROFILE_RELEASE_INCREMENTAL: "false"

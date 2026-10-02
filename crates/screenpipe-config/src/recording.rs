@@ -589,8 +589,8 @@ pub struct RecordingSettings {
     )]
     pub ignored_urls: Vec<UrlRule>,
 
-    /// Strict browser hostname allowlist. When non-empty, native apps and
-    /// browser windows without a positively detected matching URL are skipped.
+    /// Strict browser hostname allowlist. Browser windows without a positively
+    /// detected matching URL are skipped; native apps follow app/window rules.
     #[serde(
         rename = "includedUrls",
         default,
@@ -616,18 +616,24 @@ pub struct RecordingSettings {
     pub pause_on_drm_content: bool,
 
     /// Skip persisting clipboard rows/content in the UI recorder. Defaults to
-    /// `true` (clipboard DB capture OFF) — passwords / API keys / private keys
-    /// frequently pass through the clipboard. Clipboard operations can still
+    /// `false` in enterprise builds and `true` in consumer builds.
+    /// Clipboard operations can still
     /// wake event-driven capture when `captureOnClipboard` is enabled.
-    #[serde(rename = "disableClipboardCapture", default = "default_true")]
+    #[serde(
+        rename = "disableClipboardCapture",
+        default = "default_disable_input_capture"
+    )]
     pub disable_clipboard_capture: bool,
 
     /// Skip persisting keyboard / typed-text rows in the UI recorder.
-    /// Defaults to `true` (keyboard DB capture OFF). Keyboard events still
-    /// wake event-driven capture, and the accessibility tree + OCR still
+    /// Defaults to `false` in enterprise builds and `true` in consumer builds.
+    /// Keyboard events still wake event-driven capture, and the accessibility tree + OCR still
     /// capture on-screen text so Rewind/Ask keep working.
     /// Opt in to keyboard DB rows via the "Capture keyboard" toggle.
-    #[serde(rename = "disableKeyboardCapture", default = "default_true")]
+    #[serde(
+        rename = "disableKeyboardCapture",
+        default = "default_disable_input_capture"
+    )]
     pub disable_keyboard_capture: bool,
 
     /// Skip persisting mouse-click rows in the UI recorder. Defaults to
@@ -656,9 +662,9 @@ pub struct RecordingSettings {
     /// `frames.accessibility_text`, and `ui_events.text_content`. Raw
     /// secrets are gone after the worker processes the row — that's
     /// the contract of the user-facing "AI PII removal" toggle.
-    /// Off by default; capture path is unaffected either way. See
+    /// On by default in enterprise builds; capture path is unaffected. See
     /// `screenpipe-redact` for the full design.
-    #[serde(rename = "asyncPiiRedaction", default)]
+    #[serde(rename = "asyncPiiRedaction", default = "default_ai_pii_redaction")]
     pub async_pii_redaction: bool,
 
     /// Strip secrets from coding-agent (pi) session logs at rest. The
@@ -672,23 +678,25 @@ pub struct RecordingSettings {
     #[serde(rename = "redactAgentSessionSecrets", default)]
     pub redact_agent_session_secrets: bool,
 
-    /// Enable image-PII redaction on captured screen frames. When
-    /// `true`, the `screenpipe_redact::image::worker` runs alongside
-    /// the text reconciliation worker, scans the `frames` table, runs
-    /// the RF-DETR-Nano detector, and blacks out detected PII regions
-    /// in each JPG (atomic overwrite of the source file). Off by
-    /// default — orthogonal to `async_pii_redaction` (text path),
-    /// independently togglable. Requires the `screenpipe-redact`
-    /// crate to be built with one of the `onnx-*` cargo features and
-    /// the `rfdetr_v8.onnx` model present at `~/.screenpipe/models/`.
-    #[serde(rename = "asyncImagePiiRedaction", default)]
+    /// Enable image-PII redaction on captured screen frames. The image
+    /// worker scans the `frames` table and blacks out detected PII regions
+    /// in each JPG (atomic overwrite of the source file), using `pii_backend`.
+    /// On by default in enterprise builds, independently of text redaction.
+    /// The local backend requires an `onnx-*` cargo feature and the
+    /// `rfdetr_v8.onnx` model at `~/.screenpipe/models/`.
+    #[serde(
+        rename = "asyncImagePiiRedaction",
+        default = "default_ai_pii_redaction"
+    )]
     pub async_image_pii_redaction: bool,
 
     /// Where the AI PII redaction actually runs. One switch flips
     /// BOTH modalities (text + image) because the user-facing
     /// "AI PII removal" toggle is one knob.
     ///
-    /// - `"local"` (default): on-device ONNX models. Privacy by
+    /// Enterprise builds default to `"tinfoil"`; consumer builds default to `"local"`.
+    ///
+    /// - `"local"`: on-device ONNX models. Privacy by
     ///   construction — pixels and text never leave the box. Slower,
     ///   especially on weak hardware (~1-3 s per text row, ~60-180 ms
     ///   per frame).
@@ -961,15 +969,15 @@ impl Default for RecordingSettings {
             ignore_incognito_windows: true,
             enhanced_incognito_detection: false,
             pause_on_drm_content: false,
-            disable_clipboard_capture: true,
-            disable_keyboard_capture: true,
+            disable_clipboard_capture: default_disable_input_capture(),
+            disable_keyboard_capture: default_disable_input_capture(),
             disable_click_capture: false,
             record_while_locked: false,
             languages: vec![],
-            use_pii_removal: false,
-            async_pii_redaction: false,
+            use_pii_removal: default_ai_pii_redaction(),
+            async_pii_redaction: default_ai_pii_redaction(),
             redact_agent_session_secrets: false,
-            async_image_pii_redaction: false,
+            async_image_pii_redaction: default_ai_pii_redaction(),
             pii_backend: default_pii_backend(),
             pii_redaction_labels: default_pii_redaction_labels(),
             pii_redaction_columns: default_pii_redaction_columns(),
@@ -996,6 +1004,10 @@ impl Default for RecordingSettings {
             listen_on_lan: false,
         }
     }
+}
+
+fn default_disable_input_capture() -> bool {
+    !cfg!(feature = "enterprise-build")
 }
 
 fn default_true() -> bool {
@@ -1035,8 +1047,16 @@ fn default_pause_extraction_on_input_ms() -> u64 {
     150
 }
 
+fn default_ai_pii_redaction() -> bool {
+    cfg!(feature = "enterprise-build")
+}
+
 fn default_pii_backend() -> String {
-    "local".to_string()
+    if cfg!(feature = "enterprise-build") {
+        "tinfoil".to_string()
+    } else {
+        "local".to_string()
+    }
 }
 
 /// Default redaction allow-list: secrets only. The safety baseline —
@@ -1081,6 +1101,57 @@ fn default_hd_recording_interval_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pii_defaults_follow_build_and_preserve_explicit_choices() {
+        let enterprise = cfg!(feature = "enterprise-build");
+        let defaults = RecordingSettings::default();
+        let missing: RecordingSettings = serde_json::from_str("{}").unwrap();
+        for settings in [defaults, missing] {
+            assert_eq!(settings.use_pii_removal, enterprise);
+            assert_eq!(settings.async_pii_redaction, enterprise);
+            assert_eq!(settings.async_image_pii_redaction, enterprise);
+            assert_eq!(
+                settings.pii_backend,
+                if enterprise { "tinfoil" } else { "local" }
+            );
+        }
+        for enabled in [true, false] {
+            for backend in ["local", "tinfoil"] {
+                let settings: RecordingSettings = serde_json::from_value(serde_json::json!({
+                    "usePiiRemoval": enabled,
+                    "asyncPiiRedaction": enabled,
+                    "asyncImagePiiRedaction": enabled,
+                    "piiBackend": backend,
+                }))
+                .unwrap();
+                assert_eq!(settings.use_pii_removal, enabled);
+                assert_eq!(settings.async_pii_redaction, enabled);
+                assert_eq!(settings.async_image_pii_redaction, enabled);
+                assert_eq!(settings.pii_backend, backend);
+            }
+        }
+    }
+
+    #[test]
+    fn input_capture_defaults_follow_build_and_preserve_explicit_choices() {
+        let disabled = !cfg!(feature = "enterprise-build");
+        let defaults = RecordingSettings::default();
+        let missing: RecordingSettings = serde_json::from_value(serde_json::json!({})).unwrap();
+        for settings in [defaults, missing] {
+            assert_eq!(settings.disable_clipboard_capture, disabled);
+            assert_eq!(settings.disable_keyboard_capture, disabled);
+        }
+        for explicit in [true, false] {
+            let settings: RecordingSettings = serde_json::from_value(serde_json::json!({
+                "disableClipboardCapture": explicit,
+                "disableKeyboardCapture": explicit,
+            }))
+            .unwrap();
+            assert_eq!(settings.disable_clipboard_capture, explicit);
+            assert_eq!(settings.disable_keyboard_capture, explicit);
+        }
+    }
+
     #[test]
     fn screenshot_capture_controls_timeline_cache() {
         for (timeline, screenshots, vision, expected) in [

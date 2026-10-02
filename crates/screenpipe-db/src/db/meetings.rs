@@ -1080,79 +1080,62 @@ impl DatabaseManager {
         Ok(inserted)
     }
 
-    /// Give live meeting-transcript segments the SAME global `speaker_id` that the
-    /// engine-agnostic backfill (`backfill_missing_speakers`) resolved on
-    /// `audio_transcriptions` — so the Meeting view shows the cross-meeting, nameable
-    /// identity instead of Deepgram's per-stream "speaker N" label.
-    ///
-    /// For each segment still missing a speaker (and `captured_at >= since`), take the
-    /// `speaker_id` of the nearest already-identified `audio_transcriptions` row within
-    /// `coverage_window_secs`. The mirrored live row shares the segment's exact
-    /// timestamp, so once the chunk backfill stamps it, it matches first. Idempotent —
-    /// only fills NULLs, and the `EXISTS` guard avoids no-op NULL writes. Returns rows
-    /// updated. Cheap: runs on the reconciliation sweep, never the hot path.
+    /// Copy an identity only from this turn's identified live mirror. A nearby
+    /// same-direction row may be a different participant, device, or stream.
+    /// Exact time, text and device are required, and conflicting mirror identities
+    /// leave the provider-local label unresolved. Existing assignments survive.
     pub async fn backfill_meeting_segment_speakers(
         &self,
         since: DateTime<Utc>,
-        coverage_window_secs: f64,
+        _coverage_window_secs: f64,
     ) -> Result<u64, SqlxError> {
-        // One statement instead of fetch-candidates → per-row nearest-lookup →
-        // update-by-id (up to 501 round-trips per pass). The scalar lookup is
-        // correlated to each of the capped candidates, but — critically — its
-        // timestamp predicates leave `at.timestamp` bare. SQLite can therefore
-        // range-scan `idx_audio_transcriptions_timestamp` instead of materializing
-        // candidate × the entire audio history under a BEGIN IMMEDIATE lock.
-        //
-        // Device match preserved: a mic segment (device_type = 'input') only
-        // pulls an input-device speaker, everything else an output-device one;
-        // COALESCE(is_input_device, 1) keeps the old NULL-defaults-to-input
-        // behaviour. Resolved segments drop out of the candidate set, so
-        // steady-state work is just newly-mirrored segments.
-        //
-        // Calculate proximity from rounded epoch milliseconds rather than a
-        // julianday delta. Equal offsets around a timestamp can differ by one
-        // floating-point ULP in julianday(), which would bypass the documented
-        // timestamp/id tie breakers.
+        // Keep each mirror lookup bounded by the timestamp index. Limit eligible
+        // updates, not unresolved candidates: newer unknown turns must not starve
+        // older turns whose exact mirrors have since acquired an identity.
+        // The old proximity window is retained in the API for callers but cannot
+        // widen identity evidence beyond an exact timestamp match.
         const PER_PASS_LIMIT: i64 = 500;
         let mut tx = self.begin_immediate_with_retry().await?;
         let r = sqlx::query(
-            "WITH cand AS ( \
-                 SELECT id, device_type, captured_at \
-                 FROM meeting_transcript_segments \
-                 WHERE speaker_id IS NULL AND julianday(captured_at) >= julianday(?1) \
-                 ORDER BY captured_at DESC LIMIT ?3 \
-             ), \
-             nearest AS ( \
-                 SELECT c.id AS seg_id, at.speaker_id AS sid, \
-                        ROW_NUMBER() OVER ( \
-                            PARTITION BY c.id \
-                            ORDER BY ABS( \
-                                CAST(ROUND(unixepoch(at.timestamp, 'subsec') * 1000.0) AS INTEGER) - \
-                                CAST(ROUND(unixepoch(c.captured_at, 'subsec') * 1000.0) AS INTEGER) \
-                            ), \
-                                     at.timestamp, at.id \
-                        ) AS rn \
-                 FROM cand c \
-                 JOIN audio_transcriptions at INDEXED BY idx_audio_transcriptions_timestamp \
-                   ON at.timestamp >= strftime( \
-                          '%Y-%m-%dT%H:%M:%f+00:00', c.captured_at, printf('-%f seconds', ?2) \
-                      ) \
-                  AND at.timestamp <= strftime( \
-                          '%Y-%m-%dT%H:%M:%f+00:00', c.captured_at, printf('+%f seconds', ?2) \
-                      ) \
-                  AND at.speaker_id IS NOT NULL \
-                  AND COALESCE(at.is_input_device, 1) = \
-                      (CASE WHEN c.device_type = 'input' THEN 1 ELSE 0 END) \
-             ) \
-             UPDATE meeting_transcript_segments SET speaker_id = ( \
-                 SELECT sid FROM nearest \
-                 WHERE nearest.seg_id = meeting_transcript_segments.id AND nearest.rn = 1 \
-             ) \
-             WHERE speaker_id IS NULL \
-               AND id IN (SELECT seg_id FROM nearest WHERE rn = 1)",
+            r#"
+            WITH cand AS (
+                SELECT id, device_name, device_type, captured_at, transcript
+                FROM meeting_transcript_segments
+                WHERE speaker_id IS NULL AND julianday(captured_at) >= julianday(?1)
+                  AND TRIM(transcript) != ''
+            ), matches AS (
+                SELECT c.id AS seg_id, MIN(a.speaker_id) AS sid
+                FROM cand c
+                JOIN audio_transcriptions a INDEXED BY idx_audio_transcriptions_timestamp
+                  ON a.timestamp >= strftime('%Y-%m-%dT%H:%M:%f+00:00', c.captured_at, printf('-%f seconds', ?2))
+                 AND a.timestamp <= strftime('%Y-%m-%dT%H:%M:%f+00:00', c.captured_at, printf('+%f seconds', ?2))
+                 AND julianday(a.timestamp) = julianday(c.captured_at)
+                 AND a.transcription_engine = 'live'
+                 AND a.transcription = c.transcript
+                 AND a.device = c.device_name
+                 AND a.is_input_device = CASE WHEN c.device_type = 'input' THEN 1 ELSE 0 END
+                 AND a.speaker_id IS NOT NULL
+                WHERE c.device_type IN ('input', 'output')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM meeting_transcript_segments other
+                      WHERE other.id != c.id
+                        AND julianday(other.captured_at) = julianday(c.captured_at)
+                        AND other.device_name = c.device_name AND other.device_type = c.device_type
+                        AND other.transcript = c.transcript
+                  )
+                GROUP BY c.id HAVING COUNT(DISTINCT a.speaker_id) = 1
+                ORDER BY c.captured_at DESC, c.id DESC LIMIT ?3
+            )
+            UPDATE meeting_transcript_segments SET speaker_id = (
+                SELECT sid FROM matches WHERE matches.seg_id = meeting_transcript_segments.id
+            )
+            WHERE speaker_id IS NULL AND id IN (SELECT seg_id FROM matches)
+            "#,
         )
         .bind(since)
-        .bind(coverage_window_secs.max(0.0))
+        // SQLite timestamps are millisecond-rounded; the index envelope must
+        // include the original microsecond value on either side of that rounding.
+        .bind(0.001_f64)
         .bind(PER_PASS_LIMIT)
         .execute(&mut **tx.conn())
         .await?;

@@ -266,7 +266,9 @@ impl OAuthRefreshScheduler {
             );
             sleep_cancellable(&running, STARTUP_DELAY).await;
             while running.load(Ordering::SeqCst) {
-                tick(&store, &runner, &metrics, &failures, &refreshable).await;
+                if !screenpipe_core::background_work::is_suspended() {
+                    tick(&store, &runner, &metrics, &failures, &refreshable).await;
+                }
                 sleep_cancellable(&running, SCAN_INTERVAL).await;
             }
             info!("oauth refresh scheduler: stopped");

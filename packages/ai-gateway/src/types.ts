@@ -160,6 +160,7 @@ export interface Env {
 	CLOUDFLARE_AI_GATEWAY_ID?: string;
 	/** Narration stays disabled until BYOK and its contracted character price are configured. */
 	TTS_ENABLED?: string;
+	SOP_TTS_USD_PER_CHARACTER?: string;
 	ELEVENLABS_VOICE_ID?: string;
 	ELEVENLABS_USD_PER_CHARACTER?: string;
 	/** Local-dev only: Gateway root or compat chat URL when remote binding URL resolution is unavailable. */

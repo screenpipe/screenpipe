@@ -742,18 +742,29 @@ fn meeting_summary_evidence_steps() -> Option<&'static str> {
 fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> {
     let shipped_hashes: &[&str] = match name {
         // v2.7.56: retain observed knowledge work while repairing unsupported outcomes.
-        "workflow-discover" => &["c68d5744f8a33504"],
+        "workflow-discover" => &["d4d8181286615282", "c68d5744f8a33504"],
         // Upgrade the shipped knowledge-work prompts too; otherwise existing
         // tasks never receive the observed-scope repair in a new app build.
-        "workflow-deepen" => &["b278bd6a8abcfc77", "996ff7f9a6026e05", "cf31ccaa932b7784"],
+        "workflow-deepen" => &[
+            "45c67de30edcc651",
+            "b278bd6a8abcfc77",
+            "996ff7f9a6026e05",
+            "cf31ccaa932b7784",
+        ],
         "workflow-review" => &[
+            "6512c73c08db5ceb",
             "ac29fac407670584",
             "182e0b733f5c2bce",
             "7cace9312eb52b72",
             // Review must perform its own lookup and continue after self-edits.
             "09a0ab9de50d94ff",
         ],
-        "workflow-maintain" => &["a769acb2f48eb6c3", "3fd301c337d95126", "75da536f6510aa25"],
+        "workflow-maintain" => &[
+            "6e11baeed08afb5e",
+            "a769acb2f48eb6c3",
+            "3fd301c337d95126",
+            "75da536f6510aa25",
+        ],
         "workflow-discovery" => &["9e7b057416c5e119", "57b754f5d27ad27d", "3cb46a10a341de9b"],
         "workflow-activity" => &[
             "f5adb347d838aff7",
@@ -946,6 +957,10 @@ mod tests {
     #[test]
     fn all_staged_workflow_prompts_upgrade_without_changing_user_configuration() {
         let fixtures = [
+            ("workflow-discover", include_str!("../../assets/pipes/legacy-workflow-prompts/before-research-checkpoints-workflow-discover.md")),
+            ("workflow-deepen", include_str!("../../assets/pipes/legacy-workflow-prompts/before-research-checkpoints-workflow-deepen.md")),
+            ("workflow-maintain", include_str!("../../assets/pipes/legacy-workflow-prompts/before-research-checkpoints-workflow-maintain.md")),
+            ("workflow-review", include_str!("../../assets/pipes/legacy-workflow-prompts/before-research-checkpoints-workflow-review.md")),
             ("workflow-review", include_str!("../../assets/pipes/legacy-workflow-prompts/before-review-ownership-workflow-review.md")),
             ("workflow-maintain", include_str!("../../assets/pipes/legacy-workflow-prompts/before-detail-enrichment-workflow-maintain.md")),
             ("workflow-maintain", include_str!("../../assets/pipes/legacy-workflow-prompts/before-timing-enrichment-workflow-maintain.md")),

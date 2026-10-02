@@ -107,6 +107,7 @@ vi.mock("@/lib/hooks/use-enterprise-pipes", () => ({
 }));
 
 import { useEnterprisePolicyRuntime } from "@/lib/hooks/use-enterprise-policy";
+import { getStore } from "@/lib/hooks/use-settings";
 import {
   ManagedPolicyProvider,
   useManagedPolicy,
@@ -215,6 +216,7 @@ async function renderEnterprisePolicy() {
 describe("enterprise policy runtime manual activation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getStore).mockResolvedValue(mocks.store as any);
     vi.useRealTimers();
     localStorage.clear();
     mocks.webBaseOverride.value = null;
@@ -998,6 +1000,66 @@ describe("enterprise policy runtime manual activation", () => {
     );
     expect(heartbeatCall?.[1]?.signal).toBeInstanceOf(AbortSignal);
     expect(heartbeatCall?.[1]?.connectTimeout).toBe(10_000);
+  });
+
+  it.each(["store open", "settings read", "AI preset write", "AI preset save", "install metadata", "app update save"])(
+    "finishes enterprise verification when %s never returns",
+    async (stage) => {
+      vi.useFakeTimers();
+      const warning = vi.spyOn(console, "warn");
+      mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+      mockEnterpriseApi({});
+      const pending = new Promise<never>(() => {});
+      if (stage === "store open") vi.mocked(getStore).mockReturnValueOnce(pending);
+      if (stage === "settings read") mocks.store.get.mockReturnValueOnce(pending);
+      if (stage === "AI preset write") mocks.store.set.mockReturnValueOnce(pending);
+      if (stage === "AI preset save") mocks.store.save.mockReturnValueOnce(pending);
+      if (stage === "install metadata") {
+        mocks.commands.getEnterpriseInstallMetadata.mockReturnValueOnce(pending);
+      }
+      if (stage === "app update save") {
+        mocks.store.save.mockResolvedValueOnce(undefined).mockReturnValueOnce(pending);
+      }
+
+      const { result, unmount } = await renderEnterprisePolicy();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(LOCAL_COMMAND_TIMEOUT_MS + 1);
+      });
+
+      expect(result.current.authenticationState).toBe("authenticated");
+      expect(mocks.commands.setEnterpriseRecordingAuthorized).toHaveBeenCalledWith(
+        true, "license_key", KEY,
+      );
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining("continuing credential verification"),
+        expect.objectContaining({ message: expect.stringContaining("timed out after 8000ms") }),
+      );
+      unmount();
+      warning.mockRestore();
+    },
+  );
+
+  it("does not apply a late metadata result over a newly selected account", async () => {
+    vi.useFakeTimers();
+    mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(KEY);
+    mockEnterpriseApi({});
+    let finish!: (metadata: any) => void;
+    mocks.commands.getEnterpriseInstallMetadata.mockReturnValueOnce(
+      new Promise((resolve) => { finish = resolve; }),
+    );
+    const { result, unmount } = await renderEnterprisePolicy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(LOCAL_COMMAND_TIMEOUT_MS + 1);
+    });
+    expect(result.current.authenticationState).toBe("authenticated");
+    mocks.settings.user = { token: "new-account-token" };
+    const writes = mocks.store.set.mock.calls.length;
+    await act(async () => {
+      finish({ install_source: "mdm", update_manager: "mdm", managed: true, detected_by: [] });
+    });
+    expect(mocks.store.set).toHaveBeenCalledTimes(writes);
+    expect(mocks.settings.user).toEqual({ token: "new-account-token" });
+    unmount();
   });
 
   it("gives up on a hung policy fetch instead of leaving the gate in checking", async () => {

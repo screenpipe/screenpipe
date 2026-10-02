@@ -128,3 +128,4 @@ pub use sleep_monitor::start_sleep_monitor;
 pub use snapshot_compaction::start_snapshot_compaction;
 pub use ui_recorder::{start_ui_recording, UiRecorderConfig, UiRecorderHandle};
 pub use video::{video_quality_to_crf, video_quality_to_jpeg_q, video_quality_to_preset};
+pub mod search_only;
