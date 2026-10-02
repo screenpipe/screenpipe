@@ -107,7 +107,7 @@ curl -sS -X POST "${SCREENPIPE_LOCAL_API_URL:-http://localhost:3030}/raw_sql" \
   -d '{"query":"SELECT COUNT(*) AS frame_count FROM frames LIMIT 1"}'
 ```
 
-Never access live `db.sqlite`, `db.sqlite-wal`, or `db.sqlite-shm` directly. If MCP, API, and CLI are unavailable, report it. Run database checks or recovery only through Screenpipe with the recorder stopped.
+Never access the recorder's live SQLite database, write-ahead log, or shared-memory files directly. If MCP, API, and CLI are unavailable, report it. Run database checks or recovery only through Screenpipe with the recorder stopped.
 
 ## Shell
 
