@@ -897,11 +897,10 @@ export function createDefaultSettingsObject(isEnterprise = false): Settings {
 	} catch (e) {
 		// Keep platform-independent defaults if platform detection fails.
 	}
-	return {
-		...DEFAULT_SETTINGS,
+	return Object.assign({}, DEFAULT_SETTINGS, {
 		disableClipboardCapture: !isEnterprise,
 		disableKeyboardCapture: !isEnterprise,
-	};
+	});
 }
 
 export function normalizeSettingsArrays(settings: Settings): boolean {
