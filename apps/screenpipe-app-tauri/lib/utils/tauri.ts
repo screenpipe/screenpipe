@@ -4079,15 +4079,15 @@ enhancedIncognitoDetection?: boolean;
 pauseOnDrmContent?: boolean;
 /**
  * Skip persisting clipboard rows/content in the UI recorder. Defaults to
- * `true` (clipboard DB capture OFF) — passwords / API keys / private keys
- * frequently pass through the clipboard. Clipboard operations can still
+ * `false` in enterprise builds and `true` in consumer builds.
+ * Clipboard operations can still
  * wake event-driven capture when `captureOnClipboard` is enabled.
  */
 disableClipboardCapture?: boolean;
 /**
  * Skip persisting keyboard / typed-text rows in the UI recorder.
- * Defaults to `true` (keyboard DB capture OFF). Keyboard events still
- * wake event-driven capture, and the accessibility tree + OCR still
+ * Defaults to `false` in enterprise builds and `true` in consumer builds.
+ * Keyboard events still wake event-driven capture, and the accessibility tree + OCR still
  * capture on-screen text so Rewind/Ask keep working.
  * Opt in to keyboard DB rows via the "Capture keyboard" toggle.
  */

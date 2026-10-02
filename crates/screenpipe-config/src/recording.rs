@@ -616,18 +616,24 @@ pub struct RecordingSettings {
     pub pause_on_drm_content: bool,
 
     /// Skip persisting clipboard rows/content in the UI recorder. Defaults to
-    /// `true` (clipboard DB capture OFF) — passwords / API keys / private keys
-    /// frequently pass through the clipboard. Clipboard operations can still
+    /// `false` in enterprise builds and `true` in consumer builds.
+    /// Clipboard operations can still
     /// wake event-driven capture when `captureOnClipboard` is enabled.
-    #[serde(rename = "disableClipboardCapture", default = "default_true")]
+    #[serde(
+        rename = "disableClipboardCapture",
+        default = "default_disable_input_capture"
+    )]
     pub disable_clipboard_capture: bool,
 
     /// Skip persisting keyboard / typed-text rows in the UI recorder.
-    /// Defaults to `true` (keyboard DB capture OFF). Keyboard events still
-    /// wake event-driven capture, and the accessibility tree + OCR still
+    /// Defaults to `false` in enterprise builds and `true` in consumer builds.
+    /// Keyboard events still wake event-driven capture, and the accessibility tree + OCR still
     /// capture on-screen text so Rewind/Ask keep working.
     /// Opt in to keyboard DB rows via the "Capture keyboard" toggle.
-    #[serde(rename = "disableKeyboardCapture", default = "default_true")]
+    #[serde(
+        rename = "disableKeyboardCapture",
+        default = "default_disable_input_capture"
+    )]
     pub disable_keyboard_capture: bool,
 
     /// Skip persisting mouse-click rows in the UI recorder. Defaults to
@@ -961,8 +967,8 @@ impl Default for RecordingSettings {
             ignore_incognito_windows: true,
             enhanced_incognito_detection: false,
             pause_on_drm_content: false,
-            disable_clipboard_capture: true,
-            disable_keyboard_capture: true,
+            disable_clipboard_capture: default_disable_input_capture(),
+            disable_keyboard_capture: default_disable_input_capture(),
             disable_click_capture: false,
             record_while_locked: false,
             languages: vec![],
@@ -996,6 +1002,10 @@ impl Default for RecordingSettings {
             listen_on_lan: false,
         }
     }
+}
+
+fn default_disable_input_capture() -> bool {
+    !cfg!(feature = "enterprise-build")
 }
 
 fn default_true() -> bool {
@@ -1081,6 +1091,25 @@ fn default_hd_recording_interval_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn input_capture_defaults_follow_build_and_preserve_explicit_choices() {
+        let disabled = !cfg!(feature = "enterprise-build");
+        let defaults = RecordingSettings::default();
+        let missing: RecordingSettings = serde_json::from_value(serde_json::json!({})).unwrap();
+        for settings in [defaults, missing] {
+            assert_eq!(settings.disable_clipboard_capture, disabled);
+            assert_eq!(settings.disable_keyboard_capture, disabled);
+        }
+        for explicit in [true, false] {
+            let settings: RecordingSettings = serde_json::from_value(serde_json::json!({
+                "disableClipboardCapture": explicit,
+                "disableKeyboardCapture": explicit,
+            })).unwrap();
+            assert_eq!(settings.disable_clipboard_capture, explicit);
+            assert_eq!(settings.disable_keyboard_capture, explicit);
+        }
+    }
+
     #[test]
     fn screenshot_capture_controls_timeline_cache() {
         for (timeline, screenshots, vision, expected) in [
