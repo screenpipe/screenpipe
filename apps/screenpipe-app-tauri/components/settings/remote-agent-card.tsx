@@ -34,6 +34,18 @@ const JSON_SNIPPET = `{
 }
 `;
 
+const OPENCLAW_JSON_SNIPPET = `{
+  "mcp": {
+    "servers": {
+      "screenpipe": {
+        "command": "bun",
+        "args": ["x", "screenpipe-mcp@latest"],
+        "transport": "stdio"
+      }
+    }
+  }
+}`;
+
 const YAML_SNIPPET = `mcp_servers:
   screenpipe:
     command: npx
@@ -82,8 +94,8 @@ const TARGETS: { id: TargetId; label: string; props: AgentCardProps }[] = [
       description:
         msg("Run any AI agent on your VPS 24/7. Wire it to screenpipe — register the MCP server, install the skill, or sync your data.", {}),
       homepage: "https://github.com/openclaw/openclaw",
-      mcp: { format: "json", configPath: "~/openclaw/mcp.json", snippet: JSON_SNIPPET },
-      skills: skillVariants("~/openclaw/skills"),
+      mcp: { format: "json", configPath: "~/.openclaw/openclaw.json", snippet: OPENCLAW_JSON_SNIPPET },
+      skills: skillVariants("~/.openclaw/skills"),
       sync: { defaultRemotePath: "~/screenpipe-data", storageKeyPrefix: "openclaw" },
       connect: {
         integrationId: "openclaw",
@@ -97,10 +109,10 @@ const TARGETS: { id: TargetId; label: string; props: AgentCardProps }[] = [
           },
           {
             key: "token",
-            label: msg("Gateway Token", {}),
+            label: msg("Hook Token", {}),
             secret: true,
-            placeholder: msg("Your-openclaw-gateway-token", {}),
-            helpUrl: "https://docs.openclaw.ai/gateway/authentication",
+            placeholder: msg("hooks.token", {}),
+            helpUrl: "https://docs.openclaw.ai/gateway/config-hooks",
           },
         ],
       },
