@@ -17,15 +17,12 @@ use screenpipe_audio::vad::silero::SileroVad;
 use screenpipe_audio::vad::VadEngine;
 use vad_rs::VadStatus;
 
-/// Frame size matching prepare_segments.rs.
-const FRAME_SIZE: usize = 1600;
-
 /// Compute speech_ratio for an audio segment.
 fn compute_speech_ratio(audio: &[f32], vad: &mut SileroVad) -> f32 {
     let mut total_frames = 0u32;
     let mut speech_frames = 0u32;
 
-    for chunk in audio.chunks(FRAME_SIZE) {
+    for chunk in audio.chunks(vad.frame_size()) {
         total_frames += 1;
         if let Ok(VadStatus::Speech) = vad.audio_type(chunk) {
             speech_frames += 1;

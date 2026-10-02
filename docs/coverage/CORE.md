@@ -8,11 +8,11 @@ confidence, and criticality.
 - Manifest: `docs/coverage/core-engine-map.json`
 - Tracked crates: screenpipe-engine, screenpipe-db, screenpipe-sqlite-coordinator, screenpipe-audio, screenpipe-screen, screenpipe-a11y, screenpipe-fs
 - Mapped suites: 36
-- Mapped Rust files: 380
-- Active test blocks: 3735
-- Ignored/manual test blocks: 168
-- Declared test blocks: 3903
-- Weighted coverage points: 3081.1
+- Mapped Rust files: 381
+- Active test blocks: 3738
+- Ignored/manual test blocks: 169
+- Declared test blocks: 3907
+- Weighted coverage points: 3082.6
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -23,9 +23,9 @@ are explicitly enabled in a runtime lane.
 
 | Platform | Suites | Active tests | Ignored tests | Weighted points | Layers | Flows | Critical score |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| windows | 32 | 3589 | 154 | 3014.9 | 21 | 11 | 100% |
-| macos | 31 | 3617 | 129 | 3004.8 | 22 | 11 | 100% |
-| linux | 28 | 3174 | 129 | 2639.6 | 20 | 11 | 100% |
+| windows | 32 | 3592 | 155 | 3016.4 | 21 | 11 | 100% |
+| macos | 31 | 3620 | 130 | 3006.3 | 22 | 11 | 100% |
+| linux | 28 | 3177 | 130 | 2641.1 | 20 | 11 | 100% |
 
 ## Crate Summary
 
@@ -34,7 +34,7 @@ are explicitly enabled in a runtime lane.
 | screenpipe-engine | 12 | 21 | 126 | 1796 | 52 | 1381.6 | 10 |
 | screenpipe-db | 5 | 64 | 26 | 589 | 25 | 561.1 | 9 |
 | screenpipe-sqlite-coordinator | 1 | 0 | 3 | 27 | 0 | 27.0 | 2 |
-| screenpipe-audio | 7 | 25 | 53 | 672 | 48 | 588.8 | 5 |
+| screenpipe-audio | 7 | 26 | 53 | 675 | 49 | 590.3 | 5 |
 | screenpipe-screen | 6 | 9 | 19 | 272 | 9 | 242.3 | 4 |
 | screenpipe-a11y | 4 | 2 | 31 | 376 | 34 | 277.3 | 3 |
 | screenpipe-fs | 1 | 0 | 1 | 3 | 0 | 3.0 | 3 |
@@ -63,7 +63,7 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | Layer | windows | macos | linux |
 | --- | --- | --- | --- |
 | accessibility | 4 suites / 374 active / 35 ignored / 340.1 pts | 4 suites / 415 active / 10 ignored / 336.4 pts | 4 suites / 334 active / 7 ignored / 306.5 pts |
-| audio | 9 suites / 794 active / 49 ignored / 710.8 pts | 8 suites / 788 active / 49 ignored / 706.6 pts | 7 suites / 709 active / 48 ignored / 651.3 pts |
+| audio | 9 suites / 797 active / 50 ignored / 712.3 pts | 8 suites / 791 active / 50 ignored / 708.0 pts | 7 suites / 712 active / 49 ignored / 652.8 pts |
 | audio-device | 2 suites / 234 active / 7 ignored / 210.3 pts | 2 suites / 234 active / 7 ignored / 210.3 pts | 1 suites / 155 active / 6 ignored / 155.0 pts |
 | configuration | 2 suites / 143 active / 3 ignored / 129.2 pts | 2 suites / 143 active / 3 ignored / 129.2 pts | 2 suites / 143 active / 3 ignored / 129.2 pts |
 | database | 7 suites / 542 active / 21 ignored / 514.1 pts | 7 suites / 542 active / 21 ignored / 514.1 pts | 7 suites / 542 active / 21 ignored / 514.1 pts |
@@ -73,7 +73,7 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | meeting | 6 suites / 1693 active / 24 ignored / 1382.5 pts | 6 suites / 1693 active / 24 ignored / 1382.5 pts | 4 suites / 1344 active / 20 ignored / 1057.2 pts |
 | ocr | 4 suites / 137 active / 7 ignored / 127.7 pts | 4 suites / 130 active / 7 ignored / 125.5 pts | 3 suites / 121 active / 6 ignored / 116.5 pts |
 | os-integration | 1 suites / 6 active / 0 ignored / 1.7 pts | 1 suites / 6 active / 0 ignored / 1.7 pts | - |
-| performance | 13 suites / 1622 active / 78 ignored / 1435.0 pts | 14 suites / 1730 active / 82 ignored / 1478.2 pts | 13 suites / 1622 active / 78 ignored / 1435.0 pts |
+| performance | 13 suites / 1625 active / 79 ignored / 1436.5 pts | 14 suites / 1733 active / 83 ignored / 1479.7 pts | 13 suites / 1625 active / 79 ignored / 1436.5 pts |
 | pipes | 1 suites / 527 active / 3 ignored / 368.9 pts | 1 suites / 527 active / 3 ignored / 368.9 pts | 1 suites / 527 active / 3 ignored / 368.9 pts |
 | privacy | 5 suites / 980 active / 42 ignored / 791.6 pts | 5 suites / 1021 active / 17 ignored / 787.9 pts | 5 suites / 940 active / 14 ignored / 757.9 pts |
 | real-app | - | 1 suites / 108 active / 4 ignored / 43.2 pts | - |
@@ -81,7 +81,7 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | storage | 4 suites / 667 active / 38 ignored / 553.9 pts | 4 suites / 667 active / 38 ignored / 553.9 pts | 4 suites / 667 active / 38 ignored / 553.9 pts |
 | sync | 1 suites / 527 active / 3 ignored / 368.9 pts | 1 suites / 527 active / 3 ignored / 368.9 pts | 1 suites / 527 active / 3 ignored / 368.9 pts |
 | timeline | 4 suites / 1214 active / 44 ignored / 994.4 pts | 4 suites / 1214 active / 44 ignored / 994.4 pts | 4 suites / 1214 active / 44 ignored / 994.4 pts |
-| transcription | 6 suites / 867 active / 47 ignored / 678.8 pts | 5 suites / 861 active / 47 ignored / 674.6 pts | 5 suites / 861 active / 47 ignored / 674.6 pts |
+| transcription | 6 suites / 870 active / 48 ignored / 680.2 pts | 5 suites / 864 active / 48 ignored / 676.0 pts | 5 suites / 864 active / 48 ignored / 676.0 pts |
 | ui-events | 4 suites / 795 active / 34 ignored / 603.0 pts | 3 suites / 728 active / 5 ignored / 556.1 pts | 3 suites / 728 active / 5 ignored / 556.1 pts |
 | vision-capture | 6 suites / 569 active / 32 ignored / 448.4 pts | 6 suites / 562 active / 32 ignored / 446.2 pts | 5 suites / 553 active / 31 ignored / 437.2 pts |
 
@@ -126,7 +126,7 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | audio-device-stream-health | screenpipe-audio | windows, macos, linux | audio-device, audio, performance | audio-device-health, audio-record-transcribe, performance-liveness | high | strong | mixed | 14 | 155 | 6 | Device monitor, device manager, stream buffering, source lag, audio metrics, Bluetooth gap/hallucination regressions, and cross-platform process-tap watchdog counters (process_tap.rs split into src/core/process_tap/ modules). |
 | audio-meetings-speakers-dedup | screenpipe-audio | windows, macos, linux | audio, meeting, speaker, transcription | audio-record-transcribe, meeting-live-notes, performance-liveness | high | strong | mixed | 26 | 269 | 10 | Meeting streaming config/controller logic, speaker embedding state, cross-device dedupe simulations, and overlap cleanup coverage. |
 | audio-models-filtering | screenpipe-audio | windows, macos, linux | audio, transcription, privacy | audio-record-transcribe, privacy-and-redaction | medium | partial | mixed | 6 | 20 | 10 | Model-download/TLS guards, ONNX startup smoke, and music-versus-speech filtering. |
-| audio-pipeline-benchmarks | screenpipe-audio | windows, macos, linux | audio, transcription, performance | audio-record-transcribe, meeting-live-notes, performance-liveness | medium | partial | benchmark | 8 | 22 | 12 | Benchmark-backed regression probes for VAD, smart mode, meeting audio, quality, cross-device, and end-to-end pipeline timing. |
+| audio-pipeline-benchmarks | screenpipe-audio | windows, macos, linux | audio, transcription, performance | audio-record-transcribe, meeting-live-notes, performance-liveness | medium | partial | benchmark | 9 | 25 | 13 | Benchmark-backed regression probes for VAD, smart mode, meeting audio, quality, cross-device, and end-to-end pipeline timing. Native-window continuity, valid 16 kHz fallback frames and partial-tail regression tests; optional real-model speech-fixture timing is ignored by default. |
 | audio-platform-output-capture | screenpipe-audio | windows, macos | audio-device, audio, meeting | audio-device-health, audio-record-transcribe, meeting-live-notes | high | partial | unit | 7 | 79 | 1 | OS-specific output/system-audio capture: CoreAudio process tap and SCK output watchdog plus VPIO health policy on macOS, per-process meeting audio taps on both platforms, and the Windows follow-the-audio output watchdog. Platform impl files are cfg-gated to their target OS. |
 | audio-transcription-pipeline | screenpipe-audio | windows, macos, linux | audio, transcription, performance | audio-record-transcribe, meeting-live-notes, performance-liveness | high | partial | mixed | 16 | 121 | 9 | Batch deferral, cleanup, language detection, result normalization, and real recording/transcription tests. Hardware/model-heavy tests are ignored by default. Also covers ffmpeg encode child reaping on error paths. |
 | audio-windows-parakeet-provider | screenpipe-audio | windows | audio, transcription | audio-record-transcribe | high | partial | unit | 1 | 6 | 0 | Registers existing CPU override, eligible adapter selection, DXGI ordinal, error fallback and adapter determinism tests. Windows-only; manifest registration does not verify execution on physical GPU hardware. |
@@ -271,6 +271,7 @@ bun run coverage:core -- --llvm-cov-summary ../../docs/coverage/core-llvm-cov-su
 | audio-meetings-speakers-dedup | screenpipe-audio | tests/speaker_identification.rs | integration | 2 | 1 | 3 |
 | audio-meetings-speakers-dedup | screenpipe-audio | tests/speaker_identity_gate_real_audio_test.rs | integration | 0 | 4 | 4 |
 | audio-meetings-speakers-dedup | screenpipe-audio | tests/speaker_identity_gate_test.rs | integration | 11 | 0 | 11 |
+| audio-pipeline-benchmarks | screenpipe-audio | tests/vad_frame_continuity_test.rs | integration | 3 | 1 | 4 |
 | db-runtime-reliability | screenpipe-db | src/cancellable_query.rs | source | 2 | 0 | 2 |
 | db-timeline-frames | screenpipe-db | src/db/activity_ledger.rs | source | 5 | 0 | 5 |
 | db-accessibility-ui-events | screenpipe-db | src/db/elements.rs | source | 5 | 0 | 5 |
