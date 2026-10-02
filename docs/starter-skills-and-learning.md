@@ -116,7 +116,10 @@ created/patched by the existing provenance-aware API. A patch carries the last
 read SHA; manual edits, imported skills, and skills created by another agent
 are not adopted by the learning task.
 
-Successful changes have a verified read-back and a local before/after artifact
+Successful changes verify the read-back hash, skill identity, agent ownership,
+description and instructions against the requested method, allowing the store's
+whitespace normalization. A mismatch leaves the pending receipt in place without
+consuming evidence or reporting success. Changes have a local before/after artifact
 at `output/latest-change.md`. `output/learning-state.json` records ownership,
 consumed evidence, and the previous version of the last change. A pending receipt
 is written before the API mutation. A timeout or interrupted write leaves the

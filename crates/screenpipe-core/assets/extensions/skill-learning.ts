@@ -149,7 +149,14 @@ export default function (pi: ExtensionAPI) {
       source: "skill-learning",
     });
     const verified = await request("/agent/skills/manage", { action: "read", name: input.name });
-    if (!skill?.sha256 || verified.skill?.sha256 !== skill.sha256) throw new Error("Could not verify the saved skill. Review the pending change.");
+    const saved = verified.skill;
+    // Matching response hashes alone do not establish that the requested
+    // method was saved. The store trims description and body on rendering.
+    if (!skill?.sha256 || saved?.sha256 !== skill.sha256
+      || saved.key !== input.name || saved.name !== input.name || saved.origin !== "agent"
+      || saved.description !== input.description.trim() || saved.instructions !== input.instructions.trim()) {
+      throw new Error("Could not verify the saved skill. Review the pending change.");
+    }
     await localFile("latest-change.md", `# ${current ? "Updated" : "Created"} ${input.name}\n\nSaved locally. Validation: authored scenarios; effectiveness needs later observation.\n\n## Before\n\n${current?.instructions ?? "New skill."}\n\n## After\n\n${input.instructions}\n\n## Checks\n\n${input.checks.map((c: string) => `- ${c}`).join("\n")}\n`);
     state = { owned: { ...state.owned, [input.name]: skill.sha256 }, used: [...new Set([...state.used, ...refs])].slice(-300), changes: (state.changes || 0) + 1, last_change: { name: input.name, sha256: skill.sha256, previous: current ?? null } };
     await saveState();

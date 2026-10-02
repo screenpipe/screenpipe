@@ -19,7 +19,7 @@ async function harness(state?: any) {
   const hooks = new Map<string, any>(); const tools = new Map<string, any>(); let active: string[] = [];
   learning({ on: (name: string, fn: any) => hooks.set(name, fn), registerTool: (t: any) => tools.set(t.name, t), setActiveTools: (names: string[]) => active = names } as any);
   await hooks.get("session_start")({}, { cwd: root });
-  const calls: { path: string; body: any }[] = []; let stored: any = null; let failWrite = false;
+  const calls: { path: string; body: any }[] = []; let stored: any = null; let failWrite = false; let savedPatch: any = {};
   globalThis.fetch = (async (url: any, init: any) => {
     const path = new URL(String(url)).pathname; const body = init.body ? JSON.parse(init.body) : null; calls.push({ path, body });
     expect(String(url)).toStartWith("http://127.0.0.1:3130/"); expect(init.headers.Authorization).toBe("Bearer synthetic-test-token");
@@ -28,11 +28,11 @@ async function harness(state?: any) {
     if (body.action === "list") return Response.json({ skills: stored ? [stored] : [] });
     if (body.action === "read") return Response.json({ skill: stored });
     if (failWrite) return Response.json({ error: "conflict" }, { status: 409 });
-    stored = { ...body, key: body.name, origin: "agent", sha256: "saved-hash" }; return Response.json({ skill: stored });
+    stored = { ...body, description: body.description.trim(), instructions: body.instructions.trim(), key: body.name, origin: "agent", sha256: "saved-hash", ...savedPatch }; return Response.json({ skill: stored });
   }) as any;
   const call = async (name: string, input = {}) => { const value = await tools.get(name).execute("id", input); return { ...JSON.parse(value.content[0].text), isError: value.isError }; };
   const refs = async () => (await call("learning_context", { source: "activity" })).items.map((i: any) => i.ref);
-  return { root, hooks, active, calls, call, refs, fail: () => failWrite = true, seed: (s: any) => stored = s };
+  return { root, hooks, active, calls, call, refs, fail: () => failWrite = true, seed: (s: any) => stored = s, alterSaved: (patch: any) => savedPatch = patch };
 }
 
 describe("learning decision boundary evals", () => {
@@ -69,6 +69,24 @@ describe("learning tool integration", () => {
     const state = JSON.parse(await readFile(join(h.root, "output/learning-state.json"), "utf8")); expect(state.pending).toBeUndefined(); expect(state.used).toEqual(evidence);
     expect(await readFile(join(h.root, "output/latest-change.md"), "utf8")).toContain("effectiveness needs later observation");
     expect((await h.call("learning_save", { ...proposal, evidence })).isError).toBe(true);
+  });
+  for (const [field, value] of [
+    ["key", "screenpipe-learned-different"], ["name", "screenpipe-learned-different"],
+    ["description", "A different trigger"], ["instructions", "A different method"], ["origin", "user"],
+  ]) test(`rejects a saved ${field} mismatch even when both returned hashes match`, async () => {
+    const h = await harness(); await h.call("learning_inventory"); const evidence = await h.refs();
+    h.alterSaved({ [field]: value });
+    const saved = await h.call("learning_save", { ...proposal, evidence });
+    expect(saved.isError).toBe(true); expect(saved.saved).toBeUndefined();
+    const state = JSON.parse(await readFile(join(h.root, "output/learning-state.json"), "utf8"));
+    expect(state.pending.name).toBe(proposal.name); expect(state.used).toEqual([]); expect(state.owned).toEqual({});
+    expect(await readFile(join(h.root, "output/latest-change.md"), "utf8").catch(() => null)).toBeNull();
+    await h.call("learning_save", { ...proposal, evidence });
+    expect(h.calls.filter(c => c.body?.action === "create")).toHaveLength(1);
+  });
+  test("accepts the engine's whitespace normalization on read-back", async () => {
+    const h = await harness(); await h.call("learning_inventory"); const evidence = await h.refs();
+    expect((await h.call("learning_save", { ...proposal, evidence, description: ` ${proposal.description} `, instructions: `\n${proposal.instructions}\n` })).saved).toBe(proposal.name);
   });
   test("a failed write leaves a pending receipt and never retries automatically", async () => {
     const h = await harness(); await h.call("learning_inventory"); const evidence = await h.refs(); h.fail();
