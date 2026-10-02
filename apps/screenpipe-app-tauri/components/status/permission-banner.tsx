@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { commands } from "@/lib/utils/tauri";
 import { openPermissionSettingsWithFlow, requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 import { usePlatform } from "@/lib/hooks/use-platform";
+import { useSettings } from "@/lib/hooks/use-settings";
+import { isMicrophoneRequired } from "@/lib/utils/permission-requirements";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 import { useGT } from "gt-react";
 
@@ -29,6 +31,8 @@ interface PermissionState {
 export function PermissionBanner() {
 
   const ui = useGT();
+  const { settings, isSettingsLoaded } = useSettings();
+  const audioDisabled = !isMicrophoneRequired(settings);
   const [permissions, setPermissions] = useState<PermissionState | null>(null);
 
   const { isMac } = usePlatform();
@@ -60,15 +64,17 @@ export function PermissionBanner() {
   });
 
   // Don't render on non-Mac or while loading
-  if (!isMac || !permissions) return null;
+  if (!isMac || !permissions || !isSettingsLoaded) return null;
+
+  const micOk = audioDisabled || permissions.micOk;
 
   // Don't render if all permissions are granted
-  if (permissions.screenOk && permissions.micOk && permissions.accessibilityOk) return null;
+  if (permissions.screenOk && micOk && permissions.accessibilityOk) return null;
 
 
   const missingPerms: string[] = [];
   if (!permissions.screenOk) missingPerms.push("screen recording");
-  if (!permissions.micOk) missingPerms.push("microphone");
+  if (!micOk) missingPerms.push("microphone");
   if (!permissions.accessibilityOk) missingPerms.push("accessibility");
 
   return (
@@ -102,12 +108,12 @@ export function PermissionBanner() {
             // (e.g. mic prompt, accessibility prompt). If the permission was already
             // denied, it falls back to opening System Settings internally.
             try {
-              if (!permissions.micOk) await commands.requestPermission("microphone");
+              if (!micOk) await commands.requestPermission("microphone");
               else if (!permissions.accessibilityOk) await requestPermissionWithFlow("accessibility");
               else if (!permissions.screenOk) await requestPermissionWithFlow("screenRecording");
             } catch {
               // fallback to opening settings directly
-              if (!permissions.micOk) await openPermissionSettingsWithFlow("microphone");
+              if (!micOk) await openPermissionSettingsWithFlow("microphone");
               else if (!permissions.accessibilityOk) await openPermissionSettingsWithFlow("accessibility");
               else if (!permissions.screenOk) await openPermissionSettingsWithFlow("screenRecording");
             }

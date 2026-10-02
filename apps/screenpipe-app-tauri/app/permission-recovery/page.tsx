@@ -10,6 +10,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "@/lib/utils/tauri";
 import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
 import { usePlatform } from "@/lib/hooks/use-platform";
+import { useSettings } from "@/lib/hooks/use-settings";
+import { isMicrophoneRequired } from "@/lib/utils/permission-requirements";
 import posthog from "posthog-js";
 import { useGT } from "gt-react";
 
@@ -126,6 +128,8 @@ function PermissionRow({
 export default function PermissionRecoveryPage() {
 
   const ui = useGT();
+  const { settings, isSettingsLoaded } = useSettings();
+  const audioDisabled = !isMicrophoneRequired(settings);
   const [permissions, setPermissions] = useState<Record<string, string> | null>(null);
   // Keychain: "granted" if enabled or unavailable (no keychain on this OS),
   // "denied" only if the user previously opted in but access is now refused.
@@ -133,13 +137,17 @@ export default function PermissionRecoveryPage() {
   const { isMac: isMacOS } = usePlatform();
   const restartTriggeredRef = useRef(false);
   const [restartingApp, setRestartingApp] = useState(false);
+  const [recoveryError, setRecoveryError] = useState(false);
 
+  const permissionCheckGeneration = useRef(0);
   const checkPermissions = useCallback(async () => {
+    const generation = ++permissionCheckGeneration.current;
     try {
       const perms = await commands.doPermissionsCheck(false);
-      setPermissions(perms);
+      if (generation === permissionCheckGeneration.current) setPermissions(perms);
       return perms;
     } catch (error) {
+      if (generation === permissionCheckGeneration.current) setPermissions(null);
       console.error("failed to check permissions:", error);
       return null;
     }
@@ -168,37 +176,49 @@ export default function PermissionRecoveryPage() {
     checkPermissions();
     if (isMacOS) checkKeychain();
     const interval = setInterval(() => {
-      if (restartTriggeredRef.current) return;
       checkPermissions();
       if (isMacOS) checkKeychain();
     }, 3000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      permissionCheckGeneration.current += 1;
+    };
   }, [checkPermissions, checkKeychain, isMacOS]);
 
-  // Auto-close and restart when critical permissions are restored
+  const canRecover = isSettingsLoaded && permissions !== null &&
+    ["granted", "notNeeded"].includes(permissions.screenRecording) &&
+    (audioDisabled || ["granted", "notNeeded"].includes(permissions.microphone)) &&
+    (!isMacOS || ["granted", "notNeeded"].includes(permissions.accessibility));
+
+  // A hidden recovery webview is reused. Rearm after a later permission loss,
+  // and cancel both the delay and a late IPC completion if grants change.
   useEffect(() => {
-    if (!permissions || restartTriggeredRef.current) return;
-
-    const screenOk = permissions.screenRecording === "granted" || permissions.screenRecording === "notNeeded";
-    const micOk = permissions.microphone === "granted" || permissions.microphone === "notNeeded";
-    const accessibilityOk =
-      !isMacOS ||
-      permissions.accessibility === "granted" ||
-      permissions.accessibility === "notNeeded";
-
-    if (screenOk && micOk && accessibilityOk) {
-      restartTriggeredRef.current = true;
-      setTimeout(async () => {
-        try {
-          await commands.stopScreenpipe();
-          await commands.spawnScreenpipe(null);
-          await commands.closeWindow("PermissionRecovery");
-        } catch {
-          try { await commands.closeWindow("PermissionRecovery"); } catch {}
-        }
-      }, 1000);
+    if (!canRecover) {
+      restartTriggeredRef.current = false;
+      setRecoveryError(false);
+      return;
     }
-  }, [permissions, isMacOS]);
+    if (restartTriggeredRef.current || recoveryError) return;
+    let cancelled = false;
+    const timeout = setTimeout(async () => {
+      restartTriggeredRef.current = true;
+      try {
+        // Preserve a user pause under native lifecycle control.
+        const result = await commands.retryScreenpipe();
+        if (result.status === "error") throw new Error(result.error);
+        if (!cancelled) await commands.closeWindow("PermissionRecovery");
+      } catch {
+        if (!cancelled) {
+          restartTriggeredRef.current = false;
+          setRecoveryError(true);
+        }
+      }
+    }, 1000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [canRecover, recoveryError]);
 
   const handleFix = async (permission: Parameters<typeof commands.requestPermission>[0]) => {
     posthog.capture("permission_recovery_manual_fix", { permission });
@@ -233,20 +253,17 @@ export default function PermissionRecoveryPage() {
     permissions?.screenRecording === "restartRequired";
   const screenStatus: PermissionStatus = permissions?.screenRecording === "granted" || permissions?.screenRecording === "notNeeded"
     ? "granted" : permissions === null ? "checking" : "denied";
-  const micStatus: PermissionStatus = permissions?.microphone === "granted" || permissions?.microphone === "notNeeded"
+  const micStatus: PermissionStatus = audioDisabled || permissions?.microphone === "granted" || permissions?.microphone === "notNeeded"
     ? "granted" : permissions === null ? "checking" : "denied";
   const accessibilityStatus: PermissionStatus = permissions?.accessibility === "granted" || permissions?.accessibility === "notNeeded"
     ? "granted" : permissions === null ? "checking" : "denied";
 
-  const allOk =
-    screenStatus === "granted" &&
-    micStatus === "granted" &&
-    accessibilityStatus === "granted";
+  const allOk = canRecover;
 
   // Wheel rows in fix order (screen last — regaining it restarts the engine).
   // The keychain row only exists while denied, so it can't hold the wheel up.
   const rows = [
-    {
+    ...(!audioDisabled && isSettingsLoaded ? [{
       id: "microphone",
       icon: <Mic className="w-4 h-4" strokeWidth={1.5} />,
       label: ui("Microphone"),
@@ -254,7 +271,7 @@ export default function PermissionRecoveryPage() {
       status: micStatus,
       onFix: () => handleFix("microphone"),
       testId: "permission-row-microphone",
-    },
+    }] : []),
     ...(isMacOS
       ? [
           {
@@ -344,10 +361,17 @@ export default function PermissionRecoveryPage() {
               {restartingApp ? ui("Restarting...") : ui("Restart screenpipe")}
             </button>
           </div>
+        ) : recoveryError ? (
+          <div role="alert" className="space-y-2 text-center font-mono text-xs">
+            <p>{ui("Could not resume recording. Try again.")}</p>
+            <button className="border border-foreground px-3 py-2" onClick={() => setRecoveryError(false)}>
+              {ui("Retry recording")}
+            </button>
+          </div>
         ) : allOk ? (
           <div className="text-center space-y-2" data-testid="permission-recovery-all-fixed">
             <Check className="w-5 h-5 mx-auto text-muted-foreground" />
-            <p className="font-mono text-sm">All fixed — resuming</p>
+            <p className="font-mono text-sm">Permissions ready</p>
           </div>
         ) : (
           <div className="w-full max-w-sm space-y-4" data-testid="permission-recovery-page">

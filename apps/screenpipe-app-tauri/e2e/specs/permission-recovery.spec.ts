@@ -14,6 +14,8 @@
  */
 
 import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { E2E_DATA_DIR } from "../helpers/app-launcher.js";
 import { saveScreenshot } from "../helpers/screenshot-utils.js";
 import { openHomeWindow, waitForAppReady, t } from "../helpers/test-utils.js";
 import {
@@ -28,6 +30,18 @@ import {
 } from "../helpers/tauri.js";
 
 const RECOVERY_HANDLE = "permission-recovery";
+
+async function microphoneRequired(): Promise<boolean> {
+  const rid = await invokeOrThrow<number | null>("plugin:store|get_store", {
+    path: join(E2E_DATA_DIR, "store.bin"),
+  });
+  if (rid == null) throw new Error("settings store is not loaded");
+  const [settings, exists] = await invokeOrThrow<[Record<string, unknown>, boolean]>(
+    "plugin:store|get", { rid, key: "settings" },
+  );
+  if (!exists || !settings) throw new Error("settings are not loaded");
+  return settings.disableAudio !== true && String(settings.audioCaptureMode).toLowerCase() !== "disabled";
+}
 
 async function expectDeniedPermissionRow(testId: string): Promise<void> {
   const row = await $(`[data-testid="${testId}"]`);
@@ -66,12 +80,13 @@ async function expectDeniedPermissionRow(testId: string): Promise<void> {
     it("opens the recovery window with rows for missing macOS permissions", async function () {
       const permissions = await getPermissions(false);
       const screenOk = permissionIsOk(permissions.screenRecording);
-      const micOk = permissionIsOk(permissions.microphone);
+      const micRequired = await microphoneRequired();
+      const micOk = !micRequired || permissionIsOk(permissions.microphone);
       const accessibilityOk = permissionIsOk(permissions.accessibility);
 
       // Fully permissioned local machines auto-resume and close this surface,
       // which is correct behavior but not the CI scenario this spec targets.
-      if (screenOk && micOk) {
+      if (screenOk && micOk && accessibilityOk) {
         this.skip();
       }
 
@@ -82,6 +97,10 @@ async function expectDeniedPermissionRow(testId: string): Promise<void> {
       await browser.switchToWindow(RECOVERY_HANDLE);
       await waitForWindowUrl("/permission-recovery", undefined, t(10_000));
 
+      if (permissions.screenRecording === "restartRequired") {
+        await $('[data-testid="permission-recovery-restart-button"]').waitForExist({ timeout: t(10_000) });
+        return;
+      }
       const page = await $('[data-testid="permission-recovery-page"]');
       await page.waitForExist({ timeout: t(10_000) });
 
@@ -89,7 +108,9 @@ async function expectDeniedPermissionRow(testId: string): Promise<void> {
         await expectDeniedPermissionRow("permission-row-screen");
       }
 
-      if (!micOk) {
+      if (!micRequired) {
+        expect(await $('[data-testid="permission-row-microphone"]').isExisting()).toBe(false);
+      } else if (!micOk) {
         await expectDeniedPermissionRow("permission-row-microphone");
       }
 
@@ -111,7 +132,8 @@ async function expectDeniedPermissionRow(testId: string): Promise<void> {
       const permissions = await getPermissions(false);
       if (
         permissionIsOk(permissions.screenRecording) &&
-        permissionIsOk(permissions.microphone)
+        (!await microphoneRequired() || permissionIsOk(permissions.microphone)) &&
+        permissionIsOk(permissions.accessibility)
       ) {
         this.skip();
       }
@@ -135,7 +157,9 @@ async function expectDeniedPermissionRow(testId: string): Promise<void> {
       await browser.switchToWindow(RECOVERY_HANDLE);
       await waitForWindowUrl("/permission-recovery", undefined, t(10_000));
 
-      const page = await $('[data-testid="permission-recovery-page"]');
+      const page = await $(permissions.screenRecording === "restartRequired"
+        ? '[data-testid="permission-recovery-restart-prompt"]'
+        : '[data-testid="permission-recovery-page"]');
       await page.waitForExist({ timeout: t(10_000) });
     });
   },

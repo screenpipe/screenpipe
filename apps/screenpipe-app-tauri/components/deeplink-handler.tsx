@@ -4,7 +4,7 @@
 "use client";
 
 import { workflowReviewLink } from "@/lib/workflows/notification";
-import { routeNotificationDeeplink } from "@/lib/notifications/actions";
+import { CALENDAR_CONNECTIONS_URL, routeNotificationDeeplink } from "@/lib/notifications/actions";
 import { useEffect } from "react";
 import { useToast } from "@/components/ui/use-toast";
 import { useChangelogDialog } from "@/lib/hooks/use-changelog-dialog";
@@ -353,6 +353,11 @@ export function DeeplinkHandler() {
             variant: "destructive",
           });
         }
+      }
+
+      if (url === CALENDAR_CONNECTIONS_URL) {
+        await routeNotificationDeeplink(url);
+        return;
       }
 
       if (url.includes("settings") || url.includes("home")) {

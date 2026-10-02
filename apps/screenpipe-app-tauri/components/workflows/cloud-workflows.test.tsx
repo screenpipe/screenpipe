@@ -20,7 +20,7 @@ it("renders cloud detail and search without any local analysis controls", async 
   expect(screen.queryByRole('switch', { name: 'Automatic updates' })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'All workflows' }));
   fireEvent.change(screen.getByRole('textbox', { name: 'Search workflows' }), { target: { value: 'missing' } });
-  expect(screen.getByText('No workflows match these filters')).toBeVisible();
+  expect(screen.getByText('No workflows match your search')).toBeVisible();
 });
 it("never stops local jobs on mount, refresh, a later visit or a timer", async () => {
   const service = api(); const view = render(<CloudWorkflows {...props} api={service} />);

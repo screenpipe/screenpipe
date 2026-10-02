@@ -35,6 +35,7 @@ fn history_request(method: &Method, path: &str) -> bool {
     matches!(
         path,
         "/search"
+            | "/starred-sessions"
             | "/search/keyword"
             | "/semantic/actors/search"
             | "/health"

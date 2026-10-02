@@ -87,14 +87,14 @@ export function acpBootLabel(state: AcpBootState, agentName: string, now: number
 }
 
 /**
- * Label for whichever agent is currently booting, or null when none is.
+ * Label for the chat's selected ACP agent, or null when it is not booting.
+ * Other agents may still be installing, including after a provider switch.
  *
  * Ticks once a second only while a boot is in flight — an idle chat must not
  * re-render on a timer.
  */
-export function useAcpBootLabel(): string | null {
-  const booting = useAcpBootState((state) => state.booting);
-  const active = Object.values(booting)[0] ?? null;
+export function useAcpBootLabel(agentId: string | null | undefined): string | null {
+  const active = useAcpBootState((state) => agentId ? state.booting[agentId] ?? null : null);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {

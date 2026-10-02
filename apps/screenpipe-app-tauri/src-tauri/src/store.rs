@@ -1515,6 +1515,8 @@ pub struct SettingsStore {
     pub search_shortcut: String,
     #[serde(rename = "lockVaultShortcut", default)]
     pub lock_vault_shortcut: String,
+    #[serde(rename = "starSessionShortcut", default)]
+    pub star_session_shortcut: String,
     /// Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
     #[serde(rename = "shortcutOverlaySize", default = "default_overlay_size")]
     pub shortcut_overlay_size: String,
@@ -2156,6 +2158,12 @@ Rules:
             lock_vault_shortcut: "Ctrl+Shift+L".to_string(),
             #[cfg(not(target_os = "windows"))]
             lock_vault_shortcut: "Super+Shift+L".to_string(),
+            star_session_shortcut: if cfg!(target_os = "windows") {
+                "Alt+Shift+B"
+            } else {
+                "Control+Super+B"
+            }
+            .to_string(),
             shortcut_overlay_size: "small".to_string(),
             shortcut_overlay_anchor: default_overlay_anchor(),
             shortcut_overlay_display: String::new(),

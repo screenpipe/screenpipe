@@ -80,6 +80,317 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn starred_search_paginates_union_and_summary_includes_empty_sessions() {
+        let (app, db) = setup_test_app().await;
+        let base = Utc::now() - Duration::hours(2);
+        let stamp = |minute| {
+            (base + Duration::minutes(minute)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        };
+        // The first two intervals overlap; the third is disjoint; fourth has no capture.
+        for (id, start, end) in [("a", 0, 15), ("b", 5, 20), ("c", 30, 40), ("empty", 50, 55)] {
+            db.save_starred_session(id, &stamp(start), &stamp(end), false, 0, &stamp(60))
+                .await
+                .unwrap();
+        }
+        for minute in [1, 10, 20, 25, 35] {
+            let t = DateTime::parse_from_rfc3339(&stamp(minute))
+                .unwrap()
+                .with_timezone(&Utc);
+            let chunk = db.insert_audio_chunk("fixture.wav", Some(t)).await.unwrap();
+            db.insert_audio_transcription(
+                chunk,
+                &format!("sentinel minute {minute}"),
+                0,
+                "test",
+                &screenpipe_db::AudioDevice {
+                    name: "fixture".into(),
+                    device_type: screenpipe_db::DeviceType::Input,
+                },
+                None,
+                None,
+                None,
+                Some(t),
+            )
+            .await
+            .unwrap();
+        }
+        let get = |uri: String| {
+            let app = app.clone();
+            async move {
+                let response = app
+                    .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                serde_json::from_slice::<serde_json::Value>(
+                    &to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+                )
+                .unwrap()
+            }
+        };
+        let first = get("/search?content_type=audio&starred_only=true&limit=1".into()).await;
+        assert_eq!(first["pagination"]["total"], 3);
+        assert_eq!(
+            first["data"][0]["content"]["transcription"],
+            "sentinel minute 35"
+        );
+        assert_eq!(first["data"][0]["starred"], true);
+        let second =
+            get("/search?content_type=audio&starred_only=true&limit=1&offset=1".into()).await;
+        assert_eq!(
+            second["data"][0]["content"]["transcription"],
+            "sentinel minute 10"
+        );
+        let asc =
+            get("/search?content_type=audio&starred_only=true&limit=10&order=ascending".into())
+                .await;
+        assert_eq!(asc["data"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            asc["data"][0]["content"]["transcription"],
+            "sentinel minute 1"
+        );
+        let ordinary = get("/search?content_type=audio&limit=10".into()).await;
+        assert_eq!(ordinary["pagination"]["total"], 5);
+        let unrelated =
+            get("/search?content_type=audio&starred_only=true&q=absent&limit=10".into()).await;
+        assert_eq!(unrelated["pagination"]["total"], 0);
+        let exact = get(format!(
+            "/search?content_type=audio&starred_only=true&starred_session_id=c&limit=10"
+        ))
+        .await;
+        assert_eq!(exact["pagination"]["total"], 1);
+        let range = format!("start_time={}&end_time={}", stamp(0), stamp(60));
+        let summary = get(format!("/activity-summary?{range}")).await;
+        assert_eq!(summary["starred_sessions"].as_array().unwrap().len(), 4);
+        assert_eq!(summary["starred_sessions"][0]["id"], "empty");
+        assert_eq!(summary["starred_sessions"][0]["has_audio"], false);
+        assert_eq!(summary["starred_sessions_has_more"], false);
+        let lean = get(format!("/activity-summary?{range}&include_starred=false")).await;
+        assert!(lean.get("starred_sessions").is_none());
+        assert_eq!(
+            lean["total_active_minutes"],
+            summary["total_active_minutes"]
+        );
+        let app_filtered = get(format!("/activity-summary?{range}&app_name=Other")).await;
+        assert!(app_filtered.get("starred_sessions").is_none());
+        let perms = screenpipe_core::pipes::permissions::PipePermissions {
+            pipe_name: "restricted-fixture".into(),
+            allow_rules: vec![screenpipe_core::pipes::permissions::PermissionRule::App {
+                value: "Other".into(),
+            }],
+            deny_rules: vec![],
+            use_default_allowlist: true,
+            time_range: None,
+            days: None,
+            pipe_token: None,
+            pipe_dir: None,
+            privacy_filter: false,
+        };
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/activity-summary?{range}"))
+                    .extension(Arc::new(perms))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let restricted: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert!(restricted.get("starred_sessions").is_none());
+        assert!(restricted.get("starred_sessions_has_more").is_none());
+        for i in 0..11 {
+            db.save_starred_session(
+                &format!("extra-{i}"),
+                &stamp(60 + i * 2),
+                &stamp(61 + i * 2),
+                false,
+                0,
+                &stamp(90),
+            )
+            .await
+            .unwrap();
+        }
+        let many = get(format!(
+            "/activity-summary?start_time={}&end_time={}",
+            stamp(60),
+            stamp(90)
+        ))
+        .await;
+        assert_eq!(many["starred_sessions"].as_array().unwrap().len(), 10);
+        assert_eq!(many["starred_sessions_has_more"], true);
+        // Broad requests fail explicitly rather than silently searching only a prefix.
+        for i in 0..101 {
+            db.save_starred_session(
+                &format!("old-{i}"),
+                &stamp(-500 + i * 2),
+                &stamp(-499 + i * 2),
+                false,
+                0,
+                &stamp(90),
+            )
+            .await
+            .unwrap();
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/search?starred_only=true&content_type=audio")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert!(error["error"]
+            .as_str()
+            .unwrap()
+            .contains("narrow start_time/end_time"));
+    }
+
+    #[tokio::test]
+    async fn starred_api_creates_edits_and_reports_audio() {
+        let (app, db) = setup_test_app().await;
+        let now = Utc::now();
+        let start = now - Duration::minutes(15);
+        let end = now - Duration::minutes(1);
+        let chunk_id = db
+            .insert_audio_chunk("starred-test.wav", Some(start + Duration::minutes(1)))
+            .await
+            .unwrap();
+        db.insert_audio_transcription(
+            chunk_id,
+            "starred sentinel",
+            0,
+            "test",
+            &screenpipe_db::AudioDevice {
+                name: "star-test".into(),
+                device_type: screenpipe_db::DeviceType::Input,
+            },
+            None,
+            None,
+            None,
+            Some(start + Duration::minutes(1)),
+        )
+        .await
+        .unwrap();
+        let search_uri = "/search?content_type=audio&limit=10&q=starred%20sentinel";
+        let before = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(search_uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let before: serde_json::Value =
+            serde_json::from_slice(&to_bytes(before.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(before["data"][0]["starred"], false);
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut body = serde_json::json!({"id":id,"start":start,"end":end,"revision":0});
+        let make_request = |body: &serde_json::Value| {
+            Request::builder()
+                .method("POST")
+                .uri("/starred-sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let response = app.clone().oneshot(make_request(&body)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(value["has_audio"], true);
+        assert_eq!(value["revision"], 1);
+        let after = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(search_uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let after: serde_json::Value =
+            serde_json::from_slice(&to_bytes(after.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(
+            after["data"][0]["starred"], true,
+            "marking invalidates the previously cached search"
+        );
+        let scoped = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/search?starred_session_id={id}&content_type=audio&limit=10"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let scoped: serde_json::Value =
+            serde_json::from_slice(&to_bytes(scoped.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(scoped["data"].as_array().unwrap().len(), 1);
+
+        assert_eq!(
+            app.clone()
+                .oneshot(make_request(&body))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        body["end"] = serde_json::json!(now);
+        assert_eq!(
+            app.clone()
+                .oneshot(make_request(&body))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT
+        );
+        body["revision"] = serde_json::json!(1);
+        assert_eq!(
+            app.clone()
+                .oneshot(make_request(&body))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/starred-sessions?id={id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(value["data"][0]["revision"], 2);
+    }
+
+    #[tokio::test]
     async fn frame_thumbnail_endpoint_resizes_caches_and_invalidates_snapshot() {
         let (app, db) = setup_test_app().await;
         let temp_dir = tempfile::tempdir().unwrap();
@@ -472,7 +783,7 @@ mod tests {
         assert_eq!(search_response.pagination.total, 1);
         assert_eq!(search_response.data.len(), 1);
 
-        match &search_response.data[0] {
+        match &search_response.data[0].item {
             ContentItem::OCR(ocr) => {
                 assert_eq!(ocr.frame_id, frame_id);
                 assert!(ocr.text.contains("local api sentinel exactmatch"));
@@ -579,7 +890,7 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let search_response: SearchResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(search_response.pagination.total, 1);
-        match &search_response.data[0] {
+        match &search_response.data[0].item {
             ContentItem::Parsed(parsed) => {
                 assert_eq!(parsed.frame_id, frame_id);
                 assert_eq!(parsed.app_name, "Slack");

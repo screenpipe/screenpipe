@@ -11,7 +11,7 @@ import { cloudWorkflowMap } from "@/lib/workflows/cloud-presentation";
 import { stopLocalWorkflowProcessing } from "@/lib/workflows/cloud-processing";
 import { ProductSwitcher, type ProductMode } from "./product-switcher";
 import { WorkflowsShell, WorkflowCatalog, WorkflowDetails, WorkflowCommandPalette, WorkflowCatalogPlaceholder,
-  defaultWorkflowFilters, type AppView, type WorkflowsPlatform, type WorkflowsAppProps } from "@screenpipe/workflows-ui";
+  type AppView, type WorkflowsPlatform, type WorkflowsAppProps } from "@screenpipe/workflows-ui";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
@@ -39,7 +39,7 @@ export function CloudWorkflows({ active, token, onModeChange, recordingStatus, n
   const processingPending = useRef(false);
   const [processingError, setProcessingError] = useState("");
   const [revision, setRevision] = useState(0);
-  const [filters, setFilters] = useState(defaultWorkflowFilters);
+  const [query, setQuery] = useState("");
   const [view, setView] = useState<AppView>("workflows");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [shortcuts, setShortcuts] = useState(false);
@@ -117,8 +117,8 @@ export function CloudWorkflows({ active, token, onModeChange, recordingStatus, n
         <DialogFooter className="gap-2"><Button variant="outline" disabled={processingBusy} onClick={() => void chooseProcessing(false)}>Keep local processing</Button><Button disabled={processingBusy} onClick={() => void chooseProcessing(true)}>{processingBusy ? "Saving…" : "Turn off local processing"}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
-    <WorkflowsShell view={view} navigate={navigate} runtime={null} workflowCount={workflows.length}
-      query={filters.query} setQuery={query => setFilters(current => ({ ...current, query }))}
+    <WorkflowsShell hasLibrary={false} view={view} navigate={navigate} runtime={null} workflowCount={workflows.length}
+      query={query} setQuery={setQuery}
       activeScope={null} scopes={[]} setScope={() => {}} embedded={false} active={active} fullscreen={fullscreen}
       startWindowDrag={process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock" ? undefined : () => getCurrentWindow().startDragging().catch(() => {})}
       sourceControl={sourceControl} navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />}
@@ -129,7 +129,7 @@ export function CloudWorkflows({ active, token, onModeChange, recordingStatus, n
         : loading && !data ? <WorkflowCatalogPlaceholder />
         : view === "workflow" && selected ? <WorkflowDetails workflow={selected} platform={readOnlyPlatform} active={active} navigate={navigate} workProfile={null}
             workflowAgentActions={() => refreshControl} sourceLabel={`${data?.scope === "member" ? "Your cloud workflow" : "Cloud workflow"} · Version ${selected.revision}`} observationsAvailable={false} canSaveAnswers={false} onAnswersSaved={() => {}} />
-        : <WorkflowCatalog workflows={workflows} knownWorkflowCount={workflows.length} filters={filters} setFilters={setFilters} openWorkflow={openWorkflow}
+        : <WorkflowCatalog workflows={workflows} knownWorkflowCount={workflows.length} query={query} setQuery={setQuery} openWorkflow={openWorkflow}
             analyze={refresh} analyzing={loading} error="" activityState={{ cycleId: "", items: [], unavailable: false }} refreshControl={refreshControl}
             emptyState={<section className="py-12"><h2 className="text-lg font-medium">No cloud workflows yet</h2><p className="mt-2 text-sm opacity-70">{data?.scope === "member" ? (data.memberAccessEnabled === false ? "Your workspace hasn’t enabled member workflow access. Ask your admin to turn on “Let members see their own workflows” in the enterprise dashboard." : "Your workflows will appear here as your workspace processes activity from your signed-in devices.") : "Workflows will appear here after your workspace analyzes uploaded activity."}</p></section>} />}
     </WorkflowsShell>

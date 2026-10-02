@@ -192,6 +192,8 @@ function mockAppFrames(appName: string, limit: number, offset: number) {
   );
 }
 
+let mockStarredSessions: Array<{id:string;start:string;end:string;revision:number;hd_requested:boolean;has_audio:boolean}> = [];
+
 export function mockLocalApiResponse(
   url: URL,
   init: RequestInit | undefined,
@@ -205,6 +207,18 @@ export function mockLocalApiResponse(
   }
 
   const method = (init?.method ?? "GET").toUpperCase();
+  if (url.pathname === "/starred-sessions") {
+    if (method === "POST") {
+      const value = JSON.parse(String(init?.body));
+      const existing = mockStarredSessions.find((s) => s.id === value.id);
+      if ((existing?.revision ?? 0) !== value.revision) return Response.json({error:"Sessions changed. Reload before saving."},{status:409});
+      const row = {...value,revision:value.revision+1,has_audio:existing?.has_audio ?? false};
+      mockStarredSessions = [row,...mockStarredSessions.filter((s) => s.id !== row.id)];
+      return Response.json(row);
+    }
+    return Response.json({data:mockStarredSessions});
+  }
+  if (url.pathname === "/export") return Response.json({error:"Video export requires the desktop engine and recorded media."},{status:409});
   if (url.pathname === "/pipes/skill-learning") {
     return Response.json({ data: { name: "skill-learning", config: { enabled: mockLearningEnabled, schedule: "every 6h", model: "auto", preset: mockLearningPreset, agent: "pi" } } });
   }

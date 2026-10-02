@@ -22,6 +22,14 @@ export type WorkflowEdit = {
   outcome: string;
   stages: StageEdit[];
 };
+/** Match authored content to the referenced step before reusing its timing. */
+export function isUnchangedStage(edit: StageEdit, source: WorkflowStage | undefined): boolean {
+  return Boolean(source && edit.name.trim() === source.name && edit.description.trim() === source.description
+    && edit.procedure.length === (source.procedure?.length ?? 0)
+    && edit.procedure.every((block, index) => block.sourceIndex === index
+      && block.kind === source.procedure![index].kind && block.text.trim() === source.procedure![index].text));
+}
+
 export function workflowEdit(workflow: WorkflowMap): WorkflowEdit {
   return {
     id: workflow.id ?? workflow.title,

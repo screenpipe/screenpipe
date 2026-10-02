@@ -57,7 +57,7 @@ await page.getByRole('heading',{name:'Collect sources',exact:true}).waitFor();
 await capture({animations:'disabled',style:'nextjs-portal { display: none; }',path:out+'/cloud-detail.png'});
 await page.getByRole('button',{name:'All workflows',exact:true}).click();
 await page.getByRole('textbox',{name:'Search workflows'}).fill('zzzz');
-await page.getByRole('heading',{name:'No workflows match these filters'}).waitFor();
+await page.getByRole('heading',{name:'No workflows match your search'}).waitFor();
 await page.getByRole('textbox',{name:'Search workflows'}).fill('');
 await page.getByRole('button',{name:'Context',exact:true}).click();
 await page.getByText('Workspace context is not available in this cloud view yet.').waitFor();

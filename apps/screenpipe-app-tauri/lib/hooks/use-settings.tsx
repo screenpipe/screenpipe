@@ -38,7 +38,10 @@ import {
 	applyManagedOverrides,
 	type ManagedSettingValue,
 } from "./managed-settings";
-import { isResolvedConsumerBuild } from "./use-is-enterprise-build";
+import {
+	isResolvedConsumerBuild,
+	resolveEnterpriseBuild,
+} from "./use-is-enterprise-build";
 import {
 	clearLegacyUserGoalCategory,
 	DEFAULT_USER_GOAL_CATEGORY,
@@ -343,6 +346,7 @@ export type Settings = SettingsStore & {
 	categoryOwnedFilters?: { apps: string[]; domains: string[] };
 	searchShortcut?: string;
 	lockVaultShortcut?: string;
+	starSessionShortcut?: string;
 	/** When true, audio devices follow system default and auto-switch on changes */
 	useSystemDefaultAudio?: boolean;
 	/** Enable AI workflow event detection (cloud, triggers event-based pipes) */
@@ -418,9 +422,9 @@ export type Settings = SettingsStore & {
 	hideAppInScreenShare?: boolean;
 	/** Pause all screen capture when a DRM-protected streaming app (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware Horizon) is focused — they blank their windows during screen recording */
 	pauseOnDrmContent?: boolean;
-	/** Skip clipboard capture in the UI recorder (events + content). Defaults to true (clipboard capture OFF) — passwords / API keys often pass through the clipboard, so it's opt-in. */
+	/** Skip clipboard capture in the UI recorder (events + content). Defaults to false in enterprise builds and true in consumer builds. */
 	disableClipboardCapture?: boolean;
-	/** Skip keyboard / typed-text capture in the UI recorder. Defaults to true (keyboard capture OFF) — the a11y tree + OCR still capture on-screen text, this only drops the raw keystroke stream where secrets get typed. */
+	/** Skip keyboard / typed-text capture in the UI recorder. Defaults to false in enterprise builds and true in consumer builds. */
 	disableKeyboardCapture?: boolean;
 	/** Skip mouse-click rows in the UI recorder. Defaults to false (click capture ON) — clicks carry no text payload and drive workflow/task mining. Clicks still wake event-driven capture when disabled. */
 	disableClickCapture?: boolean;
@@ -745,11 +749,8 @@ let DEFAULT_SETTINGS: Settings = {
 			monitorIds: ["default"],
 			audioDevices: ["default"],
 			useSystemDefaultAudio: true,
-			// Default ON (#3819): this is the lightweight hot-path regex redaction
-			// in screenpipe-core (emails, phone numbers, SSNs, card numbers, API
-			// keys, etc.) — NOT the heavy async AI model (asyncPiiRedaction stays
-			// off, so no ~2.8GB model download). Privacy-by-default for new installs;
-			// existing users keep whatever they already chose.
+			// Basic regex redaction stays on for new desktop installs.
+			// Enterprise AI defaults are selected in createDefaultSettingsObject.
 			usePiiRemoval: true,
 			port: 3030,
 			dataDir: "default",
@@ -814,6 +815,7 @@ let DEFAULT_SETTINGS: Settings = {
 			showChatShortcut: "Control+Super+L",
 			searchShortcut: "Control+Super+K",
 			lockVaultShortcut: "Super+Shift+L",
+			starSessionShortcut: "Control+Super+B",
 			disableVision: false,
 			disableScreenshots: false,
 			enableSemanticContext: true,
@@ -873,7 +875,7 @@ let DEFAULT_SETTINGS: Settings = {
 			fontSize: "16px",
 		};
 
-export function createDefaultSettingsObject(): Settings {
+export function createDefaultSettingsObject(isEnterprise = false): Settings {
 	try {
 		const p = platform();
 		DEFAULT_SETTINGS.platform = p;
@@ -885,6 +887,7 @@ export function createDefaultSettingsObject(): Settings {
 		DEFAULT_SETTINGS.searchShortcut = p === "windows" ? "Alt+K" : "Control+Super+K";
 		DEFAULT_SETTINGS.startAudioShortcut = p === "windows" ? "Alt+Shift+A" : "Control+Super+A";
 		DEFAULT_SETTINGS.stopAudioShortcut = p === "windows" ? "Alt+Shift+Z" : "Control+Super+Z";
+		DEFAULT_SETTINGS.starSessionShortcut = p === "windows" ? "Alt+Shift+B" : "Control+Super+B";
 		DEFAULT_SETTINGS.lockVaultShortcut = p === "windows" ? "Ctrl+Shift+L" : "Super+Shift+L";
 
 		if (p === "windows") {
@@ -894,12 +897,16 @@ export function createDefaultSettingsObject(): Settings {
 		if (p === "linux") {
 			DEFAULT_SETTINGS.overlayMode = "window";
 		}
-
-		return DEFAULT_SETTINGS;
 	} catch (e) {
-		// Fallback if platform detection fails
-		return DEFAULT_SETTINGS;
+		// Keep platform-independent defaults if platform detection fails.
 	}
+	return Object.assign({}, DEFAULT_SETTINGS, {
+		disableClipboardCapture: !isEnterprise,
+		disableKeyboardCapture: !isEnterprise,
+		asyncPiiRedaction: isEnterprise,
+		asyncImagePiiRedaction: isEnterprise,
+		piiBackend: isEnterprise ? "tinfoil" : "local",
+	});
 }
 
 export function normalizeSettingsArrays(settings: Settings): boolean {
@@ -1104,14 +1111,35 @@ function createSettingsStore() {
 	const get = async (): Promise<Settings> => {
 		const store = await getStore();
 		const settings = await store.get<Settings>("settings");
+		// Existing explicit choices do not need a build-identity lookup.
+		const needsBuildDefaults = !settings
+			|| settings.disableClipboardCapture === undefined
+			|| settings.disableKeyboardCapture === undefined
+			|| settings.asyncPiiRedaction === undefined
+			|| settings.asyncImagePiiRedaction === undefined
+			|| settings.piiBackend === undefined;
+		const defaults = createDefaultSettingsObject(
+			needsBuildDefaults ? await resolveEnterpriseBuild() : false,
+		);
 		if (!settings) {
-			return createDefaultSettingsObject();
+			return defaults;
 		}
 
 		// #3943: re-hydrate the cloud token that no longer persists in store.bin.
 		await hydrateCloudToken(settings);
 
 		let needsUpdate = normalizeSettingsArrays(settings);
+		for (const key of ["disableClipboardCapture", "disableKeyboardCapture", "asyncPiiRedaction", "asyncImagePiiRedaction"] as const) {
+			if (settings[key] === undefined) {
+				settings[key] = defaults[key];
+				needsUpdate = true;
+			}
+		}
+
+		if (settings.piiBackend === undefined) {
+			settings.piiBackend = defaults.piiBackend;
+			needsUpdate = true;
+		}
 
 		// Migration: Ensure existing users have deviceId for free tier tracking
 		const existingUserGoal = normalizeUserGoalCategory(
@@ -1277,6 +1305,11 @@ function createSettingsStore() {
 				activeConversationId: null,
 				historyEnabled: true,
 			};
+			needsUpdate = true;
+		}
+
+		if (!settings.starSessionShortcut?.trim()) {
+			settings.starSessionShortcut = platform() === "windows" ? "Alt+Shift+B" : "Control+Super+B";
 			needsUpdate = true;
 		}
 
@@ -1475,7 +1508,7 @@ function createSettingsStore() {
 			const current = await get();
 			const managedValues = await activeManagedValues(current);
 			const defaults = applyManagedOverrides(
-				{ ...createDefaultSettingsObject(), deviceId: current.deviceId } as Record<string, unknown>,
+				{ ...createDefaultSettingsObject(await resolveEnterpriseBuild()), deviceId: current.deviceId } as Record<string, unknown>,
 				managedValues
 			) as Settings;
 			if (managedValues) defaults.enterpriseManagedSettings = managedValues;
@@ -1486,7 +1519,7 @@ function createSettingsStore() {
 	const resetSetting = async <K extends keyof Settings>(key: K) => {
 		if (key === "deviceId") return;
 		const current = await get();
-		const defaultValue = createDefaultSettingsObject()[key];
+		const defaultValue = createDefaultSettingsObject(await resolveEnterpriseBuild())[key];
 		await set({ [key]: defaultValue } as Partial<Settings>);
 	};
 
@@ -1499,7 +1532,7 @@ function createSettingsStore() {
 			let seq = 0;
 			return store.onKeyChange("settings", async (newValue: Settings | null | undefined) => {
 				const mySeq = ++seq;
-				const next = await hydrateCloudToken(newValue || createDefaultSettingsObject());
+				const next = await hydrateCloudToken(newValue || createDefaultSettingsObject(await resolveEnterpriseBuild()));
 				normalizeSettingsArrays(next);
 				if (mySeq === seq) callback(next);
 			});

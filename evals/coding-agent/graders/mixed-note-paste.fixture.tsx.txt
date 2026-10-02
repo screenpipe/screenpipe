@@ -1,0 +1,21 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import React from 'react';
+import {afterEach,beforeEach,expect,test,vi} from 'vitest';
+import {render,fireEvent,waitFor,cleanup,act} from '@testing-library/react';
+const ports=vi.hoisted(()=>({convert:vi.fn()}));
+vi.mock('./components/meeting-notes/image-utils',async importOriginal=>({...await importOriginal<any>(),imageFileToDataUrl:(f:File)=>ports.convert(f)}));
+vi.mock('./components/meeting-notes/editor-menus',()=>({FormatToolbar:()=>null,SlashCommandMenu:()=>null}));
+vi.mock('gt-react',async importOriginal=>({...await importOriginal<any>(),useGT:()=>(text:string)=>text}));
+vi.mock('@/lib/i18n/provider',()=>({useUiLocale:()=> 'en'}));
+import {NoteEditor} from './components/meeting-notes/note-editor';
+const image='data:image/png;base64,iVBORw0KGgo=';
+beforeEach(()=>{ports.convert.mockReset();ports.convert.mockResolvedValue(image);HTMLElement.prototype.scrollIntoView=()=>{}; Range.prototype.getClientRects=()=>[] as any; Range.prototype.getBoundingClientRect=()=>({x:0,y:0,left:0,top:0,right:0,bottom:0,width:0,height:0,toJSON:()=>({})});});
+afterEach(()=>cleanup());
+async function mount(key='a') {const changes=vi.fn();const result=render(<NoteEditor key={key} value="" onChange={changes}/>);await waitFor(()=>expect(result.container.querySelector('.tiptap')).not.toBeNull());return {...result,changes,editor:result.container.querySelector('.tiptap')!};}
+function paste(editor:Element,{file=true,text='',html=''}={}){const img=new File(['synthetic'],'shot.png',{type:'image/png'});const event=new Event('paste',{bubbles:true,cancelable:true});Object.defineProperty(event,'clipboardData',{value:{files:file?[img]:[],items:file?[{kind:'file',getAsFile:()=>img}]:[],types:['text/plain','text/html'],getData:(format:string)=>format==='text/plain'?text:format==='text/html'?html:''}});fireEvent(editor,event);return event;}
+test('mixed clipboard preserves readable text and an image',async()=>{const r=await mount();paste(r.editor,{text:'agenda followup'});await waitFor(()=>expect(r.editor.querySelector('img')?.getAttribute('src')).toBe(image));expect(r.editor.textContent).toContain('agenda followup');expect(r.changes.mock.calls.at(-1)?.[0]).toContain('agenda followup');expect(r.changes.mock.calls.at(-1)?.[0]).toContain(image);});
+test('image-only file paste remains usable',async()=>{const r=await mount();paste(r.editor);await waitFor(()=>expect(r.editor.querySelectorAll('img')).toHaveLength(1));});
+test('HTML-only image is inserted without duplicating its URL as text',async()=>{const r=await mount();paste(r.editor,{file:false,text:image,html:`<img src="${image}">`});await waitFor(()=>expect(r.editor.querySelector('img')?.getAttribute('src')).toBe(image));expect(r.editor.textContent).not.toContain(image);});
+test('ordinary text paste remains readable',async()=>{const r=await mount();paste(r.editor,{file:false,text:'ordinary agenda'});await waitFor(()=>expect(r.editor.textContent).toContain('ordinary agenda'));expect(ports.convert).not.toHaveBeenCalled();});
+test('late old-note image does not reach a newly keyed meeting',async()=>{let resolve!:(s:string)=>void;ports.convert.mockReturnValue(new Promise<string>(r=>resolve=r));const r=await mount();paste(r.editor,{text:'old note'});await waitFor(()=>expect(ports.convert).toHaveBeenCalledTimes(1));r.rerender(<NoteEditor key="b" value="new note" onChange={r.changes}/>);await waitFor(()=>expect(r.container.querySelector('.tiptap')?.textContent).toContain('new note'));await act(async()=>{resolve(image);await Promise.resolve();});expect(r.container.querySelectorAll('img')).toHaveLength(0);expect(r.container.querySelector('.tiptap')?.textContent).not.toContain('old note');});

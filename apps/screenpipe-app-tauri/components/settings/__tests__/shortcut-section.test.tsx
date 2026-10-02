@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
     startAudioShortcut: "Control+Super+A",
     stopAudioShortcut: "Control+Super+Z",
     lockVaultShortcut: "",
+    starSessionShortcut: "Control+Super+B",
   },
 }));
 
@@ -28,7 +29,7 @@ vi.mock("@/lib/hooks/use-platform", () => ({
   usePlatform: () => ({ isMac: true }),
 }));
 vi.mock("@/lib/hooks/use-settings", () => ({
-  createDefaultSettingsObject: () => mocks.settings,
+  createDefaultSettingsObject: () => ({ ...mocks.settings, starSessionShortcut: "Control+Super+B" }),
   useSettings: () => ({
     settings: mocks.settings,
     updateSettings: vi.fn(),
@@ -49,9 +50,16 @@ import ShortcutSection from "@/components/settings/shortcut-section";
 afterEach(() => {
   cleanup();
   mocks.experimentalEnabled = false;
+  mocks.settings.starSessionShortcut = "Control+Super+B";
 });
 
 describe("ShortcutSection experimental rollout", () => {
+  it("allows restoring defaults when only the star shortcut changed", () => {
+    mocks.settings.starSessionShortcut = "CTRL+SUPER+J";
+    render(<ShortcutSection />);
+    expect(screen.getByRole("button", { name: /restore defaults/i })).toBeEnabled();
+  });
+
   it("keeps the stable global-shortcut view for users outside the flag", () => {
     render(<ShortcutSection />);
 

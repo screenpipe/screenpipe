@@ -22,6 +22,7 @@ vi.mock("@/lib/workflows/disk-storage", () => ({
   isStoredWorkflowAnalysis: vi.fn(), loadWorkflowAnalysisFromDisk: vi.fn(),
   loadWorkProfileFromDisk: vi.fn(), saveWorkflowAnalysisToDisk: vi.fn(),
   saveWorkProfileToDisk: vi.fn(),
+  listSkillDraftsFromDisk: vi.fn().mockResolvedValue([]), saveSkillDraftToDisk: vi.fn(),
 }));
 vi.mock("@/lib/workflows/scheduled-discovery", () => ({
   ensureWorkflowTask: vi.fn(), startWorkflowJob: vi.fn(), getWorkflowJob: vi.fn(),

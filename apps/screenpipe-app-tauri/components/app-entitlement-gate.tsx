@@ -405,15 +405,18 @@ export function AppEntitlementGate({
     // "checking access" shell, but that transient state must never stop the
     // recorder. Otherwise opening the overlay can tear down the local API just
     // before the consumer/enterprise result arrives.
-    if (!isSettingsLoaded || !isManagedDeploymentResolved) return;
+    if (
+      !isSettingsLoaded ||
+      !isManagedDeploymentResolved ||
+      isManagedDeployment
+    )
+      return;
     if (!shouldGate) {
       stoppedForGateRef.current = false;
       return;
     }
-    // Enterprise credentials are restored asynchronously in every webview.
-    // `checking` means "verification in progress", not "access denied". The
-    // old behavior stopped the recorder here, then failed to resume because an
-    // already-entitled enterprise account never flips `isEntitled` false→true.
+    // Consumer credentials are restored asynchronously in every webview.
+    // `checking` means "verification in progress", not "access denied".
     if (enterpriseAuthenticationPending) return;
     // Only the primary content window owns recorder lifecycle. Search, overlay,
     // notification, and settings webviews still render the gate but must never
@@ -610,9 +613,8 @@ export function AppEntitlementGate({
     })();
   }, []);
 
-  // A genuine enterprise gate (missing/invalid account or key) is allowed to
-  // stop capture. If the user then authenticates successfully, resume even
-  // though their paid entitlement was already true before the gate appeared.
+  // Report access recovery, but leave Enterprise capture startup to native
+  // verification so hiding or destroying this webview cannot abandon it.
   useEffect(() => {
     if (!isSettingsLoaded || !isManagedDeployment) {
       prevEnterpriseAuthenticatedRef.current = null;
@@ -621,21 +623,20 @@ export function AppEntitlementGate({
     const previouslyAuthenticated = prevEnterpriseAuthenticatedRef.current;
     prevEnterpriseAuthenticatedRef.current = isManagedAuthenticated;
     if (previouslyAuthenticated !== false || !isManagedAuthenticated) return;
-    if (!recorderStoppedByGateRef.current) return;
     posthog.capture("enterprise_auth_recording_restored", {
       authentication_state: authenticationState,
     });
-    resumeRecordingAfterGate(true);
+    // Native credential verification owns Enterprise capture startup. A
+    // webview restart here can race it, or disappear halfway through stop/start.
   }, [
     authenticationState,
     isManagedDeployment,
     isManagedAuthenticated,
     isSettingsLoaded,
-    resumeRecordingAfterGate,
   ]);
 
   useEffect(() => {
-    if (!isSettingsLoaded || devBypass) return;
+    if (!isSettingsLoaded || devBypass || isManagedDeployment) return;
     if (skipNextResumeForE2ESeedRef.current) {
       prevGateRef.current = shouldGate;
       if (!shouldGate) skipNextResumeForE2ESeedRef.current = false;
@@ -651,6 +652,7 @@ export function AppEntitlementGate({
   }, [
     devBypass,
     isSettingsLoaded,
+    isManagedDeployment,
     resumeRecordingAfterGate,
     shouldGate,
     user?.subscription_plan,

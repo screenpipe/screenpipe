@@ -282,7 +282,7 @@ describe("screenpipe-tools MCP server", () => {
             method: "tools/call",
             params: {
               name: "activity_summary",
-              arguments: { start_time: input, end_time: "now" },
+              arguments: { start_time: input, end_time: "now", include_starred: false },
             },
           }),
         });
@@ -295,6 +295,7 @@ describe("screenpipe-tools MCP server", () => {
         expect(url.pathname).toBe("/activity-summary");
         expect(url.searchParams.get("start_time")).toBe(expected);
         expect(url.searchParams.get("end_time")).toBe("now");
+        expect(url.searchParams.get("include_starred")).toBe("false");
       }
     } finally {
       if (proc.exitCode === null && proc.signalCode === null) {

@@ -160,6 +160,7 @@ fn apply_edit(previous: &Value, body: &EditRequest) -> Result<Value, ApiError> {
             next["procedure"] = json!(details);
         }
         if next != prior {
+            next["timing"] = Value::Null;
             next["userEdited"] = json!(true);
         }
         stages.push(next);
@@ -262,6 +263,28 @@ mod tests {
             StatusCode::CONFLICT
         );
         assert_eq!(prior, original());
+    }
+    #[test]
+    fn step_timing_follows_reorders_but_not_changed_instructions() {
+        let mut prior = original();
+        prior["stages"][0]["timing"] = json!({"averageMinutes":2});
+        prior["stages"][1]["timing"] = json!({"averageMinutes":3});
+        let mut body = request();
+        body.stages.swap(0, 1);
+        let reordered = apply_edit(&prior, &body).unwrap();
+        assert_eq!(
+            reordered["stages"][0]["timing"],
+            prior["stages"][1]["timing"]
+        );
+        assert_eq!(
+            reordered["stages"][1]["timing"],
+            prior["stages"][0]["timing"]
+        );
+        assert!(reordered["timing"].is_null());
+        body.stages[1].procedure[0].text = "Read a different set of sources".into();
+        let edited = apply_edit(&prior, &body).unwrap();
+        assert!(edited["stages"][1]["timing"].is_null());
+        assert_eq!(edited["stages"][0]["timing"], prior["stages"][1]["timing"]);
     }
     #[test]
     fn rename_reorder_add_delete_preserve_references_not_verification() {

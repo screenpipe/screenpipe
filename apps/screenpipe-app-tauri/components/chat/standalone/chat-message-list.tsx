@@ -78,6 +78,7 @@ export interface ChatMessageListProps {
   messages: Message[];
   isLoading: boolean;
   isStreaming: boolean;
+  activeAcpAgentId?: string | null;
   turnLiveness?: TurnLivenessStatus | null;
   activeSourceFooterMessageId: string | null;
   expandedSteerWorkIds: Set<string>;
@@ -122,6 +123,7 @@ export function ChatMessageList({
   messages,
   isLoading,
   isStreaming,
+  activeAcpAgentId,
   turnLiveness,
   activeSourceFooterMessageId,
   expandedSteerWorkIds,
@@ -181,8 +183,8 @@ export function ChatMessageList({
     }
   }
 
-  // Null unless an ACP agent is installing/starting. Ticks only while it is.
-  const acpBoot = useAcpBootLabel();
+  // Only the selected provider can own this chat's installation status.
+  const acpBoot = useAcpBootLabel(activeAcpAgentId);
   const messageBubbleRefs = React.useRef(new Map<string, HTMLDivElement>());
   const [editBubbleWidth, setEditBubbleWidth] = React.useState<number | null>(null);
 
