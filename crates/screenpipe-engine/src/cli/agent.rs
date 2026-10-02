@@ -303,23 +303,19 @@ fn has_screenpipe_mcp(layout: &AgentLayout) -> bool {
         return false;
     };
     match layout.mcp_format {
-        McpFormat::Json | McpFormat::VscodeJson => read_mcp_json(&existing, &layout.mcp_format)
-            .ok()
-            .and_then(|root| {
-                let servers = root
-                    .get(if layout.mcp_format == McpFormat::VscodeJson {
-                        "servers"
-                    } else {
-                        "mcpServers"
-                    })?
-                    .as_object()?;
-                servers.get(screenpipe_json_key(servers)?).cloned()
-            })
-            .is_some_and(|entry| {
-                !entry.is_null()
-                    && (!matches!(layout.name, "Runner" | "VS Code")
-                        || entry.get("type").and_then(|value| value.as_str()) == Some("stdio"))
-            }),
+        McpFormat::Json | McpFormat::OpenclawJson | McpFormat::VscodeJson => {
+            read_mcp_json(&existing, &layout.mcp_format)
+                .ok()
+                .and_then(|root| {
+                    let servers = mcp_json_servers(&root, &layout.mcp_format)?;
+                    servers.get(screenpipe_json_key(servers)?).cloned()
+                })
+                .is_some_and(|entry| {
+                    !entry.is_null()
+                        && (!matches!(layout.name, "Runner" | "VS Code")
+                            || entry.get("type").and_then(|value| value.as_str()) == Some("stdio"))
+                })
+        }
         McpFormat::Toml => existing.lines().any(is_screenpipe_toml_table),
         McpFormat::Yaml => existing.lines().any(|line| {
             let line = line.trim_start();
@@ -409,6 +405,7 @@ struct AgentLayout {
 #[derive(PartialEq)]
 enum McpFormat {
     Json,
+    OpenclawJson,
     VscodeJson,
     Yaml,
     Toml,
@@ -550,38 +547,37 @@ fn desktop_mcp_ready(layout: &AgentLayout, launch: &McpLaunchConfig) -> bool {
         return false;
     };
     match layout.mcp_format {
-        McpFormat::Json | McpFormat::VscodeJson => read_mcp_json(&existing, &layout.mcp_format)
-            .ok()
-            .and_then(|root| {
-                let servers = root
-                    .get(if layout.mcp_format == McpFormat::VscodeJson {
-                        "servers"
-                    } else {
-                        "mcpServers"
-                    })?
-                    .as_object()?;
-                servers.get(screenpipe_json_key(servers)?).cloned()
-            })
-            .is_some_and(|entry| {
-                entry.get("command").and_then(|value| value.as_str())
-                    == Some(launch.command.as_str())
-                    && entry
-                        .get("args")
-                        .and_then(|value| serde_json::from_value::<Vec<String>>(value.clone()).ok())
-                        .as_ref()
-                        == Some(&launch.args)
-                    && entry
-                        .get("env")
-                        .and_then(|value| {
-                            serde_json::from_value::<BTreeMap<String, String>>(value.clone()).ok()
-                        })
-                        .as_ref()
-                        == Some(&launch.env)
-                    && entry.get("transport").and_then(|value| value.as_str())
-                        == launch.transport.as_deref()
-                    && entry.get("type").and_then(|value| value.as_str())
-                        == launch.server_type.as_deref()
-            }),
+        McpFormat::Json | McpFormat::OpenclawJson | McpFormat::VscodeJson => {
+            read_mcp_json(&existing, &layout.mcp_format)
+                .ok()
+                .and_then(|root| {
+                    let servers = mcp_json_servers(&root, &layout.mcp_format)?;
+                    servers.get(screenpipe_json_key(servers)?).cloned()
+                })
+                .is_some_and(|entry| {
+                    entry.get("command").and_then(|value| value.as_str())
+                        == Some(launch.command.as_str())
+                        && entry
+                            .get("args")
+                            .and_then(|value| {
+                                serde_json::from_value::<Vec<String>>(value.clone()).ok()
+                            })
+                            .as_ref()
+                            == Some(&launch.args)
+                        && entry
+                            .get("env")
+                            .and_then(|value| {
+                                serde_json::from_value::<BTreeMap<String, String>>(value.clone())
+                                    .ok()
+                            })
+                            .as_ref()
+                            == Some(&launch.env)
+                        && entry.get("transport").and_then(|value| value.as_str())
+                            == launch.transport.as_deref()
+                        && entry.get("type").and_then(|value| value.as_str())
+                            == launch.server_type.as_deref()
+                })
+        }
         McpFormat::Toml => render_mcp_toml_block(launch)
             .ok()
             .is_some_and(|block| existing.contains(&block)),
@@ -773,15 +769,14 @@ fn layout(target: &str) -> Result<AgentLayout> {
 fn layout_in(target: &str, h: &Path) -> Result<AgentLayout> {
     let client = AgentClient::from_name(target);
     Ok(match target {
-        // OpenClaw's real layout (verified against a live install + docs):
-        // root is ~/.openclaw, skills under ~/.openclaw/skills, MCP servers
-        // under mcpServers in ~/.openclaw/openclaw.json.
+        // OpenClaw's native JSON5 config uses mcp.servers. Keep the same
+        // format for explicit CLI setup and desktop launch reconciliation.
         "openclaw" => AgentLayout {
             client,
             name: "OpenClaw",
             skills_dir: Some(h.join(".openclaw/skills")),
             mcp_path: h.join(".openclaw/openclaw.json"),
-            mcp_format: McpFormat::Json,
+            mcp_format: McpFormat::OpenclawJson,
         },
         "hermes" => AgentLayout {
             client,
@@ -900,7 +895,85 @@ fn parse_vscode_config(text: &str) -> Result<jsonc_parser::cst::CstRootNode> {
     Ok(root)
 }
 
+/// The legacy OpenClaw root key is invalid in current versions; do not report
+/// it as connected or let background reconciliation skip its migration.
+fn mcp_json_servers<'a>(
+    root: &'a serde_json::Value,
+    format: &McpFormat,
+) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
+    match format {
+        McpFormat::OpenclawJson if root.get("mcpServers").is_some() => None,
+        McpFormat::OpenclawJson => root.get("mcp")?.get("servers")?.as_object(),
+        McpFormat::VscodeJson => root.get("servers")?.as_object(),
+        _ => root.get("mcpServers")?.as_object(),
+    }
+}
+
+/// Preserve all non-Screenpipe settings while repairing our old root-level map.
+/// Conflicting legacy/native server definitions are refused before any write.
+fn update_openclaw_mcp(path: &Path, launch: Option<&McpLaunchConfig>) -> Result<()> {
+    use serde_json::json;
+    let existing = read_config_text(path)?;
+    let mut root = match existing.as_deref().filter(|text| !text.trim().is_empty()) {
+        Some(text) => read_mcp_json(text, &McpFormat::OpenclawJson)?,
+        None => json!({}),
+    };
+    let before = root.clone();
+    let obj = root
+        .as_object_mut()
+        .context("OpenClaw config must be an object")?;
+    if launch.is_none() && !obj.contains_key("mcp") && !obj.contains_key("mcpServers") {
+        return Ok(());
+    }
+    let legacy = obj.remove("mcpServers").unwrap_or_else(|| json!({}));
+    let legacy = legacy
+        .as_object()
+        .context("OpenClaw mcpServers must be an object")?;
+    let mcp = obj
+        .entry("mcp")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .context("OpenClaw mcp must be an object")?;
+    let servers = mcp
+        .entry("servers")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .context("OpenClaw mcp.servers must be an object")?;
+    for (name, server) in legacy {
+        if name.eq_ignore_ascii_case("screenpipe") {
+            continue;
+        }
+        if servers.get(name).is_some_and(|current| current != server) {
+            anyhow::bail!("OpenClaw has conflicting MCP entries for {name} — resolve them before reconnecting");
+        }
+        servers.insert(name.clone(), server.clone());
+    }
+    servers.retain(|name, _| !name.eq_ignore_ascii_case("screenpipe"));
+    if let Some(launch) = launch {
+        servers.insert(
+            "screenpipe".into(),
+            json!({
+                "command": launch.command,
+                "args": launch.args,
+                "env": launch.env,
+                "transport": "stdio",
+            }),
+        );
+    }
+    if root != before {
+        replace_config(
+            path,
+            existing.as_deref(),
+            &(serde_json::to_string_pretty(&root)? + "\n"),
+        )?;
+    }
+    Ok(())
+}
+
 fn read_mcp_json(text: &str, format: &McpFormat) -> Result<serde_json::Value> {
+    if *format == McpFormat::OpenclawJson {
+        return json5::from_str(text).context("OpenClaw config is not valid JSON5");
+    }
     if *format == McpFormat::VscodeJson {
         Ok(parse_vscode_config(text)?
             .to_serde_value()
@@ -1141,6 +1214,9 @@ fn setup(target: &str, api_url: &str) -> Result<()> {
     }
 
     match l.mcp_format {
+        McpFormat::OpenclawJson => {
+            update_openclaw_mcp(&l.mcp_path, Some(&cli_launch_config(remote, api_url)))?;
+        }
         McpFormat::VscodeJson => {
             let mut launch = cli_launch_config(remote, api_url);
             launch.server_type = Some("stdio".to_string());
@@ -1242,6 +1318,7 @@ fn remove(target: &str) -> Result<()> {
     }
 
     match l.mcp_format {
+        McpFormat::OpenclawJson => update_openclaw_mcp(&l.mcp_path, None)?,
         McpFormat::VscodeJson => update_vscode_mcp(&l.mcp_path, None)?,
         McpFormat::Json => remove_mcp_json(&l.mcp_path)?,
         McpFormat::Toml => remove_mcp_toml(&l.mcp_path)?,
@@ -1455,6 +1532,7 @@ fn cli_launch_config(remote: bool, api_url: &str) -> McpLaunchConfig {
 
 fn merge_mcp_launch(layout: &AgentLayout, launch: &McpLaunchConfig) -> Result<()> {
     match layout.mcp_format {
+        McpFormat::OpenclawJson => update_openclaw_mcp(&layout.mcp_path, Some(launch)),
         McpFormat::VscodeJson => update_vscode_mcp(&layout.mcp_path, Some(launch)),
         McpFormat::Json => merge_mcp_json_launch(&layout.mcp_path, launch),
         McpFormat::Yaml => merge_mcp_yaml_launch(&layout.mcp_path, launch),
@@ -1705,6 +1783,59 @@ fn merge_mcp_toml_launch(path: &Path, launch: &McpLaunchConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn openclaw_native_setup_migrates_legacy_and_preserves_other_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("openclaw.json");
+        std::fs::write(
+            &path,
+            r#"{ // JSON5
+            gateway: {mode: 'local'},
+            mcpServers: {Screenpipe: {command: 'old'}, other: {command: 'keep'}},
+            mcp: {servers: {native: {command: 'native'}}},
+        }"#,
+        )
+        .unwrap();
+        let launch = cli_launch_config(false, "http://localhost:3030");
+        update_openclaw_mcp(&path, Some(&launch)).unwrap();
+        let first = std::fs::read_to_string(&path).unwrap();
+        let root: serde_json::Value = serde_json::from_str(&first).unwrap();
+        assert!(root.get("mcpServers").is_none());
+        assert_eq!(root["gateway"]["mode"], "local");
+        assert_eq!(root["mcp"]["servers"]["other"]["command"], "keep");
+        assert_eq!(root["mcp"]["servers"]["native"]["command"], "native");
+        assert_eq!(root["mcp"]["servers"]["screenpipe"]["transport"], "stdio");
+        update_openclaw_mcp(&path, Some(&launch)).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+        update_openclaw_mcp(&path, None).unwrap();
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(root["mcp"]["servers"].get("screenpipe").is_none());
+        assert_eq!(root["mcp"]["servers"].as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn openclaw_refuses_invalid_maps_and_migration_conflicts_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("openclaw.json");
+        for original in [
+            "{mcp: []}",
+            "{mcp: {servers: []}}",
+            "{mcpServers: []}",
+            "{broken",
+            r#"{mcpServers:{other:{command:'a'}},mcp:{servers:{other:{command:'b'}}}}"#,
+        ] {
+            std::fs::write(&path, original).unwrap();
+            assert!(update_openclaw_mcp(
+                &path,
+                Some(&cli_launch_config(false, "http://localhost:3030"))
+            )
+            .is_err());
+            assert!(update_openclaw_mcp(&path, None).is_err());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        }
+    }
 
     #[test]
     fn test_vscode_background_jsonc_lifecycle() {
@@ -2746,7 +2877,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(openclaw["gateway"]["port"], 18789);
-        assert_eq!(openclaw["mcpServers"]["screenpipe"]["transport"], "stdio");
+        assert_eq!(
+            openclaw["mcp"]["servers"]["screenpipe"]["transport"],
+            "stdio"
+        );
 
         let hermes = std::fs::read_to_string(home.join(".hermes/config.yaml")).unwrap();
         assert!(hermes.contains("model: test"));

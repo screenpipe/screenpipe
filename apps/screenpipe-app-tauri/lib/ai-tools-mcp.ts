@@ -32,6 +32,7 @@ import {
 
 import { isGrokBotDetected, grokBotConnection } from "@/lib/grokbot-connection";
 
+import JSON5 from "json5";
 import { parse, modify, applyEdits, type ParseError } from "jsonc-parser";
 import { parse as parseToml } from "smol-toml";
 
@@ -534,34 +535,76 @@ export async function uninstallCodexMcp(): Promise<void> {
 }
 
 // ─── OpenClaw ─────────────────────────────────────────────────────────────────
-// MCP servers live under mcpServers in ~/.openclaw/openclaw.json (stdio
-// transport); skills under ~/.openclaw/skills. Verified against a live install.
-
+// OpenClaw uses JSON5 and mcp.servers, unlike Claude's mcpServers map.
 export async function getOpenclawMcpConfigPath(): Promise<string> {
-  const home = await homeDir();
-  return join(home, ".openclaw", "openclaw.json");
+  return join(await homeDir(), ".openclaw", "openclaw.json");
+}
+
+function configObject(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object — screenpipe won't overwrite it`);
+  }
+  return value as Record<string, unknown>;
+}
+
+async function readOpenclawConfig(): Promise<Record<string, unknown>> {
+  const path = await getOpenclawMcpConfigPath();
+  const text = (await readConfigText(path)) ?? "";
+  let root: Record<string, unknown>;
+  try {
+    root = configObject(text.trim() ? JSON5.parse(text) : {}, path);
+  } catch {
+    throw new Error(`${path} is not valid JSON5 — screenpipe won't overwrite it`);
+  }
+  const mcp = root.mcp === undefined ? {} : configObject(root.mcp, `${path}: mcp`);
+  if (mcp.servers !== undefined) configObject(mcp.servers, `${path}: mcp.servers`);
+  if (root.mcpServers !== undefined) configObject(root.mcpServers, `${path}: mcpServers`);
+  return root;
+}
+
+// Move the legacy map written by older Screenpipe versions into the native
+// location. Preserve every unrelated server; ambiguous collisions stay untouched.
+function migrateOpenclawServers(root: Record<string, unknown>): Record<string, unknown> {
+  const mcp = (root.mcp ??= {}) as Record<string, unknown>;
+  const servers = (mcp.servers ??= {}) as Record<string, unknown>;
+  for (const [name, server] of Object.entries((root.mcpServers ?? {}) as Record<string, unknown>)) {
+    if (name.toLowerCase() === "screenpipe") continue;
+    if (Object.hasOwn(servers, name) && JSON.stringify(servers[name]) !== JSON.stringify(server)) {
+      throw new Error(`OpenClaw has conflicting MCP entries for ${name} — resolve them before reconnecting`);
+    }
+    servers[name] = server;
+  }
+  delete root.mcpServers;
+  return servers;
 }
 
 export async function isOpenclawMcpInstalled(): Promise<boolean> {
   try {
-    const config = JSON.parse(await readTextFile(await getOpenclawMcpConfigPath()));
-    return !!getScreenpipeServer(config);
+    const root = await readOpenclawConfig();
+    if (root.mcpServers !== undefined) return false;
+    const servers = (root.mcp as Record<string, unknown> | undefined)?.servers as Record<string, unknown> | undefined;
+    const key = screenpipeServerKey(servers);
+    return !!(key && servers?.[key]);
   } catch { return false; }
 }
 
 export async function installOpenclawMcp(): Promise<McpCommand> {
-  const configPath = await getOpenclawMcpConfigPath();
-  // openclaw.json holds the whole gateway/agent config — preserve everything
-  // and only set mcpServers.screenpipe.
-  const config = await readJsonConfigStrict(configPath);
+  const root = await readOpenclawConfig();
+  const servers = migrateOpenclawServers(root);
   const mcp = await buildMcpConfig({ client: "openclaw" });
-  setScreenpipeServer(config, { ...mcp, transport: "stdio" });
-  await writeJsonConfig(configPath, config);
+  for (const name of Object.keys(servers)) if (name.toLowerCase() === "screenpipe") delete servers[name];
+  servers.screenpipe = { ...mcp, transport: "stdio" };
+  await writeJsonConfig(await getOpenclawMcpConfigPath(), root);
   return mcp;
 }
 
 export async function uninstallOpenclawMcp(): Promise<void> {
-  await removeScreenpipeFromJsonConfig(await getOpenclawMcpConfigPath());
+  const root = await readOpenclawConfig();
+  const before = JSON.stringify(root);
+  if (root.mcp === undefined && root.mcpServers === undefined) return;
+  const servers = migrateOpenclawServers(root);
+  for (const name of Object.keys(servers)) if (name.toLowerCase() === "screenpipe") delete servers[name];
+  if (JSON.stringify(root) !== before) await writeJsonConfig(await getOpenclawMcpConfigPath(), root);
 }
 
 // ─── Hermes ──────────────────────────────────────────────────────────────────
@@ -1068,7 +1111,7 @@ export async function isToolConfigHealthy(id: ConnectAllToolId): Promise<boolean
         await readJsonConfigStrict(await getGeminiMcpConfigPath());
         return true;
       case "openclaw":
-        await readJsonConfigStrict(await getOpenclawMcpConfigPath());
+        await readOpenclawConfig();
         return true;
       case "vscode": {
         const path = await getVscodeMcpConfigPath();

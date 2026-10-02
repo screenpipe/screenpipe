@@ -112,6 +112,9 @@ import {
   uninstallCodexMcp,
   installCursorMcp,
   uninstallCursorMcp,
+  installOpenclawMcp,
+  uninstallOpenclawMcp,
+  isOpenclawMcpInstalled,
   installHermesMcp,
   uninstallHermesMcp,
   installRunnerMcp,
@@ -291,6 +294,51 @@ describe("safe config IO", () => {
     fsMock.files.set(CURSOR, "broken{");
     await expect(uninstallCursorMcp()).rejects.toThrow(/not valid JSON/);
     expect(fsMock.files.get(CURSOR)).toBe("broken{");
+  });
+});
+
+describe("OpenClaw native MCP configuration", () => {
+  const path = "/Users/test/.openclaw/openclaw.json";
+  it("writes mcp.servers in a JSON5 config and preserves unrelated settings", async () => {
+    fsMock.files.set(path, "{ // user config\n gateway: {mode: 'local'}, mcp: {servers: {other: {command: 'keep'}}}, }");
+    await installOpenclawMcp();
+    await expect(isOpenclawMcpInstalled()).resolves.toBe(true);
+    const root = JSON.parse(fsMock.files.get(path)!);
+    expect(root.gateway).toEqual({mode: "local"});
+    expect(root.mcpServers).toBeUndefined();
+    expect(root.mcp.servers.other.command).toBe("keep");
+    expect(root.mcp.servers.screenpipe).toMatchObject({command:"/app/bun", transport:"stdio", env:{SCREENPIPE_LOCAL_API_KEY:"sp-test", SCREENPIPE_MCP_CLIENT:"openclaw"}});
+    await uninstallOpenclawMcp();
+    expect(JSON.parse(fsMock.files.get(path)!).mcp.servers).toEqual({other:{command:"keep"}});
+    await expect(isOpenclawMcpInstalled()).resolves.toBe(false);
+  });
+
+  it("migrates legacy servers and repairs the old Screenpipe entry idempotently", async () => {
+    fsMock.files.set(path, JSON.stringify({mcpServers:{Screenpipe:{command:"stale"},other:{command:"keep"}},mcp:{servers:{native:{command:"native"}}}}));
+    await expect(isOpenclawMcpInstalled()).resolves.toBe(false);
+    await installOpenclawMcp();
+    const first = fsMock.files.get(path)!;
+    await installOpenclawMcp();
+    expect(fsMock.files.get(path)).toBe(first);
+    const root = JSON.parse(first);
+    expect(root.mcpServers).toBeUndefined();
+    expect(Object.keys(root.mcp.servers).sort()).toEqual(["native","other","screenpipe"]);
+  });
+
+  it.each([
+    '{mcp: []}', '{mcp: {servers: []}}', '{mcpServers: []}', '{broken',
+    '{mcpServers:{other:{command:"a"}},mcp:{servers:{other:{command:"b"}}}}',
+  ])("refuses malformed maps and migration conflicts unchanged: %s", async seeded => {
+    fsMock.files.set(path, seeded);
+    await expect(installOpenclawMcp()).rejects.toThrow();
+    await expect(uninstallOpenclawMcp()).rejects.toThrow();
+    expect(fsMock.files.get(path)).toBe(seeded);
+  });
+
+  it("disconnects a legacy entry without deleting other servers", async () => {
+    fsMock.files.set(path, JSON.stringify({mcpServers:{screenpipe:{command:"old"}, other:{command:"keep"}}}));
+    await uninstallOpenclawMcp();
+    expect(JSON.parse(fsMock.files.get(path)!)).toEqual({mcp:{servers:{other:{command:"keep"}}}});
   });
 });
 
