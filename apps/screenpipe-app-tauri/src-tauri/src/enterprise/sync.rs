@@ -787,6 +787,24 @@ async fn run_one_sync_inner(
     }
 
     let prepared = prepare_upload_identity(cfg, local, http).await?;
+    if backfill.is_some_and(|request| request.images_only)
+        && !matches!(
+            prepared.upload_mode,
+            EnterpriseUploadMode::HostedIngest | EnterpriseUploadMode::DirectReadable(_)
+        )
+    {
+        return Err(EnterpriseSyncError::BackfillImages(
+            "screenshot_storage_mode_blocked",
+        ));
+    }
+    if backfill
+        .and_then(|request| request.source_id.as_deref())
+        .is_some_and(|source| source != prepared.device_id)
+    {
+        return Err(EnterpriseSyncError::BackfillImages(
+            "screenshot_source_changed",
+        ));
+    }
     let export = local.begin_export().await?;
     let cfg = &prepared;
     if cfg.stable_device_id.is_none()
@@ -1121,83 +1139,84 @@ async fn run_one_sync_inner(
         |row| &row.timestamp,
     );
 
-    match &cfg.upload_mode {
-        EnterpriseUploadMode::HostedIngest => {
-            for request_body in split_jsonl_requests(body, HOSTED_INGEST_REQUEST_BYTES) {
+    if !backfill.is_some_and(|request| request.images_only) {
+        match &cfg.upload_mode {
+            EnterpriseUploadMode::HostedIngest => {
+                for request_body in split_jsonl_requests(body, HOSTED_INGEST_REQUEST_BYTES) {
+                    let admission = match &export {
+                        Some(token) => token.admit().await?,
+                        None => None,
+                    };
+                    let upload = post_jsonl_with_identity(
+                        http,
+                        &cfg.ingest_url,
+                        &cfg.license_key,
+                        request_body,
+                        cfg.stable_device_id.as_deref(),
+                        backfill.is_some(),
+                    );
+                    drop(admission);
+                    upload.await?;
+                }
+            }
+            EnterpriseUploadMode::DirectWriteOnly(direct) => {
+                let counts = DirectUploadRecordCounts {
+                    frames: frames.len(),
+                    parsed: parsed.len(),
+                    activities: activities.len(),
+                    audio: audio.len(),
+                    ui: ui.len(),
+                    snapshots: snapshots.len(),
+                    memories: memories.len(),
+                    feedback: feedback.len(),
+                };
                 let admission = match &export {
                     Some(token) => token.admit().await?,
                     None => None,
                 };
-                let upload = post_jsonl_with_identity(
+                let upload = upload_direct_write_only_batch(
                     http,
-                    &cfg.ingest_url,
-                    &cfg.license_key,
-                    request_body,
-                    cfg.stable_device_id.as_deref(),
+                    cfg,
+                    direct,
+                    body,
+                    counts,
+                    enterprise_upload::direct_upload_cursors(&next_cursor),
+                );
+                drop(admission);
+                upload.await?;
+            }
+            EnterpriseUploadMode::DirectReadable(direct) => {
+                let counts = DirectUploadRecordCounts {
+                    frames: frames.len(),
+                    parsed: parsed.len(),
+                    activities: activities.len(),
+                    audio: audio.len(),
+                    ui: ui.len(),
+                    snapshots: snapshots.len(),
+                    memories: memories.len(),
+                    feedback: feedback.len(),
+                };
+                let admission = match &export {
+                    Some(token) => token.admit().await?,
+                    None => None,
+                };
+                let upload = upload_direct_readable_batch(
+                    http,
+                    cfg,
+                    direct,
+                    body,
+                    counts,
+                    enterprise_upload::direct_upload_cursors(&next_cursor),
                     backfill.is_some(),
                 );
                 drop(admission);
                 upload.await?;
             }
-        }
-        EnterpriseUploadMode::DirectWriteOnly(direct) => {
-            let counts = DirectUploadRecordCounts {
-                frames: frames.len(),
-                parsed: parsed.len(),
-                activities: activities.len(),
-                audio: audio.len(),
-                ui: ui.len(),
-                snapshots: snapshots.len(),
-                memories: memories.len(),
-                feedback: feedback.len(),
-            };
-            let admission = match &export {
-                Some(token) => token.admit().await?,
-                None => None,
-            };
-            let upload = upload_direct_write_only_batch(
-                http,
-                cfg,
-                direct,
-                body,
-                counts,
-                enterprise_upload::direct_upload_cursors(&next_cursor),
-            );
-            drop(admission);
-            upload.await?;
-        }
-        EnterpriseUploadMode::DirectReadable(direct) => {
-            let counts = DirectUploadRecordCounts {
-                frames: frames.len(),
-                parsed: parsed.len(),
-                activities: activities.len(),
-                audio: audio.len(),
-                ui: ui.len(),
-                snapshots: snapshots.len(),
-                memories: memories.len(),
-                feedback: feedback.len(),
-            };
-            let admission = match &export {
-                Some(token) => token.admit().await?,
-                None => None,
-            };
-            let upload = upload_direct_readable_batch(
-                http,
-                cfg,
-                direct,
-                body,
-                counts,
-                enterprise_upload::direct_upload_cursors(&next_cursor),
-                backfill.is_some(),
-            );
-            drop(admission);
-            upload.await?;
-        }
-        EnterpriseUploadMode::Blocked(reason) => {
-            return Err(EnterpriseSyncError::Configuration(reason.clone()));
+            EnterpriseUploadMode::Blocked(reason) => {
+                return Err(EnterpriseSyncError::Configuration(reason.clone()));
+            }
         }
     }
-
     if backfill.is_some() {
         let records =
             frames.len() + audio.len() + ui.len() + parsed.len() + memories.len() + feedback.len();

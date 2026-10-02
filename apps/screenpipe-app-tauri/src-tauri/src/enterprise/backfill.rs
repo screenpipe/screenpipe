@@ -26,6 +26,10 @@ pub(super) struct BackfillRequest {
     start_at: chrono::DateTime<chrono::Utc>,
     end_at: chrono::DateTime<chrono::Utc>,
     streams: Vec<BackfillStream>,
+    #[serde(default)]
+    pub(super) images_only: bool,
+    #[serde(default)]
+    pub(super) source_id: Option<String>,
 }
 
 impl BackfillRequest {
@@ -36,6 +40,10 @@ impl BackfillRequest {
             || self.start_at >= self.end_at
             || self.end_at > chrono::Utc::now()
             || self.streams.is_empty()
+            || self.images_only
+                && (self.source_id.as_deref().is_none_or(str::is_empty)
+                    || self.streams.len() != 1
+                    || !matches!(self.streams[0], BackfillStream::Frames))
         {
             return Err(EnterpriseSyncError::Configuration(
                 "invalid backfill target or range".into(),
@@ -48,6 +56,12 @@ impl BackfillRequest {
         &self,
         policy: SyncStreams,
     ) -> Result<SyncStreams, EnterpriseSyncError> {
+        if self.images_only && policy.frame_images != crate::enterprise_policy::FrameImagesMode::All
+        {
+            return Err(EnterpriseSyncError::BackfillImages(
+                "screenshot_policy_disabled",
+            ));
+        }
         let mut result = SyncStreams {
             frames: false,
             audio: false,
@@ -322,6 +336,7 @@ async fn report(
         .json(&serde_json::json!({
             "id": request.id, "status": status, "uploaded_records": cursor.boundary.backfill_records.unwrap_or(0),
             "screenshots": cursor.boundary.backfill_images,
+            "images_only": request.images_only,
             "last_error": failure.map(|error| match error { EnterpriseSyncError::BackfillImages(code) => *code, _ => "retrying" }),
             "cursors": { "frames": cursor.last_frame_ts, "audio": cursor.last_audio_ts, "ui_events": cursor.last_ui_ts,
                 "parsed": cursor.last_parsed_ts, "memories": cursor.last_memory_ts, "feedback": cursor.last_feedback_ts }
@@ -746,6 +761,171 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn image_continuation_uses_its_own_checkpoint_and_never_replays_telemetry() {
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
+        crate::enterprise_policy::set_sync_streams(
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            "off".into(),
+            "all".into(),
+        );
+        let server = MockServer::start().await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg = cfg(&dir, &server);
+        let req = request();
+        let telemetry_checkpoint = dir.path().join(format!(
+            "enterprise_backfill_{}_{}.json",
+            req.license_id, req.id
+        ));
+        std::fs::write(&cfg.cursor_path, "live checkpoint").unwrap();
+        std::fs::write(
+            &telemetry_checkpoint,
+            "original completed telemetry checkpoint",
+        )
+        .unwrap();
+        let mut body = pending();
+        body["request"]["images_only"] = serde_json::json!(true);
+        body["request"]["source_id"] = serde_json::json!("dev-1");
+        Mock::given(method("GET"))
+            .and(path("/api/enterprise/backfill-requests"))
+            .and(header("x-screenpipe-backfill-images", "cursor-v1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/enterprise/backfill-requests"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"accepted": true})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/enterprise/frame-uploads"))
+            .respond_with(|r: &wiremock::Request| {
+                let body: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+                let ids: Vec<_> = body["frames"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|f| f["frame_id"].clone())
+                    .collect();
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"stored": [], "unavailable": ids}))
+            })
+            .mount(&server)
+            .await;
+        let local = Local {
+            reads: AtomicUsize::new(0),
+            fail_ui: false,
+        };
+        let (_, shutdown) = tokio::sync::watch::channel(false);
+        let http = enterprise_http_client();
+        fulfill_requests(&cfg, &local, &http, &shutdown)
+            .await
+            .unwrap();
+        let image_checkpoint = dir.path().join(format!(
+            "enterprise_backfill_{}_{}_images.json",
+            req.license_id, req.id
+        ));
+        assert_eq!(
+            Cursor::load(&image_checkpoint).boundary.backfill_records,
+            Some(500)
+        );
+        fulfill_requests(&cfg, &local, &http, &shutdown)
+            .await
+            .unwrap();
+        assert_eq!(
+            Cursor::load(&image_checkpoint)
+                .boundary
+                .backfill_images
+                .unwrap()
+                .unavailable,
+            501
+        );
+        assert_eq!(
+            std::fs::read_to_string(&cfg.cursor_path).unwrap(),
+            "live checkpoint"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&telemetry_checkpoint).unwrap(),
+            "original completed telemetry checkpoint"
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests.iter().all(|r| [
+            "/api/enterprise/backfill-requests",
+            "/api/enterprise/frame-uploads"
+        ]
+        .contains(&r.url.path())));
+        let last: serde_json::Value = serde_json::from_slice(
+            &requests
+                .iter()
+                .rev()
+                .find(|r| r.method == "POST" && r.url.path().ends_with("backfill-requests"))
+                .unwrap()
+                .body,
+        )
+        .unwrap();
+        assert_eq!(last["images_only"], true);
+        assert_eq!(last["status"], "completed");
+        assert_eq!(
+            last["screenshots"],
+            serde_json::json!({"uploaded": 0, "unavailable": 501})
+        );
+        let mut wrong_source = request();
+        wrong_source.images_only = true;
+        wrong_source.source_id = Some("different-source".into());
+        let reads = local.reads.load(Ordering::SeqCst);
+        assert!(run_one_sync_inner(
+            &cfg,
+            &mut wrong_source.initial_cursor(),
+            &local,
+            &http,
+            false,
+            Some(&wrong_source)
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("screenshot_source_changed"));
+        assert_eq!(local.reads.load(Ordering::SeqCst), reads);
+        let mut strict_cfg = cfg.clone();
+        strict_cfg.upload_mode =
+            EnterpriseUploadMode::DirectWriteOnly(enterprise_upload::DirectUploadConfig {
+                ticket_url: format!("{}/ticket", server.uri()),
+                complete_url: format!("{}/complete", server.uri()),
+                pinned_hosts: vec![],
+            });
+        wrong_source.source_id = Some("dev-1".into());
+        assert!(run_one_sync_inner(
+            &strict_cfg,
+            &mut wrong_source.initial_cursor(),
+            &local,
+            &http,
+            false,
+            Some(&wrong_source)
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("screenshot_storage_mode_blocked"));
+        assert_eq!(local.reads.load(Ordering::SeqCst), reads);
+        crate::enterprise_policy::set_sync_streams(
+            true,
+            false,
+            true,
+            true,
+            true,
+            true,
+            "off".into(),
+            "cited".into(),
+        );
+    }
+
+    #[tokio::test]
     async fn backfill_wrong_device_and_cancelled_request_never_read_local_data() {
         let server = MockServer::start().await;
         let dir = tempfile::TempDir::new().unwrap();
@@ -858,6 +1038,7 @@ pub(super) async fn fulfill_requests(
         }
         let response = http
             .get(&url)
+            .header("X-Screenpipe-Backfill-Images", "cursor-v1")
             .header("X-License-Key", &cfg.license_key)
             .header("X-Device-Id", &cfg.device_id)
             .send()
@@ -880,8 +1061,10 @@ pub(super) async fn fulfill_requests(
         request.validate(cfg)?;
         let mut replay_cfg = cfg.clone();
         replay_cfg.cursor_path = cfg.cursor_path.with_file_name(format!(
-            "enterprise_backfill_{}_{}.json",
-            request.license_id, request.id
+            "enterprise_backfill_{}_{}{}.json",
+            request.license_id,
+            request.id,
+            if request.images_only { "_images" } else { "" }
         ));
         // Stable label keeps retries deterministic even after a hostname change.
         replay_cfg.device_label = cfg.device_id.clone();
@@ -930,7 +1113,9 @@ pub(super) async fn fulfill_requests(
                     None,
                 )
                 .await?;
-                if complete {
+                // JPEG pages are heavier than telemetry pages. Yield to live
+                // sync after one acknowledged image page, retaining its cursor.
+                if complete || cursor.boundary.backfill_images.is_some() {
                     break;
                 }
             }
