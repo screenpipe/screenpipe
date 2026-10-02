@@ -120,8 +120,11 @@ The inventory reports a pending-write warning only when a pending receipt exists
 that state blocks context reads as well as writes. A tool failure stops further
 operations for the current run, without altering the next scheduled run.
 
-The prompt prefers repairing a verified gap in the closest owned skill. Creation
-requires a distinct recurring need; an already-covered method, one-off request,
+The prompt searches a nonempty inventory by trigger before deciding whether to
+create a skill. An unrelated first page does not establish that no method exists.
+It prefers repairing a verified gap in the closest owned skill. An empty inventory
+permits creation; ownership is required only for updates. Creation still requires
+a distinct recurring need; an already-covered method, one-off request,
 ordinary advice or unchanged watch item produces no change. The runtime rejects
 new names with an identical existing trigger description, rejects exact copies of
 an inspected owned method, and returns an unchanged result for an identical update.
@@ -138,7 +141,10 @@ are not adopted by the learning task.
 
 Successful changes verify the read-back hash, skill identity, agent ownership,
 description and instructions against the requested method, allowing the store's
-whitespace normalization. A mismatch leaves the pending receipt in place without
+whitespace normalization. The prompt distinguishes verified saves, skipped or
+unchanged methods, and failures. A failed save must be reported as unverified,
+since a write may already have happened; it must not be reported as no change.
+A mismatch leaves the pending receipt in place without
 consuming evidence or reporting success. Changes have a local before/after artifact
 at `output/latest-change.md`. `output/learning-state.json` records ownership,
 consumed evidence, and the previous version of the last change. A pending receipt
