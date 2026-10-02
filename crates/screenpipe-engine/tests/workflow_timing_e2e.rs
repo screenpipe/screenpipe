@@ -228,7 +228,10 @@ async fn timing_survives_verified_publication_retries_and_disk_reload() {
     assert_eq!(timing["basis"], "estimated-elapsed");
     if let Some(expected) = input.get("expectedStepAverageMinutes") {
         let stage = &saved["analysis"]["workflows"][0]["stages"][0];
-        assert_eq!(stage["timing"]["averageMinutes"].as_f64(), expected.as_f64());
+        assert_eq!(
+            stage["timing"]["averageMinutes"].as_f64(),
+            expected.as_f64()
+        );
         assert_eq!(stage["timing"]["sampleCount"], 1);
         assert!(saved["analysis"]["workflows"][0]["stages"][1]["timing"].is_null());
         let context = get(&client, &base, "/workflows/context").await;
