@@ -70,10 +70,14 @@
 .blockControls { position: absolute; left: -30px; top: 1px; }
 .blockControls[data-open] { z-index: 5; }
 .block textarea, .block > div[data-testid="procedure-markdown"] { min-width: 0; grid-column: 1; grid-row: 1; }
-.kindLabel { grid-column: 2; grid-row: 1; padding: 8px 4px; font-size: 11px; line-height: 1.4; color: var(--muted); pointer-events: none; }
+.kindLabel { position: relative; grid-column: 2; grid-row: 1; width: 76px; }
+.kindLabel select { appearance: none; -webkit-appearance: none; box-sizing: border-box; width: 100%; min-height: 30px; padding: 6px 18px 6px 4px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; line-height: 1.4; cursor: pointer; }
+.kindLabel select:hover, .kindLabel select:focus-visible { background: var(--soft); color: var(--ink); }
+.kindLabel svg { position: absolute; right: 4px; top: 9px; color: var(--muted); pointer-events: none; opacity: 0; }
+.kindLabel[data-kind="action"] { opacity: 0; }
+.block:hover > .kindLabel, .block:focus-within > .kindLabel { opacity: 1; }
+.block:hover > .kindLabel svg, .block:focus-within > .kindLabel svg { opacity: 1; }
 .blockMenu { position: absolute; left: 0; top: 29px; box-sizing: border-box; width: 200px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 4px 12px #00000012; }
-.blockMenu label { display: block; padding: 4px; font-size: 11px; color: var(--muted); }
-.blockMenu select { display: block; box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: inherit; font-size: 13px; color: var(--ink); background: var(--panel); }
 .blockMenu > button { justify-content: flex-start; width: 100%; padding: 7px 4px; }
 .source { margin: 2px 0 0 29px; }
 .source > details { margin: 0; border: 0; border-radius: 0; background: transparent; }
@@ -88,6 +92,8 @@
 .error { padding: 12px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; line-height: 1.6; }
 .srOnly { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
 @media (hover: none) {
+  .kindLabel[data-kind="action"], .kindLabel svg { opacity: 1; }
+  .kindLabel select { min-height: 32px; }
   .editor button { min-width: 32px; min-height: 32px; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -102,7 +108,7 @@
   .source { margin-left: 25px; }
   .block { grid-template-columns: minmax(0, 1fr); }
   .block textarea, .block > div[data-testid="procedure-markdown"] { grid-column: 1; grid-row: 1; }
-  .kindLabel { grid-column: 1; grid-row: 2; padding: 0 5px 3px; }
+  .kindLabel { grid-column: 1; grid-row: 2; }
 }
 
 @media (prefers-reduced-motion: no-preference) {

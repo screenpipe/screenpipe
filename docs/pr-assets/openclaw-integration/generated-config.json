@@ -1,0 +1,21 @@
+{
+  "gateway": {
+    "mode": "local"
+  },
+  "mcp": {
+    "servers": {
+      "screenpipe": {
+        "command": "/mock/screenpipe/bun",
+        "args": [
+          "x",
+          "screenpipe-mcp@latest"
+        ],
+        "env": {
+          "SCREENPIPE_MCP_CLIENT": "openclaw",
+          "SCREENPIPE_LOCAL_API_KEY": "sp-fixture-only"
+        },
+        "transport": "stdio"
+      }
+    }
+  }
+}
