@@ -338,6 +338,7 @@
         "src/routes/search.rs",
         "src/routes/semantic.rs",
         "src/routes/speakers.rs",
+        "src/routes/starred.rs",
         "src/routes/streaming.rs",
         "src/routes/structured_outputs.rs",
         "src/routes/time.rs",
@@ -631,6 +632,7 @@
       "label": "Database OCR/accessibility search indexing",
       "crate": "screenpipe-db",
       "files": [
+        "src/db/starred.rs",
         "src/text_normalizer.rs",
         "src/text_similarity.rs",
         "tests/accessibility_late_materialization_test.rs",

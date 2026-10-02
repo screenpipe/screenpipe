@@ -468,6 +468,8 @@ mod frames;
 mod maintenance;
 mod meetings;
 mod memories;
+mod starred;
+pub use starred::StarredSession;
 mod outputs;
 mod search;
 mod semantic;
