@@ -1104,7 +1104,8 @@ mod tests {
             let settings: RecordingSettings = serde_json::from_value(serde_json::json!({
                 "disableClipboardCapture": explicit,
                 "disableKeyboardCapture": explicit,
-            })).unwrap();
+            }))
+            .unwrap();
             assert_eq!(settings.disable_clipboard_capture, explicit);
             assert_eq!(settings.disable_keyboard_capture, explicit);
         }
