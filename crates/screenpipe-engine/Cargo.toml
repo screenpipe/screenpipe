@@ -89,7 +89,7 @@ tokio-stream = { workspace = true, features = ["sync"] }
 dirs = { workspace = true }
 
 # Password input (no-echo for vault CLI)
-rpassword = "5"
+rpassword = "7.5.4"
 
 # Client http
 reqwest = { workspace = true }

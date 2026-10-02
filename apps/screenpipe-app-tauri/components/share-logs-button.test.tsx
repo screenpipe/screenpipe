@@ -143,6 +143,8 @@ async function emitFeedbackCompleted(payload: {
 
 describe("ShareLogsButton attachments", () => {
   beforeEach(() => {
+    // Vitest 4's restoreAllMocks no longer clears standalone vi.fn call history.
+    vi.clearAllMocks();
     settingsMockRef.current = { analyticsId: "test-analytics" };
     feedbackEventHandlers.clear();
     dragDropHandlerRef.current = null;

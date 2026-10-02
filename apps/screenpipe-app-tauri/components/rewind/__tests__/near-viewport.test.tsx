@@ -22,7 +22,7 @@ describe("NearViewport", () => {
 		const cancelWork = vi.fn();
 		let observer!: IntersectionObserver;
 
-		globalThis.IntersectionObserver = vi.fn((nextCallback) => {
+		globalThis.IntersectionObserver = vi.fn(function (nextCallback: IntersectionObserverCallback) {
 			callback = nextCallback;
 			observer = {
 				observe,

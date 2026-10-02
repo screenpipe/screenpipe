@@ -146,7 +146,7 @@
     "mammoth": "^1.12.0",
     "mdast-util-to-string": "^4.0.0",
     "mermaid": "^11.12.3",
-    "next": "15.5.21",
+    "next": "15.5.24",
     "nuqs": "^2.8.9",
     "posthog-js": "^1.359.1",
     "react": "^18.3.1",
@@ -165,7 +165,7 @@
     "tiptap-markdown": "^0.9.0",
     "unified": "^11.0.0",
     "unpdf": "^1.6.2",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^3",
     "zustand": "^5.0.11"
   },
@@ -212,11 +212,14 @@
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "unplugin": "2.3.11",
-    "vitest": "^1.6.1",
+    "vitest": "^4.1.11",
     "wdio-video-reporter": "^6.0.0"
   },
   "packageManager": "bun@1.3.10",
   "trustedDependencies": [
     "@sentry/cli"
-  ]
+  ],
+  "overrides": {
+    "vite": "^6.4.3"
+  }
 }

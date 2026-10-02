@@ -295,9 +295,10 @@ describe("ChatTabStrip", () => {
 
     await act(async () => {
       finishNavigation();
+      // Commit the destination with navigation, before flushing its completion.
+      view.rerender(<ChatTabStrip activeId="chat-new" onActivate={vi.fn()} onNewChat={onNewChat} />);
       await Promise.resolve();
     });
-    view.rerender(<ChatTabStrip activeId="chat-new" onActivate={vi.fn()} onNewChat={onNewChat} />);
     await waitFor(() => expect(useChatStore.getState().openChatIds).toEqual(["chat-new"]));
   });
 
