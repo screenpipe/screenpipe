@@ -14,6 +14,7 @@
 // portals into the shell owned here.
 
 import { AppSidebarLayout, SidebarProvider } from "@/components/app-sidebar";
+import { MeetingCalendarReminder } from "@/components/meeting-calendar-reminder";
 import { CardAskProvider } from "@/components/card-ask-provider";
 import { FirstRunLearningWindowProvider } from "@/components/first-run/learning-window-provider";
 
@@ -33,6 +34,7 @@ export default function MainLayout({
           single localStorage partition owning the arm assignment lives.
         */}
         <CardAskProvider />
+        <MeetingCalendarReminder />
       </SidebarProvider>
     </FirstRunLearningWindowProvider>
   );

@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     showScreenpipeShortcut: "Control+Super+S",
     showChatShortcut: "Control+Super+L",
     searchShortcut: "Control+Super+K",
+    starSessionShortcut: "Control+Super+B",
     startRecordingShortcut: "Super+Alt+U",
     stopRecordingShortcut: "Super+Alt+X",
     startAudioShortcut: "Control+Super+A",

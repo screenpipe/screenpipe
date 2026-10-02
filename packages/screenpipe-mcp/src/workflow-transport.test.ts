@@ -20,7 +20,7 @@ it("discovers and retrieves workflow targeting context through the built MCP tra
     if(req.url?.startsWith("/workflows?")) res.end(JSON.stringify({data:[{id,title:"Invoice review"},{id:uuidId,title:"Maintained workflow"}]}));
     else if(req.url?.startsWith(`/workflows/${id}?`)) res.end(JSON.stringify({id,workflow:{stages:[{name:"Review"}]},automationEvidence:[{status:"no_captured_frame",actionTarget:"unknown"}]}));
     else if(req.url?.startsWith(`/workflows/${uuidId}?`)) res.end(JSON.stringify({id:uuidId,workflow:{stages:[{name:"Review maintained workflow"}]}}));
-    else if(req.url?.startsWith("/search?")) res.end(JSON.stringify({data:[{type:"Input",content:{id:8,event_type:"click",frame_id:7,x:40,y:60,element_role:"AXButton",element_name:"Approve"}}],pagination:{total:1,offset:0,limit:5}}));
+    else if(req.url?.startsWith("/search?")) res.end(JSON.stringify({data:[{starred:req.url.includes("starred_only=true"),type:"Input",content:{id:8,event_type:"click",frame_id:7,x:40,y:60,element_role:"AXButton",element_name:"Approve"}}],pagination:{total:1,offset:0,limit:5}}));
     else if(req.url === "/frames/7/context?include_empty=true") res.end(JSON.stringify({frame_id:7,text_source:"accessibility",nodes:[{role:"AXButton",text:"",bounds:{left:0.25,top:0.5,width:0.125,height:0.0625},properties:{automation_id:"approve"}}]}));
     else { res.writeHead(404);res.end("{}"); }
   });
@@ -33,6 +33,14 @@ it("discovers and retrieves workflow targeting context through the built MCP tra
     await client.connect(transport);
     const tools=await client.listTools();
     expect(tools.tools.map(t=>t.name)).toEqual(expect.arrayContaining(["list-workflows","get-workflow"]));
+    expect(tools.tools.some(t=>t.name === "list-starred-sessions")).toBe(false);
+    expect(tools.tools.find(t=>t.name === "search-content")?.inputSchema.properties).toHaveProperty("starred_only");
+    const before = requests.length;
+    const starred = await client.callTool({name:"search-content",arguments:{starred_only:true,start_time:"2026-10-02T00:00:00Z",end_time:"2026-10-03T00:00:00Z",limit:5}});
+    expect(starred.isError).not.toBe(true);
+    expect(JSON.stringify(starred)).toContain("[Starred moment]");
+    expect(requests.slice(before)).toHaveLength(1);
+    expect(requests.at(-1)).toContain("starred_only=true");
     const listed=await client.callTool({name:"list-workflows",arguments:{q:"invoice"}});
     expect(JSON.stringify(listed)).toContain(id);
     const detail=await client.callTool({name:"get-workflow",arguments:{id}});

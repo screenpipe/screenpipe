@@ -1029,6 +1029,13 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
       }
       case "get_enterprise_host_identity":
         return { machine_id_hash: null, os_user_id_hash: null };
+      case "calendar_status":
+        return { available: false, authorized: false, calendarCount: 0 };
+      case "oauth_list_instances":
+      case "ics_calendar_get_entries":
+        return [];
+      case "oauth_status":
+        return { connected: false };
       case "get_enterprise_install_metadata":
         return {
           install_source: "browser-dev",

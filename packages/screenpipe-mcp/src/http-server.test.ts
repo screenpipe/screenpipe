@@ -200,7 +200,7 @@ describe("buildHttpServer", () => {
         return;
       }
       response.end(JSON.stringify({
-        data: [{ type: "OCR", content: { text: "synthetic authenticated result" } }],
+        data: [{ starred: true, type: "OCR", content: { text: "synthetic authenticated result" } }],
         pagination: { total: 1 },
       }));
     });
@@ -222,9 +222,11 @@ describe("buildHttpServer", () => {
       await client.connect(new StreamableHTTPClientTransport(url, {
         requestInit: { headers: { authorization: "Bearer mcp-client-secret" } },
       }));
-      const call = client.callTool({ name: "search_content", arguments: { q: "fixture", limit: 1 } });
+      const call = client.callTool({ name: "search_content", arguments: { q: "fixture", limit: 1, starred_only: true } });
       if (succeeds) {
         const result = await call;
+        expect(JSON.stringify(result)).toContain("[Starred moment]");
+        expect(requests[0].path).toContain("starred_only=true");
         expect(result.isError).not.toBe(true);
         expect(result.content).toEqual([expect.objectContaining({
           type: "text", text: expect.stringContaining("synthetic authenticated result"),
@@ -235,7 +237,7 @@ describe("buildHttpServer", () => {
         await expect(call).rejects.toThrow("HTTP error: 403");
         expect(requests).toHaveLength(1);
       }
-      expect(requests[0].path).toBe("/search?q=fixture&limit=1");
+      expect(requests[0].path).toBe("/search?q=fixture&limit=1&starred_only=true");
       expect(requests.some(request => request.authorization === "Bearer mcp-client-secret")).toBe(false);
     } finally {
       await client.close();
@@ -254,6 +256,11 @@ describe("buildHttpServer", () => {
       if (request.url?.startsWith("/search?")) {
         searches.push({ source: request.headers["x-screenpipe-client"], agent: request.headers["x-screenpipe-agent"] });
         const q = new URL(request.url, "http://fixture").searchParams.get("q");
+        if (q === "broad") {
+          response.statusCode = 400;
+          response.end(JSON.stringify({ error: "starred search covers more than 100 disjoint intervals; narrow start_time/end_time" }));
+          return;
+        }
         if (q === "failed") response.statusCode = 500;
         response.end(JSON.stringify({ data: q === "empty" ? [] : [{ type: "OCR", content: { text: "fixture result" } }] }));
       } else if (request.url === "/internal/telemetry/mcp-value") {
@@ -298,6 +305,7 @@ describe("buildHttpServer", () => {
       ]));
       await clients[0].callTool({ name: "search_content", arguments: { q: "empty" } });
       await expect(clients[0].callTool({ name: "search_content", arguments: { q: "failed" } })).rejects.toThrow();
+      await expect(clients[0].callTool({ name: "search_content", arguments: { q: "broad", starred_only: true } })).rejects.toThrow("narrow start_time/end_time");
       expect(outcomes).toHaveLength(3);
     } finally {
       await Promise.all(clients.map(client => client.close()));

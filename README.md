@@ -14,8 +14,8 @@
 
 
 
-<p align="center">Screenpipe remembers how you actually work</p>
-<p align="center">Record your screen continuously locally and provide context to your agents (Claude, Codex, Openclaw, Hermes, Runner...)</p>
+<p align="center">Screenpipe finds work worth automating in your company</p>
+<p align="center">Continuously record your company's computer work, map workflows, help find work worth automating, and power agents' context</p>
 
 
 
@@ -46,13 +46,16 @@ https://github.com/user-attachments/assets/70fe94eb-6d2a-47ca-b7c3-c8ead13a5b7f
 
 <img width="1312" height="947" alt="Screenshot 2026-07-16 at 1 57 50 PM" src="https://github.com/user-attachments/assets/e8de9f45-1f08-4157-ab52-10e3c31822db" />
 
-<img width="1312" height="947" alt="Screenshot 2026-07-16 at 1 58 37 PM" src="https://github.com/user-attachments/assets/4448a90b-6113-46e5-80e4-244c24bb9ba8" />
+<img width="1268" height="903" alt="Screenshot 2026-10-02 at 9 57 26 AM" src="https://github.com/user-attachments/assets/5b1cd0cf-8ea9-465d-a641-80cb5634583d" />
+
+<img width="1512" height="949" alt="Screenshot 2026-10-02 at 9 58 32 AM" src="https://github.com/user-attachments/assets/62425cfb-d46a-44fc-a584-8faf77cbcfcd" />
+
 
 ---
 
 ## what is this?
 
-screenpipe capture all your computer work locally and power your agents
+screenpipe capture all your computer work locally and power your company's agents
 
 ```
 ┌─────────────────────────────────────────┐
@@ -60,7 +63,8 @@ screenpipe capture all your computer work locally and power your agents
 └─────────────────────────────────────────┘
 ```
 
-- **remember everything** - never forget what you saw, heard, or did
+- **remember everything** - never forget what you did, saw, heard
+- **map workflows** - generate a list of workflows to automate (instead of interviewing people or hiring consultants)
 - **run agents that work based on what you do** generate agents, skills, and automations based on what you do
 
 <img width="360" height="311" alt="image" src="https://github.com/user-attachments/assets/cfbf0fd3-84ef-4feb-8c6d-2779d67058a7" />
@@ -68,13 +72,13 @@ screenpipe capture all your computer work locally and power your agents
 - **search with ai** - find anything using natural language
 - **Local-first** - capture history stays on your device by default. Cloud AI, sync, integrations, and managed team storage have separate data paths; see [Privacy and security](#privacy-and-security).
 - **source-available** - inspect, modify, audit ([LICENSE.md](LICENSE.md))
-- **Team knowledge** - share reviewed outputs or configure managed storage with agreed access rules; see [Teams & enterprise](#teams--enterprise).
 
 <p align="center">
    <a href ="https://screenpi.pe">
       <img src="https://github.com/user-attachments/assets/1f0c04f6-300a-417d-8bd3-5b73435ee2e9">
    </a>
 </p>
+
 
 
 ## install

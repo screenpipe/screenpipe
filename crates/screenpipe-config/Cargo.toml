@@ -21,6 +21,7 @@ specta = { workspace = true, optional = true }
 
 [features]
 default = []
+enterprise-build = []
 specta = ["dep:specta"]
 
 [dev-dependencies]

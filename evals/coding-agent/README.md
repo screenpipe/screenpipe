@@ -1467,3 +1467,22 @@ continuity, old-row backfill, whitespace-split entities, live model providers,
 agent isolation or model capability. Run the shared runner with
 `--case app-ocr-derived-copy-retry --verify`; compilation and extraction failures
 must remain infrastructure errors, not evidence of the historical defect.
+
+### Enterprise local policy waits
+
+`app-enterprise-local-policy-waits` runs the actual enterprise authentication hook with synthetic HTTP, settings and native-command boundaries. Fourteen outcomes cover six stalled local operations, late install metadata, rejected/expired credentials, credential choice, account-only access, recording pause, native denial and healthy policy persistence. The task allows ten seconds for one stalled operation; it does not require a particular timer helper or warning message.
+
+Run `bun test evals/coding-agent/calibrate-enterprise-policy-waits.test.js` to check the broken parent, historical reference, current hook, equivalent helper names, disconnected correct source, omitted persistence, excessive wait, native/pause bypasses and missing-source infrastructure failure. These checks do not establish native recording enforcement, real disk durability, host isolation or model performance.
+
+`app-learning-save-readback` runs the actual opted-in learning extension with
+synthetic service replies and temporary local state. Five outcomes reject a
+mismatched saved identity, origin or content despite matching response hashes.
+Seven nearby outcomes cover hash failures, uncertain writes, restart protection,
+successful creation, whitespace normalization and owned updates. The parent fails
+five and preserves seven; the reference and current source pass all twelve.
+Run `bun test evals/coding-agent/calibrate-learning-save-readback.test.js` for ten
+controls, including equivalent helper naming, unused correct code, blanket save
+refusal, lost reports, ignored hashes, lost pending state and missing source.
+Fixtures appear only at grading. This checks the extension and its local receipts;
+real skill-store durability, native authorization, context privacy filtering,
+execution isolation and model performance remain outside this evidence.

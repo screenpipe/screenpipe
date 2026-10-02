@@ -1313,6 +1313,50 @@ fn stop_native_overlay_meeting(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// The native menu uses the same engine writes as the webview and CLI. This
+// runs on the existing callback worker, never the macOS UI thread.
+fn native_star_session(app: &tauri::AppHandle, minutes: u32, hd: bool) -> Result<(), String> {
+    use crate::recording::local_api_context_from_app;
+    let api = local_api_context_from_app(app);
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let now = chrono::Utc::now();
+    let body = if minutes == 0 {
+        let response = api
+            .apply_auth_blocking(
+                client
+                    .get(api.url("/starred-sessions"))
+                    .query(&[("start_time", now.to_rfc3339())]),
+            )
+            .send()
+            .map_err(|e| e.to_string())?
+            .error_for_status()
+            .map_err(|e| e.to_string())?;
+        let value: serde_json::Value = response.json().map_err(|e| e.to_string())?;
+        let mut row = value["data"]
+            .as_array()
+            .and_then(|a| a.first())
+            .cloned()
+            .ok_or("No active starred session")?;
+        row["end"] = serde_json::json!(now);
+        row
+    } else {
+        serde_json::json!({"id":uuid::Uuid::new_v4().to_string(),"start":now,"end":now+chrono::Duration::minutes(minutes as i64),"hd_requested":hd,"revision":0})
+    };
+    let response = api
+        .apply_auth_blocking(client.post(api.url("/starred-sessions")).json(&body))
+        .send()
+        .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(
+            "Could not save the session. Open session controls to check its current state.".into(),
+        );
+    }
+    Ok(())
+}
+
 fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char) {
     if action_ptr.is_null() {
         return;
@@ -1333,6 +1377,28 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
         let app_clone = app.clone();
         std::thread::spawn(move || {
             let app_for_show = app_clone.clone();
+            if let Some(payload) = action.strip_prefix("star_session:") {
+                if let Some((minutes, mode)) = payload.split_once(':') {
+                    if let Ok(minutes) = minutes.parse::<u32>() {
+                        if [0, 5, 15, 30, 60].contains(&minutes) && ["normal", "hd"].contains(&mode)
+                        {
+                            let result = native_star_session(&app_clone, minutes, mode == "hd");
+                            let title = if result.is_ok() {
+                                if minutes == 0 {
+                                    "Starred session ended"
+                                } else {
+                                    "Work session starred"
+                                }
+                            } else {
+                                "Could not update starred session"
+                            };
+                            let detail = result.err().unwrap_or_else(|| if minutes == 0 { "View or edit it in the timeline.".into() } else { format!("Starring for {minutes} minutes. Recording pauses and exclusions still apply.") });
+                            crate::notifications::client::send(title, detail);
+                        }
+                    }
+                }
+                return;
+            }
             if let Some(anchor) = parse_overlay_anchor(&action) {
                 let persisted = persist_shortcut_overlay_anchor(&app_clone, anchor);
                 track_native_overlay_event(
@@ -1375,6 +1441,14 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
                 return;
             }
             match action.as_str() {
+                "open_starred_sessions" => {
+                    let _ = app_clone.run_on_main_thread(move || {
+                        let _ = (ShowRewindWindow::Home {
+                            page: Some("timeline&starred=1".into()),
+                        })
+                        .show(&app_for_show);
+                    });
+                }
                 "open_timeline" => {
                     track_native_overlay_event(
                         &app_clone,

@@ -4886,6 +4886,83 @@
         ],
         "command": "cargo test --locked -p screenpipe-redact --test eval_ocr_derived -- --test-threads=1"
       }
+    },
+    {
+      "id": "app-enterprise-local-policy-waits",
+      "name": "Finish enterprise verification despite stalled local policy work",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "6b48cdbc6bd445f6ce0389aa00fd40c642872f65",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/7435"
+      },
+      "base_ref": "959f7e46559620b9df4666553379d26d21da8760",
+      "oracle_ref": "6b48cdbc6bd445f6ce0389aa00fd40c642872f65",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/lib/hooks/use-enterprise-policy.ts"
+      ],
+      "gate": "advisory",
+      "trigger_paths": [
+        "apps/screenpipe-app-tauri/lib/hooks/use-enterprise-policy.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "enterprise",
+        "auth",
+        "deadline",
+        "preserved-behavior"
+      ],
+      "prompt": "Enterprise startup can stay on checking access forever when local policy work stalls, even though the service can verify the saved license key. Ensure verification finishes within 10 seconds when one store-open, settings-read, AI-preset write/save, install-metadata lookup, or app-update settings-save operation never settles and the other operations respond promptly. Continue real policy verification and native authorization before reporting success. Keep key requests free of account authorization headers. Ignore install metadata that arrives after its wait has ended so it cannot overwrite settings or a newly selected account. Preserve credential choice with no credentials, denied and expired credentials even after a local read stall, account-login requirements, administrator recording pauses, and native authorization failure. Healthy policy application must still persist update policy and timely install metadata while retaining allowed employee presets, account identity, and unrelated settings.",
+      "agent_timeout_seconds": 900,
+      "grader_dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/enterprise-policy-waits.fixture.tsx.txt",
+            "destination_path": "apps/screenpipe-app-tauri/lib/hooks/__tests__/eval-enterprise-policy-waits.test.tsx"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && NODE_OPTIONS=--localstorage-file=.eval-localstorage bun x vitest run --config vitest.config.ts lib/hooks/__tests__/eval-enterprise-policy-waits.test.tsx"
+      }
+    },
+    {
+      "id": "app-learning-save-readback",
+      "name": "Verify the saved skill before reporting learning success",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "ebfae02d4464e87983c1516bb1f4e95a40197397",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/7434"
+      },
+      "base_ref": "fffff2a42ef5584969e7dd680b54bafde59803c4",
+      "oracle_ref": "ebfae02d4464e87983c1516bb1f4e95a40197397",
+      "oracle_paths": [
+        "crates/screenpipe-core/assets/extensions/skill-learning.ts"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "local-skills",
+        "write-verification",
+        "preserved-behavior"
+      ],
+      "prompt": "The opted-in learning task can report a successful skill save even when the service stored a different method or identity. Repair the active learning extension so a save succeeds only when read-back has matching nonempty write/read hashes and the requested key, name, agent origin, description and instructions. Accept the storage service trimming surrounding whitespace. A mismatched result or failed write must report an error, keep a durable pending receipt, leave consumed evidence, ownership and change count unchanged, and avoid a success report or another write in that run. A pending receipt must also block a save after restart. Preserve successful creation and updating of an owned skill, the existing optimistic concurrency hash, evidence consumption, ownership, one-change limit and the review report including the previous method for updates. Use synthetic activity and service replies; no real recordings or private data are needed.",
+      "agent_timeout_seconds": 900,
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/learning-save-readback.test.ts",
+            "destination_path": "evals/coding-agent/graders/learning-save-readback.test.ts"
+          }
+        ],
+        "command": "\"${BUN_BIN:-bun}\" test evals/coding-agent/graders/learning-save-readback.test.ts"
+      }
     }
   ]
 }

@@ -283,3 +283,55 @@ async fn reminder_real_storage_failure_survives_rotation_and_support_redaction()
         std::io::ErrorKind::InvalidData
     );
 }
+
+#[test]
+fn independent_google_accounts_preserve_failed_account_receipts_across_restart() {
+    let healthy = CalendarSource::GoogleAccount("a".repeat(64));
+    let failed = CalendarSource::GoogleAccount("b".repeat(64));
+    let snapshot = snapshots::CalendarSnapshots {
+        sources: BTreeMap::from([
+            (healthy.clone(), vec![event("healthy", 30)]),
+            (failed.clone(), vec![event("failed", 60)]),
+        ]),
+    };
+    let mut ledger = Ledger::default();
+    ledger.reconcile(&snapshot, NOW);
+    let path = tempfile::tempdir().unwrap();
+    let file = path.path().join("ledger.json");
+    write_ledger(&file, &ledger).unwrap();
+    let mut restarted = read_ledger(&file).unwrap();
+    let healthy_only = snapshots::CalendarSnapshots {
+        sources: BTreeMap::from([(healthy, vec![event("healthy", 30)])]),
+    };
+    restarted.reconcile(&healthy_only, NOW);
+    assert_eq!(restarted.observed[&failed].len(), 1);
+    assert_eq!(restarted.due(&healthy_only, NOW, 30).len(), 1);
+    assert!(restarted
+        .receipts
+        .values()
+        .all(|r| r.disposition != Disposition::Removed));
+    // Existing pre-upgrade enum map keys still load.
+    assert!(serde_json::from_str::<Ledger>(
+        r#"{"observed":{"Google":{},"Native":{},"Ics":{}},"receipts":{}}"#
+    )
+    .is_ok());
+}
+
+#[test]
+fn google_account_migration_keeps_previous_reminder_dismissals() {
+    let original = snapshot(vec![event("one", 30)]);
+    let mut ledger = Ledger::default();
+    ledger.reconcile(&original, NOW);
+    let (occurrence, _) = ledger.due(&original, NOW, 30).pop().unwrap();
+    ledger.record(&occurrence, Disposition::Emitted);
+    let serialized = serde_json::to_string(&ledger).unwrap();
+    let mut restarted: Ledger = serde_json::from_str(&serialized).unwrap();
+    let account = snapshots::CalendarSnapshots {
+        sources: BTreeMap::from([(
+            CalendarSource::GoogleAccount("a".repeat(64)),
+            vec![event("one", 30)],
+        )]),
+    };
+    restarted.reconcile(&account, NOW);
+    assert!(restarted.due(&account, NOW, 30).is_empty());
+}
