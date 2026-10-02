@@ -141,3 +141,6 @@ pub mod stream_invalidation {
             .is_ok()
     }
 }
+
+#[cfg(any(target_os = "windows", test))]
+mod ocr_worker;

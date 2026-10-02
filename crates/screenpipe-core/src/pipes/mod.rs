@@ -2380,7 +2380,19 @@ fn classify_pipe_process_result(
 
     if process_success {
         if !stdout_has_verified_pipe_result(filtered_stdout) {
-            let missing_output = "pipe process exited successfully without a verified result";
+            let compaction_failed = filtered_stdout.lines().any(|line| {
+                serde_json::from_str::<serde_json::Value>(line).is_ok_and(|event| {
+                    event["type"] == "compaction_end"
+                        && event["errorMessage"]
+                            .as_str()
+                            .is_some_and(|error| !error.trim().is_empty())
+                })
+            });
+            let missing_output = if compaction_failed {
+                "context compaction failed before the agent produced a final result"
+            } else {
+                "pipe process exited successfully without a verified result"
+            };
             let classified_stderr = if stderr.trim().is_empty() {
                 missing_output.to_string()
             } else {
@@ -2390,10 +2402,12 @@ fn classify_pipe_process_result(
                 status: "failed",
                 success: false,
                 stderr: classified_stderr,
-                error_type: Some("missing_output".to_string()),
-                error_message: Some(
-                    "automation finished without producing a verifiable result".to_string(),
-                ),
+                error_type: Some(if compaction_failed { "context_compaction" } else { "missing_output" }.to_string()),
+                error_message: Some(if compaction_failed {
+                    "Could not prepare the next step. Any saved progress is still available. Try again."
+                } else {
+                    "automation finished without producing a verifiable result"
+                }.to_string()),
             };
         }
         return ClassifiedPipeProcessResult {
@@ -2531,7 +2545,11 @@ fn agent_end_has_successful_assistant_text(value: &serde_json::Value) -> bool {
         return false;
     };
 
-    if message.get("stopReason").and_then(|v| v.as_str()) == Some("error") {
+    if message
+        .get("stopReason")
+        .and_then(|v| v.as_str())
+        .is_some_and(|reason| reason != "stop")
+    {
         return false;
     }
 
@@ -12260,6 +12278,36 @@ Run the scheduled task.
 
         assert_eq!(classified.status, "failed");
         assert_eq!(classified.error_type.as_deref(), Some("missing_output"));
+    }
+
+    #[test]
+    fn unfinished_agent_text_after_compaction_failure_is_not_success() {
+        for reason in ["toolUse", "aborted", "length", "error"] {
+            let stdout = [
+                serde_json::json!({"type":"compaction_end","errorMessage":"Auto-compaction failed: 502","aborted":false,"willRetry":false}),
+                serde_json::json!({"type":"agent_end","messages":[{"role":"assistant","stopReason":reason,"content":[
+                    {"type":"text","text":"I will check the next source."},
+                    {"type":"toolCall","id":"t1","name":"lookup","arguments":{}}
+                ]}]})
+            ].iter().map(serde_json::Value::to_string).collect::<Vec<_>>().join("\n");
+            let result = classify_pipe_process_result(true, false, "", &stdout);
+            assert_eq!(result.status, "failed", "{reason}");
+            assert_eq!(result.error_type.as_deref(), Some("context_compaction"));
+            assert!(result.error_message.unwrap().contains("saved progress"));
+            let cancelled = classify_pipe_process_result(true, true, "", &stdout);
+            assert_eq!(cancelled.status, "cancelled");
+        }
+    }
+
+    #[test]
+    fn recovered_compaction_failure_does_not_override_final_success() {
+        let stdout = [
+            r#"{"type":"compaction_end","errorMessage":"Auto-compaction failed: 502"}"#,
+            r#"{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Saved the reviewed result."}]}]}"#
+        ].join("\n");
+        let result = classify_pipe_process_result(true, false, "", &stdout);
+        assert!(result.success);
+        assert_eq!(result.status, "completed");
     }
 
     #[test]

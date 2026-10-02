@@ -10,7 +10,7 @@ import {
   rename,
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
-import type { WorkProfile, WorkflowAnalysis } from "@screenpipe/workflows-ui";
+import type { WorkProfile, WorkflowAnalysis, WorkflowSkillDraft } from "@screenpipe/workflows-ui";
 import { parseGuide, type WorkflowGuide, isAssistantState, type AssistantState } from "@screenpipe/workflows-ui";
 
 const STORAGE_DIRECTORY = "workflows";
@@ -145,6 +145,7 @@ function isGuideStore(value: unknown): value is Record<string, WorkflowGuide> {
 const readGuides = () => readValidated("workflows/guides.json", "workflows/guides.backup.json", isGuideStore, "guides");
 
 export async function loadGuideFromDisk(key: string) {
+  await writeQueue;
   const guides = await readGuides();
   return guides && Object.hasOwn(guides, key) ? parseGuide(guides[key]) : null;
 }
@@ -153,5 +154,32 @@ export function saveGuideToDisk(guide: WorkflowGuide) {
     const validated = parseGuide(guide);
     const guides = await readGuides();
     await replaceWithBackup("workflows/guides.json", "workflows/guides.backup.json", { ...guides, [validated.workflowKey]: validated });
+  });
+}
+
+
+export async function listGuidesFromDisk() {
+  await writeQueue;
+  return Object.values(await readGuides() ?? {}).map(guide => parseGuide(guide));
+}
+
+type SkillDraftStore = Record<string, WorkflowSkillDraft>;
+function isSkillDraftStore(value: unknown): value is SkillDraftStore {
+  if (!asRecord(value) || Array.isArray(value)) return false;
+  return Object.values(value as Record<string, unknown>).every(draft => {
+    const d = asRecord(draft);
+    return d && ["name", "description", "instructions", "sourceWorkflow"].every(key => typeof d[key] === "string" && d[key].length <= 20000);
+  });
+}
+const readSkillDrafts = () => readValidated("workflows/skill-drafts.json", "workflows/skill-drafts.backup.json", isSkillDraftStore, "skill drafts");
+export async function listSkillDraftsFromDisk() {
+  await writeQueue;
+  return Object.entries(await readSkillDrafts() ?? {}).map(([workflowKey, draft]) => ({ workflowKey, draft }));
+}
+export function saveSkillDraftToDisk(workflowKey: string, draft: WorkflowSkillDraft) {
+  return queueWrite(async () => {
+    if (!workflowKey || !isSkillDraftStore({ [workflowKey]: draft })) throw new Error("Invalid skill draft");
+    const drafts = await readSkillDrafts();
+    await replaceWithBackup("workflows/skill-drafts.json", "workflows/skill-drafts.backup.json", { ...drafts, [workflowKey]: draft });
   });
 }

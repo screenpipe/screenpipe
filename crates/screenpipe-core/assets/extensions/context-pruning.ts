@@ -80,7 +80,7 @@ const CHARS_PER_TOKEN = 4;
 
 const HISTORY_OPEN = "<conversation_history>";
 const HISTORY_CLOSE = "</conversation_history>";
-const CONTEXT_SIZE_EXCEEDED = /context size has been exceeded/i;
+const CONTEXT_SIZE_EXCEEDED = /context size has been exceeded|conversation is too long for [^\n]*context window/i;
 /**
  * Mark the provider's generic HTTP 500 overflow wording for pi's existing
  * overflow classifier. The original error remains intact for diagnostics and

@@ -100,3 +100,14 @@ describe("notification file links", () => {
     });
   });
 });
+
+describe("calendar reminder deeplinks", () => {
+  it("opens calendar connections directly in Home", async () => {
+    const showWindowActivated = vi.fn().mockResolvedValue({ status: "ok" });
+    const emitEvent = vi.fn().mockResolvedValue(undefined);
+    await routeNotificationDeeplink("screenpipe://calendar-connections", { showWindowActivated, emitEvent });
+    expect(showWindowActivated).toHaveBeenCalledWith({ Home: { page: "connections&category=Calendar" } });
+    expect(emitEvent).toHaveBeenCalledWith("navigate", { url: "/home?section=connections&category=Calendar" });
+    expect(emitEvent).not.toHaveBeenCalledWith("deep-link-received", expect.anything());
+  });
+});

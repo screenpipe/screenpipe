@@ -109,6 +109,37 @@ fs.mkdirSync(out, { recursive: true });
   await snap("after-saved");
   await open();
   assert.equal(await input.inputValue(), "The project lead reviews the brief before it is shared with the team.");
+  // Saving manual answers must not wait for a recording or an AI fill.
+  for (const phase of ["recording", "filling"]) {
+    releaseFill = undefined;
+    await questions.getByRole("button", { name: "Answer with voice" }).click();
+    await page.getByText("Listening", { exact: true }).waitFor();
+    await page.evaluate(() => window.__voiceChannel.onmessage({ data: JSON.stringify({
+      type: "session.input_transcript.delta", event_id: "save-test", delta: "The project lead reviews it.",
+    }) }));
+    if (phase === "filling") {
+      await page.getByRole("button", { name: "Stop recording" }).click();
+      const deadline = Date.now() + 10000;
+      while (!releaseFill && Date.now() < deadline) await page.waitForTimeout(50);
+      assert.ok(releaseFill, "Fill request should be in flight");
+    }
+    const answer = `Reviewed answer during ${phase}`;
+    await input.fill(answer);
+    const saveButton = page.getByRole("button", { name: "Save answers", exact: true });
+    assert.equal(await saveButton.isEnabled(), true);
+    await saveButton.scrollIntoViewIfNeeded();
+    await snap(`save-during-${phase}`);
+    await saveButton.click();
+    await page.getByText("Answers saved for the next workflow update.", { exact: true }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Stop recording" }).count(), 0);
+    if (releaseFill) releaseFill();
+    await open();
+    assert.equal(await input.inputValue(), answer);
+  }
+  // Restore the answer expected by the remaining layout checks.
+  await input.fill("The project lead reviews the brief before it is shared with the team.");
+  await page.getByRole("button", { name: "Save answers", exact: true }).click();
+  await page.getByText("Answers saved for the next workflow update.", { exact: true }).waitFor();
   const play=page.getByRole("button",{name:/View recording for/}).first();
   await play.scrollIntoViewIfNeeded();
   assert.equal((await play.innerText()).trim(), "");
@@ -131,6 +162,6 @@ fs.mkdirSync(out, { recursive: true });
   await page.emulateMedia({reducedMotion:"reduce"});
   await snap("after-reduced-motion");
   assert.deepEqual(errors,[]);
-  console.log("PASS: generated questions, typing, voice affordance, explicit save, failed-save retry, reload, compact playback, mobile, reduced motion, synthetic Live session, multi-field fill, undo, microphone cleanup, no browser errors.");
+  console.log("PASS: generated questions, typing, voice affordance, explicit save, save during recording and pending fill, failed-save retry, reload, compact playback, mobile, reduced motion, synthetic Live session, multi-field fill, undo, microphone cleanup, no browser errors.");
  } finally { await browser.close(); }
 })().catch(e=>{console.error(e);process.exitCode=1;});

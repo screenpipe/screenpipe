@@ -124,6 +124,7 @@ const ShortcutRow = ({
     showChatShortcut: string;
     searchShortcut: string;
     lockVaultShortcut?: string;
+    starSessionShortcut?: string;
   }) => {
     console.log("syncing shortcuts:", {
       showShortcut: updatedShortcuts.showScreenpipeShortcut,
@@ -162,6 +163,7 @@ const ShortcutRow = ({
         showChatShortcut: settings.showChatShortcut,
         searchShortcut: settings.searchShortcut,
         lockVaultShortcut: settings.lockVaultShortcut || "",
+        starSessionShortcut: settings.starSessionShortcut || "",
       };
       const conflict = Object.entries(allShortcuts).find(
         ([key, value]) =>
@@ -203,6 +205,7 @@ const ShortcutRow = ({
             stopAudioShortcut: shortcut === "stopAudioShortcut" ? keys : settings.stopAudioShortcut,
             showChatShortcut: shortcut === "showChatShortcut" ? keys : settings.showChatShortcut,
             searchShortcut: shortcut === "searchShortcut" ? keys : settings.searchShortcut,
+            starSessionShortcut: shortcut === "starSessionShortcut" ? keys : (settings.starSessionShortcut || ""),
             lockVaultShortcut: shortcut === "lockVaultShortcut" ? keys : (settings.lockVaultShortcut || ""),
           };
           await syncShortcuts(updatedShortcuts);

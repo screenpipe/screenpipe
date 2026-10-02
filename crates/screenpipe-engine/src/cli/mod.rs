@@ -19,6 +19,7 @@ pub mod presets;
 pub mod profile;
 pub mod search;
 pub mod service;
+pub mod starred;
 pub mod status;
 pub(crate) mod store_file;
 pub mod survey;
@@ -243,6 +244,13 @@ pub enum Command {
     /// (no daemon required — opens `~/.screenpipe/db.sqlite` read-side
     /// via WAL while sp may be writing).
     Search(SearchArgs),
+    /// Mark, list or edit important work intervals through the running engine.
+    Star {
+        #[command(subcommand)]
+        subcommand: starred::StarCommand,
+        #[arg(long, default_value_t = 3030)]
+        port: u16,
+    },
 
     /// Enterprise: query teammates' screen + audio history via
     /// `screenpi.pe/api/enterprise/v1/*`. Admin-only — needs a

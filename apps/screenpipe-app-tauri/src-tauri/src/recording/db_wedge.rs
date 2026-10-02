@@ -284,7 +284,7 @@ async fn recover_from_db_wedge(
                 }
                 recording_state.is_starting.store(false, Ordering::SeqCst);
                 recording_state.last_spawn_epoch.store(0, Ordering::SeqCst);
-                crate::process_exit::request_app_relaunch(
+                crate::process_exit::request_recovery_relaunch(
                     app.clone(),
                     "DB owner shutdown incomplete; relaunch into verification",
                     Duration::from_millis(250),

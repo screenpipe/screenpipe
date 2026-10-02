@@ -141,7 +141,11 @@ const server=Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,async fetch(
     if(b.action==="publish"&&ws.drafts[b.draft_id]?.status==="published")return Response.json(ws.drafts[b.draft_id].receipt);
     if(["reject","handoff"].includes(b.action)&&ws.drafts[b.draft_id]?.status!=="open")return Response.json({error:"Draft is no longer open."},{status:409});
     if(b.expected_revision!==ws.revision)return Response.json({error:"Workspace changed. Read context again."},{status:409});
-    if(b.action==="propose"&&(discovery||timingCase)){const id=b.draft_id||crypto.randomUUID();ws.drafts[id]={id,status:"open",assignee:b.assignee,payload:b.payload,history:[{note:b.note}]};}
+    if(b.action==="checkpoint") {
+      if(ws.cycle.status!=="running" || typeof b.note!=="string" || !b.note.trim() || [...b.note].length>8000 || b.draft_id!=null || b.payload!=null || b.assignee!=null) return Response.json({error:"Invalid research checkpoint"},{status:409});
+      ws.cycle.checkpoints ||= {};ws.cycle.checkpoints[task]={note:b.note,savedAt:new Date().toISOString()};
+    }
+    else if(b.action==="propose"&&(discovery||timingCase)){const id=b.draft_id||crypto.randomUUID();ws.drafts[id]={id,status:"open",assignee:b.assignee,payload:b.payload,history:[{note:b.note}]};}
     else if(b.action==="reject") {
       if(ws.drafts[b.draft_id].publicationRetry?.retryable)return Response.json({error:"Publication is waiting for source verification. Keep this draft open and retry publication when the recorder recovers, or hand it off for investigation. A temporary save failure is not evidence against the workflow. Read current context before retrying."},{status:409});
       ws.drafts[b.draft_id].status="rejected";ws.drafts[b.draft_id].decision=b.note;
@@ -175,6 +179,7 @@ const server=Bun.serve({hostname:"127.0.0.1",port:0,idleTimeout:120,async fetch(
       if(timingCase&&task==="workflow-review"&&!ws.cycle.finished["workflow-maintain"])return Response.json({error:"Maintenance has not finished."},{status:409});
       if(Object.values(ws.drafts).some((d:any)=>d.status==="open"&&((!timingCase&&!discovery&&task!=="workflow-deepen")||d.assignee===task)))return Response.json({error:"Open drafts remain"},{status:409});
       ws.cycle.notes ||= {};ws.cycle.notes[task]=b.note;
+      if(ws.cycle.checkpoints) delete ws.cycle.checkpoints[task];
       if(task==="workflow-deepen"||(timingCase&&task==="workflow-maintain"))ws.cycle.finished[task]=true;else ws.cycle.status="complete";
     }else return Response.json({error:"Unknown action"},{status:400});
     ws.revision++;return Response.json({saved:true,revision:ws.revision});

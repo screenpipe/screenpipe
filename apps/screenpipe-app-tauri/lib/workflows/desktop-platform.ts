@@ -19,6 +19,8 @@ import {
   saveWorkflowSkill,
 } from "./runtime";
 import {
+  listSkillDraftsFromDisk,
+  saveSkillDraftToDisk,
   isStoredWorkflowAnalysis,
   loadWorkflowAnalysisFromDisk,
   loadWorkProfileFromDisk,
@@ -165,6 +167,15 @@ export const desktopWorkflowsPlatform: WorkflowsPlatform = {
   generateWorkflowSkill,
   saveWorkflowSkill,
   guides: desktopGuides,
+  library: {
+    listSkillDrafts: listSkillDraftsFromDisk,
+    saveSkillDraft: saveSkillDraftToDisk,
+    listInstalledSkills: async () => {
+      const result = await commands.listImportedSkills();
+      if (result.status === "error") throw new Error(result.error);
+      return result.data;
+    },
+  },
   openAccount: async () => {
     const result = await commands.openLoginWindow(null, "sign-up");
     if (result.status !== "ok") throw new Error(result.error);

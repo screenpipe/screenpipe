@@ -54,22 +54,7 @@ fn is_excluded_app(app_lower: &str) -> bool {
 }
 
 /// Known browser app names (lowercase). Matches vision crate's list.
-const BROWSER_NAMES: &[&str] = &[
-    "chrome",
-    "firefox",
-    "safari",
-    "edge",
-    "brave",
-    "arc",
-    "chromium",
-    "vivaldi",
-    "opera",
-    "zen",
-    "comet",
-    "brave browser",
-    "google chrome",
-    "microsoft edge",
-];
+use crate::url_filter::BROWSER_NAMES;
 
 /// Check if the app (lowercase name) is a known browser.
 fn is_browser(app_lower: &str) -> bool {

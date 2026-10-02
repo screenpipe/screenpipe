@@ -1,0 +1,88 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import React from 'react';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { RecordingStatus } from '../components/recording-status';
+import { TooltipProvider } from '../components/ui/tooltip';
+const ports = vi.hoisted(() => ({ fetch: vi.fn() }));
+vi.mock('@/lib/api', () => ({ localFetch: ports.fetch }));
+vi.mock('@/lib/utils', () => ({ cn: (...xs: unknown[]) => xs.filter(Boolean).join(' ') }));
+vi.mock('posthog-js', () => ({ default: { capture: vi.fn() } }));
+afterEach(cleanup);
+beforeEach(() => { ports.fetch.mockReset(); ports.fetch.mockResolvedValue({ok: true}); });
+const paused = [
+  {name:'Display', fullName:'Display synthetic', kind:'monitor', id:41, active:false},
+  {name:'Mic', fullName:'Synthetic microphone (input)', kind:'input', active:false},
+  {name:'Speaker', fullName:'Synthetic speakers (output)', kind:'output', active:false},
+] as any;
+function mount(devices: any[], global: boolean, extra: any = {}) {
+  const pause=vi.fn(), resume=vi.fn();
+  function Host() {
+    const [state,setState]=React.useState(devices);
+    return <TooltipProvider><RecordingStatus devices={state} onDevicesChange={setState}
+      meetingActive={false} meetingLoading={false} onToggleMeeting={()=>{}}
+      onPauseRecording={pause} onResumeRecording={resume} isGloballyPaused={global} {...extra}/>
+      <output data-testid="device-state">{JSON.stringify(state)}</output></TooltipProvider>;
+  }
+  render(<Host/>);
+  fireEvent.click(screen.getByRole('button', {name:/recording|paused/i}));
+  return {pause,resume};
+}
+test('global stopped session resumes through global callback only', async()=>{
+  const p=mount(paused,true);
+  fireEvent.click(screen.getByRole('button',{name:/resume all recording/i}));
+  await waitFor(()=>expect(p.resume).toHaveBeenCalledTimes(1));
+  expect(p.pause).not.toHaveBeenCalled(); expect(ports.fetch).not.toHaveBeenCalled();
+});
+test('live session with every device paused resumes individual display and audio ports',async()=>{
+  const p=mount(paused,false);
+  fireEvent.click(screen.getByRole('button',{name:/resume all recording/i}));
+  await waitFor(()=>expect(ports.fetch).toHaveBeenCalledTimes(3));
+  expect(ports.fetch.mock.calls.map(([url,init])=>[url,init.method,JSON.parse(init.body)]).sort()).toEqual([
+    ['/vision/device/start','POST',{monitor_id:41}],
+    ['/audio/device/start','POST',{device_name:'Synthetic microphone (input)'}],
+    ['/audio/device/start','POST',{device_name:'Synthetic speakers (output)'}],
+  ].sort());
+  expect(p.resume).not.toHaveBeenCalled();expect(p.pause).not.toHaveBeenCalled();
+});
+test('active capture retains global pause action',async()=>{
+  const p=mount(paused.map((d:any)=>({...d,active:true})),false);
+  fireEvent.click(screen.getByRole('button',{name:/pause all recording/i}));
+  await waitFor(()=>expect(p.pause).toHaveBeenCalledTimes(1));
+  expect(p.resume).not.toHaveBeenCalled();expect(ports.fetch).not.toHaveBeenCalled();
+});
+test('failed individual request restores the device pause state',async()=>{
+  ports.fetch.mockResolvedValue({ok:false,status:503});
+  mount([paused[1]],false);
+  fireEvent.click(screen.getByRole('button',{name:/^resume$/i}));
+  await waitFor(()=>expect(ports.fetch).toHaveBeenCalledTimes(1));
+  await waitFor(()=>expect(JSON.parse(screen.getByTestId('device-state').textContent!)[0].active).toBe(false));
+});
+
+test('legacy monitor without an id makes no request while audio resumes',async()=>{
+ const p=mount([{...paused[0],id:undefined},paused[1]],false);
+ fireEvent.click(screen.getByRole('button',{name:/resume all recording/i}));
+ await waitFor(()=>expect(ports.fetch).toHaveBeenCalledTimes(1));
+ expect(ports.fetch.mock.calls[0][0]).toBe('/audio/device/start');
+ expect(JSON.parse(ports.fetch.mock.calls[0][1].body)).toEqual({device_name:paused[1].fullName});
+ expect(p.resume).not.toHaveBeenCalled();expect(p.pause).not.toHaveBeenCalled();
+});
+test('no global callbacks keeps the global control absent',()=>{
+ mount(paused,false,{onPauseRecording:undefined,onResumeRecording:undefined});
+ expect(screen.queryByRole('button',{name:/all recording/i})).toBeNull();
+ expect(ports.fetch).not.toHaveBeenCalled();
+});
+test('stopped session without a resume callback cannot trigger a global action',()=>{
+ const p=mount(paused,true,{onResumeRecording:undefined});
+ const button=screen.queryByRole('button',{name:/resume all recording/i});
+ // An unavailable action may be disabled or omitted.
+ if(button) {expect((button as HTMLButtonElement).disabled).toBe(true);fireEvent.click(button);}
+ expect(p.pause).not.toHaveBeenCalled();expect(ports.fetch).not.toHaveBeenCalled();
+});
+test('mixed active and paused devices keep the global pause action',async()=>{
+ const p=mount([{...paused[0],active:true},paused[1]],false);
+ fireEvent.click(screen.getByRole('button',{name:/pause all recording/i}));
+ await waitFor(()=>expect(p.pause).toHaveBeenCalledTimes(1));
+ expect(p.resume).not.toHaveBeenCalled();expect(ports.fetch).not.toHaveBeenCalled();
+});

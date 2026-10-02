@@ -31,6 +31,16 @@ fn references(
                     .and_then(Value::as_array)
                     .into_iter()
                     .flatten()
+                    .chain(
+                        stage
+                            .get("timingRuns")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .flat_map(|run| {
+                                [run.get("start"), run.get("end")].into_iter().flatten()
+                            }),
+                    )
             })
             .chain(
                 workflow
@@ -431,9 +441,17 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let end = start + ChronoDuration::minutes(20);
-        let value = json!({"workflows":[{"timingRuns":[{"start":{"timestamp":start,"app":"Editor"},"end":{"timestamp":end,"app":"Browser"}}]}]});
+        let run = json!({"start":{"timestamp":start,"app":"Editor"},"end":{"timestamp":end,"app":"Browser"}});
+        let value =
+            json!({"workflows":[{"stages":[{"timingRuns":[run.clone()]}],"timingRuns":[run]}]});
         assert_eq!(
             references(&value, start, start + ChronoDuration::days(1)).unwrap(),
+            vec![(start, "Editor".into()), (end, "Browser".into())]
+        );
+        let mut step_only = value;
+        step_only["workflows"][0]["timingRuns"] = json!([]);
+        assert_eq!(
+            references(&step_only, start, start + ChronoDuration::days(1)).unwrap(),
             vec![(start, "Editor".into()), (end, "Browser".into())]
         );
     }

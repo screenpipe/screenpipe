@@ -27,6 +27,16 @@ function tailItem() {
 }
 
 describe('AI gateway Tail Worker', () => {
+	it('retains direct rescue attribution without forwarding arbitrary failure text', () => {
+		const item = tailItem();
+		item.event.response.status = 200;
+		item.logs = [{ message: [`screenpipe.ai-gateway-route ${JSON.stringify({
+			served_model: 'gpt-6-luna', gateway_mode: 'direct', fallback_model: 'gpt-6-luna', fallback_reason: 'account_allowance',
+		})}`] }];
+		expect(normalizeTailItem(item)).toMatchObject({ outcome: 'success', gateway_mode: 'direct', fallback_model: 'gpt-6-luna', fallback_reason: 'account_allowance' });
+		item.logs = [{ message: [`screenpipe.ai-gateway-route ${JSON.stringify({ fallback_reason: 'private provider payload' })}`] }];
+		expect(normalizeTailItem(item)?.fallback_reason).toBeUndefined();
+	});
 	it('exports a strict content-free request audit event', () => {
 		const event = normalizeTailItem(tailItem());
 		expect(event).toMatchObject({

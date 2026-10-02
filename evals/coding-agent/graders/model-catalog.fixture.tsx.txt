@@ -1,0 +1,28 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import { act, cleanup, renderHook } from '@testing-library/react';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+const state = vi.hoisted(() => ({ loaded: true, token: 'session-a' }));
+vi.mock('@/lib/hooks/use-settings', () => ({ useSettings: () => ({ isSettingsLoaded: state.loaded, settings: { user: { token: state.token } } }) }));
+vi.mock('@/lib/utils/tauri', () => ({ commands: { getScreenpipeAiGatewayUrl: async () => ({ status: 'ok', data: 'https://api.screenpipe.com/v1' }) } }));
+vi.mock('@/lib/http/tauri-fetch', () => ({ tauriFetchWithDeadline: () => { throw new Error('unexpected native transport'); } }));
+import { usePiModels } from './lib/hooks/use-pi-models';
+function deferred() { let resolve!: (v:any)=>void, reject!: (e:any)=>void; const promise = new Promise<any>((a,b)=>{resolve=a;reject=b}); return {promise,resolve,reject}; }
+let requests: { reply: ReturnType<typeof deferred>, init: RequestInit }[];
+beforeEach(() => { state.loaded=true; state.token='session-a'; requests=[]; vi.stubGlobal('fetch',vi.fn((_url,init)=>{const reply=deferred();requests.push({reply,init});return reply.promise;})); });
+afterEach(()=>{cleanup();vi.unstubAllGlobals();});
+const rows=(id:string)=>[{id}];
+const settle=async (fn:()=>void)=>{await act(async()=>{});await act(async()=>{fn();await new Promise(r=>setTimeout(r,0));});};
+async function answer(index:number,data:any[],status=200){await settle(()=>requests[index].reply.resolve({ok:status===200,status,json:async()=>({data})}));}
+async function switchToken(r:any,token='session-b'){state.token=token;r.rerender();await act(async()=>{});}
+const ids=(r:any)=>r.result.current.piModels.map((m:any)=>m.id);
+test('waits for hydration then loads the current bearer',async()=>{state.loaded=false;const r=renderHook(usePiModels);await act(async()=>{});expect(requests).toHaveLength(0);expect(r.result.current.isLoading).toBe(false);state.loaded=true;r.rerender();await act(async()=>{});expect(requests).toHaveLength(1);expect(new Headers(requests[0].init.headers).get('Authorization')).toBe('Bearer session-a');await answer(0,rows('ready'));expect(ids(r)).toEqual(['ready']);});
+test('loaded anonymous sessions still load without bearer',async()=>{state.token='';const r=renderHook(usePiModels);await act(async()=>{});expect(requests).toHaveLength(1);expect(new Headers(requests[0].init.headers).has('Authorization')).toBe(false);await answer(0,rows('free'));expect(ids(r)).toEqual(['free']);expect(r.result.current.isLoading).toBe(false);});
+test('refresh keeps the catalog and uses the replacement token',async()=>{const r=renderHook(usePiModels);await answer(0,rows('old'));await switchToken(r);expect(ids(r)).toEqual(['old']);expect(r.result.current.isLoading).toBe(true);expect(new Headers(requests[1].init.headers).get('Authorization')).toBe('Bearer session-b');await answer(1,rows('new'));expect(ids(r)).toEqual(['new']);expect(r.result.current.isLoading).toBe(false);});
+test('late response cannot overwrite a newer catalog',async()=>{const r=renderHook(usePiModels);await switchToken(r);await answer(1,rows('new'));await answer(0,rows('stale'));expect(ids(r)).toEqual(['new']);});
+test('late body cannot overwrite a newer catalog',async()=>{const r=renderHook(usePiModels);const body=deferred();await settle(()=>requests[0].reply.resolve({ok:true,json:()=>body.promise}));await switchToken(r);await answer(1,rows('new'));await settle(()=>body.resolve({data:rows('stale')}));expect(ids(r)).toEqual(['new']);});
+test('stale completion cannot clear current loading',async()=>{const r=renderHook(usePiModels);await switchToken(r);await answer(0,rows('stale'));expect(r.result.current.isLoading).toBe(true);await answer(1,rows('new'));expect(r.result.current.isLoading).toBe(false);});
+test('settings unload invalidates the pending body and stops loading',async()=>{const r=renderHook(usePiModels);await answer(0,rows('saved'));await switchToken(r);const body=deferred();await settle(()=>requests[1].reply.resolve({ok:true,json:()=>body.promise}));state.loaded=false;r.rerender();expect(r.result.current.isLoading).toBe(false);await settle(()=>body.resolve({data:rows('stale')}));expect(ids(r)).toEqual(['saved']);expect(requests).toHaveLength(2);});
+test('HTTP refusal preserves the last good catalog',async()=>{const r=renderHook(usePiModels);await answer(0,rows('saved'));await switchToken(r);await answer(1,[],401);expect(ids(r)).toEqual(['saved']);expect(r.result.current.isLoading).toBe(false);});
+test('network failure preserves the catalog and allows later recovery',async()=>{const r=renderHook(usePiModels);await answer(0,rows('saved'));await switchToken(r);await settle(()=>requests[1].reply.reject(new Error('synthetic offline')));expect(ids(r)).toEqual(['saved']);expect(r.result.current.isLoading).toBe(false);await switchToken(r,'session-c');await answer(2,rows('recovered'));expect(ids(r)).toEqual(['recovered']);});
+test('deduplicates by first ID and preserves metadata and name fallback',async()=>{const r=renderHook(usePiModels);const first={id:'model-a',name:'First',free:true,cost_tier:'low',recommended_for:['chat'],warning:'synthetic warning',locked:false,health:{status:'ok',error_rate_5m:0}};await answer(0,[first,{id:'model-a',name:'Duplicate'},{id:'model-b'}]);expect(r.result.current.piModels).toHaveLength(2);expect(r.result.current.piModels[0]).toMatchObject(first);expect(r.result.current.piModels[1]).toMatchObject({id:'model-b',name:'model-b'});});

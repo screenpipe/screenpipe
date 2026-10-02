@@ -34,6 +34,7 @@ import { discoverTeamConfig } from "./team-config";
 import { teamFrameContent, teamFramePath } from "./team-frame";
 import { WORKFLOW_TOOLS, readWorkflowTool, frameAutomationContent, inputEventContent } from "./workflow-tools";
 import { PKG_VERSION } from "./version";
+import { BUNDLED_SKILLS_TOOL, readBundledSkills } from "./bundled-skills";
 import { formatForElementPurpose } from "./element-format";
 import { buildActivitySummaryResult } from "./activity-summary-tool";
 import {
@@ -323,10 +324,11 @@ const server = new Server(
 // ---------------------------------------------------------------------------
 const TOOLS: Tool[] = [
   ...WORKFLOW_TOOLS,
+  BUNDLED_SKILLS_TOOL,
   {
     name: "search-content",
     description:
-      "Search screen text, audio transcriptions, input events, memories, and parsed app data. Returns timestamped results with app context. " +
+      "Search screen text, audio transcriptions, input events, memories, and parsed app data. Returns timestamped results with app context and starred markers. For starred work, set starred_only=true and a time range; no session lookup needed. " +
       "USE WHEN: you need the actual text/content of a moment — quotes, screen text, transcript lines, or compact parsed messages, emails, tasks, documents, and code review — or want to filter by speaker/window. " +
       "DO NOT USE for: broad questions like 'what was I doing?' (use activity-summary, it pre-summarizes apps + windows + transcripts). " +
       "Also DO NOT USE for: targeted UI controls (use search-elements). " +
@@ -356,6 +358,8 @@ const TOOLS: Tool[] = [
           type: "string",
           description: "ISO 8601, relative time, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD'). Defaults to now.",
         },
+        starred_only: { type: "boolean", description: "Only captures inside starred intervals. Use for starred work; omit for ordinary searches. Applied before pagination." },
+        starred_session_id: { type: "string", description: "Optional exact session ID already known from activity-summary. Usually use starred_only instead." },
         app_name: { type: "string", description: "Filter by app name (e.g. 'Google Chrome', 'Slack', 'zoom.us'). Case-sensitive." },
         window_name: { type: "string", description: "Filter by window title substring" },
         frame_id: { type: "integer", description: "With content_type='parsed', return parsed data attached to one frame." },
@@ -441,6 +445,7 @@ const TOOLS: Tool[] = [
   {
     name: "activity-summary",
     description:
+      "Includes up to ten recent starred intervals for this time range, even without captured content. Stars indicate user intent, not duration or completion. " +
       "Rich activity overview: authoritative active minutes, app/window time, edited document paths, key text, and audio transcriptions, with optional parsed task context when available. " +
       "USE WHEN: any broad question about what the user did — 'what was I doing?', 'how long on X?', 'which apps?', 'recap my morning'. " +
       "This is almost always the right first call for time-range questions — usually sufficient without follow-up searches. " +
@@ -452,6 +457,7 @@ const TOOLS: Tool[] = [
       properties: {
         start_time: { type: "string", description: "ISO 8601, relative (e.g. '3h ago'), or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
         end_time: { type: "string", description: "ISO 8601, relative (e.g. 'now'), or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
+        include_starred: { type: "boolean", description: "Include bounded starred-session context (default true; omitted for app/data-restricted reads)." },
         app_name: { type: "string", description: "Optional app name filter to focus on one app" },
         include_parsed_context: {
           type: "boolean",
@@ -1402,6 +1408,8 @@ function screenTag(textSource: unknown): string {
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
+  if (name === BUNDLED_SKILLS_TOOL.name) return readBundledSkills(args);
+
   if (!args) {
     throw new Error("Missing arguments");
   }
@@ -1642,6 +1650,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         for (const result of results) {
           const content = result.content;
           if (!content) continue;
+          if (result.starred) formattedResults.push("[Starred moment]");
 
           if (result.type === "OCR") {
             const tagsStr = content.tags?.length ? `\nTags: ${content.tags.join(", ")}` : "";

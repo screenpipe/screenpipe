@@ -161,7 +161,7 @@ fn normalized_url(raw: &str) -> Option<Url> {
 /// Also the identity the audio-process detector compares across polls to
 /// notice the browser moved from one conference room to another (see
 /// `audio_process::room_change`).
-pub(crate) fn meeting_url_identity(raw: &str) -> Option<String> {
+pub fn meeting_url_identity(raw: &str) -> Option<String> {
     let parsed = normalized_url(raw)?;
     let host = parsed
         .host_str()?

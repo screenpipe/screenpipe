@@ -40,6 +40,10 @@ workflows, connect accounts, install skills or send messages.
 2. Read /activity-summary for that interval using start_time/end_time,
    include_key_texts=false and bounded timestamped snippets. Check data_status,
    query_status and time_range. This overview establishes the reviewed interval.
+   Use the summary's bounded starred_sessions to prioritize user-marked examples.
+   If supporting evidence is missing, use a focused /search with starred_only=true
+   (or starred_session_id for a known interval). A star indicates intent, not
+   completion or elapsed effort. Keep the full response on disk.
 3. Turn the useful timestamped snippets DIRECTLY into modest observations.
    Copy their literal text and metadata programmatically from the saved response.
    Do not search for or reread a source that already supports an observation.

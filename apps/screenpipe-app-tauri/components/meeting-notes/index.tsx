@@ -690,6 +690,7 @@ export function MeetingNotesSection({
         captureDevices={captureDevices}
         onCaptureDevicesRefresh={onCaptureDevicesRefresh}
         calendarEvents={upcoming}
+        onOpenCalendarConnections={openCalendarConnections}
         transcriptOpenIntent={
           transcriptOpenRequest?.id === selected.id
             ? transcriptOpenRequest.intent

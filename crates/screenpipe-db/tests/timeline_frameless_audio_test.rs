@@ -231,4 +231,108 @@ mod timeline_frameless_audio_tests {
             "nearby speech should attach to the real frame"
         );
     }
+    /// Broken offsets previously panicked the ordered-map lookup and hid every
+    /// saved frame in the request. Preserve all transcripts using the known
+    /// chunk timestamp, while leaving valid segments at their exact offset.
+    #[tokio::test]
+    async fn reversed_audio_offsets_do_not_abort_timeline_history() {
+        assert_audio_offsets_survive(&[("reversed", 90.0, 1.0, false), ("valid", 2.0, 4.0, true)])
+            .await;
+    }
+
+    #[tokio::test]
+    async fn extreme_audio_offsets_do_not_abort_timeline_history() {
+        assert_audio_offsets_survive(&[
+            ("infinite", f64::INFINITY, 2.0, false),
+            ("overflow", 1.0e30, 1.0e30, false),
+            ("negative-overflow", -1.0e30, -1.0e30, false),
+            ("valid", 2.0, 4.0, true),
+        ])
+        .await;
+    }
+
+    async fn assert_audio_offsets_survive(cases: &[(&str, f64, f64, bool)]) {
+        use chrono::Timelike;
+        let db = setup_test_db().await;
+        let base = Utc::now().with_nanosecond(0).unwrap();
+        for (index, (name, start, end, _)) in cases.iter().enumerate() {
+            let at = base + Duration::seconds(index as i64 * 60);
+            let chunk = db
+                .insert_audio_chunk(&format!("{name}.mp4"), Some(at))
+                .await
+                .unwrap();
+            db.insert_audio_transcription(
+                chunk,
+                name,
+                0,
+                "test",
+                &output_device(),
+                None,
+                Some(*start),
+                Some(*end),
+                Some(at),
+            )
+            .await
+            .unwrap();
+        }
+        let chunks = db
+            .find_video_chunks(base - Duration::seconds(1), base + Duration::minutes(5))
+            .await
+            .expect("one malformed segment must not discard timeline history");
+        for (index, (name, start, end, valid)) in cases.iter().enumerate() {
+            let audio = chunks
+                .frames
+                .iter()
+                .flat_map(|frame| &frame.audio_entries)
+                .find(|audio| audio.transcription == *name)
+                .expect("each transcript must survive, including malformed timing");
+            let at = base + Duration::seconds(index as i64 * 60);
+            assert_eq!(
+                audio.captured_at,
+                Some(if *valid {
+                    at + Duration::seconds(2)
+                } else {
+                    at
+                })
+            );
+            assert_eq!(audio.start_time, if *valid { Some(*start) } else { None });
+            assert_eq!(audio.end_time, if *valid { Some(*end) } else { None });
+        }
+    }
+    #[tokio::test]
+    async fn missing_audio_end_preserves_the_known_segment_start() {
+        use chrono::Timelike;
+        let db = setup_test_db().await;
+        let base = Utc::now().with_nanosecond(0).unwrap();
+        let chunk = db
+            .insert_audio_chunk("start-only.mp4", Some(base))
+            .await
+            .unwrap();
+        db.insert_audio_transcription(
+            chunk,
+            "known start",
+            0,
+            "test",
+            &output_device(),
+            None,
+            Some(90.0),
+            None,
+            Some(base),
+        )
+        .await
+        .unwrap();
+        let chunks = db
+            .find_video_chunks(base - Duration::seconds(1), base + Duration::minutes(3))
+            .await
+            .unwrap();
+        let audio = chunks
+            .frames
+            .iter()
+            .flat_map(|frame| &frame.audio_entries)
+            .find(|audio| audio.transcription == "known start")
+            .unwrap();
+        assert_eq!(audio.captured_at, Some(base + Duration::seconds(90)));
+        assert_eq!(audio.start_time, Some(90.0));
+        assert_eq!(audio.end_time, None);
+    }
 }

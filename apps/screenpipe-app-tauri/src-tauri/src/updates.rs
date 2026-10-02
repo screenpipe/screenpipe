@@ -670,6 +670,9 @@ pub struct UpdateAttempt {
     pub from_version: String,
     pub to_version: String,
     pub ts_epoch_secs: u64,
+    /// None for markers written by older builds or if visibility was unavailable.
+    #[serde(default)]
+    pub home_visible: Option<bool>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -715,14 +718,16 @@ fn record_update_attempt(app: &tauri::AppHandle, to_version: &str) {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0),
+        home_visible: crate::process_exit::home_window_visible(app),
     };
     crate::update_diagnostics::record(
         "restart_committed",
         &format!(
-            "from={} target={} attempt_ts={} executable={:?}",
+            "from={} target={} attempt_ts={} home_visible={:?} executable={:?}",
             attempt.from_version,
             attempt.to_version,
             attempt.ts_epoch_secs,
+            attempt.home_visible,
             std::env::current_exe()
         ),
     );
@@ -734,6 +739,23 @@ fn record_update_attempt(app: &tauri::AppHandle, to_version: &str) {
         Ok(Err(e)) => warn!("failed to write update-attempt marker: {}", e),
         Err(e) => warn!("failed to serialize update-attempt marker: {}", e),
     }
+}
+
+/// Read before showing startup windows. The updater consumes this same marker
+/// later in setup, preserving failed-install detection and one-launch lifetime.
+pub(crate) fn update_startup_home_visibility(app: &tauri::AppHandle) -> Option<bool> {
+    update_startup_home_visibility_at(
+        &update_attempt_marker_path(app)?,
+        &app.package_info().version.to_string(),
+    )
+}
+
+fn update_startup_home_visibility_at(path: &std::path::Path, current: &str) -> Option<bool> {
+    let attempt: UpdateAttempt = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    if classify_update_attempt(&attempt, current) == UpdateAttemptOutcome::Unrelated {
+        return None;
+    }
+    attempt.home_visible
 }
 
 /// Read + delete the marker left by the previous process. Returns the failed
@@ -760,11 +782,12 @@ fn consume_update_attempt_at(path: &std::path::Path, current: &str) -> Option<Up
         path.parent()?,
         "relaunch_observed",
         &format!(
-            "from={} target={} attempt_ts={} running={} executable={:?} outcome={:?}",
+            "from={} target={} attempt_ts={} running={} home_visible={:?} executable={:?} outcome={:?}",
             attempt.from_version,
             attempt.to_version,
             attempt.ts_epoch_secs,
             current,
+            attempt.home_visible,
             std::env::current_exe(),
             classify_update_attempt(&attempt, &current)
         ),
@@ -2063,9 +2086,13 @@ pub(crate) mod tests {
         let path = root.join(super::UPDATE_ATTEMPT_MARKER_FILE);
         std::fs::write(
             &path,
-            r#"{"from_version":"1.0.0","to_version":"99.0.0","ts_epoch_secs":1}"#,
+            r#"{"from_version":"1.0.0","to_version":"99.0.0","ts_epoch_secs":1,"home_visible":false}"#,
         )
         .unwrap();
+        assert_eq!(
+            super::update_startup_home_visibility_at(&path, "1.0.0"),
+            Some(false)
+        );
         assert!(super::consume_update_attempt_at(&path, "1.0.0").is_some());
         assert!(!path.exists());
         assert!(super::consume_update_attempt_at(&path, "1.0.0").is_none());
@@ -2074,6 +2101,48 @@ pub(crate) mod tests {
     use super::*;
 
     const HOUR: Duration = Duration::from_secs(3600);
+
+    #[test]
+    fn update_home_visibility_survives_restart_and_is_consumed_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(UPDATE_ATTEMPT_MARKER_FILE);
+        for visible in [false, true] {
+            for running in ["2.6.6", "2.6.7"] {
+                let attempt = UpdateAttempt {
+                    from_version: "2.6.6".into(),
+                    to_version: "2.6.7".into(),
+                    ts_epoch_secs: 1,
+                    home_visible: Some(visible),
+                };
+                std::fs::write(&path, serde_json::to_vec(&attempt).unwrap()).unwrap();
+                assert_eq!(
+                    update_startup_home_visibility_at(&path, running),
+                    Some(visible)
+                );
+                assert_eq!(
+                    consume_update_attempt_at(&path, running).is_some(),
+                    running == "2.6.6",
+                    "window restoration must preserve failed-install detection"
+                );
+                assert_eq!(update_startup_home_visibility_at(&path, running), None);
+            }
+        }
+    }
+
+    #[test]
+    fn update_home_visibility_keeps_normal_startup_for_old_invalid_or_unrelated_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(UPDATE_ATTEMPT_MARKER_FILE);
+        assert_eq!(update_startup_home_visibility_at(&path, "2.6.7"), None);
+        for raw in [
+            r#"{"from_version":"2.6.6","to_version":"2.6.7","ts_epoch_secs":1}"#,
+            r#"{"from_version":"2.6.5","to_version":"2.6.6","ts_epoch_secs":1,"home_visible":false}"#,
+            "{truncated",
+        ] {
+            std::fs::write(&path, raw).unwrap();
+            assert_eq!(update_startup_home_visibility_at(&path, "2.6.7"), None);
+        }
+    }
 
     #[test]
     fn sweep_removes_installer_leftovers_only() {
@@ -2232,6 +2301,7 @@ pub(crate) mod tests {
             from_version: "2.6.77".into(),
             to_version: "2.6.81".into(),
             ts_epoch_secs: 0,
+            home_visible: None,
         };
         let cooldown = cooldown_from_failed_attempt(Some(&attempt));
         assert!(failed_version_in_cooldown(
@@ -2530,6 +2600,7 @@ pub(crate) mod tests {
             from_version: "2.6.6".into(),
             to_version: "2.6.7".into(),
             ts_epoch_secs: 0,
+            home_visible: None,
         };
         // Still on the version we tried to leave → the install didn't apply.
         assert_eq!(

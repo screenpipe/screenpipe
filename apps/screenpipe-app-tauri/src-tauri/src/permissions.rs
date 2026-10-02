@@ -9,6 +9,11 @@ use specta::Type;
 use std::sync::atomic::Ordering;
 use tracing::{debug, error, info, warn};
 
+/// Match RecordingConfig's effective audio setting, including legacy mode-only stores.
+pub(crate) fn microphone_required(settings: &screenpipe_config::RecordingSettings) -> bool {
+    !settings.disable_audio && !settings.audio_capture_mode.eq_ignore_ascii_case("disabled")
+}
+
 #[derive(Serialize, Deserialize, Type, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum OSPermission {
@@ -1638,5 +1643,25 @@ mod mic_grant_restart_tests {
         assert!(flag
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_err());
+    }
+}
+
+#[cfg(test)]
+mod microphone_requirement_tests {
+    #[test]
+    fn microphone_requirement_matches_effective_recorder_audio_config() {
+        for disabled in [false, true] {
+            for mode in ["always", "meetings-only", "disabled", "DISABLED", "", "unknown"] {
+                let settings = screenpipe_config::RecordingSettings {
+                    disable_audio: disabled,
+                    audio_capture_mode: mode.to_owned(),
+                    ..Default::default()
+                };
+                let config = screenpipe_engine::RecordingConfig::from_settings(
+                    &settings, std::path::PathBuf::from("/tmp/permission-requirement-test"), None,
+                );
+                assert_eq!(super::microphone_required(&settings), !config.disable_audio, "disable_audio={disabled}, mode={mode}");
+            }
+        }
     }
 }

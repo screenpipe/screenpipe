@@ -13,6 +13,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  settings: { disableAudio: false },
+  isSettingsLoaded: true,
   checkMicrophonePermission: vi.fn(async () => "denied"),
   checkAccessibilityPermissionCmd: vi.fn(async () => "denied"),
   checkAccessibilityPermissionLiveCmd: vi.fn(async () => "denied"),
@@ -27,6 +29,10 @@ const mocks = vi.hoisted(() => ({
     data: "/Users/test/.screenpipe",
   })),
   revealInDefaultBrowser: vi.fn(async () => ({ status: "ok", data: null })),
+}));
+
+vi.mock("@/lib/hooks/use-settings", () => ({
+  useSettings: () => ({ settings: mocks.settings, isSettingsLoaded: mocks.isSettingsLoaded }),
 }));
 
 vi.mock("@/lib/hooks/use-platform", () => ({
@@ -75,6 +81,8 @@ const screenRow = () =>
 describe("onboarding permission wheel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.settings.disableAudio = false;
+    mocks.isSettingsLoaded = true;
     mocks.checkMicrophonePermission.mockResolvedValue("denied");
     mocks.checkAccessibilityPermissionCmd.mockResolvedValue("denied");
     mocks.checkAccessibilityPermissionLiveCmd.mockResolvedValue("denied");
@@ -91,6 +99,75 @@ describe("onboarding permission wheel", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("skips microphone permission for audio-disabled onboarding", async () => {
+    mocks.settings.disableAudio = true;
+    render(<PermissionsStep handleNextSlide={vi.fn()} />);
+    await waitFor(() => expect(accessibilityRow()).toBeEnabled());
+    expect(screen.queryByRole("button", { name: /capture what you say/i })).toBeNull();
+    expect(mocks.checkMicrophonePermission).not.toHaveBeenCalled();
+    fireEvent.click(accessibilityRow());
+    expect(mocks.requestPermissionWithFlow).toHaveBeenCalledWith("accessibility");
+    expect(mocks.requestPermission).not.toHaveBeenCalled();
+  });
+
+  it("cancels delayed advancement if audio is re-enabled before completion", async () => {
+    vi.useFakeTimers();
+    mocks.settings.disableAudio = true;
+    mocks.checkAccessibilityPermissionCmd.mockResolvedValue("granted");
+    mocks.checkScreenRecordingPermission.mockResolvedValue("granted");
+    const next = vi.fn();
+    const view = render(<PermissionsStep handleNextSlide={next} />);
+    await act(async () => {});
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    mocks.settings.disableAudio = false;
+    view.rerender(<PermissionsStep handleNextSlide={next} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(next).not.toHaveBeenCalled();
+    expect(micRow()).toBeEnabled();
+    mocks.checkMicrophonePermission.mockResolvedValue("granted");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechecks a previously granted mic when policy makes it required again", async () => {
+    vi.useFakeTimers();
+    mocks.checkMicrophonePermission.mockResolvedValue("granted");
+    mocks.checkScreenRecordingPermission.mockResolvedValue("granted");
+    const next = vi.fn();
+    const view = render(<PermissionsStep handleNextSlide={next} />);
+    await act(async () => {});
+    mocks.settings.disableAudio = true;
+    view.rerender(<PermissionsStep handleNextSlide={next} />);
+    mocks.checkMicrophonePermission.mockResolvedValue("denied");
+    mocks.checkAccessibilityPermissionCmd.mockResolvedValue("granted");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    mocks.settings.disableAudio = false;
+    view.rerender(<PermissionsStep handleNextSlide={next} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    expect(next).not.toHaveBeenCalled();
+    expect(micRow()).toBeEnabled();
+  });
+
+  it("does not advance while settings are loading or after unmount", async () => {
+    vi.useFakeTimers();
+    mocks.isSettingsLoaded = false;
+    mocks.settings.disableAudio = true;
+    mocks.checkMicrophonePermission.mockResolvedValue("granted");
+    mocks.checkScreenRecordingPermission.mockResolvedValue("granted");
+    mocks.checkAccessibilityPermissionCmd.mockResolvedValue("granted");
+    const next = vi.fn();
+    const view = render(<PermissionsStep handleNextSlide={next} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(next).not.toHaveBeenCalled();
+    mocks.isSettingsLoaded = true;
+    view.rerender(<PermissionsStep handleNextSlide={next} />);
+    await act(async () => {});
+    view.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(next).not.toHaveBeenCalled();
   });
 
   it("coalesces interval ticks instead of overlapping permission polls", async () => {

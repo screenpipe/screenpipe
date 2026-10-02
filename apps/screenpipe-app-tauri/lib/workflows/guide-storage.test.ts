@@ -87,3 +87,46 @@ it("keeps screenshot review through disk validation and backup recovery", async 
   files.set("workflows/guides.json", "broken");
   expect(await loadGuideFromDisk("research")).toEqual(reviewed);
 });
+
+it("persists video edits alongside the SOP through reload", async () => {
+  const video = { version: 1 as const, sourceHash: "abc", scenes: [{ id: "section-0", title: "Video title", narration: "Shorter narration.", includeImage: false }] };
+  await saveGuideToDisk({ ...guide, video });
+  resetWorkflowDiskStorageForTests();
+  const loaded = await loadGuideFromDisk(guide.workflowKey);
+  expect(loaded?.video).toEqual(video);
+  expect(loaded?.steps).toEqual(guide.steps);
+});
+
+it("reopening waits for an in-flight save instead of returning an older draft", async () => {
+  await saveGuideToDisk(guide);
+  const pending = saveGuideToDisk({ ...guide, title: "Latest edit" });
+  expect((await loadGuideFromDisk("research"))?.title).toBe("Latest edit");
+  await pending;
+});
+
+it("lists saved SOPs independently of the current workflow catalog after restart", async () => {
+  const { listGuidesFromDisk } = await import("./disk-storage");
+  await saveGuideToDisk(guide);
+  await saveGuideToDisk({ ...guide, workflowKey: "removed-source" });
+  resetWorkflowDiskStorageForTests();
+  expect((await listGuidesFromDisk()).map(g => g.workflowKey)).toEqual(["research", "removed-source"]);
+});
+
+it("persists uninstalled skill drafts and their edits without overwriting other skills", async () => {
+  const { listSkillDraftsFromDisk, saveSkillDraftToDisk } = await import("./disk-storage");
+  const draft = { name: "review", description: "Review a brief", instructions: "Read the brief", sourceWorkflow: "Research" };
+  await Promise.all([saveSkillDraftToDisk("first", draft), saveSkillDraftToDisk("second", draft)]);
+  const pending = saveSkillDraftToDisk("first", { ...draft, instructions: "Edited instructions" });
+  expect((await listSkillDraftsFromDisk()).find(d => d.workflowKey === "first")?.draft.instructions).toBe("Edited instructions");
+  await pending;
+  resetWorkflowDiskStorageForTests();
+  expect(await listSkillDraftsFromDisk()).toHaveLength(2);
+});
+
+it("keeps corrupt skill storage intact and reports failure instead of an empty Library", async () => {
+  const { listSkillDraftsFromDisk, saveSkillDraftToDisk } = await import("./disk-storage");
+  files.set("workflows/skill-drafts.json", "bad");
+  await expect(listSkillDraftsFromDisk()).rejects.toThrow("unreadable");
+  await expect(saveSkillDraftToDisk("first", { name: "review", description: "", instructions: "", sourceWorkflow: "" })).rejects.toThrow("unreadable");
+  expect(files.get("workflows/skill-drafts.json")).toBe("bad");
+});

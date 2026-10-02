@@ -12,6 +12,8 @@ import {
   OPEN_BRAIN_ARTIFACT_EVENT,
 } from "@/lib/artifact-deeplink";
 
+export const CALENDAR_CONNECTIONS_URL = "screenpipe://calendar-connections";
+
 const GENERIC_DEEPLINK_MOUNT_DELAY_MS = 150;
 const MEETING_DEEPLINK_RETRY_DELAYS_MS = [0, 250, 750, 1500] as const;
 const ARTIFACT_DEEPLINK_RETRY_DELAYS_MS = [0, 250, 750, 1500] as const;
@@ -93,6 +95,7 @@ export function parseMeetingDeeplink(url: string): {
 }
 
 export function windowForDeeplink(url: string) {
+  if (url === CALENDAR_CONNECTIONS_URL) return { Home: { page: "connections&category=Calendar" } };
   if (workflowReviewLink(url)) return { Home: { page: "home" } };
   if (artifactOpenRequestFromUrl(url, "notification")) {
     return { Home: { page: "brain" } };
@@ -156,6 +159,13 @@ export async function routeNotificationDeeplink(
     deps.showWindowActivated ?? commands.showWindowActivated;
   const emitEvent = deps.emitEvent ?? emit;
   const sleepMs = deps.sleepMs ?? sleep;
+
+  if (url === CALENDAR_CONNECTIONS_URL) {
+    const shown = await showWindowActivated(windowForDeeplink(url));
+    if (shown?.status === "error") throw new Error("Could not open calendar connections");
+    await emitEvent("navigate", { url: "/home?section=connections&category=Calendar" });
+    return;
+  }
 
   const review = workflowReviewLink(url);
   if (review) {

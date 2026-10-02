@@ -17,3 +17,12 @@ export function workflowTiming(value: unknown): WorkflowTiming | null {
     averageMinutes: minutes.reduce((sum, value) => sum + value, 0) / minutes.length,
     minMinutes: Math.min(...minutes), maxMinutes: Math.max(...minutes) };
 }
+
+export function formatTimingMinutes(value: number): string {
+  if (value > 0 && value < 1) return "<1m";
+  const minutes = Math.max(0, Math.round(value || 0));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
+}

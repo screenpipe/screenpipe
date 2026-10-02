@@ -1071,6 +1071,13 @@ pub struct GoogleCalendarEventsQuery {
     pub hours_back: Option<i64>,
     pub hours_ahead: Option<i64>,
     pub instance: Option<String>,
+    /// Deletion-aware consumers must not treat a partial account result as a
+    /// complete snapshot. Interactive callers still receive healthy accounts.
+    #[serde(default)]
+    pub require_complete: bool,
+    /// Return independent account snapshots for deletion-aware publishers.
+    #[serde(default)]
+    pub account_snapshots: bool,
 }
 
 #[derive(Deserialize)]
@@ -1206,105 +1213,250 @@ async fn gcal_events(
     Query(params): Query<GoogleCalendarEventsQuery>,
 ) -> (StatusCode, Json<Value>) {
     let client = build_default_client();
-    match gcal_events_inner(&client, params, &state.secret_store).await {
+    let snapshots = gcal_account_snapshots(
+        &client,
+        &params,
+        &state.secret_store,
+        "https://www.googleapis.com/calendar/v3/",
+    )
+    .await;
+    if params.account_snapshots {
+        return (StatusCode::OK, Json(json!(snapshots)));
+    }
+    let mut lists = Vec::new();
+    let mut first_error = None;
+    for snapshot in snapshots {
+        if let Some(events) = snapshot.events {
+            lists.push(events);
+        } else if first_error.is_none() {
+            let cause = snapshot
+                .error
+                .unwrap_or_else(|| "Google Calendar account refresh failed".into());
+            first_error = Some(if snapshot.auth_required {
+                GcalAuthError { message: cause }.into()
+            } else {
+                anyhow::anyhow!(cause)
+            });
+        }
+    }
+    match finish_gcal_snapshot(lists, first_error, params.require_complete) {
         Ok(events) => (StatusCode::OK, Json(json!(events))),
         Err(e) => gcal_events_error_response(&e),
     }
 }
 
-async fn gcal_events_inner(
-    client: &reqwest::Client,
-    params: GoogleCalendarEventsQuery,
-    secret_store: &Option<Arc<SecretStore>>,
-) -> anyhow::Result<Vec<Value>> {
-    let hours_back = params.hours_back.unwrap_or(1);
-    let hours_ahead = params.hours_ahead.unwrap_or(8);
-
-    // No explicit account while several are connected: merge every account's
-    // events instead of refusing. Callers that predate multi-account support
-    // (the app's 60s calendar poller, live meeting notes, pipes, chat tools)
-    // all pass no instance — refusing turned "user connected a 2nd Google
-    // account" into "calendar looks disconnected everywhere". A read-only
-    // merge matches what the meeting-notes UI already does client-side.
-    if params.instance.is_none() {
-        let connected =
-            oauth_store::list_connected_oauth_instances(secret_store.as_deref(), "google-calendar")
-                .await;
-        if connected.len() > 1 {
-            let mut lists = Vec::new();
-            let mut first_err: Option<anyhow::Error> = None;
-            for inst in &connected {
-                let label = inst.as_deref().unwrap_or("primary");
-                let events = match gcal_token(client, inst.as_deref(), secret_store).await {
-                    Ok(token) => {
-                        gcal_fetch_events(client, &token, label, hours_back, hours_ahead).await
-                    }
-                    Err(e) => Err(e),
-                };
-                match events {
-                    Ok(events) => lists.push(events),
-                    Err(e) => {
-                        // One broken account must not blank the calendar for
-                        // the healthy ones — keep going, report only if all fail.
-                        tracing::warn!("google-calendar: account '{label}' failed: {e:#}");
-                        if first_err.is_none() {
-                            first_err = Some(e);
-                        }
-                    }
-                }
-            }
-            if lists.is_empty() {
-                return Err(first_err.unwrap_or_else(|| {
-                    anyhow::anyhow!("no Google Calendar account could be queried")
-                }));
-            }
-            return Ok(merge_gcal_events(lists));
-        }
-    }
-
-    let token = gcal_token(client, params.instance.as_deref(), secret_store).await?;
-    let label = params.instance.as_deref().unwrap_or("primary");
-    gcal_fetch_events(client, &token, label, hours_back, hours_ahead).await
+#[derive(Serialize)]
+struct GoogleAccountSnapshot {
+    instance: Option<String>,
+    // None means failed, never deleted. An empty list is a successful refresh.
+    events: Option<Vec<Value>>,
+    error: Option<String>,
+    #[serde(skip)]
+    auth_required: bool,
 }
 
-/// Fetch and normalize one account's events from the Google Calendar API.
-/// `calendar_label` lands in `calendarName` so multi-account callers can tell
-/// which account an event came from.
-async fn gcal_fetch_events(
+async fn gcal_account_snapshots(
     client: &reqwest::Client,
+    params: &GoogleCalendarEventsQuery,
+    secret_store: &Option<Arc<SecretStore>>,
+    api_base: &str,
+) -> Vec<GoogleAccountSnapshot> {
+    let accounts = match &params.instance {
+        Some(instance) => vec![Some(instance.clone())],
+        None => {
+            oauth_store::list_connected_oauth_instances(secret_store.as_deref(), "google-calendar")
+                .await
+        }
+    };
+    use futures::StreamExt;
+    futures::stream::iter(accounts)
+        .map(|instance| async move {
+            let label = instance.as_deref().unwrap_or("primary");
+            let result = match gcal_token(client, instance.as_deref(), secret_store).await {
+                Ok(token) => {
+                    gcal_fetch_all_calendars(
+                        client,
+                        api_base,
+                        &token,
+                        label,
+                        params.hours_back.unwrap_or(1),
+                        params.hours_ahead.unwrap_or(8),
+                    )
+                    .await
+                }
+                Err(error) => Err(error),
+            };
+            let auth_required = result
+                .as_ref()
+                .err()
+                .is_some_and(|e| e.is::<GcalAuthError>());
+            let (events, error) = match result {
+                Ok(events) => (Some(events), None),
+                Err(error) => (None, Some(format!("{error:#}"))),
+            };
+            GoogleAccountSnapshot {
+                instance,
+                events,
+                error,
+                auth_required,
+            }
+        })
+        .buffered(4)
+        .collect()
+        .await
+}
+
+fn finish_gcal_snapshot(
+    lists: Vec<Vec<Value>>,
+    first_err: Option<anyhow::Error>,
+    require_complete: bool,
+) -> anyhow::Result<Vec<Value>> {
+    if let (true, Some(error)) = (require_complete, first_err.as_ref()) {
+        // Keep this a fetch failure (500), even when one account needs auth.
+        // A 401 would tell the publisher to clear every account's events.
+        anyhow::bail!("incomplete Google Calendar snapshot: {error}");
+    }
+    if lists.is_empty() {
+        return Err(first_err.unwrap_or_else(|| {
+            GcalAuthError {
+                message: "no Google Calendar account connected".into(),
+            }
+            .into()
+        }));
+    }
+    Ok(merge_gcal_events(lists))
+}
+
+/// Fetch all readable calendars and all event pages for one account atomically.
+async fn gcal_fetch_all_calendars(
+    client: &reqwest::Client,
+    base: &str,
     token: &str,
-    calendar_label: &str,
+    account_label: &str,
     hours_back: i64,
     hours_ahead: i64,
 ) -> anyhow::Result<Vec<Value>> {
+    let base = reqwest::Url::parse(base)?;
+    let mut calendars = gcal_fetch_items(
+        client
+            .get(base.join("users/me/calendarList")?)
+            .bearer_auth(token)
+            .query(&[
+                ("minAccessRole", "reader"),
+                ("showHidden", "true"),
+                ("maxResults", "250"),
+            ]),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("calendar_list: {e}"))?;
+    // Prefer the existing primary ID when an invitation is copied to another calendar.
+    calendars.sort_by_key(|calendar| calendar["primary"].as_bool() != Some(true));
     let now = chrono::Utc::now();
     let time_min = (now - chrono::Duration::hours(hours_back)).to_rfc3339();
     let time_max = (now + chrono::Duration::hours(hours_ahead)).to_rfc3339();
-
-    let resp: Value = client
-        .get("https://www.googleapis.com/calendar/v3/calendars/primary/events")
-        .bearer_auth(token)
-        .query(&[
+    let mut lists = Vec::new();
+    for calendar in calendars {
+        if calendar["deleted"].as_bool() == Some(true) || calendar["accessRole"] == "freeBusyReader"
+        {
+            continue;
+        }
+        let id = calendar["id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("calendar_list: missing calendar id"))?;
+        let mut url = base.clone();
+        url.path_segments_mut()
+            .map_err(|_| anyhow::anyhow!("invalid calendar API URL"))?
+            .pop_if_empty()
+            .extend(["calendars", id, "events"]);
+        // Preserve the primary calendar's previous label/identity. Other calendars
+        // use their stable ID rather than their mutable display title.
+        let label = if calendar["primary"].as_bool() == Some(true) {
+            account_label.to_string()
+        } else {
+            format!("{account_label} / {id}")
+        };
+        let request = client.get(url).bearer_auth(token).query(&[
             ("timeMin", time_min.as_str()),
             ("timeMax", time_max.as_str()),
             ("singleEvents", "true"),
             ("orderBy", "startTime"),
-            ("maxResults", "50"),
+            ("maxResults", "250"),
             ("conferenceDataVersion", "1"),
-        ])
-        .send()
+        ]);
+        let mut events = gcal_fetch_pages(request, &label)
+            .await
+            .map_err(|e| anyhow::anyhow!("calendar_events: {e}"))?;
+        if calendar["primary"].as_bool() != Some(true) {
+            for event in &mut events {
+                if let Some(event_id) = event["id"].as_str().filter(|id| !id.is_empty()) {
+                    event["id"] = json!(format!("{id}:{event_id}"));
+                }
+            }
+        }
+        lists.push(events);
+    }
+    Ok(merge_gcal_events(lists))
+}
+
+async fn gcal_fetch_pages(
+    request: reqwest::RequestBuilder,
+    calendar_label: &str,
+) -> anyhow::Result<Vec<Value>> {
+    Ok(gcal_fetch_items(request)
         .await?
-        .error_for_status()?
-        .json()
-        .await?;
-
-    let items = resp["items"].as_array().cloned().unwrap_or_default();
-    let events: Vec<Value> = items
         .into_iter()
+        .filter(google_calendar_event_is_available)
         .map(|item| google_calendar_event_json(&item, calendar_label))
-        .collect();
+        .collect())
+}
 
-    Ok(events)
+async fn gcal_fetch_items(request: reqwest::RequestBuilder) -> anyhow::Result<Vec<Value>> {
+    let mut page_token: Option<String> = None;
+    let mut items = Vec::new();
+    loop {
+        let mut page = request
+            .try_clone()
+            .ok_or_else(|| anyhow::anyhow!("calendar GET request cannot be cloned"))?;
+        if let Some(token) = &page_token {
+            page = page.query(&[("pageToken", token)]);
+        }
+        let resp: Value = page
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e.without_url()))?
+            .error_for_status()
+            .map_err(|e| anyhow::anyhow!("{}", e.without_url()))?
+            .json()
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e.without_url()))?;
+        if let Some(values) = resp.get("items") {
+            items.extend(
+                values
+                    .as_array()
+                    .ok_or_else(|| anyhow::anyhow!("invalid calendar items"))?
+                    .iter()
+                    .cloned(),
+            );
+        }
+        page_token = resp["nextPageToken"]
+            .as_str()
+            .filter(|t| !t.is_empty())
+            .map(str::to_owned);
+        if page_token.is_none() {
+            break;
+        }
+    }
+    Ok(items)
+}
+
+fn google_calendar_event_is_available(item: &Value) -> bool {
+    item["status"].as_str() != Some("cancelled")
+        && !item["attendees"].as_array().is_some_and(|attendees| {
+            attendees.iter().any(|attendee| {
+                attendee["self"].as_bool() == Some(true)
+                    && attendee["responseStatus"].as_str() == Some("declined")
+            })
+        })
 }
 
 fn google_calendar_event_json(item: &Value, calendar_label: &str) -> Value {
@@ -1332,6 +1484,7 @@ fn google_calendar_event_json(item: &Value, calendar_label: &str) -> Value {
 
     json!({
         "id": item["id"].as_str().unwrap_or(""),
+        "iCalUID": item["iCalUID"].as_str(),
         "title": item["summary"].as_str().unwrap_or(""),
         "start": start,
         "end": end,
@@ -1343,18 +1496,20 @@ fn google_calendar_event_json(item: &Value, calendar_label: &str) -> Value {
     })
 }
 
-/// Merge per-account Google Calendar event lists into one timeline. An invite
-/// visible in more than one connected account keeps its Google event id, so
-/// duplicates are dropped by id (first account wins). Sorted by start time;
-/// timestamps are compared as instants because each account's events carry
-/// that calendar's own UTC offset.
+/// Merge copies of the same invitation by iCalUID and occurrence time. Keep
+/// recurring occurrences distinct; older payloads fall back to their event ID.
 fn merge_gcal_events(lists: Vec<Vec<Value>>) -> Vec<Value> {
     let mut seen = std::collections::HashSet::new();
     let mut merged: Vec<Value> = Vec::new();
     for list in lists {
         for event in list {
             let id = event["id"].as_str().unwrap_or("");
-            if !id.is_empty() && !seen.insert(id.to_string()) {
+            let key = event["iCalUID"]
+                .as_str()
+                .filter(|uid| !uid.is_empty())
+                .map(|uid| format!("uid:{uid}:{}", gcal_event_start_epoch(&event)))
+                .or_else(|| (!id.is_empty()).then(|| format!("id:{id}")));
+            if key.is_some_and(|key| !seen.insert(key)) {
                 continue;
             }
             merged.push(event);
@@ -4262,6 +4417,239 @@ mod tests {
         let event = google_calendar_event_json(&item, "primary");
         assert_eq!(event["title"], "");
         assert_eq!(event["meetingUrl"], "https://meet.google.com/abc-defg-hij");
+    }
+
+    #[test]
+    fn reminder_google_calendar_excludes_cancelled_and_self_declined_events() {
+        assert!(!google_calendar_event_is_available(
+            &json!({"status": "cancelled"})
+        ));
+        assert!(!google_calendar_event_is_available(
+            &json!({"attendees": [{"self": true, "responseStatus": "declined"}]})
+        ));
+        assert!(google_calendar_event_is_available(
+            &json!({"attendees": [{"self": false, "responseStatus": "declined"}]})
+        ));
+        for response in ["accepted", "tentative", "needsAction"] {
+            assert!(google_calendar_event_is_available(
+                &json!({"attendees": [{"self": true, "responseStatus": response}]})
+            ));
+        }
+    }
+
+    #[test]
+    fn reminder_google_snapshot_rejects_partial_results_without_clearing_calendars() {
+        let events = vec![vec![
+            json!({"id": "healthy", "start": "2026-09-29T19:00:00Z"}),
+        ]];
+        assert_eq!(
+            finish_gcal_snapshot(events.clone(), Some(anyhow::anyhow!("offline")), false)
+                .unwrap()
+                .len(),
+            1
+        );
+        let error = finish_gcal_snapshot(
+            events,
+            Some(
+                GcalAuthError {
+                    message: "account needs auth".into(),
+                }
+                .into(),
+            ),
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(
+            gcal_events_error_response(&error).0,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert!(finish_gcal_snapshot(vec![vec![]], None, true)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn reminder_google_snapshot_fetches_every_page_and_rejects_a_failed_page() {
+        use wiremock::{matchers::query_param, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(query_param("pageToken", "second"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "items": [{"id": "two", "summary": "second page"}]
+            })))
+            .with_priority(2)
+            .mount(&server)
+            .await;
+        Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "items": [{"id": "one"}], "nextPageToken": "second"
+            })))
+            .with_priority(3)
+            .mount(&server)
+            .await;
+        let client = reqwest::Client::new();
+        let events = gcal_fetch_pages(client.get(server.uri()), "Work")
+            .await
+            .unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|e| e["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["one", "two"]
+        );
+        Mock::given(query_param("pageToken", "second"))
+            .respond_with(ResponseTemplate::new(503))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        assert!(gcal_fetch_pages(client.get(server.uri()), "Work")
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn google_calendar_account_auth_failure_keeps_healthy_account_events() {
+        use wiremock::{
+            matchers::{header, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let server = MockServer::start().await;
+        let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
+        let store = Arc::new(SecretStore::new(pool, None).await.unwrap());
+        for account in ["bad", "healthy"] {
+            store
+                .set_json(
+                    &format!("oauth:google-calendar:{account}"),
+                    &json!({
+                        "access_token":account, "expires_at":chrono::Utc::now().timestamp() + 3600
+                    }),
+                )
+                .await
+                .unwrap();
+        }
+        Mock::given(header("authorization", "Bearer bad"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        Mock::given(header("authorization", "Bearer healthy"))
+            .and(path("/users/me/calendarList"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "items":[{"id":"work", "primary":true}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(path("/calendars/work/events"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[{"id":"new"}]})))
+            .mount(&server)
+            .await;
+        let snapshots = gcal_account_snapshots(
+            &reqwest::Client::new(),
+            &GoogleCalendarEventsQuery {
+                hours_back: Some(1),
+                hours_ahead: Some(2),
+                instance: None,
+                require_complete: false,
+                account_snapshots: true,
+            },
+            &Some(store),
+            &format!("{}/", server.uri()),
+        )
+        .await;
+        assert_eq!(snapshots.len(), 2);
+        let bad = snapshots
+            .iter()
+            .find(|s| s.instance.as_deref() == Some("bad"))
+            .unwrap();
+        assert!(bad.events.is_none());
+        assert!(bad.error.as_ref().unwrap().contains("401"));
+        let healthy = snapshots
+            .iter()
+            .find(|s| s.instance.as_deref() == Some("healthy"))
+            .unwrap();
+        assert_eq!(healthy.events.as_ref().unwrap()[0]["id"], "new");
+    }
+
+    #[test]
+    fn google_calendar_merge_keeps_calendar_ids_and_recurring_occurrences_distinct() {
+        let events = merge_gcal_events(vec![vec![
+            json!({"id":"one", "iCalUID":"invite", "start":"2026-10-02T18:00:00Z"}),
+            json!({"id":"shared:one", "iCalUID":"invite", "start":"2026-10-02T11:00:00-07:00"}),
+            json!({"id":"shared:two", "iCalUID":"invite", "start":"2026-10-03T18:00:00Z"}),
+            json!({"id":"other:one", "iCalUID":"different", "start":"2026-10-02T18:00:00Z"}),
+        ]]);
+        assert_eq!(events.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn google_calendar_fetches_paginated_calendar_list_and_secondary_events() {
+        use wiremock::{
+            matchers::{path, query_param},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let server = MockServer::start().await;
+        Mock::given(path("/users/me/calendarList"))
+            .and(query_param("pageToken", "second"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "items": [{"id":"shared@example.com", "hidden":true, "accessRole":"reader"}]
+            })))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/users/me/calendarList"))
+            .and(query_param("showHidden", "true"))
+            .and(query_param("minAccessRole", "reader"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "items": [{"id":"primary-id", "primary":true, "accessRole":"owner"}],
+                "nextPageToken":"second"
+            })))
+            .with_priority(2)
+            .mount(&server)
+            .await;
+        Mock::given(path("/calendars/primary-id/events"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[]})))
+            .mount(&server)
+            .await;
+        Mock::given(path("/calendars/shared@example.com/events"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[{
+                "id":"secondary", "start":{"dateTime":"2026-10-02T18:00:00Z"},
+                "end":{"dateTime":"2026-10-02T18:30:00Z"}, "hangoutLink":"https://meet.google.com/abc-defg-hij"
+            }]}))).mount(&server).await;
+        let events = gcal_fetch_all_calendars(
+            &reqwest::Client::new(),
+            &format!("{}/", server.uri()),
+            "test-token",
+            "Work",
+            1,
+            2,
+        )
+        .await
+        .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["id"], "shared@example.com:secondary");
+        assert_eq!(events[0]["calendarName"], "Work / shared@example.com");
+        assert_eq!(
+            events[0]["meetingUrl"],
+            "https://meet.google.com/abc-defg-hij"
+        );
+        Mock::given(path("/calendars/shared@example.com/events"))
+            .respond_with(ResponseTemplate::new(503))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        let error = gcal_fetch_all_calendars(
+            &reqwest::Client::new(),
+            &format!("{}/", server.uri()),
+            "test-token",
+            "Work",
+            1,
+            2,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("503"), "{error}");
+        assert!(error.contains("calendar_events"), "{error}");
+        assert!(!error.contains("shared@example.com"));
     }
 
     #[test]

@@ -39,6 +39,25 @@ function summaryPayload() {
 }
 
 describe("activity-summary tool orchestration", () => {
+  it("returns bounded starred metadata in the existing summary call, including empty sessions", async () => {
+    const endpoints: string[] = [];
+    const result = await buildActivitySummaryResult(
+      { start_time: "2026-10-02T00:00:00Z", end_time: "2026-10-03T00:00:00Z" },
+      async endpoint => {
+        endpoints.push(endpoint);
+        return jsonResponse({ ...summaryPayload(), starred_sessions: [
+          { id: "empty-session", start: "2026-10-02T10:00:00Z", end: "2026-10-02T10:15:00Z", has_audio: false },
+        ], starred_sessions_has_more: true });
+      },
+    );
+    expect(endpoints).toHaveLength(1);
+    expect(endpoints[0]).toContain("/activity-summary?");
+    expect(result.text).toContain("empty-session");
+    expect(result.text).toContain("has_audio=false");
+    expect(result.text).toContain("More intervals exist");
+    expect(result.text).toContain("Authoritative active time: 120 min");
+  });
+
   it("returns authoritative time, paths, and bounded parsed context", async () => {
     const endpoints: string[] = [];
     const result = await buildActivitySummaryResult(

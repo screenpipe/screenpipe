@@ -88,6 +88,8 @@ pub enum SessionKind {
     Meeting { meeting_id: i64 },
     /// Bound to a wall-clock timer. Cleared when `expires_at` is reached.
     Timer,
+    /// An independent, bounded starred-work capture lease.
+    Starred,
     /// User clicked "+ HD" on a *prewarm* notification (before the call
     /// has actually started — no `meeting_id` exists yet). Recording fires
     /// now; the next `meeting_started` event upgrades this session to
@@ -173,6 +175,7 @@ impl HighFpsSnapshot {
 /// Runtime control surface for the HD-recording override.
 pub struct HighFpsController {
     inner: Mutex<Option<Session>>,
+    starred: Mutex<Option<(String, Session)>>,
     /// Default mode persists across sessions. Stored as `AtomicI8` so the
     /// hot path doesn't take the inner lock just to read it.
     default_mode: AtomicI8,
@@ -198,6 +201,7 @@ impl HighFpsController {
     ) -> Self {
         Self {
             inner: Mutex::new(None),
+            starred: Mutex::new(None),
             default_mode: AtomicI8::new(default_mode.as_i8()),
             interval_ms: AtomicU64::new(interval_ms.max(MIN_INTERVAL_MS)),
             detector,
@@ -241,6 +245,15 @@ impl HighFpsController {
         };
         drop(guard);
 
+        let mut starred = self.starred.lock().expect("starred HD mutex poisoned");
+        if starred.as_ref().is_some_and(|(_, s)| s.expires_at <= now) {
+            *starred = None;
+        }
+        let session = match (session, starred.as_ref().map(|(_, s)| *s)) {
+            (Some(a), Some(b)) => Some(if a.expires_at >= b.expires_at { a } else { b }),
+            (a, b) => a.or(b),
+        };
+        drop(starred);
         if let Some(s) = session {
             HighFpsSnapshot {
                 active: true,
@@ -406,8 +419,29 @@ impl HighFpsController {
         self.snapshot()
     }
 
-    /// Stop the current session. No-op if no session is active.
+    /// Update only this star's lease. Finishing it cannot stop a meeting/timer.
+    pub fn set_starred_session(&self, id: &str, duration: Duration) {
+        let mut slot = self.starred.lock().expect("starred HD mutex poisoned");
+        if duration.is_zero() {
+            if slot.as_ref().is_some_and(|(current, _)| current == id) {
+                *slot = None;
+            }
+        } else {
+            let now = Instant::now();
+            *slot = Some((
+                id.to_owned(),
+                Session {
+                    kind: SessionKind::Starred,
+                    started_at: now,
+                    expires_at: now + duration.min(MAX_TIMER_DURATION),
+                },
+            ));
+        }
+    }
+
+    /// Stop all HD, including a star lease, on an explicit user stop.
     pub fn stop_session(&self) -> HighFpsSnapshot {
+        *self.starred.lock().expect("starred HD mutex poisoned") = None;
         let mut guard = self.inner.lock().expect("HighFpsController mutex poisoned");
         if let Some(s) = guard.take() {
             tracing::info!(
@@ -922,5 +956,21 @@ mod tests {
             h.join().unwrap();
         }
         reader.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod starred_tests {
+    use super::*;
+    #[test]
+    fn ending_star_preserves_other_hd_and_stop_clears_both() {
+        let controller = HighFpsController::new(None, DefaultMode::Ask, 100);
+        controller.start_timer_session(Duration::from_secs(600));
+        controller.set_starred_session("a", Duration::from_secs(900));
+        assert_eq!(controller.snapshot().kind, Some(SessionKind::Starred));
+        controller.set_starred_session("a", Duration::ZERO);
+        assert_eq!(controller.snapshot().kind, Some(SessionKind::Timer));
+        controller.set_starred_session("b", Duration::from_secs(900));
+        assert!(!controller.stop_session().active);
     }
 }

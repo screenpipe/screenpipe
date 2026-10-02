@@ -1870,6 +1870,17 @@ fn ensure_workflow_feedback_extension(project_dir: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to install feedback tool: {}", e))
 }
 
+fn ensure_workflow_video_extension(project_dir: &str) -> Result<(), String> {
+    let ext_dir = std::path::Path::new(project_dir).join(".pi").join("extensions");
+    std::fs::create_dir_all(&ext_dir).map_err(|e| e.to_string())?;
+    let skill_dir = std::path::Path::new(project_dir).join(".pi/skills/video-sop");
+    std::fs::create_dir_all(&skill_dir).map_err(|e| e.to_string())?;
+    std::fs::write(skill_dir.join("SKILL.md"), include_str!("../../../../packages/workflows-ui/skills/video-sop/SKILL.md")).map_err(|e| e.to_string())?;
+    std::fs::write(ext_dir.join("workflow-video.ts"),
+        include_str!("../../../../packages/workflows-ui/src/video-tool.ts"))
+        .map_err(|e| format!("Failed to install video editing tool: {}", e))
+}
+
 fn ensure_work_context_extension(project_dir: &str) -> Result<(), String> {
     let ext_dir = std::path::Path::new(project_dir).join(".pi").join("extensions");
     std::fs::create_dir_all(&ext_dir).map_err(|e| e.to_string())?;
@@ -2982,6 +2993,10 @@ pub async fn pi_start_inner(
             .is_some_and(|tools| tools.iter().any(|tool| tool == "refine_workflow")) {
             ensure_workflow_feedback_extension(&project_dir)?;
         }
+        if provider_config.as_ref().and_then(|config| config.allowed_tools.as_ref())
+            .is_some_and(|tools| tools.iter().any(|tool| tool == "edit_video_sop")) {
+            ensure_workflow_video_extension(&project_dir)?;
+        }
         // The form tool has a receiver only in explicitly scoped Context runs.
         if provider_config.as_ref().and_then(|config| config.allowed_tools.as_ref())
             .is_some_and(|tools| tools.iter().any(|tool| tool == "fill_work_context")) {
@@ -3606,6 +3621,12 @@ pub async fn pi_start_inner(
         if let Some(ref token) = user_token {
             cmd.env("SCREENPIPE_API_KEY", token);
         }
+    }
+
+    // The video skill invokes this binary's headless renderer. Credentials stay
+    // in the inherited account environment, never in a project or model prompt.
+    if provider_config.as_ref().is_some_and(|config| config.allowed_tools.as_ref().is_some_and(|tools| tools.iter().any(|tool| tool == "render_video_sop"))) {
+        cmd.env("SCREENPIPE_VIDEO_CLI", std::env::current_exe().map_err(|e| e.to_string())?);
     }
 
     // Pass local API config so the Pi agent can authenticate to the runtime local API.
