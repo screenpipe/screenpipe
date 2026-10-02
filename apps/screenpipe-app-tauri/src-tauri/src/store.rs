@@ -1515,6 +1515,8 @@ pub struct SettingsStore {
     pub search_shortcut: String,
     #[serde(rename = "lockVaultShortcut", default)]
     pub lock_vault_shortcut: String,
+    #[serde(rename = "starSessionShortcut", default)]
+    pub star_session_shortcut: String,
     /// Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
     #[serde(rename = "shortcutOverlaySize", default = "default_overlay_size")]
     pub shortcut_overlay_size: String,
@@ -1633,6 +1635,10 @@ pub struct SettingsStore {
     /// and the local server continue in the background.
     #[serde(rename = "headlessRecordOnly", default)]
     pub headless_record_only: bool,
+
+    /// Quit stops capture and closes the UI while the existing process serves history.
+    #[serde(rename = "keepSearchAvailableAfterQuit", default = "default_true")]
+    pub keep_search_available_after_quit: bool,
 }
 
 fn generate_device_id() -> String {
@@ -1733,6 +1739,8 @@ pub struct AIPreset {
     pub model: String,
     #[serde(rename = "defaultPreset")]
     pub default_preset: bool,
+    #[serde(rename = "enterpriseManaged", default)]
+    pub enterprise_managed: bool,
     #[serde(rename = "apiKey")]
     pub api_key: Option<String>,
     #[serde(rename = "maxContextChars")]
@@ -1755,6 +1763,7 @@ impl Default for AIPreset {
             url: "https://api.screenpipe.com/v1".to_string(),
             model: "qwen/qwen3.5-flash-02-23".to_string(),
             default_preset: false,
+            enterprise_managed: false,
             api_key: None,
             max_context_chars: 512000,
             max_tokens: 4096,
@@ -2028,6 +2037,7 @@ Rules:
             url: "https://api.screenpipe.com/v1".to_string(),
             model: "auto".to_string(),
             default_preset: true,
+            enterprise_managed: false,
             api_key: None,
             max_context_chars: 128000,
             max_tokens: 4096,
@@ -2148,6 +2158,12 @@ Rules:
             lock_vault_shortcut: "Ctrl+Shift+L".to_string(),
             #[cfg(not(target_os = "windows"))]
             lock_vault_shortcut: "Super+Shift+L".to_string(),
+            star_session_shortcut: if cfg!(target_os = "windows") {
+                "Alt+Shift+B"
+            } else {
+                "Control+Super+B"
+            }
+            .to_string(),
             shortcut_overlay_size: "small".to_string(),
             shortcut_overlay_anchor: default_overlay_anchor(),
             shortcut_overlay_display: String::new(),
@@ -2179,6 +2195,7 @@ Rules:
             minimize_to_tray_on_close: false,
             headless: false,
             headless_record_only: false,
+            keep_search_available_after_quit: true,
             extra: remote_control,
         }
     }
@@ -3568,6 +3585,19 @@ mod tests {
         .unwrap();
 
         assert!(settings.auto_update);
+    }
+
+    #[test]
+    fn search_after_quit_defaults_on_and_preserves_explicit_opt_out() {
+        assert!(SettingsStore::default().keep_search_available_after_quit);
+        let missing: SettingsStore = serde_json::from_value(json!({"aiPresets": []})).unwrap();
+        assert!(missing.keep_search_available_after_quit);
+        let opted_out: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": [], "keepSearchAvailableAfterQuit": false
+        })).unwrap();
+        assert!(!opted_out.keep_search_available_after_quit);
+        let round_trip: SettingsStore = serde_json::from_value(serde_json::to_value(opted_out).unwrap()).unwrap();
+        assert!(!round_trip.keep_search_available_after_quit);
     }
 
     #[test]
@@ -5473,6 +5503,40 @@ mod tests {
         let preset = &sanitized_acp["aiPresets"][0];
         assert_eq!(preset["provider"].as_str(), Some("acp"));
         assert_eq!(preset["acpAgent"]["id"].as_str(), Some("codex-acp"));
+    }
+
+    #[test]
+    fn enterprise_managed_preset_survives_settings_persistence() {
+        let settings: SettingsStore = serde_json::from_value(json!({
+            "aiPresets": [
+                {
+                    "id": "company-assistant",
+                    "provider": "anthropic",
+                    "model": "company-model",
+                    "defaultPreset": true,
+                    "enterpriseManaged": true
+                },
+                {
+                    "id": "employee-assistant",
+                    "provider": "anthropic",
+                    "model": "employee-model"
+                }
+            ]
+        }))
+        .expect("settings with managed and legacy employee presets should deserialize");
+
+        // Native saves serialize the typed settings, which must retain the
+        // marker the frontend uses when employee-created presets are disabled.
+        let saved = serde_json::to_value(settings).expect("settings should serialize");
+        assert_eq!(saved["aiPresets"][0]["enterpriseManaged"], json!(true));
+        assert_eq!(saved["aiPresets"][0]["defaultPreset"], json!(true));
+        assert_ne!(saved["aiPresets"][1]["enterpriseManaged"], json!(true));
+
+        let reloaded: SettingsStore =
+            serde_json::from_value(saved).expect("saved settings should reload");
+        let saved_again = serde_json::to_value(reloaded).expect("settings should serialize again");
+        assert_eq!(saved_again["aiPresets"][0]["enterpriseManaged"], json!(true));
+        assert_ne!(saved_again["aiPresets"][1]["enterpriseManaged"], json!(true));
     }
 
     #[test]

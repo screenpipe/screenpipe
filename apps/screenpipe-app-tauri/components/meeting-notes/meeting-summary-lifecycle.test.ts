@@ -33,6 +33,26 @@ const status = (
 });
 
 describe("meeting summary lifecycle", () => {
+  it("keeps polling completed runs while the backend is finalizing their save", () => {
+    const lifecycle = meetingSummaryLifecycleFromStatus(
+      status({
+        state: "running",
+        execution_id: 12,
+        execution_status: "completed",
+      }),
+    );
+    expect(lifecycle.kind).toBe("running");
+    expect(summaryLifecycleIsWorking(lifecycle)).toBe(true);
+    expect(
+      meetingSummaryLifecycleFromStatus(
+        status({
+          state: "ready",
+          execution_id: 12,
+          execution_status: "completed",
+        }),
+      ).kind,
+    ).toBe("completed");
+  });
   it("maps each engine state onto what the note renders", () => {
     expect(
       meetingSummaryLifecycleFromStatus(

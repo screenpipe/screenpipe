@@ -569,6 +569,7 @@ impl AudioManager {
                     audio_rx,
                     self.db.clone(),
                     self.engine.clone(),
+                    self.on_transcription_insert.clone(),
                 ));
             }
         }
@@ -721,12 +722,16 @@ impl AudioManager {
         // Stop producers FIRST: abort per-device recording tasks and the OS audio streams.
         // This must happen before killing the consumer so any audio already queued in the
         // audio channel (including the final 30s flush) can still be drained.
-        for pair in self.recording_handles.iter() {
-            let handle = pair.value();
+        let device_stop_result = self.device_manager.stop_all_devices().await;
+        let handles: Vec<_> = self
+            .recording_handles
+            .iter()
+            .map(|p| p.value().clone())
+            .collect();
+        self.recording_handles.clear();
+        for handle in handles {
             handle.lock().await.abort();
         }
-        self.recording_handles.clear();
-        self.device_manager.stop_all_devices().await?;
 
         // Drain the channel: wait until the pipeline handler has consumed all queued chunks
         // (or a hard timeout expires). The early persist — file write + DB insert — happens
@@ -760,7 +765,7 @@ impl AudioManager {
         }
 
         info!("audio manager stopped");
-        Ok(())
+        device_stop_result
     }
 
     pub async fn stop(&self) -> Result<()> {
@@ -794,26 +799,27 @@ impl AudioManager {
     /// Idempotent — safe to call on already-stopped devices.
     /// Used by device monitor for force-cycling devices after sleep/wake.
     pub async fn stop_device_recording(&self, device: &AudioDevice) -> Result<()> {
+        let manager = self.clone();
+        let target = device.clone();
+        self.device_manager
+            .run_device_operation(device, async move {
+                manager.stop_device_recording_inner(&target).await
+            })
+            .await
+    }
+
+    async fn stop_device_recording_inner(&self, device: &AudioDevice) -> Result<()> {
         // Signal the recording loop to stop BEFORE aborting the handle,
         // so it exits cleanly without triggering "stream dead" warnings.
         if let Some(is_running) = self.device_manager.is_running_mut(device) {
             is_running.store(false, std::sync::atomic::Ordering::Relaxed);
         }
 
-        // Ignore "already stopped" errors
-        if let Err(e) = self.device_manager.stop_device(device).await {
-            let msg = e.to_string();
-            if !msg.contains("already stopped") && !msg.contains("not running") {
-                return Err(e);
-            }
-        }
-
-        if let Some(pair) = self.recording_handles.get(device) {
-            let handle = pair.value();
+        let result = self.device_manager.stop_device(device).await;
+        if let Some((_, handle)) = self.recording_handles.remove(device) {
             handle.lock().await.abort();
         }
-
-        self.recording_handles.remove(device);
+        result?;
 
         Ok(())
     }
@@ -827,7 +833,7 @@ impl AudioManager {
     }
 
     /// Temporarily pause a device without changing the configured device list.
-    /// Idempotent — safe to call if already paused. Never errors.
+    /// Idempotent — safe to call if already paused. Reports native teardown failures.
     pub async fn pause_device(&self, device_name: &str) -> Result<()> {
         self.user_enabled_devices.write().await.remove(device_name);
         // Mark as disabled FIRST so no monitor path can race and restart it
@@ -836,10 +842,8 @@ impl AudioManager {
             .await
             .insert(device_name.to_string());
 
-        // Best-effort stop — ignore all errors (already stopped, not found, etc.)
-        if let Ok(device) = parse_audio_device(device_name) {
-            let _ = self.stop_device_recording(&device).await;
-        }
+        let device = parse_audio_device(device_name)?;
+        self.stop_device_recording(&device).await?;
         info!("user paused audio device: {}", device_name);
         Ok(())
     }
@@ -905,6 +909,20 @@ impl AudioManager {
     }
 
     pub async fn start_device(&self, device: &AudioDevice) -> Result<()> {
+        let manager = self.clone();
+        let target = device.clone();
+        self.device_manager
+            .run_device_operation(
+                device,
+                async move { manager.start_device_inner(&target).await },
+            )
+            .await
+    }
+
+    async fn start_device_inner(&self, device: &AudioDevice) -> Result<()> {
+        if self.status().await != AudioManagerStatus::Running {
+            return Err(anyhow!("audio manager is stopped"));
+        }
         if self.options.read().await.is_disabled {
             debug!(
                 "skipping start of audio device because audio capture is disabled: {}",
@@ -1013,11 +1031,22 @@ impl AudioManager {
             }
         }
 
+        if self.status().await != AudioManagerStatus::Running
+            || self
+                .user_disabled_devices
+                .read()
+                .await
+                .contains(&device.to_string())
+        {
+            self.stop_device_recording_inner(device).await?;
+            return Ok(());
+        }
+
         // The meeting may end while the OS backend is opening the stream. The
         // pre-start gate cannot close that race, and the monitor cannot see the
         // stream until its recording handle is registered.
         if self.meetings_only_capture_waiting().await {
-            self.stop_device_recording(device).await?;
+            self.stop_device_recording_inner(device).await?;
             debug!(
                 "stopped newly-opened audio device after meeting ended during startup: {}",
                 device
@@ -1028,7 +1057,7 @@ impl AudioManager {
         // Close the race where meeting detection changes while the backend is
         // opening a normal stream. Session streams never pass through here.
         if self.meeting_piggyback_owns_normal_capture().await {
-            self.stop_device_recording(device).await?;
+            self.stop_device_recording_inner(device).await?;
             info!(
                 "smart recording engaged mid-open — stopped normal audio device: {}",
                 device
@@ -1041,7 +1070,7 @@ impl AudioManager {
         // cannot see this stream until its recording handle is registered.
         #[cfg(target_os = "macos")]
         if screenpipe_config::should_pause_audio_for_lock() {
-            self.stop_device_recording(device).await?;
+            self.stop_device_recording_inner(device).await?;
             debug!(
                 "stopped newly-opened audio device after screen locked during startup: {}",
                 device
@@ -1078,6 +1107,23 @@ impl AudioManager {
         device: &AudioDevice,
         tap_pids: Option<Vec<i32>>,
     ) -> Result<()> {
+        let manager = self.clone();
+        let target = device.clone();
+        self.device_manager
+            .run_device_operation(device, async move {
+                manager.start_session_device_inner(&target, tap_pids).await
+            })
+            .await
+    }
+
+    async fn start_session_device_inner(
+        &self,
+        device: &AudioDevice,
+        tap_pids: Option<Vec<i32>>,
+    ) -> Result<()> {
+        if self.status().await != AudioManagerStatus::Running {
+            return Err(anyhow!("audio manager is stopped"));
+        }
         if self.options.read().await.is_disabled {
             return Err(anyhow!("audio capture is disabled"));
         }
@@ -1139,6 +1185,24 @@ impl AudioManager {
             }
         }
 
+        if self.status().await != AudioManagerStatus::Running
+            || self
+                .user_disabled_devices
+                .read()
+                .await
+                .contains(&device.to_string())
+        {
+            self.session_devices
+                .write()
+                .unwrap()
+                .remove(&device.to_string());
+            self.stop_device_recording_inner(device).await?;
+            return Err(anyhow!(
+                "device {} capture was stopped during startup",
+                device
+            ));
+        }
+
         // The meeting can end while the backend is opening the stream. Remove
         // session ownership before stopping so a racing callback cannot bypass
         // the persistence gate after the edge.
@@ -1151,7 +1215,7 @@ impl AudioManager {
                 .write()
                 .unwrap()
                 .remove(&device.to_string());
-            self.stop_device_recording(device).await?;
+            self.stop_device_recording_inner(device).await?;
             debug!(
                 "stopped newly-opened meeting-session audio device after the meeting ended during startup: {}",
                 device
@@ -1167,7 +1231,7 @@ impl AudioManager {
                 .write()
                 .unwrap()
                 .remove(&device.to_string());
-            self.stop_device_recording(device).await?;
+            self.stop_device_recording_inner(device).await?;
             debug!(
                 "stopped newly-opened meeting-session audio device after screen locked during startup: {}",
                 device
@@ -1198,11 +1262,18 @@ impl AudioManager {
 
     /// Tear down a meeting-session stream. Never touches `enabled_devices`.
     pub async fn stop_session_device(&self, device: &AudioDevice) -> Result<()> {
-        self.session_devices
-            .write()
-            .unwrap()
-            .remove(&device.to_string());
-        self.stop_device_recording(device).await
+        let manager = self.clone();
+        let target = device.clone();
+        self.device_manager
+            .run_device_operation(device, async move {
+                manager
+                    .session_devices
+                    .write()
+                    .unwrap()
+                    .remove(&target.to_string());
+                manager.stop_device_recording_inner(&target).await
+            })
+            .await
     }
 
     /// Snapshot of the currently-registered meeting-session device names.
@@ -1909,21 +1980,13 @@ impl AudioManager {
             output_devices.len()
         );
 
+        // Publish the gate before teardown so recovery cannot reopen an output.
+        *self.drm_stopped_devices.write().await = output_devices.clone();
         for device in &output_devices {
-            // Stop the underlying stream
-            if let Err(e) = self.device_manager.stop_device(device).await {
+            if let Err(e) = self.stop_device_recording(device).await {
                 warn!("DRM: failed to stop audio device {}: {:?}", device, e);
             }
-
-            // Abort the recording task
-            if let Some(pair) = self.recording_handles.get(device) {
-                pair.value().lock().await.abort();
-            }
-            self.recording_handles.remove(device);
         }
-
-        // Store stopped devices for later restart
-        *self.drm_stopped_devices.write().await = output_devices;
 
         Ok(())
     }
@@ -2409,14 +2472,7 @@ impl AudioManager {
             Err(_) => return Err(anyhow!("Device {} not found", device_name)),
         };
 
-        // Remove from recording handles
-        if let Some((_, handle)) = self.recording_handles.remove(&device) {
-            // Abort the handle if somehow still running
-            handle.lock().await.abort();
-        }
-
-        // Stop the device in device manager (clears streams and states)
-        let _ = self.device_manager.stop_device(&device).await;
+        self.stop_device_recording(&device).await?;
 
         debug!("cleaned up stale device {} for restart", device_name);
 

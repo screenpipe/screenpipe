@@ -140,6 +140,14 @@ async cancelStorageMigration(root: string) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async cancelWorkflowVideo(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("cancel_workflow_video", { id }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async chatgptOauthCheckToken() : Promise<Result<boolean, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("chatgpt_oauth_check_token") };
@@ -381,6 +389,14 @@ async copyTextToClipboard(text: string) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async createWorkflowVideo(id: string, scenes: WorkflowVideoScene[]) : Promise<Result<WorkflowVideoResult, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("create_workflow_video", { id, scenes }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async deleteBrainView(id: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("delete_brain_view", { id }) };
@@ -444,6 +460,17 @@ async disableKeychainEncryption() : Promise<Result<KeychainStatus, string>> {
 async disableOverlayClickThrough() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("disable_overlay_click_through") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Outputs remain available while reviewing. Explicit discard bounds permanent local storage.
+ */
+async discardWorkflowVideo(id: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("discard_workflow_video", { id }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -3159,7 +3186,7 @@ async writeBrowserLogs(entries: BrowserLogEntry[]) : Promise<void> {
 
 /** user-defined types **/
 
-export type AIPreset = { id: string; prompt: string; provider: AIProviderType; acpAgent?: AcpAgentPresetConfig | null; url?: string; model?: string; defaultPreset: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
+export type AIPreset = { id: string; prompt: string; provider: AIProviderType; acpAgent?: AcpAgentPresetConfig | null; url?: string; model?: string; defaultPreset: boolean; enterpriseManaged?: boolean; apiKey: string | null; maxContextChars: number; maxTokens?: number }
 export type AIProviderType = "openai" | "openai-chatgpt" | "native-ollama" | "custom" | "screenpipe-cloud" | "acp" | "pi" | "anthropic"
 export type AcpAgentConfig = {
 /**
@@ -3275,8 +3302,8 @@ error: string | null;
 sinceEpochSecs: number;
 /**
  * True when this CPU lacks AVX2 (pre-2013 x86-64 / Atom-line): local
- * whisper/qwen3 STT is disabled at runtime (their kernels are
- * AVX2-compiled); parakeet + cloud engines still work. Drives the
+ * Whisper (and non-Windows Qwen) STT is disabled at runtime because its
+ * kernels are AVX2-compiled; Windows ONNX Qwen, Parakeet, and cloud engines work. Drives the
  * "compatibility mode" notice in onboarding/settings.
  */
 cpuCompatMode: boolean }
@@ -4029,8 +4056,8 @@ includedWindows: string[];
  */
 ignoredUrls?: UrlRule[];
 /**
- * Strict browser hostname allowlist. When non-empty, native apps and
- * browser windows without a positively detected matching URL are skipped.
+ * Strict browser hostname allowlist. Browser windows without a positively
+ * detected matching URL are skipped; native apps follow app/window rules.
  */
 includedUrls?: DomainRule[];
 /**
@@ -4052,15 +4079,15 @@ enhancedIncognitoDetection?: boolean;
 pauseOnDrmContent?: boolean;
 /**
  * Skip persisting clipboard rows/content in the UI recorder. Defaults to
- * `true` (clipboard DB capture OFF) — passwords / API keys / private keys
- * frequently pass through the clipboard. Clipboard operations can still
+ * `false` in enterprise builds and `true` in consumer builds.
+ * Clipboard operations can still
  * wake event-driven capture when `captureOnClipboard` is enabled.
  */
 disableClipboardCapture?: boolean;
 /**
  * Skip persisting keyboard / typed-text rows in the UI recorder.
- * Defaults to `true` (keyboard DB capture OFF). Keyboard events still
- * wake event-driven capture, and the accessibility tree + OCR still
+ * Defaults to `false` in enterprise builds and `true` in consumer builds.
+ * Keyboard events still wake event-driven capture, and the accessibility tree + OCR still
  * capture on-screen text so Rewind/Ask keep working.
  * Opt in to keyboard DB rows via the "Capture keyboard" toggle.
  */
@@ -4092,7 +4119,7 @@ usePiiRemoval: boolean;
  * `frames.accessibility_text`, and `ui_events.text_content`. Raw
  * secrets are gone after the worker processes the row — that's
  * the contract of the user-facing "AI PII removal" toggle.
- * Off by default; capture path is unaffected either way. See
+ * On by default in enterprise builds; capture path is unaffected. See
  * `screenpipe-redact` for the full design.
  */
 asyncPiiRedaction?: boolean;
@@ -4108,15 +4135,12 @@ asyncPiiRedaction?: boolean;
  */
 redactAgentSessionSecrets?: boolean;
 /**
- * Enable image-PII redaction on captured screen frames. When
- * `true`, the `screenpipe_redact::image::worker` runs alongside
- * the text reconciliation worker, scans the `frames` table, runs
- * the RF-DETR-Nano detector, and blacks out detected PII regions
- * in each JPG (atomic overwrite of the source file). Off by
- * default — orthogonal to `async_pii_redaction` (text path),
- * independently togglable. Requires the `screenpipe-redact`
- * crate to be built with one of the `onnx-*` cargo features and
- * the `rfdetr_v8.onnx` model present at `~/.screenpipe/models/`.
+ * Enable image-PII redaction on captured screen frames. The image
+ * worker scans the `frames` table and blacks out detected PII regions
+ * in each JPG (atomic overwrite of the source file), using `pii_backend`.
+ * On by default in enterprise builds, independently of text redaction.
+ * The local backend requires an `onnx-*` cargo feature and the
+ * `rfdetr_v8.onnx` model at `~/.screenpipe/models/`.
  */
 asyncImagePiiRedaction?: boolean;
 /**
@@ -4124,7 +4148,9 @@ asyncImagePiiRedaction?: boolean;
  * BOTH modalities (text + image) because the user-facing
  * "AI PII removal" toggle is one knob.
  *
- * - `"local"` (default): on-device ONNX models. Privacy by
+ * Enterprise builds default to `"tinfoil"`; consumer builds default to `"local"`.
+ *
+ * - `"local"`: on-device ONNX models. Privacy by
  * construction — pixels and text never leave the box. Slower,
  * especially on weak hardware (~1-3 s per text row, ~60-180 ms
  * per frame).
@@ -4292,7 +4318,7 @@ uiLocale: string;
 /**
  * Last resolved PostHog rollout decision, shared with all native surfaces.
  */
-uiLocalizationEnabled: boolean; devMode: boolean; ocrEngine: string; dataDir: string; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; lockVaultShortcut?: string;
+uiLocalizationEnabled: boolean; devMode: boolean; ocrEngine: string; dataDir: string; embeddedLLM: EmbeddedLLM; autoStartEnabled: boolean; platform: string; disabledShortcuts: string[]; user: User; showScreenpipeShortcut: string; startRecordingShortcut: string; stopRecordingShortcut: string; startAudioShortcut: string; stopAudioShortcut: string; showChatShortcut: string; searchShortcut: string; lockVaultShortcut?: string; starSessionShortcut?: string;
 /**
  * Overlay size: "small" (default), "medium" (1.5x), "large" (2x)
  */
@@ -4415,7 +4441,11 @@ headless?: boolean;
  * When true, headless mode skips scheduled pipe runs so only recording
  * and the local server continue in the background.
  */
-headlessRecordOnly?: boolean }
+headlessRecordOnly?: boolean;
+/**
+ * Quit stops capture and closes the UI while the existing process serves history.
+ */
+keepSearchAvailableAfterQuit?: boolean }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
 export type StartExportRecordingResponse = { jobId: string }
 export type StorageMigrationActivity = { root: string | null; busy: boolean; recovering: boolean; message: string; error: string | null; elapsed_seconds: number; completed_records: number | null; total_records: number | null; bytes_saved: number | null; available_bytes: number | null; completed: boolean }
@@ -4469,6 +4499,9 @@ word: string;
  * Optional replacement — if set, the transcribed `word` is replaced with this.
  */
 replace_with?: string | null }
+export type WorkflowVideoFocus = { x: number; y: number; zoom: number }
+export type WorkflowVideoResult = { path: string; captionsPath: string }
+export type WorkflowVideoScene = { title: string; narration: string; image: string | null; pace?: number; focus: WorkflowVideoFocus | null }
 
 /** tauri-specta globals **/
 

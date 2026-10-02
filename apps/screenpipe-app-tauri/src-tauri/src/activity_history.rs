@@ -1892,6 +1892,9 @@ pub fn start(app: AppHandle) {
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tick.tick().await;
+            if crate::search_only::is_active() {
+                continue;
+            }
             let Ok(Some(settings)) = SettingsStore::get(&app) else {
                 continue;
             };

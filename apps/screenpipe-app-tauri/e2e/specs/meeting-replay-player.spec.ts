@@ -175,10 +175,10 @@ describe("historical meeting silent replay player", function () {
       return {
         audio: element.querySelectorAll("audio").length,
         video: element.querySelectorAll("video").length,
-        silentLabel: element.textContent?.toLowerCase().includes("silent"),
+        noAudioLabel: element.textContent?.toLowerCase().includes("no audio"),
       };
-    }, player)) as { audio: number; video: number; silentLabel: boolean };
-    expect(media).toEqual({ audio: 0, video: 0, silentLabel: true });
+    }, player)) as { audio: number; video: number; noAudioLabel: boolean };
+    expect(media).toEqual({ audio: 0, video: 0, noAudioLabel: true });
 
     const replayLayout = (await browser.execute((element: HTMLElement) => {
       const frame = element.querySelector<HTMLElement>(
@@ -239,7 +239,7 @@ describe("historical meeting silent replay player", function () {
     );
 
     const pause = await waitForTestId("replay-play-toggle", 5_000);
-    expect(await pause.getAttribute("aria-label")).toBe("pause silent replay");
+    expect(await pause.getAttribute("aria-label")).toBe("Pause replay");
     await pause.click();
     const pausedFrameId = await $(
       "[data-testid='replay-active-frame']",
@@ -259,7 +259,7 @@ describe("historical meeting silent replay player", function () {
     // coordinates read off the live layout. Both surfaces are addressed by
     // attributes that predate the fix, so this spec fails on the buggy build.
     const scrubber = await waitForTestId("replay-scrubber", 5_000);
-    const progress = await $('[aria-label="silent replay progress"]');
+    const progress = await $('[aria-label="Replay progress"]');
     await progress.waitForExist({ timeout: t(5_000) });
     const valueMax = Number(await scrubber.getAttribute("aria-valuemax"));
     expect(valueMax).toBeGreaterThan(0);

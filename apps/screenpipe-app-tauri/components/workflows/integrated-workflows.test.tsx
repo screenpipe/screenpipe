@@ -2,7 +2,7 @@
 // https://screenpipe.com
 
 import React from "react";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { RecordingStatus } from "@/components/recording-status";
 import { SidebarFooter } from "@/components/sidebar-footer";
@@ -13,7 +13,15 @@ vi.mock("@/lib/workflows/desktop-platform", async () => {
   return { desktopWorkflowsPlatform: {
     ...createFixtureWorkflowsPlatform(),
     // jsdom cannot rasterize the browser fixture's SVG screenshots.
-    loadCapturedWork: async () => structuredClone(fixtureWorkflowAnalysis),
+    loadCapturedWork: async () => {
+      const catalog = structuredClone(fixtureWorkflowAnalysis);
+      catalog.analysis.workflows.forEach((workflow, index) => {
+        workflow.id = `wf-fixture-${index}`;
+        // The persisted catalog represents unanswered corrections as null.
+        workflow.userCorrection = null;
+      });
+      return catalog;
+    },
   } };
 });
 vi.mock("@/components/connected-share-dialog", () => ({
@@ -32,7 +40,7 @@ it("renders the native recording dot and opens device controls in Workflows", as
   fireEvent.click(await screen.findByRole("button", { name: "Recording" }));
   expect(await screen.findByTestId("recording-status-popover")).toBeVisible();
   expect(screen.getByText("Display 1")).toBeVisible();
-  expect(screen.getByRole("button", { name: "pause all recording" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Pause all recording" })).toBeVisible();
   expect(screen.queryByText("Starting")).not.toBeInTheDocument();
 });
 
@@ -46,6 +54,21 @@ it("keeps Settings and Help in the footer and opens workspace shortcuts from Hel
   fireEvent.keyDown(screen.getByRole("button", { name: "Help" }), { key: "Enter" });
   fireEvent.click(await screen.findByRole("menuitem", { name: "Keyboard shortcuts" }));
   expect(await screen.findByRole("dialog", { name: /command/i })).toBeVisible();
+});
+
+it("opens the team invite popover and web management from the Workflows footer", async () => {
+  const manageTeam = vi.fn();
+  render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null}
+    navigationFooter={({ openKeyboardShortcuts }) => <SidebarFooter
+      onSettings={vi.fn()} onHelp={vi.fn()} onKeyboardShortcuts={openKeyboardShortcuts}
+      teamEntry={{ kind: "team", label: "Example Studio", href: "https://screenpipe.com/team-dashboard?team_id=studio", teamId: "studio", canInvite: true }}
+      teamToken="fixture-only" onTeam={manageTeam} />} />);
+  fireEvent.click(screen.getByRole("button", { name: "Example Studio, team menu" }));
+  expect(await screen.findByRole("textbox", { name: "Teammate email" })).toHaveFocus();
+  expect(screen.getByRole("button", { name: "Send invitation" })).toBeDisabled();
+  expect(manageTeam).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Manage team on the web" }));
+  expect(manageTeam).toHaveBeenCalledOnce();
 });
 
 it("opens the existing sharing review from the selected workflow in the main app", async () => {
@@ -93,21 +116,47 @@ it("hands off workflow identity without embedding captured content", async () =>
 });
 
 
-it("opens quiet header filters and restores the catalog after clearing them", async () => {
+it("keeps catalog search and refresh without the advanced filter controls", async () => {
   window.history.replaceState(null, "", "/home?mode=workflows");
   render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
-  const filters = await screen.findByRole("button", { name: "Filters", exact: true });
-  expect(filters).toHaveAttribute("title", "Filters");
-  expect(screen.queryByRole("combobox", { name:"Workflow activity period" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Update now" })).toHaveAttribute("title", "Update now");
-  fireEvent.click(filters);
-  const panel = screen.getByRole("region", { name: "Workflow filters" });
-  expect(filters).toHaveAttribute("aria-controls", panel.id);
-  fireEvent.change(within(panel).getByLabelText("Evidence quality"), { target: { value: "strong" } });
-  expect(screen.getByRole("button", { name: "Filters (1)" })).toHaveAttribute("aria-expanded", "true");
-  fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
-  expect(within(panel).getByLabelText("Evidence quality")).toHaveValue("all");
-  expect(screen.queryByRole("button", { name: "Clear filters" })).not.toBeInTheDocument();
-  fireEvent.click(filters);
+  await screen.findByRole("heading", { name: "Research synthesis" });
+  expect(screen.queryByRole("button", { name: /^Filters/ })).not.toBeInTheDocument();
   expect(screen.queryByRole("region", { name: "Workflow filters" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Update now" })).toHaveAttribute("title", "Update now");
+  const search = screen.getByPlaceholderText("Search workflows");
+  fireEvent.change(search, { target: { value: "no-such-workflow-xyz" } });
+  expect(screen.getByText("No workflows match your search")).toBeVisible();
+  fireEvent.click(screen.getAllByRole("button", { name: "Clear search" })[0]);
+  expect(screen.getByRole("heading", { name: "Research synthesis" })).toBeVisible();
+  expect(search).toHaveValue("");
+});
+
+
+it("waits for the catalog then opens the exact workflow once across delivery retries", async () => {
+  sessionStorage.clear();
+  const posthog = (await import("posthog-js")).default;
+  vi.mocked(posthog.capture).mockClear();
+  const { rememberWorkflowReview } = await import("@/lib/workflows/notification");
+  const request = { key: "cold-start", workflowId: "wf-fixture-4" };
+  rememberWorkflowReview(request);
+  window.history.replaceState(null, "", "/home?mode=workflows");
+  render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
+  expect(await screen.findByRole("button", { name: "Create SOP" })).toBeVisible();
+  expect(screen.getByRole("textbox", { name: "Workflow title" })).toHaveValue("Research synthesis");
+  act(() => rememberWorkflowReview(request));
+  await waitFor(() => expect(vi.mocked(posthog.capture).mock.calls.filter(c => c[0] === "workflow_notification_opened")).toHaveLength(1));
+  expect(sessionStorage.getItem("screenpipe:workflow-review-request")).toBeNull();
+});
+
+it("recovers a removed workflow into the catalog without claiming it opened", async () => {
+  sessionStorage.clear();
+  const posthog = (await import("posthog-js")).default;
+  vi.mocked(posthog.capture).mockClear();
+  const { rememberWorkflowReview } = await import("@/lib/workflows/notification");
+  rememberWorkflowReview({ key: "missing", workflowId: "wf-missing" });
+  window.history.replaceState(null, "", "/home?mode=workflows");
+  render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
+  expect(await screen.findByText("This workflow is no longer available. Your other workflows are shown below.")).toBeVisible();
+  expect(screen.getByRole("heading", { name: "Your workflows" })).toBeVisible();
+  expect(posthog.capture).toHaveBeenCalledWith("workflow_notification_open_failed", expect.objectContaining({ reason: "workflow_unavailable" }));
 });

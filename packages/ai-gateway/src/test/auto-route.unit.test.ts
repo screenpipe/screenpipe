@@ -80,9 +80,9 @@ describe('Auto routing across tool calls and isolates', () => {
     const initial = await pinAutoRoute(h.env, scope, hard, AUTO_WATERFALL, true);
     const next = { ...hard, messages: [...toolLoop(hard).messages, ...hard.messages] };
     h.env.ROUTER_MODE = 'off';
-    expect((await pinAutoRoute(h.env, scope, next, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-luna');
+    expect((await pinAutoRoute(h.env, scope, next, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-6-luna');
     await expect(initial.beforeAttempt('claude-sonnet-5')).rejects.toThrow('Auto routing state unavailable');
-    expect((await pinAutoRoute(h.env, scope, toolLoop(next), AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-luna');
+    expect((await pinAutoRoute(h.env, scope, toolLoop(next), AUTO_WATERFALL, true)).chain[0]).toBe('gpt-6-luna');
     // A later turn can repeat the first fingerprint after history compaction.
     h.env.ROUTER_MODE = 'heuristic';
     expect((await pinAutoRoute(h.env, scope, hard, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-sol');
@@ -95,7 +95,7 @@ describe('Auto routing across tool calls and isolates', () => {
     h.evict();
     expect((await pinAutoRoute(h.env, scope, toolLoop(hard), AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-sol');
     const next = { ...hard, messages: [...toolLoop(hard).messages, { role: 'user' as const, content: 'Dziękuję!' }] };
-    expect((await pinAutoRoute(h.env, scope, next, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-luna');
+    expect((await pinAutoRoute(h.env, scope, next, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-6-luna');
     expect(JSON.stringify([...h.stores.values()].map((s) => [...s]))).not.toContain(hard.messages[0].content as string);
     expect([...h.alarms.values()].every((time) => time <= Date.now() + AUTO_ROUTE_TTL_MS)).toBe(true);
   });
@@ -118,15 +118,15 @@ describe('Auto routing across tool calls and isolates', () => {
   it('pins timeout fallback to Luna even after Workers AI recovers', async () => {
     const h = harness('embedding');
     h.env.AI = { run: () => new Promise(() => {}) } as unknown as Env['AI'];
-    expect((await pinAutoRoute(h.env, scope, hard, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-luna');
+    expect((await pinAutoRoute(h.env, scope, hard, AUTO_WATERFALL, true)).chain[0]).toBe('gpt-6-luna');
     h.env.ROUTER_MODE = 'heuristic';
     h.evict();
-    expect((await pinAutoRoute(h.env, scope, toolLoop(hard), AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-luna');
+    expect((await pinAutoRoute(h.env, scope, toolLoop(hard), AUTO_WATERFALL, true)).chain[0]).toBe('gpt-6-luna');
   });
 
   it('does not escalate a continuation without retained state', async () => {
     const h = harness();
-    expect((await pinAutoRoute(h.env, scope, toolLoop(hard), AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-luna');
+    expect((await pinAutoRoute(h.env, scope, toolLoop(hard), AUTO_WATERFALL, true)).chain[0]).toBe('gpt-6-luna');
   });
 
   it('persists the provider fallback before spending and never moves a stale request backwards', async () => {
@@ -139,10 +139,10 @@ describe('Auto routing across tool calls and isolates', () => {
       return new Response('ok');
     });
     const result = await runChain(pin.chain, hard, h.env, 'auto', false, pin.chain.length, undefined, attempt, pin.beforeAttempt);
-    expect(result).toMatchObject({ model: 'gpt-5.6-luna' });
-    expect(models).toEqual(['gpt-5.6-sol', 'gpt-5.6-luna']);
+    expect(result).toMatchObject({ model: 'gpt-6-luna' });
+    expect(models).toEqual(['gpt-5.6-sol', 'gpt-6-luna']);
     h.evict();
-    expect((await pinAutoRoute(h.env, scope, toolLoop(hard), AUTO_WATERFALL, true)).chain[0]).toBe('gpt-5.6-luna');
+    expect((await pinAutoRoute(h.env, scope, toolLoop(hard), AUTO_WATERFALL, true)).chain[0]).toBe('gpt-6-luna');
     expect(await pin.beforeAttempt('gpt-5.6-sol')).toBe(false);
     expect(await pin.beforeAttempt('claude-sonnet-5')).toBe(true);
     expect((await pinAutoRoute(h.env, scope, toolLoop(hard), AUTO_WATERFALL, true)).chain[0]).toBe('claude-sonnet-5');
@@ -183,12 +183,12 @@ describe('Auto handler policy and provider wiring', () => {
       expect((await invoke(hard)).headers.get('x-screenpipe-model')).toBe('gpt-5.6-sol');
       expect((await invoke(toolLoop(hard))).headers.get('x-screenpipe-model')).toBe('gpt-5.6-sol');
       expect(sent[1].messages.some((m: any) => m.role === 'tool')).toBe(true); // full context still reaches provider
-      expect((await invoke(hard, {})).headers.get('x-screenpipe-model')).toBe('gpt-5.6-luna');
-      expect((await invoke(toolLoop(hard), { autoRouteScope: scope, efficientOnly: true })).headers.get('x-screenpipe-model')).toBe('gpt-5.6-luna');
+      expect((await invoke(hard, {})).headers.get('x-screenpipe-model')).toBe('gpt-6-luna');
+      expect((await invoke(toolLoop(hard), { autoRouteScope: scope, efficientOnly: true })).headers.get('x-screenpipe-model')).toBe('gpt-6-luna');
       const secondScope = { ...scope, session: 'second-session' };
       await invoke(hard, { autoRouteScope: secondScope });
       h.env.ROUTER_MODE = 'off';
-      expect((await invoke(toolLoop(hard), { autoRouteScope: secondScope })).headers.get('x-screenpipe-model')).toBe('gpt-5.6-luna');
+      expect((await invoke(toolLoop(hard), { autoRouteScope: secondScope })).headers.get('x-screenpipe-model')).toBe('gpt-6-luna');
     } finally { provider.mockRestore(); }
   });
 });

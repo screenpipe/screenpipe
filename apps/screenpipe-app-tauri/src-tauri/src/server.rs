@@ -172,6 +172,9 @@ async fn handle_focus(
             payload.deep_link_url.as_deref(),
             payload.target.as_deref(),
         );
+    if !startup_handoff && crate::search_only::is_active() {
+        crate::headless::wake_from_tray(&state.app_handle);
+    }
     if startup_handoff {
         info!("autostart: ignored duplicate OS startup focus handoff");
     } else if payload.target.as_deref() == Some("browser_pairing") {
@@ -367,6 +370,11 @@ pub async fn run_server(app_handle: tauri::AppHandle, port: u16) {
     // localhost instead. Compiled out of every shipped build.
     #[cfg(feature = "e2e")]
     let app = app
+        .route("/e2e/search-only/state", axum::routing::get(e2e_search_only_state))
+        .route("/e2e/search-only/quit", axum::routing::post(e2e_search_only_quit))
+        .route("/e2e/search-only/reopen", axum::routing::post(e2e_search_only_reopen))
+        .route("/e2e/search-only/resume", axum::routing::post(e2e_search_only_resume))
+        .route("/e2e/search-only/restart", axum::routing::post(e2e_search_only_restart))
         .route("/e2e/updates/state", axum::routing::get(e2e_updates_state))
         .route("/e2e/updates/click", axum::routing::post(e2e_updates_click))
         .route(
@@ -651,6 +659,53 @@ async fn list_installed_apps_handler(State(_): State<ServerState>) -> impl IntoR
         *guard = Some((Instant::now(), apps.clone()));
     }
     Json(apps)
+}
+
+/// Content-free lifecycle state for the disposable E2E app.
+#[cfg(feature = "e2e")]
+async fn e2e_search_only_state(State(state): State<ServerState>) -> impl IntoResponse {
+    use tauri::Manager;
+    let app = &state.app_handle;
+    let recording = app.state::<crate::recording::RecordingState>();
+    Json(serde_json::json!({
+        "pid": std::process::id(),
+        "search_only": crate::search_only::is_active(),
+        "entering": crate::search_only::is_entering(),
+        "capture_intended": recording.capture_intended(),
+        "capture_running": recording.capture.lock().await.is_some(),
+        "webviews": app.webview_windows().keys().cloned().collect::<Vec<_>>(),
+        "keep_search_after_quit": crate::search_only::keep_after_quit(app),
+    }))
+}
+
+#[cfg(feature = "e2e")]
+async fn e2e_search_only_quit(State(state): State<ServerState>) -> impl IntoResponse {
+    // The same action chosen by the native Quit confirmation's first button.
+    crate::process_exit::request_app_quit(state.app_handle);
+    Json(serde_json::json!({"accepted": true}))
+}
+
+#[cfg(feature = "e2e")]
+async fn e2e_search_only_reopen(State(state): State<ServerState>) -> impl IntoResponse {
+    let app = state.app_handle.clone();
+    let scheduled = state.app_handle.run_on_main_thread(move || {
+        crate::headless::wake_from_tray(&app);
+        let _ = (crate::window::ShowRewindWindow::Home { page: None }).show(&app);
+    });
+    Json(serde_json::json!({"accepted": scheduled.is_ok()}))
+}
+
+#[cfg(feature = "e2e")]
+async fn e2e_search_only_resume(State(state): State<ServerState>) -> impl IntoResponse {
+    use tauri::Manager;
+    let result = crate::recording::start_capture(state.app_handle.state(), state.app_handle.clone()).await;
+    Json(serde_json::json!({"resumed": result.is_ok(), "error": result.err()}))
+}
+
+#[cfg(feature = "e2e")]
+async fn e2e_search_only_restart(State(state): State<ServerState>) -> impl IntoResponse {
+    let result = crate::updates::restart_for_update(state.app_handle, Some(10)).await;
+    Json(serde_json::json!({"result": result}))
 }
 
 /// Content-free updater state for the packaged e2e test: what the tray menu

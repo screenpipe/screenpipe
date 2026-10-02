@@ -1,0 +1,26 @@
+--- a/dist/core/agent-session.js
++++ b/dist/core/agent-session.js
+@@ -1753,15 +1753,21 @@
+             return this.agent.hasQueuedMessages();
+         }
+         catch (error) {
++            // screenpipe-compaction-failure-v1
++            const cancelled = Boolean(parentSignal?.aborted || this._autoCompactionAbortController?.signal.aborted);
++            // The summary request already exhausted Pi's bounded retry policy.
++            // Stop this run before another tool step re-enters the same failure.
++            // Original messages remain intact and a later prompt can retry.
++            if (!cancelled && parentSignal) this.agent.abort();
+             const errorMessage = error instanceof Error ? error.message : "compaction failed";
+             if (started) {
+                 this._emit({
+                     type: "compaction_end",
+                     reason,
+                     result: undefined,
+-                    aborted: false,
++                    aborted: cancelled,
+                     willRetry: false,
+-                    errorMessage: reason === "overflow"
++                    errorMessage: cancelled ? undefined : reason === "overflow"
+                         ? `Context overflow recovery failed: ${errorMessage}`
+                         : `Auto-compaction failed: ${errorMessage}`,
+                 });

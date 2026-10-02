@@ -144,6 +144,10 @@ impl ExternalMemorySyncScheduler {
             );
             sleep_cancellable(&running, STARTUP_DELAY).await;
             while running.load(Ordering::SeqCst) {
+                if screenpipe_core::background_work::is_suspended() {
+                    sleep_cancellable(&running, SCAN_INTERVAL).await;
+                    continue;
+                }
                 let outcomes = run_once(&db_clone, ss_clone.as_deref(), &dir_clone).await;
                 record_outcomes(&metrics, &outcomes);
                 metrics.last_tick_unix.store(now_unix(), Ordering::Relaxed);

@@ -227,6 +227,8 @@ export function RecentsSourceFilterLabel({
   source: RecentSource;
   label: string;
 }) {
+  const uiMessages = useMessages();
+
   return (
     <span className="flex min-w-0 flex-1 items-center gap-2">
       <Image
@@ -237,7 +239,7 @@ export function RecentsSourceFilterLabel({
         className="h-4 w-4 shrink-0 rounded-sm object-contain"
         unoptimized
       />
-      <span className="truncate">{label}</span>
+      <span className="truncate">{localizeDefinitions(label, uiMessages)}</span>
     </span>
   );
 }

@@ -572,6 +572,7 @@ pub struct OCREntry {
 
 #[derive(OaSchema, Debug, Clone)]
 pub struct AudioEntry {
+    pub captured_at: Option<DateTime<Utc>>,
     pub transcription: String,
     pub device_name: String,
     pub is_input: bool,

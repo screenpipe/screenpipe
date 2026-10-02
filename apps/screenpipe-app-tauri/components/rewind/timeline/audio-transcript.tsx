@@ -241,7 +241,7 @@ export function AudioTranscript({
 					device.audio.forEach((audio) => {
 						allAudio.push({
 							...audio,
-							timestamp: frameTime,
+							timestamp: new Date(audio.captured_at || frameTime),
 						});
 					});
 				});

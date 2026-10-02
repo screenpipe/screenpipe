@@ -1,0 +1,149 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { Miniflare } from 'miniflare';
+import runtime from 'miniflare/package.json';
+if (runtime.version !== '3.20250718.3') throw new Error('Grader requires miniflare 3.20250718.3');
+import type { Env } from '../types';
+import { logCost } from '../services/cost-tracker';
+const COST_DAILY_SCHEMA = `CREATE TABLE cost_daily (
+	date TEXT NOT NULL, tier TEXT NOT NULL, provider TEXT NOT NULL,
+	model TEXT NOT NULL, endpoint TEXT NOT NULL, stream INTEGER NOT NULL,
+	router_tier TEXT NOT NULL, requests INTEGER NOT NULL DEFAULT 0,
+	input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+	cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+	cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+	estimated_cost_usd REAL NOT NULL DEFAULT 0,
+	latency_ms_sum INTEGER NOT NULL DEFAULT 0,
+	latency_samples INTEGER NOT NULL DEFAULT 0,
+	updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+	PRIMARY KEY (date, tier, provider, model, endpoint, stream, router_tier)
+) WITHOUT ROWID`;
+
+const SCHEMA = [
+	`CREATE TABLE usage (
+		device_id TEXT PRIMARY KEY, user_id TEXT, daily_count INTEGER DEFAULT 0,
+		last_reset TEXT NOT NULL, tier TEXT DEFAULT 'anonymous',
+		created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')),
+		cost_day TEXT, daily_cost_usd REAL NOT NULL DEFAULT 0
+	)`,
+	COST_DAILY_SCHEMA,
+	`CREATE TABLE hosted_ai_settlements (
+		settlement_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
+		cost_micro_cents INTEGER NOT NULL CHECK (cost_micro_cents >= 0),
+		day TEXT NOT NULL, month_period TEXT NOT NULL, hour TEXT NOT NULL,
+		lane TEXT NOT NULL CHECK (lane IN ('interactive', 'background')),
+		hosted_ai_trial INTEGER NOT NULL CHECK (hosted_ai_trial IN (0, 1)),
+		ledger_epoch TEXT NOT NULL, applied_at TEXT,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	) WITHOUT ROWID`,
+];
+
+function entry(settlementId: string, overrides: Record<string, unknown> = {}) {
+	return {
+		settlement_id: settlementId,
+		device_id: 'settlement-test-account',
+		tier: 'business',
+		provider: 'anthropic',
+		model: 'claude-sonnet-5',
+		input_tokens: 1_000,
+		output_tokens: 100,
+		cache_read_tokens: 50,
+		cache_creation_tokens: 25,
+		estimated_cost_usd: 0.12345678,
+		endpoint: '/v1/chat/completions',
+		stream: true,
+		lane: 'interactive' as const,
+		latency_ms: 250,
+		...overrides,
+	};
+}
+
+describe('hosted AI settlement ledger against workerd D1', () => {
+	let miniflare: Miniflare;
+	let env: Env;
+
+	beforeEach(async () => {
+		miniflare = new Miniflare({
+			compatibilityDate: '2026-01-01',
+			d1Databases: { DB: 'settlement-ledger-test' },
+			modules: true,
+			script: 'export default { fetch() { return new Response("ok"); } };',
+		});
+		const db = await miniflare.getD1Database('DB');
+		await db.batch(SCHEMA.map((statement) => db.prepare(statement)));
+		env = { DB: db as unknown as D1Database } as Env;
+	});
+
+	afterEach(async () => {
+		await miniflare.dispose();
+	});
+
+
+ const amount = async (id = 'settlement-test-account') => (await env.DB.prepare('SELECT daily_cost_usd AS cost FROM usage WHERE device_id = ?').bind(id).first())?.cost ?? 0;
+ const aggregate = async () => await env.DB.prepare('SELECT SUM(requests) AS requests, SUM(estimated_cost_usd) AS cost FROM cost_daily').first();
+ it('concurrent replay charges account and telemetry once', async () => {
+   expect((await Promise.all(Array.from({length: 12}, () => logCost(env, entry('same'))))).every(Boolean)).toBe(true);
+   expect(await amount()).toBeCloseTo(0.12345678, 8);
+   expect((await aggregate())?.requests).toBe(1);
+   expect((await aggregate())?.cost).toBeCloseTo(0.12345678, 8);
+ });
+ it('distinct requests retain both charges', async () => {
+   expect(await logCost(env, entry('one'))).toBe(true);
+   expect(await logCost(env, entry('two'))).toBe(true);
+   expect(await amount()).toBeCloseTo(0.24691356, 8);
+   expect((await aggregate())?.requests).toBe(2);
+ });
+ it('changed cost cannot reuse an applied identity', async () => {
+   expect(await logCost(env, entry('cost'))).toBe(true);
+   expect(await logCost(env, entry('cost', {estimated_cost_usd: 0.5}))).toBe(false);
+   expect(await amount()).toBeCloseTo(0.12345678, 8);
+   expect((await aggregate())?.requests).toBe(1);
+ });
+ it('changed ownership cannot reuse an applied identity', async () => {
+   expect(await logCost(env, entry('owner'))).toBe(true);
+   expect(await logCost(env, entry('owner', {device_id: 'other-synthetic-account'}))).toBe(false);
+   expect(await amount('other-synthetic-account')).toBe(0);
+   expect(await amount()).toBeCloseTo(0.12345678, 8);
+   expect((await aggregate())?.requests).toBe(1);
+ });
+ it('dependent write failure leaves no charge and supports retry', async () => {
+   await env.DB.prepare('DROP TABLE cost_daily').run();
+   expect(await logCost(env, entry('retry'))).toBe(false);
+   expect(await amount()).toBe(0);
+   await env.DB.prepare(COST_DAILY_SCHEMA).run();
+   expect(await logCost(env, entry('retry'))).toBe(true);
+   expect(await amount()).toBeCloseTo(0.12345678,8);
+   expect((await aggregate())?.requests).toBe(1);
+ });
+
+ it('an ambiguous committed response can be retried without a second charge', async () => {
+   const db = env.DB; let fail = true;
+   const unreliable = { DB: {
+     prepare: db.prepare.bind(db),
+     batch: async (...args) => { const result = await db.batch(...args); if (fail) { fail = false; throw new Error('Synthetic lost commit acknowledgement'); } return result; },
+   }} as Env;
+   expect(await logCost(unreliable, entry('ack'))).toBe(false);
+   expect(await logCost(env, entry('ack'))).toBe(true);
+   expect(await amount()).toBeCloseTo(0.12345678,8);
+   expect((await aggregate())?.requests).toBe(1);
+ });
+ it('zero cost replay records one request without inventing spend', async () => {
+   for(let i=0;i<2;i++) expect(await logCost(env,entry('zero',{estimated_cost_usd:0}))).toBe(true);
+   expect(await amount()).toBe(0); expect((await aggregate())?.requests).toBe(1);
+ });
+ it('legacy calls without settlement identity retain independent accounting', async () => {
+   for(let i=0;i<2;i++) expect(await logCost(env,entry(undefined))).toBe(true);
+   expect(await amount()).toBeCloseTo(0.24691356,8); expect((await aggregate())?.requests).toBe(2);
+ });
+ it('unbudgeted calls retain telemetry without charging the account', async () => {
+   for(let i=0;i<2;i++) expect(await logCost(env,entry('unbudgeted',{budgeted:false}))).toBe(true);
+   expect(await amount()).toBe(0); expect((await aggregate())?.requests).toBe(2);
+ });
+ it('speech accounting preserves its separate repeated-charge path', async () => {
+   for(let i=0;i<2;i++) expect(await logCost(env,entry('speech',{transcription_budgeted:true}))).toBe(true);
+   expect(await amount()).toBe(0);
+   expect(await amount('hosted-transcription-cost:day:v1:settlement-test-account')).toBeCloseTo(0.24691356,8);
+   expect((await aggregate())?.requests).toBe(2);
+ });
+});

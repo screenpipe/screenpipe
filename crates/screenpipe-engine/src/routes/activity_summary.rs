@@ -97,6 +97,9 @@ pub struct ActivitySummaryQuery {
     /// need to know whether parsed evidence exists without loading excerpts.
     #[serde(default)]
     pub include_parsed_count: bool,
+    /// Include up to ten recent starred intervals. Omitted for app/data-restricted reads.
+    #[serde(default = "default_true")]
+    pub include_starred: bool,
 
     /// Cap on combined screen+audio snippets returned. Default 8, max 12.
     #[serde(default = "default_max_snippets")]
@@ -241,6 +244,10 @@ pub struct ActivityGuidance {
 
 #[derive(Serialize, OaSchema)]
 pub struct ActivitySummaryResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) starred_sessions: Option<Vec<super::starred::StarredSession>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) starred_sessions_has_more: Option<bool>,
     // --- existing fields (stable schema for Receipts panel + AI summary) ---
     /// Per-app usage. Omitted when `include_apps=false`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -310,10 +317,11 @@ pub struct ActivitySummaryResponse {
 /// `include_windows=false`, and especially `include_key_texts=false` (the
 /// heaviest field) — each omits its field from the response when disabled.
 #[oasgen]
-pub async fn get_activity_summary(
+pub(crate) async fn get_activity_summary(
     State(state): State<Arc<AppState>>,
     Query(mut query): Query<ActivitySummaryQuery>,
     api_client: ExplicitApiClient,
+    super::search::OptionalPipePerms(perms): super::search::OptionalPipePerms,
 ) -> Result<JsonResponse<ActivitySummaryResponse>, (StatusCode, JsonResponse<Value>)> {
     if query.start_time >= query.end_time {
         return Err((
@@ -388,6 +396,43 @@ pub async fn get_activity_summary(
         }
     );
 
+    let starred = if query.include_starred
+        && query.app_name.is_none()
+        && !perms.as_ref().is_some_and(|p| p.has_data_restrictions())
+    {
+        match state
+            .db
+            .list_starred_sessions(
+                &super::starred::stamp(query.start_time),
+                &super::starred::stamp(query.end_time),
+                11,
+                0,
+            )
+            .await
+        {
+            Ok(mut rows) => {
+                let cutoff = state
+                    .history_access
+                    .cutoff(Utc::now())
+                    .map(super::starred::stamp);
+                rows.retain(|s| cutoff.as_ref().is_none_or(|c| &s.start >= c));
+                let has_more = rows.len() > 10;
+                let rows = rows.into_iter().take(10).map(Into::into).collect();
+                Some((rows, has_more))
+            }
+            Err(e) => {
+                error!("activity summary: starred intervals failed: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let (starred_sessions, starred_sessions_has_more) = match starred {
+        Some((rows, more)) => (Some(rows), Some(more)),
+        None => (None, None),
+    };
+
     let snippets_for_status = snippets_opt.as_deref().unwrap_or(&[]);
     let memories_for_status = memories_opt.as_deref().unwrap_or(&[]);
     let data_status =
@@ -416,6 +461,8 @@ pub async fn get_activity_summary(
     };
 
     Ok(JsonResponse(ActivitySummaryResponse {
+        starred_sessions,
+        starred_sessions_has_more,
         apps: query.include_apps.then_some(summary_core.apps),
         windows: query.include_windows.then_some(summary_core.windows),
         key_texts: query.include_key_texts.then_some(summary_core.key_texts),
@@ -459,6 +506,8 @@ fn empty_activity_summary_response(query: &ActivitySummaryQuery) -> ActivitySumm
         "not_requested"
     };
     ActivitySummaryResponse {
+        starred_sessions: None,
+        starred_sessions_has_more: None,
         apps: query.include_apps.then(Vec::new),
         windows: query.include_windows.then(Vec::new),
         key_texts: query.include_key_texts.then(Vec::new),
@@ -512,16 +561,21 @@ struct SummaryCore {
 /// may not have that link, so the second fallback uses the latest named UI event
 /// strictly inside the same idle window used by the activity-duration math.
 fn resolved_frames_cte(start: &str, end: &str) -> String {
+    // Point lookups keep the logical ui_events view selective on hybrid
+    // storage. A LEFT JOIN can materialize that entire view, decoding archived
+    // window titles and URLs even for events outside the requested range.
+    // IDs, timestamps, frame links and app names remain resident; select IDs
+    // from main so the archive view cannot interfere with index ordering.
     format!(
         "WITH frame_fallback AS MATERIALIZED ( \
            SELECT f.id, f.timestamp, f.app_name, f.window_name, f.browser_url, \
              f.focused, f.document_path, \
              CASE WHEN f.app_name IS NULL OR f.app_name = '' THEN COALESCE( \
-               (SELECT u.id FROM ui_events u \
+               (SELECT u.id FROM main.ui_events u \
                 WHERE u.frame_id = f.id \
                   AND u.app_name IS NOT NULL AND u.app_name != '' \
                 ORDER BY u.timestamp DESC, u.id DESC LIMIT 1), \
-               (SELECT u.id FROM ui_events u \
+               (SELECT u.id FROM main.ui_events u \
                 WHERE u.timestamp <= f.timestamp \
                   AND u.timestamp > datetime(f.timestamp, '-{IDLE_CAP_SECS} seconds') \
                   AND u.app_name IS NOT NULL AND u.app_name != '' \
@@ -531,19 +585,21 @@ fn resolved_frames_cte(start: &str, end: &str) -> String {
            WHERE f.timestamp BETWEEN '{}' AND '{}' \
          ), resolved_frames AS MATERIALIZED ( \
            SELECT f.id, f.timestamp, \
-             COALESCE(NULLIF(f.app_name, ''), NULLIF(u.app_name, '')) AS app_name, \
+             COALESCE(NULLIF(f.app_name, ''), \
+               (SELECT NULLIF(u.app_name, '') FROM ui_events u WHERE u.id = f.fallback_event_id)) AS app_name, \
              CASE WHEN f.app_name IS NULL OR f.app_name = '' \
-               THEN NULLIF(u.window_title, '') ELSE NULLIF(f.window_name, '') END AS window_name, \
+               THEN (SELECT NULLIF(u.window_title, '') FROM ui_events u WHERE u.id = f.fallback_event_id) \
+               ELSE NULLIF(f.window_name, '') END AS window_name, \
              CASE WHEN f.app_name IS NULL OR f.app_name = '' \
-               THEN NULLIF(u.browser_url, '') ELSE NULLIF(f.browser_url, '') END AS browser_url, \
+               THEN (SELECT NULLIF(u.browser_url, '') FROM ui_events u WHERE u.id = f.fallback_event_id) \
+               ELSE NULLIF(f.browser_url, '') END AS browser_url, \
              f.focused, f.document_path, \
              CASE \
                WHEN f.app_name IS NOT NULL AND f.app_name != '' THEN 'frame' \
-               WHEN u.app_name IS NOT NULL AND u.app_name != '' THEN 'ui_event' \
+               WHEN f.fallback_event_id IS NOT NULL THEN 'ui_event' \
                ELSE NULL \
              END AS attribution_source \
            FROM frame_fallback f \
-           LEFT JOIN ui_events u ON u.id = f.fallback_event_id \
          )",
         sql_escape(start),
         sql_escape(end)
@@ -593,6 +649,10 @@ fn key_texts_query(resolved_frames_cte: &str, app_filter_f: &str) -> String {
 #[cfg(test)]
 #[path = "activity_summary_key_text_tests.rs"]
 mod key_text_tests;
+
+#[cfg(test)]
+#[path = "activity_summary_hybrid_tests.rs"]
+mod hybrid_tests;
 
 async fn collect_summary_core(
     db: &DatabaseManager,
@@ -1769,6 +1829,7 @@ mod tests {
             include_snippets: true,
             include_guidance: true,
             include_parsed_count: false,
+            include_starred: true,
             max_snippets: 8,
             max_snippet_chars: 500,
             max_memories: 5,
@@ -2007,6 +2068,7 @@ mod db_tests {
             include_snippets: false,
             include_guidance: false,
             include_parsed_count: false,
+            include_starred: true,
             max_snippets: 8,
             max_snippet_chars: 500,
             max_memories: 5,
@@ -2987,6 +3049,8 @@ mod include_flag_tests {
             timestamp: "2026-06-02T10:00:30Z".to_string(),
         }];
         ActivitySummaryResponse {
+            starred_sessions: None,
+            starred_sessions_has_more: None,
             apps: include_apps.then_some(apps),
             windows: include_windows.then_some(windows),
             key_texts: include_key_texts.then_some(key_texts),

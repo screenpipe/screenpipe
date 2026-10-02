@@ -16,6 +16,46 @@ use std::path::{Path, PathBuf};
 mod tests {
     use super::*;
 
+    #[test]
+    fn migration_search_term_uses_fts_safe_unicode_words() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE VIRTUAL TABLE probe USING fts5(text, tokenize='unicode61')")
+            .unwrap();
+        for (text, expected) in [
+            ("plain text", Some("\"plain\"")),
+            ("\0\0├───┼───── foo", Some("\"foo\"")),
+            ("foo\0bar", Some("\"foo\"")),
+            ("┃", None),
+            ("\0├───┼─────", None),
+            ("\u{0345}\u{0345}\u{0345}", None),
+            ("hello\"world", Some("\"hello\"")),
+            ("AND OR NOT", Some("\"AND\"")),
+            ("שלום עולם", Some("\"שלום\"")),
+            ("東京", Some("\"東京\"")),
+            ("plainé", Some("\"plainé\"")),
+            ("cafe\u{301}", Some("\"cafe\"")),
+            ("123", Some("\"123\"")),
+            ("a an", None),
+            ("", None),
+        ] {
+            let term = migration_search_term(text);
+            assert_eq!(term.as_deref(), expected, "{text:?}");
+            if let Some(term) = term {
+                db.execute("INSERT INTO probe(text) VALUES(?)", [text])
+                    .unwrap();
+                let found: i64 = db
+                    .query_row(
+                        "SELECT count(*) FROM probe WHERE probe MATCH ?",
+                        [term],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(found, 1, "probe must find its source text: {text:?}");
+                db.execute("DELETE FROM probe", []).unwrap();
+            }
+        }
+    }
+
     // Frozen pre-optimization receipt reader/codec: an independent oracle for
     // old journals and the paired benchmark, never used by production.
     async fn legacy_receipt(db: &DatabaseManager, table: &str) -> TableParity {
@@ -758,11 +798,11 @@ async fn migrate_observed(
             let frozen = source.begin_immediate_with_retry().await?;
             verify_integrity(&source.pool).await?;
             let receipts = table_receipts(&source, None).await?;
+            super::diagnostics::stage("sampling_source_search");
             let terms: Vec<String> = sqlx::query_scalar("SELECT full_text FROM frames WHERE full_text IS NOT NULL AND id IN ((SELECT min(id) FROM frames),(SELECT max(id) FROM frames))").fetch_all(&source.pool).await?;
             let mut searches = Vec::new();
             for text in terms {
-                if let Some(term) = text.split_whitespace().find(|t| t.len()>2) {
-                    let term = format!("\"{}\"",term.replace('"',"\"\""));
+                if let Some(term) = migration_search_term(&text) {
                     let ids = sqlx::query_scalar(MIGRATION_SEARCH).bind(&term).fetch_all(&source.pool).await?;
                     searches.push((term,ids));
                 }
@@ -1045,6 +1085,17 @@ async fn migrate_observed(
 }
 
 const MIGRATION_SEARCH: &str = "SELECT frames.id FROM frames JOIN frames_fts ON frames_fts.rowid=frames.id WHERE frames_fts MATCH ? ORDER BY frames.timestamp DESC,frames.id DESC LIMIT 32";
+
+fn migration_search_term(text: &str) -> Option<String> {
+    // Controls can terminate an FTS query, and diagram glyphs are not words.
+    // Keep Unicode letters/numbers so non-Latin history retains search coverage.
+    static WORD: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"[\p{L}\p{N}]+").unwrap());
+    WORD.find_iter(text)
+        .map(|word| word.as_str())
+        .find(|word| word.len() > 2)
+        .map(|word| format!("\"{word}\""))
+}
 
 async fn resume_legacy_migration(
     root: &Path,

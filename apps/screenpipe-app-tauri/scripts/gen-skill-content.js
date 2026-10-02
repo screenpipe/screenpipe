@@ -12,6 +12,7 @@
 
 import { readFile, writeFile, access, mkdir } from 'fs/promises'
 import path from 'path'
+import { readStarterSkills } from '../../../scripts/lib/skill-bundle.mjs'
 
 const repoRoot = path.resolve(__dirname, '../../..')
 const outFile = path.resolve(__dirname, '../lib/generated/screenpipe-skills.ts')
@@ -59,13 +60,7 @@ async function main() {
 		)
 	}
 
-	const registry = await readFile(path.join(repoRoot, 'crates/screenpipe-core/src/starter_skills.rs'), 'utf8')
-	const starterNames = [...registry.matchAll(/"(screenpipe-[^"]+)",\s*include_str!\(/g)].map(match => match[1]).sort()
-	if (!starterNames.length) throw new Error('starter skill registry is empty')
-	const starters = await Promise.all(starterNames.map(async name => {
-		const md = await readFile(path.join(skillsRoot, name, 'SKILL.md'), 'utf8')
-		return { name, description: md.match(/^description: "(.*)"$/m)?.[1] ?? name }
-	}))
+	const starters = (await readStarterSkills(repoRoot)).map(({ name, description }) => ({ name, description }))
 	body += `export const SCREENPIPE_STARTER_SKILLS = ${JSON.stringify(starters, null, 2)} as const;\n`
 	await mkdir(path.dirname(outFile), { recursive: true })
 	await writeFile(outFile, `${HEADER}\n${body}`, 'utf8')

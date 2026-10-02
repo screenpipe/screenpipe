@@ -1,0 +1,34 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import { test, expect } from 'bun:test';
+import { selectOrderedSessions } from './lib/stores/chat-store';
+
+const epoch = 1700000000000;
+function row(id: string, message: Record<string, unknown> = {}, fields: Record<string, unknown> = {}) {
+  return {id, title: `Title ${id}`, kind: 'chat', status: 'idle', pinned: false,
+    hidden: false, draft: false, createdAt: epoch, updatedAt: epoch + 100,
+    lastUserMessageAt: epoch, messageCount: 2,
+    messages: [{id: 'shared-message', role: 'user', content: 'summarize this', timestamp: epoch, ...message},
+      {id: id + '-reply', role: 'assistant', content: 'answer for ' + id, timestamp: epoch + 10}], ...fields};
+}
+function assertRows(rows: ReturnType<typeof row>[], ids: string[]) {
+  const state = {sessions: Object.fromEntries(rows.map(r => [r.id, r]))};
+  const snapshot = JSON.stringify(state);
+  const actual = selectOrderedSessions(state as any);
+  expect(actual.map(r => r.id).sort()).toEqual([...ids].sort());
+  for (const value of actual) expect(value).toEqual(state.sessions[value.id]);
+  expect(JSON.stringify(state)).toBe(snapshot);
+}
+
+test('separate sends with the same text stay visible', () => assertRows([row('one', {id:'send-a'}), row('two', {id:'send-b', timestamp: epoch+1})], ['one','two']));
+test('different message ids at the same time stay visible', () => assertRows([row('one', {id:'send-a'}), row('two', {id:'send-b'})], ['one','two']));
+test('same message id at different times stays visible', () => assertRows([row('one'), row('two', {timestamp:epoch+1})], ['one','two']));
+test('legacy missing message ids stay visible', () => assertRows([row('one', {id:undefined}), row('two', {id:undefined})], ['one','two']));
+test('legacy missing message timestamps stay visible', () => assertRows([row('one', {timestamp:undefined}), row('two', {timestamp:undefined})], ['one','two']));
+test('copies of the same message still collapse to the completed reply', () => assertRows([row('ghost', {}, {messages:[{id:'shared-message',role:'user',content:'summarize this',timestamp:epoch},{role:'assistant',content:'Processing...'}]}), row('real')], ['real']));
+test('equivalent wrappers still collapse', () => assertRows([row('real'), row('ghost', {content:'<connections_context>\nsynthetic data\n</connections_context>\n\nsummarize this'}, {messageCount:1,messages:[{id:'shared-message',role:'user',content:'<connections_context>\nsynthetic data\n</connections_context>\n\nsummarize this',timestamp:epoch}]})], ['real']));
+test('different text with matching metadata stays visible', () => assertRows([row('one'), row('two', {content:'a different question'})], ['one','two']));
+test('separate pipe runs stay visible', () => assertRows([row('one', {}, {kind:'pipe-run'}), row('two', {}, {kind:'pipe-run'})], ['one','two']));
+test('branch sharing its parent opener stays visible', () => assertRows([row('one'), row('two', {}, {branchedFrom:'one'})], ['one','two']));
+test('copies outside the existing thirty-minute window stay visible', () => assertRows([row('one'), row('two', {}, {createdAt:epoch+31*60*1000})], ['one','two']));
+test('visible copy survives a more complete hidden twin', () => assertRows([row('hidden', {}, {hidden:true}), row('visible', {}, {messageCount:1,messages:[{id:'shared-message',role:'user',content:'summarize this',timestamp:epoch}]})], ['visible']));

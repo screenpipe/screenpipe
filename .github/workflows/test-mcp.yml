@@ -62,6 +62,18 @@ jobs:
       - name: Vitest
         run: bun run test
 
+      # installers.test.ts builds, unpacks, and runs the local extension against
+      # a synthetic API. Make the exact checked artifacts available for review.
+      - name: Upload tested plugin installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenpipe-mcp-installers
+          if-no-files-found: error
+          path: |
+            packages/screenpipe-mcp/installers/screenpipe-local.mcpb
+            packages/screenpipe-mcp/installers/screenpipe-cloud.zip
+            packages/screenpipe-mcp/installers/SUBMISSION.md
+
       - name: Pack contents include the gateway config module
         # npm 0.18.15 shipped with NO team-config in the tarball, so every
         # `team-*` tool 401'd against a customer gateway. The version bump alone

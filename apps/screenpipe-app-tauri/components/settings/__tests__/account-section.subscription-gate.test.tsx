@@ -28,13 +28,15 @@ import {
 } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({
-  state: { user: null as any },
+  state: { user: null as any, dataSyncEnabled: false },
   managed: false,
   managedAuthenticated: true,
   updateSettings: vi.fn().mockResolvedValue(undefined),
   loadUser: vi.fn().mockResolvedValue(undefined),
   openLoginWindow: vi.fn().mockResolvedValue(undefined),
   piUpdateConfig: vi.fn().mockResolvedValue(undefined),
+  getCloudToken: vi.fn().mockResolvedValue("test-cloud-token"),
+  dataSyncFetch: vi.fn(),
   capture: vi.fn(),
   openUrl: vi.fn().mockResolvedValue(undefined),
   eventHandlers: new Map<string, (event: any) => unknown>(),
@@ -54,6 +56,9 @@ vi.mock("@/lib/hooks/use-settings", () => ({
       pipeSyncEnabled: false,
       memoriesSyncEnabled: false,
       connectionSyncEnabled: false,
+      deviceId: "test-device-id",
+      dataSyncEnabled: mocks.state.dataSyncEnabled,
+      dataSyncDeviceName: "Work laptop",
     },
     updateSettings: mocks.updateSettings,
     loadUser: mocks.loadUser,
@@ -76,11 +81,15 @@ vi.mock("@/lib/utils/tauri", () => ({
   commands: {
     openLoginWindow: mocks.openLoginWindow,
     piUpdateConfig: mocks.piUpdateConfig,
+    getCloudToken: mocks.getCloudToken,
   },
 }));
 
 vi.mock("@/components/ui/use-toast", () => ({ toast: vi.fn() }));
 vi.mock("@/lib/api", () => ({ localFetch: vi.fn() }));
+vi.mock("@/lib/http/tauri-fetch", () => ({
+  tauriFetchWithDeadline: mocks.dataSyncFetch,
+}));
 vi.mock("posthog-js", () => ({ default: { capture: mocks.capture } }));
 
 // Tauri plugins the effect wires up on mount — keep them inert.
@@ -138,6 +147,8 @@ describe("AccountSection subscription/login gating", () => {
     vi.unstubAllEnvs();
     mocks.eventHandlers.clear();
     mocks.state.user = null;
+    mocks.state.dataSyncEnabled = false;
+    mocks.dataSyncFetch.mockReset();
     mocks.managed = false;
     mocks.managedAuthenticated = true;
   });
@@ -450,6 +461,7 @@ describe("AccountSection subscription/login gating", () => {
 
     expect(loginStatus()).toContain("logged in as basic@screenpipe.test");
     expect(screen.queryByTestId(ACTIVE_CARD)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("account-data-sync-setting")).not.toBeInTheDocument();
     // Branch-3 named-plan badge still renders for the paying Basic user.
     expect(screen.getByText("Active")).toBeInTheDocument();
     expect(screen.getByTestId("account-plan-standard")).toHaveAttribute(
@@ -549,5 +561,116 @@ describe("AccountSection subscription/login gating", () => {
     expect(loginStatus()).toContain("not logged in");
     expect(screen.queryByTestId(ACTIVE_CARD)).not.toBeInTheDocument();
     expect(screen.getByText(/sign in to screenpipe/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("account-data-sync-setting")).not.toBeInTheDocument();
+  });
+
+  function signInForDataSync() {
+    mocks.state.user = {
+      id: "u1",
+      token: "tok",
+      cloud_subscribed: true,
+      subscription_plan: "pro",
+      app_entitled: true,
+      entitlement: {
+        active: true,
+        plan: "pro",
+        source: "subscription",
+        checked_at: new Date().toISOString(),
+      },
+    };
+  }
+
+  it("enables account consent and this device from the visible switch before saving locally", async () => {
+    signInForDataSync();
+    let finishDevice!: (response: Response) => void;
+    mocks.dataSyncFetch
+      .mockResolvedValueOnce(new Response("{}"))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => {
+        finishDevice = resolve;
+      }));
+    render(<AccountSection />);
+    const sync = screen.getByRole("switch", { name: "Sync this device" });
+    expect(sync).toBeVisible();
+    expect(sync.closest("details")).toBeNull();
+    expect(mocks.dataSyncFetch).not.toHaveBeenCalled();
+    fireEvent.click(sync);
+
+    await waitFor(() => expect(mocks.dataSyncFetch).toHaveBeenCalledTimes(2));
+    expect(mocks.dataSyncFetch).toHaveBeenNthCalledWith(1,
+      expect.stringMatching(/\/api\/user\/data-sync$/),
+      expect.objectContaining({
+        method: "PATCH",
+        headers: expect.objectContaining({ Authorization: "Bearer test-cloud-token" }),
+        body: JSON.stringify({ allow_data_sync: true }),
+      }),
+    );
+    expect(mocks.dataSyncFetch).toHaveBeenNthCalledWith(2,
+      expect.stringMatching(/\/api\/user\/data-sync\/ingest$/),
+      expect.objectContaining({
+        method: "PATCH",
+        headers: expect.objectContaining({
+          "X-Screenpipe-Device-Id": "test-device-id",
+          "X-Screenpipe-Device-Label": "Work laptop",
+        }),
+        body: JSON.stringify({ enabled: true }),
+      }),
+    );
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    expect(sync).toBeDisabled();
+    fireEvent.click(sync);
+    expect(mocks.dataSyncFetch).toHaveBeenCalledTimes(2);
+
+    await act(async () => finishDevice(new Response("{}")));
+    expect(mocks.updateSettings).toHaveBeenCalledWith({
+      dataSyncEnabled: true,
+      dataSyncDeviceName: "Work laptop",
+      dataSyncAccountId: "u1",
+      dataSyncEnabledAt: expect.any(String),
+    });
+    expect(mocks.openUrl).not.toHaveBeenCalled();
+  });
+
+  it.each(["account", "device"])("keeps sync off after a %s save failure and retries in the app", async (stage) => {
+    signInForDataSync();
+    if (stage === "device") mocks.dataSyncFetch.mockResolvedValueOnce(new Response("{}"));
+    mocks.dataSyncFetch.mockResolvedValueOnce(new Response(
+      JSON.stringify({ error: "sync service unavailable" }), { status: 503 },
+    ));
+    render(<AccountSection />);
+    fireEvent.click(screen.getByRole("switch", { name: "Sync this device" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not update syncing on this device");
+    expect(screen.getByRole("switch", { name: "Sync this device" })).toHaveAttribute("aria-checked", "false");
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    expect(mocks.dataSyncFetch).toHaveBeenCalledTimes(stage === "account" ? 1 : 2);
+
+    mocks.dataSyncFetch.mockImplementation(async () => new Response("{}"));
+    fireEvent.click(screen.getByRole("button", { name: "Try again", exact: true }));
+    await waitFor(() => expect(mocks.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ dataSyncEnabled: true }),
+    ));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("disables only this device and leaves deletion on the website", async () => {
+    signInForDataSync();
+    mocks.state.dataSyncEnabled = true;
+    mocks.dataSyncFetch.mockImplementation(async () => new Response(JSON.stringify({ devices: [] })));
+    render(<AccountSection />);
+    await screen.findByText("Waiting for the first upload. Keep Screenpipe running.");
+    mocks.dataSyncFetch.mockClear();
+    fireEvent.click(screen.getByRole("switch", { name: "Sync this device" }));
+    await waitFor(() => expect(mocks.updateSettings).toHaveBeenCalledWith({
+      dataSyncEnabled: false,
+      dataSyncDeviceName: "Work laptop",
+      dataSyncAccountId: "",
+    }));
+    expect(mocks.dataSyncFetch).toHaveBeenCalledTimes(1);
+    expect(mocks.dataSyncFetch).toHaveBeenCalledWith(
+      expect.stringMatching(/\/api\/user\/data-sync\/ingest$/),
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ enabled: false }) }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Manage or delete cloud data on website" }));
+    await waitFor(() => expect(mocks.openUrl).toHaveBeenCalledWith("https://screenpipe.com/account"));
+    expect(mocks.dataSyncFetch).toHaveBeenCalledTimes(1);
   });
 });

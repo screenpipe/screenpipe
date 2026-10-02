@@ -610,54 +610,47 @@ impl AudioStream {
     }
 
     pub async fn stop(&self) -> Result<()> {
-        self.is_disconnected.store(true, Ordering::Relaxed);
+        self.stop_with_timeout(std::time::Duration::from_secs(3))
+            .await
+    }
 
-        // PulseAudio path: the capture thread checks is_disconnected and exits
-        // on its own — no stream_control message needed.
+    async fn stop_with_timeout(&self, timeout: std::time::Duration) -> Result<()> {
+        self.is_disconnected.store(true, Ordering::Relaxed);
+        let deadline = tokio::time::Instant::now() + timeout;
+
         #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
         {
-            // Sources without a cpal control channel (e.g. `from_wav`,
-            // `from_sender_for_test`) drop the receiver, so the send/recv
-            // here will error. That's expected — `is_disconnected` already
-            // signals the playback task to exit. Don't propagate this error.
+            // Queue teardown without an unbounded acknowledgement wait. The
+            // worker handle below proves native pause/drop actually completed.
             let (control, rx) = StreamControl::stop(StopMode::Immediate);
             if self.stream_control.send(control).is_ok() {
-                let _ = rx.await;
+                tokio::time::timeout_at(deadline, rx)
+                    .await
+                    .map_err(|_| {
+                        anyhow::anyhow!("audio device {} teardown timed out", self.device)
+                    })?
+                    .ok();
             }
         }
 
-        if let Some(thread_arc) = self.stream_thread.as_ref() {
-            let thread_arc_clone = thread_arc.clone();
-            tokio::task::spawn_blocking(move || {
-                let mut thread_guard = thread_arc_clone.blocking_lock();
-                if let Some(join_handle) = thread_guard.take() {
-                    // Wait up to 3s for the playback task to exit naturally so cpal
-                    // stream.pause()+drop() can run before the stream resources go
-                    // away — aborting mid-callback is what races the CoreAudio IO
-                    // thread into UAF (issue #3261). If the task is wedged in cpal
-                    // / CoreAudio though, fall back to abort() so stop() can't hang
-                    // forever on quit/device-switch.
-                    let deadline =
-                        std::time::Instant::now() + std::time::Duration::from_secs(3);
-                    while !join_handle.is_finished()
-                        && std::time::Instant::now() < deadline
-                    {
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                    }
-                    if !join_handle.is_finished() {
-                        // Fully-qualified — `use tracing::{error, warn}` above
-                        // is cfg-gated to non-pulseaudio builds, so on linux+
-                        // pulseaudio CI (Release CLI) `warn!` is out of scope.
-                        tracing::warn!(
-                            "audio stream thread did not exit within 3s; aborting (potential cpal/CoreAudio wedge)"
-                        );
-                        join_handle.abort();
-                    }
-                }
-            })
-            .await?;
+        if let Some(thread) = self.stream_thread.as_ref() {
+            let mut worker = tokio::time::timeout_at(deadline, thread.lock())
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("audio device {} teardown is still pending", self.device)
+                })?;
+            if let Some(handle) = worker.as_mut() {
+                // Poll by mutable reference: timing out must retain ownership.
+                // Aborting spawn_blocking does not cancel native CoreAudio work.
+                let result = tokio::time::timeout_at(deadline, handle)
+                    .await
+                    .map_err(|_| {
+                        anyhow::anyhow!("audio device {} worker did not exit", self.device)
+                    })?;
+                worker.take();
+                result?;
+            }
         }
-
         Ok(())
     }
 
@@ -1043,6 +1036,56 @@ impl Drop for AudioStream {
 mod from_wav_tests {
     use super::*;
     use std::time::Duration;
+
+    #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
+    #[tokio::test]
+    async fn teardown_timeout_retains_native_worker_and_allows_later_cleanup() {
+        let device = Arc::new(AudioDevice::new(
+            "test mic".into(),
+            super::super::device::DeviceType::Input,
+        ));
+        let (mut stream, _tx) = AudioStream::from_sender_for_test(device, 48_000, 1);
+        let (control_tx, control_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        stream.stream_control = control_tx;
+        stream.stream_thread = Some(Arc::new(tokio::sync::Mutex::new(Some(
+            tokio::task::spawn_blocking(move || {
+                release_rx.recv().unwrap();
+                if let Ok(StreamControl::Stop {
+                    _response: response,
+                    ..
+                }) = control_rx.recv()
+                {
+                    response.send(()).ok();
+                }
+            }),
+        ))));
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            stream.stop_with_timeout(Duration::from_millis(50)),
+        )
+        .await
+        .expect("stop must be bounded")
+        .unwrap_err();
+        assert!(error.to_string().contains("teardown timed out"));
+        assert!(stream.is_disconnected());
+        assert!(stream
+            .stream_thread
+            .as_ref()
+            .unwrap()
+            .lock()
+            .await
+            .is_some());
+        release_tx.send(()).unwrap();
+        stream.stop().await.unwrap();
+        assert!(stream
+            .stream_thread
+            .as_ref()
+            .unwrap()
+            .lock()
+            .await
+            .is_none());
+    }
 
     #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
     #[test]

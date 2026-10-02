@@ -18,6 +18,7 @@ import type {
 import type { WorkflowsPlatform } from "./platform";
 import { isAssistantState, type AssistantState, type WorkflowsAssistantPlatform } from "./assistant";
 import { guideKey, parseGuide, type WorkflowGuide } from "./guide";
+import { isUnchangedStage } from "./workflow-edits";
 import { workflowTiming } from "./timing";
 
 function fixtureAssistant(): WorkflowsAssistantPlatform {
@@ -124,6 +125,13 @@ function fixtureWorkflow(input: FixtureWorkflow, index: number): WorkflowMap {
       name,
       description: input.stageDetails?.[stageIndex]?.description ?? [`Gather the inputs needed to begin ${input.title.toLowerCase()}.`, "Work through the main decision and supporting context.", "Review the result and close the loop."][stageIndex],
       procedure: input.stageDetails?.[stageIndex]?.blocks.map(block => ({ ...block, quote: "", timestamp: "", app: "" })),
+      // Explicit fictional step occurrences, independent of the workflow totals.
+      timing: workflowTiming({ basis: "estimated-elapsed", runs: index === 4 && stageIndex === 0 ? [4, 6].map((minutes, i) => {
+        const start = new Date(Date.UTC(2026, 8, i + 1, 16));
+        return { start: { timestamp: start.toISOString(), app: input.apps[0], quote: "Started gathering fictional research inputs" },
+          end: { timestamp: new Date(start.getTime() + minutes * 60_000).toISOString(), app: input.apps[0], quote: "Finished gathering fictional research inputs" },
+          summary: "One uninterrupted fictional input gathering step" };
+      }) : [] }),
       activeMinutes: stageActive,
       waitingMinutes: stageIndex === 1 ? input.waitingMinutes : 0,
       apps: [input.apps[Math.min(stageIndex, input.apps.length - 1)]],
@@ -415,8 +423,23 @@ async function rasterizeFixture(workflow: Pick<WorkflowMap, "stages">) {
 }
 
 // Maintained browser-only guide fixture. No model, recorder or native filesystem access.
+export const fixtureLibrary: NonNullable<WorkflowsPlatform["library"]> = {
+  listSkillDrafts: async () => JSON.parse(localStorage.getItem("workflow-skill-preview") || "[]"),
+  saveSkillDraft: async (workflowKey, draft) => {
+    const entries = await fixtureLibrary.listSkillDrafts();
+    localStorage.setItem("workflow-skill-preview", JSON.stringify([...entries.filter(e => e.workflowKey !== workflowKey), { workflowKey, draft }]));
+  },
+};
+
 export function fixtureGuides(): NonNullable<WorkflowsPlatform["guides"]> {
   return {
+    video: {
+      generate: async () => { throw new Error("Video rendering is unavailable in this fictional browser preview. Use the desktop app to create an MP4."); },
+      edit: async () => { throw new Error("Video editing is unavailable in this fictional browser preview."); },
+      export: async () => false,
+      release: async () => {},
+    },
+    list: async () => Object.keys(localStorage).filter(key => key.startsWith("workflow-guide-preview:")).map(key => parseGuide(JSON.parse(localStorage.getItem(key)!))),
     openWeb: async () => {
       throw new Error("This fictional preview does not publish. Use the website preview to try editing and sharing.");
     },
@@ -485,6 +508,31 @@ export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixt
       const value = restore(); await Promise.all(value.analysis.workflows.map(rasterizeFixture)); return structuredClone(value);
     },
     analyzeCapturedWork: async () => restore(),
+    // Explicit test transport. The maintained browser mock never contacts a real
+    // voice provider or pretends synthetic responses are a production session.
+    questionnaireVoice: {
+      connect: async (input, signal) => {
+        const response = await fetch("/__fixtures/workflow-voice", { method: "POST", body: JSON.stringify(input), signal });
+        if (!response.ok) throw new Error("Voice requires the desktop app. You can type in this preview.");
+        return response.json();
+      },
+      disconnect: async call_token => { await fetch("/__fixtures/workflow-voice", { method: "DELETE", body: JSON.stringify({ call_token }) }); },
+      fill: async (input, signal) => {
+        const response = await fetch("/__fixtures/workflow-voice-fill", { method: "POST", body: JSON.stringify(input), signal });
+        if (!response.ok) throw new Error("Could not fill answers. Your words are kept. Try again.");
+        return response.json();
+      },
+    },
+    saveWorkflowAnswers: async (target, correction) => {
+      restore();
+      const workflow = current.analysis.workflows.find(w => (w.id ?? w.title) === (target.id ?? target.title));
+      if (!workflow || (workflow.revision ?? 0) !== (target.revision ?? 0)) throw new Error("Workflow changed. Try again.");
+      const saved = { ...workflow, userCorrection: correction, revision: (workflow.revision ?? 0) + 1 };
+      const next = { ...current, analysis: { workflows: current.analysis.workflows.map(w => w === workflow ? saved : w) } };
+      localStorage.setItem(storageKey, JSON.stringify(next));
+      current = next;
+      return saved;
+    },
     saveWorkflowEdits: async (draft) => {
       restore();
       const workflow = current.analysis.workflows.find(w => (w.id ?? w.title) === draft.id);
@@ -492,11 +540,13 @@ export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixt
       const stages = draft.stages.map(s => {
         const prior = s.sourceIndex === null ? null : workflow.stages[s.sourceIndex];
         return { ...(prior ?? { activeMinutes: 0, waitingMinutes: 0, apps: [], confidence: 0, observedOccurrences: 0, observedDays: 0, evidence: [] }),
+          timing: isUnchangedStage(s, prior ?? undefined) ? prior?.timing : null,
           name: s.name.trim(), description: s.description.trim(), userEdited: true,
           procedure: s.procedure.map(p => ({ ...(p.sourceIndex === null ? { quote: "", timestamp: "", app: "" } : prior?.procedure?.[p.sourceIndex] ?? { quote: "", timestamp: "", app: "" }), kind: p.kind, text: p.text.trim(), userEdited: true })),
         };
       });
-      const saved = { ...workflow, id: draft.id, revision: draft.expected_revision + 1, title: draft.title.trim(), description: draft.description.trim(), trigger: draft.trigger.trim(), outcome: draft.outcome.trim(), stages, userEditedAt: new Date().toISOString() };
+      const unchangedStages = draft.stages.length === workflow.stages.length && draft.stages.every((s, i) => s.sourceIndex === i && isUnchangedStage(s, workflow.stages[i]));
+      const saved = { ...workflow, ...(unchangedStages ? {} : { timing: null, durationSource: "unknown" as const, durationSampleCount: 0 }), id: draft.id, revision: draft.expected_revision + 1, title: draft.title.trim(), description: draft.description.trim(), trigger: draft.trigger.trim(), outcome: draft.outcome.trim(), stages, userEditedAt: new Date().toISOString() };
       const next = { ...current, analysis: { workflows: current.analysis.workflows.map(w => w === workflow ? saved : w) } };
       localStorage.setItem(storageKey, JSON.stringify(next));
       current = next;
@@ -505,7 +555,12 @@ export function createFixtureWorkflowsPlatform(analysis: WorkflowAnalysis = fixt
     loadWorkProfile: async () => profile,
     saveWorkProfile: async (nextProfile) => (profile = nextProfile),
     guides: fixtureGuides(),
-    generateWorkflowSkill: async (workflow, _profile, onProgress) => fixtureSkillDraftWithProgress(workflow, onProgress),
+    library: fixtureLibrary,
+    generateWorkflowSkill: async (workflow, _profile, onProgress) => {
+      const draft = await fixtureSkillDraftWithProgress(workflow, onProgress);
+      await fixtureLibrary.saveSkillDraft(guideKey(workflow), draft);
+      return draft;
+    },
     saveWorkflowSkill: async (draft) => fixtureSkillReceipt(draft),
     skillInstallMode: "preview",
   };

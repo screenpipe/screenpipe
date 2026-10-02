@@ -143,8 +143,8 @@ const bundleInput = { ...input, starterSkills };
 const bundle = skillSpecs(bundleInput, "Test Mac");
 
 describe("Grok Bot public starter bundle", () => {
-  it("uses all eight canonical workflows, with device-local execution and no schedules", () => {
-    expect(bundle).toHaveLength(9);
+  it("uses all canonical workflows, with device-local execution and no schedules", () => {
+    expect(bundle).toHaveLength(starterSkills.length + 1);
     for (const [name, markdown] of starterSkills) {
       const installed = bundle.find(item => item.sourceRef.endsWith(`/skills/${name}`));
       expect(installed.body).toContain(markdown);
@@ -157,10 +157,10 @@ describe("Grok Bot public starter bundle", () => {
     const native = readFileSync(resolve(import.meta.dirname, "../../src-tauri/src/grokbot.rs"), "utf8");
     expect(native).toContain('"starterSkills": screenpipe_core::starter_skills::STARTER_SKILLS');
   });
-  it("upgrades the API-only integration and verifies all nine without duplicate writes", async () => {
+  it("upgrades the API-only integration and verifies the full bundle without duplicate writes", async () => {
     const f = fixture([{ ...spec, id: "api", source: "workflow" }]);
-    expect(await reconcileSkills(f.call, bundle, "connect")).toMatchObject({ connected: true, installed: 9, total: 9 });
-    expect(f.call.mock.calls.filter(x => x[0] === "createAgentWorkflow")).toHaveLength(8);
+    expect(await reconcileSkills(f.call, bundle, "connect")).toMatchObject({ connected: true, installed: bundle.length, total: bundle.length });
+    expect(f.call.mock.calls.filter(x => x[0] === "createAgentWorkflow")).toHaveLength(starterSkills.length);
     f.call.mockClear();
     expect((await reconcileSkills(f.call, bundle, "connect")).connected).toBe(true);
     expect(f.call.mock.calls.map(x => x[0])).toEqual(["listAgents", "getAgentWorkflows", "getAgentWorkflows"]);
@@ -169,7 +169,7 @@ describe("Grok Bot public starter bundle", () => {
     const f = fixture(); await reconcileSkills(f.call, bundle, "connect");
     const updated = skillSpecs({ ...bundleInput, port: 4242 }, "Test Mac");
     await reconcileSkills(f.call, updated, "connect");
-    expect(f.rows()).toHaveLength(9);
+    expect(f.rows()).toHaveLength(bundle.length);
     expect(f.rows().every(row => row.body.includes("http://127.0.0.1:4242"))).toBe(true);
   });
   it.each(["body", "description", "name", "trigger"])("preserves a starter's edited %s on reconnect and disconnect", async field => {
@@ -201,13 +201,13 @@ describe("Grok Bot public starter bundle", () => {
     expect(f.rows()).toHaveLength(3);
     expect((await reconcileSkills(f.call, bundle, "status")).connected).toBe(false);
     expect((await reconcileSkills(f.call, bundle, "connect")).connected).toBe(true);
-    expect(f.rows()).toHaveLength(9);
-    expect(new Set(f.rows().map(row => row.sourceRef)).size).toBe(9);
+    expect(f.rows()).toHaveLength(bundle.length);
+    expect(new Set(f.rows().map(row => row.sourceRef)).size).toBe(bundle.length);
   });
   it("verifies every starter, not just the API entry", async () => {
     const f = fixture([{ ...spec, id: "api", source: "workflow" }], true);
     await expect(reconcileSkills(f.call, bundle, "connect")).rejects.toThrow("not confirmed");
-    expect(await reconcileSkills(f.call, bundle, "status")).toMatchObject({ connected: false, installed: 1, total: 9 });
+    expect(await reconcileSkills(f.call, bundle, "status")).toMatchObject({ connected: false, installed: 1, total: bundle.length });
   });
   it("disconnects only this device's bundle, preserving other devices and user workflows", async () => {
     const other = skillSpecs(bundleInput, "Other Mac").map((item, index) => ({ ...item, id: `other-${index}`, source: "workflow" }));
@@ -218,7 +218,7 @@ describe("Grok Bot public starter bundle", () => {
   });
   it("renders Windows paths as data and keeps Linux credential support explicitly unavailable", () => {
     const windows = skillSpecs({ ...bundleInput, home: "C:\\Users\\Test", bun: "C:\\Program Files\\screenpipe\\bun.exe", dataDir: "D:\\Screenpipe Data" }, "Test PC");
-    expect(windows).toHaveLength(9);
+    expect(windows).toHaveLength(bundle.length);
     expect(windows[1].body).toContain(JSON.stringify("D:\\Screenpipe Data"));
     const installer = readFileSync(resolve(import.meta.dirname, "../grokbot-installer.mjs"), "utf8");
     expect(installer).toContain("Automatic Grok Bot installation is currently available on macOS and Windows.");

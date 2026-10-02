@@ -1,0 +1,67 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import {beforeEach, afterEach, expect, test, vi} from 'vitest';
+const ports = vi.hoisted(()=>({invoke:vi.fn(), list:vi.fn(), capture:vi.fn()}));
+vi.mock('@tauri-apps/api/core',()=>({invoke:ports.invoke}));
+vi.mock('@/lib/utils/tauri',()=>({commands:{listBrainViews:ports.list}}));
+vi.mock('posthog-js',()=>({default:{capture:ports.capture}}));
+vi.mock('@/lib/api',()=>({localFetch:(path:string,init?:RequestInit)=>fetch('http://localhost:3030'+path,init)}));
+import {runDueOnboardingLiveViewFollowUp as publicBoundary} from './lib/live-views/onboarding-follow-up';
+if(typeof publicBoundary!=='function')throw Error('Missing production follow-up boundary');
+const values=new Map<string,string>();
+const storage={getItem:(k:string)=>values.get(k)??null,setItem:(k:string,v:string)=>values.set(k,String(v)),removeItem:(k:string)=>values.delete(k),clear:()=>values.clear()};
+const view={id:'synthetic-view',title:'Project notes',timeRange:'today',slots:[{id:'a',binding:{pipeName:'summary'}},{id:'b',binding:{pipeName:'summary'}}]};
+let activation:any,follow:any,requests:Array<{url:string,body:any}>,controlStatus:number,engineStatus:number,delivered:any[];
+let now=new Date('2026-08-01T12:00:00Z');
+beforeEach(async()=>{
+ vi.resetModules();vi.clearAllMocks();values.clear();requests=[];delivered=[];controlStatus=200;engineStatus=200;
+ vi.useFakeTimers();vi.setSystemTime(now);
+ vi.stubGlobal('window',{localStorage:storage,dispatchEvent:()=>true});
+ vi.stubGlobal('CustomEvent',class {constructor(public type:string,public detail:any){}});
+ ports.invoke.mockResolvedValue({port:18435});ports.list.mockResolvedValue({status:'ok',data:[view]});
+ vi.stubGlobal('fetch',vi.fn(async(input:any,init:any)=>{
+  const url=String(input),body=init?.body?JSON.parse(init.body):null;requests.push({url,body});
+  const target=new URL(url);let status=404;
+  if(init?.method!=='POST')return {ok:false,status:405};
+  if(target.origin==='http://localhost:3030'&&target.pathname==='/pipes/summary/run')status=engineStatus;
+  if(['http://localhost:18435','http://localhost:11435'].includes(target.origin)&&target.pathname==='/notify') {status=controlStatus;if(status===200)delivered.push(body);}
+  return {ok:status===200,status};
+ }));
+ activation=await import('./lib/live-views/onboarding-activation');follow=await import('./lib/live-views/onboarding-follow-up');
+ activation.startOnboardingLiveViewActivation(view.id,'work_memory',{goal:'Find project notes'});
+ activation.markOnboardingLiveViewSetupReady(view.id);
+ activation.updateOnboardingLiveViewFollowUp(view.id,(f:any)=>({...f,dueAt:now.toISOString()}));
+});
+afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals()});
+test('default transport delivers through runtime control port and suppresses replay',async()=>{
+ await follow.runDueOnboardingLiveViewFollowUp({now:()=>now});
+ expect(delivered).toHaveLength(1);
+ expect(requests.filter(x=>x.url==='http://localhost:3030/pipes/summary/run')).toHaveLength(1);
+ expect(delivered[0].source_url).toBe('screenpipe://live-view/synthetic-view');
+ expect(activation.getOnboardingLiveViewActivation(view.id).followUp.status).toBe('sent');
+ await follow.runDueOnboardingLiveViewFollowUp({now:()=>now});expect(delivered).toHaveLength(1);
+});
+test('native config lookup failure still reaches default control port',async()=>{
+ ports.invoke.mockRejectedValue(new Error('synthetic native config unavailable'));
+ await follow.runDueOnboardingLiveViewFollowUp({now:()=>now});
+ expect(delivered).toHaveLength(1);expect(requests.some(x=>x.url==='http://localhost:11435/notify')).toBe(true);
+});
+test('refused notification remains retryable and later recovery persists success',async()=>{
+ controlStatus=503;await follow.runDueOnboardingLiveViewFollowUp({now:()=>now});expect(delivered).toHaveLength(0);
+ expect(activation.getOnboardingLiveViewActivation(view.id).followUp.status).toBe('scheduled');
+ controlStatus=200;const later=new Date(now.getTime()+6*60*1000);vi.setSystemTime(later);
+ await follow.runDueOnboardingLiveViewFollowUp({now:()=>later});expect(delivered).toHaveLength(1);
+ expect(activation.getOnboardingLiveViewActivation(view.id).followUp.status).toBe('sent');
+});
+test('no notification is delivered when engine dispatch fails',async()=>{
+ engineStatus=503;await follow.runDueOnboardingLiveViewFollowUp({now:()=>now});expect(delivered).toHaveLength(0);
+ expect(requests.some(x=>x.url.endsWith('/notify'))).toBe(false);
+ expect(activation.getOnboardingLiveViewActivation(view.id).followUp.status).toBe('scheduled');
+});
+test('future deadline performs no transport work',async()=>{
+ activation.updateOnboardingLiveViewFollowUp(view.id,(f:any)=>({...f,dueAt:new Date(now.getTime()+60000).toISOString()}));
+ await follow.runDueOnboardingLiveViewFollowUp({now:()=>now});expect(requests).toHaveLength(0);
+});
+test('missing view performs no transport work',async()=>{
+ ports.list.mockResolvedValue({status:'ok',data:[]});await follow.runDueOnboardingLiveViewFollowUp({now:()=>now});expect(requests).toHaveLength(0);
+});

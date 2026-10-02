@@ -35,7 +35,9 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("@/lib/hooks/use-timeline-store", () => ({
   useTimelineStore: (
-    selector: (state: { setPendingNavigation: typeof mocks.setPendingNavigation }) => unknown,
+    selector: (state: {
+      setPendingNavigation: typeof mocks.setPendingNavigation;
+    }) => unknown,
   ) => selector({ setPendingNavigation: mocks.setPendingNavigation }),
 }));
 
@@ -46,6 +48,11 @@ vi.mock("@/components/speaker-assign-popover", () => ({
 vi.mock("@/lib/utils/meeting-context", () => ({
   fetchFrameSamples: mocks.fetchFrameSamples,
   fetchMeetingAudio: mocks.fetchMeetingAudio,
+}));
+
+vi.mock("./replay-audio", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./replay-audio")>()),
+  ReplayAudio: () => null,
 }));
 
 import {
@@ -149,8 +156,8 @@ describe("ReplayStrip", () => {
       ).toBe(true);
     });
 
-    const brokenFrame = Array.from(container.querySelectorAll("img")).find((img) =>
-      img.src.includes("/frames/1"),
+    const brokenFrame = Array.from(container.querySelectorAll("img")).find(
+      (img) => img.src.includes("/frames/1"),
     );
     expect(brokenFrame).toBeTruthy();
     fireEvent.error(brokenFrame!);
@@ -163,7 +170,9 @@ describe("ReplayStrip", () => {
   });
 
   it("shows an empty image state when every sampled frame is unavailable", async () => {
-    mocks.fetchFrameSamples.mockResolvedValue([{ frameId: 1, timestamp: transcriptAt }]);
+    mocks.fetchFrameSamples.mockResolvedValue([
+      { frameId: 1, timestamp: transcriptAt },
+    ]);
 
     const { container } = renderReplayStrip();
 
@@ -179,7 +188,9 @@ describe("ReplayStrip", () => {
 
     await waitFor(() => {
       expect(frameImageSources(container)).toEqual([]);
-      expect(screen.getByText(/no screen images available/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/no screen images available/i),
+      ).toBeInTheDocument();
     });
   });
 
@@ -204,8 +215,8 @@ describe("ReplayStrip", () => {
         "1",
       ),
     );
-    expect(screen.getByRole("button", { name: "Play silent replay" })).toBeEnabled();
-    expect(screen.getByText("Silent")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Play replay" })).toBeEnabled();
+    expect(screen.getByText("No audio")).toBeInTheDocument();
     expect(container.querySelector("audio, video")).toBeNull();
   });
 
@@ -281,12 +292,22 @@ describe("ReplayStrip", () => {
       ),
     );
 
-    const bar = screen.getByLabelText("Silent replay progress");
+    const bar = screen.getByLabelText("Replay progress");
     bar.getBoundingClientRect = () =>
-      ({ left: 0, width: 200, top: 0, height: 28, right: 200, bottom: 28 }) as DOMRect;
+      ({
+        left: 0,
+        width: 200,
+        top: 0,
+        height: 28,
+        right: 200,
+        bottom: 28,
+      }) as DOMRect;
     // jsdom has no PointerEvent; a MouseEvent named "pointerdown" carries
     // clientX and still triggers React's onPointerDown.
-    fireEvent(bar, new MouseEvent("pointerdown", { clientX: 100, bubbles: true }));
+    fireEvent(
+      bar,
+      new MouseEvent("pointerdown", { clientX: 100, bubbles: true }),
+    );
 
     // Meeting is 10 minutes; clicking the middle seeks to ~300s.
     const valueNow = Number(
@@ -308,11 +329,7 @@ describe("ReplayStrip", () => {
     ]);
 
     const { container } = render(
-      <ReplayStrip
-        meetingId={43}
-        segments={[]}
-        timeRange={{ start, end }}
-      />,
+      <ReplayStrip meetingId={43} segments={[]} timeRange={{ start, end }} />,
     );
     await waitFor(() =>
       expect(screen.getByTestId("replay-active-frame")).toHaveAttribute(
@@ -327,11 +344,11 @@ describe("ReplayStrip", () => {
       ).map((element) => element.dataset.frameId),
     ).toEqual(["1", "2"]);
 
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
+    vi.useFakeTimers({
+      toFake: ["setInterval", "clearInterval", "performance"],
+    });
     fireEvent.click(screen.getByTestId("replay-play-toggle"));
-    expect(
-      screen.getByRole("button", { name: "Pause silent replay" }),
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Pause replay" })).toBeEnabled();
     act(() => vi.advanceTimersByTime(1_100));
     expect(screen.getByTestId("replay-active-frame")).toHaveAttribute(
       "data-frame-id",

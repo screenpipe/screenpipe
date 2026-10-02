@@ -1,11 +1,38 @@
 /* screenpipe — AI that knows everything you've seen, said, or heard */
 /* https://screenpipe.com */
-.question { box-sizing: border-box; display: flex; align-items: flex-start; gap: 9px; width: 100%; padding: 9px 6px; border: 0; border-radius: 4px; background: transparent; color: var(--ink, #171914); font: inherit; font-size: 13px; line-height: 1.5; text-align: left; cursor: pointer; }
-.question span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.question svg { flex-shrink: 0; margin-top: 3px; color: var(--muted, #78786f); }
-.question:hover { background: var(--soft, #f1f2ed); }
-.question:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
-
-.question > svg:last-child { opacity: 0; }
-.question:hover > svg:last-child, .question:focus-visible > svg:last-child { opacity: 1; }
-@media (hover: none) { .question { min-height: 44px; } .question > svg:last-child { opacity: 1; } }
+.questions { width: 100%; box-sizing: border-box; color-scheme: light; scroll-margin-top: 130px; max-width: 768px; margin-inline: auto; border-top: 1px solid var(--line); padding-top: 32px; }
+.heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.questions .heading h2 { font-size: 20px; font-weight: 600; letter-spacing: -.025em; margin: 0; }
+.hint { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 8px 0 0; max-width: 510px; }
+.voiceButton { flex-shrink: 0; display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font-size: 13px; }
+.voiceButton:hover { background: var(--canvas); }
+.progress { font-size: 12px; color: var(--muted); margin: 16px 0 8px; }
+.field { border-bottom: 1px solid var(--line); padding: 24px 0; }
+.field > label { display: flex; align-items: flex-start; gap: 12px; font-size: 14px; font-weight: 500; line-height: 1.5; margin-bottom: 12px; }
+.field > label > span:nth-child(2) { flex: 1; }
+.number { width: 20px; flex-shrink: 0; color: var(--muted); font-size: 12px; padding-top: 2px; font-variant-numeric: tabular-nums; }
+.answer { padding-left: 32px; }
+.answer > .hint { margin: 0 0 12px; }
+.field textarea { box-sizing: border-box; display: block; width: 100%; resize: vertical; padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); font: inherit; font-size: 14px; line-height: 1.6; }
+.field textarea::placeholder { color: var(--muted); }
+.field textarea:focus { outline: 1px solid var(--ink); outline-offset: -1px; }
+.fieldActions { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.fieldActions label, .fieldActions span, .fieldActions button { display: inline-flex; align-items: center; gap: 6px; }
+.fieldActions input { accent-color: var(--ink); }
+.fieldActions button { padding: 0; color: inherit; }
+.actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; padding: 20px 0 16px; }
+.actions button { min-height: 40px; padding: 8px 14px; border-radius: 6px; background: var(--ink); color: var(--panel); font-size: 13px; }
+.questions button:disabled { opacity: .45; cursor: default; }
+.questions button:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.actions span { max-width: 420px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.error { font-size: 13px; border: 1px solid var(--line); border-radius: 6px; padding: 12px; margin-top: 16px; }
+.voicePanel { margin: 20px 0 0; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); }
+.voiceStatus, .voiceStatus > span { display: flex; align-items: center; gap: 8px; }
+.voiceStatus { justify-content: space-between; font-size: 13px; }
+.voiceStatus > span:last-child { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.voiceStatus meter { width: 60px; }
+.voicePanel details { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; font-size: 12px; }
+.voicePanel summary { cursor: pointer; }
+.transcript { max-height: 144px; overflow: auto; white-space: pre-wrap; font-size: 14px; line-height: 1.6; }
+.textButton { font-size: 12px; text-decoration: underline; text-underline-offset: 3px; margin-top: 12px; }
+@media (max-width: 620px) { .heading { flex-wrap: wrap; } .voiceButton { min-height: 44px; } .answer { padding-left: 0; } .actions button { min-height: 44px; } }

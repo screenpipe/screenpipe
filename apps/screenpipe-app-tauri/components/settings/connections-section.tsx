@@ -1053,7 +1053,7 @@ function SkillsSpotlight({
 function PanelConfigError({ err }: { err: FriendlyToolError }) {
   const revealPath = async (path: string) => {
     try {
-      if (platform() === "macos") await Command.create("open", ["-R", path]).execute();
+      if (platform() === "macos") await Command.create("open-reveal", ["-R", path]).execute();
     } catch (e) {
       console.warn("[connections] reveal failed:", e);
     }
@@ -1143,9 +1143,7 @@ function ClaudePanel({
         })
         .catch(() => setClaudeAppInstalled(false));
     } else if (os === "macos") {
-      Command.create("exec-sh", ["-c", "ls /Applications/Claude.app"]).execute()
-        .then(r => setClaudeAppInstalled(r.code === 0))
-        .catch(() => setClaudeAppInstalled(false));
+      macAppExists("Claude").then(setClaudeAppInstalled);
     } else {
       setClaudeAppInstalled(false);
     }
@@ -1179,7 +1177,7 @@ function ClaudePanel({
   const openClaude = async () => {
     try {
       const os = platform();
-      if (os === "macos") await Command.create("open", ["-a", "Claude"]).execute();
+      if (os === "macos") await Command.create("open-app", ["-a", "Claude"]).execute();
       else if (os === "windows") {
         // Try MSIX launch via Windows shell app launcher first
         const msixOpened = await openWindowsShellTarget("shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude")
@@ -1258,9 +1256,7 @@ function CursorPanel({ onConnected, onDisconnected }: { onConnected?: () => void
         .then((exe) => setCursorAppInstalled(!!exe))
         .catch(() => setCursorAppInstalled(false));
     } else if (os === "macos") {
-      Command.create("exec-sh", ["-c", "test -d '/Applications/Cursor.app' || test -d \"$HOME/Applications/Cursor.app\""]).execute()
-        .then((r) => setCursorAppInstalled(r.code === 0))
-        .catch(() => setCursorAppInstalled(false));
+      macAppExists("Cursor").then(setCursorAppInstalled);
     } else {
       setCursorAppInstalled(false);
     }
@@ -1289,7 +1285,7 @@ function CursorPanel({ onConnected, onDisconnected }: { onConnected?: () => void
   const openCursor = async () => {
     try {
       const os = platform();
-      if (os === "macos") await Command.create("open", ["-a", "Cursor"]).execute();
+      if (os === "macos") await Command.create("open-app", ["-a", "Cursor"]).execute();
       else if (os === "windows") {
         const exe = await findCursorExeOnWindows();
         if (exe) await openWindowsShellTarget(exe);
@@ -1372,7 +1368,7 @@ function CodexPanel({ onConnected, onDisconnected }: { onConnected?: () => void;
   const openCodex = async () => {
     try {
       const os = platform();
-      if (os === "macos") await Command.create("open", ["-a", "Codex"]).execute();
+      if (os === "macos") await Command.create("open-app", ["-a", "Codex"]).execute();
       else await openUrl("https://chatgpt.com/codex");
     } catch { await openUrl("https://chatgpt.com/codex"); }
   };

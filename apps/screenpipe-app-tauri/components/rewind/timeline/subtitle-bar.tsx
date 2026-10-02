@@ -5,6 +5,7 @@
 import { useMemo, useRef, useEffect, useState } from "react";
 import { Mic, Volume2, ChevronDown, X, Loader2, MessageSquareText } from "lucide-react";
 import { StreamTimeSeriesResponse, AudioData } from "@/components/rewind/timeline";
+import { timelineAudioKey } from "@/lib/hooks/timeline-frame-merge";
 import { useGT } from "gt-react";
 
 
@@ -63,7 +64,7 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 					entries.push({
 						...audio,
 						transcription: audio.transcription?.trim() || "",
-						timestamp: new Date(ft),
+						timestamp: new Date(audio.captured_at || ft),
 					});
 				}
 			}
@@ -71,14 +72,14 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 
 		if (entries.length === 0) return [];
 
-		// Dedup pass 1: by audio_chunk_id — keep earliest timestamp
-		const byChunk = new Map<number, AudioEntry>();
+		// Dedup pass 1: by audio chunk and speech time — keep distinct turns
+		const byChunk = new Map<string | null, AudioEntry>();
 		for (const entry of entries) {
-			const existing = byChunk.get(entry.audio_chunk_id);
+			const existing = byChunk.get(timelineAudioKey(entry));
 			if (!existing) {
-				byChunk.set(entry.audio_chunk_id, entry);
+				byChunk.set(timelineAudioKey(entry), entry);
 			} else if (entry.timestamp < existing.timestamp) {
-				byChunk.set(entry.audio_chunk_id, { ...existing, timestamp: entry.timestamp });
+				byChunk.set(timelineAudioKey(entry), { ...existing, timestamp: entry.timestamp });
 			}
 		}
 
@@ -88,7 +89,7 @@ export function SubtitleBar({ frames, currentIndex, isPlaying, onClick, transcri
 		const byPrefix = new Map<string, AudioEntry>();
 		for (const entry of byChunk.values()) {
 			const key = entry.transcription
-				? `${entry.is_input}-${normalize(entry.transcription).slice(0, 60)}`
+				? `${entry.is_input}-${entry.captured_at ?? ""}-${normalize(entry.transcription).slice(0, 60)}`
 				: `pending-${entry.audio_chunk_id}`;
 			const existing = byPrefix.get(key);
 			if (!existing) {

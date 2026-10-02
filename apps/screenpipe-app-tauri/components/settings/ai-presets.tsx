@@ -1287,7 +1287,7 @@ const AISection = ({
           <ArrowLeft className="w-4 h-4" /> Back
         </Button>
         <h1 className="text-xl font-semibold">
-          {preset ? ui("Update preset") : ui("Create preset")}
+          {isDuplicating ? ui("Duplicate preset") : preset ? ui("Update preset") : ui("Create preset")}
         </h1>
       </div>
 
@@ -1952,7 +1952,7 @@ const AISection = ({
                   ) : (
                     <AlertCircle className="w-4 h-4" />
                   )}
-                  {preset ? ui("Update preset") : ui("Create preset")}
+                  {isDuplicating ? ui("Create copy") : preset ? ui("Update preset") : ui("Create preset")}
                 </Button>
               </span>
             </TooltipTrigger>

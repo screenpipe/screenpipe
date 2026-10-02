@@ -9,3 +9,5 @@ pub mod gate;
 pub mod rewrite;
 pub mod routes;
 pub mod store;
+
+pub mod workflow;

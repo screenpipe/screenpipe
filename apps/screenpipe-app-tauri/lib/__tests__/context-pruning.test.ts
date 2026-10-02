@@ -76,12 +76,20 @@ describe("provider overflow normalization", () => {
     expect(result.message.errorMessage).toContain(original.errorMessage);
   });
 
+  it("recognizes the private gateway's 413 overflow without losing diagnostics", async () => {
+    const errorMessage = '413 data: {"error":{"message":"Your conversation is too long for glm-5.3-flash-reap50-iq3m\'s context window. Start a new conversation."}}';
+    const result = await registerExtension().message_end({ message: { role: "assistant", stopReason: "error", errorMessage } });
+    expect(result.message.errorMessage).toBe(`context_length_exceeded: ${errorMessage}`);
+  });
+
   it("does not rewrite unrelated provider failures", async () => {
     const handlers = registerExtension();
     for (const errorMessage of [
       "Internal server error",
       "Rate limit exceeded",
       "Service unavailable",
+      "413 request body too large",
+      "The conversation is too long to display",
     ]) {
       const result = await handlers.message_end({
         type: "message_end",

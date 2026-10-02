@@ -26,3 +26,6 @@ crates/screenpipe-sqlite-recovery/vendor/** linguist-vendored -whitespace
 *.safetensors filter=lfs diff=lfs merge=lfs -text
 *.zip filter=lfs diff=lfs merge=lfs -text
 *.tar.gz filter=lfs diff=lfs merge=lfs -text
+
+# Tiny browser test fixture must work in checkouts without LFS downloads.
+apps/screenpipe-workflows-web/public/video-sop-fixture.mp4 -filter -diff -merge -text

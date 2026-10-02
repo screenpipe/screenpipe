@@ -4,7 +4,7 @@
 
 use image::DynamicImage;
 use once_cell::sync::Lazy;
-use screenpipe_a11y::url_filter::{DomainRule, UrlRule};
+use screenpipe_a11y::url_filter::{DomainRule, UrlRule, BROWSER_NAMES};
 use screenpipe_core::window_pattern::{self, WindowPattern};
 use std::collections::HashSet;
 use std::error::Error;
@@ -30,10 +30,6 @@ use crate::monitor::macos_version::use_sck_rs;
 
 #[cfg(target_os = "macos")]
 use std::collections::HashMap;
-
-const BROWSER_NAMES: [&str; 9] = [
-    "chrome", "firefox", "safari", "edge", "brave", "arc", "chromium", "vivaldi", "opera",
-];
 
 #[derive(Debug)]
 enum CaptureError {
@@ -316,6 +312,11 @@ impl WindowFilters {
     /// title fallback is applied separately only when no URL is available.
     pub fn should_capture_url(&self, url: Option<&str>) -> bool {
         self.url_policy.should_capture(url)
+    }
+
+    /// Apply URL rules only to browser content after app/window filtering.
+    pub fn should_capture_window_url(&self, app_name: Option<&str>, url: Option<&str>) -> bool {
+        self.url_policy.should_capture_window(app_name, url)
     }
 
     pub fn has_url_allowlist(&self) -> bool {
@@ -1237,10 +1238,9 @@ pub async fn capture_all_visible_windows(
                 None
             };
 
-            // A detected URL is authoritative. With an allowlist active, a
-            // missing, malformed, internal, or non-matching URL fails closed;
-            // this also rejects native apps while browser-only capture is on.
-            if !window_filters.should_capture_url(browser_url.as_deref()) {
+            // Native apps keep their app/window policy. Browser content must
+            // provide a usable URL when URL rules are active.
+            if !window_filters.should_capture_window_url(Some(&app_name), browser_url.as_deref()) {
                 tracing::info!(
                     "Privacy filter: skipping window because its browser URL did not pass policy"
                 );
@@ -1308,6 +1308,66 @@ mod tests {
         let filters = WindowFilters::new(&[], &[], &[]);
         assert!(!filters.is_url_blocked("https://wellsfargo.com"));
         assert!(!filters.is_url_blocked("https://chase.com"));
+    }
+
+    #[test]
+    fn app_and_domain_filters_compose_across_all_sixteen_configurations() {
+        // Bits: Notepad, English Wikipedia, German Wikipedia, example.com.
+        // Configuration bits: ignore title, include app/title, block URL, allow URL.
+        let expected = [15, 13, 7, 5, 11, 9, 3, 1, 7, 5, 7, 5, 3, 1, 3, 1];
+        let windows = [
+            ("Notepad", "Untitled", None),
+            (
+                "Microsoft Edge",
+                "English Wikipedia",
+                Some("https://en.wikipedia.org"),
+            ),
+            (
+                "Microsoft Edge",
+                "German Wikipedia",
+                Some("https://de.wikipedia.org"),
+            ),
+            ("Microsoft Edge", "Example", Some("https://example.com")),
+        ];
+        for (case, expected_mask) in expected.into_iter().enumerate() {
+            let ignored = if case & 1 != 0 {
+                vec!["English".into()]
+            } else {
+                vec![]
+            };
+            let included = if case & 2 != 0 {
+                vec!["Notepad".into(), "Wikipedia".into()]
+            } else {
+                vec![]
+            };
+            let blocked = if case & 4 != 0 {
+                vec![UrlRule::Structured(domain_rule(
+                    "de.wikipedia.org",
+                    true,
+                    &[],
+                ))]
+            } else {
+                vec![]
+            };
+            let allowed = if case & 8 != 0 {
+                vec![
+                    domain_rule("en.wikipedia.org", false, &[]),
+                    domain_rule("de.wikipedia.org", false, &[]),
+                ]
+            } else {
+                vec![]
+            };
+            let filters = WindowFilters::with_url_rules(&ignored, &included, &blocked, &allowed);
+            let mut actual_mask = 0;
+            for (index, (app, title, url)) in windows.iter().enumerate() {
+                if filters.is_valid(app, title)
+                    && filters.should_capture_window_url(Some(app), *url)
+                {
+                    actual_mask |= 1 << index;
+                }
+            }
+            assert_eq!(actual_mask, expected_mask, "configuration c{case:02}");
+        }
     }
 
     #[test]

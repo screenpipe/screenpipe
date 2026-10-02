@@ -225,6 +225,82 @@ async fn migration_diagnostics_preserve_table_totals_and_verified_completion() {
 }
 
 #[tokio::test]
+async fn migration_search_probes_handle_controls_symbols_and_unicode() {
+    for texts in [
+        ["\0\0├───┼───── foo", "┃"],
+        ["\0שלום עולם", "café\0東京"],
+        ["\0\0├───┼─────", "┃"],
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("db.sqlite");
+        let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        let mut tx = db.begin_immediate_with_retry().await.unwrap();
+        for (index, text) in texts.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO frames(id,timestamp,full_text) VALUES(?,'2026-09-28T12:00:00Z',?)",
+            )
+            .bind(index as i64 + 1)
+            .bind(text)
+            .execute(&mut **tx.conn())
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+        let before = db.frame_payloads(&[1, 2], Projection::All).await.unwrap();
+        let mut searches = Vec::new();
+        for term in ["foo", "שלום", "café", "東京"] {
+            let ids: Vec<i64> = sqlx::query_scalar(
+                "SELECT rowid FROM frames_fts WHERE frames_fts MATCH ? ORDER BY rowid",
+            )
+            .bind(term)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+            searches.push((term, ids));
+        }
+        db.close().await;
+
+        let report = migrate(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap();
+        assert_eq!(report.frames, 2);
+        assert!(root
+            .path()
+            .join("storage-migration-complete.json")
+            .is_file());
+        assert!(!root.path().join("storage-migration.json").exists());
+        let reopened = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            reopened.storage_mode(),
+            screenpipe_db::storage::StorageMode::HybridParquetV1
+        );
+        let after = reopened
+            .frame_payloads(&[1, 2], Projection::All)
+            .await
+            .unwrap();
+        for id in [1, 2] {
+            assert_eq!(after[&id].full_text, before[&id].full_text);
+        }
+        for (term, expected) in searches {
+            let actual: Vec<i64> = sqlx::query_scalar(
+                "SELECT rowid FROM frames_fts WHERE frames_fts MATCH ? ORDER BY rowid",
+            )
+            .bind(term)
+            .fetch_all(&reopened.pool)
+            .await
+            .unwrap();
+            assert_eq!(actual, expected, "search changed for {term}");
+        }
+        reopened.verify_storage().await.unwrap();
+        reopened.close().await;
+    }
+}
+
+#[tokio::test]
 async fn migration_preserves_search_when_frames_and_bulk_history_are_both_present() {
     assert_migration_search(false).await;
 }

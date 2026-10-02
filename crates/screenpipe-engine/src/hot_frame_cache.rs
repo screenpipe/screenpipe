@@ -58,6 +58,16 @@ pub struct HotAudio {
     pub speaker_name: Option<Arc<str>>,
 }
 
+impl HotAudio {
+    pub fn captured_at(&self) -> DateTime<Utc> {
+        self.timestamp
+            .checked_add_signed(chrono::Duration::milliseconds(
+                (self.start_time.unwrap_or(0.0) * 1000.0) as i64,
+            ))
+            .unwrap_or(self.timestamp)
+    }
+}
+
 /// In-memory cache for today's frames and audio.
 ///
 /// Uses BTreeMap for O(log n) insert and efficient time-range queries.
@@ -271,6 +281,7 @@ impl HotFrameCache {
                     for audio_entry in &frame_data.audio_entries {
                         let audio_key = (
                             audio_entry.audio_chunk_id,
+                            audio_entry.captured_at,
                             audio_entry.start_time.map(f64::to_bits),
                             audio_entry.end_time.map(f64::to_bits),
                             audio_entry.device_name.clone(),
@@ -282,7 +293,14 @@ impl HotFrameCache {
                         }
                         let hot_audio = HotAudio {
                             audio_chunk_id: audio_entry.audio_chunk_id,
-                            timestamp: frame_data.timestamp,
+                            timestamp: audio_entry
+                                .captured_at
+                                .and_then(|time| {
+                                    time.checked_sub_signed(chrono::Duration::milliseconds(
+                                        (audio_entry.start_time.unwrap_or(0.0) * 1000.0) as i64,
+                                    ))
+                                })
+                                .unwrap_or(frame_data.timestamp),
                             transcription: Arc::from(audio_entry.transcription.as_str()),
                             device_name: Arc::from(audio_entry.device_name.as_str()),
                             is_input: audio_entry.is_input,
@@ -399,6 +417,7 @@ fn find_audio_for_frame(
     for (_, audio_list) in audio_map.range(search_start..=search_end) {
         for a in audio_list {
             entries.push(AudioEntry {
+                captured_at: Some(a.captured_at()),
                 transcription: a.transcription.to_string(),
                 device_name: a.device_name.to_string(),
                 is_input: a.is_input,
@@ -510,8 +529,8 @@ mod tests {
                 is_input: true,
                 audio_file_path: "/tmp/audio.mp4".into(),
                 duration_secs: 3.0,
-                start_time: None,
-                end_time: None,
+                start_time: Some(2.0),
+                end_time: Some(5.0),
                 speaker_id: None,
                 speaker_name: None,
             })
@@ -523,6 +542,10 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].frame_data[0].audio_entries.len(), 1);
+        assert_eq!(
+            result[0].frame_data[0].audio_entries[0].captured_at,
+            Some(now + chrono::Duration::seconds(7))
+        );
         assert_eq!(
             result[0].frame_data[0].audio_entries[0].transcription,
             "hello"

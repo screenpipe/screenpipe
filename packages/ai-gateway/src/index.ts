@@ -351,6 +351,24 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			}
 		}
 
+		// Personal Live voice uses the verified account, never a client-supplied owner.
+		// DELETE stays available after an entitlement change so a call can be closed.
+		if (path === '/v1/workflow-voice') {
+			if (!authResult.isValid || !authResult.userId || authResult.service) return addCorsHeaders(createErrorResponse(401, 'Sign in to use voice.'));
+			if (request.method !== 'DELETE') {
+				const gate = paidHostedAiRouteError(authResult);
+				if (gate) return gate;
+			}
+			const owner = env.RATE_LIMITER.idFromName(`workflow-voice:${authResult.userId}`);
+			const headers = new Headers(request.headers);
+			headers.set('x-voice-account', authResult.userId);
+			const upstream = await env.RATE_LIMITER.get(owner).fetch(new Request('https://internal/workflow-voice', { method: request.method, headers, body: request.body }));
+			// Fetch responses have immutable headers in the Workers runtime.
+			const response = new Response(upstream.body, upstream);
+			response.headers.set('Cache-Control', 'no-store');
+			return addCorsHeaders(response);
+		}
+
 		// Usage status endpoint - returns current usage without incrementing
 		if (path === '/v1/usage' && request.method === 'GET') {
 			// Anonymous auth results deliberately carry an `unknown` account plan:
@@ -644,7 +662,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 					served_tier: response.headers.get('x-screenpipe-served-tier'),
 					router_tier: routerTier,
 					workload: latency,
-					gateway_mode: 'cloudflare',
+					gateway_mode: response.headers.has('x-screenpipe-background-fallback') ? 'direct' : 'cloudflare',
+					fallback_model: response.headers.get('x-screenpipe-background-fallback'),
+					fallback_reason: response.headers.get('x-screenpipe-background-fallback-reason'),
 					latency_ms: latencyMs,
 					status_code: response.status,
 				});
@@ -663,7 +683,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 				if (response.ok && body.stream) {
 					const { response: trackedResponse, usage: usagePromise } = trackResponseUsage(response, 'openai');
 					response = trackedResponse;
-					void usagePromise.then(u => logCost(env, {
+					ctx.waitUntil(usagePromise.then(u => logCost(env, {
 						device_id: authResult.deviceId,
 						user_id: authResult.userId,
 						tier: authResult.tier,
@@ -686,9 +706,9 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 						stream: true,
 						latency_ms: latencyMs,
 						router_tier: routerTier,
-					}));
+					})));
 				} else if (response.ok) {
-					void settleActualOrReservedCost(
+					ctx.waitUntil(settleActualOrReservedCost(
 						env,
 						null,
 						reservedCostAttribution(
@@ -729,7 +749,7 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 								router_tier: routerTier,
 							});
 						},
-					);
+					));
 				}
 
 				return attachLeaseRelease(response);

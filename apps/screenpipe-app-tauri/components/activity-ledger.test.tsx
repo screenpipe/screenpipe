@@ -438,15 +438,14 @@ beforeEach(() => {
         range: { start, end },
         sessionPrefix: "activity-history",
       });
-      return {
-        status: "ok",
-        data: await mocks.reconcilePersistedActivityHistory(
-          "activity-history-pi-v9",
-          range,
-          parseActivityHistoryResponse(raw, range),
-          range,
-        ),
-      };
+      const data = await mocks.reconcilePersistedActivityHistory(
+        "activity-history-pi-v9",
+        range,
+        parseActivityHistoryResponse(raw, range),
+        range,
+      );
+      mocks.loadPersistedActivityHistory.mockResolvedValue(data);
+      return { status: "ok", data };
     },
   );
   mocks.showChatWithPrefill.mockResolvedValue(undefined);
@@ -1782,6 +1781,99 @@ describe("ActivityLedger", () => {
     );
   });
 
+  it.each([false, true])(
+    "keeps the full local day after filling its morning gap (event first: %s)",
+    async (eventFirst) => {
+      vi.setSystemTime(new Date("2026-08-17T20:00:00"));
+      const dayStart = new Date("2026-08-17T00:00:00").toISOString();
+      const dayEnd = new Date("2026-08-17T20:00:00").toISOString();
+      const afternoonStart = new Date("2026-08-17T15:00:00").toISOString();
+      const entries = JSON.parse(HISTORY_RESPONSE).entries;
+      entries[0] = {
+        ...entries[0],
+        start_at: new Date("2026-08-17T09:00:00").toISOString(),
+        end_at: new Date("2026-08-17T10:00:00").toISOString(),
+      };
+      entries[1] = {
+        ...entries[1],
+        start_at: afternoonStart,
+        end_at: new Date("2026-08-17T16:00:00").toISOString(),
+      };
+      const complete = { entries, coverage: [{ start: dayStart, end: dayEnd }] };
+      let saved = {
+        entries: [entries[1]],
+        coverage: [{ start: afternoonStart, end: dayEnd }],
+      };
+      mocks.getActivityHistory.mockImplementation(async () => ({
+        status: "ok",
+        data: saved,
+      }));
+      mocks.generateActivityHistory.mockImplementation(async () => {
+        saved = complete;
+        if (eventFirst) {
+          mocks.eventListeners.get("activity-history-updated")?.({ payload: {} });
+          await Promise.resolve();
+        }
+        // Native generation returns only the generated interval, not the day.
+        return {
+          status: "ok",
+          data: {
+            entries: [entries[0]],
+            coverage: [{ start: dayStart, end: afternoonStart }],
+          },
+        };
+      });
+      render(<ActivityLedger />);
+      await screen.findByText("Unblocked a customer's onboarding");
+      expect(screen.queryByText("Fixed a capture reliability regression")).toBeNull();
+      const refresh = screen.getByRole("button", { name: "Refresh history" });
+      await waitFor(() => expect(refresh).toBeEnabled());
+      fireEvent.click(refresh);
+      await screen.findByText("Fixed a capture reliability regression");
+      await waitFor(() =>
+        expect(screen.getByText("Unblocked a customer's onboarding")).toBeVisible(),
+      );
+      expect(mocks.generateActivityHistory).toHaveBeenCalledWith(
+        dayStart,
+        afternoonStart,
+        "today",
+      );
+      const [readStart, readEnd] = mocks.getActivityHistory.mock.calls.at(-1)!;
+      expect(readStart).toBe(dayStart);
+      expect(
+        Math.abs(new Date(readEnd).getTime() - new Date(dayEnd).getTime()),
+      ).toBeLessThan(1_000);
+      expect(screen.queryByText(/Not yet summarized/)).toBeNull();
+      expect(screen.getAllByRole("article")).toHaveLength(2);
+    },
+  );
+
+  it("shows a missing interval and a failed refresh alongside saved activities", async () => {
+    const entries = JSON.parse(HISTORY_RESPONSE).entries;
+    mocks.getActivityHistory.mockResolvedValue({
+      status: "ok",
+      data: {
+        entries: [entries[1]],
+        coverage: [{ start: "2026-08-17T17:00:00Z", end: "2026-08-17T20:00:00Z" }],
+      },
+    });
+    mocks.generateActivityHistory.mockResolvedValue({
+      status: "error",
+      error: "hosted_ai_allowance_exceeded",
+    });
+    render(<ActivityLedger />);
+    await screen.findByText("Unblocked a customer's onboarding");
+    expect(await screen.findByText(/Not yet summarized/)).toBeVisible();
+    const refresh = screen.getByRole("button", { name: "Refresh history" });
+    await waitFor(() => expect(refresh).toBeEnabled());
+    fireEvent.click(refresh);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This AI preset has no usage left.",
+    );
+    expect(screen.getByText("Unblocked a customer's onboarding")).toBeVisible();
+    expect(refresh).toBeEnabled();
+  });
+
   it("does not show a bottom append control", async () => {
     mocks.loadPersistedActivityHistory.mockImplementation(
       async (_producer: string, range: { start: Date; end: Date }) => ({
@@ -2140,15 +2232,14 @@ describe("ActivityLedger", () => {
       start: new Date("2026-08-17T07:00:00Z"),
       end: new Date("2026-08-17T20:00:00Z"),
     };
-    mocks.generateActivityHistory.mockResolvedValue({
-      status: "ok",
-      data: {
-        entries: parseActivityHistoryResponse(REPAIRED_HISTORY_RESPONSE, range)
-          .entries,
-        coverage: [
-          { start: range.start.toISOString(), end: range.end.toISOString() },
-        ],
-      },
+    const repaired = {
+      entries: parseActivityHistoryResponse(REPAIRED_HISTORY_RESPONSE, range)
+        .entries,
+      coverage: [{ start: range.start.toISOString(), end: range.end.toISOString() }],
+    };
+    mocks.generateActivityHistory.mockImplementation(async () => {
+      mocks.loadPersistedActivityHistory.mockResolvedValue(repaired);
+      return { status: "ok", data: repaired };
     });
 
     render(<ActivityLedger />);

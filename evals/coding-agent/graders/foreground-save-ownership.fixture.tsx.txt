@@ -1,0 +1,47 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import { useRef, useState } from 'react';
+import { act, renderHook, cleanup } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { usePiChatState } from '@/components/chat/standalone/hooks/use-pi-chat-state';
+import { usePiForegroundEvents } from '@/components/chat/standalone/hooks/use-pi-foreground-events';
+vi.mock('@tauri-apps/api/event', () => ({emit:vi.fn(async()=>{})}));
+vi.mock('@/lib/stores/chat-store',()=>({useChatStore:{getState:()=>({sessions:{},actions:{patch:vi.fn(),setStreaming:vi.fn(),setMessages:vi.fn(),appendMessage:vi.fn()}})}}));
+vi.mock('@/lib/events/bus',()=>({mountAgentEventBus:vi.fn(async()=>{}),onTerminated:vi.fn(()=>()=>{})}));
+vi.mock('@/components/chat/standalone/hooks/pi-log-listener',()=>({registerPiLogListener:vi.fn(async()=>()=>{})}));
+vi.mock('@/components/chat/standalone/hooks/pi-reauth-listener',()=>({registerPiReauthListener:vi.fn(async()=>()=>{})}));
+vi.mock('posthog-js',()=>({default:{capture:vi.fn(),getFeatureFlag:vi.fn()}}));
+const oldRows=[{id:'old-row',role:'user',content:'Synthetic old conversation',timestamp:1}];
+function useHarness({session,files}:{session:string,files:Map<string,any[]>}) {
+ const pi=usePiChatState(); pi.piSessionIdRef.current=session;
+ const [messages,setMessages]=useState<any[]>([]); const messagesRef=useRef(messages);messagesRef.current=messages;
+ const handler=useRef<any>(null);
+ // This port preserves the real save API's captured-id preference and explicit
+ // override, with serialized synthetic records instead of filesystem/native IO.
+ const saveConversation=async(rows:any[],options:any={})=>{files.set(options.idOverride||session,JSON.parse(JSON.stringify(rows)));};
+ usePiForegroundEvents({...pi,activePreset:undefined,buildProviderConfig:()=>null,cancelStreamingMessageRender:vi.fn(),clearPipeExecution:vi.fn(),consumeQueuedDisplayForStartedMessage:()=>undefined,findTurnIntentForUserStart:()=>undefined,flushPendingSteerBatch:async()=>{},flushStreamingMessageRender:vi.fn(),handleAgentEventDataRef:handler,handleAgentActionEvent:()=>false,clearAgentActionsForSession:vi.fn(),handleInvalidatedAuthToken:vi.fn(),lastUserMessageRef:useRef(''),markTurnIntentConsumed:vi.fn(),messages,messagesRef,setMessages,mountedRef:useRef(true),optimisticSteerRef:useRef(null),pendingNextPiUserDisplayRef:useRef(null),pendingNextPiUserIntentRef:useRef(null),pendingSteerBatchRef:useRef([]),saveConversation,scheduleStreamingMessageRender:vi.fn(),setIsLoading:vi.fn(),setIsStreaming:vi.fn(),settings:{} as never,syncThinkingLevelAfterStart:vi.fn(),turnIntentLedgerRef:useRef([]),turnIntentTextValuesMatch:()=>false,noteTurnLivenessEvent:vi.fn()} as any);
+ return {pi,messages,handler};
+}
+beforeEach(()=>{vi.stubGlobal('fetch',vi.fn(()=>{throw new Error('live fetch forbidden')}));});
+afterEach(()=>{cleanup();vi.restoreAllMocks();vi.unstubAllGlobals();});
+it.each(['new-chat','other-existing-chat'])('saves a switched foreground turn only into %s',async(target)=>{
+ const files=new Map<string,any[]>([['old-chat',structuredClone(oldRows)]]);
+ if(target==='other-existing-chat')files.set(target,[]);
+ const {result,rerender}=renderHook(useHarness,{initialProps:{session:'old-chat',files}});
+ rerender({session:target,files});
+ await act(async()=>{result.current.handler.current({type:'message_start',message:{role:'user',content:[{type:'text',text:'Synthetic new prompt'}]}});});
+ expect(files.get('old-chat')).toEqual(oldRows);
+ expect(files.get(target)?.filter(x=>x.role==='user').map(x=>x.content)).toEqual(['Synthetic new prompt']);
+ expect(files.get(target)?.filter(x=>x.role==='assistant')).toHaveLength(1);
+ expect([...files.keys()].sort()).toEqual(['old-chat',target].sort());
+});
+it('preserves saving an ordinary stable-session turn',async()=>{
+ const files=new Map<string,any[]>();const {result}=renderHook(useHarness,{initialProps:{session:'stable-chat',files}});
+ await act(async()=>{result.current.handler.current({type:'message_start',message:{role:'user',content:[{type:'text',text:'Stable prompt'}]}});});
+ expect(files.get('stable-chat')?.map(x=>x.role)).toEqual(['user','assistant']);expect(files.get('stable-chat')?.[0].content).toBe('Stable prompt');
+});
+it('does not overwrite either conversation for an empty user event',async()=>{
+ const files=new Map<string,any[]>([['old-chat',structuredClone(oldRows)]]);const {result,rerender}=renderHook(useHarness,{initialProps:{session:'old-chat',files}});rerender({session:'new-chat',files});
+ await act(async()=>{result.current.handler.current({type:'message_start',message:{role:'user',content:[]}});});
+ expect([...files]).toEqual([['old-chat',oldRows]]);expect(result.current.messages).toEqual([]);
+});

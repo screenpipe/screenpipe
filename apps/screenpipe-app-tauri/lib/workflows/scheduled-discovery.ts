@@ -1,6 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
+import { trackWorkflowOutcome } from "./notification";
 import { requireWorkflowsRollout, syncWorkflowsRollout } from "./rollout";
 import { localFetch } from "@/lib/api";
 import type { WorkflowAnalysis, WorkflowAnalysisJob, WorkflowMap } from "@screenpipe/workflows-ui";
@@ -122,7 +123,10 @@ function job(execution: any): WorkflowAnalysisJob {
       : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_usage_unavailable") ? "Could not check AI allowance. Reconnect and try again."
       : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_sign_in_required") ? "Sign in again to resume workflow updates."
       : String(`${execution.error_type || ""} ${execution.error_message || ""}`).includes("workflow_rollout_disabled") ? "Workflows access was not confirmed. Try Update now to reconnect."
+      : execution.error_type === "context_compaction" ? "The update could not prepare its next step. Any saved progress is kept. Try again to continue."
       : execution.error_type === "missing_output" ? "The update could not be saved. Your previous workflows are still available. Try again."
+      : execution.error_type === "timeout" || execution.status === "timed_out" || /(?:execution|request|connection) timed out/i.test(execution.error_message || "") ? "The update ran out of time. Saved workflows and research are kept. Try again to continue."
+      : /context_length_exceeded|conversation is too long|context size has been exceeded/i.test(execution.error_message || "") ? "The update reached the AI context limit. Saved workflows and research are kept. Try again to continue."
       : status === "failed" ? "Could not update workflows. Your saved workflows are still available. See the scheduled task for details."
       : status === "processing" ? "Updating workflows" : "Waiting to update workflows",
   };
@@ -167,10 +171,14 @@ export async function getWorkflowJob(id: string): Promise<WorkflowAnalysisJob> {
     && Date.parse(item.execution.started_at) >= Date.parse(startedAt || ""))
     .sort((a,b) => Date.parse(b.execution.started_at) - Date.parse(a.execution.started_at))[0];
   if (failure) return { ...tracked(failure.execution, failure.task), cycleId };
-  const lastFinished = Math.max(Date.parse(startedAt || "") || 0, ...tasks.map(item => Date.parse(item.execution?.finished_at || "") || 0));
+  // Readiness checks can finish every minute without doing any research.
+  // Only a durable write in this cycle extends the handoff grace period.
+  const lastProgress = Math.max(Date.parse(startedAt || "") || 0, ...Object.values(ws.receipts || {})
+    .filter((receipt: any) => cycleId && receipt.cycle === cycleId)
+    .map((receipt: any) => Date.parse(receipt.savedAt || "") || 0));
   // Completion events normally wake the next agent. Scheduled readiness checks
   // recover a missed event or a review handoff that triggers chain cooldown.
-  if (ws.cycle?.status === "running" && Date.now() - lastFinished < 360_000) {
+  if (ws.cycle?.status === "running" && Date.now() - lastProgress < 360_000) {
     return { id, cycleId, startedAt, status: "queued", message: "Preparing the next workflow agent" };
   }
   const open = Object.values(ws.drafts || {}).filter((draft: any) => draft.status === "open").length;
@@ -241,6 +249,7 @@ export async function saveWorkflowCorrections(analysis: WorkflowAnalysis) {
 export async function saveWorkflowFeedback(workflow: WorkflowMap, feedback: string) {
   if (!workflow.id) throw new Error("Refresh this workflow before sending feedback.");
   await request("/workflows/corrections", { id: workflow.id, correction: feedback });
+  trackWorkflowOutcome("workflow_feedback_saved", workflow.id);
 }
 
 /** Compare-and-save a scoped feedback refinement through the catalog writer. */
@@ -251,6 +260,7 @@ export async function applyWorkflowFeedback(workflow: WorkflowMap, learning: str
   const correction = prior.includes(note) ? prior : [prior, note].filter(Boolean).join("\n\n");
   const result = await request("/workflows/corrections", { id: workflow.id, correction, expected_revision: workflow.revision ?? 0, changes });
   if (!result.success || result.workflow?.id !== workflow.id) throw new Error("Could not verify the saved workflow refinement.");
+  trackWorkflowOutcome("workflow_feedback_saved", workflow.id);
   return result.workflow as WorkflowMap;
 }
 
@@ -258,4 +268,14 @@ export async function saveWorkflowEdits(draft: import("@screenpipe/workflows-ui"
   const result = await request("/workflows/edits", draft);
   if (result.workflow?.id !== draft.id) throw new Error("The saved workflow could not be confirmed. Your draft is kept.");
   return result.workflow;
+}
+
+/** Keep concurrent catalog updates from overwriting an answer review. */
+export async function saveWorkflowAnswers(workflow: WorkflowMap, correction: string): Promise<WorkflowMap> {
+  if (!workflow.id) throw new Error("Refresh this workflow before saving answers.");
+  const result = await request("/workflows/corrections", {
+    id: workflow.id, correction, expected_revision: workflow.revision ?? 0, changes: {},
+  });
+  if (!result.success || result.workflow?.id !== workflow.id) throw new Error("Could not verify saved answers.");
+  return result.workflow as WorkflowMap;
 }

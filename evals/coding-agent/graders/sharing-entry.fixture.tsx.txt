@@ -1,0 +1,96 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import React from 'react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { WorkflowTasksPrompt } from './workflow-tasks-prompt';
+const f = vi.hoisted(() => ({ settings: {} as any, update: vi.fn(), request: vi.fn(), token: vi.fn(), stop: vi.fn() }));
+vi.mock('@/lib/hooks/use-settings', () => ({ useSettings: () => ({ settings: f.settings, updateSettings: f.update }) }));
+vi.mock('@/lib/utils/tauri', () => ({ commands: { getCloudToken: f.token } }));
+vi.mock('@/lib/trajectories/collector', () => ({ SHARING_NOTICE_VERSION: '2026-09-23', sharingRequest: f.request, trajectoryCollector: { stop: f.stop } }));
+vi.mock('@/lib/workflows/scheduled-discovery', () => ({ loadWorkflowTaskSetup: vi.fn(), enableWorkflowTask: vi.fn(), disableWorkflowTasks: vi.fn() }));
+const notice = '2026-09-23';
+function status(extra = {}) { return { available: true, noticeVersion: notice, acceptedNoticeVersion: null, accountId: f.settings.user?.id, sharing: false, training: false, epoch: null, revision: 1, ...extra }; }
+beforeEach(() => {
+ vi.clearAllMocks();
+ f.settings = { user: { id: 'synthetic-a' }, workflowSharingPromptSeen: {}, workflowSharing: null, piiBackend: 'local', disabled: true };
+ f.update.mockImplementation(async (patch: any) => { f.settings = { ...f.settings, ...patch }; });
+ f.token.mockImplementation(async () => f.settings.user ? `synthetic-token-${f.settings.user.id}` : null);
+ f.request.mockImplementation(async (method: string) => status(method === 'PUT' ? { sharing: true, training: true, acceptedNoticeVersion: notice, epoch: 'synthetic-epoch' } : {}));
+});
+afterEach(cleanup);
+function service(enabled = false) {
+ return { load: vi.fn(async () => ({ enabled, title: 'Synthetic updates', schedule: 'Hourly', tasks: [{ name: 'synthetic-task', enabled }] })), enable: vi.fn(async () => { enabled = true; }), disable: vi.fn(async () => { enabled = false; }) };
+}
+const dialog = () => screen.findByRole('dialog', { name: 'Help improve Screenpipe' });
+const skip = () => fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+const toggle = () => screen.getByRole('switch', { name: 'Automatic updates' });
+const grants = () => f.request.mock.calls.filter(([method]) => method !== 'GET');
+async function flush() { await act(async () => { await Promise.resolve(); }); }
+it('offers a real optional sharing choice on entry while schedules are off', async () => {
+ const tasks = service(); render(<WorkflowTasksPrompt active tasks={tasks} />);
+ expect(await dialog()).toBeVisible();
+ await waitFor(() => expect(screen.getByRole('button', { name: 'Allow sharing' })).toBeEnabled());
+ expect(f.update).not.toHaveBeenCalled(); expect(grants()).toEqual([]);
+ expect(tasks.enable).not.toHaveBeenCalled(); expect(tasks.disable).not.toHaveBeenCalled();
+ skip(); await flush();
+ expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); expect(toggle()).not.toBeChecked();
+ expect(f.settings.workflowSharing).toBeNull(); expect(f.settings.piiBackend).toBe('local'); expect(f.settings.disabled).toBe(true);
+ expect(f.settings.workflowSharingPromptSeen).toEqual({ 'synthetic-a': notice }); expect(grants()).toEqual([]);
+});
+it('offers sharing without recorder readiness or automatic-update access', async () => {
+ const tasks = service(); render(<WorkflowTasksPrompt active backendReady={false} canEnable={false} tasks={tasks} />);
+ expect(await dialog()).toBeVisible(); expect(tasks.load).not.toHaveBeenCalled(); expect(tasks.enable).not.toHaveBeenCalled(); expect(grants()).toEqual([]);
+ skip(); await flush(); expect(f.settings.workflowSharing).toBeNull();
+});
+it('records only the skipping account and does not repeat on workspace re-entry', async () => {
+ f.settings.workflowSharingPromptSeen = { other: notice }; const tasks = service();
+ const view = render(<WorkflowTasksPrompt active tasks={tasks} />); await dialog(); skip(); await flush();
+ expect(f.settings.workflowSharingPromptSeen).toEqual({ other: notice, 'synthetic-a': notice });
+ view.rerender(<WorkflowTasksPrompt active={false} tasks={tasks} />); view.rerender(<WorkflowTasksPrompt active tasks={tasks} />); await flush();
+ expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); expect(grants()).toEqual([]);
+});
+it('hydrates and switches account choices without granting on logout', async () => {
+ f.settings.user = null; const tasks = service(); const view = render(<WorkflowTasksPrompt active tasks={tasks} />); await flush();
+ expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+ f.settings.user = { id: 'synthetic-a' }; view.rerender(<WorkflowTasksPrompt active tasks={tasks} />); await dialog(); skip(); await flush();
+ f.settings.user = { id: 'synthetic-b' }; view.rerender(<WorkflowTasksPrompt active tasks={tasks} />); expect(await dialog()).toBeVisible();
+ expect(f.settings.workflowSharingPromptSeen).toEqual({ 'synthetic-a': notice });
+ f.settings.user = null; view.rerender(<WorkflowTasksPrompt active tasks={tasks} />); await flush();
+ expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); expect(grants()).toEqual([]);
+});
+it('keeps an unanswered choice open through recorder disconnect and reconnect', async () => {
+ const tasks = service(); const view = render(<WorkflowTasksPrompt active tasks={tasks} />); await dialog();
+ view.rerender(<WorkflowTasksPrompt active backendReady={false} tasks={tasks} />); expect(await dialog()).toBeVisible();
+ view.rerender(<WorkflowTasksPrompt active backendReady tasks={tasks} />); expect(await dialog()).toBeVisible();
+ expect(f.update).not.toHaveBeenCalled(); expect(grants()).toEqual([]);
+});
+it('preserves inactive and already-seen account behavior', async () => {
+ const tasks = service(); const view = render(<WorkflowTasksPrompt active={false} tasks={tasks} />); await flush();
+ expect(tasks.load).not.toHaveBeenCalled(); expect(f.request).not.toHaveBeenCalled(); expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+ f.settings.workflowSharingPromptSeen = { 'synthetic-a': notice }; view.rerender(<WorkflowTasksPrompt active tasks={tasks} />); await flush();
+ expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); expect(grants()).toEqual([]); expect(tasks.enable).not.toHaveBeenCalled();
+});
+it('preserves explicit successful sharing through actual controls', async () => {
+ const tasks = service(true); render(<WorkflowTasksPrompt active tasks={tasks} />); await dialog();
+ await waitFor(() => expect(screen.getByRole('button', { name: 'Allow sharing' })).toBeEnabled());
+ expect(grants()).toEqual([]); fireEvent.click(screen.getByRole('button', { name: 'Allow sharing' }));
+ await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+ expect(grants()).toHaveLength(1); expect(grants()[0][0]).toBe('PUT');
+ expect(grants()[0][1]).toMatchObject({ sharing: true, training: true, noticeVersion: notice });
+ expect(f.settings.workflowSharing).toMatchObject({ accountId: 'synthetic-a', epoch: 'synthetic-epoch', priorBackend: 'local' });
+ expect(f.settings.piiBackend).toBe('tinfoil'); expect(f.settings.disabled).toBe(true); expect(tasks.enable).not.toHaveBeenCalled();
+});
+it('preserves unavailable sharing refusal and a usable skip', async () => {
+ f.request.mockImplementation(async () => status({ available: false }));
+ render(<WorkflowTasksPrompt active tasks={service(true)} />); await dialog(); await flush();
+ expect(screen.getByRole('button', { name: 'Allow sharing' })).toBeDisabled(); skip(); await flush();
+ expect(grants()).toEqual([]); expect(f.settings.workflowSharing).toBeNull(); expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+});
+it('preserves schedule confirmation after an independent skip', async () => {
+ const tasks = service(); render(<WorkflowTasksPrompt active tasks={tasks} />); await dialog(); skip(); await flush();
+ await waitFor(() => expect(toggle()).toBeEnabled()); fireEvent.click(toggle());
+ fireEvent.click(await screen.findByRole('button', { name: 'Enable automatic updates' }));
+ await waitFor(() => expect(toggle()).toBeChecked()); expect(tasks.enable).toHaveBeenCalledOnce();
+ expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); expect(grants()).toEqual([]); expect(f.settings.workflowSharing).toBeNull();
+});

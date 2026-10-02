@@ -278,11 +278,11 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
   }, [confirmingDisconnect, rows, connected, removeTool, refresh, onChanged]);
 
   // Reveal the offending config next to the error so the fix is one click
-  // away. macOS `open -R` selects the file in Finder (the shell "open" command
-  // is already in the app's allowlist); other platforms fall back silently.
+  // away. macOS `open -R` selects the file in Finder (the "open-reveal" entry
+  // in the app's shell allowlist); other platforms fall back silently.
   const revealPath = async (path: string) => {
     try {
-      if (platform() === "macos") await Command.create("open", ["-R", path]).execute();
+      if (platform() === "macos") await Command.create("open-reveal", ["-R", path]).execute();
     } catch (e) {
       console.warn("[ai-tools] reveal failed:", e);
     }

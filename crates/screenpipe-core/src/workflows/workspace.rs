@@ -154,6 +154,18 @@ pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, Strin
     let rev = revision(ws) + 1;
     let mut id = change.draft_id.clone();
     match change.action.as_str() {
+        "checkpoint" => {
+            if change.draft_id.is_some() || change.payload.is_some() || change.assignee.is_some() {
+                return Err("Checkpoint saves only a research note. Use propose or handoff to change a draft.".into());
+            }
+            // Replace one bounded note per role. This records research progress,
+            // never evidence, publication, or completion of the requested range.
+            if change.note.chars().count() > 8000 {
+                return Err("Keep the checkpoint within 8000 characters; save source references, remaining gaps and the next query, not raw captures.".into());
+            }
+            ws["cycle"]["checkpoints"][task] =
+                json!({"note":change.note,"savedAt":Utc::now().to_rfc3339()});
+        }
         "propose" | "handoff" => {
             let assignee = change
                 .assignee
@@ -230,6 +242,9 @@ pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, Strin
             }
             ws["cycle"]["finished"][task] = json!(true);
             ws["cycle"]["notes"][task] = json!(change.note);
+            if let Some(checkpoints) = ws["cycle"]["checkpoints"].as_object_mut() {
+                checkpoints.remove(task);
+            }
         }
         _ => return Err("Unknown workspace action.".into()),
     }
@@ -239,7 +254,11 @@ pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, Strin
         return Err("Workspace is full. Finish the current drafts before proposing more.".into());
     }
     ws["revision"] = json!(rev);
-    ws["receipts"][task] = json!({"revision":rev,"cycle":ws["cycle"]["id"],"note":change.note});
+    ws["receipts"][task] =
+        json!({"revision":rev,"cycle":ws["cycle"]["id"],"savedAt":Utc::now().to_rfc3339()});
+    if change.action != "checkpoint" {
+        ws["receipts"][task]["note"] = json!(change.note);
+    }
     Ok(json!({"revision":rev,"draft_id":id,"saved":true}))
 }
 
@@ -342,7 +361,7 @@ pub fn published(ws: &mut Value, id: Option<&str>, payload: Option<&Value>, rece
     }
     let rev = revision(ws) + 1;
     ws["revision"] = json!(rev);
-    ws["receipts"][TASKS[2]] = json!({"revision":rev,"cycle":ws["cycle"]["id"],"saved":true});
+    ws["receipts"][TASKS[2]] = json!({"revision":rev,"cycle":ws["cycle"]["id"],"saved":true,"savedAt":Utc::now().to_rfc3339()});
 }
 
 /// Publication must preserve the reviewed procedure. Normalization can report
@@ -381,6 +400,68 @@ pub fn validate_publication(raw: &Value, normalized: &Value) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn checkpoint_survives_restart_without_completing_coverage() {
+        let mut ws = empty();
+        start(&mut ws, &json!({}));
+        let end = ws["cycle"]["end"].clone();
+        let mut checkpoint = change("checkpoint", &ws, None, None);
+        checkpoint.payload = None;
+        checkpoint.note = "Inspected A; B failed. Next: narrow query B.".into();
+        apply(&mut ws, TASKS[0], &checkpoint).unwrap();
+        let mut restored: Value = serde_json::from_str(&ws.to_string()).unwrap();
+        assert_eq!(
+            restored["cycle"]["checkpoints"][TASKS[0]]["note"],
+            checkpoint.note
+        );
+        assert!(ready(&restored, TASKS[0]));
+        assert!(!can_finish(&restored));
+        assert_eq!(restored["cycle"]["end"], end);
+        assert_eq!(restored["cycle"]["finished"], json!({}));
+        let before = restored.clone();
+        assert!(apply(&mut restored, TASKS[0], &checkpoint).is_err());
+        assert_eq!(restored, before);
+        checkpoint.expected_revision = revision(&restored);
+        checkpoint.note = "Next focused query".into();
+        apply(&mut restored, TASKS[0], &checkpoint).unwrap();
+        assert_eq!(
+            restored["cycle"]["checkpoints"].as_object().unwrap().len(),
+            1
+        );
+        assert_eq!(
+            restored["cycle"]["checkpoints"][TASKS[0]]["note"],
+            "Next focused query"
+        );
+        assert!(restored["receipts"][TASKS[0]]["savedAt"].as_str().is_some());
+        let finish = change("finish", &restored, None, None);
+        apply(&mut restored, TASKS[0], &finish).unwrap();
+        assert!(restored["cycle"]["checkpoints"][TASKS[0]].is_null());
+        assert_eq!(restored["cycle"]["finished"][TASKS[0]], true);
+        assert!(!can_finish(&restored));
+    }
+
+    #[test]
+    fn checkpoint_respects_stop_and_rejects_oversized_or_ambiguous_saves() {
+        let mut ws = empty();
+        start(&mut ws, &json!({}));
+        let mut checkpoint = change("checkpoint", &ws, None, None);
+        checkpoint.payload = None;
+        checkpoint.note = "界".repeat(8001);
+        let before = ws.clone();
+        assert!(apply(&mut ws, TASKS[0], &checkpoint).is_err());
+        assert_eq!(ws, before);
+        checkpoint.note = "bounded progress".into();
+        checkpoint.payload = Some(json!({"title":"not a checkpoint"}));
+        assert!(apply(&mut ws, TASKS[0], &checkpoint).is_err());
+        assert_eq!(ws, before);
+        checkpoint.payload = None;
+        pause(&mut ws);
+        checkpoint.expected_revision = revision(&ws);
+        let paused = ws.clone();
+        assert!(apply(&mut ws, TASKS[0], &checkpoint).is_err());
+        assert_eq!(ws, paused);
+    }
+
     #[test]
     fn completed_research_survives_cycles_restart_and_pause() {
         let mut ws = empty();

@@ -11,6 +11,7 @@ import posthog from "posthog-js";
 import { commands, type AIPreset } from "@/lib/utils/tauri";
 import {
   LEARNING_POLL_INTERVAL_MS,
+  LEARNING_WINDOW_CEILING_MS,
   LEARNING_SUMMARY_OPENED_EVENT,
   LEARNING_WINDOW_RESET_EVENT,
   beginLearningWindow,
@@ -55,15 +56,9 @@ export type LearningWindowOptions = {
 export function useLearningWindow(
   _options: LearningWindowOptions = {},
 ): LearningWindowView {
-  const [state, setState] = useState<FirstRunLearningState>(() => {
-    const stored = readLearningWindow();
-    // A ready card is a one-session announcement, not a replacement for the
-    // normal Home starter on every later app launch. The chat remains durable.
-    return stored.phase === "ready" && stored.readyShownAt
-      ? markLearningDone()
-      : stored;
-  });
+  const [state, setState] = useState<FirstRunLearningState>(readLearningWindow);
   const [capturedApps, setCapturedApps] = useState<FirstRunCapturedApp[]>([]);
+  const [previewStartedAt, setPreviewStartedAt] = useState<string | null>(null);
   const [remainingMs, setRemainingMs] = useState(() =>
     learningWindowRemainingMs(readLearningWindow().startedAt),
   );
@@ -74,13 +69,31 @@ export function useLearningWindow(
     let cancelled = false;
     const sync = async () => {
       const result = await commands.getOnboardingStatus();
-      if (cancelled || result.status !== "ok" || !result.data.isCompleted) return;
+      if (cancelled || result.status !== "ok") return;
       const native = result.data;
+      const phase = native.firstRunSummaryPhase ?? "idle";
+      // Only the native owner can authorize preview reads. Restored browser
+      // state must not restart a completed or unarmed learning window.
+      setPreviewStartedAt(
+        native.isCompleted && phase === "learning"
+          ? native.firstRunSummaryStartedAt ?? null
+          : null,
+      );
+      if (!native.isCompleted || phase === "idle") {
+        const stored = readLearningWindow();
+        if (stored.phase === "learning" || stored.phase === "writing") {
+          resetLearningWindow();
+          setState(readLearningWindow());
+          setCapturedApps([]);
+          setRemainingMs(0);
+        }
+        return;
+      }
       setActivationState(trialActivationState(native.currentStep));
       const startedAt = native.firstRunSummaryStartedAt ?? native.completedAt;
-      const phase = native.firstRunSummaryPhase ?? "idle";
 
       if (phase === "learning" && startedAt) {
+        setRemainingMs(learningWindowRemainingMs(startedAt));
         const stored = readLearningWindow();
         if (stored.startedAt !== startedAt || stored.phase === "idle" || stored.phase === "writing") {
           setState(beginLearningWindow(startedAt, true));
@@ -122,22 +135,48 @@ export function useLearningWindow(
   }, []);
 
   useEffect(() => {
-    if (!state.startedAt || (state.phase !== "learning" && state.phase !== "writing")) return;
-    let cancelled = false;
+    if (
+      state.phase !== "learning" ||
+      !previewStartedAt ||
+      state.startedAt !== previewStartedAt
+    ) return;
+    const remaining = learningWindowRemainingMs(previewStartedAt);
+    setRemainingMs(remaining);
+    if (!Number.isFinite(remaining) || remaining <= 0 || remaining > LEARNING_WINDOW_CEILING_MS) return;
+
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let delay = LEARNING_POLL_INTERVAL_MS;
+    // The UI preview has a fixed lifetime. Native generation and its durable
+    // retries continue independently after this countdown or navigation.
+    const deadline = setTimeout(() => {
+      controller.abort();
+      clearTimeout(timer);
+      setRemainingMs(0);
+    }, remaining);
     const refresh = async () => {
-      if (state.phase === "learning") {
-        setRemainingMs(learningWindowRemainingMs(state.startedAt));
+      if (controller.signal.aborted) return;
+      setRemainingMs(learningWindowRemainingMs(previewStartedAt));
+      const activity = await fetchRecentActivity(previewStartedAt, {
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      if (activity) {
+        setCapturedApps(capturedAppsFrom(activity, Date.now()));
+        delay = LEARNING_POLL_INTERVAL_MS;
+      } else {
+        delay = Math.min(delay * 2, LEARNING_WINDOW_CEILING_MS);
       }
-      const activity = await fetchRecentActivity(state.startedAt!);
-      if (!cancelled && activity) setCapturedApps(capturedAppsFrom(activity, Date.now()));
+      // Schedule after completion, so a slow query never overlaps its retry.
+      timer = setTimeout(() => void refresh(), delay);
     };
     void refresh();
-    const timer = setInterval(() => void refresh(), LEARNING_POLL_INTERVAL_MS);
     return () => {
-      cancelled = true;
-      clearInterval(timer);
+      controller.abort();
+      clearTimeout(timer);
+      clearTimeout(deadline);
     };
-  }, [state.phase, state.startedAt]);
+  }, [previewStartedAt, state.phase, state.startedAt]);
 
   useEffect(() => {
     const unlisten = listen(LEARNING_WINDOW_RESET_EVENT, () => {
@@ -155,7 +194,16 @@ export function useLearningWindow(
 
   const markSummaryOpened = useCallback(() => setState(markLearningSummaryOpened()), []);
   const markSummaryRendered = useCallback(async () => {
-    if (activationState !== "summary") return;
+    if (readLearningWindow().phase !== "ready") return;
+    // A restored chat can render before the first status poll resolves. Read
+    // the persisted gate before retiring it so treatment keeps its summary.
+    const native = await commands.getOnboardingStatus();
+    if (native.status !== "ok") throw new Error(native.error);
+    const renderedActivation = trialActivationState(native.data.currentStep);
+    if (renderedActivation !== "summary") {
+      if (renderedActivation !== "paywall") setState(markLearningDone());
+      return;
+    }
     await commands.setOnboardingStep(TRIAL_ACTIVATION_PAYWALL_STEP);
     posthog.capture("first_run_summary_rendered", {
       experiment: "first-summary-card-trial-v1",
@@ -163,7 +211,7 @@ export function useLearningWindow(
       eligible_new_install: true,
     });
     setActivationState("paywall");
-  }, [activationState]);
+  }, []);
   // Notification persistence is native; retained for the existing view contract.
   const markNotificationSent = useCallback(() => {}, []);
   const markReadyShown = useCallback(() => {

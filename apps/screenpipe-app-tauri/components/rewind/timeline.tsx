@@ -85,6 +85,7 @@ export interface DeviceMetadata {
 }
 
 export interface AudioData {
+    captured_at?: string | null;
 	device_name: string;
 	is_input: boolean;
 	transcription: string;

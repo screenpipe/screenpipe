@@ -55,7 +55,7 @@ function textSimilarity(a: string, b: string): number {
 	return (2 * overlap) / (wordsA.size + wordsB.size);
 }
 
-function deduplicateAudioByTime<T extends { audio_chunk_id: number; is_input: boolean; transcription: string }>(
+function deduplicateAudioByTime<T extends { audio_chunk_id: number; is_input: boolean; transcription: string; captured_at?: string | null }>(
 	entries: T[],
 	getTime: (entry: T) => number,
 ): T[] {
@@ -66,7 +66,7 @@ function deduplicateAudioByTime<T extends { audio_chunk_id: number; is_input: bo
 	const seen = new Set<string>();
 	const uniqueEntries: T[] = [];
 	for (const entry of entries) {
-		const key = `${entry.audio_chunk_id}:${entry.transcription}`;
+		const key = `${entry.audio_chunk_id}:${entry.captured_at ?? ""}:${entry.transcription}`;
 		if (!seen.has(key)) {
 			seen.add(key);
 			uniqueEntries.push(entry);
@@ -133,7 +133,7 @@ function detectMeetings(frames: StreamTimeSeriesResponse[]): Meeting[] {
 				if (!audio.transcription || audio.transcription.trim().length === 0) return;
 				allAudio.push({
 					...audio,
-					frameTimestamp: frameTime,
+					frameTimestamp: new Date(audio.captured_at || frameTime),
 					frameIndex,
 				});
 			});

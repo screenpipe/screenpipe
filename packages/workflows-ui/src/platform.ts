@@ -38,6 +38,9 @@ export type WorkflowAnalysisJob = {
 };
 
 export type WorkflowsPlatform = {
+  /** Save reviewed answers through the existing revision-checked correction writer. */
+  questionnaireVoice?: import("./questionnaire-voice").QuestionnaireVoice;
+  saveWorkflowAnswers?: (workflow: WorkflowMap, correction: string) => Promise<WorkflowMap>;
   saveWorkflowEdits?: (draft: import("./workflow-edits").WorkflowEdit) => Promise<WorkflowMap>;
   modelPreference?: import("./model-choice").WorkflowModelPreference;
   /** The existing scheduled-task runtime owns reconciliation and persistence. */
@@ -93,7 +96,16 @@ export type WorkflowsPlatform = {
     profile: WorkProfile,
     scope?: WorkflowScope,
   ) => Promise<WorkProfile>;
+  library?: {
+    listSkillDrafts: () => Promise<Array<{ workflowKey: string; draft: WorkflowSkillDraft }>>;
+    saveSkillDraft: (workflowKey: string, draft: WorkflowSkillDraft) => Promise<void>;
+    listInstalledSkills?: () => Promise<Array<{ name: string; description: string; path: string }>>;
+  };
   guides?: {
+    list?: () => Promise<WorkflowGuide[]>;
+    loadSourceScreenshot?: WorkflowsPlatform["loadWorkflowScreenshot"];
+    loadScreenshot?: (frameId: number, signal: AbortSignal) => Promise<string>;
+    video?: import("./guide-video").GuideVideoPlatform;
     generate: (
       workflow: WorkflowMap,
       signal: AbortSignal,
@@ -136,6 +148,11 @@ export type WorkflowRecording = {
 };
 
 export type WorkflowsAppProps = {
+  /** Quiet in-app alternative to interrupting a focused workflow reader. */
+  readyWorkflowIds?: string[];
+  /** Host-owned request survives cold startup until the saved catalog loads. */
+  reviewRequest?: { key: string; workflowId?: string; workflowIds?: string[] };
+  onReviewRequestHandled?: (found: boolean) => void;
   platform: WorkflowsPlatform;
   initialAnalysis?: WorkflowAnalysis | null;
   storageKey?: string | null;

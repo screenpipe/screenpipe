@@ -1,0 +1,84 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+const ports = vi.hoisted(() => ({ config: vi.fn() }));
+vi.mock('@/lib/utils/tauri', () => ({ commands: { getLocalApiConfig: ports.config } }));
+vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => {}) }));
+vi.mock('@/lib/chat-utils', () => ({ showChatWithPrefill: vi.fn(async () => {}) }));
+let api: typeof import('./api');
+let actions: typeof import('./notifications/actions');
+let transport: ReturnType<typeof vi.fn>;
+let originalFetch: typeof window.fetch;
+const key = 'synthetic-local-key';
+function headers(index = 0) { return new Headers(transport.mock.calls[index]?.[1]?.headers); }
+beforeEach(async () => {
+  vi.resetModules();
+  ports.config.mockReset();
+  ports.config.mockResolvedValue({ key, port: 4317, auth_enabled: true });
+  originalFetch = window.fetch;
+  transport = vi.fn(async () => new Response(null, { status: 200 }));
+  window.fetch = transport as typeof window.fetch;
+  api = await import('./api');
+  await api.ensureApiReady();
+  actions = await import('./notifications/actions');
+});
+afterEach(() => { window.fetch = originalFetch; document.querySelectorAll('base[data-eval]').forEach(el => el.remove()); });
+it.each([
+  'https://external.invalid/collect',
+  'http://localhost:4317@external.invalid/collect',
+  'http://external.invalid/localhost:4317',
+  'http://localhost:4317.external.invalid/collect',
+  'http://localhost:4318/health',
+  'https://localhost:4317/health',
+])('localFetch never supplies its key to %s', async url => {
+  await api.localFetch(url);
+  expect(transport).toHaveBeenCalledTimes(1);
+  expect(transport.mock.calls[0][0]).toBe(url);
+  expect(headers().has('Authorization')).toBe(false);
+});
+it.each(['/health', 'health', 'http://localhost:4317/health', 'http://127.0.0.1:4317/health'])('configured local target retains authentication: %s', async url => {
+  await api.localFetch(url);
+  expect(transport).toHaveBeenCalledTimes(1);
+  expect(headers().get('Authorization')).toBe(`Bearer ${key}`);
+  expect(transport.mock.calls[0][0]).toBe(url.startsWith('http') ? url : 'http://localhost:4317/health');
+});
+it.each(['https://external.invalid/?next=localhost:4317', 'http://localhost:4317@external.invalid/collect', '/app-relative', 'https://external.invalid/plain'])('global fetch uses actual authority for %s', async url => {
+  await window.fetch(url);
+  expect(transport).toHaveBeenCalledTimes(1);
+  expect(headers().has('Authorization')).toBe(false);
+});
+it('global fetch honors a local document base', async () => {
+  const base = document.createElement('base'); base.dataset.eval = 'true'; base.href = 'http://localhost:4317/'; document.head.append(base);
+  await window.fetch('/health');
+  expect(headers().get('Authorization')).toBe(`Bearer ${key}`);
+});
+it.each(['https://external.invalid/collect', 'http://localhost:4317@external.invalid/collect', 'http://localhost:4318/health', 'https://localhost:4317/health', '//external.invalid/collect'])('notification API executor refuses non-local target without transport: %s', async url => {
+  let rejected = false;
+  try { await actions.executeNotificationAction({ type: 'api', url }); } catch { rejected = true; }
+  expect(rejected).toBe(true);
+  expect(transport).not.toHaveBeenCalled();
+});
+it('notification local action preserves request and body', async () => {
+  await actions.executeNotificationAction({ type: 'api', url: '/capture/hd/start', method: 'POST', body: { fps: 1 } });
+  expect(transport).toHaveBeenCalledTimes(1);
+  expect(transport.mock.calls[0][0]).toBe('http://localhost:4317/capture/hd/start');
+  expect(transport.mock.calls[0][1].method).toBe('POST');
+  expect(JSON.parse(transport.mock.calls[0][1].body)).toEqual({ fps: 1 });
+  expect(headers().get('Authorization')).toBe(`Bearer ${key}`);
+});
+it('disabled authentication does not inject the key', async () => {
+  api.configureApi({ authEnabled: false }); await api.localFetch('/health');
+  expect(headers().has('Authorization')).toBe(false);
+});
+it('explicit caller authorization is preserved', async () => {
+  await api.localFetch('/health', { headers: { Authorization: 'Bearer synthetic-explicit' } });
+  expect(headers().get('Authorization')).toBe('Bearer synthetic-explicit');
+});
+it('local unauthorized response refreshes the key for one retry', async () => {
+  transport.mockResolvedValueOnce(new Response(null, { status: 401 }));
+  ports.config.mockResolvedValue({ key: 'synthetic-replacement', port: 4317, auth_enabled: true });
+  await api.localFetch('/health');
+  expect(transport).toHaveBeenCalledTimes(2);
+  expect(headers(0).get('Authorization')).toBe(`Bearer ${key}`);
+  expect(headers(1).get('Authorization')).toBe('Bearer synthetic-replacement');
+});

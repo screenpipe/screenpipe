@@ -1,0 +1,35 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import React from 'react';
+import {render,act,waitFor,cleanup} from '@testing-library/react';
+import {it,expect,vi,afterEach,beforeEach} from 'vitest';
+const state=vi.hoisted(()=>({settings:null as any, runtime:Promise.resolve(false),version:Promise.resolve('0.0.0'),identify:vi.fn(),alias:vi.fn(),optOut:vi.fn(),unexpected:[] as string[]}));
+vi.mock('posthog-js',()=>({default:{identify:state.identify,alias:state.alias,opt_out_capturing:state.optOut,capture:vi.fn()}}));
+vi.mock('@tauri-apps/api/core',()=>({invoke:(name:string)=>{if(name==='is_telemetry_disabled_by_env')return state.runtime;state.unexpected.push(name);throw Error('unexpected native command');}}));
+vi.mock('@tauri-apps/api/app',()=>({getVersion:()=>state.version}));
+vi.mock('@tauri-apps/api/path',()=>({homeDir:async()=>'/synthetic'}));
+vi.mock('@tauri-apps/plugin-os',()=>({platform:()=>'macos',arch:()=>'aarch64'}));
+vi.mock('@tauri-apps/api/event',()=>({emit:vi.fn(async()=>{}),listen:vi.fn(async()=>()=>{})}));
+vi.mock('@tauri-apps/plugin-store',()=>({Store:{load:async()=>({get:async()=>structuredClone(state.settings),set:async(_k:string,v:any)=>{state.settings=structuredClone(v)},save:async()=>{},onKeyChange:async()=>()=>{}})}}));
+vi.mock('@/lib/utils/tauri',()=>({commands:{getScreenpipeBaseDir:async()=>({status:'ok',data:'/synthetic'}),reencryptStore:async()=>{},getCloudToken:async()=>null,setCloudToken:async()=>({status:'ok'}),setBrowserCookieAccessState:async()=>{}}}));
+vi.mock('@/lib/auth-guard',()=>({installAuthInterceptor:()=>()=>{}}));
+vi.mock('@/lib/analytics-id',()=>({cacheAnalyticsId:()=>{},cacheAnalyticsEnabled:()=>{}}));
+vi.mock('@/lib/analytics/settings-change',()=>({captureSettingsChange:()=>{}}));
+vi.mock('@/lib/api',()=>({configureApi:()=>{},refreshApiConfig:async()=>{},localFetch:async()=>{throw Error('unexpected network')}}));
+vi.mock('@/lib/hooks/use-is-enterprise-build',()=>({isResolvedConsumerBuild:async()=>true}));
+const gate=()=>{let resolve!:(x:any)=>void;const promise=new Promise<any>(r=>{resolve=r});return {promise,resolve}};
+beforeEach(()=>{vi.resetModules();vi.clearAllMocks();state.unexpected=[];state.runtime=Promise.resolve(false);state.version=Promise.resolve('0.0.0');localStorage.clear();vi.stubGlobal('fetch',vi.fn(async()=>{throw Error('network forbidden')}));});
+afterEach(()=>{cleanup();vi.unstubAllGlobals();expect(state.unexpected).toEqual([])});
+async function mount(enabled:boolean){
+ const m=await import('@/lib/hooks/use-settings');state.settings={...m.createDefaultSettingsObject(),deviceId:'synthetic-device',analyticsId:'synthetic-install',analyticsEnabled:enabled,user:{id:'synthetic-user',clerk_id:'synthetic-clerk',email:'owner@example.invalid'},_proCloudMigrationDone:true,_presetsSeededForUser:true};
+ let loaded = false;
+ function Observer() { loaded = m.useSettings().isSettingsLoaded; return null; }
+ const view=render(<m.SettingsProvider><Observer /></m.SettingsProvider>);
+ await waitFor(()=>expect(loaded).toBe(true));
+ await act(async()=>{await Promise.resolve();await Promise.resolve()});return view;
+}
+it('explicit analytics refusal blocks both identity effects',async()=>{await mount(false);expect(state.identify).not.toHaveBeenCalled();expect(state.alias).not.toHaveBeenCalled()});
+it('native runtime refusal blocks both identity effects',async()=>{state.runtime=Promise.resolve(true);await mount(true);expect(state.identify).not.toHaveBeenCalled();expect(state.alias).not.toHaveBeenCalled()});
+it('opted-in settled runtime preserves account identity',async()=>{await mount(true);await waitFor(()=>expect(state.identify).toHaveBeenCalledWith('synthetic-clerk',expect.objectContaining({email:'owner@example.invalid',machine_analytics_id:'synthetic-install'})));expect(state.alias).toHaveBeenCalledWith('synthetic-clerk')});
+it('pending runtime delays identity until permission resolves',async()=>{const g=gate();state.runtime=g.promise;await mount(true);expect(state.identify).not.toHaveBeenCalled();expect(state.alias).not.toHaveBeenCalled();await act(async()=>g.resolve(false));await waitFor(()=>expect(state.identify).toHaveBeenCalled())});
+it('unmount fences late version completion',async()=>{const g=gate();state.version=g.promise;const v=await mount(true);v.unmount();await act(async()=>g.resolve('0.0.0'));expect(state.identify).not.toHaveBeenCalled()});

@@ -1,0 +1,132 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+
+import React from "react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PipeStoreView } from "@/components/pipe-store";
+
+const mocks = vi.hoisted(() => ({
+  localFetch: vi.fn(),
+  cacheSet: vi.fn(),
+  invalidatePrefix: vi.fn(),
+}));
+
+vi.mock("@/lib/api", () => ({ localFetch: mocks.localFetch }));
+vi.mock("@/lib/cache", () => ({
+  apiCache: {
+    get: vi.fn(() => null),
+    getStale: vi.fn(() => null),
+    isFresh: vi.fn(() => false),
+    set: mocks.cacheSet,
+    invalidate: vi.fn(),
+    invalidatePrefix: mocks.invalidatePrefix,
+  },
+}));
+vi.mock("@/lib/hooks/use-settings", () => ({
+  useSettings: () => ({ settings: { user: null } }),
+}));
+vi.mock("@/lib/hooks/use-event-listener", () => ({ useEventListener: vi.fn() }));
+vi.mock("@/components/ui/use-toast", () => ({
+  useToast: () => ({ toast: vi.fn() }),
+}));
+vi.mock("@/components/settings/pipes-section", () => ({
+  PipesSection: () => <div>installed tasks</div>,
+}));
+vi.mock("@/components/notification-bell", () => ({ NotificationBell: () => null }));
+vi.mock("@/components/pipe-store-submission", () => ({
+  PipeStoreSubmissionDialog: () => null,
+}));
+vi.mock("@/lib/stores/feedback-store", () => ({
+  useFeedbackStore: () => vi.fn(),
+}));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
+vi.mock("posthog-js", () => ({ default: { capture: vi.fn() } }));
+
+function jsonResponse(data: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => data,
+  } as Response;
+}
+
+describe("pipe store error state", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const values = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+      clear: () => values.clear(),
+    });
+    localStorage.setItem("screenpipe:pipes-welcome-dismissed", "1");
+  });
+
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const errorText = /(?:couldn.t|cannot|unable to) load|load.*failed|catalog.*unavailable/i;
+  const emptyText = /no (?:scheduled tasks|tasks|pipes|workflows) (?:found|available)|catalog is empty/i;
+  const retryName = /try again|retry|reload/i;
+  const pipe = { slug: "daily-summary", title: "Daily summary", description: "summarizes the day", category: "productivity" };
+  function installResponses(store: () => Promise<Response>) {
+    mocks.localFetch.mockImplementation(async (url: string) => {
+      if (url === "/pipes") return jsonResponse([{ config: { name: "installed" } }]);
+      if (url === "/pipes/store/check-updates") return jsonResponse({ data: [] });
+      if (url.startsWith("/pipes/store?")) return store();
+      throw new Error(`unexpected request: ${url}`);
+    });
+  }
+  function discover() {
+    render(<PipeStoreView />);
+    expect(screen.getByText("installed tasks")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /discover/i }));
+  }
+  function noError() {
+    expect(screen.queryAllByText(errorText)).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: retryName })).toBeNull();
+  }
+  for (const failure of ["payload", "http", "network"]) {
+    for (const recovered of ["populated", "empty"]) {
+      it(`${failure} failure stays distinct from empty and retries to ${recovered}`, async () => {
+        let failed = false;
+        installResponses(async () => {
+          if (!failed) {
+            failed = true;
+            if (failure === "network") throw new Error("offline");
+            return failure === "http" ? jsonResponse({}, 503) : jsonResponse({ error: "registry unavailable" });
+          }
+          return jsonResponse({ data: recovered === "empty" ? [] : [pipe] });
+        });
+        discover();
+        await waitFor(() => expect(screen.queryAllByText(errorText).length).toBeGreaterThan(0));
+        expect(screen.queryByText(emptyText)).toBeNull();
+        fireEvent.click(screen.getByRole("button", { name: retryName }));
+        await waitFor(() => expect(screen.getByText(recovered === "empty" ? emptyText : "Daily summary")).toBeTruthy());
+        noError();
+      });
+    }
+  }
+  for (const payload of [[], { data: [] }, { pipes: [] }]) {
+    it(`successful empty catalog stays empty: ${JSON.stringify(payload)}`, async () => {
+      installResponses(async () => jsonResponse(payload));
+      discover();
+      await waitFor(() => expect(screen.getByText(emptyText)).toBeTruthy());
+      noError();
+    });
+  }
+  it("successful populated catalog preserves its content", async () => {
+    installResponses(async () => jsonResponse({ data: [pipe] }));
+    discover();
+    await waitFor(() => expect(screen.getByText("Daily summary")).toBeTruthy());
+    noError();
+    expect(screen.queryByText(emptyText)).toBeNull();
+  });
+});

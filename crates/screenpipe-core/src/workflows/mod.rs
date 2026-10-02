@@ -691,6 +691,7 @@ pub fn normalize_analysis(
             stages.push(json!({
                 "name": name,
                 "description": stage_description,
+                "timing": timing::normalize_timing(stage, catalog)?,
                 "procedure": procedure,
                 "openQuestions": open_questions,
                 "activeMinutes": 0,
@@ -1650,9 +1651,18 @@ mod quote_tests {
             "evidence":[{"timestamp":timestamp,"app":"Receipts"}],
             "procedure":[{"kind":"action","text":quote,"quote":quote,"timestamp":timestamp,"app":"Receipts"}]
         })).collect();
-        let raw = json!({"evidenceVersion":2,"workflows":[{"title":"Record invoice","description":"Enter and save invoice","stages":stages}]});
-        let result = normalize_analysis(raw.clone(), 90, &catalog).unwrap();
+        let raw = json!({"evidenceVersion":2,"workflows":[{"title":"Record invoice","description":"Enter and save invoice","stages":stages,
+            "totalMinutes":500,"durationSource":"measured","timing":{"averageMinutes":500},
+            "quality":{"evidenceCount":999,"screenshotCount":999}}]});
+        let mut result = normalize_analysis(raw.clone(), 90, &catalog).unwrap();
         workspace::validate_publication(&raw, &result).unwrap();
+        // Reused citations count once. Model-proposed totals cannot invent
+        // observations, screenshots or a measured duration from text alone.
+        attach_screenshot_quality(&mut result);
+        assert_eq!(result["workflows"][0]["quality"]["evidenceCount"], 1);
+        assert_eq!(result["workflows"][0]["quality"]["screenshotCount"], 0);
+        assert_eq!(result["workflows"][0]["durationSource"], "unknown");
+        assert!(result["workflows"][0]["timing"].is_null());
         assert_eq!(result["workflows"][0]["quality"]["distinctDays"], 1);
         assert!(result["workflows"][0]["limitations"]
             .as_array()

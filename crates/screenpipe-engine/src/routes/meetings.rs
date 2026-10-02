@@ -458,8 +458,18 @@ async fn latest_summary_execution(
     meeting_id: i64,
     not_before: Option<DateTime<Utc>>,
 ) -> Option<(ExecutionSnapshot, Option<String>, Option<String>)> {
-    let rows = sqlx::query_as::<_, (i64, String, Option<String>, Option<String>, Option<String>)>(
-        r#"SELECT id, status, started_at, error_type, error_message
+    let rows = sqlx::query_as::<
+        _,
+        (
+            i64,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        r#"SELECT id, status, started_at, error_type, error_message, finished_at
            FROM pipe_executions
            WHERE pipe_name = ?1 AND trigger_event = 'meeting_ended' AND trigger_key = ?2
            ORDER BY id DESC
@@ -473,7 +483,7 @@ async fn latest_summary_execution(
     .unwrap_or_default();
 
     rows.into_iter()
-        .find(|(_, _, started_at, _, _)| match not_before {
+        .find(|(_, _, started_at, _, _, _)| match not_before {
             // A run that started before the newest input summarized the old
             // transcript, so it must not satisfy the current generation.
             Some(boundary) => started_at
@@ -482,8 +492,20 @@ async fn latest_summary_execution(
                 .is_some_and(|started| started.with_timezone(&Utc) >= boundary),
             None => true,
         })
-        .map(|(id, status, _, error_type, error_message)| {
-            (ExecutionSnapshot { id, status }, error_type, error_message)
+        .map(|(id, status, _, error_type, error_message, finished_at)| {
+            let finished_at = finished_at
+                .as_deref()
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                .map(|t| t.with_timezone(&Utc));
+            (
+                ExecutionSnapshot {
+                    id,
+                    status,
+                    finished_at,
+                },
+                error_type,
+                error_message,
+            )
         })
 }
 

@@ -159,11 +159,13 @@ describe("Recents provider filtering", () => {
   });
 
   it.each([
+    ["screenpipe", "Screenpipe", "/images/screenpipe.png"],
     ["codex", "Codex", "/images/codex.svg"],
     ["claude-code", "Claude", "/images/claude-ai.svg"],
   ] as const)("shows the %s mark in the source picker", (source, label, icon) => {
+    const option = visibleRecentSourceOptions().find((option) => option.source === source)!;
     const { container } = render(
-      <RecentsSourceFilterLabel source={source} label={label} />,
+      <RecentsSourceFilterLabel {...option} />,
     );
 
     expect(screen.getByText(label)).toBeVisible();

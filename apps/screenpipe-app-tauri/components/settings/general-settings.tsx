@@ -13,7 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Rocket, Moon, Sun, Monitor, FlaskConical, ExternalLink, Layers, RefreshCw } from "lucide-react";
+import { Rocket, Moon, Sun, Monitor, FlaskConical, ExternalLink, Layers, RefreshCw, Search } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,6 +41,7 @@ import posthog from "posthog-js";
 export const searchIndex: SettingsField[] = [
   { label: msg("Language", {}), keywords: ["locale", "translation"] },
   { label: msg("Auto-start", {}), keywords: ["autostart", "launch", "startup"] },
+  { label: msg("Keep search available after quitting", {}), keywords: ["quit", "background", "recording", "api"] },
   { label: msg("Auto-update", {}), keywords: ["updates"] },
   { label: msg("Check for updates", {}), keywords: ["version"] },
   { label: msg("Auto-update scheduled tasks", {}), keywords: ["pipes", "store", "tasks"] },
@@ -272,6 +273,38 @@ export default function GeneralSettings() {
           </CardContent>
         </Card>
         </LockedSetting>
+
+        <Card className="border-border bg-card">
+          <CardContent className="px-3 py-2.5">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center space-x-2.5">
+                <Search className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div>
+                  <Label
+                    htmlFor="keep-search-after-quit"
+                    className="text-sm font-medium font-sans text-foreground"
+                  >
+                    {gt("Keep search available after quitting")}
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    {gt(
+                      "Quitting stops recording and closes the window. Screenpipe keeps running in the background so connected tools can search your saved history.",
+                    )}
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="keep-search-after-quit"
+                checked={settings?.keepSearchAvailableAfterQuit ?? true}
+                onCheckedChange={(checked) =>
+                  handleSettingsChange({
+                    keepSearchAvailableAfterQuit: checked,
+                  })
+                }
+              />
+            </div>
+          </CardContent>
+        </Card>
 
         {!isManagedDeployment && (
           <Card className="border-border bg-card">

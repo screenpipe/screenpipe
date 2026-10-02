@@ -41,6 +41,7 @@ const ShortcutSection = () => {
       "stopAudioShortcut",
       "showChatShortcut",
       "searchShortcut",
+      "starSessionShortcut",
     ] as const;
     return (
       keys.every((k) => settings[k] === defaults[k]) &&
@@ -61,6 +62,7 @@ const ShortcutSection = () => {
         showChatShortcut: defaults.showChatShortcut,
         searchShortcut: defaults.searchShortcut,
         lockVaultShortcut: defaults.lockVaultShortcut,
+        starSessionShortcut: defaults.starSessionShortcut,
         disabledShortcuts: [],
       });
 
@@ -96,6 +98,7 @@ const ShortcutSection = () => {
     <>
       <ShortcutRow type="global" shortcut="showScreenpipeShortcut" title={ui("Toggle screenpipe overlay")} description={ui("Show/hide the main interface")} value={settings.showScreenpipeShortcut} />
       <ShortcutRow type="global" shortcut="showChatShortcut" title={ui("Toggle AI chat")} description={ui("Show/hide the AI chat window")} value={settings.showChatShortcut} />
+      <ShortcutRow type="global" shortcut="starSessionShortcut" title={ui("Star a work session")} description={ui("Choose a duration or edit a saved session")} value={settings.starSessionShortcut || ""} />
       <ShortcutRow type="global" shortcut="searchShortcut" title={ui("Open search")} description={ui("Open search when overlay is visible")} value={settings.searchShortcut} />
       <ShortcutRow type="global" shortcut="startRecordingShortcut" title={ui("Start recording")} description={ui("Start screen recording")} value={settings.startRecordingShortcut} />
       <ShortcutRow type="global" shortcut="stopRecordingShortcut" title={ui("Stop recording")} description={ui("Stop screen recording")} value={settings.stopRecordingShortcut} />

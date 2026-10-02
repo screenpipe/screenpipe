@@ -12,7 +12,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use tauri::AppHandle;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tracing::{debug, error, info};
 
 /// Read `notificationPrefs.pipeNotifications` from the settings store.
@@ -96,14 +96,15 @@ fn pipe_config_denies_notify(pipe_name: &str) -> bool {
             return false;
         }
     };
-    pipe_config_denies_notify_from_content(&raw).unwrap_or_else(|e| {
-        debug!(
-            path = %pipe_md.display(),
-            "notify: cannot parse pipe config for notify permission check: {}",
-            e
-        );
-        false
-    })
+    pipe_config_denies_notify_for_producer(&raw, super::workflow::is_workflow_pipe(Some(pipe_name)))
+        .unwrap_or_else(|e| {
+            debug!(
+                path = %pipe_md.display(),
+                "notify: cannot parse pipe config for notify permission check: {}",
+                e
+            );
+            false
+        })
 }
 
 fn safe_pipe_dir_name(pipe_name: &str) -> Option<&str> {
@@ -120,9 +121,28 @@ fn safe_pipe_dir_name(pipe_name: &str) -> Option<&str> {
     }
 }
 
+#[cfg(test)]
 fn pipe_config_denies_notify_from_content(raw: &str) -> anyhow::Result<bool> {
+    pipe_config_denies_notify_for_producer(raw, false)
+}
+
+fn pipe_config_denies_notify_for_producer(
+    raw: &str,
+    native_workflow: bool,
+) -> anyhow::Result<bool> {
     let (config, _) = screenpipe_core::pipes::parse_frontmatter(raw)?;
-    let perms = screenpipe_core::pipes::permissions::PipePermissions::from_config(&config);
+    let mut perms = screenpipe_core::pipes::permissions::PipePermissions::from_config(&config);
+    if native_workflow {
+        // Catalog-ready alerts belong to the desktop, not the review agent's
+        // tool allowlist. Preserve explicit notification-toggle denies. This
+        // does not change the engine's capability enforcement for agent calls.
+        perms
+            .allow_rules
+            .push(screenpipe_core::pipes::permissions::PermissionRule::Api {
+                method: "POST".into(),
+                path: "/notify".into(),
+            });
+    }
     Ok(!perms.is_endpoint_allowed("POST", "/notify"))
 }
 
@@ -130,9 +150,96 @@ fn pipe_config_denies_notify_from_content(raw: &str) -> anyhow::Result<bool> {
 pub async fn send_notification(
     State(state): State<ServerState>,
     headers: HeaderMap,
-    Json(payload): Json<NotifyPayload>,
+    Json(mut payload): Json<NotifyPayload>,
 ) -> Result<Json<ApiResponse>, (StatusCode, String)> {
-    info!("Received notification request: {:?}", payload);
+    // Never log captured titles, bodies or action prompts.
+    let initial_source = resolve_notification_source_metadata(&payload, &headers, "pending");
+    let workflow_request = super::workflow::is_workflow_pipe(initial_source.pipe_name.as_deref());
+    let _workflow_writer = if workflow_request {
+        Some(super::workflow::WRITER.lock().await)
+    } else {
+        None
+    };
+    let mut workflow_receipt = None;
+    if workflow_request {
+        let dir = state
+            .app_handle
+            .path()
+            .app_local_data_dir()
+            .map_err(|_| {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Workflow storage unavailable".into(),
+                )
+            })?
+            .join("workflows");
+        let path = dir.join("notification-ledger.json");
+        let catalog = super::workflow::read_catalog(&dir).map_err(|reason| {
+            super::workflow::track(
+                &state.app_handle,
+                "workflow_notification_failed",
+                "catalog_unavailable",
+                0,
+            );
+            (StatusCode::SERVICE_UNAVAILABLE, reason)
+        })?;
+        let ledger = super::workflow::read_ledger(&path).map_err(|reason| {
+            super::workflow::track(
+                &state.app_handle,
+                "workflow_notification_failed",
+                "ledger_unreadable",
+                0,
+            );
+            (StatusCode::SERVICE_UNAVAILABLE, reason)
+        })?;
+        let candidates = super::workflow::candidates(&payload, &catalog, &ledger);
+        let now = chrono::Utc::now().timestamp_millis();
+        if let Some(reason) = super::workflow::suppression(&ledger, now, &candidates) {
+            super::workflow::track(
+                &state.app_handle,
+                "workflow_notification_suppressed",
+                reason,
+                candidates.len(),
+            );
+            return Ok(Json(ApiResponse {
+                success: true,
+                message: format!("workflow notification suppressed: {reason}"),
+            }));
+        }
+        super::workflow::track(
+            &state.app_handle,
+            "workflow_notification_eligible",
+            "saved_supported_workflow",
+            candidates.len(),
+        );
+        let mut next = ledger.clone();
+        for (id, steps) in &candidates {
+            next.workflows.insert(id.clone(), *steps);
+        }
+        if super::workflow::reviewing_workflows(&state.app_handle) {
+            let ids: Vec<&str> = candidates.iter().map(|(id, _)| id.as_str()).collect();
+            let _ = state.app_handle.emit("workflow-review-ready", &ids);
+            // The user is already in the destination. Consume these suggestions,
+            // without spending the daily interruption allowance.
+            super::workflow::write_ledger(&path, &next)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+            super::workflow::track(
+                &state.app_handle,
+                "workflow_notification_suppressed",
+                "already_viewing",
+                candidates.len(),
+            );
+            return Ok(Json(ApiResponse {
+                success: true,
+                message: "already viewing workflows".into(),
+            }));
+        }
+        next.last_accepted_at = Some(now);
+        payload.pipe_name = initial_source.pipe_name;
+        payload.surface = None;
+        super::workflow::prepare(&mut payload, &candidates);
+        workflow_receipt = Some((path, ledger, next, candidates.len()));
+    }
 
     let panel_id = payload
         .id
@@ -173,7 +280,16 @@ pub async fn send_notification(
         .clone()
         .unwrap_or_else(|| "pipe".to_string());
     let priority = payload.priority.unwrap_or_default();
-    let source = resolve_notification_source_metadata(&payload, &headers, &panel_id);
+    let empty_headers = HeaderMap::new();
+    let source = resolve_notification_source_metadata(
+        &payload,
+        if workflow_request {
+            &empty_headers
+        } else {
+            &headers
+        },
+        &panel_id,
+    );
 
     // Delivery gate (master-off / snooze / quiet hours): drop the alert here so
     // it never writes history either. Announcements returned above are
@@ -187,6 +303,14 @@ pub async fn send_notification(
         source.pipe_name.as_deref(),
     ) {
         debug!("notify: skipped (notifications paused — master/snooze/quiet)");
+        if workflow_request {
+            super::workflow::track(
+                &state.app_handle,
+                "workflow_notification_suppressed",
+                "preferences",
+                0,
+            );
+        }
         return Ok(Json(ApiResponse {
             success: true,
             message: "notifications paused".to_string(),
@@ -208,6 +332,14 @@ pub async fn send_notification(
         &payload.body,
     ) {
         debug!("notify: skipped (identical alert already shown recently)");
+        if workflow_request {
+            super::workflow::track(
+                &state.app_handle,
+                "workflow_notification_suppressed",
+                "duplicate",
+                0,
+            );
+        }
         return Ok(Json(ApiResponse {
             success: true,
             message: "duplicate notification suppressed".to_string(),
@@ -222,6 +354,14 @@ pub async fn send_notification(
     // drops the event entirely (no history write, no panel).
     if resolved_type == "pipe" && !pipe_notifications_enabled(&state.app_handle) {
         debug!("notify: skipped (pipe notifications disabled)");
+        if workflow_request {
+            super::workflow::track(
+                &state.app_handle,
+                "workflow_notification_suppressed",
+                "preferences",
+                0,
+            );
+        }
         return Ok(Json(ApiResponse {
             success: true,
             message: "pipe notifications disabled".to_string(),
@@ -235,6 +375,14 @@ pub async fn send_notification(
     if let Some(name) = source.pipe_name.as_deref() {
         if pipe_config_denies_notify(name) {
             debug!("notify: skipped (pipe '{}' denies POST /notify)", name);
+            if workflow_request {
+                super::workflow::track(
+                    &state.app_handle,
+                    "workflow_notification_suppressed",
+                    "preferences",
+                    0,
+                );
+            }
             return Ok(Json(ApiResponse {
                 success: true,
                 message: "pipe notifications disabled".to_string(),
@@ -243,6 +391,14 @@ pub async fn send_notification(
 
         if pipe_muted(&state.app_handle, name) {
             debug!("notify: skipped (pipe '{}' muted)", name);
+            if workflow_request {
+                super::workflow::track(
+                    &state.app_handle,
+                    "workflow_notification_suppressed",
+                    "muted",
+                    0,
+                );
+            }
             return Ok(Json(ApiResponse {
                 success: true,
                 message: "pipe muted".to_string(),
@@ -276,6 +432,19 @@ pub async fn send_notification(
     // can override the classification either way with `transient`.
     let transient = resolve_transient(payload.transient, &resolved_type, priority);
 
+    // Serialize quota reservation and inbox persistence across all workflow pipes.
+    // A definite inbox-write failure rolls back; an interrupted delivery keeps
+    // its durable identity so a restart cannot resend the same suggestion.
+    if let Some((path, _, next, count)) = &workflow_receipt {
+        super::workflow::write_ledger(path, next)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        super::workflow::track(
+            &state.app_handle,
+            "workflow_notification_delivery_attempted",
+            "eligible",
+            *count,
+        );
+    }
     if transient {
         debug!(
             id = %panel_id,
@@ -301,6 +470,15 @@ pub async fn send_notification(
             actions: payload.actions,
         })
         .map_err(|error| {
+            if let Some((path, previous, _, count)) = &workflow_receipt {
+                let _ = super::workflow::write_ledger(path, previous);
+                super::workflow::track(
+                    &state.app_handle,
+                    "workflow_notification_failed",
+                    "inbox_write_failed",
+                    *count,
+                );
+            }
             error!(id = %panel_id, "notify: failed to persist notification: {error}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -328,6 +506,15 @@ pub async fn send_notification(
     // Every accepted notification surfaces in the top-right panel. Priority
     // organizes the inbox and persistence policy; it must not silently turn a
     // producer's notification into an inbox-only entry.
+    if let Some((_, _, _, count)) = &workflow_receipt {
+        super::workflow::track(
+            &state.app_handle,
+            "workflow_notification_accepted",
+            "inbox_persisted",
+            *count,
+        );
+    }
+    let workflow_count = workflow_receipt.as_ref().map(|r| r.3).unwrap_or(0);
     let panel_json = panel_payload.to_string();
     let app = state.app_handle.clone();
     let delivery_id = panel_id.clone();
@@ -338,11 +525,19 @@ pub async fn send_notification(
             std::time::Duration::from_secs(5),
             // The route only peeked at the repeat ledger above. The shared
             // delivery path remains the single check-and-record owner.
-            crate::commands::deliver_notification_panel(app, panel_json),
+            crate::commands::deliver_notification_panel(app.clone(), panel_json),
         )
         .await
         {
             Ok(Ok(delivery)) => {
+                if workflow_request {
+                    super::workflow::track(
+                        &app,
+                        "workflow_notification_delivery_result",
+                        delivery.as_str(),
+                        workflow_count,
+                    );
+                }
                 // Report what happened, not that we asked. The delivery path
                 // still drops alerts at the reduced-state gate, so a blanket
                 // "shown" here would hide real suppressions in the logs.
@@ -365,6 +560,14 @@ pub async fn send_notification(
                 }
             }
             Ok(Err(e)) => {
+                if workflow_request {
+                    super::workflow::track(
+                        &app,
+                        "workflow_notification_failed",
+                        "display_failed",
+                        workflow_count,
+                    );
+                }
                 error!(
                     id = %delivery_id,
                     title = %delivery_title,
@@ -375,6 +578,14 @@ pub async fn send_notification(
                 );
             }
             Err(_) => {
+                if workflow_request {
+                    super::workflow::track(
+                        &app,
+                        "workflow_notification_failed",
+                        "display_timeout",
+                        workflow_count,
+                    );
+                }
                 error!(
                     id = %delivery_id,
                     title = %delivery_title,
@@ -600,6 +811,9 @@ pub struct NotifyPayload {
     pub timeout: Option<u64>,
     #[serde(default)]
     pub actions: Vec<serde_json::Value>,
+    /// Saved catalog IDs, resolved locally before a review notification is sent.
+    #[serde(default)]
+    pub workflow_ids: Vec<String>,
     #[serde(default, alias = "sourceSessionId")]
     pub source_session_id: Option<String>,
     #[serde(default, alias = "sourceMessageId")]
@@ -784,6 +998,18 @@ mod tests {
     }
 
     #[test]
+    fn native_workflow_alerts_honor_explicit_mutes_without_granting_agent_tools() {
+        let raw = "---\npermissions:\n  allow:\n    - Api(GET /workflows/context)\n---\nReview saved drafts";
+        assert!(pipe_config_denies_notify_from_content(raw).unwrap());
+        assert!(!pipe_config_denies_notify_for_producer(raw, true).unwrap());
+        let muted = raw.replace(
+            "---\nReview",
+            "  deny:\n    - Api(POST /notify)\n---\nReview",
+        );
+        assert!(pipe_config_denies_notify_for_producer(&muted, true).unwrap());
+    }
+
+    #[test]
     fn transient_classification_drives_whether_notify_writes_a_row() {
         // The two families cluttering the inbox today: meeting lifecycle and
         // ambient status. Both still deliver, neither leaves a row.
@@ -823,6 +1049,7 @@ mod tests {
             auto_dismiss_ms: None,
             timeout: None,
             actions: vec![],
+            workflow_ids: vec![],
             source_session_id: None,
             source_message_id: None,
             source_url: None,
@@ -946,6 +1173,7 @@ mod tests {
             auto_dismiss_ms: None,
             timeout: None,
             actions: vec![],
+            workflow_ids: vec![],
             source_session_id: None,
             source_message_id: None,
             source_url: None,

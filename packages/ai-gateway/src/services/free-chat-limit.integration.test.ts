@@ -297,7 +297,7 @@ describe('usage reservations against workerd D1', () => {
 	it('reserves Auto against the full router for every Business-equivalent plan', async () => {
 		const now = new Date('2026-07-14T12:00:00.000Z');
 		const fullRouterHold = getCostReservationMicroUsd('auto');
-		const efficientRouterHold = getCostReservationMicroUsd('gpt-5.6-luna');
+		const efficientRouterHold = getCostReservationMicroUsd('gpt-5.4-mini');
 		expect(fullRouterHold).toBeGreaterThan(efficientRouterHold);
 
 		for (const plan of [

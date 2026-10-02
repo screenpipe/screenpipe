@@ -8,6 +8,7 @@ import { ChatMarkdown } from "@screenpipe/workflows-ui/chat";
 export { stableStreamingMarkdownPrefix } from "@screenpipe/workflows-ui/chat";
 import { emit } from "@tauri-apps/api/event";
 import rehypeRaw from "rehype-raw";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
 import {
@@ -29,6 +30,50 @@ import { ChatWebLink } from "@/components/chat/chat-web-link";
 import { useGT } from "gt-react";
 
 
+// Chat text comes from AI replies built on captured screens, pages, and
+// files, so raw HTML must not become live DOM in the app window. rehype-raw
+// keeps the formatting tags the system prompt asks for (e.g. <details>);
+// GitHub's allowlist then drops iframes, forms, meta, scripts, styles, and
+// event-handler attributes. href/src protocols are left to `urlTransform`,
+// which react-markdown applies after rehype and which already allows
+// screenpipe:// and local file links that the default protocol list would
+// strip; attributes urlTransform never sees keep the default protocol check.
+const CLOBBER_PREFIX = "user-content-";
+const chatSanitizeSchema = {
+  ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), "u", "mark", "small"],
+  protocols: { ...defaultSchema.protocols, href: [], src: [] },
+  clobberPrefix: CLOBBER_PREFIX,
+  strip: [...(defaultSchema.strip ?? []), "style"],
+};
+
+// The sanitizer prefixes ids so raw HTML cannot clobber globals. GFM
+// footnotes are emitted unprefixed (see remarkRehypeOptions) so every id is
+// prefixed exactly once; in-page links are re-pointed at the prefixed ids.
+type HastNode = {
+  type: string;
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  children?: HastNode[];
+};
+function prefixInPageLinks(node: HastNode) {
+  const href = node.properties?.href;
+  if (node.tagName === "a" && typeof href === "string" && href.length > 1 && href.startsWith("#")) {
+    node.properties!.href = `#${CLOBBER_PREFIX}${href.slice(1)}`;
+  }
+  node.children?.forEach(prefixInPageLinks);
+}
+const rehypePrefixInPageLinks = () => prefixInPageLinks;
+
+const chatRemarkRehypeOptions: ReactMarkdownOptions["remarkRehypeOptions"] = {
+  clobberPrefix: "",
+};
+const chatRehypePlugins: NonNullable<ReactMarkdownOptions["rehypePlugins"]> = [
+  rehypeRaw,
+  [rehypeSanitize, chatSanitizeSchema],
+  rehypePrefixInPageLinks,
+];
+
 // The transport snapshots text every 80 ms. Parse only complete blocks
 // (blank-line / closed-fence boundaries) and commit each one on the same
 // snapshot so headings, lists, and links do not sit as raw source. Each
@@ -39,7 +84,11 @@ import { useGT } from "gt-react";
 export interface MarkdownBlockOptions {
   /** Extra parsing passes layered onto the main Chat Markdown pipeline. */
   additionalRemarkPlugins?: ReactMarkdownOptions["remarkPlugins"];
-  /** Extend the main Chat URL allowlist for a bounded embedded surface. */
+  /**
+   * Extend the main Chat URL allowlist for a bounded embedded surface. This is
+   * the only protocol check on href/src (the sanitizer defers to it), so it
+   * must still fall back to `chatUrlTransform` or react-markdown's default.
+   */
   urlTransform?: ReactMarkdownOptions["urlTransform"];
   /** Return a node for links owned by the embedding surface; undefined falls back to Chat. */
   renderLink?: (input: {
@@ -259,7 +308,8 @@ export function MarkdownBlock({
           className={markdownClassName}
           remarkPlugins={remarkPlugins}
           urlTransform={resolvedUrlTransform}
-          rehypePlugins={[rehypeRaw]}
+          remarkRehypeOptions={chatRemarkRehypeOptions}
+          rehypePlugins={chatRehypePlugins}
           components={markdownComponents}
         >
           {block}

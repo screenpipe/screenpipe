@@ -11,6 +11,24 @@ clustering) on a wav fixture and scores predictions against an RTTM ground
 truth. Lives in its own crate (`screenpipe-audio-eval`) so its deps and
 helpers don't bleed into prod paths.
 
+## Database attribution evals
+
+Voice clustering and DER do not establish that the database assigns the right
+person to a transcript. The downstream attribution suite calls the production
+DB methods against migrated, in-memory databases with synthetic evidence:
+
+```bash
+cargo test -p screenpipe-db --test speaker_identity_eval -- --nocapture
+```
+
+It checks exact live-mirror attribution, microphone owner-name bootstrapping,
+and chunk-level speaker backfill. Cases include remote audio leaking into input,
+competing identities, mixed turns, stream reconnects, overlap, conflicting model
+evidence, and preservation of existing assignments. Positive controls require
+clean matches to resolve. Each case emits JSON, followed by per-path totals.
+These results measure identity propagation and abstention, not acoustic accuracy
+or real-world diarization error rate. The suite needs no recordings or credentials.
+
 ## Why this exists
 
 PR [#3107](https://github.com/screenpipe/screenpipe/pull/3107) shipped a

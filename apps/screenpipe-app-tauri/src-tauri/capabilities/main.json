@@ -329,18 +329,13 @@
       ]
     },
     {
-      "identifier": "shell:allow-execute",
+      "identifier": "fs:allow-exists",
       "allow": [
         {
-          "name": "exec-sh",
-          "cmd": "sh",
-          "args": [
-            "-c",
-            {
-              "validator": "\\S[\\s\\S]*"
-            }
-          ],
-          "sidecar": false
+          "path": "/Applications/Claude.app"
+        },
+        {
+          "path": "/Applications/Cursor.app"
         }
       ]
     },
@@ -598,20 +593,45 @@
       "identifier": "shell:allow-execute",
       "allow": [
         {
-          "name": "open",
-          "cmd": "open",
-          "args": true,
+          "name": "open-reveal",
+          "cmd": "/usr/bin/open",
+          "args": [
+            "-R",
+            {
+              "validator": "/.+"
+            }
+          ],
           "sidecar": false
-        }
-      ]
-    },
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
+        },
         {
-          "name": "cmd",
-          "cmd": "cmd",
-          "args": true,
+          "name": "open-app",
+          "cmd": "/usr/bin/open",
+          "args": [
+            "-a",
+            {
+              "validator": "(?:Claude|Cursor|Codex)"
+            }
+          ],
+          "sidecar": false
+        },
+        {
+          "name": "open-codex-url",
+          "cmd": "/usr/bin/open",
+          "args": [
+            "-b",
+            "com.openai.codex",
+            {
+              "validator": "codex://automations(?:\\?.*)?"
+            }
+          ],
+          "sidecar": false
+        },
+        {
+          "name": "open-full-disk-access",
+          "cmd": "/usr/bin/open",
+          "args": [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+          ],
           "sidecar": false
         }
       ]

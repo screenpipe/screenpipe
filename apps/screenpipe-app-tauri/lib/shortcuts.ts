@@ -91,6 +91,7 @@ export const IN_APP_SHORTCUTS: readonly InAppShortcutDefinition[] = [
 ] as const;
 
 export type GlobalShortcutKey =
+  | "starSessionShortcut"
   | "searchShortcut"
   | "showScreenpipeShortcut"
   | "showChatShortcut"
@@ -105,6 +106,7 @@ export const GLOBAL_SHORTCUTS: readonly {
 }[] = [
   { id: "showScreenpipeShortcut", label: msg("Toggle screenpipe overlay", {}) },
   { id: "showChatShortcut", label: msg("Toggle AI chat", {}) },
+  { id: "starSessionShortcut", label: msg("Star a work session", {}) },
   { id: "searchShortcut", label: msg("Open search", {}) },
   { id: "startRecordingShortcut", label: msg("Start screen recording", {}) },
   { id: "stopRecordingShortcut", label: msg("Stop screen recording", {}) },

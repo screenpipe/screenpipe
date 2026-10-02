@@ -37,6 +37,10 @@ use serde::Serialize;
 /// silently falling back to idle.
 pub const SCHEDULER_DISPATCH_GRACE_SECS: i64 = 90;
 
+// Completion and the meeting-note write are separate commits. The finalizer
+// waits five seconds before recovering agent output; allow bounded write lag.
+pub const SUMMARY_SAVE_GRACE_SECS: i64 = 30;
+
 /// What the meeting note should show for automatic summarization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, OaSchema)]
 #[serde(rename_all = "snake_case")]
@@ -62,6 +66,7 @@ pub enum SummaryState {
 pub struct ExecutionSnapshot {
     pub id: i64,
     pub status: String,
+    pub finished_at: Option<DateTime<Utc>>,
 }
 
 /// Everything the decision needs, so the rule stays pure and testable.
@@ -111,7 +116,14 @@ pub fn resolve_summary_state(inputs: &SummaryStatusInputs<'_>) -> SummaryState {
     if let Some(execution) = inputs.execution {
         let state = state_for_execution(&execution.status);
         return if state == SummaryState::Ready && !inputs.has_saved_summary {
-            SummaryState::Failed
+            if execution.finished_at.is_some_and(|finished| {
+                inputs.now.signed_duration_since(finished)
+                    < Duration::seconds(SUMMARY_SAVE_GRACE_SECS)
+            }) {
+                SummaryState::Running
+            } else {
+                SummaryState::Failed
+            }
         } else {
             state
         };
@@ -161,9 +173,12 @@ mod tests {
         let execution = ExecutionSnapshot {
             id: 1,
             status: "completed".into(),
+            finished_at: Some(at(0)),
         };
         let mut i = inputs(Some(&execution));
         i.has_saved_summary = false;
+        assert_eq!(resolve_summary_state(&i), SummaryState::Running);
+        i.now = at(SUMMARY_SAVE_GRACE_SECS);
         assert_eq!(resolve_summary_state(&i), SummaryState::Failed);
         i.has_saved_summary = true;
         assert_eq!(resolve_summary_state(&i), SummaryState::Ready);
@@ -187,6 +202,7 @@ mod tests {
         let execution = ExecutionSnapshot {
             id: 1,
             status: "running".into(),
+            finished_at: None,
         };
         let mut i = inputs(Some(&execution));
         i.auto_summary_enabled = false;
@@ -207,6 +223,7 @@ mod tests {
             let execution = ExecutionSnapshot {
                 id: 7,
                 status: status.into(),
+                finished_at: None,
             };
             let mut i = inputs(Some(&execution));
             i.meeting_end = None;
@@ -232,6 +249,7 @@ mod tests {
             let execution = ExecutionSnapshot {
                 id: 7,
                 status: status.into(),
+                finished_at: None,
             };
             assert_eq!(
                 resolve_summary_state(&inputs(Some(&execution))),

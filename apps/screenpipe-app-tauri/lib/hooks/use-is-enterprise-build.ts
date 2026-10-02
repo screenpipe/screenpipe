@@ -53,7 +53,7 @@ function readE2eEnterpriseOverride(): boolean | null {
   }
 }
 
-async function resolveEnterpriseBuild(): Promise<boolean> {
+export async function resolveEnterpriseBuild(): Promise<boolean> {
   // E2E binaries are compiled without `enterprise-build`; dedicated managed
   // deployment specs opt in through the existing local-storage override. Do
   // not make app startup depend on native IPC that the WebDriver bootstrap can

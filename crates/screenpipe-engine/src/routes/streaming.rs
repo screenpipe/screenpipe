@@ -213,6 +213,7 @@ pub struct DeviceMetadata {
 
 #[derive(Debug, Serialize)]
 pub struct AudioData {
+    pub captured_at: Option<DateTime<Utc>>,
     pub device_name: String,
     pub is_input: bool,
     pub transcription: String,
@@ -252,6 +253,7 @@ impl From<TimeSeriesFrame> for StreamTimeSeriesResponse {
                             .audio_entries
                             .into_iter()
                             .map(|audio| AudioData {
+                                captured_at: audio.captured_at,
                                 device_name: audio.device_name,
                                 is_input: audio.is_input,
                                 transcription: audio.transcription,
@@ -277,6 +279,7 @@ pub(crate) fn create_time_series_frame(chunk: FrameData) -> TimeSeriesFrame {
         .audio_entries
         .iter()
         .map(|a| AudioEntry {
+            captured_at: a.captured_at,
             transcription: a.transcription.clone(),
             device_name: a.device_name.clone(),
             is_input: a.is_input,
@@ -727,6 +730,7 @@ async fn handle_stream_frames_socket(
                                     audio: audio_entries
                                         .into_iter()
                                         .map(|a| AudioData {
+                                            captured_at: a.captured_at,
                                             device_name: a.device_name,
                                             is_input: a.is_input,
                                             transcription: a.transcription,
@@ -784,6 +788,7 @@ async fn handle_stream_frames_socket(
                                 "type": "audio_update",
                                 "timestamp": hot_audio.timestamp,
                                 "audio": {
+                                    "captured_at": hot_audio.captured_at(),
                                     "device_name": hot_audio.device_name,
                                     "is_input": hot_audio.is_input,
                                     "transcription": hot_audio.transcription,
@@ -1103,6 +1108,7 @@ mod tests {
 
         let audio_entries: Vec<DbAudioEntry> = (0..num_audio_entries)
             .map(|i| DbAudioEntry {
+                captured_at: Some(Utc::now()),
                 transcription: format!("Audio transcription {}", i),
                 device_name: format!("microphone_{}", i),
                 is_input: true,

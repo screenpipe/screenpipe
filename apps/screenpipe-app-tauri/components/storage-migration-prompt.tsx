@@ -47,6 +47,9 @@ export function StorageMigrationPrompt({ activity }: { activity: StorageMigratio
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // The native command waits for startup under the lifecycle lock. Keep the
+    // submitted button visible until it settles, even if a status poll was in flight.
+    if (submitting) return;
     if (activity.busy) {
       setError(null);
       setDismissed(null);
@@ -70,7 +73,7 @@ export function StorageMigrationPrompt({ activity }: { activity: StorageMigratio
     };
     void poll();
     return () => { disposed = true; clearTimeout(timer); };
-  }, [activity.busy, activity.completed, activity.error]);
+  }, [activity.busy, activity.completed, activity.error, submitting]);
 
   const success = activity.root === status?.root && activity.completed && status?.completed && status.using_new_storage;
   const failure = error || status?.error;

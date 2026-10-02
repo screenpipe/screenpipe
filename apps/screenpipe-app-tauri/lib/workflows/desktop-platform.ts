@@ -1,5 +1,6 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
+import { desktopQuestionnaireVoice } from "./questionnaire-voice";
 import { workflowModelPreference } from "./model-choice";
 import { desktopGuides } from "./guides";
 
@@ -18,6 +19,8 @@ import {
   saveWorkflowSkill,
 } from "./runtime";
 import {
+  listSkillDraftsFromDisk,
+  saveSkillDraftToDisk,
   isStoredWorkflowAnalysis,
   loadWorkflowAnalysisFromDisk,
   loadWorkProfileFromDisk,
@@ -25,7 +28,7 @@ import {
   saveWorkProfileToDisk,
 } from "./disk-storage";
 
-import { ensureWorkflowTask, startWorkflowJob, getWorkflowJob, latestWorkflowJob, stopWorkflowJob, loadScheduledCatalog, saveWorkflowCorrections, saveWorkflowEdits } from "./scheduled-discovery";
+import { ensureWorkflowTask, startWorkflowJob, getWorkflowJob, latestWorkflowJob, stopWorkflowJob, loadScheduledCatalog, saveWorkflowCorrections, saveWorkflowEdits, saveWorkflowAnswers } from "./scheduled-discovery";
 import { loadWorkflowScreenshot } from "./source-screenshot";
 
 const WORK_PROFILE_KEY = "screenpipe-workflows:work-profile:v1";
@@ -155,7 +158,7 @@ export const desktopWorkflowsPlatform: WorkflowsPlatform = {
   analyzeCapturedWork: (days, options) => analyzeCapturedWork(days, options?.workProfile),
   loadCapturedWork: (_days, options) => browserPreview ? loadSavedAnalysis() : loadScheduledCatalog(options?.signal),
   saveCapturedWork: (analysis) => browserPreview ? saveAnalysis(analysis) : saveWorkflowCorrections(analysis),
-  ...(!browserPreview ? { saveWorkflowEdits, managesAnalysis: true, ensureAnalysisTask: ensureWorkflowTask,
+  ...(!browserPreview ? { saveWorkflowEdits, saveWorkflowAnswers, questionnaireVoice: desktopQuestionnaireVoice, managesAnalysis: true, ensureAnalysisTask: ensureWorkflowTask,
     startAnalysisJob: startWorkflowJob, getAnalysisJob: getWorkflowJob,
     getLatestAnalysisJob: latestWorkflowJob, cancelAnalysisJob: stopWorkflowJob,
     subscribeAnalysisActivity: subscribeWorkflowActivity } : {}),
@@ -164,6 +167,15 @@ export const desktopWorkflowsPlatform: WorkflowsPlatform = {
   generateWorkflowSkill,
   saveWorkflowSkill,
   guides: desktopGuides,
+  library: {
+    listSkillDrafts: listSkillDraftsFromDisk,
+    saveSkillDraft: saveSkillDraftToDisk,
+    listInstalledSkills: async () => {
+      const result = await commands.listImportedSkills();
+      if (result.status === "error") throw new Error(result.error);
+      return result.data;
+    },
+  },
   openAccount: async () => {
     const result = await commands.openLoginWindow(null, "sign-up");
     if (result.status !== "ok") throw new Error(result.error);

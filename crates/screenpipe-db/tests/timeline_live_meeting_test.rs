@@ -142,6 +142,12 @@ mod timeline_live_meeting_tests {
             found,
             "live meeting transcript should be surfaced on the timeline"
         );
+        let turn = &chunks.frames[0].audio_entries[0];
+        assert_eq!(turn.captured_at, Some(base + Duration::seconds(2)));
+        assert!(
+            turn.audio_chunk_id < 0,
+            "live turns have distinct transcript identities"
+        );
     }
 
     /// A live segment that duplicates a background transcription of the same moment
@@ -476,6 +482,13 @@ mod timeline_live_meeting_tests {
             count, 1,
             "mirrored segment must appear on the timeline exactly once (mirror shown, live row deduped)"
         );
+        let turn = &chunks.frames[0].audio_entries[0];
+        assert_eq!(turn.start_time, Some(2.0));
+        assert_eq!(
+            turn.captured_at,
+            Some(base + Duration::seconds(2)),
+            "live capture time already includes the file offset; do not add it twice"
+        );
     }
 
     /// Once the engine-agnostic backfill has resolved a global `speaker_id` on the
@@ -490,16 +503,16 @@ mod timeline_live_meeting_tests {
         // A named global speaker (as the embedding backfill would have created/named).
         let speaker = db.create_speaker_with_name("Chris Ng").await.unwrap();
 
-        // The meeting's covering audio, already identified with that speaker.
+        // The exact mirrored live turn, already identified with that speaker.
         let chunk_id = db
             .insert_audio_chunk("System Audio (output)_meeting.mp4", Some(base))
             .await
             .unwrap();
         db.insert_audio_transcription(
             chunk_id,
-            "identified background line",
+            "audience question",
             0,
-            "",
+            "live",
             &AudioDevice {
                 name: "System Audio".to_string(),
                 device_type: DeviceType::Output,
@@ -526,7 +539,7 @@ mod timeline_live_meeting_tests {
             "output",
             Some("speaker 1"),
             "audience question",
-            base + Duration::seconds(1),
+            base,
         )
         .await
         .unwrap();
@@ -666,7 +679,7 @@ mod timeline_live_meeting_tests {
     }
 
     #[tokio::test]
-    async fn test_speaker_backfill_matches_reference_and_breaks_ties_deterministically() {
+    async fn test_speaker_backfill_abstains_on_nearby_turns() {
         let db = setup_test_db().await;
         // This millisecond phase makes julianday() represent +2s as one ULP
         // nearer than -2s, reproducing the old incorrect tie resolution.
@@ -684,8 +697,8 @@ mod timeline_live_meeting_tests {
         let earlier = db.create_speaker_with_name("Earlier").await.unwrap();
         let later = db.create_speaker_with_name("Later").await.unwrap();
 
-        // Equal distance from the segment. The documented tie order picks the
-        // earlier timestamp, then the lower row id when timestamps also match.
+        // Nearby turns are not evidence of who spoke the unresolved turn.
+        // Timestamp or row-id tie breakers cannot establish identity.
         for (text, timestamp, speaker_id) in [
             ("later", base + Duration::seconds(2), later.id),
             ("earlier", base - Duration::seconds(2), earlier.id),
@@ -720,40 +733,19 @@ mod timeline_live_meeting_tests {
         .await
         .unwrap();
 
-        // Reference implementation: the old nearest-row lookup plus explicit
-        // timestamp/id tie breakers. Use integer epoch milliseconds so equal
-        // offsets remain exactly equal before applying those tie breakers.
-        let expected: i64 = sqlx::query_scalar(
-            "SELECT speaker_id FROM audio_transcriptions \
-             WHERE speaker_id IS NOT NULL AND COALESCE(is_input_device, 1) = 0 \
-               AND ABS( \
-                   CAST(ROUND(unixepoch(timestamp, 'subsec') * 1000.0) AS INTEGER) - \
-                   CAST(ROUND(unixepoch(?1, 'subsec') * 1000.0) AS INTEGER) \
-               ) <= 10000 \
-             ORDER BY ABS( \
-                 CAST(ROUND(unixepoch(timestamp, 'subsec') * 1000.0) AS INTEGER) - \
-                 CAST(ROUND(unixepoch(?1, 'subsec') * 1000.0) AS INTEGER) \
-             ), timestamp, id LIMIT 1",
-        )
-        .bind(base)
-        .fetch_one(&db.pool)
-        .await
-        .unwrap();
-
-        assert_eq!(expected, earlier.id);
         assert_eq!(
             db.backfill_meeting_segment_speakers(base - Duration::hours(1), 10.0)
                 .await
                 .unwrap(),
-            1
+            0
         );
-        let actual: i64 = sqlx::query_scalar(
+        let actual: Option<i64> = sqlx::query_scalar(
             "SELECT speaker_id FROM meeting_transcript_segments WHERE item_id = 'tie-segment'",
         )
         .fetch_one(&db.pool)
         .await
         .unwrap();
-        assert_eq!(actual, expected);
+        assert_eq!(actual, None);
     }
 
     #[tokio::test]

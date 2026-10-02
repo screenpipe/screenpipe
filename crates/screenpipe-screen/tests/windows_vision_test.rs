@@ -1,3 +1,5 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
 #[cfg(target_os = "windows")]
 #[cfg(test)]
 mod tests {
@@ -116,5 +118,70 @@ mod tests {
         //     result.is_ok(),
         //     "Test timed out or failed to receive captures"
         // );
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod apartment_regression {
+    use screenpipe_core::Language;
+    use screenpipe_screen::perform_ocr_windows;
+    use std::time::Duration;
+    use windows::Win32::System::WinRT::{
+        RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED, RO_INIT_SINGLETHREADED,
+    };
+
+    #[test]
+    fn windows_ocr_survives_sta_blocking_pool() {
+        // The pool has exactly one thread, and its apartment stays STA until
+        // shutdown. Hooks balance successful initialization on that same thread.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .on_thread_start(|| unsafe { RoInitialize(RO_INIT_SINGLETHREADED).unwrap() })
+            .on_thread_stop(|| unsafe { RoUninitialize() })
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            // Prove the precondition rather than assuming which pool thread ran.
+            let code = tokio::task::spawn_blocking(|| unsafe {
+                match RoInitialize(RO_INIT_MULTITHREADED) {
+                    Err(error) => error.code().0 as u32,
+                    Ok(()) => {
+                        RoUninitialize();
+                        0
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(code, 0x80010106, "pool must reject MTA initialization");
+            let image = image::load_from_memory(include_bytes!("testing_OCR.png")).unwrap();
+            for _ in 0..3 {
+                let (text, boxes, confidence) = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    perform_ocr_windows(&image, &[Language::English]),
+                )
+                .await
+                .expect("OCR timed out")
+                .expect("OCR must not inherit pool STA");
+                assert!(
+                    text.to_lowercase().contains("capture"),
+                    "fixture text missing: {text}"
+                );
+                let words: Vec<serde_json::Value> = serde_json::from_str(&boxes).unwrap();
+                assert!(!words.is_empty());
+                assert_eq!(confidence, Some(1.0));
+            }
+        });
+        runtime.shutdown_timeout(Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn windows_ocr_empty_image_stays_empty() {
+        let empty = image::DynamicImage::new_rgba8(0, 0);
+        assert_eq!(
+            perform_ocr_windows(&empty, &[]).await.unwrap(),
+            (String::new(), "[]".into(), None)
+        );
     }
 }
