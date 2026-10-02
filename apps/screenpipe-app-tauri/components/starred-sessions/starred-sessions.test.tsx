@@ -140,7 +140,7 @@ describe("starred sessions", () => {
   it("saves edited boundaries with the current revision", async () => {
     saved = [session];
     render(<Panel />);
-    fireEvent.click(await screen.findByRole("button", { name: "Edit times" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit session end" }));
     const before = screen.getByLabelText("Session end") as HTMLInputElement;
     const date = new Date(session.end);
     date.setMinutes(date.getMinutes() + 5);
@@ -148,9 +148,45 @@ describe("starred sessions", () => {
       .toISOString()
       .slice(0, 19);
     fireEvent.change(before, { target: { value } });
-    fireEvent.click(screen.getByRole("button", { name: "Save times" }));
+    fireEvent.keyDown(before, { key: "Enter" });
+    fireEvent.blur(before);
     await waitFor(() => expect(saved[0].revision).toBe(2));
     expect(Date.parse(saved[0].end)).toBe(Date.parse(session.end) + 5 * 60000);
+    expect(mocks.fetch.mock.calls.filter((c) => c[1]?.method === "POST")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Edit times" })).toBeNull();
+  });
+  it("saves a start time on blur and cancels an end edit with Escape", async () => {
+    saved = [session];
+    render(<Panel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit session start" }));
+    const input = screen.getByLabelText("Session start") as HTMLInputElement;
+    const earlier = new Date(Date.parse(session.start) - 60000);
+    const local = new Date(earlier.getTime() - earlier.getTimezoneOffset() * 60000).toISOString().slice(0, 19);
+    fireEvent.change(input, { target: { value: local } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(saved[0].start).toBe(earlier.toISOString()));
+    fireEvent.click(screen.getByRole("button", { name: "Edit session end" }));
+    const end = screen.getByLabelText("Session end");
+    fireEvent.change(end, { target: { value: local } });
+    fireEvent.keyDown(end, { key: "Escape" });
+    fireEvent.blur(end);
+    expect(saved[0].end).toBe(session.end);
+    expect(mocks.fetch.mock.calls.filter((c) => c[1]?.method === "POST")).toHaveLength(1);
+    expect(screen.queryByLabelText("Session end")).toBeNull();
+  });
+  it("keeps invalid inline edits visible without writing them", async () => {
+    saved = [session];
+    render(<Panel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit session end" }));
+    const end = screen.getByLabelText("Session end");
+    fireEvent.change(end, { target: { value: "" } });
+    fireEvent.blur(end);
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter a valid date and time.");
+    fireEvent.change(end, { target: { value: "2020-01-01T10:00" } });
+    fireEvent.keyDown(end, { key: "Enter" });
+    expect(screen.getByRole("alert")).toHaveTextContent("End time must be after start time.");
+    expect(mocks.fetch.mock.calls.filter((c) => c[1]?.method === "POST")).toHaveLength(0);
+    expect(screen.getByLabelText("Session end")).toBeVisible();
   });
   it("exports exact bounds and automatically uses captured audio", async () => {
     mocks.fetch.mockResolvedValueOnce(

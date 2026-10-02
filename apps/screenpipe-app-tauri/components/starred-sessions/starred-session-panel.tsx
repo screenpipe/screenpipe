@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import {
@@ -24,10 +24,51 @@ export function StarredSessionPanel({
 }) {
   const [selected, setSelected] = useState<string>();
   const [hd, setHd] = useState(false);
-  const [editing, setEditing] = useState<StarredSession | null>(null);
+  type TimeEdit = { session: StarredSession; key: "start" | "end" };
+  const [editing, setEditing] = useState<TimeEdit | null>(null);
+  const editRef = useRef<TimeEdit | null>(null);
+  const timeButtons = useRef<
+    Partial<Record<"start" | "end", HTMLButtonElement | null>>
+  >({});
   const [working, setWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [video, setVideo] = useState<{ id: string; path: string } | null>(null);
+  const closeEditor = (focus = false) => {
+    const key = editRef.current?.key;
+    editRef.current = null;
+    setEditing(null);
+    setError(null);
+    if (focus && key)
+      requestAnimationFrame(() => timeButtons.current[key]?.focus());
+  };
+  async function saveTime(edit: TimeEdit, value: string, focus = false) {
+    // Enter can be followed by blur. Claim this draft once before saving.
+    if (editRef.current !== edit) return;
+    const date = new Date(value);
+    if (!value || !Number.isFinite(date.getTime())) {
+      setError("Enter a valid date and time.");
+      return;
+    }
+    const next = { ...edit.session, [edit.key]: date.toISOString() };
+    if (Date.parse(next.end) <= Date.parse(next.start)) {
+      setError("End time must be after start time.");
+      return;
+    }
+    if (next[edit.key] === edit.session[edit.key]) {
+      closeEditor(focus);
+      return;
+    }
+    editRef.current = null;
+    setError(null);
+    if (await state.save(next)) {
+      setEditing(null);
+      setVideo(null);
+      if (focus)
+        requestAnimationFrame(() => timeButtons.current[edit.key]?.focus());
+    } else {
+      editRef.current = edit;
+    }
+  }
   const session =
     state.sessions.find((s) => s.id === selected) ??
     state.active ??
@@ -171,8 +212,7 @@ export function StarredSessionPanel({
               disabled={disabled}
               onChange={(e) => {
                 setSelected(e.target.value);
-                setEditing(null);
-                setError(null);
+                closeEditor();
               }}
             >
               {state.sessions.map((s) => (
@@ -189,78 +229,66 @@ export function StarredSessionPanel({
               ))}
             </select>
           </label>
-          <p className="text-white/60">
-            {new Date(session.start).toLocaleTimeString()} –{" "}
-            {new Date(session.end).toLocaleTimeString()} ·{" "}
-            {session.has_audio ? "Recorded audio" : "Audio not found"}
-          </p>
-          {editing ? (
-            <form
-              className="space-y-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                const fields = new FormData(e.currentTarget);
-                const start = new Date(String(fields.get("start")));
-                const end = new Date(String(fields.get("end")));
-                if (
-                  !Number.isFinite(start.getTime()) ||
-                  !Number.isFinite(end.getTime()) ||
-                  end <= start
-                ) {
-                  setError("End time must be after start time.");
-                  return;
-                }
-                void state
-                  .save({
-                    ...editing,
-                    start: start.toISOString(),
-                    end: end.toISOString(),
-                  })
-                  .then((saved) => {
-                    if (saved) {
-                      setEditing(null);
-                      setVideo(null);
-                      setError(null);
-                    }
-                  });
-              }}
-            >
-              {(["start", "end"] as const).map((key) => (
-                <label key={key} className="block capitalize">
-                  {key}
+          <div className="space-y-1">
+            {(["start", "end"] as const).map((key) => (
+              <div
+                key={key}
+                className="grid min-w-0 grid-cols-[2.5rem_minmax(0,1fr)] items-center gap-2"
+              >
+                <span className="capitalize text-white/50">{key}</span>
+                {editing?.key === key ? (
                   <input
                     aria-label={`Session ${key}`}
                     type="datetime-local"
                     step="1"
                     required
-                    className="mt-1 block w-full rounded-md border border-white/30 bg-black p-1.5"
-                    name={key}
-                    defaultValue={localTime(editing[key])}
+                    autoFocus
+                    disabled={disabled}
+                    className="min-w-0 w-full rounded border border-white/40 bg-black px-1 py-1 text-xs [color-scheme:dark] focus:outline focus:outline-1 focus:outline-white/60"
+                    defaultValue={localTime(editing.session[key])}
+                    onBlur={(e) =>
+                      void saveTime(editing, e.currentTarget.value)
+                    }
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        closeEditor(true);
+                      } else if (e.key === "Enter") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void saveTime(editing, e.currentTarget.value, true);
+                      }
+                    }}
                   />
-                </label>
-              ))}
-              <div className="flex gap-2">
-                <button className={action} disabled={disabled} type="submit">
-                  Save times
-                </button>
-                <button
-                  className={action}
-                  type="button"
-                  onClick={() => setEditing(null)}
-                >
-                  Cancel
-                </button>
+                ) : (
+                  <button
+                    ref={(element) => {
+                      timeButtons.current[key] = element;
+                    }}
+                    type="button"
+                    aria-label={`Edit session ${key}`}
+                    title={`Edit ${key} time`}
+                    disabled={disabled}
+                    className="rounded px-1 py-1 text-left tabular-nums text-white/80 hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-1 focus-visible:outline-white/60 disabled:opacity-50"
+                    onClick={() => {
+                      const edit = { session: { ...session }, key };
+                      editRef.current = edit;
+                      setEditing(edit);
+                      setError(null);
+                    }}
+                  >
+                    {new Date(session[key]).toLocaleString()}
+                  </button>
+                )}
               </div>
-            </form>
-          ) : (
+            ))}
+          </div>
+          <p className="text-white/50">
+            {session.has_audio ? "Recorded audio" : "Audio not found"}
+          </p>
+          {!editing && (
             <div className="flex flex-wrap gap-2">
-              <button
-                className={action}
-                disabled={disabled}
-                onClick={() => setEditing({ ...session })}
-              >
-                Edit times
-              </button>
               {completed && (
                 <button
                   className={action}
