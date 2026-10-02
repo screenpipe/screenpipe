@@ -741,6 +741,7 @@ export class OpenAIProvider implements AIProvider {
 		return {
 			choices: [
 				{
+					finish_reason: response.choices[0].finish_reason,
 					message: {
 						content: response.choices[0].message.content,
 						role: 'assistant',

@@ -1,0 +1,13 @@
+# Personal settings
+model: example-model
+mcp_servers:
+  existing:
+    command: existing-server
+  screenpipe:
+    command: /mock/screenpipe/bun
+    args:
+      - x
+      - screenpipe-mcp@latest
+    env:
+      SCREENPIPE_MCP_CLIENT: hermes
+      SCREENPIPE_LOCAL_API_KEY: sp-fixture-only
