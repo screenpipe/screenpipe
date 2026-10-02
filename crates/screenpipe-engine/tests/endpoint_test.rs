@@ -175,7 +175,9 @@ mod tests {
         assert!(app_filtered.get("starred_sessions").is_none());
         let perms = screenpipe_core::pipes::permissions::PipePermissions {
             pipe_name: "restricted-fixture".into(),
-            allow_rules: vec![screenpipe_core::pipes::permissions::PermissionRule::App { value: "Other".into() }],
+            allow_rules: vec![screenpipe_core::pipes::permissions::PermissionRule::App {
+                value: "Other".into(),
+            }],
             deny_rules: vec![],
             use_default_allowlist: true,
             time_range: None,
