@@ -124,6 +124,7 @@ fn parse_bare_api(s: &str) -> Option<PermissionRule> {
 
 pub const DEFAULT_ALLOWED_ENDPOINTS: &[&str] = &[
     "GET /search",
+    "GET /starred-sessions",
     "GET /activity-summary",
     "GET /workflows",
     "GET /workflows/*",

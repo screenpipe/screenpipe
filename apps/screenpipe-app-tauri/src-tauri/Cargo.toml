@@ -312,6 +312,7 @@ enterprise-build = [
     "dep:thiserror",
     "dep:screenpipe-sync",
     "screenpipe-core/enterprise-build",
+    "screenpipe-config/enterprise-build",
 ]
 
 qwen3-asr = ["screenpipe-engine/qwen3-asr"]

@@ -122,6 +122,11 @@ impl SearchContentType {
 #[derive(OaSchema, Deserialize)]
 pub(crate) struct SearchQuery {
     q: Option<String>,
+    /// Restrict retrieval to a saved starred interval.
+    starred_session_id: Option<String>,
+    /// Restrict captures to the union of starred intervals before pagination.
+    #[serde(default)]
+    starred_only: bool,
     #[serde(flatten)]
     pagination: PaginationQuery,
     #[serde(default)]
@@ -392,8 +397,28 @@ fn parse_flexible_bool(s: &str) -> Result<bool, String> {
 }
 
 #[derive(OaSchema, Serialize, Deserialize, Clone)]
+pub struct StarredSearchHit {
+    #[serde(flatten)]
+    pub item: ContentItem,
+    /// User marked this capture's timestamp as important. Not an accuracy score.
+    pub starred: bool,
+}
+
+fn captured_at(item: &ContentItem) -> String {
+    let timestamp = match item {
+        ContentItem::OCR(s) => Some(s.timestamp),
+        ContentItem::Audio(s) => Some(s.timestamp),
+        ContentItem::UI(s) => Some(s.timestamp),
+        ContentItem::Input(s) => Some(s.timestamp),
+        ContentItem::Parsed(s) => Some(s.timestamp),
+        ContentItem::Memory(_) => None,
+    };
+    timestamp.map(super::starred::stamp).unwrap_or_default()
+}
+
+#[derive(OaSchema, Serialize, Deserialize, Clone)]
 pub struct SearchResponse {
-    pub data: Vec<ContentItem>,
+    pub data: Vec<StarredSearchHit>,
     pub pagination: PaginationInfo,
     /// Metadata about cloud search availability (only present when cloud sync is available)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -859,6 +884,8 @@ fn deduplicate_ocr_and_ui(content_items: &mut Vec<ContentItem>) {
 pub(crate) fn compute_search_cache_key(query: &SearchQuery) -> u64 {
     let mut hasher = DefaultHasher::new();
     query.q.hash(&mut hasher);
+    query.starred_session_id.hash(&mut hasher);
+    query.starred_only.hash(&mut hasher);
     query.pagination.limit.hash(&mut hasher);
     query.pagination.offset.hash(&mut hasher);
     format!("{:?}", query.content_type).hash(&mut hasher);
@@ -1080,6 +1107,51 @@ pub(crate) async fn search(
         ));
     }
 
+    if let Some(id) = &query.starred_session_id {
+        let session = state
+            .db
+            .get_starred_session(id)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    JsonResponse(json!({"error":"could not load starred interval"})),
+                )
+            })?
+            .ok_or_else(|| {
+                (
+                    StatusCode::NOT_FOUND,
+                    JsonResponse(json!({"error":"starred session not found"})),
+                )
+            })?;
+        let start = DateTime::parse_from_rfc3339(&session.start)
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    JsonResponse(json!({"error":"invalid saved interval"})),
+                )
+            })?
+            .with_timezone(&Utc);
+        let end = DateTime::parse_from_rfc3339(&session.end)
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    JsonResponse(json!({"error":"invalid saved interval"})),
+                )
+            })?
+            .with_timezone(&Utc);
+        query.start_time = Some(query.start_time.map_or(start, |s| s.max(start)));
+        // Existing search predicates are inclusive; starred intervals are [start,end).
+        let last_included = end - chrono::Duration::nanoseconds(1);
+        query.end_time = Some(
+            query
+                .end_time
+                .map_or(last_included, |e| e.min(last_included)),
+        );
+        if query.start_time > query.end_time {
+            return Ok(empty_search_response(&query, format, &fields));
+        }
+    }
     let wholly_before_history_cutoff =
         apply_search_query_history_access(&state.history_access, &mut query, Utc::now());
     if wholly_before_history_cutoff {
@@ -1111,8 +1183,12 @@ pub(crate) async fn search(
             JsonResponse(json!({"error":e.to_string()})),
         )
     })?;
-    let cache_key =
-        compute_search_cache_key(&query) ^ (storage_read.revision as u64).rotate_left(17);
+    let cache_key = compute_search_cache_key(&query)
+        ^ (storage_read.revision as u64).rotate_left(17)
+        ^ state
+            .starred_revision
+            .load(std::sync::atomic::Ordering::SeqCst)
+            .rotate_left(37);
 
     if !history_restricted && !query.include_frames && cacheable_render && !pipe_data_restricted {
         if let Some(cached) = state.search_cache.get(&cache_key).await {
@@ -1153,21 +1229,27 @@ pub(crate) async fn search(
     // unbounded scan beside the page query. Serial execution halves the number
     // of simultaneous SQLite statements per admitted request while the outer
     // deadline still covers the complete operation.
-    let search_and_count = async {
+    let query = &query;
+    let state = &state;
+    let search_range = |range_start, range_end, page_limit, page_offset| async move {
         if parsed_search {
             let parsed_query = SemanticContextQuery {
                 frame_id: query.frame_id,
                 q: query.q.clone(),
-                start_time: query.start_time,
-                end_time: query.end_time,
+                start_time: range_start,
+                end_time: range_end,
                 app_name: query.app_name.clone(),
                 window_name: query.window_name.clone(),
                 actor_id: query.actor_id,
-                limit: query.pagination.limit,
-                offset: query.pagination.offset,
+                limit: page_limit,
+                offset: page_offset,
                 order: query.order,
             };
-            let results = state.db.search_semantic_context(&parsed_query).await?;
+            let results = if page_limit == 0 {
+                Vec::new()
+            } else {
+                state.db.search_semantic_context(&parsed_query).await?
+            };
             let total = state.db.count_semantic_context(&parsed_query).await?;
             return Ok::<_, sqlx::Error>((SearchPage::Parsed(results), total));
         }
@@ -1176,39 +1258,43 @@ pub(crate) async fn search(
             .content_type
             .database_type()
             .expect("non-parsed search type must map to a database content type");
-        let results = state
-            .db
-            .search_with_tags_ordered_lightweight(
-                query_str,
-                content_type.clone(),
-                query.pagination.limit,
-                query.pagination.offset,
-                query.start_time,
-                query.end_time,
-                query.app_name.as_deref(),
-                query.window_name.as_deref(),
-                query.min_length,
-                query.max_length,
-                query.speaker_ids.clone(),
-                query.frame_name.as_deref(),
-                query.browser_url.as_deref(),
-                query.focused,
-                query.speaker_name.as_deref(),
-                query.device_name.as_deref(),
-                query.machine_id.as_deref(),
-                query.on_screen,
-                query.input_context_only,
-                tags,
-                query.order,
-            )
-            .await?;
+        let results = if page_limit == 0 {
+            Vec::new()
+        } else {
+            state
+                .db
+                .search_with_tags_ordered_lightweight(
+                    query_str,
+                    content_type.clone(),
+                    page_limit,
+                    page_offset,
+                    range_start,
+                    range_end,
+                    query.app_name.as_deref(),
+                    query.window_name.as_deref(),
+                    query.min_length,
+                    query.max_length,
+                    query.speaker_ids.clone(),
+                    query.frame_name.as_deref(),
+                    query.browser_url.as_deref(),
+                    query.focused,
+                    query.speaker_name.as_deref(),
+                    query.device_name.as_deref(),
+                    query.machine_id.as_deref(),
+                    query.on_screen,
+                    query.input_context_only,
+                    tags,
+                    query.order,
+                )
+                .await?
+        };
         let total = state
             .db
             .count_search_results_with_tags_filtered(
                 query_str,
                 content_type,
-                query.start_time,
-                query.end_time,
+                range_start,
+                range_end,
                 query.app_name.as_deref(),
                 query.window_name.as_deref(),
                 query.min_length,
@@ -1226,6 +1312,78 @@ pub(crate) async fn search(
         Ok::<_, sqlx::Error>((SearchPage::Standard(results), total))
     };
 
+    let search_and_count = async {
+        if !query.starred_only {
+            return search_range(
+                query.start_time,
+                query.end_time,
+                query.pagination.limit,
+                query.pagination.offset,
+            )
+            .await;
+        }
+        let mut page = if parsed_search {
+            SearchPage::Parsed(Vec::new())
+        } else {
+            SearchPage::Standard(Vec::new())
+        };
+        // Memories have no captured timestamp and never count as starred evidence.
+        if query.content_type == SearchContentType::Memory {
+            return Ok((page, 0));
+        }
+        let lower = query.start_time.unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+        let upper = query.end_time.unwrap_or_else(Utc::now);
+        // Session stamps use millisecond precision. Bounds are intersected again
+        // below to preserve a caller's higher-precision start/end filters.
+        let mut ranges = state
+            .db
+            .starred_search_ranges(
+                &super::starred::stamp(lower),
+                &super::starred::stamp(
+                    upper
+                        .checked_add_signed(chrono::Duration::milliseconds(1))
+                        .unwrap_or(upper),
+                ),
+            )
+            .await?;
+        if ranges.len() > 100 {
+            return Err(sqlx::Error::InvalidArgument("starred search covers more than 100 disjoint intervals; narrow start_time/end_time".into()));
+        }
+        if matches!(query.order, Order::Descending) {
+            ranges.reverse();
+        }
+        let mut total = 0;
+        let mut offset = query.pagination.offset;
+        let mut limit = query.pagination.limit;
+        for (start, end) in ranges {
+            let parse = |s: &str| {
+                DateTime::parse_from_rfc3339(s)
+                    .map(|t| t.with_timezone(&Utc))
+                    .map_err(|e| sqlx::Error::Protocol(e.to_string()))
+            };
+            let start = parse(&start)?.max(lower);
+            let end = (parse(&end)? - chrono::Duration::nanoseconds(1)).min(upper);
+            if start > end {
+                continue;
+            }
+            let (found, count) = search_range(Some(start), Some(end), limit, offset).await?;
+            total += count;
+            offset = offset.saturating_sub(count.min(u32::MAX as usize) as u32);
+            match (&mut page, found) {
+                (SearchPage::Standard(rows), SearchPage::Standard(mut found)) => {
+                    limit = limit.saturating_sub(found.len() as u32);
+                    rows.append(&mut found);
+                }
+                (SearchPage::Parsed(rows), SearchPage::Parsed(mut found)) => {
+                    limit = limit.saturating_sub(found.len() as u32);
+                    rows.append(&mut found);
+                }
+                _ => unreachable!(),
+            }
+        }
+        Ok((page, total))
+    };
+
     let database_result = match timeout(Duration::from_secs(30), search_and_count).await {
         Ok(result) => result,
         Err(_) => {
@@ -1236,6 +1394,12 @@ pub(crate) async fn search(
 
     let (results, mut total) = match database_result {
         Ok(result) => result,
+        Err(sqlx::Error::InvalidArgument(message)) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                JsonResponse(json!({"error": message})),
+            ));
+        }
         Err(error) => {
             if let Some(response) = classified_search_database_response(&error) {
                 warn!("search database operation was interrupted or resource-limited: {error}");
@@ -1514,8 +1678,23 @@ pub(crate) async fn search(
         None
     };
 
+    let timestamps: Vec<_> = content_items.iter().map(captured_at).collect();
+    let starred = state
+        .db
+        .starred_timestamps(&timestamps)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                JsonResponse(json!({"error":"could not read starred metadata"})),
+            )
+        })?;
     let response = SearchResponse {
-        data: content_items,
+        data: content_items
+            .into_iter()
+            .zip(starred)
+            .map(|(item, starred)| StarredSearchHit { item, starred })
+            .collect(),
         pagination: PaginationInfo {
             limit: query.pagination.limit,
             offset: query.pagination.offset,
@@ -1736,6 +1915,8 @@ mod tests {
 
     fn search_query(content_type: SearchContentType, app_name: Option<&str>) -> SearchQuery {
         SearchQuery {
+            starred_session_id: None,
+            starred_only: false,
             q: None,
             pagination: PaginationQuery {
                 limit: 20,
@@ -2289,6 +2470,8 @@ mod tests {
     fn test_search_cache_key_deterministic() {
         // Same query should produce same cache key
         let query1 = SearchQuery {
+            starred_session_id: None,
+            starred_only: false,
             q: Some("test".to_string()),
             pagination: PaginationQuery {
                 limit: 10,
@@ -2324,6 +2507,8 @@ mod tests {
         };
 
         let query2 = SearchQuery {
+            starred_session_id: None,
+            starred_only: false,
             q: Some("test".to_string()),
             pagination: PaginationQuery {
                 limit: 10,
@@ -2367,6 +2552,8 @@ mod tests {
     #[test]
     fn test_search_cache_key_differs_for_different_queries() {
         let query1 = SearchQuery {
+            starred_session_id: None,
+            starred_only: false,
             q: Some("test".to_string()),
             pagination: PaginationQuery {
                 limit: 10,
@@ -2402,6 +2589,8 @@ mod tests {
         };
 
         let query2 = SearchQuery {
+            starred_session_id: None,
+            starred_only: false,
             q: Some("different".to_string()),
             pagination: PaginationQuery {
                 limit: 10,
@@ -2452,6 +2641,8 @@ mod tests {
     #[test]
     fn test_search_cache_key_distinguishes_on_screen() {
         let mk = |on_screen: Option<bool>| SearchQuery {
+            starred_session_id: None,
+            starred_only: false,
             q: Some("test".to_string()),
             pagination: PaginationQuery {
                 limit: 10,
@@ -2498,6 +2689,8 @@ mod tests {
     #[test]
     fn test_search_cache_key_distinguishes_include_related() {
         let mk = |include_related: bool| SearchQuery {
+            starred_session_id: None,
+            starred_only: false,
             q: Some("test".to_string()),
             pagination: PaginationQuery {
                 limit: 10,
@@ -2592,8 +2785,14 @@ mod tests {
                 updated_at: "2026-06-30T00:00:00Z".to_string(),
             })
         };
-        let response = |data| SearchResponse {
-            data,
+        let response = |data: Vec<ContentItem>| SearchResponse {
+            data: data
+                .into_iter()
+                .map(|item| StarredSearchHit {
+                    item,
+                    starred: false,
+                })
+                .collect(),
             pagination: PaginationInfo {
                 limit: 20,
                 offset: 0,

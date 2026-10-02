@@ -155,7 +155,7 @@ const TOOLS = [
     name: "search_content",
     description:
       "Search screenpipe's recorded content: screen text, audio transcriptions, input events, and parsed app data. " +
-      "Returns timestamped results with app context. " +
+      "Returns timestamped results with app context and starred markers. For starred work, set starred_only=true and a time range. " +
       "Call with no parameters to get recent activity.",
     inputSchema: {
       type: "object" as const,
@@ -181,6 +181,8 @@ const TOOLS = [
           type: "string",
           description: "ISO 8601, relative, or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')",
         },
+        starred_only: { type: "boolean", description: "Only captures inside starred intervals; applied before pagination. Omit for unrelated searches." },
+        starred_session_id: { type: "string", description: "Optional known session ID to restrict the search." },
         app_name: {
           type: "string",
           description: "Filter by app (e.g., 'Google Chrome', 'Slack', 'zoom.us')",
@@ -230,7 +232,9 @@ async function handleSearchContent(
 
   const response = await fetchAPI(`/search?${params.toString()}`);
   if (!response.ok) {
-    throw new Error(`HTTP error: ${response.status}`);
+    const body = await response.json().catch(() => ({}));
+    const detail = typeof body?.error === "string" ? `: ${body.error.slice(0, 500)}` : "";
+    throw new Error(`HTTP error: ${response.status}${detail}`);
   }
 
   const data = await response.json();
@@ -252,6 +256,7 @@ async function handleSearchContent(
   for (const result of results) {
     const content = result.content;
     if (!content) continue;
+    if (result.starred) formattedResults.push("[Starred moment]");
 
     if (result.type === "OCR") {
       formattedResults.push(
