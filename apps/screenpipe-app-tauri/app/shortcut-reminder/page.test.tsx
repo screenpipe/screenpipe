@@ -850,3 +850,19 @@ describe("drag to pin", () => {
     );
   });
 });
+
+
+describe("starred sessions during a live meeting", () => {
+  it("opens session controls while keeping the meeting running", async () => {
+    mocks.getRecordingHealthState.mockResolvedValue("normal");
+    mocks.storeGet.mockResolvedValue(undefined);
+    Object.assign(mocks.meetingOverlayState, {active:true,activeMeetingId:42,stoppableMeetingId:42});
+    render(<ShortcutReminderPage />);
+    fireEvent.mouseEnter(await screen.findByTestId("shortcut-reminder-root"));
+    fireEvent.click(await screen.findByRole("button",{name:"Starred work sessions"}));
+    expect(await screen.findByRole("button",{name:"Start starred session"})).toBeVisible();
+    expect(mocks.stopMeeting).not.toHaveBeenCalled();
+    cleanup();
+    Object.assign(mocks.meetingOverlayState, {active:false,activeMeetingId:null,stoppableMeetingId:null});
+  });
+});
