@@ -41,6 +41,7 @@ const ShortcutSection = () => {
       "stopAudioShortcut",
       "showChatShortcut",
       "searchShortcut",
+      "starSessionShortcut",
     ] as const;
     return (
       keys.every((k) => settings[k] === defaults[k]) &&
