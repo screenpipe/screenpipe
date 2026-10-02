@@ -8,6 +8,7 @@
 // fails, and disconnect stays idempotent.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { parse as parseYaml } from "yaml";
 
 const fsMock = vi.hoisted(() => ({
   files: new Map<string, string>(),
@@ -113,6 +114,7 @@ import {
   installCursorMcp,
   uninstallCursorMcp,
   installHermesMcp,
+  isHermesMcpInstalled,
   uninstallHermesMcp,
   installRunnerMcp,
   uninstallRunnerMcp,
@@ -313,11 +315,51 @@ describe("hermes yaml handling", () => {
     expect(after).not.toContain("SCREENPIPE_LOCAL_API_KEY");
   });
 
-  it("fails visibly on a hand-authored mcp_servers block", async () => {
-    fsMock.files.set(HERMES, "mcp_servers:\n  other:\n    command: x\n");
+  it("connects and disconnects alongside existing servers, preserving comments", async () => {
+    const seeded = "# my model\nmodel: x\nmcp_servers:\n  # keep my server\n  other:\n    command: x\nnotifications: true\n";
+    fsMock.files.set(HERMES, seeded);
+    await expect(isToolConfigHealthy("hermes")).resolves.toBe(true);
+    await installHermesMcp();
+    await expect(isHermesMcpInstalled()).resolves.toBe(true);
+    const connected = fsMock.files.get(HERMES)!;
+    expect(connected).toContain("# my model");
+    expect(connected).toContain("# keep my server");
+    expect(parseYaml(connected).mcp_servers.other).toEqual({ command: "x" });
+    expect(parseYaml(connected).mcp_servers.screenpipe.env.SCREENPIPE_LOCAL_API_KEY).toBe("sp-test");
+    await uninstallHermesMcp();
+    expect(parseYaml(fsMock.files.get(HERMES)!)).toEqual(parseYaml(seeded));
+    await expect(isHermesMcpInstalled()).resolves.toBe(false);
+  });
 
-    await expect(installHermesMcp()).rejects.toThrow(/add the screenpipe server manually/);
-    expect(fsMock.files.get(HERMES)).toBe("mcp_servers:\n  other:\n    command: x\n");
+  it("refreshes stale credentials without duplicating a mixed-case Screenpipe entry", async () => {
+    fsMock.files.set(HERMES, "mcp_servers:\n  Screenpipe:\n    command: old\n    env: {SCREENPIPE_LOCAL_API_KEY: stale}\n  other: {command: keep}\n");
+    await installHermesMcp();
+    await installHermesMcp();
+    const servers = parseYaml(fsMock.files.get(HERMES)!).mcp_servers;
+    expect(Object.keys(servers).sort()).toEqual(["other", "screenpipe"]);
+    expect(servers.screenpipe.env.SCREENPIPE_LOCAL_API_KEY).toBe("sp-test");
+  });
+
+  it("does not mistake mentions in prompts or other settings for an installed server", async () => {
+    fsMock.files.set(HERMES, "prompt: |\n  use screenpipe-mcp\nskills:\n  screenpipe: true\n");
+    await expect(isHermesMcpInstalled()).resolves.toBe(false);
+    await installHermesMcp();
+    await expect(isHermesMcpInstalled()).resolves.toBe(true);
+  });
+
+  it("supports an inline mapping while preserving unrelated YAML", async () => {
+    fsMock.files.set(HERMES, "mcp_servers: {other: {command: keep}}\nmodel: x\n");
+    await installHermesMcp();
+    await uninstallHermesMcp();
+    expect(parseYaml(fsMock.files.get(HERMES)!)).toEqual({ model: "x", mcp_servers: {other: {command: "keep"}} });
+  });
+
+  it.each(["mcp_servers: [broken", "mcp_servers: nope\n", "mcp_servers: {}\nmcp_servers: {}\n", "- not-a-config\n"])("refuses malformed YAML unchanged: %s", async (seeded) => {
+    fsMock.files.set(HERMES, seeded);
+    await expect(installHermesMcp()).rejects.toThrow();
+    await expect(uninstallHermesMcp()).rejects.toThrow();
+    await expect(isToolConfigHealthy("hermes")).resolves.toBe(false);
+    expect(fsMock.files.get(HERMES)).toBe(seeded);
   });
 });
 

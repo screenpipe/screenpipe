@@ -34,6 +34,7 @@ import { isGrokBotDetected, grokBotConnection } from "@/lib/grokbot-connection";
 
 import { parse, modify, applyEdits, type ParseError } from "jsonc-parser";
 import { parse as parseToml } from "smol-toml";
+import { isMap, isScalar, parseDocument } from "yaml";
 
 type McpCommand = { command: string; args: string[]; env?: Record<string, string> };
 
@@ -565,67 +566,48 @@ export async function uninstallOpenclawMcp(): Promise<void> {
 }
 
 // ─── Hermes ──────────────────────────────────────────────────────────────────
-// YAML config at ~/.hermes/config.yaml. No YAML parser in the frontend, so we
-// only ever add or remove the exact block we write ourselves; anything
-// hand-authored fails loudly instead of getting string-sliced.
-
+// Edit the YAML document tree so comments and unrelated servers survive.
+// All writes still use the shared backup, symlink resolution and atomic rename.
 export async function getHermesConfigPath(): Promise<string> {
-  const home = await homeDir();
-  return join(home, ".hermes", "config.yaml");
+  return join(await homeDir(), ".hermes", "config.yaml");
 }
 
-// Hermes ships a commented-out `# mcp_servers:` example block in its default
-// config.yaml — substring checks match it and wrongly report a hand-authored
-// block. Only uncommented lines count.
-const HERMES_MCP_BLOCK = /^mcp_servers:\s*$/m;
+function parseHermesConfig(text: string, path: string) {
+  const doc = parseDocument(text);
+  if (doc.errors.length || (doc.contents !== null && !isMap(doc.contents))) {
+    throw new Error(`${path} is not valid YAML — screenpipe won't overwrite it`);
+  }
+  const servers = doc.get("mcp_servers", true);
+  if (servers !== undefined && !isMap(servers)) {
+    throw new Error(`${path} has a custom mcp_servers block — expected a mapping`);
+  }
+  return doc;
+}
 
-function hermesHasScreenpipe(content: string): boolean {
-  return content.split("\n").some(
-    (l) =>
-      !l.trimStart().startsWith("#") &&
-      (/^\s+screenpipe:/i.test(l) || l.toLowerCase().includes("screenpipe-mcp"))
+function hermesServerKeys(doc: ReturnType<typeof parseHermesConfig>): string[] {
+  const servers = doc.get("mcp_servers", true);
+  if (!isMap(servers)) return [];
+  return servers.items.flatMap(({ key }) =>
+    isScalar(key) && typeof key.value === "string" && key.value.toLowerCase() === "screenpipe"
+      ? [key.value] : []
   );
 }
 
 export async function isHermesMcpInstalled(): Promise<boolean> {
   try {
-    return hermesHasScreenpipe(await readTextFile(await getHermesConfigPath()));
+    const path = await getHermesConfigPath();
+    const doc = parseHermesConfig((await readConfigText(path)) ?? "", path);
+    return hermesServerKeys(doc).some(key => isMap(doc.getIn(["mcp_servers", key], true)));
   } catch { return false; }
 }
 
 export async function installHermesMcp(): Promise<McpCommand> {
   const configPath = await getHermesConfigPath();
+  const doc = parseHermesConfig((await readConfigText(configPath)) ?? "", configPath);
   const mcp = await buildMcpConfig({ client: "hermes" });
-  const { command, args, env } = mcp;
-  const existing = (await readConfigText(configPath)) ?? "";
-
-  if (hermesHasScreenpipe(existing)) {
-    return mcp; // already wired — leave hand-edited YAML alone
-  }
-
-  const envBlock =
-    env && Object.keys(env).length > 0
-      ? `\n    env:\n${Object.entries(env)
-          .map(([k, v]) => `      ${k}: ${JSON.stringify(v)}`)
-          .join("\n")}`
-      : "";
-  const server = `  screenpipe:\n    command: ${JSON.stringify(command)}\n    args:\n${args
-    .map((a) => `      - ${JSON.stringify(a)}`)
-    .join("\n")}${envBlock}\n`;
-
-  if (HERMES_MCP_BLOCK.test(existing)) {
-    // A real (uncommented) hand-authored block we can't safely string-merge
-    // into. Fail loudly so the per-tool status shows failed instead of a
-    // silent fake success.
-    throw new Error(
-      "~/.hermes/config.yaml already has an mcp_servers block — add the screenpipe server manually"
-    );
-  }
-
-  let out = existing;
-  if (out && !out.endsWith("\n")) out += "\n";
-  out += `mcp_servers:\n${server}`;
-  await replaceConfig(configPath, out);
+  for (const key of hermesServerKeys(doc)) doc.deleteIn(["mcp_servers", key]);
+  doc.setIn(["mcp_servers", "screenpipe"], mcp);
+  await replaceConfig(configPath, doc.toString());
   return mcp;
 }
 
@@ -633,35 +615,13 @@ export async function uninstallHermesMcp(): Promise<void> {
   const configPath = await getHermesConfigPath();
   const existing = await readConfigText(configPath);
   if (existing === null) return;
-
-  // Strip exactly the block installHermesMcp writes: the `mcp_servers:` line
-  // plus its indented children — but only when screenpipe is its sole child.
-  // No real (uncommented) block means nothing we wrote — no-op.
-  const lines = existing.split("\n");
-  const start = lines.findIndex((l) => /^mcp_servers:\s*$/.test(l));
-  if (start === -1) return;
-  let end = start + 1;
-  const topLevelChildren: string[] = [];
-  while (end < lines.length && (/^\s+\S/.test(lines[end]) || lines[end].trim() === "")) {
-    const m = lines[end].match(/^  (\S[^:]*):/);
-    if (m) topLevelChildren.push(m[1]);
-    end++;
-  }
-  const onlyScreenpipe =
-    topLevelChildren.length === 1 &&
-    topLevelChildren[0].toLowerCase() === "screenpipe";
-  const blockText = lines.slice(start, end).join("\n");
-  if (!onlyScreenpipe || !blockText.toLowerCase().includes("screenpipe-mcp")) {
-    throw new Error(
-      "~/.hermes/config.yaml has a customized mcp_servers block — remove the screenpipe entry manually"
-    );
-  }
-
-  const next = [...lines.slice(0, start), ...lines.slice(end)]
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/^\n+/, "");
-  await replaceConfig(configPath, next);
+  const doc = parseHermesConfig(existing, configPath);
+  const keys = hermesServerKeys(doc);
+  if (!keys.length) return;
+  for (const key of keys) doc.deleteIn(["mcp_servers", key]);
+  const servers = doc.get("mcp_servers", true);
+  if (isMap(servers) && !servers.items.length) doc.delete("mcp_servers");
+  await replaceConfig(configPath, doc.toString());
 }
 
 // VS Code's default user profile uses JSONC and a `servers` map.
@@ -1020,7 +980,7 @@ export function friendlyToolError(err: unknown): FriendlyToolError {
   // Cause only — the fix is inferable from the retry button + open-file
   // action every surface renders next to this message. No embedded paths:
   // that's the open-file button's job.
-  if (detail.includes("not valid JSON")) {
+  if (detail.includes("not valid JSON") || detail.includes("not valid YAML")) {
     return { message: "config file has a syntax error", path, detail };
   }
   if (detail.includes("could not read")) {
@@ -1087,9 +1047,9 @@ export async function isToolConfigHealthy(id: ConnectAllToolId): Promise<boolean
         await readConfigText(await getCodexConfigPath());
         return true;
       case "hermes": {
-        const text = (await readConfigText(await getHermesConfigPath())) ?? "";
-        // Our one refusal: a hand-authored mcp_servers block without screenpipe.
-        return hermesHasScreenpipe(text) || !HERMES_MCP_BLOCK.test(text);
+        const path = await getHermesConfigPath();
+        parseHermesConfig((await readConfigText(path)) ?? "", path);
+        return true;
       }
     }
   } catch {
