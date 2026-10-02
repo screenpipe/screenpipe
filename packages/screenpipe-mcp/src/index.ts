@@ -34,6 +34,7 @@ import { discoverTeamConfig } from "./team-config";
 import { teamFrameContent, teamFramePath } from "./team-frame";
 import { WORKFLOW_TOOLS, readWorkflowTool, frameAutomationContent, inputEventContent } from "./workflow-tools";
 import { PKG_VERSION } from "./version";
+import { BUNDLED_SKILLS_TOOL, readBundledSkills } from "./bundled-skills";
 import { formatForElementPurpose } from "./element-format";
 import { buildActivitySummaryResult } from "./activity-summary-tool";
 import {
@@ -323,6 +324,7 @@ const server = new Server(
 // ---------------------------------------------------------------------------
 const TOOLS: Tool[] = [
   ...WORKFLOW_TOOLS,
+  BUNDLED_SKILLS_TOOL,
   {
     name: "search-content",
     description:
@@ -1401,6 +1403,8 @@ function screenTag(textSource: unknown): string {
 // ---------------------------------------------------------------------------
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+
+  if (name === BUNDLED_SKILLS_TOOL.name) return readBundledSkills(args);
 
   if (!args) {
     throw new Error("Missing arguments");

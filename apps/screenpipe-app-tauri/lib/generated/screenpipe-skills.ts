@@ -8,12 +8,36 @@ export const SCREENPIPE_CLI_SKILL_MD = "---\nname: screenpipe-cli\ndescription: 
 
 export const SCREENPIPE_STARTER_SKILLS = [
   {
+    "name": "screenpipe-bug-report",
+    "description": "Turn a recorded software failure into a reproducible bug report with timestamps and observed behavior."
+  },
+  {
+    "name": "screenpipe-commitment-review",
+    "description": "Find explicit promises and deadlines in selected work history and reconcile their latest status."
+  },
+  {
+    "name": "screenpipe-customer-context",
+    "description": "Reconstruct a customer relationship from recorded interactions before answering or drafting a response."
+  },
+  {
+    "name": "screenpipe-decision-history",
+    "description": "Trace why a decision was made, which alternatives were considered, and what changed later."
+  },
+  {
     "name": "screenpipe-durable-learning",
     "description": "Turn a verified correction or repeated workflow into a reusable local learning."
   },
   {
     "name": "screenpipe-focus-review",
     "description": "Review focus and context switching over a chosen period without inventing productivity scores."
+  },
+  {
+    "name": "screenpipe-incident-timeline",
+    "description": "Reconstruct a bounded incident timeline and separate observed events from suspected causes."
+  },
+  {
+    "name": "screenpipe-interview-synthesis",
+    "description": "Analyze one discovery interview for observed behavior, needs, workarounds, and unanswered questions."
   },
   {
     "name": "screenpipe-meeting-follow-up",
@@ -24,6 +48,18 @@ export const SCREENPIPE_STARTER_SKILLS = [
     "description": "Prepare for a specific upcoming meeting using verified identity and prior context."
   },
   {
+    "name": "screenpipe-process-guide",
+    "description": "Convert a demonstrated procedure into a reusable guide with verified steps and explicit gaps."
+  },
+  {
+    "name": "screenpipe-project-handoff",
+    "description": "Prepare an evidence-backed handoff with current state, relevant artifacts, blockers, and next actions."
+  },
+  {
+    "name": "screenpipe-project-status",
+    "description": "Summarize one project against its stated milestones using recent work and verified outcomes."
+  },
+  {
     "name": "screenpipe-recall",
     "description": "Find a past decision, document, or conversation in Screenpipe with source links."
   },
@@ -32,11 +68,23 @@ export const SCREENPIPE_STARTER_SKILLS = [
     "description": "Synthesize repeated themes from selected research conversations or notes."
   },
   {
+    "name": "screenpipe-resume-work",
+    "description": "Recover the last verified state of an interrupted task and identify the next useful action."
+  },
+  {
     "name": "screenpipe-shareable-recap",
     "description": "Create a shareable recap of selected Screenpipe activity while minimizing private details."
   },
   {
+    "name": "screenpipe-workflow-discovery",
+    "description": "Identify repeated work from recorded activity and assess which steps could be automated."
+  },
+  {
     "name": "screenpipe-worklog",
     "description": "Reconstruct a daily or weekly worklog from observed activity and outcomes."
+  },
+  {
+    "name": "screenpipe-writing-context",
+    "description": "Recover facts and relevant examples from work history to support a requested piece of writing."
   }
 ] as const;

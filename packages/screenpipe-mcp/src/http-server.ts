@@ -31,6 +31,7 @@ import {
   initMcpTelemetry,
 } from "./telemetry";
 import { PKG_VERSION } from "./version";
+import { BUNDLED_SKILLS_TOOL, readBundledSkills } from "./bundled-skills";
 import { normalizeTimeFields } from "./time-normalization";
 import { createMcpQualifiedValueReporter, resolveMcpClient, type McpClient } from "./qualified-value";
 
@@ -319,10 +320,11 @@ function createMcpServer(screenpipePort: number): Server {
     client,
   );
 
-  s.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+  s.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...TOOLS, BUNDLED_SKILLS_TOOL] }));
 
   s.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
+    if (name === BUNDLED_SKILLS_TOOL.name) return readBundledSkills(args);
     if (!args) throw new Error("Missing arguments");
     if (name === "search_content") return handleSearchContent(fetchAPI, args, qualifiedValue);
     throw new Error(`Unknown tool: ${name}`);

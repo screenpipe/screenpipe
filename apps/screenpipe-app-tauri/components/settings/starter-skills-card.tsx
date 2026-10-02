@@ -84,12 +84,12 @@ export function StarterSkillsCard() {
         <div className="flex items-center gap-2">
           <BookOpen className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
           <h3 className="text-sm font-medium">Skills that travel with you</h3>
-          <span className="ml-auto font-mono text-[10px] text-muted-foreground">8 included</span>
+          <span className="ml-auto font-mono text-[10px] text-muted-foreground">{SCREENPIPE_STARTER_SKILLS.length} included</span>
         </div>
         <p className="mt-2 text-xs leading-relaxed text-muted-foreground">Recall decisions, prepare for meetings, and turn work into clear next steps. Open-source workflows, ready for Screenpipe and your connected skill-capable agents.</p>
         <details className="group mt-3">
           <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded-sm text-xs underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-4">
-            Explore the 8 skills <ChevronDown className="h-3 w-3 group-open:rotate-180" aria-hidden="true" />
+            Explore the {SCREENPIPE_STARTER_SKILLS.length} skills <ChevronDown className="h-3 w-3 group-open:rotate-180" aria-hidden="true" />
           </summary>
           <ul className="mt-3 grid gap-x-5 gap-y-3 sm:grid-cols-2">
             {SCREENPIPE_STARTER_SKILLS.map(skill => <li key={skill.name}>
@@ -97,7 +97,7 @@ export function StarterSkillsCard() {
               <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{skill.description}</p>
             </li>)}
           </ul>
-          <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">Included with MCP setup for Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, and Hermes. Other connected tools keep their existing MCP support. Your personal skills are preserved.</p>
+          <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">Included with MCP setup for Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, and Hermes. Other connected tools can read these bundled workflows through Screenpipe MCP. Your personal skills are preserved.</p>
         </details>
       </div>
       <div className="border-t border-border px-4 py-3">

@@ -1,33 +1,50 @@
 # Starter skills and continuous learning
 
-<!-- doc-covers: crates/screenpipe-core/src/starter_skills.rs, crates/screenpipe-core/assets/extensions/skill-learning.ts, crates/screenpipe-core/assets/pipes/skill-learning -->
-<!-- doc-verified: 695f780ca7ab -->
+<!-- doc-covers: crates/screenpipe-core/src/starter_skills.rs, crates/screenpipe-core/assets/extensions/skill-learning.ts, crates/screenpipe-core/assets/pipes/skill-learning, packages/screenpipe-mcp/src/bundled-skills.ts, scripts/lib/skill-bundle.mjs -->
+<!-- doc-verified: 959f7e465 -->
 
 Implementation notes for the starter-skills and learning-task change, based on the
 above main revision. Native app acceptance is still required before release.
 
 ## Product decisions
 
-Eight portable workflows ship in the public repository: recall, meeting prep,
+Twenty portable workflows ship in the public repository: recall, meeting prep,
 meeting follow-up, worklog, research synthesis, focus review, durable learning,
-and shareable recap. They are newly written general methods. No personal skill
-folders, local scripts, conversations, customer examples, or credentials are
-copied into the bundle.
+shareable recap, decision history, project handoff, resume work, commitment
+review, project status, customer context, bug report, incident timeline,
+workflow discovery, process guide, interview synthesis, and writing context.
+They are newly written general methods. No personal skill folders, local
+scripts, conversations, customer examples, or credentials are copied into the
+bundle.
 
 The bundle lives in `crates/screenpipe-core/assets/skills`. The core registry is
 also the source of the generated UI catalog. The desktop startup path seeds the
 user's `<data_dir>/skills`, normally `~/.screenpipe/skills`. The existing CLI and
 desktop MCP setup paths use the same starter installer for Claude Code, Codex,
-Cursor, Gemini CLI, OpenClaw, and Hermes. MCP-only clients stay MCP-only.
+Cursor, Gemini CLI, OpenClaw, and Hermes. MCP-only clients can list and read the
+public bundle through the read-only
+`screenpipe-skills` tool on both stdio and HTTP transports. Omit `name` for the
+catalog; pass an exact returned name for the full instructions. The catalog
+contains the twenty workflows and the API/CLI guides. It is generated from the
+same native registry and canonical Markdown files at build time and embedded
+in the MCP artifact, so it needs neither filesystem access nor a running engine
+to retrieve instructions. Personal and learned skills are not read or exported.
+The desktop and MCP package must both be updated to deliver these changes;
+existing connected MCP processes may need a restart to discover the new tool.
+
+This makes instructions available to supported connected agents. It does not
+force an agent to load every skill, add missing tools or account access, or
+bypass a task's permissions. Special internal/admin skills keep their existing
+scoping, and disconnected integrations stay disconnected.
 
 Grok Bot uses the same compiled public registry through its existing native/Bun
-gateway bridge. It receives the API skill plus eight separate device-specific
+gateway bridge. It receives the API skill plus twenty separate device-specific
 workflow skills in its private shared store. Every workflow repeats the approved
 local-computer execution boundary; it does not schedule a cloud agent or copy
 private learned skills. This adapter supports macOS and Windows; Linux has no
 credential adapter and remains explicitly unsupported.
 
-Gateway setup verifies all nine entries before reporting connected. A partial
+Gateway setup verifies all twenty-one entries before reporting connected. A partial
 install can be retried without duplicating completed entries. Starter copies
 carry a content/metadata digest; unchanged marked copies can be updated or
 removed. Unmarked or edited starter copies are preserved and reported for review.
@@ -150,12 +167,22 @@ From the repository root:
 
 ```sh
 bun test crates/screenpipe-core/assets/extensions/skill-learning.test.ts crates/screenpipe-core/assets/extensions/self-improvement.test.ts
-rustc --edition=2021 --test crates/screenpipe-core/src/starter_skills.rs -o /tmp/screenpipe-starter-tests
-/tmp/screenpipe-starter-tests
+bun scripts/test-starter-skills.mjs
 ```
 
-The standalone installer suite uses real temporary files and symlinks. It proves
-that module's filesystem behavior without compiling the full capture engine.
+From `packages/screenpipe-mcp`:
+
+```sh
+bun run typecheck
+SCREENPIPE_DISABLE_TELEMETRY=1 bun run test --no-file-parallelism src/bundled-skills.test.ts src/bundled-skills-transport.test.ts src/http-server.test.ts src/self-contained-pack.test.ts src/workflow-transport.test.ts
+```
+
+The standalone installer suite compiles the actual installer module with its
+real `screenpipe-fs` dependency and uses temporary files and symlinks, without
+compiling the full capture engine. It checks
+upgrading an eight-skill store without overwriting edits or restoring deletions.
+The MCP transport test reads every bundled skill byte-for-byte through stdio
+and HTTP; the stdio test runs a built artifact outside the source tree.
 The extension suite executes the actual extension with a synthetic Pi host and
 local API responses, including real state/report files. The frontend suite drives
 the real React component with mock IPC/API boundaries. These are regression and

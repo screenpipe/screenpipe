@@ -3,6 +3,7 @@
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { SCREENPIPE_STARTER_SKILLS } from "@/lib/generated/screenpipe-skills";
 import { StarterSkillsCard } from "./starter-skills-card";
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), presets: [{ id: "local", model: "test-local-model", provider: "native-ollama", defaultPreset: true }] }));
 vi.mock("@/lib/api", () => ({ localFetch: mocks.fetch }));
@@ -18,10 +19,10 @@ beforeEach(() => {
   });
 });
 describe("starter skills and learning setup", () => {
-  it("makes no writes until opted in and exposes all eight workflows", async () => {
+  it("makes no writes until opted in and exposes the complete bundled catalog", async () => {
     render(<StarterSkillsCard />); await screen.findByRole("button", { name: "turn on learning" });
     expect(mocks.fetch.mock.calls.every(([, init]) => !init.method)).toBe(true);
-    fireEvent.click(screen.getByText("Explore the 8 skills")); expect(screen.getAllByRole("listitem")).toHaveLength(8);
+    fireEvent.click(screen.getByText(`Explore the ${SCREENPIPE_STARTER_SKILLS.length} skills`)); expect(screen.getAllByRole("listitem")).toHaveLength(SCREENPIPE_STARTER_SKILLS.length);
     expect(screen.getByText("Uses your local model.", { exact: false })).toBeTruthy();
   });
   it("persists model before enabling, verifies the result and can pause", async () => {
