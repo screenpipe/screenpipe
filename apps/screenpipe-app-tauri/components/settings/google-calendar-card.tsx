@@ -18,6 +18,7 @@ import { commands } from "@/lib/utils/tauri";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
 import { toast } from "@/components/ui/use-toast";
 import posthog from "posthog-js";
+import { dismissCalendarNudge } from "@/lib/calendar-nudge";
 import { localFetch } from "@/lib/api";
 import { GoogleOAuthUnverifiedAppHint } from "./google-oauth-unverified-app-hint";
 import { useGT } from "gt-react";
@@ -190,6 +191,7 @@ export function GoogleCalendarCard({ onConnected, onDisconnected }: { onConnecte
     setDisconnecting(key);
     const remainingAccounts = accounts.filter(account => (account.instance ?? "__default__") !== key);
     try {
+      await dismissCalendarNudge().catch((error) => console.error("calendar nudge: disconnect suppression could not be saved", error));
       await commands.oauthDisconnect("google-calendar", instance ?? null);
       setAccounts(remainingAccounts);
       await fetchStatus();

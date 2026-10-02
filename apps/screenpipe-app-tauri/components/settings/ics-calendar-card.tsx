@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
+import { dismissCalendarNudge } from "@/lib/calendar-nudge";
 import { useGT } from "gt-react";
 
 
@@ -102,12 +103,14 @@ export function IcsCalendarCard() {
   };
 
   const handleRemove = async (index: number) => {
+    await dismissCalendarNudge().catch((error) => console.error("calendar nudge: disconnect suppression could not be saved", error));
     const updated = entries.filter((_, i) => i !== index);
     await saveEntries(updated);
     posthog.capture("ics_calendar_url_removed");
   };
 
   const handleToggle = async (index: number, enabled: boolean) => {
+    if (!enabled) await dismissCalendarNudge().catch((error) => console.error("calendar nudge: disconnect suppression could not be saved", error));
     const updated = entries.map((e, i) =>
       i === index ? { ...e, enabled } : e
     );

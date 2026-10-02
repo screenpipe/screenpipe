@@ -246,6 +246,13 @@ function HomeContent() {
     }
   }, [activeSection, activityReturnVisible]);
   const [connectionFocusRequest, setConnectionFocusRequest] = useState<ConnectionFocusRequest | null>(null);
+  const [connectionCategory, setConnectionCategory] = useQueryState("category");
+  useEffect(() => {
+    if (activeSection === "connections" && connectionCategory === "Calendar") {
+      setConnectionFocusRequest({ id: null, category: "Calendar", scopeVariant: null, requestId: Date.now() });
+      void setConnectionCategory(null, { history: "replace" });
+    }
+  }, [activeSection, connectionCategory, setConnectionCategory]);
 
   useEffect(() => {
     if (!trialActivationLocked) return;
