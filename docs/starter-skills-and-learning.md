@@ -78,6 +78,10 @@ Scheduled Tasks is where users manage these automations, their models, schedules
 and enabled state. The Settings learning card also exposes its own pause control. Changing the learning model in Settings saves and reads back the selected preset
 without pausing or enabling the task. The new model applies to future runs.
 Before initial setup, model selection stays local until learning is enabled.
+The card separates included workflows from private learning. Its searchable catalog
+uses a bounded scroll area. The learning controls show the configured cadence and
+last recorded run, with a manual status refresh, model settings link, and route to
+Scheduled Tasks. A successful scheduler run is not presented as a skill change.
 The learning task starts on its existing
 Pipe schedule; pausing prevents future runs, while an in-flight run may finish.
 
