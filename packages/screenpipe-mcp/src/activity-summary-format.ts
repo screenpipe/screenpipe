@@ -5,6 +5,8 @@
 import * as os from "os";
 
 export type ActivitySummaryPayload = {
+  starred_sessions?: Array<{ id: string; start: string; end: string; has_audio: boolean }>;
+  starred_sessions_has_more?: boolean;
   time_range?: { start?: string; end?: string };
   data_status?: string;
   query_status?: string;
@@ -215,6 +217,13 @@ export function formatActivitySummary(
         ]
       : []),
     "",
+    ...(data.starred_sessions === undefined ? [] : [
+      "Starred intervals (user intent; not proof of capture, completion or effort):",
+      ...data.starred_sessions.slice(0, 10).map((s) => `  ${s.start} to ${s.end} | id=${s.id} | has_audio=${s.has_audio}`),
+      ...(data.starred_sessions.length ? [] : ["  (none in this range)"]),
+      ...(data.starred_sessions_has_more ? ["  More intervals exist; narrow the time range for the complete list. starred_only search covers the requested range independently of this list."] : []),
+      "",
+    ]),
     "Apps:",
     ...(appsLines.length ? appsLines : ["  (none)"]),
     "",

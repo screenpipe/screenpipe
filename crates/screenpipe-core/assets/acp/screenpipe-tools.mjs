@@ -410,7 +410,7 @@ const TOOLS = [
   {
     name: "query_recordings",
     description:
-      "Run a read-only SQL query against the local Screenpipe database (the user's own recorded screen and audio) and get the rows back. Only SELECT / WITH / EXPLAIN are allowed and the query must include a LIMIT. Useful tables: frames (app_name, window_name, timestamp), ocr_text, audio_transcriptions, ui_monitoring. Prefer this over shelling out to curl for ad-hoc queries of the user's own recorded data.",
+      "Run a read-only SQL query against the local Screenpipe database (the user's own recorded screen and audio) and get the rows back. Only SELECT / WITH / EXPLAIN are allowed and the query must include a LIMIT. Useful tables: frames (app_name, window_name, timestamp), ocr_text, audio_transcriptions, ui_monitoring, starred_sessions (id, start, end). For starred captures, use EXISTS against starred_sessions with start <= capture timestamp < end before LIMIT. Stars indicate user intent, not completion or duration. Prefer this over shelling out to curl for ad-hoc queries of the user's own recorded data.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1079,12 +1079,13 @@ const HTTP_PARITY_TOOLS = [
   {
     name: "activity_summary",
     description:
-      "Rich activity overview for a time range: app usage, window/tab titles with URLs, time spent, key text per context, and audio transcriptions. The right first call for any broad 'what was I doing / how long on X / recap my morning' question — usually sufficient without follow-up searches. Proxies the local engine /activity-summary.",
+      "Rich activity overview for a time range: app usage, window/tab titles with URLs, time spent, key text per context, and audio transcriptions. The right first call for any broad 'what was I doing / how long on X / recap my morning' question — usually sufficient without follow-up searches. Includes up to ten starred intervals (user intent, not measured effort), including empty sessions. Proxies the local engine /activity-summary.",
     inputSchema: {
       type: "object",
       properties: {
         start_time: { type: "string", description: "ISO 8601, relative (e.g. '3h ago'), or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
         end_time: { type: "string", description: "ISO 8601, relative (e.g. 'now'), or local calendar ('today', 'yesterday', 'tomorrow', 'YYYY-MM-DD')" },
+        include_starred: { type: "boolean", description: "Include bounded starred interval context (default true)." },
         app_name: { type: "string", description: "Optional app name filter to focus on one app" },
       },
       required: ["start_time", "end_time"],
@@ -1094,7 +1095,7 @@ const HTTP_PARITY_TOOLS = [
       if (!args?.start_time || !args?.end_time) {
         return JSON.stringify({ error: "start_time and end_time are required" });
       }
-      return engineGet(`/activity-summary${queryString(args, ["start_time", "end_time", "app_name"])}`);
+      return engineGet(`/activity-summary${queryString(args, ["start_time", "end_time", "app_name", "include_starred"])}`);
     },
   },
   {

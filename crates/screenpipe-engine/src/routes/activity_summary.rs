@@ -97,6 +97,9 @@ pub struct ActivitySummaryQuery {
     /// need to know whether parsed evidence exists without loading excerpts.
     #[serde(default)]
     pub include_parsed_count: bool,
+    /// Include up to ten recent starred intervals. Omitted for app/data-restricted reads.
+    #[serde(default = "default_true")]
+    pub include_starred: bool,
 
     /// Cap on combined screen+audio snippets returned. Default 8, max 12.
     #[serde(default = "default_max_snippets")]
@@ -241,6 +244,10 @@ pub struct ActivityGuidance {
 
 #[derive(Serialize, OaSchema)]
 pub struct ActivitySummaryResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) starred_sessions: Option<Vec<super::starred::StarredSession>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) starred_sessions_has_more: Option<bool>,
     // --- existing fields (stable schema for Receipts panel + AI summary) ---
     /// Per-app usage. Omitted when `include_apps=false`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -310,10 +317,11 @@ pub struct ActivitySummaryResponse {
 /// `include_windows=false`, and especially `include_key_texts=false` (the
 /// heaviest field) — each omits its field from the response when disabled.
 #[oasgen]
-pub async fn get_activity_summary(
+pub(crate) async fn get_activity_summary(
     State(state): State<Arc<AppState>>,
     Query(mut query): Query<ActivitySummaryQuery>,
     api_client: ExplicitApiClient,
+    super::search::OptionalPipePerms(perms): super::search::OptionalPipePerms,
 ) -> Result<JsonResponse<ActivitySummaryResponse>, (StatusCode, JsonResponse<Value>)> {
     if query.start_time >= query.end_time {
         return Err((
@@ -388,6 +396,43 @@ pub async fn get_activity_summary(
         }
     );
 
+    let starred = if query.include_starred
+        && query.app_name.is_none()
+        && !perms.as_ref().is_some_and(|p| p.has_data_restrictions())
+    {
+        match state
+            .db
+            .list_starred_sessions(
+                &super::starred::stamp(query.start_time),
+                &super::starred::stamp(query.end_time),
+                11,
+                0,
+            )
+            .await
+        {
+            Ok(mut rows) => {
+                let cutoff = state
+                    .history_access
+                    .cutoff(Utc::now())
+                    .map(super::starred::stamp);
+                rows.retain(|s| cutoff.as_ref().is_none_or(|c| &s.start >= c));
+                let has_more = rows.len() > 10;
+                let rows = rows.into_iter().take(10).map(Into::into).collect();
+                Some((rows, has_more))
+            }
+            Err(e) => {
+                error!("activity summary: starred intervals failed: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let (starred_sessions, starred_sessions_has_more) = match starred {
+        Some((rows, more)) => (Some(rows), Some(more)),
+        None => (None, None),
+    };
+
     let snippets_for_status = snippets_opt.as_deref().unwrap_or(&[]);
     let memories_for_status = memories_opt.as_deref().unwrap_or(&[]);
     let data_status =
@@ -416,6 +461,8 @@ pub async fn get_activity_summary(
     };
 
     Ok(JsonResponse(ActivitySummaryResponse {
+        starred_sessions,
+        starred_sessions_has_more,
         apps: query.include_apps.then_some(summary_core.apps),
         windows: query.include_windows.then_some(summary_core.windows),
         key_texts: query.include_key_texts.then_some(summary_core.key_texts),
@@ -459,6 +506,8 @@ fn empty_activity_summary_response(query: &ActivitySummaryQuery) -> ActivitySumm
         "not_requested"
     };
     ActivitySummaryResponse {
+        starred_sessions: None,
+        starred_sessions_has_more: None,
         apps: query.include_apps.then(Vec::new),
         windows: query.include_windows.then(Vec::new),
         key_texts: query.include_key_texts.then(Vec::new),
@@ -1780,6 +1829,7 @@ mod tests {
             include_snippets: true,
             include_guidance: true,
             include_parsed_count: false,
+            include_starred: true,
             max_snippets: 8,
             max_snippet_chars: 500,
             max_memories: 5,
@@ -2018,6 +2068,7 @@ mod db_tests {
             include_snippets: false,
             include_guidance: false,
             include_parsed_count: false,
+            include_starred: true,
             max_snippets: 8,
             max_snippet_chars: 500,
             max_memories: 5,
@@ -2998,6 +3049,8 @@ mod include_flag_tests {
             timestamp: "2026-06-02T10:00:30Z".to_string(),
         }];
         ActivitySummaryResponse {
+            starred_sessions: None,
+            starred_sessions_has_more: None,
             apps: include_apps.then_some(apps),
             windows: include_windows.then_some(windows),
             key_texts: include_key_texts.then_some(key_texts),

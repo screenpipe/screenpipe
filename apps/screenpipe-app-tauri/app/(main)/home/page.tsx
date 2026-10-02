@@ -72,6 +72,7 @@ import { mountPiEventRouter } from "@/lib/stores/pi-event-router";
 import { mountPipeRunRecorder } from "@/lib/events/pipe-run-recorder";
 import { mountPipeWatchWriter } from "@/lib/events/pipe-watch-writer";
 import { RecordingStatus, type RecordingDevice } from "@/components/recording-status";
+import { StarredTimeline } from "@/components/starred-sessions/starred-timeline";
 import Timeline from "@/components/rewind/timeline";
 import {
   NativeTimeline,
@@ -1108,6 +1109,7 @@ function HomeContent() {
         // webview one stays as the fallback for hosts without it.
         return (
           <div className="flex h-full min-h-0 flex-col">
+            <StarredTimeline showStrip />
             <div className="min-h-0 flex-1">
               <NativeTimeline
                 fallback={<Timeline embedded />}
@@ -1368,6 +1370,7 @@ function HomeContent() {
           and global shortcuts already own. Each row prints its shortcut, so
           palette use teaches the direct key. Home window only: the settings
           page binds its own ⌘K for search focus while mounted. */}
+      <StarredTimeline />
       {/* Routes actions the native timeline window cannot perform itself. */}
       <NativeTimelineBridge
         onReturnToActivity={returnToActivity}

@@ -343,6 +343,13 @@ async fn main() -> anyhow::Result<()> {
             handle_profile_command(json, port).await?;
             return Ok(());
         }
+        Command::Star {
+            ref subcommand,
+            port,
+        } => {
+            screenpipe_engine::cli::starred::handle(subcommand, port).await?;
+            return Ok(());
+        }
         Command::Search(ref args) => {
             handle_search_command(args).await?;
             return Ok(());
