@@ -30,17 +30,18 @@ describe("missing attached screenshots", () => {
     fireEvent.click(screen.getByRole("button", { name: `Open recording for ${stage.name}` }));
     await waitFor(() => expect(open).toHaveBeenCalledWith(preview.frameId, preview.timestamp));
   });
-  it("keeps attached images without a lookup", () => {
-    const load = vi.fn();
+  it("replaces legacy embedded previews with the recorder frame", async () => {
+    Object.defineProperty(URL, "revokeObjectURL", { value: vi.fn(), configurable: true });
+    const load = vi.fn().mockResolvedValue({ ...stage.screenshot!, dataUrl: "blob:original" });
     render(<WorkflowStepEvidence workflow={workflow} stage={stage} platform={{ loadWorkflowScreenshot: load } as unknown as WorkflowsPlatform} />);
-    expect(screen.getByRole("img")).toBeVisible();
-    expect(load).not.toHaveBeenCalled();
+    expect(await screen.findByRole("img")).toHaveAttribute("src", "blob:original");
+    expect(load).toHaveBeenCalledWith(stage.screenshot!.timestamp, stage.screenshot!.app, expect.any(AbortSignal), stage.screenshot!.frameId);
   });
   it("recovers the source image when a catalog refresh omits the attachment", async () => {
     const load = vi.fn().mockResolvedValue({ ...stage.screenshot!, visualVerified: false });
     const platform = { loadWorkflowScreenshot: load } as unknown as WorkflowsPlatform;
     const { rerender } = render(<WorkflowStepEvidence workflow={workflow} stage={stage} platform={platform} />);
-    expect(load).not.toHaveBeenCalled();
+    await screen.findByRole("img");
     rerender(<WorkflowStepEvidence workflow={workflow} stage={bare} platform={platform} />);
     expect(await screen.findByRole("img")).toHaveAttribute("src", stage.screenshot!.dataUrl);
     expect(screen.getByText(/Source screenshot/)).toBeVisible();
@@ -58,7 +59,7 @@ describe("missing attached screenshots", () => {
       expect(load).not.toHaveBeenCalled();
       act(() => observe([{ isIntersecting: true }]));
       expect(await screen.findByRole("img")).toBeVisible();
-      expect(disconnect).toHaveBeenCalled();
+      expect(disconnect).not.toHaveBeenCalled();
     } finally { cleanup(); vi.unstubAllGlobals(); }
   });
   it("tries another source when the first capture is unavailable", async () => {
@@ -198,5 +199,47 @@ describe("step evidence media", () => {
     resolve({ kind: "video", url: "https://fixture.invalid/late.mp4" });
     await waitFor(() => expect(release).toHaveBeenCalledWith("https://fixture.invalid/late.mp4"));
     expect(screen.queryByLabelText("Local recording")).toBeNull();
+  });
+});
+
+
+describe("recorder references", () => {
+  it("loads each reference only while visible and releases its image off screen", async () => {
+    const observers = new Map<Element, (entries: { isIntersecting: boolean }[]) => void>();
+    vi.stubGlobal("IntersectionObserver", class {
+      callback: (entries: { isIntersecting: boolean }[]) => void;
+      constructor(callback: (entries: { isIntersecting: boolean }[]) => void) { this.callback = callback; }
+      observe(element: Element) { observers.set(element, this.callback); }
+      disconnect() {}
+    });
+    const revoke = vi.fn();
+    Object.defineProperty(URL, "revokeObjectURL", { value: revoke, configurable: true });
+    const first = { ...stage.screenshot!, dataUrl: "" };
+    const second = { ...first, frameId: 9002, timestamp: "2026-09-22T11:02:00Z" };
+    const load = vi.fn().mockImplementation(async (_timestamp, _app, _signal, id) => ({ ...(id === first.frameId ? first : second), dataUrl: `blob:${id}` }));
+    try {
+      const { container } = render(<WorkflowStepEvidence workflow={workflow} stage={{ ...stage, screenshot: null, screenshots: [first, second] }} platform={{ loadWorkflowScreenshot: load } as unknown as WorkflowsPlatform} />);
+      const figures = container.querySelectorAll("figure");
+      expect(load).not.toHaveBeenCalled();
+      act(() => observers.get(figures[0])!([{ isIntersecting: true }]));
+      await screen.findByRole("img");
+      expect(load).toHaveBeenCalledTimes(1);
+      act(() => observers.get(figures[0])!([{ isIntersecting: false }]));
+      await waitFor(() => expect(revoke).toHaveBeenCalledWith(`blob:${first.frameId}`));
+      expect(load.mock.calls[0][2].aborted).toBe(true);
+      expect(screen.queryByRole("img")).toBeNull();
+      act(() => observers.get(figures[1])!([{ isIntersecting: true }]));
+      expect(await screen.findByRole("img")).toHaveAttribute("src", "blob:9002");
+      expect(load).toHaveBeenCalledTimes(2);
+    } finally { cleanup(); vi.unstubAllGlobals(); }
+  });
+
+  it("keeps another screenshot visible when one capture has expired", async () => {
+    const first = { ...stage.screenshot!, dataUrl: "" };
+    const second = { ...first, frameId: 9002 };
+    const load = vi.fn().mockImplementation(async (_timestamp, _app, _signal, id) => id === first.frameId ? null : { ...second, dataUrl: "blob:available" });
+    render(<WorkflowStepEvidence workflow={workflow} stage={{ ...stage, screenshot: null, screenshots: [first, second] }} platform={{ loadWorkflowScreenshot: load } as unknown as WorkflowsPlatform} />);
+    expect(await screen.findByText("This screenshot is no longer available.")).toBeVisible();
+    expect(await screen.findByRole("img")).toHaveAttribute("src", "blob:available");
   });
 });

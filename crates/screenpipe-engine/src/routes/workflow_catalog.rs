@@ -236,8 +236,12 @@ pub(super) async fn persist(
             "Workflow storage is unavailable.",
         )
     })?;
-    let before = serde_json::to_vec(previous).unwrap();
-    let after = serde_json::to_vec(next).unwrap();
+    let mut previous = previous.clone();
+    let mut next = next.clone();
+    discard_screenshot_pixels(&mut previous);
+    discard_screenshot_pixels(&mut next);
+    let before = serde_json::to_vec(&previous).unwrap();
+    let after = serde_json::to_vec(&next).unwrap();
     if after.len() as u64 > super::workflows::MAX_CATALOG_BYTES {
         return Err(error(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -441,7 +445,7 @@ pub(crate) async fn commit(
                     .find(|s| s["name"] == stage["name"])
                     .map(screenshot_frame_ids)
                     .unwrap_or_default();
-                attach_stage_screenshots(stage, frames, &evidence, &endpoint).await;
+                attach_stage_screenshots(stage, frames, &evidence);
             }
         }
     }
@@ -648,12 +652,7 @@ pub(crate) async fn correct(
     Ok(Json(json!({"success":true,"workflow":updated_workflow})))
 }
 
-async fn attach_stage_screenshots(
-    stage: &mut Value,
-    frames: Vec<i64>,
-    evidence: &EvidenceCatalog,
-    endpoint: &RecorderEndpoint,
-) {
+fn attach_stage_screenshots(stage: &mut Value, frames: Vec<i64>, evidence: &EvidenceCatalog) {
     let mut screenshots = Vec::new();
     for id in frames {
         if let Some((timestamp, app)) = evidence.frames.get(&id) {
@@ -667,27 +666,7 @@ async fn attach_stage_screenshots(
                         .is_some_and(|at| at == *timestamp)
             });
             if matches {
-                let response = apply_auth(
-                    endpoint,
-                    reqwest::Client::new()
-                        .get(format!(
-                            "{}/frames/{id}/thumbnail?width=640&quality=68&fallback=false",
-                            endpoint.base_url
-                        ))
-                        .timeout(Duration::from_secs(10)),
-                )
-                .send()
-                .await;
-                if let Ok(response) = response {
-                    if response.status().is_success() {
-                        if let Ok(bytes) = response.bytes().await {
-                            if !bytes.is_empty() && bytes.len() <= 500_000 {
-                                use base64::Engine;
-                                screenshots.push(json!({"frameId":id,"timestamp":timestamp.to_rfc3339(),"app":app,"matchDistanceSeconds":0,"visualVerified":true,"dataUrl":format!("data:image/jpeg;base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes))}));
-                            }
-                        }
-                    }
-                }
+                screenshots.push(json!({"frameId":id,"timestamp":timestamp.to_rfc3339(),"app":app,"matchDistanceSeconds":0,"visualVerified":true,"dataUrl":""}));
             }
         }
     }
@@ -698,34 +677,7 @@ async fn attach_stage_screenshots(
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn multiple_exact_images_survive_publish_storage_and_reload() {
-        use axum::{routing::get, Router};
-        let app = Router::new().route(
-            "/frames/:id/thumbnail",
-            get(
-                |axum::extract::Path(id): axum::extract::Path<i64>,
-                 axum::extract::Query(query): axum::extract::Query<
-                    std::collections::HashMap<String, String>,
-                >| async move {
-                    assert_eq!(query.get("fallback").map(String::as_str), Some("false"));
-                    if id == 4 {
-                        (StatusCode::NOT_FOUND, Vec::new())
-                    } else {
-                        (StatusCode::OK, vec![0xff, 0xd8, 0xff, 0xd9])
-                    }
-                },
-            ),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = RecorderEndpoint {
-            source: "test",
-            base_url: format!("http://{}", listener.local_addr().unwrap()),
-            api_key: None,
-            health: Value::Null,
-        };
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
+    async fn multiple_exact_references_survive_publish_storage_and_reload() {
         let at = DateTime::parse_from_rfc3339("2026-09-22T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
@@ -740,9 +692,9 @@ mod tests {
             {"timestamp":(at + ChronoDuration::seconds(2)).to_rfc3339(),"app":"Notes"},
             {"timestamp":(at + ChronoDuration::seconds(4)).to_rfc3339(),"app":"Notes"}
         ]});
-        // Duplicate, unsupported, unavailable, and missing frame references cannot add images.
+        // Keep exact references even if media later expires; the recorder owns availability.
         let frames = screenshot_frame_ids(&json!({"screenshotFrameIds":[2,1,2,3,4,999]}));
-        attach_stage_screenshots(&mut stage, frames, &evidence, &endpoint).await;
+        attach_stage_screenshots(&mut stage, frames, &evidence);
         assert_eq!(
             stage["screenshots"]
                 .as_array()
@@ -750,13 +702,15 @@ mod tests {
                 .iter()
                 .map(|image| image["frameId"].as_i64().unwrap())
                 .collect::<Vec<_>>(),
-            vec![2, 1]
+            vec![2, 1, 4]
         );
         assert!(stage["screenshots"]
             .as_array()
             .unwrap()
             .iter()
-            .all(|image| image["visualVerified"] == true && image["matchDistanceSeconds"] == 0));
+            .all(|image| image["visualVerified"] == true
+                && image["matchDistanceSeconds"] == 0
+                && image["dataUrl"] == ""));
         let dir = tempfile::tempdir().unwrap();
         let source = WorkflowCatalogSource(Some(dir.path().to_path_buf()));
         let previous = read_catalog(&source).await.unwrap();
@@ -766,7 +720,6 @@ mod tests {
             read_catalog(&source).await.unwrap()["analysis"],
             next["analysis"]
         );
-        server.abort();
     }
 
     #[test]

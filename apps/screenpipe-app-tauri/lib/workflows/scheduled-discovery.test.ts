@@ -2,7 +2,7 @@
 // https://screenpipe.com
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { localFetch } from "@/lib/api";
-import { WORKFLOW_TASKS, disableWorkflowTasks, stopWorkflowJob, ensureWorkflowTask, enableWorkflowTask, loadWorkflowTaskSetup, getWorkflowJob, startWorkflowJob, saveWorkflowCorrections, saveWorkflowFeedback, saveWorkflowAnswers, loadScheduledCatalog } from "./scheduled-discovery";
+import { WORKFLOW_TASKS, latestWorkflowJob, disableWorkflowTasks, stopWorkflowJob, ensureWorkflowTask, enableWorkflowTask, loadWorkflowTaskSetup, getWorkflowJob, startWorkflowJob, saveWorkflowCorrections, saveWorkflowFeedback, saveWorkflowAnswers, loadScheduledCatalog } from "./scheduled-discovery";
 import { fixtureWorkflowAnalysis } from "@screenpipe/workflows-ui/fixture";
 vi.mock("@/lib/api", () => ({localFetch:vi.fn()}));
 vi.mock("@/lib/workflows/rollout", () => ({requireWorkflowsRollout:vi.fn(),syncWorkflowsRollout:vi.fn().mockResolvedValue(undefined)}));
@@ -275,3 +275,11 @@ it("bounds stalled schedule reads so the UI can retry", async () => {
    fetchMock.mockResolvedValueOnce(response({ error: "Workflow changed" }, 409));
    await expect(saveWorkflowAnswers(workflow, "Another answer")).rejects.toMatchObject({ status: 409 });
  });
+
+it("polls each role once without reloading the completed catalog", async () => {
+  ws.cycle.status = "complete";
+  executions["workflow-review"] = { id: 25, status: "completed", started_at: end };
+  expect(await latestWorkflowJob()).toMatchObject({ status: "complete" });
+  expect(fetchMock.mock.calls.filter(([path]) => String(path).includes("/executions?"))).toHaveLength(4);
+  expect(fetchMock.mock.calls.some(([path]) => path === "/workflows/catalog")).toBe(false);
+});

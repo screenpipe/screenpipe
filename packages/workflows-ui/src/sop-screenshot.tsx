@@ -3,9 +3,11 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import type { WorkflowsPlatform } from "./platform";
+import { useSourceScreenshot } from "./use-source-screenshot";
+import type { WorkflowScreenshot } from "./model";
 import styles from "./workflow-guide.module.css";
 
-export function SopScreenshot({ src, frameId, load, alt, onLoad, onError }: {
+function LegacySopScreenshot({ src, frameId, load, alt, onLoad, onError }: {
   src: string; frameId: number; alt: string; draggable?: boolean;
   load?: NonNullable<WorkflowsPlatform["guides"]>["loadScreenshot"];
   onLoad?: () => void; onError?: () => void;
@@ -42,3 +44,13 @@ export function SopScreenshot({ src, frameId, load, alt, onLoad, onError }: {
   </div>;
 }
 
+
+export function SopScreenshot(props: Parameters<typeof LegacySopScreenshot>[0] & { source?: WorkflowScreenshot; loadSource?: WorkflowsPlatform["loadWorkflowScreenshot"] }) {
+  return props.source && props.loadSource ? <ExactSopScreenshot {...props} source={props.source} /> : <LegacySopScreenshot {...props} />;
+}
+function ExactSopScreenshot({ source, loadSource, alt, onLoad, onError }: Parameters<typeof SopScreenshot>[0] & { source: WorkflowScreenshot }) {
+  const image = useSourceScreenshot({ evidence: [] }, false, loadSource, source);
+  return <figure ref={image.ref}>
+    {image.image ? <img src={image.image.dataUrl} alt={alt} draggable={false} onLoad={onLoad} onError={onError} /> : <p className={styles.muted} role="status">{image.status === "loading" ? "Loading source screenshot…" : "This screenshot is no longer available."}{image.canRetry && image.status !== "loading" && <button onClick={image.retry}>Retry screenshot</button>}</p>}
+  </figure>;
+}

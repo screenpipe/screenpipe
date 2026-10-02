@@ -101,8 +101,8 @@ export function WorkflowReplay({ workflow, loadRecording, releaseRecording, open
   return <section className={`${styles.replay} ph-no-capture ph-mask`} aria-label={ui("Workflow recording replay")}>
       <div className={styles.replayMedia}>
         {loading ? <p role="status">Loading local recording…</p> : media?.kind === "video" ? <RecordingVideo
-          key={media.url} media={media} poster={matchingImage?.dataUrl} failed={videoFailed} />
-          : media?.kind === "image" || matchingImage ? <img src={media?.url ?? matchingImage?.dataUrl} alt={ui("Captured moment for {value1}", { value1: moment.stage.name })} />
+          key={media.url} media={media} poster={matchingImage?.dataUrl || undefined} failed={videoFailed} />
+          : media?.kind === "image" || matchingImage?.dataUrl ? <img src={media?.url ?? matchingImage?.dataUrl} alt={ui("Captured moment for {value1}", { value1: moment.stage.name })} />
           : <p>{loadRecording ? ui("No playable recording for this moment.") : ui("Open the desktop app to play this recording.")}</p>}
       </div>
       {error && <p role="alert">{error} <button type="button" onClick={() => setRetry((value) => value + 1)}>Retry</button></p>}
