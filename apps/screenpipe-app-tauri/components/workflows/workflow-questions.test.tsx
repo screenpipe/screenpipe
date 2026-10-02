@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { WorkflowQuestions } from "../../../../packages/workflows-ui/src/workflow-questions";
 import { readWorkflowAnswers, writeWorkflowAnswers } from "../../../../packages/workflows-ui/src/workflow-answers";
@@ -82,7 +82,7 @@ it("uses a section voice control, protects manual edits during inference, suppor
   fireEvent.click(screen.getByRole("button", { name: "Stop recording" }));
   await waitFor(() => expect(voice.fill).toHaveBeenCalled());
   fireEvent.change(screen.getByLabelText(question), { target: { value: "Typed while filling" } });
-  expect(screen.getByRole("button", { name: "Save answers" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Save answers" })).toBeEnabled();
   resolve([{ question, answer: "The lead", quote: "The lead reviews it." }, { question: "Where is it saved?", answer: "Shared drive", quote: "shared drive" }]);
   await waitFor(() => expect(screen.getByLabelText("Where is it saved?")).toHaveValue("Shared drive"));
   expect(screen.getByLabelText(question)).toHaveValue("Typed while filling");
@@ -116,4 +116,38 @@ it("does not remount step media when saving answers only changes the revision", 
   view.rerender(<WorkflowEditor workflow={{ ...workflow, revision: 5, userCorrection: "New answer" }} save={save} renderSource={source} />);
   expect(screen.getAllByTestId("step-media")[0]).toBe(original);
   expect(save).not.toHaveBeenCalled();
+});
+
+
+it.each(["recording", "filling"])("saves typed answers during %s and ignores late voice results", async phase => {
+  let finish!: (value: any) => void;
+  let fillSignal: AbortSignal | undefined;
+  const voice: QuestionnaireVoice = { connect: vi.fn(), disconnect: vi.fn(), fill: vi.fn((_input, signal) => {
+    fillSignal = signal;
+    return new Promise(resolve => { finish = resolve; });
+  }) };
+  const save = vi.fn(async (userCorrection: string) => ({ ...workflow, userCorrection }));
+  render(<WorkflowQuestions workflow={workflow} save={save} voice={voice} />);
+  fireEvent.click(screen.getByRole("button", { name: "Answer with voice" }));
+  act(() => live.transcript?.("The lead reviews it. Shared drive."));
+  if (phase === "filling") {
+    fireEvent.click(screen.getByRole("button", { name: "Stop recording" }));
+    await waitFor(() => expect(voice.fill).toHaveBeenCalled());
+  }
+  fireEvent.change(screen.getByLabelText(question), { target: { value: "My reviewed answer" } });
+  const button = screen.getByRole("button", { name: "Save answers" });
+  expect(button).toBeEnabled();
+  fireEvent.click(button);
+  await screen.findByText("Answers saved for the next workflow update.");
+  expect(save).toHaveBeenCalledTimes(1);
+  expect(readWorkflowAnswers(save.mock.calls[0][0])).toEqual([{ question, answer: "My reviewed answer" }]);
+  expect(screen.queryByRole("button", { name: "Stop recording" })).not.toBeInTheDocument();
+  if (phase === "filling") {
+    expect(fillSignal?.aborted).toBe(true);
+    await act(async () => finish([{ question: "Where is it saved?", answer: "Late answer", quote: "Shared drive." }]));
+    expect(screen.getByLabelText("Where is it saved?")).toHaveValue("");
+  }
+  expect(button).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Answer with voice" }));
+  expect(screen.getByRole("button", { name: "Stop recording" })).toBeInTheDocument();
 });
