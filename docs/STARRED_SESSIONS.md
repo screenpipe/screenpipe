@@ -3,6 +3,9 @@
 
 # Starred work sessions
 
+<!-- doc-covers: crates/screenpipe-engine/src/routes/starred.rs, crates/screenpipe-db/src/db/starred.rs, crates/screenpipe-engine/src/cli/starred.rs, apps/screenpipe-app-tauri/components/starred-sessions -->
+<!-- doc-verified: ce388b18d56d9c6bf227ca1e152d676d77da866d -->
+
 A star marks a saved time interval. Capture settings, exclusions, pauses, history access, and retention still apply. The engine stores intervals in SQLite so desktop windows, API clients, CLI commands, and agents see the same boundaries.
 
 ## API
