@@ -70,8 +70,9 @@ pub(super) async fn read_catalog(source: &WorkflowCatalogSource) -> Result<Value
         {
             continue;
         }
-        if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+        if let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) {
             if value["schemaVersion"] == 5 && value["analysis"]["workflows"].is_array() {
+                screenpipe_core::workflows::discard_screenshot_pixels(&mut value);
                 return Ok(value);
             }
         }

@@ -1,6 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 "use client";
+import { exportGuideHtml } from "./guide-images";
 import { SourceSopScreenshot } from "./source-sop-screenshot";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import {
@@ -22,14 +23,11 @@ import type { WorkflowMap } from "./model";
 import type { WorkflowsPlatform } from "./platform";
 import {
   guideWithBlockIds,
-  guideHtml,
-  guideImage,
   guideScreenshot,
   guideStepIncludesImage,
   guideSourceStage,
   guideNeedsSourceReview,
   guideSourceImages,
-  isGuideImage,
   type WorkflowGuide as Guide,
 } from "./guide";
 import { WorkflowRichText } from "./rich-text";
@@ -49,12 +47,14 @@ export function WorkflowGuide({
   close,
   backLabel = "Back to workflow",
   sourceMissing = false,
+  loadScreenshot,
 }: {
   workflow: WorkflowMap;
   platform: NonNullable<WorkflowsPlatform["guides"]>;
   close: () => void;
   backLabel?: string;
   sourceMissing?: boolean;
+  loadScreenshot?: WorkflowsPlatform["loadWorkflowScreenshot"];
 }) {
   const ui = useGT();
   const [promptRequest, setPromptRequest] = useState<{
@@ -446,10 +446,10 @@ export function WorkflowGuide({
                 const sourceStage = guideSourceStage(draft, step, workflow) ?? null;
                 const image =
                   !stale && guideStepIncludesImage(step)
-                    ? guideImage(workflow, sourceStage, step.imageReview)
+                    ? guideScreenshot(workflow, sourceStage, step.imageReview)
                     : null;
                 const sources = !stale
-                  ? guideSourceImages(workflow, sourceStage).filter(source => isGuideImage(source.dataUrl))
+                  ? guideSourceImages(workflow, sourceStage)
                   : [];
                 const id = `step/${step.blockId ?? `step-${i}`}`;
                 return [
@@ -544,7 +544,9 @@ export function WorkflowGuide({
                           <SopScreenshot
                             load={platform.loadScreenshot}
                             frameId={guideScreenshot(workflow, sourceStage, step.imageReview)!.frameId}
-                            src={image}
+                            src={image.dataUrl}
+                            source={image}
+                            loadSource={loadScreenshot ?? platform.loadSourceScreenshot}
                             alt={ui("Source for {value1}", {
                               value1: step.title,
                             })}
@@ -573,6 +575,7 @@ export function WorkflowGuide({
                           replacing={!!image}
                           title={step.title}
                           load={platform.loadScreenshot}
+                          loadSource={loadScreenshot ?? platform.loadSourceScreenshot}
                           include={(source) => {
                             update({
                               ...draft,
@@ -697,7 +700,7 @@ export function WorkflowGuide({
             try {
               if (
                 await platform.export(
-                  guideHtml(draft, workflow, images),
+                  await exportGuideHtml(draft, workflow, images, loadScreenshot ?? platform.loadSourceScreenshot),
                   draft.title,
                 )
               )
@@ -726,8 +729,10 @@ function ScreenshotReview({
   title,
   include,
   load,
+  loadSource,
 }: {
   load?: NonNullable<WorkflowsPlatform["guides"]>["loadScreenshot"];
+  loadSource?: WorkflowsPlatform["loadWorkflowScreenshot"];
   sources: ReturnType<typeof guideSourceImages>;
   selected?: Guide["steps"][number]["imageReview"];
   replacing: boolean;
@@ -766,6 +771,8 @@ function ScreenshotReview({
             frameId={source.frameId}
             key={`${source.frameId}:${source.timestamp}`}
             src={source.dataUrl}
+            source={source}
+            loadSource={loadSource}
             alt={ui("Review source for {value1}", { value1: title })}
             draggable={false}
             onLoad={() => {

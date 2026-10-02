@@ -65,6 +65,7 @@ export type WorkflowsPlatform = {
     timestamp: string,
     app: string,
     signal: AbortSignal,
+    frameId?: number,
   ) => Promise<import("./model").WorkflowScreenshot | null>;
   openCapturedMoment?: (frameId: number, timestamp: string) => Promise<void>;
   assistant?: WorkflowsAssistantPlatform;

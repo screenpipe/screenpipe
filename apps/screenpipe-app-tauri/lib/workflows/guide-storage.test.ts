@@ -88,6 +88,27 @@ it("keeps screenshot review through disk validation and backup recovery", async 
   expect(await loadGuideFromDisk("research")).toEqual(reviewed);
 });
 
+it("retains the good recovery copy when saving after a corrupt primary", async () => {
+  const original = { research: guide };
+  files.set("workflows/guides.json", "broken");
+  files.set("workflows/guides.backup.json", JSON.stringify(original));
+  await saveGuideToDisk({ ...guide, title: "Recovered and edited" });
+  expect(JSON.parse(files.get("workflows/guides.backup.json")!)).toEqual(original);
+  expect((await loadGuideFromDisk("research"))?.title).toBe("Recovered and edited");
+});
+
+it("keeps recovery readable when replacing the primary fails", async () => {
+  const fs = await import("@tauri-apps/plugin-fs");
+  files.set("workflows/guides.json", "broken");
+  files.set("workflows/guides.backup.json", JSON.stringify({ research: guide }));
+  const rename = vi.mocked(fs.rename);
+  const normal = rename.getMockImplementation()!;
+  rename.mockImplementationOnce(normal).mockRejectedValueOnce(new Error("disk full"));
+  await expect(saveGuideToDisk({ ...guide, title: "Lost write" })).rejects.toThrow("disk full");
+  expect(await loadGuideFromDisk("research")).toEqual(guide);
+  expect([...files.keys()].some(key => key.includes(".tmp"))).toBe(false);
+});
+
 it("persists video edits alongside the SOP through reload", async () => {
   const video = { version: 1 as const, sourceHash: "abc", scenes: [{ id: "section-0", title: "Video title", narration: "Shorter narration.", includeImage: false }] };
   await saveGuideToDisk({ ...guide, video });
