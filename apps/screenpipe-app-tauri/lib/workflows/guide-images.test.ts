@@ -50,3 +50,17 @@ it("does not retrieve a screenshot explicitly excluded by the editor", async () 
   await exportGuideHtml({ ...guide, steps: guide.steps.map(step => ({ ...step, imageExcluded: true })) }, unreviewed, true, load);
   expect(load).not.toHaveBeenCalled();
 });
+
+it("preserves selected screenshot order when a stage has multiple captures", async () => {
+  const multiple = structuredClone(workflow);
+  const second = { ...capture, frameId: 43, timestamp: "2026-09-22T10:01:00Z" };
+  multiple.stages[0].screenshots = [capture, second];
+  const load = vi.fn().mockResolvedValue({ ...capture, dataUrl: "blob:export" });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ blob: async () => new Blob(["pixel"], { type: "image/png" }) }));
+  try {
+    expect(await exportGuideHtml(guide, multiple, true, load)).toContain("data:image/png;base64,");
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenCalledWith(capture.timestamp, capture.app, expect.any(AbortSignal), 42);
+    expect(multiple.stages[0].screenshots).toEqual([capture, second]);
+  } finally { vi.unstubAllGlobals(); }
+});

@@ -29,7 +29,10 @@ export async function exportGuideHtml(guide: WorkflowGuide, workflow: WorkflowMa
           reader.readAsDataURL(blob);
         });
         const capture = { ...source, dataUrl };
-        stages[index] = { ...stages[index], screenshot: capture, screenshots: [...(stages[index].screenshots ?? []).filter(image => image.frameId !== capture.frameId || image.timestamp !== capture.timestamp), capture] };
+        const previous = stages[index].screenshots ?? [source];
+        const matches = (image: typeof source) => image.frameId === capture.frameId && image.timestamp === capture.timestamp;
+        const screenshots = previous.some(matches) ? previous.map(image => matches(image) ? capture : image) : [...previous, capture];
+        stages[index] = { ...stages[index], screenshot: screenshots[0], screenshots };
       } finally { if (image.dataUrl.startsWith("blob:")) URL.revokeObjectURL(image.dataUrl); }
     }
     return guideHtml(guide, { ...workflow, stages }, true);
