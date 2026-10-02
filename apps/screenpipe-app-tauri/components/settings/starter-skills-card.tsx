@@ -57,6 +57,27 @@ export function StarterSkillsCard() {
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
 
+  async function changeModel(id: string) {
+    if (operation.current || !presets.some(p => p.id === id) || id === effectivePreset?.id) return;
+    operation.current = true; setBusy(true); setError("");
+    try {
+      const current = await request(`/pipes/${SLUG}`);
+      // Choosing a model before setup must not install or enable the task.
+      if (current === null) { setPreset(id); setState("missing"); return; }
+      await request(`/pipes/${SLUG}/config`, { agent: "pi", preset: [id], cloud_agent: null });
+      const verified = await request(`/pipes/${SLUG}`);
+      const config = verified?.data?.config;
+      const configured = Array.isArray(config?.preset) ? config.preset[0] : config?.preset;
+      if (configured !== id || typeof config?.enabled !== "boolean") {
+        throw new Error("Could not verify the model change. Check the task before retrying.");
+      }
+      setPreset(id);
+      setSavedModel(config.model ?? "");
+      setState(config.enabled ? "enabled" : "paused");
+    } catch (e) { setError(e instanceof Error ? e.message : ui("Could not save the model. Please retry.")); }
+    finally { operation.current = false; setBusy(false); }
+  }
+
   async function changeEnabled(enabled: boolean) {
     if (operation.current || enabled && !effectivePreset) return;
     operation.current = true; setBusy(true); setError("");
@@ -108,7 +129,7 @@ export function StarterSkillsCard() {
         <p className="mt-2 text-xs leading-relaxed text-muted-foreground">Review recent work and AI chat previews every 6 hours. Create or refine at most one reusable skill when a pattern repeats.</p>
         <div className="mt-3 flex flex-col items-stretch gap-3 sm:flex-row sm:items-end">
           <label className="min-w-0 flex-1 text-[11px] text-muted-foreground">Model
-            <select aria-label={ui("Skill learning model")} className="mt-1 block h-8 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground" value={effectivePreset?.id ?? ""} onChange={e => setPreset(e.target.value)} disabled={enabled || busy}>
+            <select aria-label={ui("Skill learning model")} aria-busy={busy} className="mt-1 block h-8 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground" value={effectivePreset?.id ?? ""} onChange={e => void changeModel(e.target.value)} disabled={busy || state === "checking" || state === "error"}>
               {!effectivePreset && <option value="">Choose a model in Settings</option>}
               {presets.map(p => <option key={p.id} value={p.id}>{p.model} · {p.provider}</option>)}
             </select>
@@ -119,6 +140,7 @@ export function StarterSkillsCard() {
               {busy ? ui("saving") : enabled ? ui("pause learning") : ui("turn on learning")}
             </Button>}
         </div>
+        <p className="mt-2 text-[11px] text-muted-foreground">Model changes apply to future runs.</p>
         <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">{effectivePreset?.provider === "native-ollama" ? ui("Uses your local model.") : ui("Context is sent to the selected model provider{value1}.", { value1: enabled && !effectivePreset && savedModel ? ` (${savedModel})` : "" })} Learned skills stay in Screenpipe. They are not automatically shared with other agents.</p>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
           <span>{enabled ? ui("Pause stops future runs; a current run may finish.") : ui("Your personal skills stay unchanged.")}</span>

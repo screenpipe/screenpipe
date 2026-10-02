@@ -9,13 +9,14 @@ const mocks = vi.hoisted(() => ({ fetch: vi.fn(), presets: [{ id: "local", model
 vi.mock("@/lib/api", () => ({ localFetch: mocks.fetch }));
 vi.mock("@/lib/hooks/use-settings", () => ({ useSettings: () => ({ settings: { aiPresets: mocks.presets } }) }));
 let enabled = false;
+let configuredPreset: string[] = [];
 beforeEach(() => {
-  enabled = false; mocks.fetch.mockReset();
+  enabled = false; configuredPreset = []; mocks.fetch.mockReset();
   mocks.presets = [{ id: "local", model: "test-local-model", provider: "native-ollama", defaultPreset: true }];
   mocks.fetch.mockImplementation(async (path: string, init: RequestInit) => {
     if (path.endsWith("/enable")) { enabled = JSON.parse(String(init.body)).enabled; return Response.json({ success: true }); }
-    if (path.endsWith("/config")) return Response.json({ success: true });
-    return Response.json({ data: { config: { enabled, model: "test-local-model", preset: [] } } });
+    if (path.endsWith("/config")) { configuredPreset = JSON.parse(String(init.body)).preset; return Response.json({ success: true }); }
+    return Response.json({ data: { config: { enabled, model: "test-local-model", preset: configuredPreset } } });
   });
 });
 describe("starter skills and learning setup", () => {
@@ -32,6 +33,43 @@ describe("starter skills and learning setup", () => {
     expect(writes.map(([path]) => path)).toEqual(["/pipes/skill-learning/config", "/pipes/skill-learning/enable"]);
     expect(JSON.parse(writes[0][1].body)).toEqual({ agent: "pi", preset: ["local"], cloud_agent: null });
     fireEvent.click(screen.getByRole("button", { name: "pause learning" })); await screen.findByRole("button", { name: "turn on learning" }); expect(enabled).toBe(false);
+  });
+  for (const isEnabled of [true, false]) it(`saves a model change while learning is ${isEnabled ? "enabled" : "paused"} and preserves that state`, async () => {
+    enabled = isEnabled; configuredPreset = ["local"];
+    mocks.presets.push({ id: "cloud", model: "test-cloud-model", provider: "screenpipe-cloud", defaultPreset: false });
+    const view = render(<StarterSkillsCard />);
+    await screen.findByRole("button", { name: isEnabled ? "pause learning" : "turn on learning" });
+    const select = screen.getByRole("combobox", { name: "Skill learning model" });
+    await waitFor(() => expect(select).toBeEnabled());
+    fireEvent.change(select, { target: { value: "cloud" } });
+    await waitFor(() => expect(configuredPreset).toEqual(["cloud"]));
+    await waitFor(() => expect(select).toHaveValue("cloud"));
+    expect(enabled).toBe(isEnabled);
+    expect(mocks.fetch.mock.calls.filter(([, init]) => init.method === "POST").map(([path]) => path)).toEqual(["/pipes/skill-learning/config"]);
+    expect(JSON.parse(mocks.fetch.mock.calls.find(([path]) => path.endsWith("/config"))![1].body)).toEqual({ agent: "pi", preset: ["cloud"], cloud_agent: null });
+    view.unmount(); render(<StarterSkillsCard />);
+    await waitFor(() => expect(screen.getByRole("combobox")).toHaveValue("cloud"));
+  });
+  for (const failsWrite of [true, false]) it(`keeps the last confirmed selection when ${failsWrite ? "the save fails" : "read-back disagrees"}`, async () => {
+    enabled = true;
+    mocks.presets.push({ id: "cloud", model: "test-cloud-model", provider: "screenpipe-cloud", defaultPreset: false });
+    mocks.fetch.mockImplementation(async (path: string) => path.endsWith("/config")
+      ? failsWrite ? Response.json({ error: "failed" }, { status: 500 }) : Response.json({ success: true })
+      : Response.json({ data: { config: { enabled: true, preset: ["local"] } } }));
+    render(<StarterSkillsCard />); await screen.findByRole("button", { name: "pause learning" });
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "cloud" } });
+    await screen.findByRole("alert");
+    expect(screen.getByRole("combobox")).toHaveValue("local");
+    expect(screen.getByRole("combobox")).toBeEnabled();
+    expect(mocks.fetch.mock.calls.some(([path]) => path.endsWith("/enable"))).toBe(false);
+  });
+  it("keeps selection local until a missing learning task is enabled", async () => {
+    mocks.presets.push({ id: "cloud", model: "test-cloud-model", provider: "screenpipe-cloud", defaultPreset: false });
+    mocks.fetch.mockImplementation(async () => Response.json({ error: "pipe not found" }, { status: 404 }));
+    render(<StarterSkillsCard />); await screen.findByRole("button", { name: "turn on learning" });
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "cloud" } });
+    await waitFor(() => expect(screen.getByRole("combobox")).toHaveValue("cloud"));
+    expect(mocks.fetch.mock.calls.every(([, init]) => !init.method)).toBe(true);
   });
   it("installs the disabled bundled task before configuring a missing task", async () => {
     let exists = false;

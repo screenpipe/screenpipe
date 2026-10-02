@@ -75,7 +75,10 @@ connection is required to enter the app.
 
 Starter skills need no extra action. The full skill catalog remains in Settings.
 Scheduled Tasks is where users manage these automations, their models, schedules,
-and enabled state. The Settings learning card also exposes its own pause control. The learning task starts on its existing
+and enabled state. The Settings learning card also exposes its own pause control. Changing the learning model in Settings saves and reads back the selected preset
+without pausing or enabling the task. The new model applies to future runs.
+Before initial setup, model selection stays local until learning is enabled.
+The learning task starts on its existing
 Pipe schedule; pausing prevents future runs, while an in-flight run may finish.
 
 Setup pins the selected compatible Pi preset before enabling each new or paused
