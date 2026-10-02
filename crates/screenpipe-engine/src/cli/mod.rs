@@ -703,6 +703,14 @@ pub struct RecordArgs {
     #[arg(long, default_value = "balanced")]
     pub video_quality: String,
 
+    /// Max width in pixels of the macOS screen capture that OCR reads.
+    /// 0 = native; nonzero values below 1280 are raised to 1280. Stored
+    /// screenshots use the smaller of this width and the --video-quality
+    /// width. Lower it to trade OCR legibility for less GPU work on wide
+    /// displays. Other platforms always capture native.
+    #[arg(long, default_value_t = 0)]
+    pub capture_max_width: u32,
+
     /// Keep the computer awake while screenpipe is running.
     #[arg(long, default_value_t = false)]
     pub keep_computer_awake: bool,
@@ -933,6 +941,7 @@ pub struct RecordArgSources {
     pub transcription_mode: bool,
     pub disable_telemetry: bool,
     pub video_quality: bool,
+    pub capture_max_width: bool,
     pub keep_computer_awake: bool,
     pub pause_on_drm_content: bool,
     pub disable_clipboard_capture: bool,
@@ -1002,6 +1011,7 @@ impl RecordArgSources {
             transcription_mode: from_command_line(record, "transcription_mode"),
             disable_telemetry: from_command_line(record, "disable_telemetry"),
             video_quality: from_command_line(record, "video_quality"),
+            capture_max_width: from_command_line(record, "capture_max_width"),
             keep_computer_awake: from_command_line(record, "keep_computer_awake"),
             pause_on_drm_content: from_command_line(record, "pause_on_drm_content"),
             disable_clipboard_capture: from_command_line(record, "disable_clipboard_capture"),
@@ -1057,6 +1067,7 @@ impl RecordArgSources {
             || self.transcription_mode
             || self.disable_telemetry
             || self.video_quality
+            || self.capture_max_width
             || self.keep_computer_awake
             || self.pause_on_drm_content
             || self.disable_clipboard_capture
@@ -1249,6 +1260,7 @@ impl RecordArgs {
                 .collect(),
             deepgram_api_key: self.deepgram_api_key.clone().unwrap_or_default(),
             video_quality: self.video_quality.clone(),
+            capture_max_width: self.capture_max_width,
             disable_snapshot_compaction: self.disable_snapshot_compaction,
             disable_meeting_detector: self.disable_meeting_detector,
             idle_capture_interval_ms: self.idle_capture_interval_ms,
@@ -1580,6 +1592,9 @@ impl RecordArgs {
         }
         if sources.video_quality {
             settings.video_quality = self.video_quality.clone();
+        }
+        if sources.capture_max_width {
+            settings.capture_max_width = self.capture_max_width;
         }
         if sources.keep_computer_awake {
             settings.keep_computer_awake = self.keep_computer_awake;
@@ -2718,6 +2733,7 @@ mod tests {
             disable_clipboard_capture: false,
             disable_keyboard_capture: false,
             video_quality: "max".to_string(),
+            capture_max_width: 2560,
             use_all_monitors: false,
             monitor_ids: vec!["42".to_string()],
             ..Default::default()
@@ -2726,6 +2742,20 @@ mod tests {
         args.apply_defaults_and_overrides(&mut settings, None, &sources);
         assert_eq!(serde_json::to_value(&settings).unwrap(), before);
         assert!(!sources.has_recording_override());
+    }
+
+    #[test]
+    fn explicit_capture_max_width_overrides_saved_value() {
+        let argv = ["screenpipe", "record", "--capture-max-width", "1920"];
+        let args = record_args(argv);
+        let sources = record_sources(argv);
+        let mut settings = screenpipe_config::RecordingSettings {
+            capture_max_width: 2560,
+            ..Default::default()
+        };
+        args.apply_defaults_and_overrides(&mut settings, None, &sources);
+        assert_eq!(settings.capture_max_width, 1920);
+        assert!(sources.has_recording_override());
     }
 
     #[test]
@@ -2748,6 +2778,7 @@ mod tests {
                     "balanced"
                 }
             );
+            assert_eq!(settings.capture_max_width, 0);
             assert!(settings.use_all_monitors);
             assert!(settings.monitor_ids.is_empty());
         }

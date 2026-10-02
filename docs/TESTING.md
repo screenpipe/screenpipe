@@ -242,6 +242,7 @@ commits: `6dd5d98e`, `831ad258`
 - [ ] **identical frames skipped** — check logs for hash match frequency on idle monitors. should be >80% skip rate.
 - [ ] **ultrawide monitor (3440x1440+)** — OCR works correctly. no distortion in change detection. text at edges is captured.
 - [ ] **4K monitor** — OCR works. frame comparison doesn't timeout or spike CPU.
+- [ ] **OCR reads full-size frames on wide displays (macOS)** — On a display wider than 1920 points with default settings (`balanced`), open a terminal with small text and search for a word from it: OCR finds it. Stored JPEGs stay at the `videoQuality` width (1920 for `balanced`), and meeting HD video width is unchanged. With `balanced`, `--capture-max-width 1920` restores the old capture size and cost. Capture width must never be derived from `videoQuality` (#7393).
 - [ ] **high refresh rate (120Hz+)** — app respects its own FPS setting (0.5 default), not the display refresh rate.
 - [ ] **very fast content changes** — scroll quickly through a document. OCR captures content, no crashes from buffer overflows.
 - [ ] **corrupt pixel buffer** — sck-rs handles corrupt ScreenCaptureKit buffers gracefully (no SIGABRT). fixed in `831ad258`.

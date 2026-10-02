@@ -18,6 +18,7 @@
   {"policyKey": "disableTimeline", "deviceKey": "disableTimeline", "apply": "engine", "kind": "boolean", "defaultValue": false},
   {"policyKey": "useAllMonitors", "deviceKey": "useAllMonitors", "apply": "engine", "kind": "boolean", "defaultValue": true},
   {"policyKey": "videoQuality", "deviceKey": "videoQuality", "apply": "engine", "kind": "enum", "values": ["low", "balanced", "high", "max"], "defaultValue": "balanced"},
+  {"policyKey": "captureMaxWidth", "deviceKey": "captureMaxWidth", "apply": "engine", "kind": "number", "min": 0, "max": 7680, "integer": true, "defaultValue": 0},
   {"policyKey": "maxSnapshotWidth", "deviceKey": "maxSnapshotWidth", "apply": "engine", "kind": "number", "min": 0, "max": 7680, "integer": true, "defaultValue": 1920},
   {"policyKey": "disableSnapshotCompaction", "deviceKey": "disableSnapshotCompaction", "apply": "engine", "kind": "boolean", "defaultValue": false},
   {"policyKey": "disableMeetingDetector", "deviceKey": "disableMeetingDetector", "apply": "engine", "kind": "boolean", "defaultValue": false},

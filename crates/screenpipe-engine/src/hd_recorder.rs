@@ -74,6 +74,9 @@ pub struct HdRecorderConfig {
     pub ignore_incognito_windows: bool,
     /// Let the incognito detector use browser-native APIs (macOS Automation).
     pub enhanced_incognito_detection: bool,
+    /// Stored snapshot width from `videoQuality` (0 = native). Bounds the HD
+    /// stream; independent of the OCR capture width.
+    pub snapshot_max_width: u32,
 }
 
 /// Per-monitor HD recorder loop. Idles until an HD session is active, then
@@ -395,9 +398,12 @@ mod macos {
         // starts the stream, so run it on a blocking thread.
         let hd = {
             let m = monitor.clone();
-            tokio::task::spawn_blocking(move || m.start_hd_capture(fps, &excluded))
-                .await
-                .context("hd capture spawn_blocking join")??
+            let snapshot_max_width = config.snapshot_max_width;
+            tokio::task::spawn_blocking(move || {
+                m.start_hd_capture(fps, &excluded, snapshot_max_width)
+            })
+            .await
+            .context("hd capture spawn_blocking join")??
         };
         let actual_fps = hd.fps.max(1);
         let (hd_w, hd_h) = (hd.width, hd.height);

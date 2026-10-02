@@ -446,6 +446,13 @@ pub struct RecordingSettings {
     #[serde(rename = "videoQuality")]
     pub video_quality: String,
 
+    /// Max width (px) of the macOS screen capture that OCR reads. 0 = native;
+    /// nonzero values below 1280 are raised to 1280. Stored snapshots use the
+    /// smaller of this width and the `videoQuality` width. Other platforms
+    /// always capture native.
+    #[serde(rename = "captureMaxWidth", default)]
+    pub capture_max_width: u32,
+
     /// Maximum width for stored snapshots. Images wider than this are downscaled
     /// (preserving aspect ratio) before JPEG encoding. 0 = no limit (store at
     /// native resolution). Default: 1920.
@@ -938,6 +945,7 @@ impl Default for RecordingSettings {
             monitor_ids: vec![],
             use_all_monitors: true,
             video_quality: "balanced".to_string(),
+            capture_max_width: 0,
             max_snapshot_width: default_max_snapshot_width(),
             disable_snapshot_compaction: false,
             disable_meeting_detector: false,

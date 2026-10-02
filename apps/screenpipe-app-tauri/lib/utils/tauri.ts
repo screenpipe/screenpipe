@@ -3934,6 +3934,13 @@ useAllMonitors: boolean;
  */
 videoQuality: string;
 /**
+ * Max width (px) of the macOS screen capture that OCR reads. 0 = native;
+ * nonzero values below 1280 are raised to 1280. Stored snapshots use the
+ * smaller of this width and the `videoQuality` width. Other platforms
+ * always capture native.
+ */
+captureMaxWidth?: number;
+/**
  * Maximum width for stored snapshots. Images wider than this are downscaled
  * (preserving aspect ratio) before JPEG encoding. 0 = no limit (store at
  * native resolution). Default: 1920.

@@ -59,6 +59,9 @@ pub struct VisionManagerConfig {
     /// snapshot max width via `screenpipe_core::video::*`. Values: "low",
     /// "balanced" (default), "high", "max".
     pub video_quality: String,
+    /// Max width (px) of the macOS screen capture that OCR reads. 0 = native.
+    /// Independent of `video_quality`, which only sizes what is stored.
+    pub capture_max_width: u32,
     /// Skip screenshot pixels/JPEG/OCR while keeping accessibility-tree capture.
     pub disable_screenshots: bool,
     /// Enable the bounded semantic projection worker. Off by default.
@@ -627,15 +630,13 @@ impl VisionManager {
             max_snapshot_width,
         ));
 
-        // Cap the macOS SCK capture stream to the same width as the snapshot
-        // writer. The GPU downscales before replayd delivers the framebuffer,
-        // saving WindowServer composite + readback cost without affecting
-        // anything that wasn't going to be downsized in user space anyway.
-        // Text extraction is primarily a11y-tree-driven (unchanged) and OCR
-        // runs only as a fallback; both see the same image they'd see after
-        // the snapshot-writer downscale.
+        // OCR reads the captured frame, not the stored JPEG, so the capture
+        // cap decides OCR legibility. Never set it from `max_snapshot_width`
+        // or `videoQuality`: capping capture at the stored width garbled
+        // small text on wide displays (#7393). The snapshot writer shrinks
+        // its own copy.
         #[cfg(target_os = "macos")]
-        screenpipe_screen::monitor::set_sck_capture_max_width(max_snapshot_width);
+        screenpipe_screen::monitor::set_sck_capture_max_width(self.config.capture_max_width);
 
         // Create activity feed for this monitor
         let activity_feed = ActivityFeed::new();
@@ -726,6 +727,7 @@ impl VisionManager {
                 included_urls: self.config.included_urls.clone(),
                 ignore_incognito_windows: self.config.ignore_incognito_windows,
                 enhanced_incognito_detection: self.config.enhanced_incognito_detection,
+                snapshot_max_width: max_snapshot_width,
             };
             let hd_handle = self
                 .vision_handle
@@ -1035,6 +1037,7 @@ mod tests {
             pause_on_drm_content: false,
             languages: vec![Language::English],
             video_quality: "balanced".to_string(),
+            capture_max_width: 0,
             disable_screenshots: false,
             enable_semantic_context,
             semantic_context_mode: SemanticContextMode::Memory,
