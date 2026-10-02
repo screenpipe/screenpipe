@@ -166,6 +166,149 @@ struct Pending {
     request: Option<BackfillRequest>,
 }
 
+/// Outcomes acknowledged by storage, checkpointed with the telemetry page.
+/// Missing pixels are never counted as uploaded screenshots.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(super) struct ImageProgress {
+    pub uploaded: u64,
+    pub unavailable: u64,
+}
+
+#[derive(Deserialize)]
+struct ImageAck {
+    stored: Vec<i64>,
+    // Older servers do not acknowledge terminal outcomes explicitly. Keep
+    // the page pending until the server upgrade rather than infer success.
+    #[serde(default)]
+    unavailable: Vec<i64>,
+    #[serde(default)]
+    failed: Vec<ImageFailure>,
+}
+
+#[derive(Deserialize)]
+struct ImageFailure {
+    frame_id: Option<i64>,
+    reason: String,
+}
+
+pub(super) async fn upload_page_images(
+    cfg: &EnterpriseSyncConfig,
+    local: &dyn LocalApiClient,
+    http: &reqwest::Client,
+    frames: &[FrameRow],
+) -> Result<ImageProgress, EnterpriseSyncError> {
+    if !matches!(
+        cfg.upload_mode,
+        EnterpriseUploadMode::HostedIngest | EnterpriseUploadMode::DirectReadable(_)
+    ) {
+        return Err(EnterpriseSyncError::BackfillImages(
+            "screenshot_storage_mode_blocked",
+        ));
+    }
+    let base = control_plane_base(&cfg.ingest_url).ok_or(EnterpriseSyncError::BackfillImages(
+        "screenshot_endpoint_unavailable",
+    ))?;
+    let guard_source = cfg.stable_device_id.is_some()
+        || uuid::Uuid::parse_str(&cfg.device_id).is_ok_and(|id| id.get_version_num() == 4);
+    let mut progress = ImageProgress::default();
+    // Retain only one transport batch of JPEGs. The existing timestamp + tie
+    // offset cursor regenerates a failed page after a restart; no image spool.
+    for chunk in frames.chunks(FRAME_UPLOAD_ENTRIES_PER_REQUEST) {
+        if crate::enterprise_policy::current_sync_streams().frame_images
+            != crate::enterprise_policy::FrameImagesMode::All
+        {
+            return Err(EnterpriseSyncError::BackfillImages(
+                "screenshot_policy_disabled",
+            ));
+        }
+        let mut entries = Vec::with_capacity(chunk.len());
+        for frame in chunk {
+            if frame.frame_id <= 0 {
+                return Err(EnterpriseSyncError::BackfillImages(
+                    "screenshot_invalid_frame",
+                ));
+            }
+            let entry = match local.fetch_frame_jpeg(frame.frame_id).await {
+                Ok(Some(bytes)) => {
+                    let jpeg = tokio::task::spawn_blocking(move || downscale_frame_jpeg(&bytes))
+                        .await
+                        .map_err(|_| {
+                            EnterpriseSyncError::BackfillImages("screenshot_processing_failed")
+                        })?
+                        .map_err(|_| {
+                            EnterpriseSyncError::BackfillImages("screenshot_processing_failed")
+                        })?;
+                    FrameUploadEntry::image(frame.frame_id, &jpeg)
+                }
+                Ok(None) => FrameUploadEntry::err(frame.frame_id, "not_found"),
+                Err(EnterpriseSyncError::BackfillImages(code)) => {
+                    return Err(EnterpriseSyncError::BackfillImages(code))
+                }
+                Err(_) => {
+                    return Err(EnterpriseSyncError::BackfillImages(
+                        "screenshot_fetch_failed",
+                    ))
+                }
+            };
+            entries.push(entry);
+        }
+        for batch in split_frame_upload_requests(entries) {
+            if crate::enterprise_policy::current_sync_streams().frame_images
+                != crate::enterprise_policy::FrameImagesMode::All
+            {
+                return Err(EnterpriseSyncError::BackfillImages(
+                    "screenshot_policy_disabled",
+                ));
+            }
+            if guard_source
+                && local.upload_source_id().await.ok().as_deref() != Some(cfg.device_id.as_str())
+            {
+                return Err(EnterpriseSyncError::BackfillImages(
+                    "screenshot_source_changed",
+                ));
+            }
+            let response = http
+                .post(format!("{base}/api/enterprise/frame-uploads"))
+                .header("X-License-Key", &cfg.license_key)
+                .header("X-Device-Id", &cfg.device_id)
+                .json(&serde_json::json!({"frames": batch}))
+                .send()
+                .await
+                .map_err(|_| EnterpriseSyncError::BackfillImages("screenshot_upload_failed"))?
+                .error_for_status()
+                .map_err(|_| EnterpriseSyncError::BackfillImages("screenshot_upload_failed"))?;
+            let ack: ImageAck = response
+                .json()
+                .await
+                .map_err(|_| EnterpriseSyncError::BackfillImages("screenshot_ack_incomplete"))?;
+            // HTTP 200 may contain partial storage failures. Require every
+            // exact ID's matching durable outcome before acknowledging the page.
+            for entry in batch {
+                if entry.image_b64.is_some() && ack.stored.contains(&entry.frame_id) {
+                    progress.uploaded += 1;
+                } else if entry.error == Some("not_found")
+                    && ack.unavailable.contains(&entry.frame_id)
+                {
+                    progress.unavailable += 1;
+                } else {
+                    let code = match ack
+                        .failed
+                        .iter()
+                        .find(|failure| failure.frame_id == Some(entry.frame_id))
+                        .map(|failure| failure.reason.as_str())
+                    {
+                        Some("storage write failed") => "screenshot_storage_write_failed",
+                        Some("status write failed") => "screenshot_status_write_failed",
+                        _ => "screenshot_ack_incomplete",
+                    };
+                    return Err(EnterpriseSyncError::BackfillImages(code));
+                }
+            }
+        }
+    }
+    Ok(progress)
+}
+
 async fn report(
     cfg: &EnterpriseSyncConfig,
     http: &reqwest::Client,
@@ -173,11 +316,13 @@ async fn report(
     request: &BackfillRequest,
     cursor: &Cursor,
     status: &str,
-    failed: bool,
+    failure: Option<&EnterpriseSyncError>,
 ) -> Result<(), EnterpriseSyncError> {
     let response = http.post(url).header("X-License-Key", &cfg.license_key).header("X-Device-Id", &cfg.device_id)
         .json(&serde_json::json!({
-            "id": request.id, "status": status, "uploaded_records": cursor.boundary.backfill_records.unwrap_or(0), "last_error": if failed { Some("retrying") } else { None },
+            "id": request.id, "status": status, "uploaded_records": cursor.boundary.backfill_records.unwrap_or(0),
+            "screenshots": cursor.boundary.backfill_images,
+            "last_error": failure.map(|error| match error { EnterpriseSyncError::BackfillImages(code) => *code, _ => "retrying" }),
             "cursors": { "frames": cursor.last_frame_ts, "audio": cursor.last_audio_ts, "ui_events": cursor.last_ui_ts,
                 "parsed": cursor.last_parsed_ts, "memories": cursor.last_memory_ts, "feedback": cursor.last_feedback_ts }
         }))
@@ -247,7 +392,7 @@ mod tests {
             self.reads.fetch_add(1, Ordering::SeqCst);
             let ts = "2026-01-01T01:00:00+00:00";
             // 501 rows at one timestamp exercise the durable tie offset.
-            let rows = (0..501).map(|id| FrameRow {
+            let rows = (1..=501).map(|id| FrameRow {
                 frame_id: id,
                 timestamp: ts.into(),
                 app_name: None,
@@ -468,7 +613,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn direct_backfill_capacity_failure_drains_and_retries_without_advancing_history() {
+    async fn direct_backfill_images_ack_before_telemetry_and_cursor_survive_retry() {
         let _guard = crate::enterprise_policy::sync_streams_test_lock();
         crate::enterprise_policy::set_sync_streams(
             true,
@@ -481,6 +626,19 @@ mod tests {
             "all".into(),
         );
         let server = MockServer::start().await;
+        let image_attempts = Arc::new(AtomicUsize::new(0));
+        let attempts = image_attempts.clone();
+        Mock::given(method("POST")).and(path("/api/enterprise/frame-uploads"))
+            .respond_with(move |r: &wiremock::Request| {
+                let body: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+                let ids: Vec<_> = body["frames"].as_array().unwrap().iter().map(|f| f["frame_id"].clone()).collect();
+                // HTTP success does not mean every image/status was persisted.
+                if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"stored": [], "unavailable": [], "failed": [{"frame_id": 1, "reason": "status write failed"}]}))
+                } else {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"stored": [], "unavailable": ids, "failed": []}))
+                }
+            }).mount(&server).await;
         Mock::given(method("POST")).and(path("/ticket"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "ok": true, "method": "PUT", "upload_url": format!("{}/blob", server.uri()), "headers": {}
@@ -490,28 +648,18 @@ mod tests {
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
-        let full = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let is_full = full.clone();
-        Mock::given(method("POST")).and(path("/complete"))
+        let completes = Arc::new(AtomicUsize::new(0));
+        let calls = completes.clone();
+        Mock::given(method("POST"))
+            .and(path("/complete"))
             .and(header("x-screenpipe-backfill", "1"))
             .respond_with(move |_: &wiremock::Request| {
-                if is_full.load(Ordering::SeqCst) {
-                    ResponseTemplate::new(429).set_body_json(serde_json::json!({"error":"screenshot queue is full; retry after the device syncs","code":"frame_queue_full"}))
-                } else { ResponseTemplate::new(200) }
-            }).mount(&server).await;
-        Mock::given(method("GET"))
-            .and(path("/api/enterprise/frame-requests"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"frame_ids":[1]})),
-            )
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/api/enterprise/frame-uploads"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"stored":[1],"failed":[]})),
-            )
+                if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    ResponseTemplate::new(503)
+                } else {
+                    ResponseTemplate::new(200)
+                }
+            })
             .mount(&server)
             .await;
         let dir = tempfile::TempDir::new().unwrap();
@@ -533,31 +681,58 @@ mod tests {
         let error = run_one_sync_inner(&cfg, &mut cursor, &local, &http, false, Some(&request))
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("frame_queue_full"));
+        assert!(error.to_string().contains("screenshot_status_write_failed"));
+        assert_eq!(cursor.last_frame_ts, initial);
+        assert!(!cfg.cursor_path.exists());
+        assert_eq!(completes.load(Ordering::SeqCst), 0);
+        // Next image pass succeeds but telemetry fails: still no checkpoint.
+        assert!(
+            run_one_sync_inner(&cfg, &mut cursor, &local, &http, false, Some(&request))
+                .await
+                .is_err()
+        );
         assert_eq!(cursor.last_frame_ts, initial);
         assert_eq!(cursor.boundary.backfill_records, None);
         assert!(!cfg.cursor_path.exists());
-        // This is the production order after a failed historical pass: screenshot
-        // fulfillment remains reachable, then the same page retries next tick.
-        let drained = fulfill_frame_requests(&cfg, &local, &http).await;
-        assert_eq!(drained.requested, 1);
-        full.store(false, Ordering::SeqCst);
         run_one_sync_inner(&cfg, &mut cursor, &local, &http, false, Some(&request))
             .await
             .unwrap();
         assert_eq!(cursor.boundary.backfill_records, Some(500));
+        let mut restarted = Cursor::load(&cfg.cursor_path);
         assert_eq!(
-            Cursor::load(&cfg.cursor_path).last_frame_ts,
-            cursor.last_frame_ts
+            restarted
+                .boundary
+                .backfill_images
+                .as_ref()
+                .unwrap()
+                .uploaded,
+            0
         );
+        assert_eq!(
+            restarted
+                .boundary
+                .backfill_images
+                .as_ref()
+                .unwrap()
+                .unavailable,
+            500
+        );
+        run_one_sync_inner(&cfg, &mut restarted, &local, &http, false, Some(&request))
+            .await
+            .unwrap();
+        assert_eq!(restarted.boundary.backfill_records, Some(501));
+        assert_eq!(restarted.boundary.backfill_images.unwrap().unavailable, 501);
         let requests = server.received_requests().await.unwrap();
+        assert!(!requests
+            .iter()
+            .any(|r| r.url.path() == "/api/enterprise/frame-requests"));
         let completions: Vec<serde_json::Value> = requests
             .iter()
             .filter(|r| r.url.path() == "/complete")
             .map(|r| serde_json::from_slice(&r.body).unwrap())
             .collect();
-        assert!(completions.len() >= 2);
-        assert_eq!(completions.first().unwrap(), completions.last().unwrap());
+        assert_eq!(completions[0], completions[1]);
+        // Restore defaults for the shared policy fixture.
         crate::enterprise_policy::set_sync_streams(
             true,
             false,
@@ -731,13 +906,13 @@ pub(super) async fn fulfill_requests(
                     &request,
                     &request.initial_cursor(),
                     "running",
-                    true,
+                    Some(&error),
                 )
                 .await;
                 return Err(error);
             }
         };
-        report(cfg, http, &url, &request, &cursor, "running", false).await?;
+        report(cfg, http, &url, &request, &cursor, "running", None).await?;
         match run_one_sync_inner(&replay_cfg, &mut cursor, local, http, false, Some(&request)).await
         {
             Ok(page) => {
@@ -752,7 +927,7 @@ pub(super) async fn fulfill_requests(
                     &request,
                     &cursor,
                     if complete { "completed" } else { "running" },
-                    false,
+                    None,
                 )
                 .await?;
                 if complete {
@@ -760,7 +935,7 @@ pub(super) async fn fulfill_requests(
                 }
             }
             Err(error) => {
-                let _ = report(cfg, http, &url, &request, &cursor, "running", true).await;
+                let _ = report(cfg, http, &url, &request, &cursor, "running", Some(&error)).await;
                 return Err(error);
             }
         }
