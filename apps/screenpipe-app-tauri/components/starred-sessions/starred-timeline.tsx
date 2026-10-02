@@ -78,9 +78,9 @@ export function StarredTimeline({
       )}
       {!showStrip && (
         <Dialog open={open} onOpenChange={setOpen}>
-          <DialogContent aria-describedby={undefined} className="max-h-[85vh] max-w-sm overflow-y-auto border-white/20 bg-black p-4 text-white">
-            <DialogTitle className="text-sm">Starred sessions</DialogTitle>
-            <StarredSessionPanel state={state} />
+          <DialogContent aria-describedby={undefined} className="max-h-[85vh] max-w-sm overflow-y-auto border-white/20 bg-black p-0 text-white">
+            <DialogTitle className="sr-only">Starred sessions</DialogTitle>
+            <StarredSessionPanel state={state} inDialog />
           </DialogContent>
         </Dialog>
       )}

@@ -965,7 +965,7 @@ export default function ShortcutReminderPage() {
       {starPanelOpen ? (
         <div className="flex min-h-0 flex-1 w-full flex-col rounded-lg bg-black" style={{ marginTop: dockAbove ? 4 * overlayScale : 0, marginBottom: dockAbove ? 0 : 4 * overlayScale }}>
           <div className="min-h-0 flex-1 overflow-auto"><div style={{ zoom: overlayScale }}><StarredSessionPanel state={starredSessions} /></div></div>
-          <button className="w-full shrink-0 rounded-b-lg bg-black/95 py-1 text-xs text-white/60 hover:text-white" style={{ zoom: overlayScale }} onClick={() => setStarPanelOpen(false)}>Close session controls</button>
+          <button className="w-full shrink-0 rounded-b-lg bg-black/95 py-1 text-xs text-white/60 hover:text-white" style={{ zoom: overlayScale }} onClick={() => setStarPanelOpen(false)} aria-label="Close session controls">Close</button>
         </div>
       ) : settingsOpen ? (
         <div

@@ -78,6 +78,25 @@ describe("starred sessions", () => {
     expect(screen.getByRole("button", { name: "15 min" })).toBeVisible();
   });
 
+  it("keeps secondary actions collapsed and offers a new session after ending", async () => {
+    saved = [{ ...session, start: new Date(Date.now() - 60000).toISOString(), end: new Date(Date.now() + 60000).toISOString() }];
+    render(<Panel />);
+    await screen.findByRole("button", { name: "End session" });
+    expect(screen.queryByText("Keep an important stretch of work easy to find.")).toBeNull();
+    expect(screen.queryByText("Audio not found")).toBeNull();
+    expect(screen.queryByLabelText("Saved session")).toBeNull();
+    const more = screen.getByText("More");
+    expect(more.closest("details")).not.toHaveAttribute("open");
+    fireEvent.click(more);
+    expect(more.closest("details")).toHaveAttribute("open");
+    expect(screen.getByRole("button", { name: "Ask about session" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "End session" }));
+    await screen.findByRole("button", { name: "New session" });
+    fireEvent.click(screen.getByRole("button", { name: "New session" }));
+    fireEvent.click(screen.getByRole("button", { name: "5 min" }));
+    await screen.findByRole("button", { name: "End session" });
+    expect(saved).toHaveLength(2);
+  });
   it("persists a timed boundary and restores it on remount", async () => {
     const hook = renderHook(useStarredSessions);
     await waitFor(() => expect(hook.result.current.ready).toBe(true));
