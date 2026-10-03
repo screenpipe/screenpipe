@@ -204,6 +204,12 @@ export function DiskUsageSection() {
         </Card>
       </div>
 
+      <RetentionSettings
+        availableBytes={diskUsage?.available_space_bytes}
+        databaseBytes={diskUsage?.other?.database_size_bytes}
+        onStorageChanged={refetch}
+      />
+
       {/* Media Breakdown */}
       <Card className={cn("border-border bg-card", isLoading && "opacity-75")}>
         <CardContent className="px-3 py-2.5 space-y-2">
@@ -334,12 +340,6 @@ export function DiskUsageSection() {
           )}
         </CardContent>
       </Card>
-
-      <RetentionSettings
-        availableBytes={diskUsage?.available_space_bytes}
-        databaseBytes={diskUsage?.other?.database_size_bytes}
-        onStorageChanged={refetch}
-      />
     </div>
   );
 }
