@@ -185,6 +185,7 @@ pub struct OverlayState {
     pub shortcut_timeline: String,
     pub shortcut_search: String,
     pub shortcut_chat: String,
+    pub shortcut_star: String,
     pub shortcut_overlay: String,
 
     pub notification: Option<Notification>,
@@ -209,6 +210,7 @@ pub enum Control {
     Brand,
     Search,
     Chat,
+    Star,
     Timeline,
     Audio,
     Settings,

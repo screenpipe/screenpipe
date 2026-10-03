@@ -43,6 +43,7 @@ const windowsCiSpecs = [
   'history-swipe-navigation.spec.ts',
   'search/search-bugs-4645.spec.ts',
   'settings-sections.spec.ts',
+  'starred-session-popover.spec.ts',
   'windows-system-integration.spec.ts',
   'windows-user-journey.spec.ts',
 ].map((spec) => resolve(__dirname, 'specs', spec));

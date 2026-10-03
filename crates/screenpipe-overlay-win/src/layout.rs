@@ -52,7 +52,7 @@ pub const BASE_COLLAPSED_W: f32 = 22.0;
 pub const BASE_COLLAPSED_H: f32 = 16.0;
 pub const BASE_HEALTH_H: f32 = 18.0;
 pub const BASE_CORNER: f32 = 4.0;
-pub const BASE_EXPANDED_W: f32 = 160.0;
+pub const BASE_EXPANDED_W: f32 = 192.0;
 pub const BASE_DOCK_H: f32 = 30.0;
 pub const BASE_DISCLOSURE_H: f32 = 26.0;
 pub const BASE_GAP: f32 = 4.0;
@@ -317,16 +317,21 @@ enum Block {
     Notification,
 }
 
-/// Three icon buttons, the audio meter, and the rightmost brand control — the
+/// Four icon buttons, the audio meter, and the rightmost brand control — the
 /// dock from `dockView` in shortcut_reminder.swift.
 fn dock_cells(dock: Rect, s: f32) -> (Vec<(Control, Rect)>, Vec<Rect>) {
     let divider_w = 1.0f32.max(s.round());
-    let icon_controls = [Control::Search, Control::Chat, Control::Timeline];
+    let icon_controls = [
+        Control::Search,
+        Control::Chat,
+        Control::Star,
+        Control::Timeline,
+    ];
     // Audio is a status cell, not a button, but it still highlights on hover.
     let usable = dock.w - divider_w * 2.0;
-    // Five cells: three icons, the meter, and brand. The meter gets the same
+    // Six cells: four icons, the meter, and brand. The meter gets the same
     // share as an icon so the row reads as evenly spaced.
-    let cell_w = usable / 5.0;
+    let cell_w = usable / 6.0;
 
     let mut cells = Vec::new();
     let mut dividers = Vec::new();
@@ -458,7 +463,8 @@ mod tests {
     #[test]
     fn every_dock_cell_is_clickable_and_they_tile_the_dock() {
         let l = compute(&hovered());
-        assert_eq!(l.dock_cells.len(), 5);
+        assert_eq!(l.dock_cells.len(), 6);
+        assert_eq!(l.dock_cells[2].0, Control::Star);
         assert_eq!(
             l.dock_cells.first().map(|(control, _)| *control),
             Some(Control::Search)

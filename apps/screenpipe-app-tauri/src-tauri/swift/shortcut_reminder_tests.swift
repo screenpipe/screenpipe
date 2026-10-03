@@ -520,7 +520,7 @@ private func testClampWithoutDisplaysIsIdentity() {
 
 /// Selecting a UI locale must translate labels and leave shortcut tokens intact.
 private func testLocalizedDisclosure() {
-    let sources = ["right-click", "timeline", "ask chat", "search", "mic capture", "live", "idle", "settings"]
+    let sources = ["right-click", "star work session", "timeline", "ask chat", "search", "mic capture", "live", "idle", "settings"]
     let translations = Dictionary(uniqueKeysWithValues: sources.map { source in
         (SHA256.hash(data: Data(source.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined(), "localized " + source)
     })
@@ -528,12 +528,15 @@ private func testLocalizedDisclosure() {
     String(data: payload, encoding: .utf8)!.withCString { UILocalization.shared.update($0) }
     defer { "{\"locale\":\"en\",\"messages\":{}}".withCString { UILocalization.shared.update($0) } }
     let metrics = OverlayMetrics()
-    for (control, label) in [("timeline", "timeline"), ("chat", "ask chat"), ("search", "search"), ("settings", "settings")] {
-        let content = disclosureContent(for: control, overlayShortcut: "⌥Space", chatShortcut: "⌥C", searchShortcut: "⌥S", metrics: metrics)
+    for (control, label) in [("star", "star work session"), ("timeline", "timeline"), ("chat", "ask chat"), ("search", "search"), ("settings", "settings")] {
+        let content = disclosureContent(for: control, overlayShortcut: "⌥Space", chatShortcut: "⌥C", searchShortcut: "⌥S", starShortcut: "⌥B", metrics: metrics)
         expect(content?.0 == "localized " + label, "untranslated overlay control: \(control)")
+        if control == "star" { expect(content?.1 == "⌥B", "star shortcut was not preserved") }
         if control == "timeline" { expect(content?.1 == "⌥Space", "shortcut was translated") }
     }
-    let brand = disclosureContent(for: "brand", overlayShortcut: "", chatShortcut: "", searchShortcut: "", metrics: metrics)
+    let disabledStar = disclosureContent(for: "star", overlayShortcut: "", chatShortcut: "", searchShortcut: "", starShortcut: "", metrics: metrics)
+    expect(disabledStar?.1 == "", "disabled star shortcut must not show a chord")
+    let brand = disclosureContent(for: "brand", overlayShortcut: "", chatShortcut: "", searchShortcut: "", starShortcut: "", metrics: metrics)
     expect(brand?.0 == "screenpipe", "brand was translated")
     expect(brand?.1 == "localized right-click", "right-click hint was not translated")
 }

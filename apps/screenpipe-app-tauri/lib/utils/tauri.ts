@@ -938,6 +938,14 @@ async hideShortcutReminder() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async hideStarredSessions() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("hide_starred_sessions") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async icsCalendarGetEntries() : Promise<Result<IcsCalendarEntry[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("ics_calendar_get_entries") };
@@ -3023,6 +3031,14 @@ async testOpenaiCompatibleTranscription(endpoint: string, apiKey: string | null,
     else return { status: "error", error: e  as any };
 }
 },
+async toggleStarredSessions() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("toggle_starred_sessions") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 /**
  * Tauri command: start voice training. Spawns a background task that polls
  * until audio is transcribed, then assigns the speaker. Returns immediately.
@@ -3665,7 +3681,7 @@ availableActions?: string[]; lifecycleNote: string;
  */
 revision?: string | null; updatedAtMs: number | null }
 /**
- * Screen history detail, independent of image quality and audio capture.
+ * Scroll checkpoint frequency, independent of text extraction, image quality and audio.
  */
 export type RecordingDetail = "auto" | "low_impact" | "balanced" | "more_detail"
 /**

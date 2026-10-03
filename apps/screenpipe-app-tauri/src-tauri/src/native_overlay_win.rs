@@ -119,6 +119,7 @@ pub fn show(json: Option<&str>) -> bool {
     let ok = mutate(|s| {
         s.shortcut_overlay = str_at("overlay");
         s.shortcut_chat = str_at("chat");
+        s.shortcut_star = str_at("star");
         s.shortcut_search = str_at("search");
         s.shortcut_timeline = str_at("overlay");
         s.size = match str_at("shortcutOverlaySize").as_str() {

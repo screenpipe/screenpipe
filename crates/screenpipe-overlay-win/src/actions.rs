@@ -29,6 +29,7 @@ pub fn action_for(state: &OverlayState, control: Control) -> Option<String> {
         Control::Pill | Control::Brand | Control::Timeline => "open_timeline",
         Control::Search => "open_search",
         Control::Chat => "open_chat",
+        Control::Star => "open_starred_sessions",
         Control::Settings => return None,
         Control::RestartRecording => "restart_recording",
         Control::DismissIncident => "dismiss_incident",
@@ -112,6 +113,10 @@ mod tests {
         let s = OverlayState::default();
         assert_eq!(action_for(&s, Control::Search).unwrap(), "open_search");
         assert_eq!(action_for(&s, Control::Chat).unwrap(), "open_chat");
+        assert_eq!(
+            action_for(&s, Control::Star).unwrap(),
+            "open_starred_sessions"
+        );
         assert_eq!(action_for(&s, Control::Timeline).unwrap(), "open_timeline");
         assert_eq!(action_for(&s, Control::Pill).unwrap(), "open_timeline");
         assert_eq!(action_for(&s, Control::Brand).unwrap(), "open_timeline");

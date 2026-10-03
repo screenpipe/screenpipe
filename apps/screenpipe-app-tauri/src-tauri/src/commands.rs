@@ -8,6 +8,7 @@
 mod native_actions;
 // Public so the generated command registry can name the handler by full path.
 pub(crate) mod overlay_anchor;
+pub(crate) mod starred_sessions;
 
 use crate::{
     analytics::{AnalyticsManager, Attribution},
@@ -71,6 +72,21 @@ mod tests {
         scan_chat_entries_by_mtime, shortcut_overlay_hidden_by_choice,
         should_resume_snoozed_overlay, EnterpriseFileConfig, RecoveredEnterpriseDeviceConfig,
     };
+
+    #[test]
+    fn shortcut_reminder_star_hint_tracks_registered_settings() {
+        let mut settings = crate::store::SettingsStore::default();
+        let default_shortcut = settings.star_session_shortcut.clone();
+        assert_eq!(super::shortcut_reminder_payload(&settings)["star"], default_shortcut);
+        settings.star_session_shortcut.clear();
+        assert_eq!(super::shortcut_reminder_payload(&settings)["star"], default_shortcut);
+        settings.star_session_shortcut = "Alt+Shift+J".into();
+        assert_eq!(super::shortcut_reminder_payload(&settings)["star"], "Alt+Shift+J");
+        settings.disabled_shortcuts.push("starSessionShortcut".into());
+        assert_eq!(super::shortcut_reminder_payload(&settings)["star"], "");
+        settings.star_session_shortcut.clear();
+        assert_eq!(super::shortcut_reminder_payload(&settings)["star"], "");
+    }
 
     /// `get_local_api_config` must never await the server mutex.
     ///
@@ -3336,6 +3352,21 @@ fn shortcut_reminder_payload(
         serde_json::Value::String(shortcut_reminder_label(
             &settings.search_shortcut,
             "searchShortcut",
+            &settings.disabled_shortcuts,
+        )),
+    );
+    // Older stores omit this key, while the global shortcut still registers
+    // the platform default. Disabled shortcuts must keep an empty hint.
+    let star_shortcut = if settings.star_session_shortcut.is_empty() {
+        crate::store::SettingsStore::default().star_session_shortcut
+    } else {
+        settings.star_session_shortcut.clone()
+    };
+    map.insert(
+        "star".to_string(),
+        serde_json::Value::String(shortcut_reminder_label(
+            &star_shortcut,
+            "starSessionShortcut",
             &settings.disabled_shortcuts,
         )),
     );

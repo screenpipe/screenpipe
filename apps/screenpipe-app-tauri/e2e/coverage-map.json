@@ -3291,6 +3291,26 @@
       "confidence": "strong",
       "ux": "mixed",
       "notes": "Headless owned browser for background pipes (#4248): with the sidebar never opened, a background eval and navigate-and-scrape over the local API lazily create a hidden offscreen child webview, return a real JS result (6*7 -> 42; document.readyState), and stay invisible; is_ready reflects real serviceability; the same singleton is then adopted into the sidebar panel (page state survives, no second webview). Search-driven and runs last because attaching the child to home tears down home's WebDriver handle."
+    },
+    {
+      "spec": "starred-session-popover.spec.ts",
+      "platforms": [
+        "macos",
+        "windows",
+        "linux"
+      ],
+      "layers": [
+        "real-ui-e2e",
+        "local-api",
+        "tauri-command"
+      ],
+      "features": [
+        "shortcut-overlay"
+      ],
+      "criticality": "medium",
+      "confidence": "partial",
+      "ux": "real-user-flow",
+      "notes": "Opens the floating star panel through the web toolbar when present or the shared native command, saves a 15-minute session against the isolated backend, and checks Escape, close, reopen, and that Home stays hidden. Runs without app activation; actual Space/focus transitions still need desktop acceptance."
     }
   ]
 }

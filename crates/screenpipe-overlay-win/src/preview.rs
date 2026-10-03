@@ -32,6 +32,7 @@ fn base() -> OverlayState {
         shortcut_timeline: "Alt+S".into(),
         shortcut_search: "Alt+K".into(),
         shortcut_chat: "Alt+L".into(),
+        shortcut_star: "Alt+Shift+B".into(),
         shortcut_overlay: "Alt+O".into(),
         audio_active: true,
         speech_ratio: 0.55,

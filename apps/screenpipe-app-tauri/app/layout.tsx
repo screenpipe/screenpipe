@@ -93,7 +93,7 @@ export default function RootLayout({
 }) {
   const pathname = usePathname();
   const isOverlay =
-    pathname === "/shortcut-reminder" || pathname === "/notification-inbox";
+    pathname === "/shortcut-reminder" || pathname === "/notification-inbox" || pathname === "/starred-sessions";
   const isTimelineOverlay = pathname === "/overlay";
   // Transparent-body windows: floating search bar + the overlay inbox card.
   const isSearch = pathname === "/search" || pathname === "/notification-inbox";

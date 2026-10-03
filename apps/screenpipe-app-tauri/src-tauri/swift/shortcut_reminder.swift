@@ -822,11 +822,12 @@ func disclosureContent(
     overlayShortcut: String,
     chatShortcut: String,
     searchShortcut: String,
+    starShortcut: String,
     metrics: OverlayMetrics
 ) -> (String, String?)? {
     switch control {
     case "brand": return ("screenpipe", uiText("right-click"))
-    case "star": return (uiText("star work session"), "")
+    case "star": return (uiText("star work session"), starShortcut)
     case "timeline": return (uiText("timeline"), overlayShortcut)
     case "chat": return (uiText("ask chat"), chatShortcut)
     case "search": return (uiText("search"), searchShortcut)
@@ -1186,28 +1187,9 @@ struct ShortcutReminderView: View {
             DockIconButton(icon: "bubble.left.fill", active: metrics.hoveredControl == "chat", scale: scale) {
                 onAction("open_chat")
             }
-            Menu {
-                ForEach([5, 15, 30, 60], id: \.self) { minutes in
-                    Button("Star for \(minutes) min") { onAction("star_session:\(minutes):normal") }
-                }
-                Menu("Star with HD") {
-                    ForEach([5, 15, 30, 60], id: \.self) { minutes in
-                        Button("\(minutes) min") { onAction("star_session:\(minutes):hd") }
-                    }
-                }
-                Divider()
-                Button("End starred session") { onAction("star_session:0:normal") }
-                Button("Edit saved sessions…") { onAction("open_starred_sessions") }
-            } label: {
-                Image(systemName: "star")
-                    .font(.system(size: s(12)))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            DockIconButton(icon: "star", active: metrics.hoveredControl == "star", scale: scale) {
+                onAction("open_starred_sessions")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize(horizontal: false, vertical: false)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .accessibilityLabel("Star a work session")
             DockIconButton(icon: "rectangle.split.1x2", active: metrics.hoveredControl == "timeline", scale: scale) {
                 onAction("open_timeline")
@@ -1603,6 +1585,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     private var overlayShortcut = "⌘⌃S"
     private var chatShortcut = "⌘⌃L"
     private var searchShortcut = "⌘⌃K"
+    private var starShortcut = "⌘⌃B"
     private var metrics = OverlayMetrics()
     private var wsTask: URLSessionWebSocketTask?
     private var wsRetryTimer: Timer?
@@ -2163,6 +2146,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         if let s = dict["overlay"] { overlayShortcut = prettifyShortcut(s) }
         if let s = dict["chat"] { chatShortcut = prettifyShortcut(s) }
         if let s = dict["search"] { searchShortcut = prettifyShortcut(s) }
+        if let s = dict["star"] { starShortcut = prettifyShortcut(s) }
         if let s = dict["shortcutOverlaySize"] { setOverlayScale(s) }
         if let s = dict["shortcutOverlayAnchor"], let anchor = OverlayAnchor.fromStored(s) {
             overlayAnchor = anchor
@@ -2316,6 +2300,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
                   overlayShortcut: overlayShortcut,
                   chatShortcut: chatShortcut,
                   searchShortcut: searchShortcut,
+                  starShortcut: starShortcut,
                   metrics: metrics
               ) else {
             disclosurePanel?.orderOut(nil)
