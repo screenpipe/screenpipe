@@ -430,8 +430,9 @@ pub(crate) async fn upgrade_recording(
 /// capture/archive tables keep their specialized triggers.
 pub(crate) async fn ensure_resident_table_hooks(
     conn: &mut SqliteConnection,
+    has_bulk: bool,
 ) -> Result<bool, sqlx::Error> {
-    let tables: Vec<String> = sqlx::query_scalar(
+    let mut tables: Vec<String> = sqlx::query_scalar(
         "SELECT t.name FROM sqlite_master t
          WHERE t.type='table' AND substr(t.name,1,1)!='_'
          AND t.name NOT LIKE 'sqlite_%' AND t.name NOT LIKE '%_fts%'
@@ -445,6 +446,10 @@ pub(crate) async fn ensure_resident_table_hooks(
     )
     .fetch_all(&mut *conn)
     .await?;
+    // Bulk column tables remain physical SQLite tables, but their specialized
+    // triggers suppress logical revisions while sealing. Do not reinstall the
+    // generic hooks deliberately removed by bulk::bootstrap.
+    tables.retain(|table| !has_bulk || !super::bulk::is_bulk_table(table));
     if tables.is_empty() {
         return Ok(false);
     }

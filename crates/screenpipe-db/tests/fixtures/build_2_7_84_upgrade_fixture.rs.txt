@@ -1,0 +1,123 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+
+use screenpipe_db::{
+    storage::{migrate, Projection},
+    DatabaseManager,
+};
+use serde_json::json;
+
+#[tokio::test]
+async fn build_historical_upgrade_fixture() {
+    let root = std::path::PathBuf::from(std::env::var("SCREENPIPE_UPGRADE_FIXTURE_ROOT").unwrap());
+    assert!(
+        !root.exists(),
+        "fixture builder only creates a new directory"
+    );
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join(".synthetic-upgrade-fixture"),
+        "screenpipe-2.7.84\n",
+    )
+    .unwrap();
+    let path = root.join("db.sqlite");
+    let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+        .await
+        .unwrap();
+    db.execute_raw_sql_write("INSERT INTO video_chunks(id,file_path,device_name) VALUES(1,'synthetic-screen.mp4','fixture-display'); INSERT INTO audio_chunks(id,file_path,timestamp) VALUES(1,'synthetic-audio.wav','2026-09-11T12:00:00Z'); INSERT INTO tags(id,name) VALUES(1,'upgrade-fixture'); INSERT INTO meetings(id,meeting_start,meeting_app) VALUES(1,'2026-09-11T12:00:00Z','fixture');").await.unwrap();
+    let mut tx = db.begin_immediate_with_retry().await.unwrap();
+    for id in 1..=128i64 {
+        let text = format!(
+            "historicalneedle frame {id} café 東京 {}",
+            "stored context ".repeat(160)
+        );
+        let tree = json!({"role":"AXText","text":text});
+        sqlx::query("INSERT INTO frames(id,video_chunk_id,timestamp,full_text,accessibility_text,accessibility_tree_json,app_name,window_name,device_name) VALUES(?,1,'2026-09-11T12:00:00Z',?,?,?,'Fixture','Historical data','fixture-display')")
+            .bind(id).bind(&text).bind(&text).bind(tree.to_string()).execute(&mut **tx.conn()).await.unwrap();
+    }
+    for id in 1..=8i64 {
+        let text = format!("historicalneedle spoken entry {id}");
+        sqlx::query("INSERT INTO audio_transcriptions(id,audio_chunk_id,offset_index,timestamp,transcription,device) VALUES(?,1,?,'2026-09-11T12:00:00Z',?,'fixture-mic')")
+            .bind(id).bind(id).bind(&text).execute(&mut **tx.conn()).await.unwrap();
+        sqlx::query("INSERT INTO elements(id,frame_id,source,role,text,properties) VALUES(?,?,'accessibility','AXText',?,'{\"fixture\":true}')")
+            .bind(id).bind(id).bind(format!("historicalneedle element {id}")).execute(&mut **tx.conn()).await.unwrap();
+        sqlx::query("INSERT INTO ui_events(id,timestamp,event_type,text_content) VALUES(?,'2026-09-11T12:00:00Z','text',?)")
+            .bind(id).bind(format!("historicalneedle typed {id}")).execute(&mut **tx.conn()).await.unwrap();
+        sqlx::query("INSERT INTO meeting_transcript_segments(id,meeting_id,provider,item_id,transcript,captured_at) VALUES(?,1,'fixture',?,?,'2026-09-11T12:00:00Z')")
+            .bind(id).bind(id.to_string()).bind(&text).execute(&mut **tx.conn()).await.unwrap();
+    }
+    sqlx::query("INSERT INTO vision_tags(vision_id,tag_id) VALUES(1,1)")
+        .execute(&mut **tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let queries = [
+        "SELECT id,video_chunk_id,timestamp,app_name,window_name,device_name FROM frames ORDER BY id",
+        "SELECT id,audio_chunk_id,offset_index,timestamp,transcription,device FROM audio_transcriptions ORDER BY id",
+        "SELECT id,frame_id,source,role,text,properties FROM elements ORDER BY id",
+        "SELECT id,timestamp,event_type,text_content FROM ui_events ORDER BY id",
+        "SELECT id,meeting_id,provider,item_id,transcript,captured_at FROM meeting_transcript_segments ORDER BY id",
+        "SELECT vision_id,tag_id FROM vision_tags ORDER BY vision_id,tag_id",
+        "SELECT version,hex(checksum) AS checksum,success FROM _sqlx_migrations ORDER BY version",
+    ];
+    let mut snapshots = Vec::new();
+    for query in queries {
+        snapshots.push(json!({"query":query,"rows":db.query_raw_sql(query).await.unwrap()}));
+    }
+    let ids: Vec<i64> = (1..=128).collect();
+    let payloads = db.frame_payloads(&ids, Projection::All).await.unwrap();
+    db.close().await;
+    let report = migrate(&root, Default::default(), Default::default())
+        .await
+        .unwrap();
+    let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+        .await
+        .unwrap();
+    db.verify_storage().await.unwrap();
+    for snapshot in &snapshots {
+        assert_eq!(
+            db.query_raw_sql(snapshot["query"].as_str().unwrap())
+                .await
+                .unwrap(),
+            snapshot["rows"]
+        );
+    }
+    let compressed_payloads = db.frame_payloads(&ids, Projection::All).await.unwrap();
+    assert_eq!(payloads.len(), compressed_payloads.len());
+    for (id, before) in &payloads {
+        let after = &compressed_payloads[id];
+        assert_eq!(before.full_text, after.full_text, "frame {id} full text");
+        assert_eq!(
+            before.accessibility_text, after.accessibility_text,
+            "frame {id} accessibility"
+        );
+        assert_eq!(
+            before.accessibility_tree_json, after.accessibility_tree_json,
+            "frame {id} tree"
+        );
+        assert_eq!(before.text_json, after.text_json, "frame {id} OCR");
+    }
+    let stars: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name='starred_sessions'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(stars, 0);
+    let sealed: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM frame_payloads WHERE state='sealed'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(sealed, 128);
+    db.close().await;
+    let manifest = json!({"source_commit":"8325934d5571b3d7d87ac068177d63c6dc5c9ce6","app_version":"2.7.84","synthetic":true,"frames":128,"sealed_frames":sealed,"starred_table_present":false,"migration_report":report,"snapshots":snapshots,"payloads":compressed_payloads});
+    std::fs::write(
+        root.join("fixture-manifest.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    println!(
+        "Historical 2.7.84 fixture created and verified at {}",
+        root.display()
+    );
+}

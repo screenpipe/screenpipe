@@ -538,15 +538,23 @@ impl DatabaseManager {
                     // Conversion retains _sqlx_migrations. Let SQLx apply only
                     // pending feature migrations, without legacy repair helpers
                     // that assume every logical table is still a SQLite table.
-                    Self::sqlx_migrator().run(&mut *conn).await?;
+                    // Use the pool-based Acquire implementation so database
+                    // startup remains Send when spawned by the engine. Release
+                    // this handle first, including for single-connection pools.
+                    drop(conn);
+                    Self::sqlx_migrator().run(&db_manager.write_pool).await?;
+                    conn = db_manager.write_pool.acquire().await?;
                 }
                 crate::storage::schema::upgrade_resident_frames(&mut conn).await?;
                 let upgraded =
                     crate::storage::schema::upgrade_recording(&mut conn, storage.has_bulk())
                         .await?;
                 crate::storage::read_schema::upgrade(&mut conn, storage).await?;
-                let resident_hooks_changed =
-                    crate::storage::schema::ensure_resident_table_hooks(&mut conn).await?;
+                let resident_hooks_changed = crate::storage::schema::ensure_resident_table_hooks(
+                    &mut conn,
+                    storage.has_bulk(),
+                )
+                .await?;
                 storage.verify_catalog(&db_manager.pool).await?;
                 drop(conn);
                 if upgraded || resident_hooks_changed {
