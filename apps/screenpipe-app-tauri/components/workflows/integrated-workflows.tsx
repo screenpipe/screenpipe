@@ -19,6 +19,10 @@ import { usePlatform } from "@/lib/hooks/use-platform";
 import { useWorkflowsRolloutEnabled } from "@/lib/workflows/rollout";
 import { WorkflowTasksPrompt } from "./workflow-tasks-prompt";
 import { fixtureWorkflowTasks } from "@/lib/dev/workflow-tasks-fixture";
+import { CloudWorkflows } from "./cloud-workflows";
+import { fixtureCloudWorkflows } from "@/lib/dev/cloud-workflows-fixture";
+import { useSettings } from "@/lib/hooks/use-settings";
+import { useEnterpriseBuildStatus } from "@/lib/hooks/use-is-enterprise-build";
 import { WorkflowAccess } from "./workflow-access";
 
 function WorkflowDictation(props: WorkflowComposerAccessoryProps) {
@@ -41,7 +45,7 @@ const workflowAgentActions = (workflow: WorkflowMap) => <HomeCardAgentActions ke
 const platform = process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock"
   ? createFixtureWorkflowsPlatform(undefined, typeof window === "undefined" ? "ready" : new URLSearchParams(window.location.search).get("workflowConnection") ?? "ready")
   : desktopWorkflowsPlatform;
-export function IntegratedWorkflows({ active, fullscreen = false, onModeChange, recordingStatus, navigationFooter }: { active: boolean; fullscreen?: boolean; onModeChange: (mode: ProductMode) => void; recordingStatus: React.ReactNode; navigationFooter?: WorkflowsAppProps["navigationFooter"] }) {
+export function DeviceWorkflows({ active, fullscreen = false, onModeChange, recordingStatus, navigationFooter, sourceControl }: { sourceControl?: React.ReactNode; active: boolean; fullscreen?: boolean; onModeChange: (mode: ProductMode) => void; recordingStatus: React.ReactNode; navigationFooter?: WorkflowsAppProps["navigationFooter"] }) {
   const enabled = useWorkflowsRolloutEnabled();
   const [readyWorkflowIds, setReadyWorkflowIds] = useState<string[]>([]);
   useTauriEvent<string[]>("workflow-review-ready", event => {
@@ -93,7 +97,36 @@ export function IntegratedWorkflows({ active, fullscreen = false, onModeChange, 
       <WorkflowsApp readyWorkflowIds={readyWorkflowIds} reviewRequest={reviewRequest} onReviewRequestHandled={handleReview} onAnalysisUnavailable={() => setAccessRequested(true)} analysisUnavailableReason={analysisUnavailableReason} composerAccessory={composerAccessory} fullscreen={fullscreen} onShareWorkflow={openShare} workflowAgentActions={workflowAgentActions} platform={platform} active={active} storageKey={null}
         toolbarAccessory={platform.managesAnalysis ? <WorkflowAccess requested={accessRequested} onRequestChange={setAccessRequested} active={active} onAccessChange={setAnalysisUnavailableReason} /> : process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock" ? <WorkflowTasksPrompt active={active} tasks={fixtureWorkflowTasks} /> : undefined}
         recordingStatus={recordingStatus} navigationFooter={navigationFooter}
-        navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />} />
+        sourceControl={sourceControl} navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />} />
     </TooltipProvider>
   );
+}
+
+
+export function IntegratedWorkflows(props: Parameters<typeof DeviceWorkflows>[0]) {
+  const { settings, updateSettings, isSettingsLoaded } = useSettings();
+  const enterprise = useEnterpriseBuildStatus();
+  const enabled = useWorkflowsRolloutEnabled();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const mock = process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock";
+  const mockCloud = mock && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("workflowSource") === "cloud";
+  const source = settings.workflowSource ?? (enterprise.isEnterprise || mockCloud ? "cloud" : "device");
+  if (!enabled) return null;
+  if (!isSettingsLoaded || !enterprise.resolved) return <p role="status" className="p-6 text-sm text-muted-foreground">Loading workflows…</p>;
+  async function change(value: "device" | "cloud") {
+    setSaving(true); setError("");
+    try { await updateSettings({ workflowSource: value }); }
+    catch { setError("Could not save the workflow source. Try again."); }
+    finally { setSaving(false); }
+  }
+  const sourceControl = <label className="relative flex shrink-0 flex-col gap-2 text-xs"><span className="sr-only">Workflow source</span>
+    <select aria-label="Workflow source" style={{ color: "var(--ink)", colorScheme: "light" }} className="w-36 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-xs text-inherit opacity-75 hover:opacity-100 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" value={source} disabled={saving} onChange={event => void change(event.target.value as "device" | "cloud")}>
+      <option value="cloud">Cloud workspace</option><option value="device">This device</option>
+    </select>
+    {error && <span role="alert" className="absolute left-0 top-full z-20 mt-1 w-60 rounded-md border bg-background p-3 text-foreground shadow-sm">{error}</span>}
+  </label>;
+  return source === "cloud"
+    ? <TooltipProvider><CloudWorkflows processingPromptSeen={settings.cloudWorkflowProcessingPromptSeen === true} onProcessingPromptSeen={async () => { await updateSettings({ cloudWorkflowProcessingPromptSeen: true }); }} key={settings.user?.token ?? "signed-out"} {...props} sourceControl={sourceControl} token={settings.user?.token ?? undefined} api={mock ? fixtureCloudWorkflows : undefined} /></TooltipProvider>
+    : <DeviceWorkflows {...props} sourceControl={sourceControl} />;
 }

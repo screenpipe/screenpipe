@@ -905,6 +905,14 @@
   .toolbarAccessory { margin-right: auto; }
 }
 
+/* Source selection and device controls share the available toolbar width. */
+.sourceTopbar .search { margin-right: 0; }
+.sourceControl { flex: 0 0 auto; margin-right: auto; }
+@container workflow-pane (max-width: 900px) {
+  .sourceTopbar { height: auto; min-height: 59px; flex-wrap: wrap; padding-top: 12px; padding-bottom: 12px; }
+  .sourceTopbar .search { flex: 1 1 220px; min-width: 220px; width: auto; margin-right: 0; }
+}
+
 /* Keep timing outside the step expansion button for keyboard and touch use. */
 .stageHeadingRow { display: flex; align-items: flex-start; gap: 4px; }
 .stageHeadingRow > button { flex: 1; min-width: 0; }

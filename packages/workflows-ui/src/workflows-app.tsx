@@ -190,7 +190,7 @@ function Pill({ children, tone = "plain" }: { children: React.ReactNode; tone?: 
   return <span className={`${styles.pill} ${styles[`pill_${tone}`]}`}>{children}</span>;
 }
 
-function CommandPalette({ open, commands, close }: { open: boolean; commands: PaletteCommand[]; close: () => void }) {
+export function CommandPalette({ open, commands, close }: { open: boolean; commands: PaletteCommand[]; close: () => void }) {
   const ui = useGT();
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -267,7 +267,7 @@ function CommandPalette({ open, commands, close }: { open: boolean; commands: Pa
   );
 }
 
-function AppShell({
+export function AppShell({
   view,
   navigate,
   runtime,
@@ -281,6 +281,7 @@ function AppShell({
   embedded,
   active,
   navigationBrand,
+  sourceControl,
   composerAccessory,
   navigationFooter,
   recordingStatus,
@@ -305,6 +306,7 @@ function AppShell({
   embedded: boolean;
   active: boolean;
   navigationBrand?: React.ReactNode;
+  sourceControl?: React.ReactNode;
   composerAccessory?: WorkflowsAppProps["composerAccessory"];
   navigationFooter?: WorkflowsAppProps["navigationFooter"];
   recordingStatus?: React.ReactNode;
@@ -406,9 +408,10 @@ function AppShell({
         {!embedded && !navigationCollapsed && <div {...navigationWidth.separatorProps} className={`${styles.navigationResize} ${navigationWidth.resizing ? styles.navigationResizing : ""}`} />}
       </aside>
       <section className={styles.workspace} data-workflows-scroll-region>
-        <header className={styles.topbar} data-tauri-drag-region>
+        <header className={`${styles.topbar} ${sourceControl ? styles.sourceTopbar : ""}`} data-tauri-drag-region>
           {!nativeMacWindow && navigationToggle}
           <div className={styles.search}><Search size={15} /><input data-workflows-search value={query} onChange={(event) => setQuery(event.target.value)} onFocus={() => navigate("workflows")} placeholder={ui("Search workflows")} aria-label={ui("Search workflows")} />{query ? <button type="button" onClick={() => setQuery("")} aria-label={ui("Clear search")}><X size={12} /></button> : <button type="button" className={styles.commandTrigger} onMouseDown={(event) => event.preventDefault()} onClick={openCommandPalette} aria-label={ui("Open command palette")}><CommandIcon size={12} /><kbd>⌘ K</kbd></button>}</div>
+          {sourceControl && <div className={styles.sourceControl}>{sourceControl}</div>}
           {scopes.length > 1 && <label className={styles.scopeControl}>
             {activeScope?.kind === "organization" ? <Building2 size={13} /> : <Users size={13} />}
             <select value={activeScope?.id ?? ""} onChange={(event) => setScope(event.target.value)} aria-label={ui("Workflows scope")}>
@@ -464,7 +467,7 @@ function ErrorNotice({ message, retry }: { message: string; retry: () => void })
   return <div className={styles.errorNotice}><AlertTriangle size={16} /><div><strong>Couldn’t finish the work map</strong><p>{message}</p></div><button onClick={retry}><RefreshCw size={12} />Try again</button></div>;
 }
 
-function WorkflowsView({ reviewIds, workflows, knownWorkflowCount, query, setQuery, openWorkflow, analyze, analyzing, error, stop, updatedAt, checkedThrough, changes, job, subscribe, activityState, analysisUnavailableReason }: { reviewIds?: ReadonlySet<string>; activityState: WorkflowActivityState; analysisUnavailableReason?: string; workflows: WorkflowMap[]; knownWorkflowCount: number; query: string; setQuery: (query: string) => void; openWorkflow: (index: number) => void; analyze: () => void; analyzing: boolean; error: string; stop?: () => void; updatedAt?: string; checkedThrough?: string; changes?: { created: number; updated: number }; job?: WorkflowAnalysisJob | null; subscribe?: WorkflowsPlatform["subscribeAnalysisActivity"] }) {
+export function WorkflowsView({ refreshControl, emptyState, reviewIds, workflows, knownWorkflowCount, query, setQuery, openWorkflow, analyze, analyzing, error, stop, updatedAt, checkedThrough, changes, job, subscribe, activityState, analysisUnavailableReason }: { refreshControl?: React.ReactNode; emptyState?: React.ReactNode; reviewIds?: ReadonlySet<string>; activityState: WorkflowActivityState; analysisUnavailableReason?: string; workflows: WorkflowMap[]; knownWorkflowCount: number; query: string; setQuery: (query: string) => void; openWorkflow: (index: number) => void; analyze: () => void; analyzing: boolean; error: string; stop?: () => void; updatedAt?: string; checkedThrough?: string; changes?: { created: number; updated: number }; job?: WorkflowAnalysisJob | null; subscribe?: WorkflowsPlatform["subscribeAnalysisActivity"] }) {
   const ui = useGT();
   const visible = useMemo(() => filterWorkflows(workflows, { ...defaultWorkflowFilters, query }), [query, workflows]);
 
@@ -478,10 +481,10 @@ function WorkflowsView({ reviewIds, workflows, knownWorkflowCount, query, setQue
             {query && <button className={styles.clearButton} onClick={() => setQuery("")}>{ui("Clear search")}</button>}
           </div>
         </div>
-        <WorkflowRunProgress activityState={activityState} quiet disabledReason={analysisUnavailableReason} job={job} active={analyzing} subscribe={subscribe} stop={stop} analyze={analyze} updatedAt={updatedAt} checkedThrough={checkedThrough} changes={changes} />
+        {refreshControl ? <div className={styles.quietHeaderActions}>{refreshControl}</div> : <WorkflowRunProgress activityState={activityState} quiet disabledReason={analysisUnavailableReason} job={job} active={analyzing} subscribe={subscribe} stop={stop} analyze={analyze} updatedAt={updatedAt} checkedThrough={checkedThrough} changes={changes} />}
       </div>
       {error && <p role="alert" className={styles.depthNotice}>{error}</p>}
-      {!knownWorkflowCount ? <EmptyWorkMap analyzing={analyzing} analyze={analyze} /> : !workflows.length ? <section className={styles.emptyState}><Clock3 size={23} /><h2>No known workflows were active in this period</h2><p>Your {knownWorkflowCount} known workflows are still in the catalog. Choose “All known” to see them.</p></section> : <>
+      {!knownWorkflowCount ? (emptyState ?? <EmptyWorkMap analyzing={analyzing} analyze={analyze} />) : !workflows.length ? <section className={styles.emptyState}><Clock3 size={23} /><h2>No known workflows were active in this period</h2><p>Your {knownWorkflowCount} known workflows are still in the catalog. Choose “All known” to see them.</p></section> : <>
         {visible.length ? <div className={styles.workflowGrid}>{visible.map((workflow) => {
           const originalIndex = workflows.indexOf(workflow);
           const timing = workflowTiming(workflow.timing);
@@ -507,7 +510,7 @@ function WorkflowsView({ reviewIds, workflows, knownWorkflowCount, query, setQue
   );
 }
 
-function CatalogPlaceholder({ detail = false, reconnecting = false, retry }: { detail?: boolean; reconnecting?: boolean; retry?: () => void }) {
+export function CatalogPlaceholder({ detail = false, reconnecting = false, retry }: { detail?: boolean; reconnecting?: boolean; retry?: () => void }) {
   const ui = useGT();
   const bar = (width: string, height = 10) => <span className={styles.skeletonBar} style={{ width, height }} />;
   const message = reconnecting ? ui("Connecting to Screenpipe…") : ui("Loading saved workflows…");
@@ -664,7 +667,7 @@ function WorkflowCorrection({ workflow, save }: { workflow: WorkflowMap; save: (
 }
 
 // Saved coverage notes can contain legacy capture names. Keep source quotations intact.
-function WorkflowDetail({ canSaveAnswers, composerAccessory, active, onAnswersSaved, workflow, navigate, platform, workProfile, saveCorrection, saveEdits, onShareWorkflow, workflowAgentActions }: { canSaveAnswers: boolean; composerAccessory?: WorkflowsAppProps["composerAccessory"]; active: boolean; onAnswersSaved: (workflow: WorkflowMap) => void; workflow: WorkflowMap | null; navigate: (view: AppView) => void; platform: WorkflowsPlatform; workProfile: WorkProfile | null; saveCorrection?: (note: string) => Promise<void>; saveEdits?: (draft: WorkflowEdit) => Promise<WorkflowMap>; onShareWorkflow?: WorkflowsAppProps["onShareWorkflow"]; workflowAgentActions?: WorkflowsAppProps["workflowAgentActions"] }) {
+export function WorkflowDetail({ sourceLabel, observationsAvailable = true, canSaveAnswers, composerAccessory, active, onAnswersSaved, workflow, navigate, platform, workProfile, saveCorrection, saveEdits, onShareWorkflow, workflowAgentActions }: { sourceLabel?: string; observationsAvailable?: boolean; canSaveAnswers: boolean; composerAccessory?: WorkflowsAppProps["composerAccessory"]; active: boolean; onAnswersSaved: (workflow: WorkflowMap) => void; workflow: WorkflowMap | null; navigate: (view: AppView) => void; platform: WorkflowsPlatform; workProfile: WorkProfile | null; saveCorrection?: (note: string) => Promise<void>; saveEdits?: (draft: WorkflowEdit) => Promise<WorkflowMap>; onShareWorkflow?: WorkflowsAppProps["onShareWorkflow"]; workflowAgentActions?: WorkflowsAppProps["workflowAgentActions"] }) {
   const ui = useGT();
   const [expandedStages, setExpandedStages] = useState<Set<number>>(() => new Set());
   const [guideOpen, setGuideOpen] = useState(false);
@@ -747,7 +750,7 @@ function WorkflowDetail({ canSaveAnswers, composerAccessory, active, onAnswersSa
     <>
       <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
       {saveEdits ? <WorkflowEditor key={workflow.id || workflow.title} workflow={workflow} save={saveEdits} actions={workflowActions} renderSource={stage => <WorkflowStepEvidence workflow={workflow} stage={stage} platform={platform} />} /> : <section className={styles.detailHeader}>
-        <div><Pill>Evidence on {workflow.repetitions} captured day{workflow.repetitions === 1 ? "" : "s"}</Pill><h1>{workflow.title}</h1><p>{workflow.description}</p>{workflowActions}</div>
+        <div><Pill>{sourceLabel ?? <>Evidence on {workflow.repetitions} captured day{workflow.repetitions === 1 ? "" : "s"}</>}</Pill><h1>{workflow.title}</h1><p>{workflow.description}</p>{workflowActions}</div>
         <TimingDisclosure label="Workflow timing" value={workflow.timing} measured={hasMeasuredDuration(workflow) ? { minutes: workflow.totalMinutes, samples: workflow.durationSampleCount ?? 0 } : undefined} />
       </section>}
       <div className={styles.workflowNotes}>
@@ -766,7 +769,7 @@ function WorkflowDetail({ canSaveAnswers, composerAccessory, active, onAnswersSa
               <div className={styles.stageHeadingRow}>
               <button className={styles.stageSummary} onClick={() => toggleStage(index)} aria-expanded={open}>
                 <div className={styles.stageNumber}>{index + 1}</div>
-                <div className={styles.stageBody}><div><h3>{stage.name}</h3>{actionableStageFriction && <Pill tone="warm"><AlertTriangle size={11} />Actionable friction</Pill>}{!actionableStageFriction && constraint && <Pill><ShieldCheck size={11} />{controlLabel(constraint)}</Pill>}</div><p>{stage.description}</p><span>{stage.apps.join(" · ") || ui("App not clear")} · {ui("{count, plural, one {# observation} other {# observations}}", { count: stage.observedOccurrences })} across {ui("{count, plural, one {# day} other {# days}}", { count: stage.observedDays })}</span></div>
+                <div className={styles.stageBody}><div><h3>{stage.name}</h3>{actionableStageFriction && <Pill tone="warm"><AlertTriangle size={11} />Actionable friction</Pill>}{!actionableStageFriction && constraint && <Pill><ShieldCheck size={11} />{controlLabel(constraint)}</Pill>}</div><p>{stage.description}</p><span>{stage.apps.join(" · ") || ui("App not clear")}{observationsAvailable && <> · {ui("{count, plural, one {# observation} other {# observations}}", { count: stage.observedOccurrences })} across {ui("{count, plural, one {# day} other {# days}}", { count: stage.observedDays })}</>}</span></div>
                 <ChevronDown className={styles.stageChevron} size={15} />
               </button>
               <TimingDisclosure label={`Timing for step ${index + 1}`} value={stage.timing} />
@@ -786,7 +789,7 @@ function WorkflowDetail({ canSaveAnswers, composerAccessory, active, onAnswersSa
         </div>
         <div className={styles.flowEndpoint}><span>Ends with</span><strong>{workflow.outcome}</strong></div>
       </section>}
-      <WorkflowQuestions workflow={workflow} active={active} voice={platform.questionnaireVoice} save={canSaveAnswers && platform.saveWorkflowAnswers ? async correction => {
+      {observationsAvailable && <WorkflowQuestions workflow={workflow} active={active} voice={platform.questionnaireVoice} save={canSaveAnswers && platform.saveWorkflowAnswers ? async correction => {
         try {
           const saved = await platform.saveWorkflowAnswers!(workflow, correction);
           onAnswersSaved(saved); return saved;
@@ -799,7 +802,7 @@ function WorkflowDetail({ canSaveAnswers, composerAccessory, active, onAnswersSa
           }
           throw error;
         }
-      } : undefined} />
+      } : undefined} />}
       {!!workflow.variations.length && <section className={styles.panel}><h2>Variations</h2><ul className={styles.plainList}>{workflow.variations.map(item => <li key={item}>{item}</li>)}</ul></section>}
       {!!actionableFriction.length && <section><div className={styles.sectionHeading}><div><h2>Friction you can affect</h2></div></div><BottleneckList items={actionableFriction.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} /></section>}
       {!!constraints.length && <section><div className={styles.sectionHeading}><div><h2>External and required constraints</h2></div></div><BottleneckList items={constraints.map((item) => ({ ...item, workflowTitle: workflow.title, repetitions: workflow.repetitions }))} numbered={false} /></section>}
@@ -924,7 +927,7 @@ function ProfileView({
   </div>;
 }
 
-export function WorkflowsApp({ readyWorkflowIds, reviewRequest, onReviewRequestHandled, platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, fullscreen = false, navigationBrand, composerAccessory, recordingStatus, statusNotice, toolbarAccessory, analysisUnavailableReason, onAnalysisUnavailable, navigationFooter, onShareWorkflow, workflowAgentActions }: WorkflowsAppProps) {
+export function WorkflowsApp({ readyWorkflowIds, reviewRequest, onReviewRequestHandled, platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, fullscreen = false, navigationBrand, sourceControl, composerAccessory, recordingStatus, statusNotice, toolbarAccessory, analysisUnavailableReason, onAnalysisUnavailable, navigationFooter, onShareWorkflow, workflowAgentActions }: WorkflowsAppProps) {
   const uiLanguage = useLocale();
   const ui = useGT();
   const shortcuts = useSidebarShortcuts();
@@ -1333,7 +1336,7 @@ export function WorkflowsApp({ readyWorkflowIds, reviewRequest, onReviewRequestH
   }
 
   return <>
-    <AppShell hasLibrary={Boolean(platform.guides?.list || platform.library)} toolbarAccessory={toolbarAccessory} modelControl={platform.modelPreference ? <WorkflowModelControl preference={platform.modelPreference} /> : undefined} composerAccessory={composerAccessory} active={active} fullscreen={fullscreen} navigationFooter={navigationFooter} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={query} setQuery={setQuery} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: ui("Context"), profile: workProfile } : { key: "workflows", title: ui("Your workflows"), catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{statusNotice}
+    <AppShell sourceControl={sourceControl} hasLibrary={Boolean(platform.guides?.list || platform.library)} toolbarAccessory={toolbarAccessory} modelControl={platform.modelPreference ? <WorkflowModelControl preference={platform.modelPreference} /> : undefined} composerAccessory={composerAccessory} active={active} fullscreen={fullscreen} navigationFooter={navigationFooter} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={query} setQuery={setQuery} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: ui("Context"), profile: workProfile } : { key: "workflows", title: ui("Your workflows"), catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{statusNotice}
       {/* Keep drafts, imports and the active fill alive when navigating away.
           A different scope must tear down the old request before accepting fields. */}
       <div key={`${activeScope?.kind ?? "personal"}:${activeScope?.id ?? ""}`} hidden={view !== "profile"}>

@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-export { WorkflowsApp } from "./workflows-app";
+export { WorkflowsApp, AppShell as WorkflowsShell, WorkflowsView as WorkflowCatalog, WorkflowDetail as WorkflowDetails, CommandPalette as WorkflowCommandPalette, CatalogPlaceholder as WorkflowCatalogPlaceholder } from "./workflows-app";
 export { WorkflowReplay } from "./workflow-replay";
 export { WorkflowAssistant } from "./workflow-assistant";
 export * from "./catalog";

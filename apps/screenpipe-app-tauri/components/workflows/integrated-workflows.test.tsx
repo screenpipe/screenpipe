@@ -6,7 +6,7 @@ import { act, fireEvent, render, screen, within, waitFor } from "@testing-librar
 import { describe, expect, it, vi } from "vitest";
 import { RecordingStatus } from "@/components/recording-status";
 import { SidebarFooter } from "@/components/sidebar-footer";
-import { IntegratedWorkflows, workflowAgentTask } from "./integrated-workflows";
+import { DeviceWorkflows as IntegratedWorkflows, workflowAgentTask } from "./integrated-workflows";
 
 vi.mock("@/lib/workflows/desktop-platform", async () => {
   const { createFixtureWorkflowsPlatform, fixtureWorkflowAnalysis } = await import("@screenpipe/workflows-ui/fixture");

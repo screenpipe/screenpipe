@@ -362,7 +362,7 @@ function HomeContent() {
       variant: "destructive",
     }));
   };
-  const workflowsAvailable = workflowsRolloutEnabled && isManagedDeploymentResolved && !isManagedDeployment && !trialActivationLocked;
+  const workflowsAvailable = workflowsRolloutEnabled && isManagedDeploymentResolved && !trialActivationLocked;
   const workflowsActive = workflowsAvailable && requestedMode === "workflows";
   useEffect(() => { if (workflowsActive) setWorkflowsVisited(true); }, [workflowsActive]);
   const runningPipes = useRunningPipes();

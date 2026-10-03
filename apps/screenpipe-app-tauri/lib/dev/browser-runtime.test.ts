@@ -18,6 +18,13 @@ describe("browser development runtime", () => {
     expect(live("get_env", { name: "SCREENPIPE_STARTUP_AUTHENTICATION_STATUS" })).toBe("");
     expect(mock("get_env", { name: "UNRELATED" })).toBe("");
   });
+  it("retains the enterprise fixture key across policy refreshes without sharing it between runtimes", () => {
+    const invoke = createBrowserIpcMock({ mode: "mock", apiPort: 3030 });
+    expect(invoke("get_enterprise_license_key", {})).toBeNull();
+    invoke("save_enterprise_license_key", { licenseKey: "ENT-TEST-TEST-TEST-TEST" });
+    expect(invoke("get_enterprise_license_key", {})).toBe("ENT-TEST-TEST-TEST-TEST");
+    expect(createBrowserIpcMock({ mode: "mock", apiPort: 3030 })("get_enterprise_license_key", {})).toBeNull();
+  });
   it("provides a stateful Tauri store", async () => {
     const onStoreChange = vi.fn();
     const invoke = createBrowserIpcMock({
