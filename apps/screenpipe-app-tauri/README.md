@@ -57,19 +57,6 @@ recorder. From the repository root, with `bun run dev:web` running:
 CLOUD_WORKFLOWS_URL=http://127.0.0.1:1420 bun apps/screenpipe-workflows-web/scripts/eval-cloud-workflows.mjs
 ```
 
-To verify enterprise entry from the main Home screen, start the browser-mock
-server with `NEXT_PUBLIC_SCREENPIPE_E2E=true bun run dev:web`, then run:
-
-```sh
-CLOUD_WORKFLOWS_URL=http://127.0.0.1:1420 bun apps/screenpipe-workflows-web/scripts/eval-enterprise-workflows-entry.mjs
-```
-
-This regression uses the existing fictional enterprise policy fixture. It checks
-the authentication gate, the Home workspace switcher, default cloud source,
-opening workflow steps, returning to Chat, and a denied cloud deep link. The
-enterprise build remains subject to the Workflows beta flag. These are browser
-checks; they do not establish packaged-app or live member authorization.
-
 The eval covers source switching, local updates staying off, workflow details,
 search, matching local/cloud sidebar bounds, collapse/reopen, keyboard navigation,
 the host light/dark setting, compact layout, empty results, and denied access. It selects themes through
