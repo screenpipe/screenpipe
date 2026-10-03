@@ -30,6 +30,54 @@ Mac shortcuts: `Cmd+B` toggles navigation; `Option+Cmd+B` toggles the assistant.
 Windows/Linux use `Ctrl+B` and `Ctrl+Alt+B`. Switching modes keeps both chat
 components mounted, but only the visible workspace handles its shortcuts.
 
+## Cloud workflows in desktop
+
+Workflows has a source selector. Enterprise builds default to Cloud workspace;
+consumer builds default to This device. The choice is saved in app settings.
+Cloud mode reads the existing `read:workflows` API using a configured team token,
+or the signed-in admin session plus the device license to identify its workspace.
+The device license alone cannot read cloud data. Employee sign-in without scoped
+workflow access shows an access message; this UI does not expand server permissions.
+
+Cloud mode displays generated SOP workflows and the discovered workflow inventory.
+Both sources render the shared Workflows navigation shell, catalog cards, filters,
+command palette and detail view. Cloud adds a read-only data adapter and processing
+status; it has no local model or analysis controls. Cloud context is unavailable
+until the API exposes it, and missing observation counts remain unknown.
+It disables local workflow schedules, stops active workflow jobs, and checks their
+status before reporting local analysis off. Older workflow schedules are included.
+It retries while the recorder reconnects. Recording, uploads, and unrelated tasks
+keep their existing settings. Returning to This device does not re-enable schedules;
+use Automatic updates when local analysis is wanted again.
+
+Browser-mock validation uses fictional workflows and never contacts the cloud or
+recorder. From the repository root, with `bun run dev:web` running:
+
+```sh
+CLOUD_WORKFLOWS_URL=http://127.0.0.1:1420 bun apps/screenpipe-workflows-web/scripts/eval-cloud-workflows.mjs
+```
+
+To verify enterprise entry from the main Home screen, start the browser-mock
+server with `NEXT_PUBLIC_SCREENPIPE_E2E=true bun run dev:web`, then run:
+
+```sh
+CLOUD_WORKFLOWS_URL=http://127.0.0.1:1420 bun apps/screenpipe-workflows-web/scripts/eval-enterprise-workflows-entry.mjs
+```
+
+This regression uses the existing fictional enterprise policy fixture. It checks
+the authentication gate, the Home workspace switcher, default cloud source,
+opening workflow steps, returning to Chat, and a denied cloud deep link. The
+enterprise build remains subject to the Workflows beta flag. These are browser
+checks; they do not establish packaged-app or live member authorization.
+
+The eval covers source switching, local updates staying off, workflow details,
+search, matching local/cloud sidebar bounds, collapse/reopen, keyboard navigation,
+the host light/dark setting, compact layout, empty results, and denied access. It selects themes through
+the app's Appearance settings. Known Next.js development warnings from that settings
+route are logged; development-tool badges are omitted from captures. The existing
+shared Workflows shell uses its light palette under either host theme; this change
+does not introduce a separate cloud palette.
+
 ## fast browser UI development
 
 From this directory, run:
