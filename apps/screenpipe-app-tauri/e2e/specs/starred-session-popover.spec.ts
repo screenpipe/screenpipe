@@ -11,8 +11,25 @@ const visible = (label: string) =>
 describe("starred session popover", function () {
   this.timeout(t(150_000));
 
-  it("saves beside the overlay, dismisses and reopens without showing Home", async () => {
+  it("saves in floating controls, dismisses and reopens without showing Home", async () => {
     await waitForAppReady();
+    // Use the existing test-only account seam, with production refresh disabled.
+    await browser.execute(() => {
+      localStorage.setItem("screenpipe_e2e_account_fixture_active", "1");
+      localStorage.setItem(
+        "screenpipe_e2e_account_user",
+        JSON.stringify({
+          id: "e2e-star",
+          email: "star@screenpipe.test",
+          token: "e2e-fake-token-star",
+          subscription_plan: "free",
+          __e2eSkipAccountRefresh: true,
+        }),
+      );
+      window.dispatchEvent(new Event("screenpipe-e2e-seed-account-user"));
+    });
+    await browser.pause(t(500));
+    await invokeOrThrow("set_cloud_token", { token: "e2e-fake-token-star" });
     await invokeOrThrow("spawn_screenpipe", { overrideArgs: null });
     const config = await getLocalApiConfig();
     await browser.waitUntil(
@@ -37,36 +54,28 @@ describe("starred session popover", function () {
       },
     );
     await invokeOrThrow("show_shortcut_reminder", { shortcut: "Cmd+Ctrl+S" });
-    if ((await browser.getWindowHandles()).includes("home")) {
-      await invokeOrThrow("plugin:window|hide", { label: "home" });
-    }
     await invokeOrThrow("toggle_starred_sessions");
     await waitForWindowHandle("starred-sessions", t(20_000));
     await browser.switchToWindow("starred-sessions");
-    // Use the existing test-only account seam, with production refresh disabled.
-    await browser.execute(() => {
-      localStorage.setItem("screenpipe_e2e_account_fixture_active", "1");
-      localStorage.setItem(
-        "screenpipe_e2e_account_user",
-        JSON.stringify({
-          id: "e2e-star",
-          email: "star@screenpipe.test",
-          token: "e2e-fake-token-star",
-          subscription_plan: "free",
-          __e2eSkipAccountRefresh: true,
-        }),
-      );
-      window.dispatchEvent(new Event("screenpipe-e2e-seed-account-user"));
-    });
+    // Keep the retained picker as the IPC context while closing Home in this
+    // isolated fixture. Reopening must not recreate or reveal Home.
+    if ((await browser.getWindowHandles()).includes("home")) {
+      await invokeOrThrow("plugin:window|destroy", { label: "home" });
+    }
+    await invokeOrThrow("hide_starred_sessions");
+    await invokeOrThrow("toggle_starred_sessions");
     const duration = await $("button=15 min");
     await duration.waitForEnabled({ timeout: t(30_000) });
     expect(await visible("starred-sessions")).toBe(true);
-    if ((await browser.getWindowHandles()).includes("home"))
-      expect(await visible("home")).toBe(false);
+    expect(await browser.getWindowHandles()).not.toContain("home");
+    await browser.pause(t(250)); // Let WebKit finish compositing the snapshot.
     await browser.saveScreenshot("e2e/results/starred-session-popover.png");
     await duration.click();
     await $("button=End session").waitForDisplayed({ timeout: t(15_000) });
-    await browser.saveScreenshot("e2e/results/starred-session-active.png");
+    const closeBounds = await $(
+      '[aria-label="Close session controls"]',
+    ).getLocation();
+    expect(closeBounds.y).toBeGreaterThanOrEqual(0);
     const response = await fetch(
       `http://127.0.0.1:${config.port}/starred-sessions?limit=100`,
       { headers: authHeaders(config.key) },
