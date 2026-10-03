@@ -28,6 +28,7 @@ import {
 import { Skeleton } from "../ui/skeleton";
 import { cn } from "@/lib/utils";
 import { Progress } from "../ui/progress";
+import { StorageAdviceCard } from "./storage-advice-card";
 import { RetentionSettings } from "./retention-settings";
 import { useGT } from "gt-react";
 
@@ -47,6 +48,7 @@ export function DiskUsageSection() {
         <p className="text-muted-foreground text-sm mb-4">
           Monitor storage usage for your Screenpipe data
         </p>
+        <StorageAdviceCard />
         <Card>
           <CardContent className="pt-6">
             <div className="text-center text-destructive">
@@ -203,6 +205,8 @@ export function DiskUsageSection() {
           </CardContent>
         </Card>
       </div>
+
+      <StorageAdviceCard />
 
       <RetentionSettings
         availableBytes={diskUsage?.available_space_bytes}

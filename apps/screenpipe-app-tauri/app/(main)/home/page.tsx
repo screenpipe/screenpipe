@@ -71,6 +71,7 @@ import { ChatHistoryView } from "@/components/chat/chat-history-view";
 import { mountPiEventRouter } from "@/lib/stores/pi-event-router";
 import { mountPipeRunRecorder } from "@/lib/events/pipe-run-recorder";
 import { mountPipeWatchWriter } from "@/lib/events/pipe-watch-writer";
+import { StorageAdviceNotifier } from "@/components/storage-advice-notifier";
 import { useRecordingStorage } from "@/lib/hooks/use-recording-storage";
 import { RecordingStatus, type RecordingDevice } from "@/components/recording-status";
 import { StarredTimeline } from "@/components/starred-sessions/starred-timeline";
@@ -1377,6 +1378,7 @@ function HomeContent() {
           and global shortcuts already own. Each row prints its shortcut, so
           palette use teaches the direct key. Home window only: the settings
           page binds its own ⌘K for search focus while mounted. */}
+      <StorageAdviceNotifier />
       <StarredTimeline />
       {/* Routes actions the native timeline window cannot perform itself. */}
       <NativeTimelineBridge

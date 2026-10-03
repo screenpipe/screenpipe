@@ -864,6 +864,17 @@ async getScreenpipeBaseDir() : Promise<Result<string, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Probe the configured recording volume without walking the recording tree.
+ */
+async getStorageCapacity(dataDir: string) : Promise<Result<StorageCapacity, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_storage_capacity", { dataDir }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async getStorageMigrationActivity() : Promise<StorageMigrationActivity> {
     return await TAURI_INVOKE("get_storage_migration_activity");
 },
@@ -4448,6 +4459,10 @@ headlessRecordOnly?: boolean;
 keepSearchAvailableAfterQuit?: boolean }
 export type ShowRewindWindow = "Main" | { Home: { page: string | null } } | { Search: { query: string | null } } | "Onboarding" | "Chat" | "PermissionRecovery"
 export type StartExportRecordingResponse = { jobId: string }
+/**
+ * A volume-only probe. It never scans recordings or opens their database.
+ */
+export type StorageCapacity = { totalBytes: number; availableBytes: number; smallCapacity: boolean; lowSpace: boolean; recommendedDays: number }
 export type StorageMigrationActivity = { root: string | null; busy: boolean; recovering: boolean; message: string; error: string | null; elapsed_seconds: number; completed_records: number | null; total_records: number | null; bytes_saved: number | null; available_bytes: number | null; completed: boolean }
 export type StorageMigrationStatus = { root: string; app_session_id: string; busy: boolean; message: string; error: string | null; pending: boolean; in_place: boolean; completed: boolean; using_new_storage: boolean; generation: string | null; source_bytes: number; migrated_bytes: number | null; bytes_saved: number | null; available_bytes: number | null; can_migrate: boolean; can_cancel: boolean; can_delete_source: boolean; blocked_reason: string | null }
 export type Suggestion = { text: string;

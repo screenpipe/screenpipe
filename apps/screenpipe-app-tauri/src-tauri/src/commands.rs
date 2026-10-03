@@ -5128,3 +5128,16 @@ pub fn set_autostart(app_handle: tauri::AppHandle, enabled: bool) -> Result<(), 
     );
     Ok(())
 }
+
+/// Probe the configured recording volume without walking the recording tree.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_storage_capacity(
+    data_dir: String,
+) -> Result<crate::disk_usage::StorageCapacity, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::disk_usage::storage_capacity(std::path::Path::new(&data_dir))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}

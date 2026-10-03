@@ -968,3 +968,42 @@ mod tests {
         assert_eq!(usage.total_data_bytes, 4242);
     }
 }
+
+/// A volume-only probe. It never scans recordings or opens their database.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageCapacity {
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+    pub small_capacity: bool,
+    pub low_space: bool,
+    pub recommended_days: u32,
+}
+
+pub fn storage_capacity(path: &Path) -> Result<StorageCapacity, String> {
+    let total = fs2::total_space(path).map_err(|e| e.to_string())?;
+    let available = fs2::available_space(path).map_err(|e| e.to_string())?;
+    if total == 0 || available > total {
+        return Err("Storage measurement unavailable".to_string());
+    }
+    Ok(StorageCapacity {
+        total_bytes: total,
+        available_bytes: available,
+        small_capacity: screenpipe_config::storage_is_small(total),
+        low_space: screenpipe_config::storage_is_low(total, available),
+        recommended_days: screenpipe_config::initial_media_retention_days(total, available),
+    })
+}
+
+#[cfg(test)]
+mod storage_capacity_tests {
+    use super::*;
+    #[test]
+    fn storage_capacity_reads_the_target_volume_and_rejects_missing_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let sample = storage_capacity(directory.path()).unwrap();
+        assert!(sample.total_bytes > 0);
+        assert!(sample.available_bytes <= sample.total_bytes);
+        assert!(storage_capacity(&directory.path().join("missing")).is_err());
+    }
+}
