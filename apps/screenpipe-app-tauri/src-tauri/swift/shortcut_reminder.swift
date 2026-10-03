@@ -822,11 +822,12 @@ func disclosureContent(
     overlayShortcut: String,
     chatShortcut: String,
     searchShortcut: String,
+    starShortcut: String,
     metrics: OverlayMetrics
 ) -> (String, String?)? {
     switch control {
     case "brand": return ("screenpipe", uiText("right-click"))
-    case "star": return (uiText("star work session"), "")
+    case "star": return (uiText("star work session"), starShortcut)
     case "timeline": return (uiText("timeline"), overlayShortcut)
     case "chat": return (uiText("ask chat"), chatShortcut)
     case "search": return (uiText("search"), searchShortcut)
@@ -1603,6 +1604,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
     private var overlayShortcut = "⌘⌃S"
     private var chatShortcut = "⌘⌃L"
     private var searchShortcut = "⌘⌃K"
+    private var starShortcut = "⌘⌃B"
     private var metrics = OverlayMetrics()
     private var wsTask: URLSessionWebSocketTask?
     private var wsRetryTimer: Timer?
@@ -2163,6 +2165,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
         if let s = dict["overlay"] { overlayShortcut = prettifyShortcut(s) }
         if let s = dict["chat"] { chatShortcut = prettifyShortcut(s) }
         if let s = dict["search"] { searchShortcut = prettifyShortcut(s) }
+        if let s = dict["star"] { starShortcut = prettifyShortcut(s) }
         if let s = dict["shortcutOverlaySize"] { setOverlayScale(s) }
         if let s = dict["shortcutOverlayAnchor"], let anchor = OverlayAnchor.fromStored(s) {
             overlayAnchor = anchor
@@ -2316,6 +2319,7 @@ class ShortcutReminderController: NSObject, NSWindowDelegate {
                   overlayShortcut: overlayShortcut,
                   chatShortcut: chatShortcut,
                   searchShortcut: searchShortcut,
+                  starShortcut: starShortcut,
                   metrics: metrics
               ) else {
             disclosurePanel?.orderOut(nil)

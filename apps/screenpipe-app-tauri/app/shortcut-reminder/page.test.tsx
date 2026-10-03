@@ -476,6 +476,38 @@ describe("recording health hover detail", () => {
     ).toBeVisible();
   });
 
+  it.each([
+    [undefined, "Control+Super+B"],
+    [{}, "Control+Super+B"],
+    [{ starSessionShortcut: "" }, "Control+Super+B"],
+    [{ starSessionShortcut: "Alt+Shift+J" }, "Alt+Shift+J"],
+  ])("shows the star shortcut from settings %j on hover and focus", async (settings, shortcut) => {
+    mocks.getRecordingHealthState.mockResolvedValue("normal");
+    mocks.storeGet.mockResolvedValue(settings);
+    render(<ShortcutReminderPage />);
+    fireEvent.mouseEnter(await screen.findByTestId("shortcut-reminder-root"));
+    const star = screen.getByRole("button", { name: "Starred work sessions" });
+    fireEvent.mouseEnter(star);
+    expect(await screen.findByText(formatShortcut(shortcut, "macos"), { exact: false })).toBeVisible();
+    fireEvent.mouseEnter(screen.getByTitle("Open timeline"));
+    fireEvent.focus(star);
+    expect(await screen.findByText(formatShortcut(shortcut, "macos"), { exact: false })).toBeVisible();
+  });
+
+  it("hides the disabled star shortcut while keeping its action label", async () => {
+    mocks.getRecordingHealthState.mockResolvedValue("normal");
+    mocks.storeGet.mockResolvedValue({
+      starSessionShortcut: "Alt+Shift+J",
+      disabledShortcuts: ["starSessionShortcut"],
+    });
+    render(<ShortcutReminderPage />);
+    fireEvent.mouseEnter(await screen.findByTestId("shortcut-reminder-root"));
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "Starred work sessions" }));
+    expect(await screen.findByText("star work session")).toBeVisible();
+    expect(screen.queryByText(formatShortcut("Alt+Shift+J", "macos"), { exact: false })).toBeNull();
+    expect(screen.queryByText(formatShortcut("Control+Super+B", "macos"), { exact: false })).toBeNull();
+  });
+
   it("leaves no black bar under the dock when no control is hovered", async () => {
     mocks.getRecordingHealthState.mockResolvedValue("normal");
     mocks.storeGet.mockResolvedValue({});

@@ -51,6 +51,7 @@ type ReminderSettings = {
   showChatShortcut?: string;
   showScreenpipeShortcut?: string;
   searchShortcut?: string;
+  starSessionShortcut?: string;
 };
 
 type RecordingHealthState =
@@ -69,6 +70,7 @@ const DEFAULT_SHORTCUTS = {
   overlay: { mac: "Super+Ctrl+S", other: "Alt+S" },
   chat: { mac: "Control+Super+L", other: "Alt+L" },
   search: { mac: "Control+Super+K", other: "Alt+K" },
+  star: { mac: "Control+Super+B", other: "Alt+Shift+B" },
 } as const;
 
 const COLLAPSED_SIZE = { width: 22, height: 16 };
@@ -98,6 +100,7 @@ export default function ShortcutReminderPage() {
   const [overlayShortcut, setOverlayShortcut] = useState<string | null>(null);
   const [chatShortcut, setChatShortcut] = useState<string | null>(null);
   const [searchShortcut, setSearchShortcut] = useState<string | null>(null);
+  const [starShortcut, setStarShortcut] = useState<string | null>(null);
   const overlayData = useOverlayData();
   const meetingOverlay = useMeetingOverlay();
   // Hover and pin are stored as the meeting they belong to, not as bare flags.
@@ -170,6 +173,19 @@ export default function ShortcutReminderPage() {
       ),
     );
 
+    setStarShortcut(
+      formatForReminder(
+        settings.starSessionShortcut,
+        "starSessionShortcut",
+        {
+          mac: DEFAULT_SHORTCUTS.star.mac,
+          other: platformRef.current === "windows"
+            ? DEFAULT_SHORTCUTS.star.other
+            : DEFAULT_SHORTCUTS.star.mac,
+        },
+      ),
+    );
+
     if (settings.shortcutOverlaySize) {
       const s = settings.shortcutOverlaySize;
       setOverlayScale(s === "large" ? 2 : s === "medium" ? 1.5 : 1);
@@ -217,6 +233,10 @@ export default function ShortcutReminderPage() {
       setOverlayShortcut(prev => prev ?? fallback(DEFAULT_SHORTCUTS.overlay));
       setChatShortcut(prev => prev ?? fallback(DEFAULT_SHORTCUTS.chat));
       setSearchShortcut(prev => prev ?? fallback(DEFAULT_SHORTCUTS.search));
+      setStarShortcut(prev => prev ?? formatShortcut(
+        shortcutPlatform === "windows" ? DEFAULT_SHORTCUTS.star.other : DEFAULT_SHORTCUTS.star.mac,
+        shortcutPlatform,
+      ));
     });
 
     // Also listen for store changes via plugin (for live updates when user changes shortcuts).
@@ -750,7 +770,7 @@ export default function ShortcutReminderPage() {
   }
 
   const disclosure = hoveredControl === "star"
-    ? ["star work session", null]
+    ? ["star work session", starShortcut]
     : hoveredControl === "search"
     ? ["search", searchShortcut]
     : hoveredControl === "brand"
