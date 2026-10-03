@@ -209,7 +209,12 @@ export function createMediaAwareMarkdownComponents(
     if (CustomAnchor) {
       return <CustomAnchor href={href} {...props}>{children}</CustomAnchor>;
     }
-    return <a href={href} {...props}>{children}</a>;
+    // A plain web link would load the site inside the app window. The opener
+    // plugin sends `_blank` http(s) clicks to the system browser instead.
+    const webLink = href && /^https?:/i.test(href)
+      ? { target: "_blank", rel: "noopener noreferrer" }
+      : {};
+    return <a href={href} {...props} {...webLink}>{children}</a>;
   };
 
   return {

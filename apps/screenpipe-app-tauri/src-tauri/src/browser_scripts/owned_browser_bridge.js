@@ -6,7 +6,8 @@
 //
 // Runs as the child webview's initialization script on every page load
 // (including cross-origin navigations), so it must work on any origin and must
-// not depend on window.__TAURI__ (absent off app-origin pages).
+// not depend on window.__TAURI__: Tauri injects it on every page, but rejects
+// every call from a page outside the app's own origin.
 //
 // Results travel back to Rust through `document.title` — the only channel
 // writable from JS and observable from native (on_document_title_changed) on

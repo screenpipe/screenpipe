@@ -17,11 +17,13 @@
 //!
 //! [`OwnedWebviewHandle`] is implemented by translating the agent's `eval`
 //! requests into `webview.eval()` + a `document.title` round-trip. We use
-//! the title as a result transport because cross-origin pages
-//! (e.g. wikipedia.org) do not have access to `window.__TAURI__` — the
-//! Tauri IPC bridge is only injected on app-origin pages. Setting
+//! the title as a result transport because pages loaded here must not be
+//! able to call Tauri IPC. Tauri injects the IPC bridge into every page,
+//! including cross-origin ones (e.g. wikipedia.org); those calls are
+//! rejected only because no capability in `capabilities/` lists remote
+//! URLs (`lib/__tests__/webview-remote-ipc.test.ts` enforces this). Setting
 //! `document.title` works on every origin and the title is observable from
-//! Rust via `on_document_title_changed`. We install the bridge via
+//! Rust via `on_document_title_changed`. We install that title bridge via
 //! `initialization_script`, which Tauri runs on every page load including
 //! cross-origin navigations.
 //!

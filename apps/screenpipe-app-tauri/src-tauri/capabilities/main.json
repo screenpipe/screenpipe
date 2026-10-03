@@ -5,17 +5,6 @@
   "windows": [
     "*"
   ],
-  "remote": {
-    "urls": [
-      "http://localhost:*",
-      "https://api.openai.com/*",
-      "https://*.openai.com/*",
-      "https://api.screenpipe.com/*",
-      "https://*.anthropic.com/*",
-      "https://*.ollama.ai/*",
-      "https://*"
-    ]
-  },
   "permissions": [
     "core:event:allow-listen",
     "core:event:default",

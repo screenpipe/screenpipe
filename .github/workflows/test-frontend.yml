@@ -20,6 +20,10 @@ on:
       - 'apps/screenpipe-app-tauri/bun.lock'
       - 'apps/screenpipe-app-tauri/vitest.config.ts'
       - 'apps/screenpipe-app-tauri/tsconfig*.json'
+      - 'apps/screenpipe-app-tauri/src-tauri/capabilities/**'
+      - 'apps/screenpipe-app-tauri/src-tauri/tauri*.json'
+      - 'apps/screenpipe-app-tauri/src-tauri/build.rs'
+      - 'apps/screenpipe-app-tauri/src-tauri/src/**/*.rs'
       - '.github/workflows/test-frontend.yml'
   pull_request:
     paths:
@@ -36,6 +40,10 @@ on:
       - 'apps/screenpipe-app-tauri/bun.lock'
       - 'apps/screenpipe-app-tauri/vitest.config.ts'
       - 'apps/screenpipe-app-tauri/tsconfig*.json'
+      - 'apps/screenpipe-app-tauri/src-tauri/capabilities/**'
+      - 'apps/screenpipe-app-tauri/src-tauri/tauri*.json'
+      - 'apps/screenpipe-app-tauri/src-tauri/build.rs'
+      - 'apps/screenpipe-app-tauri/src-tauri/src/**/*.rs'
       - '.github/workflows/test-frontend.yml'
 
 concurrency:
