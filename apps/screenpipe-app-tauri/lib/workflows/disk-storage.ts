@@ -11,7 +11,7 @@ import {
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
 import type { WorkProfile, WorkflowAnalysis, WorkflowSkillDraft } from "@screenpipe/workflows-ui";
-import { serializeWorkflowData, parseGuide, type WorkflowGuide, isAssistantState, type AssistantState } from "@screenpipe/workflows-ui";
+import { isCloudProcedure, serializeWorkflowData, parseGuide, type WorkflowGuide, isAssistantState, type AssistantState } from "@screenpipe/workflows-ui";
 
 const STORAGE_DIRECTORY = "workflows";
 const CATALOG_PATH = `${STORAGE_DIRECTORY}/catalog.json`;
@@ -190,4 +190,22 @@ export function saveSkillDraftToDisk(workflowKey: string, draft: WorkflowSkillDr
     const drafts = await readSkillDrafts();
     await replaceWithBackup("workflows/skill-drafts.json", "workflows/skill-drafts.backup.json", { ...drafts, [workflowKey]: draft }, isSkillDraftStore);
   });
+}
+
+function cloudDraftPaths(key: string) {
+  if (!/^org_member_v1_[a-f0-9]{64}-[a-f0-9]{64}$/.test(key)) throw new Error("Invalid cloud draft scope");
+  return [`workflows/cloud-draft-${key}.json`, `workflows/cloud-draft-${key}.backup.json`] as const;
+}
+type CloudDraft = { version: 1; draft: import("@screenpipe/workflows-ui").CloudProcedure | null };
+function isCloudDraft(value: unknown): value is CloudDraft {
+  const stored = value as CloudDraft;
+  return Boolean(stored && stored.version === 1 && (stored.draft === null || isCloudProcedure(stored.draft)));
+}
+export async function loadCloudDraft(key: string) {
+  const [path, backup] = cloudDraftPaths(key);
+  return (await readValidated(path, backup, isCloudDraft, "cloud workflow draft"))?.draft ?? null;
+}
+export function saveCloudDraft(key: string, draft: import("@screenpipe/workflows-ui").CloudProcedure | null) {
+  const [path, backup] = cloudDraftPaths(key);
+  return queueWrite(() => replaceWithBackup(path, backup, { version: 1, draft }, isCloudDraft));
 }

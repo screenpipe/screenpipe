@@ -17,7 +17,7 @@ const artifact = z.object({
   }),
 });
 const catalog = z.object({ license_id: z.string(), scope: z.enum(["member", "workspace"]).optional(), member_access_enabled: z.boolean().optional(), artifacts: z.array(artifact) });
-export type CloudWorkflow = { webWorkflowId?: string; id: string; title: string; summary: string; trigger?: string; outcome?: string; frequency?: string; steps: z.infer<typeof step>[]; updatedAt: string; version: number };
+export type CloudWorkflow = { artifactId?: string; webWorkflowId?: string; id: string; title: string; summary: string; trigger?: string; outcome?: string; frequency?: string; steps: z.infer<typeof step>[]; updatedAt: string; version: number };
 export type CloudWorkflowCatalog = { licenseId: string; scope?: "member" | "workspace"; memberAccessEnabled?: boolean; workflows: CloudWorkflow[] };
 
 export function parseCloudCatalog(value: unknown): CloudWorkflowCatalog {
@@ -27,7 +27,7 @@ export function parseCloudCatalog(value: unknown): CloudWorkflowCatalog {
     .filter(item => item.status !== "archived" && !item.tags?.includes("studio-chat-draft"))
     .flatMap(item => (item.body.recurring_workflows?.length ? item.body.recurring_workflows : [{ name: item.title, steps: item.body.steps ?? [] }]).map((workflow, index) => ({
       id: item.workflow_ids?.[item.body.recurring_workflows?.length ? `recurring_workflows.${index}.steps` : "steps"] ?? `${item.artifact_id}:${index}`,
-      webWorkflowId: item.workflow_ids?.[item.body.recurring_workflows?.length ? `recurring_workflows.${index}.steps` : "steps"], title: workflow.name, summary: item.body.summary ?? "",
+      artifactId: item.artifact_id, webWorkflowId: item.workflow_ids?.[item.body.recurring_workflows?.length ? `recurring_workflows.${index}.steps` : "steps"], title: workflow.name, summary: item.body.summary ?? "",
       trigger: "trigger" in workflow ? workflow.trigger : undefined,
       outcome: "outcome" in workflow ? workflow.outcome : undefined,
       frequency: "frequency" in workflow ? workflow.frequency : undefined,

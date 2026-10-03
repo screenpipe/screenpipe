@@ -11,7 +11,8 @@ import { cloudWorkflowMap } from "@/lib/workflows/cloud-presentation";
 import { stopLocalWorkflowProcessing } from "@/lib/workflows/cloud-processing";
 import { ProductSwitcher, type ProductMode } from "./product-switcher";
 import { WorkflowsShell, WorkflowCatalog, WorkflowDetails, WorkflowCommandPalette, WorkflowCatalogPlaceholder,
-  type AppView, type WorkflowsPlatform, type WorkflowsAppProps } from "@screenpipe/workflows-ui";
+  CloudWorkflowEditor, type AppView, type WorkflowsPlatform, type WorkflowsAppProps } from "@screenpipe/workflows-ui";
+import { createCloudWorkflowRequest, cloudWorkflowDrafts } from "@/lib/workflows/cloud-editing";
 import { openExternalUrl } from "@/lib/open-external-url";
 import { screenpipeWebUrl } from "@/lib/web-url";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -24,6 +25,7 @@ const readOnlyPlatform: WorkflowsPlatform = {
 };
 export type CloudWorkflowsServices = {
   load: (token?: string, signal?: AbortSignal) => Promise<CloudWorkflowCatalog>;
+  request?: typeof fetch;
   stopLocal: (signal?: AbortSignal) => Promise<void>;
 };
 const services: CloudWorkflowsServices = { load: loadCloudCatalog, stopLocal: stopLocalWorkflowProcessing };
@@ -33,6 +35,7 @@ export function CloudWorkflows({ active, token, onModeChange, recordingStatus, n
   recordingStatus: React.ReactNode; navigationFooter?: WorkflowsAppProps["navigationFooter"];
   api?: CloudWorkflowsServices;
 }) {
+  const request = useMemo(() => api.request ?? createCloudWorkflowRequest(token), [api, token]);
   const [data, setData] = useState<CloudWorkflowCatalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -136,6 +139,7 @@ export function CloudWorkflows({ active, token, onModeChange, recordingStatus, n
       {view === "profile" ? <section><h1 className="text-2xl font-semibold">Context</h1><p className="mt-3 text-sm opacity-70">Workspace context is not available in this cloud view yet.</p></section>
         : error ? <section role="alert"><h1 className="text-2xl font-semibold">Cloud workflows unavailable</h1><p className="mt-3 text-sm opacity-70">{error}</p><Button variant="outline" className="mt-4" onClick={refresh}>Refresh</Button></section>
         : loading && !data ? <WorkflowCatalogPlaceholder />
+        : view === "workflow" && selected && selectedCloud?.artifactId && selectedCloud.webWorkflowId && data?.scope === "member" ? <CloudWorkflowEditor key={`${token}:${data.licenseId}:${selected.id}`} identity={{ license_id: data.licenseId, artifact_id: selectedCloud.artifactId, workflow_id: selectedCloud.webWorkflowId }} title={selected.title} summary={selected.description} request={request} drafts={api.request ? undefined : cloudWorkflowDrafts} back={() => navigate("workflows")} onSaved={refresh} onDenied={() => { setData(null); setSelectedId(null); setError("Workflow access changed. Refresh to check your workspace access."); }} />
         : view === "workflow" && selected ? <WorkflowDetails workflow={selected} platform={readOnlyPlatform} active={active} navigate={navigate} workProfile={null}
             workflowAgentActions={() => <><span>{linkError && <span role="alert" className="text-xs">{linkError}</span>}</span>{webLink && <Button variant="outline" size="sm" onClick={() => { setLinkError(""); void openExternalUrl(webLink).catch(() => setLinkError("Could not open your browser. Try again.")); }}>Open on web<ExternalLink size={14} className="ml-2" /></Button>}{refreshControl}</>} sourceLabel={`${data?.scope === "member" ? "Your cloud workflow" : "Cloud workflow"} · Version ${selected.revision}`} observationsAvailable={false} canSaveAnswers={false} onAnswersSaved={() => {}} />
         : <WorkflowCatalog workflows={workflows} knownWorkflowCount={workflows.length} query={query} setQuery={setQuery} openWorkflow={openWorkflow}
