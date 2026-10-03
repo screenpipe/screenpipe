@@ -10,7 +10,6 @@ import {
   useCallback,
   type Dispatch,
   type SetStateAction,
-  type RefObject,
   type MutableRefObject,
 } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -69,7 +68,6 @@ interface UseChatConversationsOpts {
   conversationId: string | null;
   setConversationId: Dispatch<SetStateAction<string | null>>;
   setInput: Dispatch<SetStateAction<string>>;
-  inputRef: RefObject<HTMLTextAreaElement | null>;
   isLoading: boolean;
   isStreaming: boolean;
   piStreamingTextRef: MutableRefObject<string>;
@@ -152,7 +150,6 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     conversationId,
     setConversationId,
     setInput,
-    inputRef,
     isLoading,
     isStreaming,
     piStreamingTextRef,
@@ -1560,7 +1557,6 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // Keep the outgoing draft visible during async restoration. Replace it
     // atomically with the incoming transcript/draft once this request wins.
     setInput("");
-    if (inputRef.current) inputRef.current.style.height = "auto";
     setPastedImages([]);
     setAttachedDocs?.([]);
     setPendingDocs?.([]);
@@ -1809,7 +1805,6 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     setMessages([]);
     setConversationId(null);
     setInput("");
-    if (inputRef.current) inputRef.current.style.height = "auto";
     setShowHistory(false);
     setPastedImages([]);
     // Clear any in-progress doc attachments — they belong to the chat the

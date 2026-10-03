@@ -51,7 +51,6 @@ export function usePiSteeringTransport(
     currentQueueSessionId,
     finishQueuedAction,
     flushStreamingMessageRender,
-    inputRef,
     isLoading,
     isStreaming,
     lastUserMessageRef,
@@ -452,7 +451,6 @@ export function usePiSteeringTransport(
       useChatStore.getState().actions.setMessages(sidNow, nextRowsAfterOptimisticAppend as any);
     }
     setInput("");
-    if (inputRef.current) inputRef.current.style.height = "auto";
 
     if (shouldClearPastedImages) setPastedImages([]);
 

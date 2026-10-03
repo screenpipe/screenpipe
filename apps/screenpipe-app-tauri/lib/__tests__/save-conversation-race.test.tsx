@@ -126,7 +126,6 @@ function useHarness(args: {
   const piStreamingTextRef = useRef("");
   const piMessageIdRef = useRef<string | null>(null);
   const piContentBlocksRef = useRef<any[]>([]);
-  const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const hook = useChatConversations({
     messages: messagesRef.current as any,
@@ -138,7 +137,6 @@ function useHarness(args: {
       conversationIdRef.current = typeof updater === "function" ? updater(conversationIdRef.current) : updater;
     }) as any,
     setInput: vi.fn() as any,
-    inputRef,
     isLoading: false,
     isStreaming: false,
     piStreamingTextRef,

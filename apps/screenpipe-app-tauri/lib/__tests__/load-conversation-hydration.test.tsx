@@ -115,7 +115,6 @@ function useHarness() {
     setInput,
     inputValueRef,
     pastedImagesRef: useRef([]),
-    inputRef: useRef<HTMLTextAreaElement | null>(null),
     isLoading: false,
     isStreaming: false,
     piStreamingTextRef,

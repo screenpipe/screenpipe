@@ -635,10 +635,7 @@ export function useChatMentions({
     const value = event.target.value;
     setInput(value);
 
-    const textarea = event.target;
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 150)}px`;
-    if (hasConnectionChip) setChipScrollTop(textarea.scrollTop);
+    if (hasConnectionChip) setChipScrollTop(event.target.scrollTop);
 
     const cursorPos = event.target.selectionStart || 0;
     const textBeforeCursor = value.slice(0, cursorPos);

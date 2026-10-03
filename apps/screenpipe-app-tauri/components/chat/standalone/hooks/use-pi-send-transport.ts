@@ -428,7 +428,6 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     // the send aborts.
     setPendingSend({ sessionId: attemptSessionId, text: userMessage, displayLabel });
     setInput("");
-    if (inputRef.current) inputRef.current.style.height = "auto";
 
     // A selector change may still be in flight when the user submits. Wait for
     // it here as the authoritative boundary. Rejections
@@ -744,7 +743,6 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     setPendingSend(null);
     if (isAttemptForeground()) {
       setInput("");
-      if (inputRef.current) inputRef.current.style.height = "auto";
       setIsLoading(true);
       setIsStreaming(true);
     }

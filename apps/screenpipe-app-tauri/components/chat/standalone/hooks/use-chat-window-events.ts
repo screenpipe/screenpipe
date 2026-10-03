@@ -215,7 +215,6 @@ export function useChatPrefillListener({
             if (sendMessageRef.current) {
               await sendMessageRef.current(fullMessage, visiblePrompt, prefillImages);
               setInput("");
-              if (inputRef.current) inputRef.current.style.height = "auto";
             }
           } finally {
             autoSendBypassRef.current = false;

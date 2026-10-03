@@ -245,13 +245,7 @@ export function useChatAttachments({
     setAttachedDocs((prev) => prev.filter((_, idx) => idx !== index));
     setShowMentionDropdown(false);
     setMentionFilter("");
-    window.setTimeout(() => {
-      inputRef.current?.focus();
-      if (inputRef.current) {
-        inputRef.current.style.height = "auto";
-        inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 150)}px`;
-      }
-    }, 0);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
   }, [inputRef, setInput, setMentionFilter, setShowMentionDropdown, setAttachedDocs]);
 
   const handleFilePicker = useCallback(async () => {
