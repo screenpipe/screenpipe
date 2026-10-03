@@ -121,3 +121,7 @@
 .titleRow > span { margin-top: 6px; }
 .stepActions { display: flex; align-items: flex-start; }
 .step:hover > .stepTop .controls, .step:focus-within > .stepTop .controls { opacity: 1; pointer-events: auto; }
+
+.readOnlyText { display: block; padding: 3px 5px; color: var(--ink); font-size: 14px; line-height: 1.6; }
+.titleRow > h1 { flex: 1; min-width: 0; padding: 3px 5px; }
+.endpoint .readOnlyText { margin-left: -5px; }

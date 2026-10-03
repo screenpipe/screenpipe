@@ -14,8 +14,25 @@ import { useGT } from "gt-react";
 
 const FEEDBACK_PROMPT = "Review this workflow and ask me 3 specific questions to help refine it. Also invite any general feedback I have.";
 
-export function WorkflowAssistant({ platform, context, onDockChange, onWidthChange, onOpenChange, onModeChange, headerToggle = false, active = true, composerAccessory, promptRequest, onBusyChange }: {
+/** Remote transports supply conversation state while retaining the existing chat UI. */
+export type WorkflowAssistantSession = {
+  title: string;
+  messages: AssistantMessage[];
+  draft: string;
+  loaded: boolean;
+  busy: boolean;
+  error: string;
+  setDraft: (text: string) => void;
+  send: (text: string) => void;
+  stop: () => void;
+  retry?: () => void;
+  renderMessage?: (message: AssistantMessage) => React.ReactNode;
+  review?: React.ReactNode;
+};
+
+export function WorkflowAssistant({ session, platform, context, onDockChange, onWidthChange, onOpenChange, onModeChange, headerToggle = false, active = true, composerAccessory, promptRequest, onBusyChange }: {
   platform: WorkflowsAssistantPlatform;
+  session?: WorkflowAssistantSession;
   promptRequest?: { id: string; text: string };
   onBusyChange?: (busy: boolean) => void;
   context: AssistantContext;
@@ -34,12 +51,12 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   const useHeaderToggle = headerToggle && state.mode === "sidebar";
   const launcherLabel = headerToggle ? "Open chat" : "Ask Screenpipe";
   const stateRef = useRef(state);
-  const [loaded, setLoaded] = useState(false);
+  const [localLoaded, setLoaded] = useState(false);
   const loadedRef = useRef(false);
   const [loadError, setLoadError] = useState("");
   const [saveError, setSaveError] = useState(false);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [localError, setError] = useState("");
+  const [localBusy, setBusy] = useState(false);
   const [activity, setActivity] = useState("Starting…");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyQuery, setHistoryQuery] = useState("");
@@ -65,7 +82,11 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mounted = useRef(true);
   const loadInFlight = useRef(false);
-  const conversation = state.conversations.find((c) => c.id === state.activeId)!;
+  const loaded = session ? session.loaded && localLoaded : localLoaded;
+  const busy = session?.busy ?? localBusy;
+  const error = session?.error || localError;
+  const storedConversation = state.conversations.find((c) => c.id === state.activeId)!;
+  const conversation = session ? { ...storedConversation, title: session.title, messages: session.messages, draft: session.draft } : storedConversation;
   const feedbackContext = conversation.feedbackContext;
   const selectedSop = useRef<string | null>(null);
   const consumedPrompt = useRef<string | null>(null);
@@ -103,6 +124,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
 
   useEffect(() => { if (active && !loadedRef.current && !loadError) void restore(); }, [active, restore, loadError]);
   useEffect(() => {
+    if (session) return;
     if (context.purpose !== "sop" && context.purpose !== "video") { selectedSop.current = null; return; }
     if (!loaded || busy || selectedSop.current === context.key) return;
     selectedSop.current = context.key;
@@ -113,6 +135,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
     update(s => ({ ...s, activeId: next.id, conversations: existing ? s.conversations : [...s.conversations, next] }));
     setError(""); setHistoryOpen(false);
   }, [context.key, context.purpose, loaded, busy, update]);
+  useEffect(() => () => onDockChange(false), [onDockChange]);
   useEffect(() => { onDockChange(open && state.mode === "sidebar"); }, [open, state.mode, onDockChange]);
   useEffect(() => { onWidthChange?.(width); }, [width, onWidthChange]);
   useEffect(() => { onOpenChange?.(open); }, [open, onOpenChange]);
@@ -229,6 +252,12 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
   }), 1000);
 
   async function send(question: string, retry = false, requestedContext?: AssistantContext) {
+    if (session) {
+      if (busy || !loaded) return;
+      setError("");
+      if (retry) session.retry?.(); else session.send(question);
+      return;
+    }
     if (!question.trim() || controller.current || !loadedRef.current) return;
     const current = stateRef.current.conversations.find((c) => c.id === stateRef.current.activeId)!;
     const previousUserIndex = current.messages.findLastIndex((m) => m.role === "user");
@@ -300,15 +329,15 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
 
   const lastUser = [...conversation.messages].reverse().find((message) => message.role === "user");
   const lastAnswer = conversation.messages.at(-1);
-  const suggestions = context.purpose === "video"
+  const suggestions = session ? ["Make the steps easier to follow", "Clarify this workflow"] : context.purpose === "video"
     ? ["Make the narration shorter", "Create video"]
     : context.purpose === "sop"
     ? ["Make this SOP shorter", "Make the steps easier to follow"]
     : context.workflow
     ? ["Summarize this workflow", "Find recent examples in my memory"]
     : ["What did I work on yesterday?", "Find a conversation I had this week"];
-  const history = [...state.conversations].reverse().filter((item) =>
-    item.messages.length && (!historyQuery.trim() || [item.title, ...item.messages.map((message) => message.text)].join(" ").toLowerCase().includes(historyQuery.trim().toLowerCase())));
+  const history = [...(session ? [conversation] : state.conversations)].reverse().filter((item) =>
+    (session ? session.messages.length : item.messages.length) && (!historyQuery.trim() || [item.title, ...item.messages.map((message) => message.text)].join(" ").toLowerCase().includes(historyQuery.trim().toLowerCase())));
   const openSource = useCallback((url: string) => {
     if (platform.openLink) void platform.openLink(url).catch(() => setError(ui("Couldn’t open that source.")));
   }, [platform]);
@@ -352,7 +381,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
           <span>{conversation.clarificationQuestion ? conversation.title : feedbackContext ? ui("Feedback") : conversation.messages.length ? conversation.title : ui("New chat")}</span><ChevronDown size={13} />
         </button>
         <div className={styles.headerActions}>
-          <button aria-label={ui("New conversation")} title={ui("New chat")} disabled={busy || !loaded} onClick={newConversation}><SquarePen size={16} /></button>
+          {!session && <button aria-label={ui("New conversation")} title={ui("New chat")} disabled={busy || !loaded} onClick={newConversation}><SquarePen size={16} /></button>}
           <div ref={displayMenu} className={styles.displayControl}>
             <button ref={displayTrigger} aria-label={ui("Chat display")} title={ui("Chat display")} aria-haspopup="menu" aria-expanded={displayOpen}
               disabled={!loaded} onClick={() => setDisplayOpen(!displayOpen)} onKeyDown={(event) => {
@@ -386,7 +415,7 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
           {!history.length && <p>{historyQuery ? ui("No matching conversations.") : ui("Your conversations will appear here.")}</p>}
         </div> : loaded && <>
           {!conversation.messages.length && <div className={styles.empty}>
-            <h2>{feedbackContext ? ui("What should change?") : context.purpose === "video" ? ui("Edit the video script") : context.purpose === "sop" ? ui("Edit this SOP") : context.workflow ? ui("Ask about this workflow") : ui("Search your memory")}</h2>
+            <h2>{feedbackContext ? ui("What should change?") : session ? ui("Edit this workflow") : context.purpose === "video" ? ui("Edit the video script") : context.purpose === "sop" ? ui("Edit this SOP") : context.workflow ? ui("Ask about this workflow") : ui("Search your memory")}</h2>
             {!feedbackContext && <div>{suggestions.map((question) => <button key={question} onClick={() => void send(question)}><Search size={15} /><span>{question}</span><ArrowUp size={13} /></button>)}</div>}
           </div>}
           {conversation.messages.map((message) => <article key={message.id} className={message.role === "user" ? styles.user : styles.assistant} aria-label={message.role === "user" ? ui("Your question") : ui("Screenpipe answer")}>
@@ -395,15 +424,17 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
               <summary><span aria-hidden="true">{tool.status === "running" ? "◌" : tool.status === "complete" ? "✓" : tool.status === "stopped" ? "□" : "!"}</span><span>{tool.name.replace(/_/g, " ")}</span><small>{tool.status === "running" && tool.detail && !tool.detail.startsWith("{") ? tool.detail.slice(0, 80) : tool.status}</small></summary>
               {tool.detail && <pre>{tool.detail}</pre>}
             </details>)}
+            {session?.renderMessage?.(message)}
             {message.feedbackSaved && message.id === lastUser?.id && <small>Feedback saved for the next update</small>}
             {message.status === "stopped" && <small>Stopped</small>}
             {message.role === "assistant" && message.text && (!busy || message.id !== lastAnswer?.id) && <div className={styles.messageActions}>
               <button aria-label={ui("Copy answer")} title={ui("Copy answer")} onClick={() => void navigator.clipboard.writeText(message.text).then(() => { setCopied(message.id); setTimeout(() => setCopied(""), 1500); }).catch(() => setError(ui("Couldn’t copy. You can select the answer and copy it.")))}>{copied === message.id ? <Check size={14} /> : <Copy size={14} />}</button>
-              {!busy && message.id === lastAnswer?.id && !message.status && lastUser && <button aria-label={ui("Retry answer")} title={ui("Retry answer")} onClick={() => void send(lastUser.text, true)}><RotateCcw size={14} /></button>}
+              {!session && !busy && message.id === lastAnswer?.id && !message.status && lastUser && <button aria-label={ui("Retry answer")} title={ui("Retry answer")} onClick={() => void send(lastUser.text, true)}><RotateCcw size={14} /></button>}
             </div>}
           </article>)}
+          {session?.review}
           {busy && <div className={styles.activity} role="status"><i aria-hidden="true" />{activity}</div>}
-          {!busy && (error || lastAnswer?.status === "error" || lastAnswer?.status === "stopped") && <div className={styles.error} role="status"><span>{error || (lastAnswer?.status === "error" ? ui("This answer didn’t finish.") : "")}</span>{lastUser && <button onClick={() => void send(lastUser.text, true)}>Try again</button>}</div>}
+          {!busy && (error || lastAnswer?.status === "error" || lastAnswer?.status === "stopped") && <div className={styles.error} role="status"><span>{error || (lastAnswer?.status === "error" ? ui("This answer didn’t finish.") : "")}</span>{(session ? session.retry : lastUser) && <button onClick={() => session ? session.retry?.() : void send(lastUser!.text, true)}>Try again</button>}</div>}
         </>}
       </div>
       {!historyOpen && <ChatJumpToLatest hasMessages={!!conversation.messages.length} scrolledUp={!atBottom} onJump={() => {
@@ -415,17 +446,17 @@ export function WorkflowAssistant({ platform, context, onDockChange, onWidthChan
       {feedbackError && <div className={styles.saveError} role="alert">{feedbackError}</div>}
       {saveError && <div className={styles.saveError} role="alert">Couldn’t save this conversation.<button onClick={() => void persist(stateRef.current).catch(() => {})}>Retry save</button></div>}
       {!historyOpen && <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(conversation.draft); }}>
-        {feedbackContext ? <span className={styles.context}><span className={styles.contextDot} /><span>{feedbackContext.title}</span></span> : <button type="button" className={styles.context} aria-pressed={includeContext} title={includeContext ? ui("Remove current page from the next message") : ui("Include current page in the next message")} onClick={() => setIncludeContext(!includeContext)}>{includeContext ? <><span className={styles.contextDot} /><span>{context.title}</span><X size={12} /></> : <><Plus size={13} /><span>Add current page</span></>}</button>}
-        <ComposerTextArea ref={input} aria-label={ui("Ask Screenpipe")} placeholder={feedbackContext ? platform.learnsFromFeedback ? ui("Share feedback to refine this workflow…") : ui("Answer a question or share feedback…") : includeContext && context.purpose === "video" ? ui("Change the narration, screenshots, or pacing…") : includeContext && context.purpose === "sop" ? ui("Ask Screenpipe to edit this SOP…") : includeContext && context.workflow ? ui("Ask about this workflow…") : ui("Ask or find anything…")} rows={1}
-          value={conversation.draft} maxLength={8000} disabled={!loaded} onChange={(event) => update((current) => ({
+        {session ? <span className={styles.context}><span className={styles.contextDot} /><span>{context.title}</span></span> : feedbackContext ? <span className={styles.context}><span className={styles.contextDot} /><span>{feedbackContext.title}</span></span> : <button type="button" className={styles.context} aria-pressed={includeContext} title={includeContext ? ui("Remove current page from the next message") : ui("Include current page in the next message")} onClick={() => setIncludeContext(!includeContext)}>{includeContext ? <><span className={styles.contextDot} /><span>{context.title}</span><X size={12} /></> : <><Plus size={13} /><span>Add current page</span></>}</button>}
+        <ComposerTextArea ref={input} aria-label={ui("Ask Screenpipe")} placeholder={session ? ui("Ask about this workflow…") : feedbackContext ? platform.learnsFromFeedback ? ui("Share feedback to refine this workflow…") : ui("Answer a question or share feedback…") : includeContext && context.purpose === "video" ? ui("Change the narration, screenshots, or pacing…") : includeContext && context.purpose === "sop" ? ui("Ask Screenpipe to edit this SOP…") : includeContext && context.workflow ? ui("Ask about this workflow…") : ui("Ask or find anything…")} rows={1}
+          value={conversation.draft} maxLength={8000} disabled={!loaded} onChange={(event) => session ? session.setDraft(event.target.value) : update((current) => ({
             ...current, conversations: current.conversations.map((item) => item.id === current.activeId ? { ...item, draft: event.target.value } : item),
           }))} onSend={() => void send(conversation.draft)} />
         <div className={styles.composerFooter}>
           {open && active && composerAccessory?.({ inputValue: conversation.draft, inputRef: input,
-            onValueChange: value => update(current => ({ ...current, conversations: current.conversations.map(item => item.id === current.activeId ? { ...item, draft: value } : item) })),
+            onValueChange: value => session ? session.setDraft(value) : update(current => ({ ...current, conversations: current.conversations.map(item => item.id === current.activeId ? { ...item, draft: value } : item) })),
             disabled: !loaded || busy, sessionId: conversation.id,
           })}
-          {busy ? <button type="button" className={styles.send} aria-label={ui("Stop answer")} title={ui("Stop answer")} onClick={() => controller.current?.abort()}><Square size={12} fill="currentColor" /></button>
+          {busy ? <button type="button" className={styles.send} aria-label={ui("Stop answer")} title={ui("Stop answer")} onClick={() => session ? session.stop() : controller.current?.abort()}><Square size={12} fill="currentColor" /></button>
             : <button className={styles.send} type="submit" aria-label={feedbackContext ? ui("Send feedback") : ui("Send message")} title={ui("Send (Enter)")} disabled={!loaded || !conversation.draft.trim()}><ArrowUp size={18} /></button>}
         </div>
       </form>}

@@ -8,17 +8,26 @@ import {
   isCloudProcedure,
   CloudWorkflowAccessError,
   type CloudProcedure,
-  type CloudProcedureStep,
+  cloudProcedureWorkflow, cloudProcedureEdit,
   type CloudDraftStore,
   type CloudWorkflowIdentity,
 } from "./cloud-workflow";
-import styles from "./cloud-workflow.module.css";
+import { WorkflowDetail } from "./workflows-app";
+import { workflowEdit, type WorkflowEdit } from "./workflow-edits";
+import type { WorkflowMap } from "./model";
+import type { WorkflowsPlatform } from "./platform";
+import type { WorkflowsAssistantPlatform } from "./assistant";
+const readOnlyPlatform: WorkflowsPlatform = {
+  ensureRuntime: async () => { throw new Error("Cloud workflows have no local runtime"); },
+  analyzeCapturedWork: async () => { throw new Error("Cloud workflows cannot start device analysis"); },
+};
 const same = (a: unknown, b: unknown) =>
   JSON.stringify(a) === JSON.stringify(b);
 export function CloudWorkflowEditor({
   identity,
-  title,
-  summary,
+  workflow,
+  appearance,
+  active = true,
   request,
   drafts,
   back,
@@ -26,8 +35,9 @@ export function CloudWorkflowEditor({
   onDenied,
 }: {
   identity: CloudWorkflowIdentity;
-  title: string;
-  summary: string;
+  workflow: WorkflowMap;
+  appearance?: Pick<WorkflowsAssistantPlatform, "load" | "save">;
+  active?: boolean;
   request: typeof fetch;
   drafts?: CloudDraftStore;
   back: () => void;
@@ -44,6 +54,14 @@ export function CloudWorkflowEditor({
   const [draftKey, setDraftKey] = useState("");
   const alive = useRef<AbortController | undefined>(undefined);
   const pending = useRef(false);
+  const base = useRef<CloudProcedure | null>(null);
+  const [editorEpoch, setEditorEpoch] = useState(0);
+  const converted = useRef<{ key: string; value: CloudProcedure } | null>(null);
+  function convert(edit: WorkflowEdit) {
+    const key = JSON.stringify([base.current, edit]);
+    if (converted.current?.key !== key) converted.current = { key, value: cloudProcedureEdit(base.current!, edit) };
+    return converted.current.value;
+  }
   const callbacks = useRef({ onSaved, onDenied });
   callbacks.current = { onSaved, onDenied };
   const key = JSON.stringify(identity);
@@ -95,6 +113,8 @@ export function CloudWorkflowEditor({
           : "";
         const draft = storageKey ? await drafts?.load(storageKey) : null;
         controller.signal.throwIfAborted();
+        base.current = draft && current.can_edit && !current.review.frozen ? draft : current;
+        setEditorEpoch(n => n + 1);
         setSaved(current);
         setDraftKey(storageKey);
         setConflict(
@@ -142,91 +162,12 @@ export function CloudWorkflowEditor({
         ),
       );
   }, [value, dirty, draftKey, drafts, loading]);
-  const change = (index: number, update: Partial<CloudProcedureStep>) =>
-    setValue(
-      (current) =>
-        current && {
-          ...current,
-          document: {
-            ...current.document,
-            steps: current.document.steps.map((step, i) =>
-              i === index ? { ...step, ...update } : step,
-            ),
-          },
-        },
-    );
-  const move = (from: number, to: number) =>
-    setValue((current) => {
-      if (!current || to < 0 || to >= current.document.steps.length)
-        return current;
-      const steps = [...current.document.steps];
-      steps.splice(to, 0, steps.splice(from, 1)[0]);
-      return { ...current, document: { ...current.document, steps } };
-    });
-  function add() {
-    setValue(
-      (current) =>
-        current && {
-          ...current,
-          document: {
-            ...current.document,
-            steps: [
-              ...current.document.steps,
-              {
-                id: crypto.randomUUID(),
-                action: "New step",
-                kind: "action",
-                app: "",
-                detail: "",
-                expected_result: "",
-                caveat: "",
-                required_access: "",
-                escalation: "",
-                response_template: "",
-              },
-            ],
-          },
-        },
-    );
-  }
-  function remove(id: string) {
-    setValue(
-      (current) =>
-        current && {
-          ...current,
-          document: {
-            ...current.document,
-            steps: current.document.steps
-              .filter((step) => step.id !== id)
-              .map((step) => ({
-                ...step,
-                ...(step.next_step_id === id
-                  ? { next_step_id: undefined }
-                  : {}),
-                ...(step.decision
-                  ? {
-                      decision: {
-                        ...step.decision,
-                        ...(step.decision.yes_step_id === id
-                          ? { yes_step_id: undefined }
-                          : {}),
-                        ...(step.decision.no_step_id === id
-                          ? { no_step_id: undefined }
-                          : {}),
-                      },
-                    }
-                  : {}),
-              })),
-          },
-        },
-    );
-  }
-  async function save() {
-    if (!value || !dirty || !editable || conflict || pending.current) return;
+  async function save(edit: WorkflowEdit): Promise<WorkflowMap> {
+    if (!base.current || !editable || conflict || pending.current) throw new Error("This workflow cannot be saved right now.");
     pending.current = true;
     setSaving(true);
     setError("");
-    const snapshot = value;
+    const snapshot = convert(edit);
     try {
       const result = await cloudWorkflowRequest(
         request,
@@ -246,10 +187,12 @@ export function CloudWorkflowEditor({
         revision: result.revision,
         review: result.review,
       };
+      base.current = next;
       setValue(next);
       setSaved(next);
       if (draftKey) await drafts?.save(draftKey, null);
       callbacks.current.onSaved();
+      return cloudProcedureWorkflow(workflow, next);
     } catch (cause) {
       if (!alive.current?.signal.aborted) {
         setError(
@@ -263,6 +206,7 @@ export function CloudWorkflowEditor({
           callbacks.current.onDenied();
         }
       }
+      throw cause;
     } finally {
       pending.current = false;
       if (!alive.current?.signal.aborted) setSaving(false);
@@ -272,238 +216,22 @@ export function CloudWorkflowEditor({
     if (draftKey) await drafts?.save(draftKey, null);
     setRevision((n) => n + 1);
   }
-  return (
-    <section className={styles.editor}>
-      <button onClick={back}>← All workflows</button>
-      <header>
-        <h1>{title}</h1>
-        <p>{summary}</p>
-      </header>
-      {loading && !value ? (
-        <p role="status">Loading workflow…</p>
-      ) : (
-        <>
-          {error && <p role="alert">{error}</p>}
-          {!value ? (
-            <button onClick={() => setRevision((n) => n + 1)}>Retry</button>
-          ) : (
-            <div className={styles.layout}>
-              <div>
-                <div className={styles.actions}>
-                  <span role="status">
-                    {saving
-                      ? "Saving…"
-                      : dirty
-                        ? "Unsaved changes"
-                        : `Saved · Version ${value.revision}`}
-                  </span>
-                  {editable && (
-                    <button
-                      disabled={!dirty || saving || conflict || loading}
-                      onClick={() => void save()}
-                    >
-                      Save changes
-                    </button>
-                  )}
-                  {dirty && (
-                    <button
-                      disabled={saving}
-                      onClick={() =>
-                        void discard().catch((cause) => setError(String(cause)))
-                      }
-                    >
-                      Discard draft and reload
-                    </button>
-                  )}
-                </div>
-                {conflict && (
-                  <p role="alert">
-                    This workflow changed since your draft was saved. Your draft
-                    is shown below. Copy the changes you need, then discard the
-                    draft to load the latest version.
-                  </p>
-                )}
-                {!editable && (
-                  <p>
-                    {saved?.review.frozen
-                      ? "Approved workflow. Ask an admin to reopen it before editing."
-                      : "View only. Your admin controls workflow editing."}
-                  </p>
-                )}
-                <ol className={styles.steps}>
-                  {value.document.steps.map((step, index) => (
-                    <li key={step.id}>
-                      <fieldset disabled={!editable || saving || loading}>
-                        <legend>Step {index + 1}</legend>
-                        <label>
-                          Action
-                          <input
-                            aria-label={`Step ${index + 1} action`}
-                            value={step.action}
-                            maxLength={300}
-                            onChange={(e) =>
-                              change(index, { action: e.target.value })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Instructions
-                          <textarea
-                            aria-label={`Step ${index + 1} instructions`}
-                            value={step.detail}
-                            maxLength={4000}
-                            rows={3}
-                            onChange={(e) =>
-                              change(index, { detail: e.target.value })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Expected result
-                          <textarea
-                            value={step.expected_result}
-                            maxLength={4000}
-                            rows={2}
-                            onChange={(e) =>
-                              change(index, { expected_result: e.target.value })
-                            }
-                          />
-                        </label>
-                        <details>
-                          <summary>Step details</summary>
-                          <label>
-                            Step type
-                            <select
-                              value={step.kind}
-                              onChange={(e) =>
-                                change(index, {
-                                  kind: e.target
-                                    .value as CloudProcedureStep["kind"],
-                                  decision:
-                                    e.target.value === "decision"
-                                      ? step.decision || {
-                                          condition: "",
-                                          if_yes: "",
-                                          if_no: "",
-                                        }
-                                      : undefined,
-                                })
-                              }
-                            >
-                              <option value="action">Action</option>
-                              <option value="decision">Decision</option>
-                              <option value="check">Check</option>
-                            </select>
-                          </label>
-                          <label>
-                            App
-                            <input
-                              value={step.app}
-                              maxLength={200}
-                              onChange={(e) =>
-                                change(index, { app: e.target.value })
-                              }
-                            />
-                          </label>
-                          {(
-                            [
-                              "caveat",
-                              "required_access",
-                              "escalation",
-                              "response_template",
-                            ] as const
-                          ).map((field) => (
-                            <label key={field}>
-                              {field.replaceAll("_", " ")}
-                              <textarea
-                                value={step[field]}
-                                rows={2}
-                                maxLength={4000}
-                                onChange={(e) =>
-                                  change(index, { [field]: e.target.value })
-                                }
-                              />
-                            </label>
-                          ))}
-                          {step.decision &&
-                            (["condition", "if_yes", "if_no"] as const).map(
-                              (field) => (
-                                <label key={field}>
-                                  {field.replaceAll("_", " ")}
-                                  <textarea
-                                    value={step.decision![field]}
-                                    onChange={(e) =>
-                                      change(index, {
-                                        decision: {
-                                          ...step.decision!,
-                                          [field]: e.target.value,
-                                        },
-                                      })
-                                    }
-                                  />
-                                </label>
-                              ),
-                            )}
-                        </details>
-                        {editable && (
-                          <div className={styles.actions}>
-                            <button
-                              disabled={!index}
-                              onClick={() => move(index, index - 1)}
-                              aria-label={`Move step ${index + 1} up`}
-                            >
-                              Move up
-                            </button>
-                            <button
-                              disabled={value.document.steps.length === 1}
-                              onClick={() => remove(step.id)}
-                              aria-label={`Remove step ${index + 1}`}
-                            >
-                              Remove
-                            </button>
-                            <button
-                              disabled={
-                                index === value.document.steps.length - 1
-                              }
-                              onClick={() => move(index, index + 1)}
-                              aria-label={`Move step ${index + 1} down`}
-                            >
-                              Move down
-                            </button>
-                          </div>
-                        )}
-                      </fieldset>
-                    </li>
-                  ))}
-                </ol>
-                {editable && (
-                  <button
-                    disabled={saving || value.document.steps.length >= 100}
-                    onClick={add}
-                  >
-                    Add step
-                  </button>
-                )}
-              </div>
-              {editable && (
-                <CloudWorkflowChat
-                  identity={identity}
-                  request={request}
-                  canApply={!dirty && !saving && !loading}
-                  onApplied={() => {
-                    setRevision((n) => n + 1);
-                    callbacks.current.onSaved();
-                  }}
-                  onDenied={() => {
-                    setValue(null);
-                    callbacks.current.onDenied();
-                  }}
-                />
-              )}
-            </div>
-          )}
-        </>
-      )}
-    </section>
-  );
+  if (!value || !saved) return <section>{error && <p role="alert">{error}</p>}{loading ? <p role="status">Loading workflow…</p> : <button onClick={() => setRevision(n => n + 1)}>Retry</button>}</section>;
+  const display = cloudProcedureWorkflow(workflow, saved);
+  return <>
+    {error && <p role="alert">{error}</p>}
+    {conflict && <p role="alert">This workflow changed since your draft was saved. Your draft is kept. <button onClick={() => void discard().catch(cause => setError(String(cause)))}>Discard draft and reload</button></p>}
+    {!editable && <p>{saved.review.frozen ? "Approved workflow. Ask an admin to reopen it before editing." : "View only. Your admin controls workflow editing."}</p>}
+    <WorkflowDetail key={`${key}-${editorEpoch}`} workflow={display} active={active} navigate={() => back()} platform={readOnlyPlatform} workProfile={null}
+      canSaveAnswers={false} observationsAvailable={false} onAnswersSaved={() => {}}
+      sourceLabel={`Your cloud workflow · Version ${saved.revision}`}
+      saveEdits={editable ? save : undefined}
+      editorOptions={{ stepsOnly: true, singleCheck: true, sessionRecovery: false, saveDisabled: conflict || loading,
+        initialDraft: workflowEdit(cloudProcedureWorkflow(workflow, value)),
+        onDraftChange: edit => { if (base.current) setValue(convert(edit)); },
+      }} />
+    {editable && <CloudWorkflowChat identity={identity} title={workflow.title} appearance={appearance} request={request} canApply={!dirty && !saving && !loading}
+      onApplied={() => { setRevision(n => n + 1); callbacks.current.onSaved(); }}
+      onDenied={() => { setValue(null); callbacks.current.onDenied(); }} />}
+  </>;
 }

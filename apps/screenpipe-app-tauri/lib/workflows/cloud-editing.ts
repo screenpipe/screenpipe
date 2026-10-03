@@ -2,7 +2,7 @@
 // https://screenpipe.com
 import { tauriFetchWithDeadline } from "@/lib/http/tauri-fetch";
 import { screenpipeWebUrl } from "@/lib/web-url";
-import { loadCloudDraft, saveCloudDraft } from "./disk-storage";
+import { loadCloudDraft, saveCloudDraft, loadCloudChatAppearance, saveCloudChatAppearance } from "./disk-storage";
 export function createCloudWorkflowRequest(token?: string): typeof fetch {
   return async (input, init) => {
     if (!token) throw new Error("Sign in to edit your cloud workflows.");
@@ -24,3 +24,5 @@ export const cloudWorkflowDrafts = {
   load: loadCloudDraft,
   save: saveCloudDraft,
 };
+
+export const cloudChatAppearance = { load: loadCloudChatAppearance, save: saveCloudChatAppearance };

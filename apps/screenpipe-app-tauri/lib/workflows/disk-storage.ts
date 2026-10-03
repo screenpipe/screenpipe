@@ -209,3 +209,13 @@ export function saveCloudDraft(key: string, draft: import("@screenpipe/workflows
   const [path, backup] = cloudDraftPaths(key);
   return queueWrite(() => replaceWithBackup(path, backup, { version: 1, draft }, isCloudDraft));
 }
+
+export function loadCloudChatAppearance() {
+  return readValidated("workflows/cloud-chat-display.json", "workflows/cloud-chat-display.backup.json", isAssistantState, "cloud chat display");
+}
+export function saveCloudChatAppearance(state: AssistantState) {
+  // Store display preferences separately from local or cloud conversation content.
+  const preferences: AssistantState = { version: 1, mode: state.mode, sidebarWidth: state.sidebarWidth,
+    activeId: "display", conversations: [{ id: "display", title: "", messages: [], draft: "" }] };
+  return queueWrite(() => replaceWithBackup("workflows/cloud-chat-display.json", "workflows/cloud-chat-display.backup.json", preferences, isAssistantState));
+}

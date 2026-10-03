@@ -1,6 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 import React from "react";
+import { cloudWorkflowMap } from "./cloud-presentation";
 import {
   act,
   fireEvent,
@@ -58,8 +59,7 @@ function view(request = api(), extra = {}) {
   return render(
     <CloudWorkflowEditor
       identity={identity}
-      title="Orders"
-      summary="Check orders"
+      workflow={cloudWorkflowMap({ id: identity.workflow_id, title: "Orders", summary: "Check orders", steps: [], version: 2, updatedAt: "" }, 0)}
       request={request}
       back={() => {}}
       onSaved={() => {}}
@@ -72,11 +72,11 @@ describe("cloud workflow editor", () => {
   it("saves the canonical revision and preserves fields outside the edited text", async () => {
     const request = api();
     view(request);
-    fireEvent.change(await screen.findByLabelText("Step 1 instructions"), {
+    fireEvent.change(await screen.findByLabelText("Step 1 title"), {
       target: { value: "Confirm reference and customer" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    await screen.findByText("Saved · Version 4");
+
+    await screen.findByText("Saved");
     const write = request.mock.calls.find(
       ([, init]) => init?.method === "PUT",
     )!;
@@ -88,7 +88,7 @@ describe("cloud workflow editor", () => {
         steps: [
           {
             id: "step-1",
-            detail: "Confirm reference and customer",
+            action: "Confirm reference and customer",
             caveat: "Retain this caveat",
             escalation: "Ask manager",
           },
@@ -109,16 +109,17 @@ describe("cloud workflow editor", () => {
         : json({ conversation: null }),
     );
     view(request);
-    fireEvent.change(await screen.findByLabelText("Step 1 instructions"), {
+    fireEvent.change(await screen.findByLabelText("Step 1 title"), {
       target: { value: "Keep my draft" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
     await screen.findByText("Connection lost");
-    expect(screen.getByLabelText("Step 1 instructions")).toHaveValue(
+    expect(screen.getByLabelText("Step 1 title")).toHaveValue(
       "Keep my draft",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    await screen.findByText("Saved · Version 4");
+    fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
+
+    await screen.findByText("Saved");
     const bodies = request.mock.calls
       .filter(([, init]) => init?.method === "PUT")
       .map(([, init]) => init?.body);
@@ -129,7 +130,8 @@ describe("cloud workflow editor", () => {
       json({ ...procedure, can_edit: false }),
     );
     view(request);
-    expect(await screen.findByLabelText("Step 1 action")).toBeDisabled();
+    await screen.findByText("View only. Your admin controls workflow editing.");
+    expect(screen.queryByLabelText("Step 1 title")).toBeNull();
     expect(screen.queryByRole("heading", { name: "Workflow chat" })).toBeNull();
     expect(request).toHaveBeenCalledTimes(1);
   });
@@ -141,7 +143,7 @@ describe("cloud workflow editor", () => {
     view(api(), { drafts });
     await screen.findByText("Unreadable draft");
     expect(drafts.save).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText("Step 1 action")).toBeNull();
+    expect(screen.queryByLabelText("Step 1 title")).toBeNull();
   });
   it("keeps a stale disk draft and prevents saving over a newer cloud revision", async () => {
     const drafts = {
@@ -156,11 +158,31 @@ describe("cloud workflow editor", () => {
         }),
       save: vi.fn().mockResolvedValue(undefined),
     };
-    view(api(), { drafts });
-    expect(await screen.findByLabelText("Step 1 instructions")).toHaveValue(
+    const request = api();
+    view(request, { drafts });
+    expect(await screen.findByLabelText("Step 1 description")).toHaveTextContent(
       "Older draft",
     );
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    await new Promise(resolve => setTimeout(resolve, 800));
+    expect(screen.getByText(/This workflow changed since your draft/)).toBeInTheDocument();
+    expect(request.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(false);
+    drafts.load.mockResolvedValue(null);
+    fireEvent.click(screen.getByRole("button", { name: "Discard draft and reload" }));
+    await waitFor(() => expect(screen.getByLabelText("Step 1 description")).toHaveTextContent("Check the reference"));
+    expect(drafts.save).toHaveBeenCalledWith(expect.any(String), null);
+  });
+  it("retains step identities and fields when restoring a reordered disk draft", async () => {
+    const second = { ...procedure.document.steps[0], id: "step-2", action: "Send order", caveat: "Second caveat" };
+    const saved = { ...procedure, document: { steps: [procedure.document.steps[0], second] } };
+    const recovered = { ...saved, document: { steps: [second, procedure.document.steps[0]] } };
+    const request = api().mockImplementation(async (url, init) => String(url).includes("/procedure")
+      ? init?.method === "PUT" ? json({ revision: 4, review: procedure.review }) : json(saved)
+      : json({ conversation: null }));
+    view(request, { drafts: { load: async () => recovered, save: async () => {} } });
+    expect(await screen.findByLabelText("Step 1 title")).toHaveValue("Send order");
+    await screen.findByText("Saved");
+    const write = request.mock.calls.find(([, init]) => init?.method === "PUT")!;
+    expect(JSON.parse(String(write[1]?.body)).document.steps).toEqual(recovered.document.steps);
   });
   it("drops protected content after a save is denied", async () => {
     const request = api();
@@ -173,10 +195,10 @@ describe("cloud workflow editor", () => {
         : json({ conversation: null }),
     );
     view(request, { onDenied: denied });
-    fireEvent.change(await screen.findByLabelText("Step 1 action"), {
+    fireEvent.change(await screen.findByLabelText("Step 1 title"), {
       target: { value: "Changed" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
     await waitFor(() => expect(denied).toHaveBeenCalled());
     expect(screen.queryByDisplayValue("Changed")).toBeNull();
   });
@@ -217,6 +239,7 @@ it("reconnects to a durable turn and waits for explicit review before applying",
     return json({ conversation: { ...chat, pending_turn: { turn_id: turn, messages: [{ role: 'user', text: 'Clarify' }] } } });
   });
   const applied = vi.fn(); render(<CloudWorkflowChat identity={identity} request={request} onApplied={applied} onDenied={() => {}}/>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Ask Screenpipe' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Review changes: Clarify order check' }));
   expect(request.mock.calls.some(([url]) => String(url).includes('/procedure'))).toBe(false);
   fireEvent.click(screen.getByRole('button', { name: 'Apply changes' })); await waitFor(() => expect(applied).toHaveBeenCalledTimes(1));
@@ -235,9 +258,10 @@ it("retries an ambiguous enqueue with the same turn and no duplicate user messag
     return json({ conversation: chat });
   });
   render(<CloudWorkflowChat identity={identity} request={request} onApplied={() => {}} onDenied={() => {}}/>);
-  const input = await screen.findByLabelText('Message about this workflow'); await waitFor(() => expect(input).not.toBeDisabled());
-  fireEvent.change(input, { target: { value: 'Clarify the order' } }); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-  await screen.findByText('Lost enqueue response'); fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Ask Screenpipe' }));
+  const input = await screen.findByRole('textbox', { name: 'Ask Screenpipe' }); await waitFor(() => expect(input).not.toBeDisabled());
+  fireEvent.change(input, { target: { value: 'Clarify the order' } }); fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+  await screen.findByText('Lost enqueue response'); fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
   await screen.findByText('Recovered response'); await waitFor(() => expect(chat.messages.filter((message: any) => message.role === 'assistant')).toHaveLength(1));
   const calls = request.mock.calls.filter(([url, init]) => String(url).includes('/chat/turn') && init?.method === 'POST');
   expect(calls[0][1]?.body).toEqual(calls[1][1]?.body); expect(chat.messages.filter((message: any) => message.role === 'user')).toHaveLength(1);

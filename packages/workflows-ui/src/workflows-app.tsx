@@ -8,7 +8,7 @@ import { serializeWorkflowData } from "./screenshots";
 import { useNavigationWidth } from "./use-navigation-width";
 import { WorkflowQuestions } from "./workflow-questions";
 import { WorkflowStepEvidence } from "./workflow-step-evidence";
-import { WorkflowEditor } from "./workflow-editor";
+import { WorkflowEditor, type WorkflowEditorOptions } from "./workflow-editor";
 import { retainNewerWorkflowEdits, type WorkflowEdit } from "./workflow-edits";
 import { WorkflowModelControl } from "./model-choice";
 import { matchesSidebarShortcut, useSidebarShortcuts } from "./sidebar-shortcuts";
@@ -320,13 +320,14 @@ export function AppShell({
 }) {
   const ui = useGT();
   const [pageAssistant, setPageAssistant] = useState<PageAssistant | null>(null);
-  const assistantPlatform = useMemo(() => assistant && ({
-    ...assistant.platform,
-    ask: (request: Parameters<typeof assistant.platform.ask>[0]) =>
+  const resolvedAssistant = pageAssistant?.platform ? { platform: pageAssistant.platform, context: pageAssistant.context } : assistant;
+  const assistantPlatform = useMemo(() => pageAssistant?.session ? resolvedAssistant?.platform : resolvedAssistant && ({
+    ...resolvedAssistant.platform,
+    ask: (request: Parameters<typeof resolvedAssistant.platform.ask>[0]) =>
       pageAssistant && request.context?.key === pageAssistant.context.key
         ? pageAssistant.ask(request)
-        : assistant.platform.ask(request),
-  }), [assistant?.platform, pageAssistant]);
+        : resolvedAssistant.platform.ask(request),
+  }), [resolvedAssistant?.platform, pageAssistant]);
   const [assistantDocked, setAssistantDocked] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantMode, setAssistantMode] = useState<AssistantState["mode"] | null>(null);
@@ -422,7 +423,7 @@ export function AppShell({
           {toolbarAccessory && <div className={styles.toolbarAccessory}>{toolbarAccessory}</div>}
           {modelControl}
           {recordingStatus ?? <Pill tone={runtime?.recording ? "green" : "plain"}><span className={styles.liveDot} />{statusLabel}</Pill>}
-          {assistant && !assistantDocked && assistantMode === "sidebar" && <button className={styles.panelToggle} data-workflows-assistant-toggle
+          {resolvedAssistant && !assistantDocked && assistantMode === "sidebar" && <button className={styles.panelToggle} data-workflows-assistant-toggle
             onClick={() => window.dispatchEvent(new Event("workflows:toggle-assistant"))}
             aria-label={assistantToggleLabel}
             title={`${assistantToggleLabel} (${shortcuts.right.keys.join(" ")})`}
@@ -437,7 +438,7 @@ export function AppShell({
         </nav>}
         <main className={styles.main}>{children}</main>
       </section>
-      {assistant && <WorkflowAssistant composerAccessory={composerAccessory} active={active} platform={assistantPlatform!} context={pageAssistant?.context ?? assistant.context} promptRequest={pageAssistant?.promptRequest} onBusyChange={pageAssistant?.onBusyChange} onDockChange={setAssistantDocked} onWidthChange={setAssistantWidth} onOpenChange={setAssistantOpen} onModeChange={setAssistantMode} headerToggle />}
+      {resolvedAssistant && <WorkflowAssistant session={pageAssistant?.session} composerAccessory={composerAccessory} active={active} platform={assistantPlatform!} context={pageAssistant?.context ?? resolvedAssistant.context} promptRequest={pageAssistant?.promptRequest} onBusyChange={pageAssistant?.onBusyChange} onDockChange={setAssistantDocked} onWidthChange={setAssistantWidth} onOpenChange={setAssistantOpen} onModeChange={setAssistantMode} headerToggle />}
     </div></PageAssistantContext.Provider>
   );
 }
@@ -667,7 +668,7 @@ function WorkflowCorrection({ workflow, save }: { workflow: WorkflowMap; save: (
 }
 
 // Saved coverage notes can contain legacy capture names. Keep source quotations intact.
-export function WorkflowDetail({ sourceLabel, observationsAvailable = true, canSaveAnswers, composerAccessory, active, onAnswersSaved, workflow, navigate, platform, workProfile, saveCorrection, saveEdits, onShareWorkflow, workflowAgentActions }: { sourceLabel?: string; observationsAvailable?: boolean; canSaveAnswers: boolean; composerAccessory?: WorkflowsAppProps["composerAccessory"]; active: boolean; onAnswersSaved: (workflow: WorkflowMap) => void; workflow: WorkflowMap | null; navigate: (view: AppView) => void; platform: WorkflowsPlatform; workProfile: WorkProfile | null; saveCorrection?: (note: string) => Promise<void>; saveEdits?: (draft: WorkflowEdit) => Promise<WorkflowMap>; onShareWorkflow?: WorkflowsAppProps["onShareWorkflow"]; workflowAgentActions?: WorkflowsAppProps["workflowAgentActions"] }) {
+export function WorkflowDetail({ editorOptions, sourceLabel, observationsAvailable = true, canSaveAnswers, composerAccessory, active, onAnswersSaved, workflow, navigate, platform, workProfile, saveCorrection, saveEdits, onShareWorkflow, workflowAgentActions }: { editorOptions?: WorkflowEditorOptions; sourceLabel?: string; observationsAvailable?: boolean; canSaveAnswers: boolean; composerAccessory?: WorkflowsAppProps["composerAccessory"]; active: boolean; onAnswersSaved: (workflow: WorkflowMap) => void; workflow: WorkflowMap | null; navigate: (view: AppView) => void; platform: WorkflowsPlatform; workProfile: WorkProfile | null; saveCorrection?: (note: string) => Promise<void>; saveEdits?: (draft: WorkflowEdit) => Promise<WorkflowMap>; onShareWorkflow?: WorkflowsAppProps["onShareWorkflow"]; workflowAgentActions?: WorkflowsAppProps["workflowAgentActions"] }) {
   const ui = useGT();
   const [expandedStages, setExpandedStages] = useState<Set<number>>(() => new Set());
   const [guideOpen, setGuideOpen] = useState(false);
@@ -749,7 +750,7 @@ export function WorkflowDetail({ sourceLabel, observationsAvailable = true, canS
   return (
     <>
       <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
-      {saveEdits ? <WorkflowEditor key={workflow.id || workflow.title} workflow={workflow} save={saveEdits} actions={workflowActions} renderSource={stage => <WorkflowStepEvidence workflow={workflow} stage={stage} platform={platform} />} /> : <section className={styles.detailHeader}>
+      {saveEdits ? <WorkflowEditor {...editorOptions} key={workflow.id || workflow.title} workflow={workflow} save={saveEdits} actions={workflowActions} renderSource={observationsAvailable ? stage => <WorkflowStepEvidence workflow={workflow} stage={stage} platform={platform} /> : undefined} /> : <section className={styles.detailHeader}>
         <div><Pill>{sourceLabel ?? <>Evidence on {workflow.repetitions} captured day{workflow.repetitions === 1 ? "" : "s"}</>}</Pill><h1>{workflow.title}</h1><p>{workflow.description}</p>{workflowActions}</div>
         <TimingDisclosure label="Workflow timing" value={workflow.timing} measured={hasMeasuredDuration(workflow) ? { minutes: workflow.totalMinutes, samples: workflow.durationSampleCount ?? 0 } : undefined} />
       </section>}

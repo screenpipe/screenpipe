@@ -121,3 +121,35 @@ export function isCloudProcedure(value: unknown): value is CloudProcedure {
     ),
   );
 }
+
+/** Adapt canonical cloud steps to the existing workflow document editor. */
+export function cloudProcedureWorkflow(base: import("./model").WorkflowMap, value: CloudProcedure): import("./model").WorkflowMap {
+  return {
+    ...base, revision: value.revision,
+    stages: value.document.steps.map(step => ({
+      name: step.action, description: step.detail, apps: step.app ? [step.app] : [],
+      activeMinutes: 0, waitingMinutes: 0, durationSource: "unknown" as const,
+      confidence: 0, observedOccurrences: 0, observedDays: 0, evidence: [],
+      procedure: step.expected_result ? [{ kind: "check" as const, text: step.expected_result, app: step.app, quote: "", timestamp: "" }] : [],
+    })),
+  };
+}
+export function cloudProcedureEdit(current: CloudProcedure, edit: import("./workflow-edits").WorkflowEdit): CloudProcedure {
+  const steps = edit.stages.map(stage => {
+    const original = stage.sourceIndex === null ? undefined : current.document.steps[stage.sourceIndex];
+    return {
+      id: original?.id ?? crypto.randomUUID(), kind: original?.kind ?? "action" as const,
+      app: "", caveat: "", required_access: "", escalation: "", response_template: "",
+      ...original, action: stage.name, detail: stage.description,
+      expected_result: stage.procedure.map(p => p.text).join("\n\n"),
+    };
+  });
+  const ids = new Set(steps.map(s => s.id));
+  return { ...current, revision: edit.expected_revision, document: { ...current.document, steps: steps.map(step => ({
+    ...step, next_step_id: step.next_step_id && ids.has(step.next_step_id) ? step.next_step_id : undefined,
+    ...(step.decision ? { decision: { ...step.decision,
+      yes_step_id: step.decision.yes_step_id && ids.has(step.decision.yes_step_id) ? step.decision.yes_step_id : undefined,
+      no_step_id: step.decision.no_step_id && ids.has(step.decision.no_step_id) ? step.decision.no_step_id : undefined,
+    } } : {}),
+  })) } };
+}

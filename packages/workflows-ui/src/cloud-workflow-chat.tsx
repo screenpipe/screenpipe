@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   cloudWorkflowRequest,
   CloudWorkflowAccessError,
@@ -9,6 +9,10 @@ import {
   type CloudWorkflowIdentity,
 } from "./cloud-workflow";
 import styles from "./cloud-workflow.module.css";
+import { WorkflowAssistant, type WorkflowAssistantSession } from "./workflow-assistant";
+import { emptyAssistantState, type WorkflowsAssistantPlatform } from "./assistant";
+import { PageAssistantContext } from "./page-assistant";
+const noAsk: WorkflowsAssistantPlatform["ask"] = async () => { throw new Error("Cloud chat requires its member transport"); };
 type Message = {
   id: string;
   role: "user" | "assistant";
@@ -85,17 +89,36 @@ export function projectCloudTurn(events: Event[], turnId: string): Message {
 /** The same durable conversation UI on web and desktop; transport is host-owned. */
 export function CloudWorkflowChat({
   identity,
+  title = "This workflow",
+  appearance,
   request,
   canApply = true,
   onApplied,
   onDenied,
 }: {
   identity: CloudWorkflowIdentity;
+  title?: string;
+  appearance?: Pick<WorkflowsAssistantPlatform, "load" | "save">;
   request: typeof fetch;
   canApply?: boolean;
   onApplied: () => void;
   onDenied: () => void;
 }) {
+  const mountAssistant = useContext(PageAssistantContext);
+  const [docked, setDocked] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(420);
+  const platform = useMemo<WorkflowsAssistantPlatform>(() => ({
+    ask: noAsk,
+    load: appearance?.load ?? (async () => {
+      const state = emptyAssistantState();
+      try { const prefs = JSON.parse(localStorage.getItem("screenpipe:cloud-chat-display") || "null");
+        if (["floating", "sidebar"].includes(prefs?.mode)) state.mode = prefs.mode;
+        if (Number.isFinite(prefs?.sidebarWidth)) state.sidebarWidth = prefs.sidebarWidth;
+      } catch { /* Appearance is optional; conversation storage is server-owned. */ }
+      return state;
+    }),
+    save: appearance?.save ?? (async state => { localStorage.setItem("screenpipe:cloud-chat-display", JSON.stringify({ mode: state.mode, sidebarWidth: state.sidebarWidth })); }),
+  }), [appearance]);
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [draft, setDraft] = useState("");
   const draftRef = useRef(draft);
@@ -244,6 +267,7 @@ export function CloudWorkflowChat({
         controller.signal.throwIfAborted();
         update(result.conversation);
         setDraft(preservedDraft || result.conversation?.composer || "");
+        setLoading(false);
         if (result.conversation?.pending_turn) {
           running.current = true;
           setBusy(true);
@@ -318,8 +342,8 @@ export function CloudWorkflowChat({
       }
     }
   }
-  async function send(reconnect = false) {
-    if (running.current || (!reconnect && (!draft.trim() || retry))) return;
+  async function send(reconnect = false, text = draft) {
+    if (running.current || (!reconnect && (!text.trim() || retry))) return;
     running.current = true;
     setBusy(true);
     setError("");
@@ -334,11 +358,11 @@ export function CloudWorkflowChat({
           {
             id: `user-${turnId}`,
             role: "user" as const,
-            parts: [{ type: "text", text: draft.trim() }],
+            parts: [{ type: "text", text: text.trim() }],
           },
         ];
         value = await persist(value, messages, "", signal);
-        setDraft((latest) => (latest === draft ? "" : latest));
+        setDraft((latest) => (latest === text ? "" : latest));
         turn = { turn_id: turnId, messages: cloudTurnHistory(messages) };
         setRetry(turn);
       }
@@ -407,38 +431,17 @@ export function CloudWorkflowChat({
       }
     }
   }
-  return (
-    <aside className={styles.chat} aria-label="Workflow chat">
-      <h2>Workflow chat</h2>
-      <p className={styles.muted}>
-        Continue this conversation on the web or in the app.
-      </p>
-      <div className={styles.messages} aria-live="polite">
-        {[...(conversation?.messages || []), ...(live ? [live] : [])].map(
-          (message) => (
-            <div className={styles.message} key={message.id}>
-              <strong>{message.role === "user" ? "You" : "Screenpipe"}</strong>
-              {message.parts.map((part, i) =>
-                part.type === "text" ? (
-                  <p key={i}>{part.text}</p>
-                ) : part.proposal ? (
-                  <button
-                    key={i}
-                    disabled={busy}
-                    onClick={() => {
-                      setProposal(part.proposal!);
-                      setApplied("");
-                    }}
-                  >
-                    Review changes: {part.proposal.summary}
-                  </button>
-                ) : null,
-              )}
-            </div>
-          ),
-        )}
-      </div>
-      {proposal && (
+  const messages = useMemo(() => [...(conversation?.messages || []), ...(live ? [live] : [])], [conversation?.messages, live]);
+  const visibleMessages = useMemo(() => messages.map(message => ({ id: message.id, role: message.role, at: "", text: message.parts.filter(p => p.type === "text").map(p => p.text || "").join("\n") })), [messages]);
+  const session: WorkflowAssistantSession = {
+    title,
+    messages: visibleMessages,
+    draft, loaded: !loading, busy, error,
+    setDraft, send: text => { void send(false, text); }, stop: () => { void stop(); },
+    retry: retry ? () => { void send(true); } : error ? () => setReload(n => n + 1) : undefined,
+    renderMessage: message => <>{messages.find(m => m.id === message.id)?.parts.filter(p => p.proposal).map((part, i) =>
+      <button key={i} disabled={busy} onClick={() => { setProposal(part.proposal!); setApplied(""); }}>Review changes: {part.proposal!.summary}</button>)}</>,
+    review: <>{proposal && (
         <section
           className={styles.proposal}
           aria-label="Proposed workflow changes"
@@ -487,62 +490,14 @@ export function CloudWorkflowChat({
           <button onClick={() => setProposal(null)}>Dismiss</button>
           {!canApply && <p>Save or discard your manual edits first.</p>}
         </section>
-      )}
-      {applied && <p role="status">{applied}</p>}
-      {error && (
-        <div role="alert">
-          <p>{error}</p>
-          {!busy && !retry && (
-            <button onClick={() => setReload((n) => n + 1)}>
-              Reload conversation
-            </button>
-          )}
-        </div>
-      )}
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          void send();
-        }}
-      >
-        <textarea
-          maxLength={8000}
-          aria-label="Message about this workflow"
-          placeholder="Ask a question or describe a change…"
-          value={draft}
-          disabled={loading}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (
-              e.key === "Enter" &&
-              !e.shiftKey &&
-              !e.nativeEvent.isComposing
-            ) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-        />
-        <div className={styles.actions}>
-          {busy && retry ? (
-            <button type="button" onClick={() => void stop()}>
-              Stop
-            </button>
-          ) : retry ? (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void send(true)}
-            >
-              Reconnect
-            </button>
-          ) : (
-            <button type="submit" disabled={busy || loading || !draft.trim()}>
-              Send
-            </button>
-          )}
-        </div>
-      </form>
-    </aside>
-  );
+      )}{applied && <p role="status">{applied}</p>}</>,
+  };
+  useEffect(() => {
+    mountAssistant?.({ context: { key, title, purpose: "sop" }, ask: noAsk, platform, session });
+  }, [mountAssistant, key, title, platform, conversation, draft, loading, busy, error, live, retry, proposal, applied, canApply]);
+  useEffect(() => () => mountAssistant?.(null), [mountAssistant]);
+  if (mountAssistant) return null;
+  return <div className={docked ? styles.webDock : styles.webFloating} style={docked ? { width: `min(${sidebarWidth}px, 100vw)` } : undefined}>
+    <WorkflowAssistant platform={platform} context={{ key, title, purpose: "sop" }} session={session} onDockChange={setDocked} onWidthChange={setSidebarWidth} />
+  </div>;
 }
