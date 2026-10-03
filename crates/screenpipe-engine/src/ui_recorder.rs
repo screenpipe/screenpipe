@@ -24,6 +24,9 @@ use crate::frame_linker_actor::{next_correlation_id, LinkerMessage, LinkerSender
 const UI_RECORDER_IDLE_RECV_TIMEOUT: Duration = Duration::from_secs(1);
 const UI_RECORDER_MIN_RECV_TIMEOUT: Duration = Duration::from_millis(1);
 
+const SCROLL_CAPTURE_SETTLE_DELAY: Duration = Duration::from_millis(200);
+const SCROLL_CAPTURE_MAX_WAIT: Duration = Duration::from_secs(1);
+
 /// A batched UI event plus an optional correlation id. Events that
 /// won't trigger a capture (Move, Idle, filtered-out targets) leave
 /// `correlation_id` as `None` — those rows stay `frame_id = NULL`.
@@ -172,6 +175,7 @@ pub struct UiRecorderConfig {
     pub capture_window_focus: bool,
     /// Capture scroll events
     pub capture_scroll: bool,
+    pub scroll_interval_ms: Option<Arc<std::sync::atomic::AtomicU64>>,
     /// Capture element context via accessibility
     pub capture_context: bool,
     /// Mirror of `EventDrivenCaptureConfig::capture_on_keystroke`. When on,
@@ -239,6 +243,7 @@ impl Default for UiRecorderConfig {
             // Linux's evdev path still emits one row per wheel detent, so it
             // keeps the old default until it grows a coalescer.
             capture_scroll: !cfg!(target_os = "linux"),
+            scroll_interval_ms: None,
             capture_context: true,
             capture_on_keystroke: true,
             capture_on_clipboard: true,
@@ -280,6 +285,7 @@ impl UiRecorderConfig {
         // a false value in UiRecorderConfig.
         config.capture_window_focus = true;
         config.capture_scroll = self.capture_scroll;
+        config.scroll_interval_ms = self.scroll_interval_ms.clone();
         config.capture_context = self.capture_context;
         config.prioritize_input_latency = self.prioritize_input_latency;
         config.extraction_thread_priority = self.extraction_thread_priority;
@@ -691,6 +697,34 @@ impl UiRecorderHandle {
     }
 }
 
+// The platform receiver is synchronous. Keep its idle wait off Tokio workers:
+// otherwise a locally queued frame-linker/database task can wait indefinitely
+// for the next input event to make this loop yield.
+fn spawn_ui_recorder_worker<F>(stop_flag: Arc<AtomicBool>, work: F) -> tokio::task::JoinHandle<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    struct StopOnDrop(Arc<AtomicBool>);
+    impl Drop for StopOnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let runtime = tokio::runtime::Handle::current();
+    let stop_on_drop = StopOnDrop(stop_flag);
+    let worker = tokio::task::spawn_blocking(move || runtime.block_on(work));
+    tokio::spawn(async move {
+        // Cancelling the async owner must also stop the blocking worker, even
+        // before this owner is first polled. The bounded receiver timeout lets
+        // the worker observe the flag and stop the native recorder while idle.
+        let _stop_on_drop = stop_on_drop;
+        if let Err(error) = worker.await {
+            error!("UI recorder worker failed: {}", error);
+        }
+    })
+}
+
 /// Start UI event recording.
 ///
 /// If `capture_trigger_tx` is provided, relevant UI events (app switch, window focus,
@@ -835,7 +869,7 @@ pub async fn start_ui_recording(
     let url_policy = screenpipe_a11y::url_filter::UrlPolicy::new(&ignored_urls, &included_urls);
 
     // Spawn the event processing task
-    let task_handle = tokio::spawn(async move {
+    let task_handle = spawn_ui_recorder_worker(stop_flag.clone(), async move {
         let session_id = Uuid::new_v4().to_string();
         info!("UI recording session started: {}", session_id);
 
@@ -850,17 +884,10 @@ pub async fn start_ui_recording(
         let max_retained = batch_size.saturating_mul(2).max(200);
         let max_batch_age = Duration::from_secs(30); // Drop events older than 30s during storms
 
-        // Track the tail of an in-progress scroll burst so we can emit a
-        // single `ScrollStop` trigger when it settles. The settle delay MUST
-        // exceed the a11y coalescer's max-burst split interval (2s — see
-        // ScrollBuffer::new in screenpipe_a11y::scroll): a long sustained
-        // scroll emits a Scroll row every ~2s mid-gesture, and each row resets
-        // this timer. At the historical 300ms every mid-gesture split row
-        // looked like a settled burst, so sustained scrolling fired a forced
-        // ScrollStop capture (dedup/throttle-bypassing, see
-        // is_workflow_checkpoint_trigger) every ~2s. At 3s the trigger fires
-        // once, after the gesture actually ends.
-        let mut scroll_burst = ScrollBurstTracker::new(Duration::from_secs(3));
+        // The platform coalescer already waits for gesture quiet and splits
+        // sustained scrolling into bounded rows. Capture those intermediate
+        // positions promptly; another long debounce here loses the whole scroll.
+        let mut scroll_burst = ScrollBurstTracker::new(SCROLL_CAPTURE_SETTLE_DELAY);
 
         loop {
             if stop_flag_clone.load(Ordering::Relaxed) {
@@ -873,6 +900,12 @@ pub async fn start_ui_recording(
             match handle.recv_timeout(recv_timeout) {
                 Some(event) => {
                     let db_event = event.to_db_insert(Some(session_id.clone()));
+                    cancel_scroll_on_focus_change(
+                        &mut scroll_burst,
+                        &db_event,
+                        &mut batch,
+                        linker_tx.as_ref(),
+                    );
                     let is_ignored = ui_event_is_ignored(&db_event, &ignored_patterns, &url_policy);
                     let should_record_event = record_input_events
                         && !is_ignored
@@ -914,7 +947,8 @@ pub async fn start_ui_recording(
                         .map(|tx| tx.receiver_count() > 0)
                         .unwrap_or(false);
                     let want_corr_id = should_record_event
-                        && (trigger_kind.is_some() || is_scroll)
+                        && (trigger_kind.is_some()
+                            || (is_scroll && scroll_burst.accepts_scroll(&db_event)))
                         && has_trigger_receivers
                         && linker_tx.is_some();
                     let mut correlation_id = if want_corr_id {
@@ -925,7 +959,13 @@ pub async fn start_ui_recording(
 
                     if is_scroll {
                         if let Some(corr_id) = correlation_id {
-                            scroll_burst.record(corr_id);
+                            if let Some(full_ids) = scroll_burst.record(corr_id) {
+                                dispatch_scroll_capture(
+                                    full_ids,
+                                    capture_trigger_tx.as_ref(),
+                                    linker_tx.as_ref(),
+                                );
+                            }
                         }
                     } else if let (Some(ref trigger_tx), Some(trigger)) =
                         (&capture_trigger_tx, trigger_kind)
@@ -1032,19 +1072,7 @@ pub async fn start_ui_recording(
             // frame-linker update. If the broadcast has no receivers, notify
             // the linker about every ID immediately rather than waiting on TTL.
             if let Some(corr_ids) = scroll_burst.poll_burst_end() {
-                if let Some(ref trigger_tx) = capture_trigger_tx {
-                    use crate::event_driven_capture::{CaptureTrigger, CaptureTriggerMsg};
-                    let msg =
-                        CaptureTriggerMsg::with_correlations(CaptureTrigger::ScrollStop, corr_ids);
-                    if let Err(send_err) = trigger_tx.send(msg) {
-                        if let Some(ref linker) = linker_tx {
-                            let _ = linker.try_send(LinkerMessage::TriggerDropped {
-                                correlation_ids: send_err.0.correlation_ids,
-                                reason: crate::frame_linker::DropReason::Other,
-                            });
-                        }
-                    }
-                }
+                dispatch_scroll_capture(corr_ids, capture_trigger_tx.as_ref(), linker_tx.as_ref());
             }
         }
 
@@ -1259,10 +1287,9 @@ fn capture_trigger_kind_with_ignored(
         // (`text_timeout_ms`, default 300ms) — one row per typing burst,
         // so one TypingPause trigger per row is the correct semantic.
         screenpipe_db::UiEventType::Text => Some(CaptureTrigger::TypingPause),
-        // Scroll triggers are deferred: a11y emits one row per wheel
-        // tick (many per second). [`ScrollBurstTracker`] holds every
-        // Scroll correlation_id until the burst ends, then emits one
-        // ScrollStop message carrying all IDs for one reduced capture.
+        // Platform-coalesced scroll rows get a short settling delay, with
+        // an independent deadline so continued scrolling cannot postpone
+        // capture indefinitely. One message carries the pending row IDs.
         screenpipe_db::UiEventType::Scroll => None,
         // Key events fire a KeyPress trigger even when privacy settings
         // suppress storing the key row.
@@ -1296,82 +1323,141 @@ fn capture_trigger_kind(
     capture_trigger_kind_with_ignored(db_event, is_ignored, gates)
 }
 
-/// Upper bound on correlation ids retained for a single scroll burst.
-/// Every id costs one pending entry in the frame linker and one
-/// `update_ui_event_frame_id` UPDATE on the SQLite write path, so a
-/// burst that never settles must not accumulate without limit: the
-/// production settle delay is 3s and continuous scrolling keeps
-/// resetting it, so `record` can be called indefinitely. 512 is ~5x the
-/// default recorder `batch_size` (100) and well under the frame
-/// linker's 4096-entry capacity, so every retained id can still be held
-/// pending rather than evicted before it pairs.
+/// Bound pending link metadata during a stalled consumer. This does not
+/// discard recorded input rows or throttle the durable capture path.
 const SCROLL_BURST_MAX_CORR_IDS: usize = 512;
 
-/// Tracks Scroll events in a burst so the recorder can emit one
-/// `ScrollStop` message containing every correlation id after the burst
-/// settles. The capture-loop reducer links the resulting frame to every
-/// Scroll row in the burst.
-///
-/// Retention is capped at [`SCROLL_BURST_MAX_CORR_IDS`]. Past the cap the
-/// OLDEST ids are dropped, not the newest: the frame is captured after the
-/// burst settles, so it shows the content the user landed on. Ids from the
-/// head of a long burst point at content that has already scrolled off
-/// screen, and linking those rows to the settle frame would be actively
-/// wrong. Dropping from the front degrades gracefully toward the previous
-/// tail-only behavior instead of losing the linkage that matters.
-///
-/// The "burst" definition is `Instant::now() - last_scroll > delay`.
-/// The production delay (3s) must stay ABOVE the a11y coalescer's
-/// max-burst split interval (2s): a sustained gesture lands a Scroll
-/// row every ~2s, and each row resets this timer — a shorter delay
-/// treats every mid-gesture split row as a settled burst and fires a
-/// throttle-bypassing ScrollStop capture per split.
+fn dispatch_scroll_capture(
+    corr_ids: Vec<CorrelationId>,
+    trigger_tx: Option<&crate::event_driven_capture::TriggerSender>,
+    linker: Option<&LinkerSender>,
+) {
+    let Some(trigger_tx) = trigger_tx else {
+        return;
+    };
+    use crate::event_driven_capture::{CaptureTrigger, CaptureTriggerMsg};
+    let msg = CaptureTriggerMsg::with_correlations(CaptureTrigger::ScrollStop, corr_ids);
+    if let Err(send_err) = trigger_tx.send(msg) {
+        if let Some(linker) = linker {
+            let _ = linker.try_send(LinkerMessage::TriggerDropped {
+                correlation_ids: send_err.0.correlation_ids,
+                reason: crate::frame_linker::DropReason::Other,
+            });
+        }
+    }
+}
+
+/// Capture shortly after a coalesced scroll row, or at the maximum wait even
+/// if more rows keep arriving. Draining starts a fresh capture window, so
+/// events do not all point to a single frame at the end of a long scroll.
 struct ScrollBurstTracker {
-    last_scroll_at: Option<std::time::Instant>,
+    first_scroll_at: Option<Instant>,
+    last_scroll_at: Option<Instant>,
     scroll_corr_ids: VecDeque<CorrelationId>,
     delay: Duration,
+    latest_focus_timestamp: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl ScrollBurstTracker {
     fn new(delay: Duration) -> Self {
         Self {
+            first_scroll_at: None,
             last_scroll_at: None,
             scroll_corr_ids: VecDeque::new(),
             delay,
+            latest_focus_timestamp: None,
         }
     }
 
-    /// Record a Scroll event with its correlation id. Ids are retained so
-    /// all rows can point at the frame produced when the burst settles,
-    /// up to [`SCROLL_BURST_MAX_CORR_IDS`]; past that the oldest id is
-    /// evicted to make room. `VecDeque` keeps that eviction O(1) on a path
-    /// that runs once per persisted Scroll row.
-    fn record(&mut self, corr_id: CorrelationId) {
-        self.last_scroll_at = Some(std::time::Instant::now());
-        if self.scroll_corr_ids.len() >= SCROLL_BURST_MAX_CORR_IDS {
-            self.scroll_corr_ids.pop_front();
-        }
+    fn record(&mut self, corr_id: CorrelationId) -> Option<Vec<CorrelationId>> {
+        self.record_at(corr_id, Instant::now())
+    }
+
+    fn record_at(&mut self, corr_id: CorrelationId, now: Instant) -> Option<Vec<CorrelationId>> {
+        let full = if self.scroll_corr_ids.len() >= SCROLL_BURST_MAX_CORR_IDS {
+            self.take_pending()
+        } else {
+            None
+        };
+        self.first_scroll_at.get_or_insert(now);
+        self.last_scroll_at = Some(now);
         self.scroll_corr_ids.push_back(corr_id);
+        full
     }
 
-    /// If a burst has settled, return every retained correlation id for one
-    /// batched `ScrollStop` message. Resets internal state on return.
     fn poll_burst_end(&mut self) -> Option<Vec<CorrelationId>> {
-        let last = self.last_scroll_at?;
-        if last.elapsed() >= self.delay {
-            self.last_scroll_at = None;
-            Some(Vec::from(std::mem::take(&mut self.scroll_corr_ids)))
+        self.poll_burst_end_at(Instant::now())
+    }
+
+    fn poll_burst_end_at(&mut self, now: Instant) -> Option<Vec<CorrelationId>> {
+        if self.remaining_at(now)? == Duration::ZERO {
+            self.take_pending()
         } else {
             None
         }
     }
 
-    fn time_until_burst_end_at(&self, now: Instant) -> Option<Duration> {
+    fn take_pending(&mut self) -> Option<Vec<CorrelationId>> {
+        self.last_scroll_at.take()?;
+        self.first_scroll_at = None;
+        Some(Vec::from(std::mem::take(&mut self.scroll_corr_ids)))
+    }
+
+    fn remaining_at(&self, now: Instant) -> Option<Duration> {
         let last = self.last_scroll_at?;
-        Some(min_positive_timeout(
+        let first = self.first_scroll_at?;
+        Some(
             self.delay
-                .saturating_sub(now.saturating_duration_since(last)),
-        ))
+                .saturating_sub(now.saturating_duration_since(last))
+                .min(SCROLL_CAPTURE_MAX_WAIT.saturating_sub(now.saturating_duration_since(first))),
+        )
+    }
+
+    fn time_until_burst_end_at(&self, now: Instant) -> Option<Duration> {
+        self.remaining_at(now).map(min_positive_timeout)
+    }
+
+    fn accepts_scroll(&self, event: &InsertUiEvent) -> bool {
+        self.latest_focus_timestamp
+            .is_none_or(|focus| event.timestamp >= focus)
+    }
+
+    fn observe_focus_change(&mut self, event: &InsertUiEvent) -> Option<Vec<CorrelationId>> {
+        if !matches!(
+            event.event_type,
+            screenpipe_db::UiEventType::AppSwitch | screenpipe_db::UiEventType::WindowFocus
+        ) || !self.accepts_scroll(event)
+        {
+            return None;
+        }
+        self.latest_focus_timestamp = Some(event.timestamp);
+        self.take_pending()
+    }
+}
+
+/// A pending screenshot cannot recover the page that just lost focus. Keep
+/// its input rows, but do not associate them with the newly focused page.
+/// Apply this before privacy filtering: switching into an excluded window
+/// must also cancel the old pending capture. Late coalescer rows are rejected
+/// by their gesture-start timestamp when correlation IDs are allocated.
+fn cancel_scroll_on_focus_change(
+    scroll: &mut ScrollBurstTracker,
+    event: &InsertUiEvent,
+    batch: &mut EventBatch,
+    linker: Option<&LinkerSender>,
+) {
+    if let Some(ids) = scroll.observe_focus_change(event) {
+        for correlation_id in &mut batch.correlation_ids {
+            if correlation_id.is_some_and(|id| ids.contains(&id)) {
+                *correlation_id = None;
+            }
+        }
+        if let Some(linker) = linker {
+            let _ = linker.try_send(LinkerMessage::TriggerDropped {
+                correlation_ids: ids,
+                reason: crate::frame_linker::DropReason::Other,
+            });
+        }
     }
 }
 
@@ -1422,7 +1508,7 @@ mod event_batch_tests {
     use chrono::{Duration as ChronoDuration, Utc};
     use screenpipe_db::UiEventType;
 
-    fn evt() -> InsertUiEvent {
+    pub(super) fn evt() -> InsertUiEvent {
         InsertUiEvent {
             timestamp: Utc::now(),
             session_id: None,
@@ -1640,9 +1726,11 @@ mod event_batch_tests {
         let batch = EventBatch::with_capacity(0);
         let now = Instant::now();
         let scroll = ScrollBurstTracker {
+            first_scroll_at: Some(now - Duration::from_millis(250)),
             last_scroll_at: Some(now - Duration::from_millis(250)),
             scroll_corr_ids: VecDeque::from(vec![1]),
             delay: Duration::from_millis(300),
+            latest_focus_timestamp: None,
         };
 
         let timeout =
@@ -2096,6 +2184,206 @@ mod capture_trigger_kind_tests {
 mod scroll_burst_tests {
     use super::*;
 
+    fn event(kind: screenpipe_db::UiEventType, offset_ms: i64) -> InsertUiEvent {
+        let mut event = super::event_batch_tests::evt();
+        event.event_type = kind;
+        event.timestamp =
+            chrono::DateTime::from_timestamp_millis(1_700_000_000_000 + offset_ms).unwrap();
+        event.app_name = Some("Browser".into());
+        event.window_title = Some("Page A".into());
+        event
+    }
+
+    #[test]
+    fn coalesced_scroll_rows_capture_intermediate_positions_at_one_hz() {
+        let mut tracker = ScrollBurstTracker::new(SCROLL_CAPTURE_SETTLE_DELAY);
+        let start = Instant::now();
+        for second in 1..=30_u64 {
+            let emitted = start + Duration::from_secs(second);
+            tracker.record_at(second, emitted);
+            assert!(tracker
+                .poll_burst_end_at(emitted + Duration::from_millis(199))
+                .is_none());
+            assert_eq!(tracker.poll_burst_end_at(emitted + Duration::from_millis(200)), Some(vec![second]),
+                "each coalesced row needs its own intermediate frame, even while scrolling continues");
+        }
+        assert!(tracker
+            .poll_burst_end_at(start + Duration::from_secs(60))
+            .is_none());
+    }
+
+    #[test]
+    fn dense_scroll_stream_cannot_reset_the_capture_deadline_forever() {
+        let mut tracker = ScrollBurstTracker::new(SCROLL_CAPTURE_SETTLE_DELAY);
+        let start = Instant::now();
+        let mut captured_ids = Vec::new();
+        let mut capture_times = Vec::new();
+        // Linux can emit individual ticks. Exercise an uninterrupted stream
+        // with a clock-driven consumer; no sleeps, screen access or fixtures.
+        for ms in (0..30_000_u64).step_by(10) {
+            if ms % 50 == 0 {
+                tracker.record_at(ms / 50, start + Duration::from_millis(ms));
+            }
+            if let Some(ids) = tracker.poll_burst_end_at(start + Duration::from_millis(ms)) {
+                captured_ids.extend(ids);
+                capture_times.push(ms);
+            }
+        }
+        captured_ids.extend(
+            tracker
+                .poll_burst_end_at(start + Duration::from_millis(30_200))
+                .unwrap(),
+        );
+        assert_eq!(
+            captured_ids,
+            (0..600).collect::<Vec<_>>(),
+            "every event stays ordered and linked exactly once"
+        );
+        assert!(
+            (28..=30).contains(&capture_times.len()),
+            "bounded capture rate: {:?}",
+            capture_times
+        );
+        assert!(capture_times[0] <= 1_000);
+        assert!(capture_times.windows(2).all(|w| w[1] - w[0] <= 1_050));
+        assert!(tracker
+            .poll_burst_end_at(start + Duration::from_secs(120))
+            .is_none());
+    }
+
+    #[test]
+    fn receive_deadline_wakes_for_sampling_even_with_recent_scroll_events() {
+        let mut tracker = ScrollBurstTracker::new(SCROLL_CAPTURE_SETTLE_DELAY);
+        let start = Instant::now();
+        tracker.record_at(1, start);
+        tracker.record_at(2, start + Duration::from_millis(950));
+        let batch = EventBatch::with_capacity(0);
+        assert_eq!(
+            next_ui_event_recv_timeout_at(
+                &batch,
+                start,
+                Duration::from_secs(1),
+                &tracker,
+                start + Duration::from_millis(950)
+            ),
+            Duration::from_millis(50)
+        );
+        assert_eq!(
+            tracker.poll_burst_end_at(start + Duration::from_secs(1)),
+            Some(vec![1, 2])
+        );
+    }
+
+    #[test]
+    fn focus_change_preserves_rows_but_cancels_previous_page_linkage() {
+        for kind in [
+            screenpipe_db::UiEventType::AppSwitch,
+            screenpipe_db::UiEventType::WindowFocus,
+        ] {
+            let mut tracker = ScrollBurstTracker::new(SCROLL_CAPTURE_SETTLE_DELAY);
+            let mut batch = EventBatch::with_capacity(3);
+            batch.push(event(screenpipe_db::UiEventType::Scroll, 0), Some(1));
+            batch.push(event(screenpipe_db::UiEventType::Scroll, 10), Some(2));
+            batch.push(event(screenpipe_db::UiEventType::Key, 20), Some(99));
+            tracker.record(1);
+            tracker.record(2);
+            let mut focus = event(kind, 100);
+            focus.window_title = Some("Page B".into());
+            let (tx, mut rx) = crate::frame_linker_actor::linker_channel();
+            cancel_scroll_on_focus_change(&mut tracker, &focus, &mut batch, Some(&tx));
+            assert_eq!(batch.len(), 3, "input recordings must not be deleted");
+            assert_eq!(batch.correlation_ids, vec![None, None, Some(99)]);
+            assert!(
+                matches!(rx.try_recv().unwrap(), LinkerMessage::TriggerDropped { correlation_ids, .. } if correlation_ids == vec![1, 2])
+            );
+            assert!(tracker
+                .poll_burst_end_at(Instant::now() + Duration::from_secs(5))
+                .is_none());
+            // A platform coalescer may flush Page A after the focus event.
+            assert!(!tracker.accepts_scroll(&event(screenpipe_db::UiEventType::Scroll, 50)));
+            assert!(tracker.accepts_scroll(&event(screenpipe_db::UiEventType::Scroll, 110)));
+        }
+    }
+
+    #[test]
+    fn excluded_focus_also_cancels_pending_scroll_capture() {
+        let mut tracker = ScrollBurstTracker::new(SCROLL_CAPTURE_SETTLE_DELAY);
+        tracker.record(7);
+        let mut focus = event(screenpipe_db::UiEventType::WindowFocus, 100);
+        focus.app_name = Some("Private".into());
+        let patterns = WindowPattern::parse_list(&["Private".into()]);
+        assert!(capture_trigger_kind(&focus, &patterns, TriggerGates).is_none());
+        cancel_scroll_on_focus_change(&mut tracker, &focus, &mut EventBatch::default(), None);
+        assert!(tracker
+            .poll_burst_end_at(Instant::now() + Duration::from_secs(1))
+            .is_none());
+    }
+
+    #[test]
+    fn delayed_focus_event_does_not_cancel_a_newer_page_scroll() {
+        let mut tracker = ScrollBurstTracker::new(SCROLL_CAPTURE_SETTLE_DELAY);
+        tracker.observe_focus_change(&event(screenpipe_db::UiEventType::WindowFocus, 200));
+        let start = Instant::now();
+        tracker.record_at(9, start);
+        assert!(tracker
+            .observe_focus_change(&event(screenpipe_db::UiEventType::AppSwitch, 100))
+            .is_none());
+        assert_eq!(
+            tracker.poll_burst_end_at(start + Duration::from_millis(200)),
+            Some(vec![9])
+        );
+        assert!(!tracker.accepts_scroll(&event(screenpipe_db::UiEventType::Scroll, 150)));
+    }
+
+    #[test]
+    fn other_inputs_do_not_cancel_pending_scroll_capture() {
+        let mut tracker = ScrollBurstTracker::new(SCROLL_CAPTURE_SETTLE_DELAY);
+        let start = Instant::now();
+        tracker.record_at(4, start);
+        for kind in [
+            screenpipe_db::UiEventType::Key,
+            screenpipe_db::UiEventType::Text,
+            screenpipe_db::UiEventType::Click,
+        ] {
+            assert!(tracker.observe_focus_change(&event(kind, 100)).is_none());
+        }
+        assert_eq!(
+            tracker.poll_burst_end_at(start + Duration::from_millis(200)),
+            Some(vec![4])
+        );
+    }
+
+    #[tokio::test]
+    async fn focus_cancelled_scroll_rows_still_persist_through_the_writer() {
+        let db = Arc::new(
+            DatabaseManager::new("sqlite::memory:", Default::default())
+                .await
+                .unwrap(),
+        );
+        let mut tracker = ScrollBurstTracker::new(SCROLL_CAPTURE_SETTLE_DELAY);
+        let mut batch = EventBatch::with_capacity(2);
+        batch.push(event(screenpipe_db::UiEventType::Scroll, 0), Some(10));
+        batch.push(event(screenpipe_db::UiEventType::Scroll, 10), Some(11));
+        tracker.record(10);
+        tracker.record(11);
+        cancel_scroll_on_focus_change(
+            &mut tracker,
+            &event(screenpipe_db::UiEventType::WindowFocus, 100),
+            &mut batch,
+            None,
+        );
+        let mut failures = 0;
+        flush_batch(&db, &mut batch, &mut failures, None).await;
+        assert_eq!(failures, 0);
+        assert!(batch.is_empty());
+        let (total, linked): (i64, i64) =
+            sqlx::query_as("SELECT COUNT(*), COUNT(frame_id) FROM ui_events")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!((total, linked), (2, 0));
+    }
+
     #[test]
     fn fires_after_delay() {
         let mut t = ScrollBurstTracker::new(Duration::from_millis(50));
@@ -2123,16 +2411,16 @@ mod scroll_burst_tests {
     }
 
     #[test]
-    fn caps_retained_correlation_ids_and_keeps_the_newest() {
+    fn caps_retained_correlation_ids_without_orphaning_oldest() {
         let mut t = ScrollBurstTracker::new(Duration::from_millis(50));
         let overshoot = 37;
         let total = SCROLL_BURST_MAX_CORR_IDS + overshoot;
 
-        // A burst that never settles: `record` runs `total` times without a
-        // single `poll_burst_end` in between, exactly what continuous
-        // scrolling does against the 3s production delay.
+        let mut dispatched = Vec::new();
         for corr_id in 1..=total as CorrelationId {
-            t.record(corr_id);
+            if let Some(full) = t.record(corr_id) {
+                dispatched.extend(full);
+            }
             assert!(
                 t.scroll_corr_ids.len() <= SCROLL_BURST_MAX_CORR_IDS,
                 "retention must stay bounded mid-burst, saw {} after {} records",
@@ -2142,34 +2430,20 @@ mod scroll_burst_tests {
         }
 
         t.last_scroll_at = Some(Instant::now() - Duration::from_millis(60));
-        let drained = t.poll_burst_end().expect("settled burst must drain");
-
+        dispatched.extend(t.poll_burst_end().expect("settled burst must drain"));
+        let expected: Vec<CorrelationId> = (1..=total as CorrelationId).collect();
         assert_eq!(
-            drained.len(),
-            SCROLL_BURST_MAX_CORR_IDS,
-            "a burst past the cap drains exactly the cap"
-        );
-        // The oldest ids are the ones dropped, so the surviving window is the
-        // newest `SCROLL_BURST_MAX_CORR_IDS` ids in original order.
-        let expected: Vec<CorrelationId> =
-            ((overshoot + 1) as CorrelationId..=total as CorrelationId).collect();
-        assert_eq!(
-            drained, expected,
-            "the settle frame must link the rows the user actually landed on"
-        );
-        assert_eq!(
-            drained.last().copied(),
-            Some(total as CorrelationId),
-            "the tail row must never be evicted"
+            dispatched, expected,
+            "capacity pressure must dispatch, never silently orphan linker ids"
         );
 
-        // The capped batch still travels as one ScrollStop message, so the
-        // reducer sees a single trigger rather than a split burst.
+        // Every dispatched chunk remains representable as one ScrollStop
+        // message; capacity pressure may intentionally split a dense burst.
         let msg = crate::event_driven_capture::CaptureTriggerMsg::with_correlations(
             crate::event_driven_capture::CaptureTrigger::ScrollStop,
-            drained.clone(),
+            dispatched.clone(),
         );
-        assert_eq!(msg.correlation_ids, drained);
+        assert_eq!(msg.correlation_ids, dispatched);
 
         // State is reset, so the next burst starts from an empty deque.
         assert!(t.scroll_corr_ids.is_empty());
@@ -2329,6 +2603,71 @@ mod tests {
         // because a flag got out of sync).
         set_ui_recorder_state(true, false, true, true, true);
         assert_eq!(ui_recorder_status_snapshot().mode, UiRecorderMode::Off);
+    }
+
+    #[tokio::test]
+    async fn recorder_idle_wait_does_not_starve_frame_linker() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let (link_tx, mut link_rx) = tokio::sync::mpsc::channel(1);
+        let linker = tokio::spawn(async move {
+            let reply: std::sync::mpsc::Sender<()> = link_rx.recv().await.unwrap();
+            reply.send(()).unwrap();
+        });
+        let worker = spawn_ui_recorder_worker(stop.clone(), async move {
+            let (reply, received) = std::sync::mpsc::channel();
+            link_tx.send(reply).await.unwrap();
+            // This is the platform receiver's idle wait. The linker must run
+            // before another input wakes it, even on a one-thread runtime.
+            received.recv_timeout(Duration::from_secs(2)).unwrap();
+        });
+        worker.await.unwrap();
+        linker.await.unwrap();
+        assert!(stop.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn cancelling_recorder_owner_stops_idle_worker() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = stop.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (ended_tx, ended_rx) = tokio::sync::oneshot::channel();
+        let worker = spawn_ui_recorder_worker(stop.clone(), async move {
+            started_tx.send(()).unwrap();
+            while !worker_stop.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let _ = ended_tx.send(());
+        });
+        started_rx.await.unwrap();
+        worker.abort();
+        assert!(worker.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(Duration::from_secs(2), ended_rx)
+            .await
+            .expect("cancelled owner must stop the blocking receiver")
+            .unwrap();
+        assert!(stop.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn cancelling_recorder_before_first_poll_stops_worker() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = stop.clone();
+        let (ended_tx, ended_rx) = tokio::sync::oneshot::channel();
+        let worker = spawn_ui_recorder_worker(stop.clone(), async move {
+            while !worker_stop.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let _ = ended_tx.send(());
+        });
+        // No await before abort: the async owner cannot have been polled by
+        // this current-thread runtime, but its cancellation guard must exist.
+        worker.abort();
+        assert!(worker.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(Duration::from_secs(2), ended_rx)
+            .await
+            .expect("unpolled owner must still stop the native receiver")
+            .unwrap();
+        assert!(stop.load(Ordering::SeqCst));
     }
 
     #[tokio::test]

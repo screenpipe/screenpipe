@@ -9,6 +9,7 @@
 use crate::activity_feed::{ActivityFeed, ActivityKind};
 use crate::config::{ExtractionThreadPriority, UiCaptureConfig};
 use crate::events::{ElementContext, EventData, UiEvent, WindowTreeSnapshot};
+use crate::scroll::{ScrollBuffer, ScrollFlush};
 use anyhow::Result;
 use chrono::Utc;
 use crossbeam_channel::{bounded, unbounded, Receiver, RecvTimeoutError, Sender};
@@ -20,7 +21,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, warn};
 
-use super::windows_uia::{self, ClickElementRequest};
+use super::windows_uia::{self, ClickElementRequest, ClickTargetIdentity};
 
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
@@ -42,8 +43,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, EVENT_SYSTEM_FOREGROUND, HC_ACTION,
     HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL,
     WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-    WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WM_TIMER, WM_XBUTTONDOWN,
+    WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_XBUTTONDOWN,
 };
 
 /// Lower the current thread's OS priority so user input threads (mouse/keyboard hook,
@@ -268,7 +269,6 @@ impl UiRecorder {
         let app_w = current_app.clone();
         let window_w = current_window.clone();
         let click_queue_w = click_queue.clone();
-        let focused_element_w = focused_element.clone();
         threads.push(
             thread::Builder::new()
                 .name("a11y-input-worker".into())
@@ -282,7 +282,6 @@ impl UiRecorder {
                         app_w,
                         window_w,
                         click_queue_w,
-                        focused_element_w,
                     );
                 })
                 .expect("failed to spawn a11y-input-worker thread"),
@@ -443,7 +442,8 @@ enum RawInput {
     Wheel {
         x: i32,
         y: i32,
-        delta: i32,
+        delta_x: i16,
+        delta_y: i16,
         timestamp: chrono::DateTime<Utc>,
         relative_ms: u64,
     },
@@ -453,25 +453,6 @@ enum RawInput {
         timestamp: chrono::DateTime<Utc>,
         relative_ms: u64,
     },
-}
-
-/// Consecutive `WM_MOUSEWHEEL` ticks within this window are coalesced into a
-/// single `Scroll` event (summed `delta_y`). Wheel ticks fire far more often
-/// than clicks, so one event per tick floods `ui_events` with little added
-/// signal (measured: 1121 scroll vs. 15 click events in a 2-min session).
-/// Coalescing preserves total scroll distance while cutting row count ~86x
-/// (measured: 1121 → 13 events in a 2-min session).
-const SCROLL_AGGREGATION_WINDOW_MS: u128 = 500;
-
-/// In-flight scroll aggregation state (None when not currently scrolling).
-struct ScrollAggregator {
-    last_scroll: Instant,
-    accumulated_delta: i32,
-    coords: (i32, i32),
-    app_name: Option<String>,
-    window_title: Option<String>,
-    start_timestamp: chrono::DateTime<Utc>,
-    start_relative_ms: u64,
 }
 
 /// State available to the LL hook callbacks. Deliberately tiny: these
@@ -509,18 +490,16 @@ fn enqueue_raw(state: &CallbackState, raw: RawInput) {
 /// Emit the accumulated scroll as a single `Scroll` event. `delta_y` is summed
 /// as i32 while aggregating and clamped to i16 (the wire type) on emit; real
 /// tick sums stay well within range.
-fn emit_aggregated_scroll(tx: &Sender<UiEvent>, agg: ScrollAggregator) {
+fn emit_aggregated_scroll(tx: &Sender<UiEvent>, agg: ScrollFlush) {
     let event = UiEvent {
         id: None,
-        timestamp: agg.start_timestamp,
-        relative_ms: agg.start_relative_ms,
+        timestamp: agg.timestamp,
+        relative_ms: agg.relative_ms,
         data: EventData::Scroll {
-            x: agg.coords.0,
-            y: agg.coords.1,
-            delta_x: 0,
-            delta_y: agg
-                .accumulated_delta
-                .clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+            x: agg.x,
+            y: agg.y,
+            delta_x: agg.delta_x,
+            delta_y: agg.delta_y,
         },
         app_name: agg.app_name,
         window_title: agg.window_title,
@@ -899,7 +878,7 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
                         }
                     }
 
-                    WM_MOUSEWHEEL => {
+                    WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
                         // Record activity for adaptive FPS even when scroll capture is off
                         if let Some(ref feed) = s.activity_feed {
                             feed.record(ActivityKind::Scroll);
@@ -907,13 +886,14 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: WPARAM, lparam: LPA
 
                         if s.enqueue_scroll {
                             // High word of mouseData contains the wheel delta
-                            let delta = (mouse_struct.mouseData >> 16) as i16 as i32;
+                            let delta = (mouse_struct.mouseData >> 16) as i16;
                             enqueue_raw(
                                 s,
                                 RawInput::Wheel {
                                     x,
                                     y,
-                                    delta,
+                                    delta_x: if msg == WM_MOUSEHWHEEL { delta } else { 0 },
+                                    delta_y: if msg == WM_MOUSEWHEEL { delta } else { 0 },
                                     timestamp: Utc::now(),
                                     relative_ms: s.start.elapsed().as_millis() as u64,
                                 },
@@ -994,10 +974,9 @@ struct InputWorker {
     current_app: Arc<Mutex<Option<String>>>,
     current_window: Arc<Mutex<Option<String>>>,
     click_queue: Arc<Mutex<Vec<ClickElementRequest>>>,
-    focused_element: Arc<Mutex<Option<ElementContext>>>,
     text_buf: String,
     last_text_time: Option<Instant>,
-    scroll_aggregator: Option<ScrollAggregator>,
+    scroll_aggregator: ScrollBuffer,
     pending_clipboard: Vec<PendingClipboard>,
     last_drops_seen: u64,
     last_drop_log: Option<Instant>,
@@ -1133,7 +1112,17 @@ impl InputWorker {
                 timestamp,
                 relative_ms,
             } => {
-                let (app_name, window_title) = self.resolve_app_window();
+                // The observer state is deliberately eventual. A click must use
+                // its own foreground sample or a rapid excluded-window switch can
+                // be recorded under the previous allowed app/window.
+                let Some(identity) = get_foreground_window_identity_fresh() else {
+                    return;
+                };
+                let Some(app_name) = app_name_for_pid(identity.pid) else {
+                    return;
+                };
+                let app_name = Some(app_name);
+                let window_title = Some(identity.title.clone());
                 if !self.config.should_capture_target(
                     app_name.as_deref().unwrap_or_default(),
                     window_title.as_deref(),
@@ -1141,41 +1130,44 @@ impl InputWorker {
                     return;
                 }
 
-                // A click interrupts any in-flight scroll run — flush it first
-                // so emitted event order matches user action order.
-                if let Some(agg) = self.scroll_aggregator.take() {
-                    emit_aggregated_scroll(&self.tx, agg);
-                }
+                // Do not force-flush a pending scroll on button-down. A click
+                // may navigate while retaining the browser HWND; waiting for
+                // the normal quiet deadline gives the title observer time to
+                // emit the page boundary first. The late, old-timestamp row is
+                // then persisted without being linked to new-page pixels.
 
                 if !self.config.capture_clicks {
                     return;
                 }
 
-                // Attach focused element context (approximate, fast).
-                let element = if self.config.capture_context {
-                    self.focused_element.lock().clone()
-                } else {
-                    None
-                };
-
                 let mut event = UiEvent::click(timestamp, relative_ms, x, y, button, 1, mods);
                 event.app_name = app_name;
                 event.window_title = window_title;
-                event.element = element;
+                // Focus context is asynchronous and has no target identity.
+                // Precise ElementFromPoint enrichment below is identity-guarded.
+                event.element = None;
                 let _ = self.tx.try_send(event);
 
                 // Queue ElementFromPoint request for precise element context
                 if self.config.capture_context {
-                    self.click_queue
-                        .lock()
-                        .push(ClickElementRequest { x, y, timestamp });
+                    self.click_queue.lock().push(ClickElementRequest {
+                        x,
+                        y,
+                        timestamp,
+                        target: ClickTargetIdentity {
+                            hwnd: identity.hwnd,
+                            pid: identity.pid,
+                            title: identity.title,
+                        },
+                    });
                 }
             }
 
             RawInput::Wheel {
                 x,
                 y,
-                delta,
+                delta_x,
+                delta_y,
                 timestamp,
                 relative_ms,
             } => {
@@ -1190,34 +1182,18 @@ impl InputWorker {
                     return;
                 }
 
-                let now = Instant::now();
-                // Coalesce consecutive ticks within the aggregation window
-                // into one event; otherwise flush the previous run and start
-                // a fresh one seeded with this tick.
-                let within_window = matches!(
-                    &self.scroll_aggregator,
-                    Some(agg) if now.duration_since(agg.last_scroll).as_millis() < SCROLL_AGGREGATION_WINDOW_MS
-                );
-
-                if within_window {
-                    if let Some(agg) = self.scroll_aggregator.as_mut() {
-                        agg.accumulated_delta = agg.accumulated_delta.saturating_add(delta);
-                        agg.last_scroll = now;
-                        agg.coords = (x, y);
-                    }
-                } else {
-                    if let Some(agg) = self.scroll_aggregator.take() {
-                        emit_aggregated_scroll(&self.tx, agg);
-                    }
-                    self.scroll_aggregator = Some(ScrollAggregator {
-                        last_scroll: now,
-                        accumulated_delta: delta,
-                        coords: (x, y),
-                        app_name,
-                        window_title,
-                        start_timestamp: timestamp,
-                        start_relative_ms: relative_ms,
-                    });
+                if let Some(agg) = self.scroll_aggregator.push(
+                    0,
+                    x,
+                    y,
+                    delta_x,
+                    delta_y,
+                    timestamp,
+                    relative_ms,
+                    app_name,
+                    window_title,
+                ) {
+                    emit_aggregated_scroll(&self.tx, agg);
                 }
             }
 
@@ -1261,9 +1237,7 @@ impl InputWorker {
                 Duration::from_millis(self.config.text_timeout_ms).saturating_sub(last.elapsed());
             timeout = timeout.min(deadline);
         }
-        if let Some(ref agg) = self.scroll_aggregator {
-            let deadline = Duration::from_millis(SCROLL_AGGREGATION_WINDOW_MS as u64)
-                .saturating_sub(agg.last_scroll.elapsed());
+        if let Some(deadline) = self.scroll_aggregator.time_until_flush() {
             timeout = timeout.min(deadline);
         }
         if !self.pending_clipboard.is_empty() {
@@ -1280,11 +1254,8 @@ impl InputWorker {
             }
         }
 
-        let scroll_due = self.scroll_aggregator.as_ref().is_some_and(|agg| {
-            agg.last_scroll.elapsed().as_millis() >= SCROLL_AGGREGATION_WINDOW_MS
-        });
-        if scroll_due {
-            if let Some(agg) = self.scroll_aggregator.take() {
+        if self.scroll_aggregator.should_flush() {
+            if let Some(agg) = self.scroll_aggregator.flush() {
                 emit_aggregated_scroll(&self.tx, agg);
             }
         }
@@ -1376,7 +1347,7 @@ impl InputWorker {
     /// before stop isn't lost.
     fn final_flush(&mut self) {
         flush_text_buffer(self);
-        if let Some(agg) = self.scroll_aggregator.take() {
+        if let Some(agg) = self.scroll_aggregator.flush() {
             emit_aggregated_scroll(&self.tx, agg);
         }
         self.process_pending_clipboard(true);
@@ -1407,10 +1378,10 @@ fn run_input_worker(
     current_app: Arc<Mutex<Option<String>>>,
     current_window: Arc<Mutex<Option<String>>>,
     click_queue: Arc<Mutex<Vec<ClickElementRequest>>>,
-    focused_element: Arc<Mutex<Option<ElementContext>>>,
 ) {
     debug!("a11y input worker started");
 
+    let scroll_aggregator = ScrollBuffer::with_live_interval(config.scroll_interval_ms.clone());
     let mut worker = InputWorker {
         tx,
         start,
@@ -1418,10 +1389,9 @@ fn run_input_worker(
         current_app,
         current_window,
         click_queue,
-        focused_element,
         text_buf: String::new(),
         last_text_time: None,
-        scroll_aggregator: None,
+        scroll_aggregator,
         pending_clipboard: Vec::new(),
         last_drops_seen: 0,
         last_drop_log: None,
@@ -1795,6 +1765,15 @@ struct AppObserverState {
     last_title: Option<String>,
 }
 
+fn foreground_change_flags(
+    hwnd: isize,
+    title: Option<&str>,
+    last_hwnd: isize,
+    last_title: Option<&str>,
+) -> (bool, bool) {
+    (hwnd != last_hwnd, hwnd != last_hwnd || title != last_title)
+}
+
 thread_local! {
     static APP_OBSERVER_STATE: std::cell::RefCell<Option<Box<AppObserverState>>> = const { std::cell::RefCell::new(None) };
 }
@@ -1807,10 +1786,6 @@ fn process_foreground_change(state: &mut AppObserverState) {
     unsafe {
         let hwnd = GetForegroundWindow();
         let hwnd_val = hwnd.0 as isize;
-
-        if hwnd_val == state.last_hwnd {
-            return;
-        }
 
         // Skip transient shell-internal windows (MSCTFIME UI, Shell_TrayWnd, etc.)
         // that briefly steal foreground focus due to the Windows 11 24H2+ TSF regression.
@@ -1829,6 +1804,16 @@ fn process_foreground_change(state: &mut AppObserverState) {
             None
         };
 
+        let (app_changed, window_changed) = foreground_change_flags(
+            hwnd_val,
+            title.as_deref(),
+            state.last_hwnd,
+            state.last_title.as_deref(),
+        );
+        if !window_changed {
+            return;
+        }
+
         // Get process ID
         let mut pid: u32 = 0;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
@@ -1836,24 +1821,22 @@ fn process_foreground_change(state: &mut AppObserverState) {
         // Resolve the logical app name (handles WebView2 and shell-hosted Edge).
         let app_name = get_effective_app_name(hwnd, pid);
 
-        // Update shared state before exclusions so input hooks do not keep
-        // attributing keystrokes/clicks to the previously focused app.
-        *state.current_app.lock() = Some(app_name.clone());
-        *state.current_window.lock() = title.clone();
+        // Hold both context locks through boundary emission. The input worker
+        // cannot observe the new attribution until the corresponding focus
+        // event is already in the channel, preventing an old pending scroll
+        // from attaching to new-page pixels.
+        let mut current_app = state.current_app.lock();
+        let mut current_window = state.current_window.lock();
 
-        // Check exclusions
-        if !state
+        let excluded = !state
             .config
-            .should_capture_target(&app_name, title.as_deref())
-        {
+            .should_capture_target(&app_name, title.as_deref());
+        if excluded {
             debug!(app = %app_name, pid, title = ?title, "a11y: foreground change excluded");
             *state.focused_element.lock() = None;
-            state.last_hwnd = hwnd_val;
-            state.last_title = title;
-            return;
+        } else {
+            debug!(app = %app_name, pid, title = ?title, "a11y: foreground change captured");
         }
-
-        debug!(app = %app_name, pid, title = ?title, "a11y: foreground change captured");
 
         // Get focused element context from UIA thread
         let element = if state.config.capture_context {
@@ -1863,35 +1846,44 @@ fn process_foreground_change(state: &mut AppObserverState) {
         };
 
         // Send app switch event
-        if state.config.capture_app_switch {
+        if state.config.capture_app_switch && app_changed {
             let mut event = UiEvent::app_switch(
                 Utc::now(),
                 state.start.elapsed().as_millis() as u64,
                 app_name.clone(),
                 pid as i32,
             );
-            event.element = element.clone();
+            event.element = (!excluded).then(|| element.clone()).flatten();
             let _ = state.tx.try_send(event);
         }
 
         // Send window focus event
-        if state.config.capture_window_focus && title != state.last_title {
-            let event = UiEvent {
+        if state.config.capture_window_focus && window_changed {
+            let mut event = UiEvent {
                 id: None,
                 timestamp: Utc::now(),
                 relative_ms: state.start.elapsed().as_millis() as u64,
                 data: EventData::WindowFocus {
-                    app: app_name,
+                    app: app_name.clone(),
                     title: title.clone(),
                 },
-                app_name: None,
-                window_title: None,
+                app_name: Some(app_name.clone()),
+                window_title: title.clone(),
                 browser_url: None,
                 element,
                 frame_id: None,
             };
+            // Excluded boundaries are sent so downstream pending captures are
+            // cancelled before private input arrives. Recorder privacy policy
+            // filters the row and suppresses its screenshot.
+            if excluded {
+                event.element = None;
+            }
             let _ = state.tx.try_send(event);
         }
+
+        *current_app = Some(app_name);
+        *current_window = title.clone();
 
         state.last_hwnd = hwnd_val;
         state.last_title = title;
@@ -1972,8 +1964,12 @@ fn run_app_observer(
             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
         );
 
-        // Safety-net timer: re-check foreground every 2s in case a hook event was missed
-        SetTimer(HWND::default(), APP_OBSERVER_TIMER_ID, 2000, None);
+        // Re-check title as well as HWND: browser tab/navigation changes often
+        // retain the same HWND and do not emit EVENT_SYSTEM_FOREGROUND.
+        let observer_timer = SetTimer(HWND::default(), APP_OBSERVER_TIMER_ID, 250, None);
+        if observer_timer == 0 {
+            warn!("a11y: failed to install foreground/title observer timer");
+        }
 
         // Process initial foreground window
         APP_OBSERVER_STATE.with(|state| {
@@ -1991,7 +1987,7 @@ fn run_app_observer(
             }
 
             // Handle timer messages as a safety-net foreground check
-            if msg.message == WM_TIMER && msg.wParam.0 == APP_OBSERVER_TIMER_ID {
+            if msg.message == WM_TIMER && msg.wParam.0 == observer_timer {
                 APP_OBSERVER_STATE.with(|state| {
                     if let Ok(mut guard) = state.try_borrow_mut() {
                         if let Some(ref mut s) = *guard {
@@ -2008,6 +2004,9 @@ fn run_app_observer(
         // Cleanup
         if !hook.is_invalid() {
             let _ = UnhookWinEvent(hook);
+        }
+        if observer_timer != 0 {
+            let _ = KillTimer(HWND::default(), observer_timer);
         }
     }
 
@@ -2061,6 +2060,37 @@ pub fn get_focused_pid_fresh() -> Option<i32> {
         let mut pid = 0;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
         (pid != 0).then_some(pid as i32)
+    }
+}
+
+/// A cheap point-in-time identity for the foreground window. Capture samples
+/// this around screenshot/text extraction so same-process and same-HWND title
+/// transitions cannot pair one context's pixels with another's metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForegroundWindowIdentity {
+    pub hwnd: isize,
+    pub pid: i32,
+    pub title: String,
+}
+
+pub fn get_foreground_window_identity_fresh() -> Option<ForegroundWindowIdentity> {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_invalid() || is_transient_shell_window(hwnd) {
+            return None;
+        }
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 {
+            return None;
+        }
+        let mut title = [0u16; 1024];
+        let copied = GetWindowTextW(hwnd, &mut title).max(0) as usize;
+        Some(ForegroundWindowIdentity {
+            hwnd: hwnd.0 as isize,
+            pid: pid as i32,
+            title: String::from_utf16_lossy(&title[..copied]),
+        })
     }
 }
 
@@ -2332,6 +2362,22 @@ mod tests {
     }
 
     #[test]
+    fn foreground_change_detects_same_hwnd_navigation() {
+        assert_eq!(
+            foreground_change_flags(42, Some("Page B"), 42, Some("Page A")),
+            (false, true)
+        );
+        assert_eq!(
+            foreground_change_flags(42, Some("Page A"), 42, Some("Page A")),
+            (false, false)
+        );
+        assert_eq!(
+            foreground_change_flags(43, Some("Page A"), 42, Some("Page A")),
+            (true, true)
+        );
+    }
+
+    #[test]
     fn test_normalize_app_name_webview2() {
         // WebView2 sub-process folds into msedge.exe regardless of window class.
         assert_eq!(normalize_app_name("msedgewebview2.exe", ""), "msedge.exe");
@@ -2432,14 +2478,13 @@ mod tests {
             current_app: Arc::new(parking_lot::Mutex::new(Some("test".into()))),
             current_window: Arc::new(parking_lot::Mutex::new(Some("test window".into()))),
             click_queue: Arc::new(parking_lot::Mutex::new(Vec::new())),
-            focused_element: Arc::new(parking_lot::Mutex::new(None)),
             text_buf: text.to_string(),
             last_text_time: if text.is_empty() {
                 None
             } else {
                 Some(std::time::Instant::now())
             },
-            scroll_aggregator: None,
+            scroll_aggregator: ScrollBuffer::new(),
             pending_clipboard: Vec::new(),
             last_drops_seen: 0,
             last_drop_log: None,
@@ -2612,37 +2657,42 @@ mod tests {
             }
             _ => panic!("expected Click event, got {:?}", event.data),
         }
-        assert_eq!(event.app_name.as_deref(), Some("test"));
+        assert!(event.app_name.is_some());
         // capture_context is on by default: element request queued for UIA.
-        assert_eq!(worker.click_queue.lock().len(), 1);
+        let queue = worker.click_queue.lock();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(
+            event.window_title.as_deref(),
+            Some(queue[0].target.title.as_str())
+        );
     }
 
     #[test]
-    fn test_wheel_aggregates_and_click_flushes() {
+    fn test_wheel_aggregates_across_click_until_explicit_tail_flush() {
         let (tx, rx) = crossbeam_channel::bounded(64);
         let mut worker = make_test_worker(tx, "");
 
         worker.process_raw(RawInput::Wheel {
             x: 1,
             y: 2,
-            delta: 120,
+            delta_x: 0,
+            delta_y: 120,
             timestamp: Utc::now(),
             relative_ms: 0,
         });
         worker.process_raw(RawInput::Wheel {
             x: 3,
             y: 4,
-            delta: 120,
+            delta_x: 0,
+            delta_y: 120,
             timestamp: Utc::now(),
             relative_ms: 1,
         });
         assert!(rx.try_recv().is_err()); // still aggregating
-        assert_eq!(
-            worker.scroll_aggregator.as_ref().unwrap().accumulated_delta,
-            240
-        );
+        assert!(!worker.scroll_aggregator.should_flush());
 
-        // A click flushes the in-flight scroll run before the click event.
+        // The click is emitted immediately, but does not force the old page's
+        // scroll row to race a possible same-HWND navigation.
         worker.process_raw(RawInput::ButtonDown {
             x: 5,
             y: 6,
@@ -2652,12 +2702,15 @@ mod tests {
             relative_ms: 2,
         });
         let first = rx.try_recv().unwrap();
-        match first.data {
+        assert!(matches!(first.data, EventData::Click { .. }));
+        assert!(rx.try_recv().is_err());
+
+        worker.final_flush();
+        let tail = rx.try_recv().unwrap();
+        match tail.data {
             EventData::Scroll { delta_y, .. } => assert_eq!(delta_y, 240),
-            _ => panic!("expected Scroll first, got {:?}", first.data),
+            _ => panic!("expected Scroll tail, got {:?}", tail.data),
         }
-        let second = rx.try_recv().unwrap();
-        assert!(matches!(second.data, EventData::Click { .. }));
     }
 
     #[test]
@@ -2689,15 +2742,9 @@ mod tests {
     fn test_final_flush_emits_buffered_state() {
         let (tx, rx) = crossbeam_channel::bounded(64);
         let mut worker = make_test_worker(tx, "tail");
-        worker.scroll_aggregator = Some(ScrollAggregator {
-            last_scroll: Instant::now(),
-            accumulated_delta: 120,
-            coords: (10, 20),
-            app_name: None,
-            window_title: None,
-            start_timestamp: Utc::now(),
-            start_relative_ms: 0,
-        });
+        worker
+            .scroll_aggregator
+            .push(0, 10, 20, 0, 120, Utc::now(), 0, None, None);
 
         worker.final_flush();
 

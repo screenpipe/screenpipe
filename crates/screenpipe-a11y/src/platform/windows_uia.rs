@@ -44,8 +44,9 @@ use windows::Win32::UI::Accessibility::{
     UIA_ControlTypePropertyId, UIA_HasKeyboardFocusPropertyId, UIA_HelpTextPropertyId,
     UIA_IsEnabledPropertyId, UIA_IsKeyboardFocusablePropertyId, UIA_IsPasswordPropertyId,
     UIA_LayoutInvalidatedEventId, UIA_LocalizedControlTypePropertyId, UIA_NamePropertyId,
-    UIA_ScrollHorizontalScrollPercentPropertyId, UIA_ScrollVerticalScrollPercentPropertyId,
-    UIA_Text_TextChangedEventId, UIA_ValueValuePropertyId, UIA_EVENT_ID, UIA_PROPERTY_ID,
+    UIA_ProcessIdPropertyId, UIA_ScrollHorizontalScrollPercentPropertyId,
+    UIA_ScrollVerticalScrollPercentPropertyId, UIA_Text_TextChangedEventId,
+    UIA_ValueValuePropertyId, UIA_EVENT_ID, UIA_PROPERTY_ID,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
@@ -100,6 +101,90 @@ pub struct ClickElementRequest {
     pub x: i32,
     pub y: i32,
     pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub target: ClickTargetIdentity,
+}
+
+/// Event-time foreground identity carried across the asynchronous UIA lookup.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClickTargetIdentity {
+    pub hwnd: isize,
+    pub pid: i32,
+    pub title: String,
+}
+
+fn fresh_click_target_identity() -> Option<ClickTargetIdentity> {
+    let identity = super::windows::get_foreground_window_identity_fresh()?;
+    Some(ClickTargetIdentity {
+        hwnd: identity.hwnd,
+        pid: identity.pid,
+        title: identity.title,
+    })
+}
+
+fn click_context_agrees(
+    requested: &ClickTargetIdentity,
+    before: Option<&ClickTargetIdentity>,
+    element_pid: Option<i32>,
+    after: Option<&ClickTargetIdentity>,
+) -> bool {
+    before == Some(requested) && after == Some(requested) && element_pid == Some(requested.pid)
+}
+
+#[cfg(test)]
+mod click_privacy_tests {
+    use super::{click_context_agrees, ClickTargetIdentity};
+
+    fn identity(hwnd: isize, pid: i32, title: &str) -> ClickTargetIdentity {
+        ClickTargetIdentity {
+            hwnd,
+            pid,
+            title: title.to_owned(),
+        }
+    }
+
+    #[test]
+    fn enrichment_requires_exact_event_time_context() {
+        let page_a = identity(10, 20, "Allowed Page A");
+        let page_b = identity(10, 20, "Ignored Page B");
+        let other_app = identity(11, 30, "Private editor");
+
+        assert!(click_context_agrees(
+            &page_a,
+            Some(&page_a),
+            Some(20),
+            Some(&page_a)
+        ));
+        assert!(!click_context_agrees(
+            &page_a,
+            None,
+            Some(20),
+            Some(&page_a)
+        ));
+        assert!(!click_context_agrees(
+            &page_a,
+            Some(&page_a),
+            Some(30),
+            Some(&page_a)
+        ));
+        assert!(!click_context_agrees(
+            &page_a,
+            Some(&other_app),
+            Some(30),
+            Some(&other_app)
+        ));
+        assert!(!click_context_agrees(
+            &page_a,
+            Some(&page_b),
+            Some(20),
+            Some(&page_b)
+        ));
+        assert!(!click_context_agrees(
+            &page_a,
+            Some(&page_a),
+            Some(20),
+            Some(&page_b)
+        ));
+    }
 }
 
 /// Default wall-clock budget when the caller doesn't provide one (tests,
@@ -512,6 +597,7 @@ impl UiaContext {
             cache_request.AddProperty(UIA_AcceleratorKeyPropertyId)?;
             cache_request.AddProperty(UIA_AccessKeyPropertyId)?;
             cache_request.AddProperty(UIA_LocalizedControlTypePropertyId)?;
+            cache_request.AddProperty(UIA_ProcessIdPropertyId)?;
 
             // Use Control View (skips raw layout elements, ~50% fewer nodes)
             let control_view_condition = automation.ControlViewCondition()?;
@@ -1297,14 +1383,18 @@ impl UiaContext {
     }
 
     /// Get element at screen position using ElementFromPoint
-    fn element_from_point(&self, x: i32, y: i32) -> Option<ElementContext> {
+    fn element_from_point(&self, x: i32, y: i32) -> Option<(ElementContext, i32)> {
         unsafe {
             let point = POINT { x, y };
             let element = self
                 .automation
                 .ElementFromPointBuildCache(point, &self.enrichment_cache_request)
                 .ok()?;
-            Some(self.element_to_context(&element))
+            let pid = element
+                .GetCachedPropertyValue(UIA_ProcessIdPropertyId)
+                .ok()
+                .and_then(|value| i32::try_from(&value).ok())?;
+            Some((self.element_to_context(&element), pid))
         }
     }
 
@@ -1642,8 +1732,20 @@ pub fn run_uia_thread(
             std::mem::take(&mut *queue)
         };
         for req in clicks {
-            if let Some(ctx) = uia.element_from_point(req.x, req.y) {
-                let _ = element_tx.try_send((req, ctx));
+            let before = fresh_click_target_identity();
+            if before.as_ref() != Some(&req.target) {
+                continue;
+            }
+            if let Some((ctx, element_pid)) = uia.element_from_point(req.x, req.y) {
+                let after = fresh_click_target_identity();
+                if click_context_agrees(
+                    &req.target,
+                    before.as_ref(),
+                    Some(element_pid),
+                    after.as_ref(),
+                ) {
+                    let _ = element_tx.try_send((req, ctx));
+                }
             }
         }
 
@@ -2311,6 +2413,11 @@ mod tests {
             x: 12,
             y: 34,
             timestamp: Utc::now(),
+            target: ClickTargetIdentity {
+                hwnd: 1,
+                pid: 2,
+                title: "test".to_owned(),
+            },
         }]));
         let original_capture_time = Instant::now() - Duration::from_secs(5);
         let mut last_capture_time = original_capture_time;
@@ -2631,7 +2738,7 @@ mod tests {
         let ctx = uia.element_from_point(point.x, point.y);
         assert!(ctx.is_some(), "No element at cursor position");
 
-        let ctx = ctx.unwrap();
+        let (ctx, _pid) = ctx.unwrap();
         println!("Element at ({}, {}):", point.x, point.y);
         println!("  Role: {}", ctx.role);
         println!("  Name: {:?}", ctx.name);
@@ -2957,6 +3064,11 @@ mod tests {
             x: 500,
             y: 500,
             timestamp: Utc::now(),
+            target: fresh_click_target_identity().unwrap_or(ClickTargetIdentity {
+                hwnd: 1,
+                pid: 2,
+                title: "test".to_owned(),
+            }),
         });
         std::thread::sleep(std::time::Duration::from_millis(200));
 

@@ -179,6 +179,7 @@ pub struct RecordingConfig {
     /// Persisted power mode preference ("auto", "performance", "battery_saver").
     /// Restored from settings on startup so the user's choice survives app restarts.
     pub power_mode: Option<String>,
+    pub recording_detail: Arc<crate::recording_detail::RecordingDetailController>,
 
     /// Keep the computer awake while screenpipe is running.
     pub keep_computer_awake: bool,
@@ -398,6 +399,9 @@ impl RecordingConfig {
                 .collect(),
             batch_max_duration_secs: settings.batch_max_duration_secs.filter(|&v| v > 0),
             power_mode: settings.power_mode.clone(),
+            recording_detail: Arc::new(crate::recording_detail::RecordingDetailController::new(
+                settings.recording_detail,
+            )),
             keep_computer_awake: settings.keep_computer_awake,
             db_config: settings
                 .device_tier
@@ -488,6 +492,7 @@ impl RecordingConfig {
             capture_on_keystroke: true,
             capture_on_clipboard,
             capture_scroll: self.capture_scroll.unwrap_or(defaults.capture_scroll),
+            scroll_interval_ms: Some(self.recording_detail.scroll_interval()),
             ..defaults
         }
     }
@@ -533,6 +538,7 @@ impl RecordingConfig {
         vision_metrics: Arc<PipelineMetrics>,
     ) -> VisionManagerConfig {
         VisionManagerConfig {
+            recording_detail: self.recording_detail.clone(),
             output_path,
             ignored_windows: self.ignored_windows.clone(),
             included_windows: self.included_windows.clone(),
@@ -593,6 +599,43 @@ mod tests {
 
     fn build(s: &screenpipe_config::RecordingSettings) -> RecordingConfig {
         RecordingConfig::from_settings(s, std::path::PathBuf::from("/tmp/sp_test"), None)
+    }
+
+    #[test]
+    fn recording_detail_changes_only_scroll_cadence_and_preserves_other_settings() {
+        for mode in [
+            screenpipe_config::RecordingDetail::Auto,
+            screenpipe_config::RecordingDetail::LowImpact,
+            screenpipe_config::RecordingDetail::Balanced,
+            screenpipe_config::RecordingDetail::MoreDetail,
+        ] {
+            let settings = screenpipe_config::RecordingSettings {
+                recording_detail: mode,
+                video_quality: "high".into(),
+                power_mode: Some("battery_saver".into()),
+                idle_capture_interval_ms: Some(45_000),
+                disable_audio: true,
+                disable_keyboard_capture: true,
+                ignored_windows: vec!["Private".into()],
+                ..Default::default()
+            };
+            let c = build(&settings);
+            let ui = c.to_ui_recorder_config().to_ui_config();
+            let vision = c.to_vision_manager_config(
+                "/tmp/sp_test".into(),
+                Arc::new(PipelineMetrics::default()),
+            );
+            assert!(Arc::ptr_eq(
+                ui.scroll_interval_ms.as_ref().unwrap(),
+                &vision.recording_detail.scroll_interval()
+            ));
+            assert_eq!(vision.ignored_windows, vec!["Private"]);
+            assert_eq!(vision.video_quality, "high");
+            assert_eq!(vision.idle_capture_interval_ms, Some(45_000));
+            assert_eq!(c.power_mode.as_deref(), Some("battery_saver"));
+            assert!(!c.to_ui_recorder_config().record_keyboard_events);
+            assert!(c.disable_audio);
+        }
     }
 
     #[test]

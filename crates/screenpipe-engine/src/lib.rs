@@ -84,6 +84,7 @@ pub mod process_priority;
 mod qualified_value;
 pub mod recording_config;
 pub mod recording_coverage;
+pub mod recording_detail;
 mod resource_monitor;
 pub mod retention;
 pub mod routes;

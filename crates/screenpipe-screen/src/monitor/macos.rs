@@ -305,7 +305,11 @@ impl SafeMonitor {
         }
     }
 
-    async fn capture_sck_bounded(&self, excluded_window_ids: Vec<u32>) -> Result<DynamicImage> {
+    async fn capture_sck_bounded(
+        &self,
+        excluded_window_ids: Vec<u32>,
+        fresh: bool,
+    ) -> Result<DynamicImage> {
         let monitor_id = self.monitor_id;
         let cached_sck = self.cached_sck.clone();
         run_bounded_macos_capture(
@@ -329,12 +333,16 @@ impl SafeMonitor {
                     }
 
                     let cap = sck_capture_max_width();
-                    let result = match (cap, excluded_window_ids.is_empty()) {
-                        (0, true) => monitor.capture_image(),
-                        (_, true) => monitor.capture_image_scaled(cap),
-                        (0, false) => monitor.capture_image_excluding(&excluded_window_ids),
-                        (_, false) => {
-                            monitor.capture_image_scaled_excluding(cap, &excluded_window_ids)
+                    let result = if fresh {
+                        monitor.capture_image_fresh_scaled_excluding(cap, &excluded_window_ids)
+                    } else {
+                        match (cap, excluded_window_ids.is_empty()) {
+                            (0, true) => monitor.capture_image(),
+                            (_, true) => monitor.capture_image_scaled(cap),
+                            (0, false) => monitor.capture_image_excluding(&excluded_window_ids),
+                            (_, false) => {
+                                monitor.capture_image_scaled_excluding(cap, &excluded_window_ids)
+                            }
                         }
                     };
                     result
@@ -379,6 +387,10 @@ impl SafeMonitor {
     /// used only for an unfiltered frame because it cannot enforce SCK window
     /// exclusions.
     pub async fn capture_image(&self) -> Result<DynamicImage> {
+        self.capture_image_inner(false).await
+    }
+
+    async fn capture_image_inner(&self, fresh: bool) -> Result<DynamicImage> {
         if !self.use_sck || self.prefer_xcap_fallback.load(Ordering::Acquire) {
             match self.capture_xcap_bounded().await {
                 Ok(image) => return Ok(image),
@@ -394,7 +406,7 @@ impl SafeMonitor {
             }
         }
 
-        match self.capture_sck_bounded(Vec::new()).await {
+        match self.capture_sck_bounded(Vec::new(), fresh).await {
             Ok(image) => Ok(image),
             Err(sck_error) => {
                 self.release_capture_stream();
@@ -420,11 +432,32 @@ impl SafeMonitor {
         &self,
         excluded_window_ids: &[u32],
     ) -> Result<DynamicImage> {
+        self.capture_image_excluding_inner(excluded_window_ids, false)
+            .await
+    }
+
+    /// Capture after a focus/input transition, retaining the same privacy and
+    /// bounded recovery policy as ordinary screenshots.
+    pub async fn capture_image_fresh_excluding(
+        &self,
+        excluded_window_ids: &[u32],
+    ) -> Result<DynamicImage> {
+        self.capture_image_excluding_inner(excluded_window_ids, true)
+            .await
+    }
+
+    async fn capture_image_excluding_inner(
+        &self,
+        excluded_window_ids: &[u32],
+        fresh: bool,
+    ) -> Result<DynamicImage> {
         if excluded_window_ids.is_empty() {
-            return self.capture_image().await;
+            return self.capture_image_inner(fresh).await;
         }
         debug_assert!(!core_graphics_fallback_allowed(excluded_window_ids));
-        let result = self.capture_sck_bounded(excluded_window_ids.to_vec()).await;
+        let result = self
+            .capture_sck_bounded(excluded_window_ids.to_vec(), fresh)
+            .await;
         if result.is_err() {
             self.release_capture_stream();
         }

@@ -217,6 +217,7 @@
       "crate": "screenpipe-engine",
       "files": [
         "src/recording_config.rs",
+        "src/recording_detail.rs",
         "src/schedule_monitor.rs",
         "src/sleep_monitor.rs",
         "src/health_identity.rs",

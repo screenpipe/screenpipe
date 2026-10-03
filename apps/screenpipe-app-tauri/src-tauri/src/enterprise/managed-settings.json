@@ -1,4 +1,5 @@
 [
+  {"policyKey": "recordingDetail", "deviceKey": "recordingDetail", "apply": "engine", "kind": "enum", "values": ["auto", "low_impact", "balanced", "more_detail"], "defaultValue": "auto"},
   {"policyKey": "audioTranscriptionEngine", "deviceKey": "audioTranscriptionEngine", "apply": "engine", "kind": "enum", "values": ["screenpipe-cloud", "deepgram", "whisper-large-v3-turbo", "whisper-large-v3-turbo-quantized", "whisper-tiny", "whisper-tiny-quantized", "qwen3-asr", "parakeet", "openai-compatible", "disabled"]},
   {"policyKey": "audioCaptureMode", "deviceKey": "audioCaptureMode", "apply": "engine", "kind": "enum", "values": ["always", "meetings-only", "disabled"], "defaultValue": "always"},
   {"policyKey": "transcriptionMode", "deviceKey": "transcriptionMode", "apply": "engine", "kind": "enum", "values": ["realtime", "smart", "batch"], "defaultValue": "batch"},

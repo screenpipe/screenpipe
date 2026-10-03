@@ -1019,7 +1019,9 @@ fn run_event_tap(
         tap_ptr: AtomicPtr::new(std::ptr::null_mut()),
         last_mouse: Mutex::new((0.0, 0.0)),
         text_buf: Mutex::new(TextBuffer::new(config.text_timeout_ms)),
-        scroll_buf: Mutex::new(ScrollBuffer::new()),
+        scroll_buf: Mutex::new(ScrollBuffer::with_live_interval(
+            config.scroll_interval_ms.clone(),
+        )),
         current_app,
         current_window,
         current_pid,

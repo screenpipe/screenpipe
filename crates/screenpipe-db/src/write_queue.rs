@@ -1929,11 +1929,20 @@ async fn execute_single_write(
             // FrameLinker emits UPDATEs after pairing a trigger event with
             // the frame it caused us to capture. `frame_id IS NULL` guards
             // against accidental clobber if a duplicate update is enqueued.
-            sqlx::query("UPDATE ui_events SET frame_id = ?1 WHERE id = ?2 AND frame_id IS NULL")
-                .bind(frame_id)
-                .bind(row_id)
-                .execute(&mut **conn)
-                .await?;
+            // A delayed scroll capture may belong to a newer window/page.
+            // Validate persisted identity in the existing writer transaction.
+            sqlx::query(
+                "UPDATE ui_events SET frame_id = ?1 WHERE id = ?2 AND frame_id IS NULL
+                 AND EXISTS (SELECT 1 FROM frames f WHERE f.id = ?1
+                   AND NULLIF(ui_events.app_name, '') = NULLIF(f.app_name, '')
+                   AND NULLIF(ui_events.window_title, '') = NULLIF(f.window_name, '')
+                   AND (NULLIF(ui_events.browser_url, '') IS NULL
+                        OR ui_events.browser_url = NULLIF(f.browser_url, '')))",
+            )
+            .bind(frame_id)
+            .bind(row_id)
+            .execute(&mut **conn)
+            .await?;
             Ok(WriteResult::Unit)
         }
 

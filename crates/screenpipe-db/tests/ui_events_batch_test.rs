@@ -126,7 +126,7 @@ mod tests {
         // FK isn't enforced in the schema but we want a realistic id.
         // Cheap shortcut: insert directly via the public API.
         let frame_id_a = db
-            .insert_accessibility_text("Codex", "Reliability", "hello", None)
+            .insert_accessibility_text("Codex", "Reliability", "hello", Some("https://screenpi.pe"))
             .await
             .unwrap();
 
@@ -162,7 +162,7 @@ mod tests {
         // frame_id IS NULL` guard). This protects against rare cases
         // like a retried capture broadcasting the same corr id twice.
         let frame_id_b = db
-            .insert_accessibility_text("Codex", "Reliability", "world", None)
+            .insert_accessibility_text("Codex", "Reliability", "world", Some("https://screenpi.pe"))
             .await
             .unwrap();
         db.update_ui_event_frame_id(row_id, frame_id_b)
@@ -179,5 +179,85 @@ mod tests {
             Some(frame_id_a),
             "duplicate UPDATE must not overwrite an existing frame_id"
         );
+    }
+    #[tokio::test]
+    async fn frame_link_rejects_changed_or_unknown_context() {
+        let db = setup_test_db().await;
+        let same = db
+            .insert_accessibility_text("Codex", "Reliability", "A", Some("https://screenpi.pe"))
+            .await
+            .unwrap();
+        let other_window = db
+            .insert_accessibility_text("Codex", "Window B", "B", Some("https://screenpi.pe"))
+            .await
+            .unwrap();
+        let other_app = db
+            .insert_accessibility_text("Other app", "Reliability", "B", Some("https://screenpi.pe"))
+            .await
+            .unwrap();
+        let other_page = db
+            .insert_accessibility_text(
+                "Codex",
+                "Reliability",
+                "B",
+                Some("https://screenpi.pe/other"),
+            )
+            .await
+            .unwrap();
+        let missing_url = db
+            .insert_accessibility_text("Codex", "Reliability", "B", None)
+            .await
+            .unwrap();
+        let row = db
+            .insert_ui_events_batch(&[text_event(0, "scroll A")])
+            .await
+            .unwrap()[0];
+        for frame in [other_window, other_app, other_page, missing_url, i64::MAX] {
+            db.update_ui_event_frame_id(row, frame).await.unwrap();
+            let linked: Option<i64> =
+                sqlx::query_scalar("SELECT frame_id FROM ui_events WHERE id=?")
+                    .bind(row)
+                    .fetch_one(&db.pool)
+                    .await
+                    .unwrap();
+            assert_eq!(linked, None);
+        }
+        db.update_ui_event_frame_id(row, same).await.unwrap();
+        db.update_ui_event_frame_id(row, other_window)
+            .await
+            .unwrap();
+        let linked: Option<i64> = sqlx::query_scalar("SELECT frame_id FROM ui_events WHERE id=?")
+            .bind(row)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(linked, Some(same));
+        for missing_app in [true, false] {
+            let mut event = text_event(0, "unknown context");
+            if missing_app {
+                event.app_name = None;
+            } else {
+                event.window_title = Some(String::new());
+            }
+            let id = db.insert_ui_events_batch(&[event]).await.unwrap()[0];
+            db.update_ui_event_frame_id(id, same).await.unwrap();
+            let linked: Option<i64> =
+                sqlx::query_scalar("SELECT frame_id FROM ui_events WHERE id=?")
+                    .bind(id)
+                    .fetch_one(&db.pool)
+                    .await
+                    .unwrap();
+            assert_eq!(linked, None);
+        }
+        let mut native_event = text_event(0, "native window");
+        native_event.browser_url = None;
+        let id = db.insert_ui_events_batch(&[native_event]).await.unwrap()[0];
+        db.update_ui_event_frame_id(id, missing_url).await.unwrap();
+        let linked: Option<i64> = sqlx::query_scalar("SELECT frame_id FROM ui_events WHERE id=?")
+            .bind(id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(linked, Some(missing_url));
     }
 }

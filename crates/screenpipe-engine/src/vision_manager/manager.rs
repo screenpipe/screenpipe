@@ -35,6 +35,7 @@ pub const ZERO_DISPLAYS_ENUMERATED: &str = "no displays enumerated";
 /// Configuration for VisionManager
 #[derive(Clone)]
 pub struct VisionManagerConfig {
+    pub recording_detail: Arc<crate::recording_detail::RecordingDetailController>,
     pub output_path: String,
     pub ignored_windows: Vec<String>,
     pub included_windows: Vec<String>,
@@ -710,6 +711,7 @@ impl VisionManager {
         let pause_on_drm_content = self.config.pause_on_drm_content;
         let languages = self.config.languages.clone();
         let power_profile_rx = self.power_profile_rx.clone();
+        let recording_detail = self.config.recording_detail.clone();
         let focus_controller = self.focus_controller.clone();
         let linker_tx = Some(self.linker_tx.clone());
         let high_fps_controller = self.high_fps_controller.clone();
@@ -772,6 +774,7 @@ impl VisionManager {
                 linker_tx,
                 high_fps_controller,
                 semantic_tx,
+                recording_detail,
             )
             .await
             {
@@ -1021,6 +1024,9 @@ mod tests {
                 .expect("in-memory db"),
         );
         let config = VisionManagerConfig {
+            recording_detail: Arc::new(crate::recording_detail::RecordingDetailController::new(
+                Default::default(),
+            )),
             output_path: std::env::temp_dir().to_string_lossy().into_owned(),
             ignored_windows: vec![],
             included_windows: vec![],

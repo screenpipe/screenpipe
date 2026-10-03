@@ -48,6 +48,7 @@ export const screenSearchIndex: SettingsField[] = [
   { label: msg("Use all monitors", {}), keywords: ["monitor", "display"], conditional: true },
   // conditional: monitor picker only renders when "Use all monitors" is off — paired right under that toggle.
   { label: msg("Monitors", {}), conditional: true },
+  { label: msg("Scroll capture", {}), keywords: ["performance", "low impact", "scroll", "auto", "slow", "cpu"], conditional: true },
   { label: msg("Recording quality", {}), keywords: ["fps", "quality"], conditional: true },
   // conditional: hidden when screen recording is off (same gate as Recording quality).
   { label: msg("Capture frequency", {}), keywords: ["screenshot", "interval", "idle", "cadence", "every", "minimum"], conditional: true },
@@ -60,6 +61,7 @@ export const searchIndex: SettingsField[] = [
   ...audioSearchIndex,
   ...screenSearchIndex,
 ];
+import { RecordingDetailCard } from "./recording-detail-card";
 import { LockedSetting, ManagedSwitch } from "@/components/enterprise-locked-setting";
 import {
   Select,
@@ -3882,6 +3884,15 @@ Your screen is a pipe. Everything you see, hear, and type flows through it. Scre
               </div>
             </CardContent>
           </Card>
+        )}
+
+        {!settings.disableVision && (
+          <LockedSetting settingKey="recordingDetail">
+            <RecordingDetailCard
+              value={settings.recordingDetail ?? "auto"}
+              onChange={(recordingDetail) => handleSettingsChange({ recordingDetail }, true)}
+            />
+          </LockedSetting>
         )}
 
         {/* Recording quality — single knob for crispness + disk cost */}

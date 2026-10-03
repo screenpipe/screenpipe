@@ -179,10 +179,24 @@ pub async fn capture_monitor_image(
     monitor: &SafeMonitor,
     #[allow(unused_variables)] excluded_window_ids: &[u32],
 ) -> Result<(DynamicImage, Duration), anyhow::Error> {
+    capture_monitor_image_with_freshness(monitor, excluded_window_ids, false).await
+}
+
+/// Request current pixels for surface transitions; normal polling keeps the
+/// inexpensive persistent buffer. Other platforms already capture on demand.
+pub async fn capture_monitor_image_with_freshness(
+    monitor: &SafeMonitor,
+    #[allow(unused_variables)] excluded_window_ids: &[u32],
+    #[allow(unused_variables)] fresh: bool,
+) -> Result<(DynamicImage, Duration), anyhow::Error> {
     let capture_start = Instant::now();
 
     #[cfg(target_os = "macos")]
-    let image = if excluded_window_ids.is_empty() {
+    let image = if fresh {
+        monitor
+            .capture_image_fresh_excluding(excluded_window_ids)
+            .await
+    } else if excluded_window_ids.is_empty() {
         monitor.capture_image().await
     } else {
         monitor.capture_image_excluding(excluded_window_ids).await
