@@ -3310,7 +3310,7 @@
       "criticality": "medium",
       "confidence": "partial",
       "ux": "real-user-flow",
-      "notes": "Opens the floating star panel through the shared native command, saves a 15-minute session against the isolated backend, and checks Escape, close, reopen, and that Home stays hidden. Runs without app activation; actual Space/focus transitions still need desktop acceptance."
+      "notes": "Opens the floating star panel through the web toolbar when present or the shared native command, saves a 15-minute session against the isolated backend, and checks Escape, close, reopen, and that Home stays hidden. Runs without app activation; actual Space/focus transitions still need desktop acceptance."
     }
   ]
 }

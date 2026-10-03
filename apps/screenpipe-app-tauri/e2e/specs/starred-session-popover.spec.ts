@@ -54,7 +54,13 @@ describe("starred session popover", function () {
       },
     );
     await invokeOrThrow("show_shortcut_reminder", { shortcut: "Cmd+Ctrl+S" });
-    await invokeOrThrow("toggle_starred_sessions");
+    if ((await browser.getWindowHandles()).includes("shortcut-reminder")) {
+      await browser.switchToWindow("shortcut-reminder");
+      await $('[data-testid="shortcut-reminder-root"]').moveTo();
+      await $('[aria-label="Starred work sessions"]').click();
+    } else {
+      await invokeOrThrow("toggle_starred_sessions");
+    }
     await waitForWindowHandle("starred-sessions", t(20_000));
     await browser.switchToWindow("starred-sessions");
     // Keep the retained picker as the IPC context while closing Home in this
@@ -64,13 +70,17 @@ describe("starred session popover", function () {
     }
     await invokeOrThrow("hide_starred_sessions");
     await invokeOrThrow("toggle_starred_sessions");
-    const duration = await $("button=15 min");
-    await duration.waitForEnabled({ timeout: t(30_000) });
+    // The visibility event remounts controls. Do not retain a WebDriver
+    // element across that remount while waiting for the backend.
+    await browser.waitUntil(async () => browser.execute(() =>
+      Array.from(document.querySelectorAll("button")).some(button =>
+        button.textContent?.trim() === "15 min" && !button.disabled)),
+      { timeout: t(30_000) });
     expect(await visible("starred-sessions")).toBe(true);
     expect(await browser.getWindowHandles()).not.toContain("home");
     await browser.pause(t(250)); // Let WebKit finish compositing the snapshot.
     await browser.saveScreenshot("e2e/results/starred-session-popover.png");
-    await duration.click();
+    await $("button=15 min").click();
     await $("button=End session").waitForDisplayed({ timeout: t(15_000) });
     const closeBounds = await $(
       '[aria-label="Close session controls"]',

@@ -6,7 +6,7 @@ use crate::store::SettingsStore;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, WebviewWindow};
 
-const OVERLAY_WINDOW_LABELS: [&str; 4] = ["main", "main-window", "chat", "shortcut-reminder"];
+const OVERLAY_WINDOW_LABELS: [&str; 5] = ["main", "main-window", "chat", "shortcut-reminder", "starred-sessions"];
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -182,6 +182,8 @@ mod tests {
         settings.hide_overlay_in_screen_recording = true;
         assert!(should_protect_window(&settings, "main-window", false));
         assert!(should_protect_window(&settings, "chat", false));
+        assert!(should_protect_window(&settings, "starred-sessions", false));
+        assert!(!should_protect_window(&settings, "starred-sessions", true));
         assert!(!should_protect_window(&settings, "permission-recovery", false));
     }
 

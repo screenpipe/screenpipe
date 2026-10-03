@@ -74,45 +74,67 @@ fn position(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> Result<(),
     Err("No display available for session controls".into())
 }
 
+/// Native Windows rectangles and Tauri monitor origins are physical pixels.
+/// Convert the whole coordinate space together so negative origins and mixed
+/// display scales do not move the picker onto the primary display.
+#[cfg(any(not(target_os = "macos"), test))]
+fn physical_origin(
+    anchor: (f64, f64, f64, f64),
+    work_area: (f64, f64, f64, f64),
+    scale: f64,
+) -> (i32, i32) {
+    let logical = |(x, y, w, h)| (x / scale, y / scale, w / scale, h / scale);
+    let (x, y) = attached_origin(logical(anchor), logical(work_area));
+    ((x * scale).round() as i32, (y * scale).round() as i32)
+}
+
 #[cfg(not(target_os = "macos"))]
 fn position(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> Result<(), String> {
-    let overlay = app.get_webview_window("shortcut-reminder");
-    let monitor = overlay
+    let overlay = app
+        .get_webview_window("shortcut-reminder")
+        .filter(|w| w.is_visible().unwrap_or(false));
+    let web_anchor = overlay
         .as_ref()
-        .and_then(|w| w.current_monitor().ok().flatten())
-        .or(app.primary_monitor().map_err(|e| e.to_string())?)
+        .and_then(|w| Some((w.outer_position().ok()?, w.outer_size().ok()?)))
+        .map(|(p, s)| (p.x as f64, p.y as f64, s.width as f64, s.height as f64));
+    #[cfg(target_os = "windows")]
+    let anchor = crate::native_shortcut_reminder::is_reminder_visible()
+        .then(crate::native_shortcut_reminder::get_frame)
+        .flatten()
+        .or(web_anchor);
+    #[cfg(not(target_os = "windows"))]
+    let anchor = web_anchor;
+
+    let monitor = anchor
+        .and_then(|(x, y, w, h)| {
+            app.monitor_from_point(x + w / 2.0, y + h / 2.0)
+                .ok()
+                .flatten()
+        })
+        .or_else(|| {
+            app.cursor_position()
+                .ok()
+                .and_then(|p| app.monitor_from_point(p.x, p.y).ok().flatten())
+        })
+        .or_else(|| app.primary_monitor().ok().flatten())
         .ok_or("No display available")?;
     let scale = monitor.scale_factor();
-    let p = monitor.position();
-    let s = monitor.size();
+    let work = monitor.work_area();
     let screen = (
-        p.x as f64 / scale,
-        p.y as f64 / scale,
-        s.width as f64 / scale,
-        s.height as f64 / scale,
+        work.position.x as f64,
+        work.position.y as f64,
+        work.size.width as f64,
+        work.size.height as f64,
     );
-    let anchor = overlay
-        .and_then(|w| Some((w.outer_position().ok()?, w.outer_size().ok()?)))
-        .map(|(p, s)| {
-            (
-                p.x as f64 / scale,
-                p.y as f64 / scale,
-                s.width as f64 / scale,
-                s.height as f64 / scale,
-            )
-        })
-        .unwrap_or((
-            screen.0 + screen.2 / 2.0 - 11.0,
-            screen.1 + 12.0,
-            22.0,
-            16.0,
-        ));
-    let (x, y) = attached_origin(anchor, screen);
+    let anchor = anchor.unwrap_or((screen.0 + screen.2 / 2.0, screen.1, 0.0, 12.0 * scale));
+    let (x, y) = physical_origin(anchor, screen, scale);
     window
-        .set_position(tauri::PhysicalPosition::new(
-            (x * scale) as i32,
-            (y * scale) as i32,
-        ))
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())?;
+    // Moving to another display can change DPI. Resolve logical dimensions
+    // only after moving, including when reusing a window on a different display.
+    window
+        .set_size(tauri::LogicalSize::new(WIDTH, HEIGHT))
         .map_err(|e| e.to_string())
 }
 
@@ -169,6 +191,13 @@ pub(crate) fn toggle(app: &tauri::AppHandle) -> Result<(), String> {
             window
         }
     };
+    // Wayland compositors may refuse absolute placement. The controls must
+    // still open; the compositor chooses their position in that case.
+    #[cfg(target_os = "linux")]
+    if let Err(error) = position(app, &window) {
+        tracing::warn!("starred session placement unavailable: {error}");
+    }
+    #[cfg(not(target_os = "linux"))]
     position(app, &window)?;
     #[cfg(target_os = "macos")]
     {
@@ -258,6 +287,36 @@ mod tests {
                 (-1440.0, -900.0, 1440.0, 900.0)
             ),
             (-1440.0, -858.0)
+        );
+    }
+    #[test]
+    fn starred_panel_uses_physical_work_area_at_mixed_dpi() {
+        // A 150% display to the left, with a taskbar reserving its bottom 60px.
+        assert_eq!(
+            physical_origin(
+                (-1500.0, 1500.0, 300.0, 30.0),
+                (-2560.0, 0.0, 2560.0, 1540.0),
+                1.5
+            ),
+            (-1620, 861),
+        );
+        // A 200% display above the primary, with reserved space on the left.
+        assert_eq!(
+            physical_origin(
+                (0.0, -1550.0, 44.0, 32.0),
+                (80.0, -1600.0, 2480.0, 1600.0),
+                2.0
+            ),
+            (80, -1506),
+        );
+        // Right edge at 125%: the entire 450px picker stays inside the work area.
+        assert_eq!(
+            physical_origin(
+                (3730.0, 20.0, 28.0, 20.0),
+                (1920.0, 0.0, 1840.0, 1000.0),
+                1.25
+            ),
+            (3310, 48),
         );
     }
 }

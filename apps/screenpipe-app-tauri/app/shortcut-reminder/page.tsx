@@ -27,7 +27,6 @@ import {
   X,
 } from "lucide-react";
 import { useStarredSessions } from "@/components/starred-sessions/use-starred-sessions";
-import { StarredSessionPanel } from "@/components/starred-sessions/starred-session-panel";
 import { useOverlayData } from "./use-overlay-data";
 import { useMeetingOverlay } from "./use-meeting-overlay";
 import { AudioEqualizer } from "./audio-equalizer";
@@ -75,7 +74,6 @@ const DEFAULT_SHORTCUTS = {
 
 const COLLAPSED_SIZE = { width: 22, height: 16 };
 const EXPANDED_SIZE = { width: 192, height: 62 };
-const STARRED_SESSION_SIZE = { width: 280, height: 350 };
 const SETTINGS_MENU_SIZE = { width: 164, height: 96 };
 const INCIDENT_SIZE = { width: 160, height: 40 };
 const MEETING_SIZE = { width: 280, height: 80 };
@@ -110,7 +108,7 @@ export default function ShortcutReminderPage() {
   const [hoverMeetingId, setHoverMeetingId] = useState<number | null>(null);
   const [pinnedMeetingId, setPinnedMeetingId] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
-  const [starPanelOpen, setStarPanelOpen] = useState(false);
+  const [starError, setStarError] = useState(false);
   const starredSessions = useStarredSessions();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hoveredControl, setHoveredControl] = useState<string | null>(null);
@@ -266,7 +264,6 @@ export default function ShortcutReminderPage() {
     // Listen for explicit shortcut-reminder-update event (from Rust side)
     const unlistenShortcut = listen<string>("shortcut-reminder-update", () => {
       setExpanded(false);
-      setStarPanelOpen(false);
       setHoveredControl(null);
       setHoverMeetingId(null);
       setPinnedMeetingId(null);
@@ -388,7 +385,6 @@ export default function ShortcutReminderPage() {
     // the press becomes a drag and land collapsed, like `beginPillDrag`.
     onDragStart: useCallback(() => {
       setExpanded(false);
-      setStarPanelOpen(false);
       setHoveredControl(null);
       setHoverMeetingId(null);
       setPinnedMeetingId(null);
@@ -401,8 +397,6 @@ export default function ShortcutReminderPage() {
     if (drag.isDragging) return;
     if (healthState !== "normal") {
       resizeOverlay(INCIDENT_SIZE);
-    } else if (starPanelOpen) {
-      resizeOverlay(STARRED_SESSION_SIZE);
     } else if (meetingOverlay.active && meetingCardOpen) {
       resizeOverlay(MEETING_SIZE);
     } else if (settingsOpen) {
@@ -420,8 +414,18 @@ export default function ShortcutReminderPage() {
     meetingOverlay.active,
     resizeOverlay,
     settingsOpen,
-    starPanelOpen,
   ]);
+
+  const openStarPanel = useCallback(async () => {
+    setSettingsOpen(false);
+    setStarError(false);
+    try {
+      const result = await commands.toggleStarredSessions();
+      if (result.status === "error") setStarError(true);
+    } catch {
+      setStarError(true);
+    }
+  }, []);
 
   const handleRestartRecording = useCallback(async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -681,7 +685,7 @@ export default function ShortcutReminderPage() {
     );
   }
 
-  if (meetingOverlay.active && meetingCardOpen && !starPanelOpen) {
+  if (meetingOverlay.active && meetingCardOpen) {
     return (
       <div
         data-testid="shortcut-reminder-meeting-preview"
@@ -711,7 +715,7 @@ export default function ShortcutReminderPage() {
               aria-label={ui("Starred work sessions")}
               title={ui("Starred work sessions")}
               onPointerDown={(event) => event.stopPropagation()}
-              onClick={() => { setStarPanelOpen(true); setExpanded(true); }}
+              onClick={() => void openStarPanel()}
               className="ml-auto flex items-center justify-center px-1.5 h-full text-white/70 hover:text-white hover:bg-white/10"
               style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
             >
@@ -791,7 +795,7 @@ export default function ShortcutReminderPage() {
     posthog.capture("shortcut_reminder_timeline_clicked");
   });
 
-  if (!expanded && !starPanelOpen) {
+  if (!expanded) {
     return (
       <div
         data-testid="shortcut-reminder-root"
@@ -869,11 +873,8 @@ export default function ShortcutReminderPage() {
         // The side anchors ride the vertical middle with room either way, so
         // they keep the dock on top like the top anchor does.
         flexDirection: dockAbove ? "column" : "column-reverse",
-        height: starPanelOpen ? "100vh" : undefined,
-        overflow: starPanelOpen ? "hidden" : undefined,
       }}
       onMouseLeave={() => {
-        if (starPanelOpen) return;
         setExpanded(false);
         setSettingsOpen(false);
         setHoveredControl(null);
@@ -922,13 +923,13 @@ export default function ShortcutReminderPage() {
         <button
           title={ui("Starred work sessions")}
           aria-label={ui("Starred work sessions")}
-          aria-expanded={starPanelOpen}
+          aria-haspopup="dialog"
           className={dockButtonClass}
           style={dockButtonStyle}
           onMouseEnter={() => setHoveredControl("star")}
           onFocus={() => setHoveredControl("star")}
           onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => { setStarPanelOpen(!starPanelOpen); setSettingsOpen(false); }}
+          onClick={() => void openStarPanel()}
         >
           <Star className={starredSessions.active ? "fill-white" : ""} style={{ width: `${12 * overlayScale}px`, height: `${12 * overlayScale}px` }} />
         </button>
@@ -982,12 +983,8 @@ export default function ShortcutReminderPage() {
         </button>
       </div>
 
-      {starPanelOpen ? (
-        <div className="flex min-h-0 flex-1 w-full flex-col rounded-lg bg-black" style={{ marginTop: dockAbove ? 4 * overlayScale : 0, marginBottom: dockAbove ? 0 : 4 * overlayScale }}>
-          <div className="min-h-0 flex-1 overflow-auto"><div style={{ zoom: overlayScale }}><StarredSessionPanel state={starredSessions} /></div></div>
-          <button className="w-full shrink-0 rounded-b-lg bg-black/95 py-1 text-xs text-white/60 hover:text-white" style={{ zoom: overlayScale }} onClick={() => setStarPanelOpen(false)} aria-label="Close session controls">Close</button>
-        </div>
-      ) : settingsOpen ? (
+      {starError && <p role="alert" className="bg-black px-2 text-xs text-white">Could not open session controls. Try again.</p>}
+      {settingsOpen ? (
         <div
           role="menu"
           aria-label={ui("Shortcut reminder options")}

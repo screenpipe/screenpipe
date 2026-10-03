@@ -23,6 +23,8 @@ const mocks = vi.hoisted(() => ({
   hideShortcutReminder: vi.fn(),
   snoozeShortcutReminderForHour: vi.fn(),
   showWindow: vi.fn(),
+  toggleStarredSessions: vi.fn().mockResolvedValue({ status: "ok", data: null }),
+  platform: { isMac: true, isWindows: false, isLoading: false },
   setSize: vi.fn(),
   setPosition: vi.fn(),
   setShortcutOverlayAnchor: vi.fn(),
@@ -102,7 +104,7 @@ vi.mock("posthog-js", () => ({
 }));
 
 vi.mock("@/lib/hooks/use-platform", () => ({
-  usePlatform: () => ({ isMac: true, isWindows: false, isLoading: false }),
+  usePlatform: () => mocks.platform,
 }));
 
 vi.mock("@/lib/hooks/use-settings", () => ({
@@ -122,6 +124,7 @@ vi.mock("@/lib/utils/tauri", () => ({
     hideShortcutReminder: mocks.hideShortcutReminder,
     snoozeShortcutReminderForHour: mocks.snoozeShortcutReminderForHour,
     showWindow: mocks.showWindow,
+    toggleStarredSessions: mocks.toggleStarredSessions,
     setShortcutOverlayAnchor: mocks.setShortcutOverlayAnchor,
   },
 }));
@@ -892,7 +895,7 @@ describe("starred sessions during a live meeting", () => {
     render(<ShortcutReminderPage />);
     fireEvent.mouseEnter(await screen.findByTestId("shortcut-reminder-root"));
     fireEvent.click(await screen.findByRole("button",{name:"Starred work sessions"}));
-    expect(await screen.findByRole("button",{name:"15 min"})).toBeVisible();
+    await waitFor(() => expect(mocks.toggleStarredSessions).toHaveBeenCalled());
     expect(mocks.stopMeeting).not.toHaveBeenCalled();
     cleanup();
     Object.assign(mocks.meetingOverlayState, {active:false,activeMeetingId:null,stoppableMeetingId:null});
@@ -900,14 +903,37 @@ describe("starred sessions during a live meeting", () => {
 });
 
 
-describe("starred overlay sizing", () => {
-  it.each([["small",1],["medium",1.5],["large",2]] as const)("scales the session panel at %s size", async (size,scale) => {
+describe("cross-platform star controls", () => {
+  it.each(["windows", "linux"])("opens the shared dialog on %s without growing the toolbar", async (platform) => {
+    mocks.platform.isMac = false;
+    mocks.platform.isWindows = platform === "windows";
     mocks.getRecordingHealthState.mockResolvedValue("normal");
-    mocks.storeGet.mockResolvedValue({shortcutOverlaySize:size});
+    mocks.storeGet.mockResolvedValue(undefined);
+    mocks.toggleStarredSessions.mockClear();
+    mocks.showWindow.mockClear();
     render(<ShortcutReminderPage />);
     fireEvent.mouseEnter(await screen.findByTestId("shortcut-reminder-root"));
-    fireEvent.click(await screen.findByRole("button",{name:"Starred work sessions"}));
-    const panel = await screen.findByRole("region",{name:"Starred work sessions"});
-    expect(panel.parentElement?.style.zoom).toBe(String(scale));
+    const star = await screen.findByRole("button", { name: "Starred work sessions" });
+    fireEvent.mouseEnter(star);
+    const binding = platform === "windows" ? "Alt+Shift+B" : "Control+Super+B";
+    expect(await screen.findByText(formatShortcut(binding, platform as "windows" | "linux"), { exact: false })).toBeVisible();
+    fireEvent.click(star);
+    await waitFor(() => expect(mocks.toggleStarredSessions).toHaveBeenCalledTimes(1));
+    expect(mocks.showWindow).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "15 min" })).toBeNull();
+    expect(star).toHaveAttribute("aria-haspopup", "dialog");
+    cleanup();
+    mocks.platform.isMac = true;
+    mocks.platform.isWindows = false;
+  });
+
+  it("shows an actionable error when the window cannot open", async () => {
+    mocks.getRecordingHealthState.mockResolvedValue("normal");
+    mocks.toggleStarredSessions.mockResolvedValueOnce({ status: "error", error: "unavailable" });
+    render(<ShortcutReminderPage />);
+    fireEvent.mouseEnter(await screen.findByTestId("shortcut-reminder-root"));
+    fireEvent.click(await screen.findByRole("button", { name: "Starred work sessions" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not open session controls");
+    cleanup();
   });
 });

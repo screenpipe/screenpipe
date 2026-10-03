@@ -64,6 +64,7 @@ const APP_ICON_PNG: &[u8] =
 // Symbols the macOS pill uses.
 const ICON_SEARCH: char = '\u{E721}';
 const ICON_CHAT: char = '\u{E8BD}';
+const ICON_STAR: char = '\u{E734}';
 const ICON_TIMELINE: char = '\u{E81C}';
 const ICON_SETTINGS: char = '\u{E713}';
 const ICON_REFRESH: char = '\u{E72C}';
@@ -457,6 +458,7 @@ impl Renderer {
                 }
                 Control::Search => self.icon(rt, ICON_SEARCH, 10.0 * s, *cell, white(alpha)),
                 Control::Chat => self.icon(rt, ICON_CHAT, 10.0 * s, *cell, white(alpha)),
+                Control::Star => self.icon(rt, ICON_STAR, 12.0 * s, *cell, white(alpha)),
                 Control::Timeline => self.icon(rt, ICON_TIMELINE, 10.0 * s, *cell, white(alpha)),
                 Control::Settings => self.icon(rt, ICON_SETTINGS, 10.0 * s, *cell, white(alpha)),
                 Control::Audio => self.draw_equalizer(rt, state, eq, *cell, s),
@@ -509,7 +511,7 @@ impl Renderer {
         let pad = 8.0 * s;
         let inner = Rect::new(r.x + pad, r.y, r.w - pad * 2.0, r.h);
         // One centred line. Two columns of hint text collide the moment a
-        // shortcut gains a modifier, and this row is only 160 DIP wide.
+        // shortcut gains a modifier, and this row is only 192 DIP wide.
         self.mono_text(
             rt,
             &disclosure_hint(state),

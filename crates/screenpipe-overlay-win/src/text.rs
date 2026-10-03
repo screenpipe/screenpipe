@@ -56,9 +56,9 @@ pub fn prettify_shortcut(raw: &str) -> String {
     out.join("+")
 }
 
-/// Longest hint the 160 DIP disclosure row can show at 8 DIP mono without
+/// Longest hint the 192 DIP disclosure row can show at 8 DIP mono without
 /// clipping, with the row's horizontal padding taken off.
-pub const MAX_HINT_CHARS: usize = 30;
+pub const MAX_HINT_CHARS: usize = 36;
 
 /// What the disclosure row says.
 ///
@@ -71,6 +71,7 @@ pub fn disclosure_hint(state: &OverlayState) -> String {
         Some(Control::Brand) => "screenpipe · right-click".into(),
         Some(Control::Search) => labelled("search", &state.shortcut_search),
         Some(Control::Chat) => labelled("chat", &state.shortcut_chat),
+        Some(Control::Star) => labelled("star work session", &state.shortcut_star),
         Some(Control::Timeline) => labelled("timeline", &state.shortcut_timeline),
         Some(Control::Settings) => "overlay settings".into(),
         Some(Control::Audio) => {
@@ -148,6 +149,7 @@ mod tests {
             shortcut_timeline: "Alt+S".into(),
             shortcut_search: "Alt+K".into(),
             shortcut_chat: "Alt+L".into(),
+            shortcut_star: "Alt+Shift+B".into(),
             shortcut_overlay: "Alt+O".into(),
             hovering: true,
             ..Default::default()
@@ -165,6 +167,16 @@ mod tests {
     }
 
     #[test]
+    fn star_hint_tracks_custom_and_disabled_bindings() {
+        let mut s = state();
+        s.hovered_control = Some(Control::Star);
+        s.shortcut_star = "Ctrl+Alt+J".into();
+        assert_eq!(disclosure_hint(&s), "star work session · Ctrl+Alt+J");
+        s.shortcut_star.clear();
+        assert_eq!(disclosure_hint(&s), "star work session");
+    }
+
+    #[test]
     fn duplicate_modifiers_collapse() {
         assert_eq!(prettify_shortcut("Ctrl+Control+K"), "Ctrl+K");
     }
@@ -178,6 +190,7 @@ mod tests {
             (Control::Timeline, "timeline · Alt+S"),
             (Control::Search, "search · Alt+K"),
             (Control::Chat, "chat · Alt+L"),
+            (Control::Star, "star work session · Alt+Shift+B"),
         ] {
             s.hovered_control = Some(control);
             assert_eq!(disclosure_hint(&s), expected);
@@ -209,7 +222,7 @@ mod tests {
         s.hovered_control = Some(Control::Search);
         let hint = disclosure_hint(&s);
         assert!(hint.chars().count() <= MAX_HINT_CHARS, "{hint:?}");
-        assert_eq!(hint, "search · ⊞+Ctrl+Alt+Shift+BRA…");
+        assert_eq!(hint, "search · ⊞+Ctrl+Alt+Shift+BRACKETLE…");
     }
 
     #[test]
