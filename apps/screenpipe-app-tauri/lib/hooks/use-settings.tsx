@@ -456,6 +456,7 @@ export type Settings = SettingsStore & {
 	recordWhileLocked?: boolean;
 	/** Auto-delete local data older than retention days (free alternative to cloud archive) */
 	localRetentionEnabled?: boolean;
+	storageRetentionDefaultDays?: number;
 	/** Days to keep data locally before auto-deleting (default: 14) */
 	localRetentionDays?: number;
 	/** What gets deleted past the cutoff:

@@ -2996,7 +2996,7 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
         }
     }
 
-    // New installs opt into local data retention (14-day media cleanup; transcripts,
+    // New installs opt into local data retention (7 or 14-day media cleanup; transcripts,
     // OCR and the searchable timeline are kept). Written as an explicit store field so
     // the Storage settings toggle shows ON and auto_start_retention() picks it up.
     // Existing stores are never touched here: flipping the fallback for users who
@@ -3020,11 +3020,11 @@ pub fn init_store(app: &AppHandle) -> Result<SettingsStore, String> {
                 data_dir
             );
         } else {
-            store.extra.insert(
-                "localRetentionEnabled".to_string(),
-                serde_json::Value::Bool(true),
-            );
-            should_save = true;
+            should_save |= apply_initial_storage_retention(&mut store.extra, || {
+                crate::disk_usage::storage_capacity(&data_dir)
+                    .map(|capacity| capacity.recommended_days)
+                    .unwrap_or(14)
+            });
         }
     }
 
@@ -3360,10 +3360,58 @@ mod fatal_alert_tests {
     }
 }
 
+/// Called only after verifying a new store with no database. Explicit retention
+/// choices always win, including provisioned stores with an explicit cutoff.
+fn apply_initial_storage_retention(
+    extra: &mut HashMap<String, Value>,
+    recommend: impl FnOnce() -> u32,
+) -> bool {
+    if extra.contains_key("localRetentionEnabled") {
+        return false;
+    }
+    extra.insert("localRetentionEnabled".into(), json!(true));
+    if !extra.contains_key("localRetentionDays") {
+        let days = recommend();
+        extra.insert("localRetentionDays".into(), json!(days));
+        if days == 7 {
+            extra.insert("storageRetentionDefaultDays".into(), json!(days));
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn storage_retention_preserves_explicit_choices_and_does_not_probe() {
+        let mut extra = HashMap::from([("localRetentionEnabled".into(), json!(false))]);
+        assert!(!apply_initial_storage_retention(&mut extra, || panic!(
+            "must not probe"
+        )));
+        assert_eq!(extra["localRetentionEnabled"], json!(false));
+        let mut extra = HashMap::from([("localRetentionDays".into(), json!(30))]);
+        assert!(apply_initial_storage_retention(&mut extra, || panic!(
+            "must not probe"
+        )));
+        assert_eq!(extra["localRetentionDays"], json!(30));
+        assert!(!extra.contains_key("storageRetentionDefaultDays"));
+    }
+
+    #[test]
+    fn storage_retention_marks_only_shortened_defaults() {
+        for days in [7, 14] {
+            let mut extra = HashMap::new();
+            assert!(apply_initial_storage_retention(&mut extra, || days));
+            assert_eq!(extra["localRetentionDays"], json!(days));
+            assert_eq!(extra.contains_key("storageRetentionDefaultDays"), days == 7);
+            assert!(!apply_initial_storage_retention(&mut extra, || panic!(
+                "second run"
+            )));
+        }
+    }
 
     const FALLBACK_ENGINE: &str = "whisper-large-v3-turbo-quantized";
 
