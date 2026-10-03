@@ -8,6 +8,8 @@ import { CloudWorkflows, type CloudWorkflowsServices } from "./cloud-workflows";
 vi.mock("./product-switcher", () => ({ ProductSwitcher: () => <button>Workflows</button> }));
 vi.mock("@/lib/workflows/cloud-catalog", () => ({ loadCloudCatalog: vi.fn() }));
 vi.mock("@/lib/workflows/cloud-processing", () => ({ stopLocalWorkflowProcessing: vi.fn() }));
+const openWeb = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("@/lib/open-external-url", () => ({ openExternalUrl: openWeb }));
 const data = { licenseId: 'org-a', workflows: [{ id: 'a', title: 'Review a draft', summary: 'Check the supporting sources.', steps: [{ action: 'Open sources', detail: 'Check the citations' }], version: 3, updatedAt: '2026-09-30' }] };
 function api(): CloudWorkflowsServices { return { load: vi.fn().mockResolvedValue(data), stopLocal: vi.fn().mockResolvedValue(undefined) }; }
 const props = { processingPromptSeen: true, onProcessingPromptSeen: vi.fn().mockResolvedValue(undefined), active: true, onModeChange: vi.fn(), recordingStatus: <button>Recording</button> };
@@ -140,4 +142,16 @@ it("points to the workspace-wide setting when member access is off", async () =>
   const service = api(); vi.mocked(service.load).mockResolvedValue({ licenseId: 'org-a', scope: 'member', memberAccessEnabled: false, workflows: [] });
   render(<CloudWorkflows {...props} api={service} />);
   expect(await screen.findByText(/Let members see their own workflows/)).toBeVisible();
+});
+
+it("offers the member web link and refreshes corrections when returning", async () => {
+  const service = api(); const id = 'a'.repeat(64);
+  vi.mocked(service.load).mockResolvedValue({ ...data, scope: 'member', workflows: [{ ...data.workflows[0], id, webWorkflowId: id }] });
+  render(<CloudWorkflows {...props} token="member-session" api={service} />);
+  fireEvent.click((await screen.findByRole('heading', { name: 'Review a draft' })).closest('article')!.querySelector('button')!);
+  fireEvent.click(await screen.findByRole('button', { name: 'Open on web' }));
+  expect(openWeb).toHaveBeenCalledWith(`https://screenpipe.com/workspace/my-workflows?license_id=org-a&workflow_id=${id}`);
+  vi.mocked(service.load).mockResolvedValue({ ...data, scope: 'member', workflows: [{ ...data.workflows[0], id, webWorkflowId: id, steps: [{ action: 'Saved web correction' }] }] });
+  fireEvent(window, new Event('focus'));
+  expect(await screen.findByRole('heading', { name: 'Saved web correction' })).toBeVisible();
 });

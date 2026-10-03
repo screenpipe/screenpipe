@@ -9,7 +9,7 @@ export const fixtureCloudWorkflows: CloudWorkflowsServices = {
     const scenario = new URLSearchParams(window.location.search).get("cloudWorkflowState");
     if (scenario === "error") throw new Error("Your account cannot read this workspace’s cloud workflows. Ask your admin for workflow access, then refresh.");
     return { licenseId: "fictional-workspace", scope: scenario?.startsWith("member") ? "member" : "workspace", memberAccessEnabled: scenario !== "member-disabled", workflows: scenario === "empty" || (scenario === "member-empty" || scenario === "member-disabled") ? [] : [...fixtureWorkflowAnalysis.analysis.workflows].reverse().slice(0, scenario === "member" ? 1 : undefined).map((workflow, index) => ({
-      id: `fictional-${index}`, title: workflow.title, summary: workflow.description,
+      id: `fictional-${index}`, webWorkflowId: String(index + 1).padStart(64, "0"), title: workflow.title, summary: workflow.description,
       trigger: workflow.trigger, outcome: workflow.outcome, version: 2,
       updatedAt: "2026-09-30T19:00:00Z",
       steps: workflow.stages.map(stage => ({ action: stage.name, detail: stage.description, app: stage.apps[0] })),

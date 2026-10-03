@@ -97,6 +97,9 @@ await capture({animations:'disabled',style:'nextjs-portal { display: none; }',pa
 await page.locator('article').getByRole('button',{name:'Open map'}).focus();
 await page.keyboard.press('Enter');
 await page.getByText('Your cloud workflow · Version 2',{exact:true}).waitFor();
+await page.evaluate(() => { window.__SCREENPIPE_E2E_OPEN_URLS = []; window.__SCREENPIPE_E2E_INTERCEPT_OPEN_URLS = true; });
+await page.getByRole('button',{name:'Open on web',exact:true}).click();
+assert.deepEqual(await page.evaluate(() => window.__SCREENPIPE_E2E_OPEN_URLS), [`https://screenpipe.com/workspace/my-workflows?license_id=fictional-workspace&workflow_id=${'1'.padStart(64,'0')}`]);
 await capture({animations:'disabled',style:'nextjs-portal { display: none; }',path:out+'/cloud-member-detail.png'});
 await page.getByRole('button',{name:'All workflows',exact:true}).click();
 await visit('&cloudWorkflowState=member-empty');
