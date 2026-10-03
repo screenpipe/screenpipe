@@ -58,25 +58,7 @@ pub(crate) async fn upgrade(
     let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_list WHERE schema='main' AND type='table' AND substr(name,1,1)!='_' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('sqlite_sequence','storage_metadata','payload_files','frame_payloads','upload_bindings')")
         .fetch_all(&mut *tx).await?;
     for table in tables {
-        let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info(?)")
-            .bind(&table)
-            .fetch_all(&mut *tx)
-            .await?;
-        let quoted = format!("\"{}\"", table.replace('"', "\"\""));
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-            "CREATE TRIGGER IF NOT EXISTS \"hybrid_read_revoke_delete_{table}\" AFTER DELETE ON {quoted} BEGIN UPDATE _storage_revocation SET revision=revision+1; END;"
-        ))).execute(&mut *tx).await?;
-        let redacted = columns
-            .iter()
-            .filter(|c| c.ends_with("redacted_at"))
-            .map(|c| format!("OLD.\"{c}\" IS NOT NULL OR NEW.\"{c}\" IS NOT NULL"))
-            .collect::<Vec<_>>()
-            .join(" OR ");
-        if !redacted.is_empty() {
-            sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-                "CREATE TRIGGER IF NOT EXISTS \"hybrid_read_revoke_redaction_{table}\" AFTER UPDATE ON {quoted} WHEN (SELECT maintenance=0 FROM storage_metadata) AND ({redacted}) BEGIN UPDATE _storage_revocation SET revision=revision+1; END;"
-            ))).execute(&mut *tx).await?;
-        }
+        install_resident_hooks(&mut tx, &table).await?;
     }
     if storage.has_bulk() {
         sqlx::raw_sql(LOOKUP).execute(&mut *tx).await?;
@@ -141,5 +123,33 @@ pub(crate) async fn upgrade(
             .await?;
     }
     tx.commit().await?;
+    Ok(())
+}
+
+// Shared by initial conversion and tables introduced by later SQLx migrations.
+pub(super) async fn install_resident_hooks(
+    conn: &mut SqliteConnection,
+    table: &str,
+) -> Result<(), sqlx::Error> {
+    let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info(?)")
+        .bind(table)
+        .fetch_all(&mut *conn)
+        .await?;
+    let escaped = table.replace('"', "\"\"");
+    let quoted = format!("\"{escaped}\"");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "CREATE TRIGGER IF NOT EXISTS \"hybrid_read_revoke_delete_{escaped}\" AFTER DELETE ON {quoted} BEGIN UPDATE _storage_revocation SET revision=revision+1; END;"
+        ))).execute(&mut *conn).await?;
+    let redacted = columns
+        .iter()
+        .filter(|c| c.ends_with("redacted_at"))
+        .map(|c| format!("OLD.\"{c}\" IS NOT NULL OR NEW.\"{c}\" IS NOT NULL"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    if !redacted.is_empty() {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                "CREATE TRIGGER IF NOT EXISTS \"hybrid_read_revoke_redaction_{escaped}\" AFTER UPDATE ON {quoted} WHEN (SELECT maintenance=0 FROM storage_metadata) AND ({redacted}) BEGIN UPDATE _storage_revocation SET revision=revision+1; END;"
+            ))).execute(&mut *conn).await?;
+    }
     Ok(())
 }

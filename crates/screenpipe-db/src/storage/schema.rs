@@ -425,50 +425,39 @@ pub(crate) async fn upgrade_recording(
     Ok(true)
 }
 
-/// Existing hybrid generations skip legacy SQL migrations because their
-/// archived tables no longer have the legacy layout. Add the resident star
-/// table through the startup writer, preserving stars already copied during
-/// conversion and installing the same revision hooks as other resident tables.
-pub(crate) async fn upgrade_starred_sessions(
+/// Give tables added by ordinary SQLx migrations the same read tracking as
+/// tables present during conversion. Inspect schema metadata only; existing
+/// capture/archive tables keep their specialized triggers.
+pub(crate) async fn ensure_resident_table_hooks(
     conn: &mut SqliteConnection,
 ) -> Result<bool, sqlx::Error> {
-    const MIGRATION: &str = include_str!("../migrations/20261002190000_starred_sessions.sql");
-    const HOOKS: &str = r#"
-CREATE TRIGGER IF NOT EXISTS hybrid_revision_starred_sessions_INSERT AFTER INSERT ON starred_sessions
-BEGIN UPDATE storage_metadata SET revision=revision+1; END;
-CREATE TRIGGER IF NOT EXISTS hybrid_revision_starred_sessions_UPDATE AFTER UPDATE ON starred_sessions
-BEGIN UPDATE storage_metadata SET revision=revision+1; END;
-CREATE TRIGGER IF NOT EXISTS hybrid_revision_starred_sessions_DELETE AFTER DELETE ON starred_sessions
-BEGIN UPDATE storage_metadata SET revision=revision+1; END;
-CREATE TRIGGER IF NOT EXISTS hybrid_read_revoke_delete_starred_sessions AFTER DELETE ON starred_sessions
-BEGIN UPDATE _storage_revocation SET revision=revision+1; END;
-"#;
-    let checksum = format!("{:x}", Sha256::digest(format!("{MIGRATION}{HOOKS}")));
-    let installed: Option<String> =
-        sqlx::query_scalar("SELECT checksum FROM _hybrid_migrations WHERE version=7")
-            .fetch_optional(&mut *conn)
-            .await?;
-    if let Some(installed) = installed {
-        return if installed == checksum {
-            Ok(false)
-        } else {
-            Err(storage_error("starred session schema checksum mismatch"))
-        };
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT t.name FROM sqlite_master t
+         WHERE t.type='table' AND substr(t.name,1,1)!='_'
+         AND t.name NOT LIKE 'sqlite_%' AND t.name NOT LIKE '%_fts%'
+         AND t.name NOT IN ('frames','frame_payloads','payload_files','storage_metadata','upload_bindings')
+         AND t.sql NOT LIKE 'CREATE VIRTUAL TABLE%'
+         AND (SELECT count(*) FROM sqlite_master h WHERE h.type='trigger' AND h.name IN (
+             'hybrid_revision_' || t.name || '_INSERT',
+             'hybrid_revision_' || t.name || '_UPDATE',
+             'hybrid_revision_' || t.name || '_DELETE',
+             'hybrid_read_revoke_delete_' || t.name)) < 4",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    if tables.is_empty() {
+        return Ok(false);
     }
     let mut tx = conn.begin().await?;
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='starred_sessions')",
-    )
-    .fetch_one(&mut *tx)
-    .await?;
-    if !exists {
-        sqlx::raw_sql(MIGRATION).execute(&mut *tx).await?;
+    for table in tables {
+        let quoted = table.replace('"', "\"\"");
+        for event in ["INSERT", "UPDATE", "DELETE"] {
+            sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+                "CREATE TRIGGER IF NOT EXISTS \"hybrid_revision_{quoted}_{event}\" AFTER {event} ON \"{quoted}\" BEGIN UPDATE storage_metadata SET revision=revision+1; END;"
+            ))).execute(&mut *tx).await?;
+        }
+        super::read_schema::install_resident_hooks(&mut tx, &table).await?;
     }
-    sqlx::raw_sql(HOOKS).execute(&mut *tx).await?;
-    sqlx::query("INSERT INTO _hybrid_migrations VALUES(7,?)")
-        .bind(checksum)
-        .execute(&mut *tx)
-        .await?;
     tx.commit().await?;
     Ok(true)
 }

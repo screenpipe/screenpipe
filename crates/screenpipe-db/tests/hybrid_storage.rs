@@ -1093,8 +1093,7 @@ async fn starred_upgrade_restores_older_hybrid_search_and_preserves_recordings()
     // mutate this disposable fixture, through its existing serialized writer.
     db.execute_raw_sql_write(
         "DROP TABLE starred_sessions;
-         DELETE FROM _sqlx_migrations WHERE version=20261002190000;
-         DELETE FROM _hybrid_migrations WHERE version=7;",
+         DELETE FROM _sqlx_migrations WHERE version=20261002190000;",
     )
     .await
     .unwrap();
@@ -1111,6 +1110,15 @@ async fn starred_upgrade_restores_older_hybrid_search_and_preserves_recordings()
         .unwrap();
         assert_eq!(db.storage_mode(), StorageMode::HybridParquetV1);
         db.verify_storage().await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM _sqlx_migrations WHERE version=20261002190000 AND success=1"
+            )
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+            1,
+        );
         assert_eq!(
             before,
             db.frame_payloads(&[1], Projection::All).await.unwrap()
@@ -1169,10 +1177,10 @@ async fn starred_upgrade_preserves_existing_sessions_and_tracks_mutations() {
         .save_starred_session("existing", start, end, true, 0, start)
         .await
         .unwrap());
-    // Also cover already-present tables whose hybrid upgrade has not run.
+    // Already-applied SQLx migrations must preserve their data; missing
+    // generic storage hooks can still be installed without replaying the DDL.
     db.execute_raw_sql_write(
-        "DELETE FROM _hybrid_migrations WHERE version=7;
-         DROP TRIGGER IF EXISTS hybrid_revision_starred_sessions_INSERT;
+        "DROP TRIGGER IF EXISTS hybrid_revision_starred_sessions_INSERT;
          DROP TRIGGER IF EXISTS hybrid_revision_starred_sessions_UPDATE;
          DROP TRIGGER IF EXISTS hybrid_revision_starred_sessions_DELETE;
          DROP TRIGGER IF EXISTS hybrid_read_revoke_delete_starred_sessions;",
@@ -1218,6 +1226,51 @@ async fn starred_upgrade_preserves_existing_sessions_and_tracks_mutations() {
                 .unwrap(),
             revocation + 1
         );
+        db.close().await;
+    }
+}
+
+#[tokio::test]
+async fn later_resident_tables_receive_storage_and_privacy_hooks() {
+    let root = tempfile::tempdir().unwrap();
+    let db = DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+        .await
+        .unwrap();
+    // A future resident feature needs no feature-specific Rust upgrade.
+    db.execute_raw_sql_write(
+        "CREATE TABLE feature_notes(id INTEGER PRIMARY KEY, text TEXT, redacted_at TEXT);",
+    )
+    .await
+    .unwrap();
+    db.close().await;
+    for _ in 0..2 {
+        let db = DatabaseManager::new(
+            root.path().join("db.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        let before = db.storage_read_token().await.unwrap().revision;
+        db.execute_raw_sql_write("INSERT INTO feature_notes VALUES(1,'private',NULL)")
+            .await
+            .unwrap();
+        assert_eq!(db.storage_read_token().await.unwrap().revision, before + 1);
+        let token = db.storage_read_token().await.unwrap();
+        db.execute_raw_sql_write(
+            "UPDATE feature_notes SET text='redacted',redacted_at='2026-10-03' WHERE id=1",
+        )
+        .await
+        .unwrap();
+        assert!(token.admit(&db.pool).await.is_err());
+        drop(token);
+        assert_eq!(db.storage_read_token().await.unwrap().revision, before + 2);
+        let token = db.storage_read_token().await.unwrap();
+        db.execute_raw_sql_write("DELETE FROM feature_notes WHERE id=1")
+            .await
+            .unwrap();
+        assert!(token.admit(&db.pool).await.is_err());
+        drop(token);
+        assert_eq!(db.storage_read_token().await.unwrap().revision, before + 3);
         db.close().await;
     }
 }
