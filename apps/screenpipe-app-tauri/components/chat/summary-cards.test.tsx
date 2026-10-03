@@ -188,6 +188,51 @@ describe("SummaryCards", () => {
     expect(quickAction.className).toContain("focus-visible:ring-1");
   });
 
+  it("centres chip labels until the agent logos need room", () => {
+    render(
+      <SummaryCards
+        onSendMessage={vi.fn()}
+        customTemplates={[{ id: "t1", title: "Client recap", description: "", prompt: "p", timeRange: "today", createdAt: "" }]}
+        onSaveCustomTemplate={vi.fn()}
+        onUpdateCustomTemplate={vi.fn()}
+        onDeleteCustomTemplate={vi.fn()}
+        userGoalCategory="work_memory"
+      />,
+    );
+
+    for (const name of ["Time Breakdown", "Meeting Prep", "Client recap"]) {
+      const chip = screen.getByRole("button", { name });
+      // Reserving the logos' slot at rest pushed each label off-centre.
+      expect(chip).toHaveClass("px-2");
+      expect(chip.className).not.toMatch(/(^|\s)p[lr]-12(\s|$)/);
+      expect(chip).toHaveClass(
+        "group-hover/home-card:pr-12",
+        "group-focus-within/home-card:pr-12",
+        // A launch keeps the logos open after the pointer leaves.
+        "group-has-[[data-expanded=true]]/home-card:pr-12",
+        "[@media(hover:none)]:pr-12",
+      );
+    }
+  });
+
+  it("keeps the dashed Custom slot outlined on hover instead of inverting it", () => {
+    render(
+      <SummaryCards
+        onSendMessage={vi.fn()}
+        customTemplates={[]}
+        onSaveCustomTemplate={vi.fn()}
+        onUpdateCustomTemplate={vi.fn()}
+        onDeleteCustomTemplate={vi.fn()}
+      />,
+    );
+
+    const custom = screen.getByTestId("custom-summary-open");
+    expect(custom).toHaveClass("border-dashed", "hover:bg-card", "focus-visible:bg-card");
+    // A solid fill would hide the dashes that mark it as an empty slot.
+    expect(custom.className).not.toMatch(/(hover|focus-visible):bg-foreground/);
+    expect(custom.className).toContain("motion-reduce:transition-none");
+  });
+
   it("previews a card prompt on hover and keyboard focus without sending", () => {
     const onPreviewPrompt = vi.fn();
     const onSendMessage = vi.fn();

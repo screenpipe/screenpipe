@@ -1880,7 +1880,7 @@ export const AIPresetsSelector = ({
           <div className="flex items-center gap-2 p-2 text-sm bg-muted border border-border rounded-lg">
             <AlertTriangle className="h-4 w-4 text-muted-foreground shrink-0" />
             <span className="text-foreground flex-1">
-              Login required to use Screenpipe Cloud
+              {ui("Login required to use Screenpipe Cloud")}
             </span>
             {showLoginCta && (
               <Button
@@ -1892,7 +1892,7 @@ export const AIPresetsSelector = ({
                 }}
               >
                 <LogIn className="h-3 w-3 mr-1" />
-                Login
+                {ui("Login")}
               </Button>
             )}
           </div>
@@ -1916,7 +1916,6 @@ export const AIPresetsSelector = ({
                   className={cn(
                     "w-full justify-between hover:bg-accent hover:text-accent-foreground",
                     compact && "h-8 text-xs",
-                    selectedPresetRequiresLogin && "border-amber-500/50",
                     triggerClassName
                   )}
                 >
@@ -1927,7 +1926,7 @@ export const AIPresetsSelector = ({
                         providerIconOnly && "justify-center",
                       )}>
                         {selectedPresetRequiresLogin && (
-                          <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
+                          <AlertTriangle className="h-4 w-4 text-muted-foreground shrink-0" />
                         )}
                         {/* The model name tells people what is selected; the
                             real colored mark makes the provider scannable when
@@ -2002,7 +2001,7 @@ export const AIPresetsSelector = ({
                       <div className="flex w-full items-center justify-between gap-2 overflow-hidden min-w-0">
                         <div className="flex items-center gap-2 min-w-0 flex-shrink overflow-hidden">
                           {selectedPresetRequiresLogin && (
-                            <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
+                            <AlertTriangle className="h-4 w-4 text-muted-foreground shrink-0" />
                           )}
                           <span className="font-medium truncate text-left">
                             {formatPresetName(selectedPresetData?.id || '')}
@@ -2030,10 +2029,10 @@ export const AIPresetsSelector = ({
               </PopoverTrigger>
               <TooltipContent>
                 {providerIconOnly ? (
-                  <p>{selectedProviderName} · switch provider</p>
+                  <p>{ui("{value1} · switch provider", { value1: selectedProviderName })}</p>
                 ) : selectedPresetRequiresLogin ? (
                   <p className="text-muted-foreground">
-                    Login required to use this preset
+                    {ui("Login required to use this preset")}
                   </p>
                 ) : (
                   <p className="flex items-center gap-2">
@@ -2057,7 +2056,7 @@ export const AIPresetsSelector = ({
             <Command>
               <CommandInput placeholder={ui("Search presets...")} />
               <CommandList>
-                <CommandEmpty>No presets found.</CommandEmpty>
+                <CommandEmpty>{ui("No presets found.")}</CommandEmpty>
                 {allowNone && (
                   <CommandGroup>
                     <CommandItem
