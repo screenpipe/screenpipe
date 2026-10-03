@@ -1050,7 +1050,8 @@
         "tests/audio_pipeline_benchmark/pipeline_benchmark.rs",
         "tests/audio_pipeline_benchmark/quality_regression.rs",
         "tests/audio_pipeline_benchmark/smart_mode_benchmark.rs",
-        "tests/audio_pipeline_benchmark/vad_benchmark.rs"
+        "tests/audio_pipeline_benchmark/vad_benchmark.rs",
+        "tests/vad_frame_continuity_test.rs"
       ],
       "platforms": [
         "windows",
@@ -1070,7 +1071,7 @@
       "criticality": "medium",
       "confidence": "partial",
       "kind": "benchmark",
-      "notes": "Benchmark-backed regression probes for VAD, smart mode, meeting audio, quality, cross-device, and end-to-end pipeline timing."
+      "notes": "Benchmark-backed regression probes for VAD, smart mode, meeting audio, quality, cross-device, and end-to-end pipeline timing. Native-window continuity, valid 16 kHz fallback frames and partial-tail regression tests; optional real-model speech-fixture timing is ignored by default."
     },
     {
       "id": "audio-models-filtering",

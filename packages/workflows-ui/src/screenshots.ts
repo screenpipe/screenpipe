@@ -10,5 +10,13 @@ export function stageScreenshots(stage: WorkflowStage): WorkflowScreenshot[] {
       && !seen.has(image.frameId) && !!seen.add(image.frameId));
 }
 export function verifiedStageScreenshots(stage: WorkflowStage): WorkflowScreenshot[] {
-  return stageScreenshots(stage).filter(image => image.visualVerified && !!image.dataUrl);
+  return stageScreenshots(stage).filter(image => image.visualVerified);
+}
+
+/** Keep recorder identities in saved state; pixel copies belong only in explicit exports. */
+export function serializeWorkflowData(value: unknown): string {
+  return JSON.stringify(value, function (key, child) {
+    return key === "dataUrl" && Number.isSafeInteger(this?.frameId)
+      && this.frameId > 0 && typeof this.timestamp === "string" ? "" : child;
+  });
 }

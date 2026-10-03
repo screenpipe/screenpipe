@@ -464,43 +464,12 @@ async fn stage_screenshot(endpoint: &RecorderEndpoint, stage: &Value) -> Option<
             else {
                 continue;
             };
-            let thumbnail_url = format!(
-                "{}/frames/{frame_id}/thumbnail?width=640&quality=68&fallback=false",
-                endpoint.base_url
-            );
-            let Ok(thumbnail) = apply_auth(
-                endpoint,
-                reqwest::Client::new()
-                    .get(thumbnail_url)
-                    .timeout(Duration::from_secs(10)),
-            )
-            .send()
-            .await
-            else {
-                continue;
-            };
-            if !thumbnail.status().is_success() {
-                continue;
-            }
-            let mime = thumbnail
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok())
-                .filter(|value| value.starts_with("image/"))
-                .unwrap_or("image/jpeg")
-                .to_string();
-            let Ok(bytes) = thumbnail.bytes().await else {
-                continue;
-            };
-            if bytes.is_empty() || bytes.len() > 500_000 {
-                continue;
-            }
             return Some(json!({
                 "frameId": frame_id,
                 "timestamp": frame_timestamp,
                 "app": app,
                 "matchDistanceSeconds": distance_seconds,
-                "dataUrl": format!("data:{mime};base64,{}", BASE64.encode(bytes)),
+                "dataUrl": "",
             }));
         }
     }

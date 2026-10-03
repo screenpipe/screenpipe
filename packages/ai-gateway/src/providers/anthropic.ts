@@ -587,13 +587,15 @@ export class AnthropicProvider implements AIProvider {
 		return {
 			choices: [
 				{
+					finish_reason: anthropicStopReasonToOpenAI(response.stop_reason),
 					message: {
 						content: textContent,
 						role: 'assistant',
 						tool_calls: response.content
 							.filter((block): block is ContentBlock => block.type === 'tool_use')
 							.map((block) => ({
-								type: block.type,
+								id: (block as any).id,
+								type: 'function',
 								function: {
 									name: (block as any).name,
 									arguments: JSON.stringify((block as any).input),

@@ -18,6 +18,7 @@ export function WorkflowStepEvidence({ workflow, stage, platform }: {
   workflow: WorkflowMap; stage: WorkflowStage; platform: WorkflowsPlatform;
 }) {
   const [reduced, setReduced] = useState<Set<number>>(() => new Set());
+  const [previewHeight, setPreviewHeight] = useState(0);
   const [selected, setSelected] = useState<WorkflowScreenshot | null>(null);
   const [playing, setPlaying] = useState(false);
   const playerRef = useRef<HTMLDivElement>(null);
@@ -53,7 +54,7 @@ export function WorkflowStepEvidence({ workflow, stage, platform }: {
       else if (media?.url && platform.releaseWorkflowRecording) void platform.releaseWorkflowRecording(media.url).catch(() => {});
     }
   };
-  return <section ref={preview.ref} className={`${styles.evidence} ph-no-capture ph-mask`} aria-label={`References for ${stage.name}`}>
+  return <section ref={preview.ref} onLoad={() => setPreviewHeight(preview.ref.current?.getBoundingClientRect().height ?? 0)} style={!attached.length && !screenshots.length && previewHeight ? { minHeight: previewHeight } : undefined} className={`${styles.evidence} ph-no-capture ph-mask`} aria-label={`References for ${stage.name}`}>
     {!playing && !screenshots.length && <div className={styles.previewStatus} role="status">
       {preview.status === "loading" ? "Loading source screenshot…" : preview.status === "error" ? "Could not load the source screenshot." : "No screenshot available for this step."}
       {preview.canRetry && preview.status !== "loading" && <button type="button" onClick={preview.retry}>Retry screenshot</button>}
@@ -61,17 +62,10 @@ export function WorkflowStepEvidence({ workflow, stage, platform }: {
     {!playing && screenshots.map((capture, index) => {
       const expanded = !reduced.has(capture.frameId);
       const suffix = screenshots.length > 1 ? ` ${index + 1}` : "";
-      return <figure key={capture.frameId} className={`${styles.figure} ${expanded ? styles.expanded : ""}`}>
-        <button className={styles.imageButton} type="button" aria-label={`${expanded ? "Reduce" : "Enlarge"} screenshot${suffix} for ${stage.name}`} aria-expanded={expanded} onClick={() => setReduced(previous => {
-          const next = new Set(previous); if (expanded) next.add(capture.frameId); else next.delete(capture.frameId); return next;
-        })}>
-          <img src={capture.dataUrl} alt={`Captured reference${suffix} for ${stage.name}`} loading="lazy" draggable={false} data-lm-disable="true" />
-          <span className={styles.zoom}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</span>
-        </button>
-        <figcaption><span>{!capture.visualVerified ? "Source screenshot · " : ""}{capture.app} · {when(capture.timestamp)}</span>
-          {(canReplay || platform.openCapturedMoment) && <button className={styles.recording} title="Open recording" type="button" disabled={opening} onClick={() => void openRecording(capture)} aria-label={`${platform.openCapturedMoment ? "Open" : "View"} recording${suffix} for ${stage.name}`}>{opening ? <Loader2 size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}</button>}
-        </figcaption>
-      </figure>;
+      return <EvidenceFigure key={`${capture.frameId}:${capture.timestamp}`} capture={capture} stage={stage} platform={platform} suffix={suffix} expanded={expanded} opening={opening}
+        toggle={() => setReduced(previous => { const next = new Set(previous); if (expanded) next.add(capture.frameId); else next.delete(capture.frameId); return next; })}
+        replay={canReplay || !!platform.openCapturedMoment ? () => void openRecording(capture) : undefined}
+        resolved={capture === preview.image} />;
     })}
     {playing && <div ref={playerRef} className={styles.player}>
       <button type="button" className={styles.close} aria-label={`Close recording for ${stage.name}`} title="Close recording" onClick={() => setPlaying(false)}><X size={15} /></button>
@@ -82,4 +76,29 @@ export function WorkflowStepEvidence({ workflow, stage, platform }: {
       {openError && <span role="alert">Could not open this capture. Try again.</span>}
     </div>
   </section>;
+}
+
+function EvidenceFigure({ capture, stage, platform, suffix, expanded, opening, toggle, replay, resolved }: {
+  capture: WorkflowScreenshot; stage: WorkflowStage; platform: WorkflowsPlatform; suffix: string;
+  expanded: boolean; opening: boolean; toggle: () => void; replay?: () => void; resolved: boolean;
+}) {
+  const load = resolved ? undefined : platform.loadWorkflowScreenshot;
+  const preview = useSourceScreenshot(stage, !load, load, capture);
+  // Desktop images always resolve through the recorder, including legacy embedded images.
+  const url = load ? preview.image?.dataUrl : capture.dataUrl;
+  const [failed, setFailed] = useState(false);
+  const [ratio, setRatio] = useState("16 / 10");
+  useEffect(() => setFailed(false), [url]);
+  return <figure ref={preview.ref} className={`${styles.figure} ${expanded ? styles.expanded : ""}`}>
+    {url && !failed ? <button className={styles.imageButton} type="button" aria-label={`${expanded ? "Reduce" : "Enlarge"} screenshot${suffix} for ${stage.name}`} aria-expanded={expanded} onClick={toggle}>
+      <img src={url} alt={`Captured reference${suffix} for ${stage.name}`} loading="lazy" decoding="async" draggable={false} data-lm-disable="true" onLoad={event => { const image = event.currentTarget; if (image.naturalWidth && image.naturalHeight) setRatio(`${image.naturalWidth} / ${image.naturalHeight}`); }} onError={() => setFailed(true)} />
+      <span className={styles.zoom}>{expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</span>
+    </button> : <div className={styles.previewStatus} role="status" style={preview.status === "loading" && !failed ? { aspectRatio: ratio } : undefined}>
+      {failed || preview.status === "error" ? "Could not load the source screenshot." : preview.status === "loading" ? "Loading source screenshot…" : "This screenshot is no longer available."}
+      {(failed || preview.status === "error") && load && <button onClick={() => { setFailed(false); preview.retry(); }}>Retry screenshot</button>}
+    </div>}
+    <figcaption><span>{!capture.visualVerified ? "Source screenshot · " : ""}{capture.app} · {when(capture.timestamp)}</span>
+      {replay && <button className={styles.recording} title="Open recording" type="button" disabled={opening} onClick={replay} aria-label={`${platform.openCapturedMoment ? "Open" : "View"} recording${suffix} for ${stage.name}`}>{opening ? <Loader2 size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}</button>}
+    </figcaption>
+  </figure>;
 }

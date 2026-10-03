@@ -52,6 +52,12 @@ pub enum VadEngineEnum {
 pub const OUTPUT_SPEECH_THRESHOLD: f32 = 0.15;
 
 pub trait VadEngine: Send {
+    /// Native analysis window at the pipeline's 16 kHz sample rate.
+    /// Silero requires 512 contiguous samples; other engines may override it.
+    fn frame_size(&self) -> usize {
+        512
+    }
+
     fn is_voice_segment(&mut self, audio_chunk: &[f32]) -> anyhow::Result<bool>;
     fn audio_type(&mut self, audio_chunk: &[f32]) -> anyhow::Result<VadStatus>;
     /// Override the speech probability threshold. Call with `None` to reset to default.

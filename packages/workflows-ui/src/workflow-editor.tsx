@@ -6,6 +6,7 @@ import {
   ArrowDown,
   ArrowUp,
   GripVertical,
+  ChevronDown,
   MoreHorizontal,
   Plus,
   Trash2,
@@ -467,32 +468,10 @@ export function WorkflowEditor({ workflow, save, actions, renderSource }: {
                       <GripVertical size={15} />
                     </button>
                     {blockMenu === detail.key && <div role="dialog" aria-label={`Actions for block ${detailIndex + 1} in step ${index + 1}`} className={styles.blockMenu}>
-                      <label>Block type
-                    <select
-                      autoFocus
-                      aria-label={`Block ${detailIndex + 1} type in step ${index + 1}`}
-                      value={detail.kind}
-                      onChange={(e) =>
-                        stageChange(index, {
-                          ...stage,
-                          procedure: stage.procedure.map((p, i) =>
-                            i === detailIndex
-                              ? { ...p, kind: e.target.value as typeof p.kind }
-                              : p,
-                          ),
-                        })
-                      }
-                    >
-                      {["action", "input", "output", "decision", "check"].map(
-                        (kind) => (
-                          <option key={kind}>{kind}</option>
-                        ),
-                      )}
-                    </select>
-                      </label>
                     <button
                       type="button"
                       title="Delete block"
+                      autoFocus
                       aria-label={`Delete block ${detailIndex + 1} in step ${index + 1}`}
                       onClick={() => {
                         setBlockMenu(null);
@@ -508,7 +487,24 @@ export function WorkflowEditor({ workflow, save, actions, renderSource }: {
                     </button>
                     </div>}
                     </div>
-                    {detail.kind !== "action" && <span className={styles.kindLabel}>{detail.kind}</span>}
+                    <div className={styles.kindLabel} data-kind={detail.kind}>
+                      <select
+                        aria-label={`Block ${detailIndex + 1} type in step ${index + 1}`}
+                        title="Change block type"
+                        value={detail.kind}
+                        onChange={(e) => stageChange(index, {
+                          ...stage,
+                          procedure: stage.procedure.map((p, i) =>
+                            i === detailIndex ? { ...p, kind: e.target.value as typeof p.kind } : p,
+                          ),
+                        })}
+                      >
+                        {["action", "input", "output", "decision", "check"].map(kind =>
+                          <option key={kind} value={kind}>{kind}</option>,
+                        )}
+                      </select>
+                      <ChevronDown size={12} aria-hidden="true" />
+                    </div>
                     <Text
                       rich
                       label={`Block ${detailIndex + 1} in step ${index + 1}`}

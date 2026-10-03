@@ -201,3 +201,11 @@ it("keeps update activity when opening a map and through missing or failed statu
   expect(platform.subscribeAnalysisActivity).toHaveBeenCalledOnce();
   expect(off).not.toHaveBeenCalled();
 });
+
+it.each(["overview", "time", "bottlenecks", "evidence", "privacy"])("routes obsolete %s links to Home", async (view) => {
+  window.history.replaceState(null, "", `/home?mode=workflows&view=${view}`);
+  const platform = createFixtureWorkflowsPlatform();
+  await mount(platform, true);
+  expect(screen.getByRole("heading", { name: "Your workflows" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Context", exact: true })).toBeVisible();
+});

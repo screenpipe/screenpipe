@@ -22,9 +22,6 @@ use vad_rs::VadStatus;
 
 use std::sync::Arc;
 
-/// Frame size matching prepare_segments.rs.
-const FRAME_SIZE: usize = 1600;
-
 /// Chunk duration in seconds (matching production pipeline).
 const CHUNK_DURATION_SECS: f64 = 30.0;
 
@@ -59,7 +56,7 @@ fn simulate_pipeline(
         let mut total_frames = 0u32;
         let mut speech_frames = 0u32;
 
-        for frame in normalized.chunks(FRAME_SIZE) {
+        for frame in normalized.chunks(vad.frame_size()) {
             total_frames += 1;
             if let Ok(VadStatus::Speech) = vad.audio_type(frame) {
                 speech_frames += 1;

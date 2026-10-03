@@ -22,7 +22,7 @@ With Screenpipe, OpenClaw can recall what you've seen on screen, reference past 
 
 ## Quick setup
 
-One command makes OpenClaw screenpipe-aware: it installs the Screenpipe skills into OpenClaw's skills directory and registers the Screenpipe MCP server in its config.
+With current OpenClaw versions that support native `mcp.servers`, connect **OpenClaw** in Screenpipe’s **Settings → Connections → AI apps**, or use the CLI. The command installs the Screenpipe skills into OpenClaw's skills directory and registers the Screenpipe MCP server in its config.
 
 ```bash
 npx -y screenpipe@latest agent setup openclaw
@@ -42,20 +42,27 @@ If OpenClaw and Screenpipe run on the same machine, setup is straightforward.
 
 ### MCP
 
-Add Screenpipe to your OpenClaw MCP config:
+Add Screenpipe under `mcp.servers` in `~/.openclaw/openclaw.json` (JSON5 is supported):
 
 ```json
 {
-  "mcpServers": {
-    "screenpipe": {
-      "command": "npx",
-      "args": ["-y", "screenpipe-mcp"]
+  "mcp": {
+    "servers": {
+      "screenpipe": {
+        "command": "bun",
+        "args": ["x", "screenpipe-mcp@latest"],
+        "transport": "stdio"
+      }
     }
   }
 }
 ```
 
-Restart OpenClaw — it will now have access to your screen history, audio transcriptions, and more.
+Restart OpenClaw and ask it to search the last 10 minutes of Screenpipe history, including timestamps and source references. A configured connection does not prove a query succeeded.
+
+Desktop setup supplies Screenpipe’s local API credential. For manual setup, supply `SCREENPIPE_LOCAL_API_KEY` in the server's environment when local API authentication is enabled; obtain it with `screenpipe auth token` on the recording computer.
+
+Older Screenpipe versions wrote a top-level `mcpServers` map. Reconnect to migrate it to `mcp.servers` while preserving other server definitions and settings. Conflicting definitions are refused without changing the file. JSON5 is accepted on read and saved as formatted JSON; a backup preserves the original comments and formatting.
 
 You can test the MCP server independently:
 
@@ -65,7 +72,7 @@ npx @modelcontextprotocol/inspector npx screenpipe-mcp
 
 ### Custom skill (alternative)
 
-Create `~/openclaw/skills/screenpipe/skill.md`:
+Create `~/.openclaw/skills/screenpipe/SKILL.md`:
 
 ````markdown
 ---
@@ -128,7 +135,7 @@ Headless `npx -y screenpipe@latest login` writes the cloud token where the engin
 
 If both machines are on the same network, OpenClaw can query Screenpipe's API directly. Use a custom skill:
 
-Create `~/openclaw/skills/screenpipe/skill.md`:
+Create `~/.openclaw/skills/screenpipe/SKILL.md`:
 
 ````markdown
 ---
@@ -261,3 +268,10 @@ Prefer to run it inside the Screenpipe app instead of OpenClaw? Do the same thin
 **No results from queries?**
 - Verify Screenpipe is running: `curl http://localhost:3030/health`
 - Ensure Screenpipe has screen recording permissions
+
+
+## Sending work to OpenClaw
+
+Reading Screenpipe uses MCP. Sending an event to OpenClaw is a separate optional connection: enable OpenClaw’s HTTP hooks and enter its dedicated **Hook Token** (`hooks.token`) in Screenpipe’s Remote agent settings. Do not use `OPENCLAW_GATEWAY_TOKEN` for hooks. The connection test sends a “screenpipe connected” wake event.
+
+See [OpenClaw’s hook configuration](https://docs.openclaw.ai/gateway/config-hooks).

@@ -1,0 +1,44 @@
+---
+title: "Hermes - Screenpipe context for your agent"
+sidebarTitle: "Hermes"
+description: "Connect Hermes to Screenpipe with MCP and skills to recall screen history and meetings."
+icon: "brain"
+---
+
+[Hermes](https://hermes-agent.nousresearch.com) can query Screenpipe through MCP. Screenpipe's skills teach the agent workflows such as recall, meeting prep, and worklogs.
+
+## Connect on the same computer
+
+1. Start Screenpipe and open Hermes once so its configuration directory exists.
+2. In Screenpipe, open **Settings → Connections → AI apps** and connect **Hermes**.
+3. Restart Hermes, or run `/reload-mcp` inside Hermes.
+
+Screenpipe adds its MCP server to `~/.hermes/config.yaml` and installs its bundled skills in `~/.hermes/skills/`. Other MCP servers and unrelated settings are preserved. Reconnecting refreshes Screenpipe's launch command and local API credential.
+
+For a CLI installation, use:
+
+```bash
+bun x screenpipe@latest agent setup hermes
+```
+
+## Verify retrieval
+
+Ask Hermes:
+
+> Use Screenpipe to find what I worked on in the last 10 minutes. Include timestamps and source references. Tell me if the query fails or returns no recordings.
+
+Then try:
+
+> Use Screenpipe to find my latest recorded meeting and summarize its decisions, citing the source.
+
+The connection indicator confirms configuration and skills are installed. A successful query from Hermes verifies that the running agent can access recordings. An empty result does not prove recording is healthy.
+
+## Disconnect
+
+Use **Remove** beside Hermes in Screenpipe's AI apps list, then reload Hermes's MCP connections. Screenpipe removes its entry while preserving other servers and user-edited skills.
+
+## Remote Hermes
+
+When Hermes runs on another computer, localhost refers to that computer. Use a private authenticated connection to the recording computer; see the [remote MCP guide](/mcp-server). Screenpipe's stdio MCP has the full tool set. The HTTP transport currently exposes search and bundled-skill access, so do not expect meeting and activity tools through HTTP yet.
+
+Hermes's API server is a separate, optional connection for sending work **to Hermes**. It is not required for Hermes to read Screenpipe context.

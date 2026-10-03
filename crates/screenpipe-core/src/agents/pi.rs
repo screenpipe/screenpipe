@@ -13,12 +13,46 @@ use arc_swap::ArcSwap;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::ffi::{OsStr, OsString};
-use std::io::Read;
+use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
 static USER_SKILL_SYNC_LOCK: Mutex<()> = Mutex::new(());
+
+struct PiPromptInput {
+    user_prompt: std::fs::File,
+    system_prompt: Option<tempfile::NamedTempFile>,
+}
+
+fn prepare_pi_prompt_input(
+    prompt: &str,
+    pipe_system_prompt: Option<&str>,
+) -> Result<PiPromptInput> {
+    // Pi 0.84.1 treats piped stdin as the initial user message without adding
+    // attachment markup. A seeked tempfile avoids both the Windows command-line
+    // limit and the deadlock risk of writing a large prompt into a child pipe.
+    let mut user_prompt = tempfile::tempfile()?;
+    user_prompt.write_all(prompt.as_bytes())?;
+    user_prompt.seek(std::io::SeekFrom::Start(0))?;
+
+    // Pi resolves an existing --append-system-prompt value as a UTF-8 file.
+    // Keep the named file alive until the child exits so the user/system roles
+    // and the system-prefix caching boundary remain unchanged.
+    let system_prompt = pipe_system_prompt
+        .map(|prompt| -> Result<_> {
+            let mut file = tempfile::NamedTempFile::new()?;
+            file.write_all(prompt.as_bytes())?;
+            file.flush()?;
+            Ok(file)
+        })
+        .transpose()?;
+
+    Ok(PiPromptInput {
+        user_prompt,
+        system_prompt,
+    })
+}
 
 fn user_skill_fingerprint(root: &Path) -> std::io::Result<String> {
     fn hash_dir(root: &Path, dir: &Path, hasher: &mut Sha256) -> std::io::Result<()> {
@@ -1803,12 +1837,15 @@ impl PiExecutor {
         pipe_system_prompt: Option<&str>,
     ) -> Result<AgentOutput> {
         super::pi_compaction::ensure_for_entrypoint(Path::new(pi_path))?;
+        let PiPromptInput {
+            user_prompt,
+            system_prompt,
+        } = prepare_pi_prompt_input(prompt, pipe_system_prompt)?;
         let mut cmd = build_async_command(pi_path);
         cmd.current_dir(working_dir);
         apply_pi_isolation_env(&mut |k, v| {
             cmd.env(k, v);
         });
-        // Flags MUST come before -p on Windows (see spawn_pi_streaming comment)
         if continue_session {
             cmd.arg("--continue");
         } else {
@@ -1816,10 +1853,11 @@ impl PiExecutor {
         }
         cmd.arg("--provider").arg(resolved_provider);
         cmd.arg("--model").arg(model);
-        if let Some(sys) = pipe_system_prompt {
-            cmd.arg("--append-system-prompt").arg(sys);
+        if let Some(ref sys) = system_prompt {
+            cmd.arg("--append-system-prompt").arg(sys.path());
         }
-        cmd.arg("-p").arg(prompt);
+        cmd.arg("-p");
+        cmd.stdin(std::process::Stdio::from(user_prompt));
 
         let cloud_token = self.current_user_token();
         if let Some(ref token) = cloud_token {
@@ -1946,14 +1984,15 @@ impl PiExecutor {
         session_owner: Option<&str>,
     ) -> Result<AgentOutput> {
         super::pi_compaction::ensure_for_entrypoint(Path::new(pi_path))?;
+        let PiPromptInput {
+            user_prompt,
+            system_prompt,
+        } = prepare_pi_prompt_input(prompt, pipe_system_prompt)?;
         let mut cmd = build_async_command(pi_path);
         cmd.current_dir(working_dir);
         apply_pi_isolation_env(&mut |k, v| {
             cmd.env(k, v);
         });
-        // Flags MUST come before -p on Windows: cmd.exe /C passes everything
-        // as a single string, and the long prompt text can break arg parsing
-        // if flags come after it.
         cmd.arg("--mode").arg("json");
         // pi 0.80 gates project-dir resources (.pi/extensions — mcp-bridge,
         // connection-gate, …) behind a project-trust prompt that can never be
@@ -1973,10 +2012,11 @@ impl PiExecutor {
         }
         // Pass pipe instructions as system prompt for Anthropic prompt caching.
         // Pi's internal system prompt + this appended text form the cached prefix.
-        if let Some(sys) = pipe_system_prompt {
-            cmd.arg("--append-system-prompt").arg(sys);
+        if let Some(ref sys) = system_prompt {
+            cmd.arg("--append-system-prompt").arg(sys.path());
         }
-        cmd.arg("-p").arg(prompt);
+        cmd.arg("-p");
+        cmd.stdin(std::process::Stdio::from(user_prompt));
 
         let cloud_token = self.current_user_token();
         if let Some(ref token) = cloud_token {
@@ -4549,6 +4589,100 @@ pub fn ensure_bash_available() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pi_prompt_input_preserves_long_user_and_system_roles() {
+        let user = format!(
+            "user role\n{}\nUnicode: 雪 🚀\nShell: %PATH% & | < > ^ $() `quoted`",
+            "u".repeat(40_000)
+        );
+        let system = format!(
+            "system role\r\n{}\nUnicode: café λ\nShell: %TEMP% & | < > ^ $()",
+            "s".repeat(40_000)
+        );
+
+        let PiPromptInput {
+            mut user_prompt,
+            system_prompt,
+        } = prepare_pi_prompt_input(&user, Some(&system)).expect("prepare prompt inputs");
+
+        let mut actual_user = String::new();
+        user_prompt
+            .read_to_string(&mut actual_user)
+            .expect("read user prompt input");
+        assert_eq!(actual_user, user);
+
+        let system_prompt = system_prompt.expect("system prompt file");
+        let system_path = system_prompt.path().to_path_buf();
+        assert_eq!(
+            std::fs::read_to_string(&system_path).expect("read system prompt input"),
+            system
+        );
+        drop(system_prompt);
+        assert!(
+            !system_path.exists(),
+            "named system prompt input must be removed when its run guard drops"
+        );
+    }
+
+    #[test]
+    fn pi_prompt_input_omits_system_file_when_not_requested() {
+        let PiPromptInput {
+            mut user_prompt,
+            system_prompt,
+        } = prepare_pi_prompt_input("short prompt", None).expect("prepare prompt input");
+
+        let mut actual_user = String::new();
+        user_prompt
+            .read_to_string(&mut actual_user)
+            .expect("read user prompt input");
+        assert_eq!(actual_user, "short prompt");
+        assert!(system_prompt.is_none());
+    }
+
+    #[test]
+    fn pi_prompt_inputs_are_isolated_between_overlapping_runs() {
+        let first = prepare_pi_prompt_input("first user", Some("first system")).unwrap();
+        let second = prepare_pi_prompt_input("second user", Some("second system")).unwrap();
+
+        let first_path = first.system_prompt.as_ref().unwrap().path();
+        let second_path = second.system_prompt.as_ref().unwrap().path();
+        assert_ne!(first_path, second_path);
+        assert_eq!(std::fs::read_to_string(first_path).unwrap(), "first system");
+        assert_eq!(
+            std::fs::read_to_string(second_path).unwrap(),
+            "second system"
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn pi_launch_error_display_preserves_windows_io_cause() {
+        let missing = std::env::temp_dir().join(format!(
+            "screenpipe-missing-pi-{}-{}.exe",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut command = build_async_command(missing.to_str().unwrap());
+        let io_error = match command.spawn() {
+            Ok(mut child) => {
+                let _ = child.kill().await;
+                panic!("unexpectedly launched missing pi executable")
+            }
+            Err(error) => error,
+        };
+        assert_eq!(io_error.raw_os_error(), Some(2));
+
+        // Scheduler logging and execution history both use ordinary Display.
+        // Raw propagation must therefore retain the Windows OS text there.
+        let expected = io_error.to_string();
+        let persisted_error = anyhow::Error::from(io_error).to_string();
+        assert_eq!(persisted_error, expected);
+        assert!(persisted_error.contains("os error 2"));
+    }
 
     #[test]
     fn windows_bash_launcher_detection_rejects_wsl_shims() {
