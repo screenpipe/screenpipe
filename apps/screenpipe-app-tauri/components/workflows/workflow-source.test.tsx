@@ -42,3 +42,14 @@ it("persists the processing choice independently of source", async () => {
  state.promptSeen = true; view.rerender(<IntegratedWorkflows {...props} />);
  expect(screen.queryByRole('button', { name: 'Remember processing choice' })).toBeNull();
 });
+
+// The cloud adapter must obey the same rollout decision as the Home entry.
+it("unmounts enterprise cloud workflows when beta access is revoked", () => {
+ const view = render(<IntegratedWorkflows {...props} />);
+ expect(screen.getByText('Cloud catalog')).toBeVisible();
+ state.enabled = false; view.rerender(<IntegratedWorkflows {...props} />);
+ expect(screen.queryByText('Cloud catalog')).toBeNull();
+ expect(screen.queryByRole('combobox', { name: 'Workflow source' })).toBeNull();
+ state.enabled = true; view.rerender(<IntegratedWorkflows {...props} />);
+ expect(screen.getByText('Cloud catalog')).toBeVisible();
+});
