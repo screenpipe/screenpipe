@@ -7,7 +7,7 @@ import { useRecordingStorage } from "./use-recording-storage";
 
 const mocks = vi.hoisted(() => ({
   settings: { dataDir: "default", stopRecordingOnLowDisk: true },
-  getDataDir: vi.fn(async () => "/example/data"),
+  getActiveDataDir: vi.fn(async () => ({ status: "ok", data: "/example/data" })),
   getDiskUsage: vi.fn(),
   getLowDiskGuardConfig: vi.fn(async () => ({ thresholdBytes: 5 * 1024 ** 3 })),
 }));
@@ -19,6 +19,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.settings.dataDir = "default";
   mocks.settings.stopRecordingOnLowDisk = true;
+  mocks.getActiveDataDir.mockResolvedValue({ status: "ok", data: "/example/data" });
   mocks.getDiskUsage.mockResolvedValue(usage(3));
   mocks.getLowDiskGuardConfig.mockResolvedValue({ thresholdBytes: 5 * 1024 ** 3 });
 });
@@ -40,6 +41,15 @@ describe("paused recording storage", () => {
     await waitFor(() => expect(result.current.checking).toBe(false));
     expect(result.current.warning).toBeNull();
     expect(mocks.getDiskUsage).toHaveBeenCalledTimes(2);
+    expect(mocks.getDiskUsage).toHaveBeenCalledWith(true, "/example/data");
+  });
+
+  it("uses the running engine directory instead of the persisted default", async () => {
+    mocks.settings.dataDir = "default";
+    mocks.getActiveDataDir.mockResolvedValueOnce({ status: "ok", data: "V:\\screenpipe-data" });
+    renderHook(() => useRecordingStorage(true));
+    await waitFor(() => expect(mocks.getDiskUsage).toHaveBeenCalled());
+    expect(mocks.getDiskUsage).toHaveBeenCalledWith(true, "V:\\screenpipe-data");
   });
 
   it("does not report failed probes as zero free bytes", async () => {

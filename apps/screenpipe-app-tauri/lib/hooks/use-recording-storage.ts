@@ -1,7 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useSettings } from "./use-settings";
 import { commands } from "@/lib/utils/tauri";
 
@@ -13,9 +13,7 @@ export interface RecordingStorageWarning {
 /** Inspect storage only while capture is paused. Never poll or scan the data
  * directory on the active recording path. Native capture owns the safety guard. */
 export function useRecordingStorage(paused: boolean) {
-  const { settings, getDataDir } = useSettings();
-  const getDataDirRef = useRef(getDataDir);
-  getDataDirRef.current = getDataDir;
+  const { settings } = useSettings();
   const enabled = paused && (settings.stopRecordingOnLowDisk ?? true);
   const [revision, setRevision] = useState(0);
   const [state, setState] = useState<{
@@ -36,7 +34,11 @@ export function useRecordingStorage(paused: boolean) {
     }));
     void (async () => {
       try {
-        const directory = await getDataDirRef.current();
+        const activeDirectory = await commands.getActiveDataDir();
+        if (activeDirectory.status === "error") {
+          throw new Error(String(activeDirectory.error));
+        }
+        const directory = activeDirectory.data;
         const [usage, config] = await Promise.all([
           commands.getDiskUsage(true, directory),
           commands.getLowDiskGuardConfig(),
