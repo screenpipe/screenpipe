@@ -1127,11 +1127,12 @@ pub(crate) async fn event_driven_capture_loop(
     // originating `ui_events` rows never sit at `frame_id=NULL`.
     let mut pending_checkpoint: Option<CaptureTrigger> = None;
     let mut pending_checkpoint_corr_ids: Vec<crate::frame_linker::CorrelationId> = Vec::new();
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    let mut context_settle_until: Option<Instant> = None;
+    #[cfg(target_os = "windows")]
+    let mut windows_context_settle_until: Option<Instant> = None;
 
     // Track content hash for dedup across captures
     let mut last_content_hash: Option<i64> = None;
+    let mut last_screenshot_focus_pid: Option<i32> = None;
     // Last frame_id that was successfully written to the DB. Used to link
     // events to a frame even when content-dedup skips the capture — the
     // screen looks the same, so reusing the last frame is semantically correct.
@@ -1215,6 +1216,7 @@ pub(crate) async fn event_driven_capture_loop(
                 false, // hd not active at startup (Manual is dedup-exempt anyway)
                 false, // not in a meeting at startup
                 true,  // focus unknown at startup — controller defaults to Active
+                &mut last_screenshot_focus_pid,
             ),
         )
         .await
@@ -1710,7 +1712,7 @@ pub(crate) async fn event_driven_capture_loop(
         // valid Click correlation ids and the click rows would lose
         // their frame_id link.
         let mut correlation_ids: Vec<crate::frame_linker::CorrelationId> = Vec::new();
-        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        #[cfg(target_os = "windows")]
         let mut context_transition_observed = false;
         let mut trigger: Option<CaptureTrigger>;
         if let Some(warm) = warm_trigger_override.take() {
@@ -1827,7 +1829,7 @@ pub(crate) async fn event_driven_capture_loop(
 
             // A later key/click/scroll message may win reduction, but it must
             // not erase the fact that this batch crossed a focus boundary.
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            #[cfg(target_os = "windows")]
             {
                 context_transition_observed = drained.iter().any(|msg| {
                     matches!(
@@ -1836,7 +1838,7 @@ pub(crate) async fn event_driven_capture_loop(
                     )
                 });
                 if context_transition_observed {
-                    context_settle_until = Some(Instant::now() + CONTEXT_CAPTURE_SETTLE);
+                    windows_context_settle_until = Some(Instant::now() + CONTEXT_CAPTURE_SETTLE);
                 }
             }
 
@@ -1962,9 +1964,9 @@ pub(crate) async fn event_driven_capture_loop(
         }
 
         if let Some(trigger) = trigger {
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
-            if capture_needs_context_settle(&trigger, context_transition_observed) {
-                context_settle_until = Some(Instant::now() + CONTEXT_CAPTURE_SETTLE);
+            #[cfg(target_os = "windows")]
+            if windows_capture_needs_context_settle(&trigger, context_transition_observed) {
+                windows_context_settle_until = Some(Instant::now() + CONTEXT_CAPTURE_SETTLE);
             }
             // Reset content hash on app/window change so the first frame
             // of a new context is never deduped by a stale hash
@@ -2058,12 +2060,12 @@ pub(crate) async fn event_driven_capture_loop(
                 // focus-aware Warm/Cold idling.
                 record_capture_attempt(&vision_metrics, &monitor_liveness);
 
-                // Foreground ownership changes before DWM/WindowServer necessarily presents
-                // the replacement window. Capturing immediately can therefore persist the last
+                // Win32 foreground ownership changes before DWM necessarily presents the
+                // replacement pixels. Capturing immediately can therefore persist the last
                 // frame of an excluded window under the newly focused app's identity. Keep
                 // this off the input hooks and wait only at app/window boundaries.
-                #[cfg(any(target_os = "windows", target_os = "macos"))]
-                if let Some(deadline) = context_settle_until.take() {
+                #[cfg(target_os = "windows")]
+                if let Some(deadline) = windows_context_settle_until.take() {
                     tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
                 }
 
@@ -2113,6 +2115,7 @@ pub(crate) async fn event_driven_capture_loop(
                         // CaptureState::Active is broader: it also covers
                         // hysteresis and unknown/stale focus fallbacks.
                         focus_controller.hosts_focus_for_monitor(&monitor),
+                        &mut last_screenshot_focus_pid,
                     ),
                 )
                 .await;
@@ -2548,18 +2551,19 @@ fn normalize_metadata_value(value: Option<&str>) -> Option<String> {
 // title/focus event arrives. Ask for current pixels at these boundaries and
 // when a visual probe detects a change. The probe itself and periodic scroll/
 // idle capture keep the existing stream and frame rate.
-fn capture_needs_fresh_pixels(trigger: &CaptureTrigger) -> bool {
-    matches!(
-        trigger,
-        CaptureTrigger::AppSwitch { .. }
-            | CaptureTrigger::WindowFocus { .. }
-            | CaptureTrigger::Click { .. }
-            | CaptureTrigger::VisualChange
-    )
+fn capture_needs_fresh_pixels(trigger: &CaptureTrigger, context_changed: bool) -> bool {
+    context_changed
+        || matches!(
+            trigger,
+            CaptureTrigger::AppSwitch { .. }
+                | CaptureTrigger::WindowFocus { .. }
+                | CaptureTrigger::Click { .. }
+                | CaptureTrigger::VisualChange
+        )
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", test))]
-fn capture_needs_context_settle(
+#[cfg(any(target_os = "windows", test))]
+fn windows_capture_needs_context_settle(
     trigger: &CaptureTrigger,
     context_transition_observed: bool,
 ) -> bool {
@@ -2581,7 +2585,7 @@ fn matching_elements_reference(
     coherent: bool,
 ) -> Option<i64> {
     if !coherent
-        || capture_needs_fresh_pixels(trigger)
+        || capture_needs_fresh_pixels(trigger, false)
         || matches!(trigger, CaptureTrigger::ScrollStop)
         || current_hash.is_none_or(|hash| hash == 0 || Some(hash) != previous_hash)
     {
@@ -3072,6 +3076,7 @@ async fn do_capture(
     hd_active: bool,
     in_meeting: bool,
     monitor_hosts_focus: bool,
+    #[allow(unused_variables)] last_screenshot_focus_pid: &mut Option<i32>,
 ) -> Result<CaptureOutput> {
     let captured_at = Utc::now();
     let bypass_capture_throttles = bypasses_capture_throttles(trigger);
@@ -3117,6 +3122,21 @@ async fn do_capture(
         }
     }
 
+    // A scroll/idle capture can already be in flight when a focus notification
+    // arrives. Detect that boundary from the cheap scalar PID as well, rather
+    // than letting its old trigger select the previous persistent SCK buffer.
+    #[cfg(target_os = "macos")]
+    let context_changed = monitor_hosts_focus
+        && !screenshot_disabled
+        && !skip_pixels_for_unknown_exclusions
+        && get_focused_pid_fresh() != *last_screenshot_focus_pid;
+    #[cfg(not(target_os = "macos"))]
+    let context_changed = false;
+    #[cfg(target_os = "macos")]
+    if context_changed {
+        tokio::time::sleep(CONTEXT_CAPTURE_SETTLE).await;
+    }
+
     let image = if screenshot_disabled || skip_pixels_for_unknown_exclusions {
         debug!(
             "screenshot capture skipped for monitor {} (trigger={})",
@@ -3131,7 +3151,7 @@ async fn do_capture(
         let (image, capture_dur) = capture_monitor_image_with_freshness(
             params.monitor,
             &excluded_ids,
-            capture_needs_fresh_pixels(trigger),
+            capture_needs_fresh_pixels(trigger, context_changed),
         )
         .await?;
         debug!(
@@ -3147,6 +3167,11 @@ async fn do_capture(
     } else {
         None
     };
+
+    #[cfg(target_os = "macos")]
+    {
+        *last_screenshot_focus_pid = screenshot_focus_pid;
+    }
 
     // Skip frames that are unusable for indexing.  Two cases:
     //   1. Near-all-black — an ignored window covering the monitor; SCK fills
@@ -4369,7 +4394,7 @@ mod tests {
             CaptureTrigger::Click { x: 10, y: 20 },
             CaptureTrigger::VisualChange,
         ] {
-            assert!(capture_needs_fresh_pixels(&trigger));
+            assert!(capture_needs_fresh_pixels(&trigger, false));
         }
         for trigger in [
             CaptureTrigger::Idle,
@@ -4379,7 +4404,9 @@ mod tests {
             CaptureTrigger::Clipboard,
             CaptureTrigger::Manual,
         ] {
-            assert!(!capture_needs_fresh_pixels(&trigger));
+            assert!(!capture_needs_fresh_pixels(&trigger, false));
+            // Focus can change after this non-focus trigger was selected.
+            assert!(capture_needs_fresh_pixels(&trigger, true));
         }
     }
 
@@ -4392,8 +4419,8 @@ mod tests {
             CaptureTrigger::Manual,
             CaptureTrigger::VisualChange,
         ] {
-            assert!(capture_needs_context_settle(&trigger, true));
-            assert!(!capture_needs_context_settle(&trigger, false));
+            assert!(windows_capture_needs_context_settle(&trigger, true));
+            assert!(!windows_capture_needs_context_settle(&trigger, false));
         }
     }
 
