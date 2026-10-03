@@ -8,6 +8,7 @@
 mod native_actions;
 // Public so the generated command registry can name the handler by full path.
 pub(crate) mod overlay_anchor;
+pub(crate) mod starred_sessions;
 
 use crate::{
     analytics::{AnalyticsManager, Attribution},

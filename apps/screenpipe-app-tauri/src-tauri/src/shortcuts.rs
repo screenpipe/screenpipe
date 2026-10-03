@@ -482,11 +482,7 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
             track_shortcut_used(app, "star_session");
             let handle = app.clone();
             let _ = app.run_on_main_thread(move || {
-                if let Err(e) = (ShowRewindWindow::Home {
-                    page: Some("timeline&starred=1".into()),
-                })
-                .show(&handle)
-                {
+                if let Err(e) = crate::commands::starred_sessions::toggle(&handle) {
                     error!("failed to open starred sessions: {e}");
                 }
             });

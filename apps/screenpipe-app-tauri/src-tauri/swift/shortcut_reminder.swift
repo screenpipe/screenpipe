@@ -1187,28 +1187,9 @@ struct ShortcutReminderView: View {
             DockIconButton(icon: "bubble.left.fill", active: metrics.hoveredControl == "chat", scale: scale) {
                 onAction("open_chat")
             }
-            Menu {
-                ForEach([5, 15, 30, 60], id: \.self) { minutes in
-                    Button("Star for \(minutes) min") { onAction("star_session:\(minutes):normal") }
-                }
-                Menu("Star with HD") {
-                    ForEach([5, 15, 30, 60], id: \.self) { minutes in
-                        Button("\(minutes) min") { onAction("star_session:\(minutes):hd") }
-                    }
-                }
-                Divider()
-                Button("End starred session") { onAction("star_session:0:normal") }
-                Button("Edit saved sessions…") { onAction("open_starred_sessions") }
-            } label: {
-                Image(systemName: "star")
-                    .font(.system(size: s(12)))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            DockIconButton(icon: "star", active: metrics.hoveredControl == "star", scale: scale) {
+                onAction("open_starred_sessions")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize(horizontal: false, vertical: false)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .accessibilityLabel("Star a work session")
             DockIconButton(icon: "rectangle.split.1x2", active: metrics.hoveredControl == "timeline", scale: scale) {
                 onAction("open_timeline")

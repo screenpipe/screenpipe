@@ -78,7 +78,7 @@ export const Providers = forwardRef<
   // sign-in can never complete and the user is locked out for good.
   const pathname = usePathname();
   const isOverlay =
-    pathname === "/shortcut-reminder" || pathname === "/notification-inbox";
+    pathname === "/shortcut-reminder" || pathname === "/notification-inbox" || pathname === "/starred-sessions";
   useEffect(() => {
     setMounted(true);
   }, []);

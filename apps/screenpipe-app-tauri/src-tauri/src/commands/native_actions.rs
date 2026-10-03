@@ -1443,10 +1443,9 @@ fn native_shortcut_action_callback_inner(action_ptr: *const std::os::raw::c_char
             match action.as_str() {
                 "open_starred_sessions" => {
                     let _ = app_clone.run_on_main_thread(move || {
-                        let _ = (ShowRewindWindow::Home {
-                            page: Some("timeline&starred=1".into()),
-                        })
-                        .show(&app_for_show);
+                        if let Err(error) = super::starred_sessions::toggle(&app_for_show) {
+                            warn!("failed to open starred session controls: {error}");
+                        }
                     });
                 }
                 "open_timeline" => {
