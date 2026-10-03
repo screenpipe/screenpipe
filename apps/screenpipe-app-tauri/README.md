@@ -30,6 +30,20 @@ Mac shortcuts: `Cmd+B` toggles navigation; `Option+Cmd+B` toggles the assistant.
 Windows/Linux use `Ctrl+B` and `Ctrl+Alt+B`. Switching modes keeps both chat
 components mounted, but only the visible workspace handles its shortcuts.
 
+## Enterprise Workflows dropdown regression
+
+To check the enterprise Home dropdown, start the browser-mock server with
+`NEXT_PUBLIC_SCREENPIPE_E2E=true bun run dev:web`, then run from the repository root:
+
+```sh
+WORKFLOWS_ENTRY_URL=http://127.0.0.1:1420 bun apps/screenpipe-workflows-web/scripts/eval-enterprise-workflows-entry.mjs
+```
+
+The regression uses fictional enterprise policy and workflow data. It checks the
+authentication gate, the Home dropdown, switching into Workflows,
+returning to Chat, and a Workflows deep link. It runs in frontend CI. It does not
+change or test cloud-mode selection or establish packaged-app validation.
+
 ## fast browser UI development
 
 From this directory, run:
