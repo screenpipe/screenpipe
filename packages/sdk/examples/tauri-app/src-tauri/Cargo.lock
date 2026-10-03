@@ -3930,18 +3930,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "internal-russh-num-bigint"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae8e22120c32fb4d19ec55fba35015f57095cd95a2e3b732e44457f5915b2ee8"
-dependencies = [
- "num-integer",
- "num-traits",
- "rand 0.10.1",
- "rand_core 0.10.1",
-]
-
-[[package]]
 name = "interpolate_name"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4883,6 +4871,8 @@ checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
 dependencies = [
  "num-integer",
  "num-traits",
+ "rand 0.10.1",
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -5518,9 +5508,9 @@ dependencies = [
 
 [[package]]
 name = "pageant"
-version = "0.2.1"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f3a5ae18f65a85c67a77d18d42d3606c07948e3c17c1e5f74852b26589e88a5"
+checksum = "6d8eab09a361a4afe0b1668be978cd97e4f052e927a92b0b608cf902965d49ce"
 dependencies = [
  "base16ct",
  "byteorder",
@@ -6258,9 +6248,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.9.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
+checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
 dependencies = [
  "rand_chacha 0.9.0",
  "rand_core 0.9.5",
@@ -6357,7 +6347,7 @@ dependencies = [
  "num-traits",
  "paste",
  "profiling",
- "rand 0.9.4",
+ "rand 0.9.5",
  "rand_chacha 0.9.0",
  "simd_helpers",
  "thiserror 2.0.18",
@@ -6592,9 +6582,9 @@ dependencies = [
 
 [[package]]
 name = "russh"
-version = "0.62.5"
+version = "0.63.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da7c230e0ed9cbeb92fbad6c8848985d6df2a1464c0dc247a021abd666e9005e"
+checksum = "036204edbd199552a5b3832f63c60dcdf395dc44c7f06b4af1c0e8139cc11bce"
 dependencies = [
  "aes",
  "bitflags 2.11.1",
@@ -6622,13 +6612,12 @@ dependencies = [
  "hex-literal",
  "hmac",
  "inout 0.2.2",
- "internal-russh-num-bigint",
  "keccak",
  "log",
  "md5",
  "ml-kem",
  "module-lattice",
- "num-bigint 0.4.6",
+ "num-bigint 0.5.1",
  "p256",
  "p384",
  "p521",
@@ -7095,7 +7084,7 @@ dependencies = [
  "objc",
  "objc-foundation",
  "once_cell",
- "rand 0.9.4",
+ "rand 0.10.1",
  "regex",
  "reqwest",
  "screenpipe-cpu-features",
@@ -7134,7 +7123,7 @@ dependencies = [
  "oasgen",
  "once_cell",
  "parquet",
- "rand 0.9.4",
+ "rand 0.10.1",
  "regex",
  "rusqlite",
  "screenpipe-config",
@@ -7258,7 +7247,7 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "keyring",
- "rand 0.9.4",
+ "rand 0.10.1",
  "screenpipe-sqlite-coordinator",
  "serde",
  "serde_json",
@@ -7323,7 +7312,7 @@ version = "0.4.52"
 dependencies = [
  "argon2 0.5.3",
  "chacha20poly1305",
- "rand 0.9.4",
+ "rand 0.10.1",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -10820,7 +10809,7 @@ dependencies = [
  "objc2-foundation",
  "percent-encoding",
  "pipewire",
- "rand 0.9.4",
+ "rand 0.9.5",
  "scopeguard",
  "serde",
  "thiserror 2.0.18",

@@ -4765,18 +4765,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "internal-russh-num-bigint"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae8e22120c32fb4d19ec55fba35015f57095cd95a2e3b732e44457f5915b2ee8"
-dependencies = [
- "num-integer",
- "num-traits",
- "rand 0.10.1",
- "rand_core 0.10.1",
-]
-
-[[package]]
 name = "interpolate_name"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6050,6 +6038,8 @@ checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
 dependencies = [
  "num-integer",
  "num-traits",
+ "rand 0.10.1",
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -6918,18 +6908,19 @@ dependencies = [
 
 [[package]]
 name = "pageant"
-version = "0.2.0"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b537f975f6d8dcf48db368d7ec209d583b015713b5df0f5d92d2631e4ff5595"
+checksum = "6d8eab09a361a4afe0b1668be978cd97e4f052e927a92b0b608cf902965d49ce"
 dependencies = [
+ "base16ct 1.0.0",
  "byteorder",
  "bytes",
  "delegate",
  "futures",
  "log",
- "rand 0.8.6",
- "sha2 0.10.9",
- "thiserror 1.0.69",
+ "rand 0.10.1",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
  "tokio",
  "windows 0.62.2",
  "windows-strings 0.5.1",
@@ -8142,12 +8133,13 @@ checksum = "3df6368f71f205ff9c33c076d170dd56ebf68e8161c733c0caa07a7a5509ed53"
 
 [[package]]
 name = "rpassword"
-version = "5.0.1"
+version = "7.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffc936cf8a7ea60c58f030fd36a612a48f440610214dc54bc36431f9ea0c3efb"
+checksum = "f3bc4a3dd492cd6974dd3f32d6626ba9f36e5122e3df3b083474b104aebd139b"
 dependencies = [
  "libc",
- "winapi",
+ "rtoolbox",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8181,6 +8173,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rtoolbox"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a1efe12a1469752d0e6ff5ebec0b6ef4924cc5c4c71046b0ec730040535819d"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "rubato"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8209,9 +8211,9 @@ dependencies = [
 
 [[package]]
 name = "russh"
-version = "0.62.5"
+version = "0.63.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da7c230e0ed9cbeb92fbad6c8848985d6df2a1464c0dc247a021abd666e9005e"
+checksum = "8e134e2480f4e86f83e4aa45b4c0a9723f84beaffa694c54bdf056e74efdd7dd"
 dependencies = [
  "aes",
  "bitflags 2.11.1",
@@ -8239,13 +8241,12 @@ dependencies = [
  "hex-literal",
  "hmac 0.13.0",
  "inout 0.2.2",
- "internal-russh-num-bigint",
  "keccak 0.2.0",
  "log",
  "md5 0.8.1",
  "ml-kem",
  "module-lattice",
- "num-bigint 0.4.6",
+ "num-bigint 0.5.1",
  "p256 0.14.0",
  "p384 0.14.0",
  "p521",
@@ -8711,7 +8712,7 @@ dependencies = [
  "once_cell",
  "ort",
  "ort-sys",
- "rand 0.9.4",
+ "rand 0.10.1",
  "realfft",
  "reqwest 0.13.3",
  "rubato",
@@ -8879,7 +8880,7 @@ dependencies = [
  "objc",
  "objc-foundation",
  "once_cell",
- "rand 0.9.4",
+ "rand 0.10.1",
  "regex",
  "reqwest 0.13.3",
  "screenpipe-cpu-features",
@@ -8924,7 +8925,7 @@ dependencies = [
  "oasgen",
  "once_cell",
  "parquet",
- "rand 0.9.4",
+ "rand 0.10.1",
  "regex",
  "rusqlite",
  "screenpipe-config",
@@ -9135,7 +9136,7 @@ dependencies = [
  "once_cell",
  "opf",
  "ort",
- "rand 0.9.4",
+ "rand 0.10.1",
  "regex",
  "reqwest 0.13.3",
  "screenpipe-db",
@@ -9230,7 +9231,7 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "keyring",
- "rand 0.9.4",
+ "rand 0.10.1",
  "screenpipe-sqlite-coordinator",
  "serde",
  "serde_json",
@@ -9295,7 +9296,7 @@ dependencies = [
  "bytes",
  "chacha20poly1305",
  "hex",
- "rand 0.9.4",
+ "rand 0.10.1",
  "reqwest 0.13.3",
  "serde",
  "serde_json",
@@ -9334,7 +9335,7 @@ version = "0.4.52"
 dependencies = [
  "argon2 0.5.3",
  "chacha20poly1305",
- "rand 0.9.4",
+ "rand 0.10.1",
  "serde",
  "serde_json",
  "tempfile",
