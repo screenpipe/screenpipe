@@ -113,7 +113,10 @@ mod tests {
         let s = OverlayState::default();
         assert_eq!(action_for(&s, Control::Search).unwrap(), "open_search");
         assert_eq!(action_for(&s, Control::Chat).unwrap(), "open_chat");
-        assert_eq!(action_for(&s, Control::Star).unwrap(), "open_starred_sessions");
+        assert_eq!(
+            action_for(&s, Control::Star).unwrap(),
+            "open_starred_sessions"
+        );
         assert_eq!(action_for(&s, Control::Timeline).unwrap(), "open_timeline");
         assert_eq!(action_for(&s, Control::Pill).unwrap(), "open_timeline");
         assert_eq!(action_for(&s, Control::Brand).unwrap(), "open_timeline");
