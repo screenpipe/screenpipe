@@ -59,7 +59,7 @@ import { SafArtifactBody } from "@/components/settings/saf-sop-view";
 import { ArtifactHtmlBody } from "@/components/settings/artifact-html-body";
 import { ConfirmDeleteDialog } from "@/components/settings/confirm-delete-dialog";
 import { BrainOverview } from "@/components/settings/brain-overview";
-import { isHtmlFileName } from "@/lib/utils/html-sandbox";
+import { isHtmlFileName, SANDBOX_CSP, withoutLinkElements } from "@/lib/utils/html-sandbox";
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { localFetch } from "@/lib/api";
 import {
@@ -2360,8 +2360,10 @@ export function BrainSection() {
                   {isHtml ? (
                     <div className="h-[160px] overflow-hidden border-b border-border bg-muted/5">
                       {htmlContent ? (
+                        // Pipe HTML is untrusted: the no-network policy the
+                        // full view uses keeps it from loading anything on sight.
                         <iframe
-                          srcDoc={`<style>html,body{overflow:hidden!important}</style>${htmlContent}`}
+                          srcDoc={`<meta http-equiv="Content-Security-Policy" content="${SANDBOX_CSP}"><style>html,body{overflow:hidden!important}</style>${withoutLinkElements(htmlContent)}`}
                           sandbox=""
                           scrolling="no"
                           className="pointer-events-none h-[320px] w-[200%] origin-top-left scale-50 border-0"

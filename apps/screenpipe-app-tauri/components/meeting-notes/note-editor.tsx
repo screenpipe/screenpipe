@@ -10,26 +10,157 @@ import React, {
   useRef,
 } from "react";
 import { useEditor, EditorContent, type Editor } from "@tiptap/react";
+import type { NodeViewRendererProps } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
 import HardBreak from "@tiptap/extension-hard-break";
-import Image from "@tiptap/extension-image";
+import Image, { type ImageOptions } from "@tiptap/extension-image";
 import { TaskItem, TaskList } from "@tiptap/extension-list";
 import { Markdown } from "tiptap-markdown";
+import { DOMSerializer, type DOMOutputSpec } from "@tiptap/pm/model";
 import { cn } from "@/lib/utils";
-import { imageFileToDataUrl, isNoteImageFile } from "./image-utils";
+import { tauriFetchWithDeadline } from "@/lib/http/tauri-fetch";
+import {
+  imageFileToDataUrl,
+  isNoteImageFile,
+  readBlobAsDataUrl,
+  resizeImageDataUrl,
+} from "./image-utils";
 import { FormatToolbar, SlashCommandMenu } from "./editor-menus";
 import { useGT } from "gt-react";
 import { useUiLocale as useLocale } from "@/lib/i18n/provider";
 
 
+// Notes show only images they carry as data: URLs. Anything else, such as a
+// remote image an AI summary wrote, would load as soon as the note renders
+// and hand its URL to that server, so it shows as its alt text instead. The
+// markdown keeps the original, so nothing is lost when the note saves.
+function isEmbeddedImageSource(src: unknown): src is string {
+  return typeof src === "string" && src.startsWith("data:image/");
+}
+
+function isWebImageSource(src: unknown): src is string {
+  return typeof src === "string" && /^https?:\/\//i.test(src);
+}
+
+export interface MeetingNoteImageLabels {
+  /**
+   * The button that downloads a blocked web image into the note. It names the
+   * host the download goes to: the alt text beside it was written by whoever
+   * wrote the note, and could ask for the click.
+   */
+  load: (host: string) => string;
+  loading: string;
+  /** The same button after a download failed. */
+  retry: string;
+}
+
+const ENGLISH_IMAGE_LABELS: MeetingNoteImageLabels = {
+  load: (host) => `Load image from ${host}`,
+  loading: "Loading image…",
+  retry: "Couldn't load image. Try again",
+};
+
+// The chip carries the image's attributes so that copying it (to move it, or
+// into another note) pastes back as the same image, not as its alt text.
+const BLOCKED_IMAGE_ATTRS = ["src", "alt", "title", "width", "height"] as const;
+
+function blockedImageSpec(attrs: Record<string, unknown>): DOMOutputSpec {
+  const src = String(attrs.src ?? "");
+  const label = typeof attrs.alt === "string" && attrs.alt ? attrs.alt : src;
+  const carried: Record<string, string> = {};
+  for (const name of BLOCKED_IMAGE_ATTRS) {
+    const value = attrs[name];
+    if (value != null && value !== "") carried[`data-blocked-image-${name}`] = String(value);
+  }
+  return [
+    "div",
+    {
+      class:
+        "meeting-note-image-blocked my-2 flex items-center gap-2 rounded border border-dashed border-border px-2 py-1 text-xs text-muted-foreground",
+      ...carried,
+    },
+    // On the span: a title on the div would be read back as the image's title.
+    ["span", { class: "min-w-0 truncate", title: src }, label],
+  ];
+}
+
+function imageHost(src: string): string {
+  try {
+    return new URL(src).host;
+  } catch {
+    return src;
+  }
+}
+
+// How the note shows an image it doesn't carry. A web image gets a button
+// that downloads it into the note once the user asks, the way a paste does;
+// the note then shows it like any embedded image. Nothing loads before that.
+function blockedImageView(props: NodeViewRendererProps, labels: MeetingNoteImageLabels) {
+  const dom = DOMSerializer.renderSpec(document, blockedImageSpec(props.node.attrs)).dom as HTMLElement;
+  const src = props.node.attrs.src;
+  if (!isWebImageSource(src)) return { dom };
+  const loadLabel = labels.load(imageHost(src));
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.dataset.imageLoad = "";
+  button.className =
+    "min-w-0 cursor-pointer text-left [overflow-wrap:anywhere] rounded px-1.5 py-0.5 font-medium text-foreground underline-offset-2 hover:underline disabled:cursor-default disabled:no-underline disabled:text-muted-foreground";
+  button.textContent = loadLabel;
+  // Keep the caret where it was.
+  button.addEventListener("mousedown", (event) => event.preventDefault());
+  button.addEventListener("click", async () => {
+    if (button.disabled || !props.editor.isEditable) return;
+    button.disabled = true;
+    button.textContent = labels.loading;
+    const embedded = await embedImageSource(src);
+    button.disabled = false;
+    // The note turned read-only meanwhile (a summary is being written into
+    // it), so it takes no edit; the chip offers the download again.
+    if (!props.editor.isEditable) {
+      button.textContent = loadLabel;
+      return;
+    }
+    const pos = props.getPos();
+    // The chip may have moved, or been removed or changed, meanwhile.
+    if (embedded && pos !== undefined && props.editor.state.doc.nodeAt(pos)?.attrs.src === src) {
+      props.editor.view.dispatch(props.editor.state.tr.setNodeAttribute(pos, "src", embedded));
+      return;
+    }
+    button.textContent = labels.retry;
+  });
+  dom.appendChild(button);
+
+  // The editor leaves the button's events to the button.
+  return { dom, stopEvent: (event: Event) => button.contains(event.target as Node) };
+}
+
+// The data: images a markdown image link can hold; markdown readers turn any
+// other (an SVG, say) into plain text.
+const MARKDOWN_DATA_IMAGE = /^data:image\/(?:gif|png|jpeg|webp);/i;
+
 /**
  * Image extension with resize enabled and custom markdown serialization.
- * When width/height are set (via resize), emits an HTML `<img>` tag so
- * dimensions survive the markdown round-trip. Otherwise falls back to
- * standard `![alt](src)` syntax (including for base64 data-URLs).
+ * When width/height are set (via resize), or the image is embedded data a
+ * markdown link can't hold, emits an HTML `<img>` tag so the image survives
+ * the markdown round-trip. Otherwise falls back to standard `![alt](src)`
+ * syntax (including for png, jpeg, gif and webp data-URLs).
  */
-const ResizableImage = Image.extend({
+const ResizableImage = Image.extend<ImageOptions & { labels: MeetingNoteImageLabels }>({
+  addOptions() {
+    return { ...this.parent!(), labels: ENGLISH_IMAGE_LABELS };
+  },
+
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      // The paste still downloading this image, so the download fills in the
+      // image wherever it has moved by then. Never saved, shown or copied.
+      pendingDownload: { default: null, rendered: false, parseHTML: () => null },
+    };
+  },
+
   addStorage() {
     return {
       markdown: {
@@ -39,7 +170,7 @@ const ResizableImage = Image.extend({
           // HTML <img> tag so dimensions survive the markdown round-trip.
           // Attributes are escaped to prevent " in alt/title from
           // breaking the tag and corrupting the image into raw text.
-          if (width || height) {
+          if (width || height || (src?.startsWith("data:") && !MARKDOWN_DATA_IMAGE.test(src))) {
             const parts = [`<img src="${escAttr(src || "")}"`];
             if (alt) parts.push(`alt="${escAttr(alt)}"`);
             if (title) parts.push(`title="${escAttr(title)}"`);
@@ -52,6 +183,9 @@ const ResizableImage = Image.extend({
               `![${state.esc(alt || "")}](${(src || "").replace(/[()]/g, "\\$&")}${title ? ` "${title.replace(/"/g, '\\"')}"` : ""})`,
             );
           }
+          // A block image ends its block, or the next block (a heading,
+          // a list) is glued onto the image's line and turns into text.
+          state.closeBlock(node);
         },
         parse: {
           // markdown-it handles both ![alt](src) and <img> natively
@@ -60,12 +194,48 @@ const ResizableImage = Image.extend({
     };
   },
 
+  parseHTML() {
+    return [
+      ...(this.parent?.() ?? []),
+      {
+        tag: "div[data-blocked-image-src]",
+        getAttrs: (element) =>
+          Object.fromEntries(
+            BLOCKED_IMAGE_ATTRS.map((name) => [
+              name,
+              element.getAttribute(`data-blocked-image-${name}`),
+            ]),
+          ),
+      },
+    ];
+  },
+
+  renderHTML(props) {
+    if (!isEmbeddedImageSource(props.node.attrs.src)) {
+      return blockedImageSpec(props.node.attrs);
+    }
+    return this.parent!(props);
+  },
+
   addNodeView() {
     const parentNodeView = this.parent?.();
     if (!parentNodeView) return null;
+    const { labels } = this.options;
 
     return (props) => {
+      if (!isEmbeddedImageSource(props.node.attrs.src)) {
+        return blockedImageView(props, labels);
+      }
+
       const nodeView = (parentNodeView as Function)(props);
+      // Tiptap's resizable view accepts any image as an update but keeps its
+      // picture, so when the note changes underneath it (an AI summary
+      // rewriting the note) the old picture would stay on screen in place of
+      // a different image or a blocked one. Redraw unless the source is the same.
+      const parentUpdate = nodeView.update?.bind(nodeView);
+      nodeView.update = (node: { attrs: { src?: unknown } }, ...rest: unknown[]) =>
+        node.attrs.src === props.node.attrs.src && Boolean(parentUpdate?.(node, ...rest));
+
       const wrapper = (nodeView as any).wrapper as HTMLElement | undefined;
       if (!wrapper) return nodeView;
 
@@ -140,10 +310,11 @@ export interface NoteEditorProps {
 }
 
 export interface NoteEditorHandle {
+  /** Returns false when nothing was inserted, as while the note is read-only. */
   insertImages: (
     dataUrls: string[],
     at?: { clientX: number; clientY: number },
-  ) => void;
+  ) => boolean;
 }
 
 interface ImageTransferItemLike {
@@ -206,7 +377,10 @@ export function createMeetingNotePlaceholderExtension(placeholder: string) {
  * Full extension set for the meeting note editor. Exported so tests can
  * round-trip markdown through the exact production configuration.
  */
-export function createMeetingNoteEditorExtensions(placeholder: string) {
+export function createMeetingNoteEditorExtensions(
+  placeholder: string,
+  imageLabels: MeetingNoteImageLabels = ENGLISH_IMAGE_LABELS,
+) {
   return [
     StarterKit.configure({
       heading: { levels: [1, 2, 3, 4] },
@@ -223,6 +397,7 @@ export function createMeetingNoteEditorExtensions(placeholder: string) {
     MarkdownHardBreak,
     createMeetingNotePlaceholderExtension(placeholder),
     ResizableImage.configure({
+      labels: imageLabels,
       allowBase64: true,
       inline: false,
       HTMLAttributes: {
@@ -296,33 +471,44 @@ function NoteEditor(
   // onUpdate handler).
   onChangeRef.current = onChange;
 
-  const insertImages = useCallback(
-    (imageSources: string[], at?: { clientX: number; clientY: number }) => {
+  // Inserts the images at `pos`, or in place of the selection. A web image
+  // shows as a blocked chip until it is downloaded into the note. Images still
+  // being read when the note turns read-only (a summary is being written into
+  // it) are left out, as typing would be. Returns whether it inserted any.
+  const insertImagesAt = useCallback(
+    (imageSources: string[], pos?: number, pendingDownload: string | null = null) => {
       const editor = editorRef.current;
       const images = imageSources.filter(isPasteableImageSource);
-      if (!editor || images.length === 0) return;
+      if (!editor?.isEditable || images.length === 0) return false;
 
       const content = images.flatMap((src) => [
-        { type: "image", attrs: { src, alt: ui("meeting note image") } },
+        { type: "image", attrs: { src, alt: ui("meeting note image"), pendingDownload } },
         { type: "paragraph" },
       ]);
-
-      // When the caller passes drop coordinates, drop the image where the user
-      // released it instead of at the stale caret. posAtCoords returns null for
-      // points outside the document (e.g. padding below the text), in which case
-      // we fall back to the caret.
-      const pos =
-        at != null
-          ? editor.view.posAtCoords({ left: at.clientX, top: at.clientY })?.pos
-          : undefined;
 
       if (pos != null) {
         editor.chain().focus().insertContentAt(pos, content).run();
       } else {
         editor.chain().focus().insertContent(content).run();
       }
+      return true;
     },
     [uiLanguage],
+  );
+
+  const insertImages = useCallback(
+    (imageSources: string[], at?: { clientX: number; clientY: number }) => {
+      // When the caller passes drop coordinates, drop the image where the user
+      // released it instead of at the stale caret. posAtCoords returns null for
+      // points outside the document (e.g. padding below the text), in which case
+      // we fall back to the caret.
+      const pos =
+        at != null
+          ? editorRef.current?.view.posAtCoords({ left: at.clientX, top: at.clientY })?.pos
+          : undefined;
+      return insertImagesAt(imageSources, pos);
+    },
+    [insertImagesAt],
   );
 
   const insertImageFiles = useCallback(
@@ -342,9 +528,14 @@ function NoteEditor(
       const editor = editorRef.current;
       if (!editor) return;
 
+      // The paste replaces the selection now. Its images go after the caret,
+      // so they never replace what the text left selected (such as a pasted
+      // rule).
       const textContent = meetingNotePasteTextContent(payload);
       if (textContent) {
         editor.chain().focus().insertContent(textContent).run();
+      } else {
+        editor.chain().focus().deleteSelection().run();
       }
 
       const dataUrls: string[] = [];
@@ -353,11 +544,32 @@ function NoteEditor(
         if (dataUrl) dataUrls.push(dataUrl);
       }
 
-      const imageSources =
-        dataUrls.length > 0 ? dataUrls : payload.htmlImageSources;
-      insertImages(imageSources);
+      if (dataUrls.length > 0) {
+        insertImagesAt(dataUrls, editorRef.current?.state.selection.to);
+        return;
+      }
+
+      // Web images hold their place as blocked images at once. Each download
+      // then fills in its image wherever that is by then, leaving the caret,
+      // the focus and the rest of the note as the user has them.
+      const sources = payload.htmlImageSources.filter(isPasteableImageSource);
+      const paste = `paste-${nextPasteId++}`;
+      if (!insertImagesAt(sources, editor.state.selection.to, paste)) return;
+      const embedded = await embedPastedImageSources(sources);
+      const current = editorRef.current;
+      // A read-only note takes no edits: its images stay blocked, and Load
+      // image fetches them once the note can change.
+      if (!current?.isEditable) return;
+      const tr = current.state.tr.setMeta("addToHistory", false);
+      current.state.doc.descendants((node, pos) => {
+        const image = node.attrs.pendingDownload === paste ? sources.indexOf(node.attrs.src) : -1;
+        if (image >= 0 && embedded[image] !== sources[image]) {
+          tr.setNodeAttribute(pos, "src", embedded[image]);
+        }
+      });
+      if (tr.docChanged) current.view.dispatch(tr);
     },
-    [insertImages],
+    [insertImagesAt],
   );
 
   useImperativeHandle(ref, () => ({ insertImages }), [insertImages]);
@@ -365,7 +577,11 @@ function NoteEditor(
   const editor = useEditor({
     immediatelyRender: false,
     editable: !readOnly,
-    extensions: createMeetingNoteEditorExtensions(placeholder ?? ""),
+    extensions: createMeetingNoteEditorExtensions(placeholder ?? "", {
+      load: (host) => ui("Load image from {host}", { host }),
+      loading: ui("Loading image…"),
+      retry: ui("Couldn't load image. Try again"),
+    }),
     content: value,
     autofocus: autoFocus ? "end" : false,
     editorProps: {
@@ -563,7 +779,10 @@ export function meetingNotePastePayloadFromTransfer(
   const text = transferData(transfer, "text/plain");
   const htmlImageSources = imageSourcesFromHtml(html);
 
-  if (files.length === 0 && htmlImageSources.length === 0) return null;
+  // Content whose images are already embedded, such as part of a note, pastes
+  // through the editor as usual, which keeps their order, alt text and size,
+  // and keeps blocked image chips.
+  if (files.length === 0 && htmlImageSources.every(isEmbeddedImageSource)) return null;
 
   return { files, html, text, htmlImageSources };
 }
@@ -585,6 +804,71 @@ export function meetingNotePasteTextContent(
   }
 
   return plainTextToEditorContent(text);
+}
+
+const IMAGE_DOWNLOAD_TIMEOUT_MS = 15_000;
+const MAX_IMAGE_DOWNLOAD_BYTES = 20 * 1024 * 1024;
+// Every embedded image is saved in the note and serialized on each edit, so
+// one paste downloads only so many.
+const MAX_PASTED_IMAGE_DOWNLOADS = 10;
+let nextPasteId = 0;
+
+/**
+ * Downloads a web image into a data: URL the note can carry, or null when it
+ * doesn't come back as an image. Runs only on the user's own action: a paste,
+ * or loading a blocked image.
+ */
+export async function embedImageSource(src: string): Promise<string | null> {
+  try {
+    const response = await tauriFetchWithDeadline(
+      src,
+      { method: "GET" },
+      { timeoutMs: IMAGE_DOWNLOAD_TIMEOUT_MS },
+    );
+    const type = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ?? "";
+    const bytes =
+      response.ok && /^image\/[a-z0-9.+-]+$/.test(type)
+        ? await readAtMost(response, MAX_IMAGE_DOWNLOAD_BYTES)
+        : null;
+    if (!bytes) {
+      await response.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    return await resizeImageDataUrl(await readBlobAsDataUrl(new Blob(bytes, { type })));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Copies images pasted from a web page into the note. Notes show only images
+ * they carry themselves, so the first few web images are downloaded now. The
+ * rest, and any that fail (behind a login, say), keep their address and show
+ * as blocked images the user can load later.
+ */
+export async function embedPastedImageSources(sources: string[]): Promise<string[]> {
+  const downloads = new Set(sources.filter(isWebImageSource).slice(0, MAX_PASTED_IMAGE_DOWNLOADS));
+  return Promise.all(
+    sources.map(async (src) => (downloads.has(src) ? await embedImageSource(src) : null) ?? src),
+  );
+}
+
+// Reads the body, giving up past `limit` bytes so a huge or endless response
+// cannot fill memory before the timeout.
+async function readAtMost(response: Response, limit: number): Promise<BlobPart[] | null> {
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+  const chunks: BlobPart[] = [];
+  let size = 0;
+  for (let read = await reader.read(); !read.done; read = await reader.read()) {
+    size += read.value.byteLength;
+    if (size > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(read.value);
+  }
+  return chunks;
 }
 
 export function imageSourcesFromHtml(html: string): string[] {
@@ -657,5 +941,5 @@ function transferData(transfer: ImageTransferLike, format: string): string {
 }
 
 function isPasteableImageSource(src: string): boolean {
-  return src.startsWith("data:image/") || /^https?:\/\//i.test(src);
+  return isEmbeddedImageSource(src) || isWebImageSource(src);
 }

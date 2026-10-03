@@ -9,6 +9,7 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { commands } from "@/lib/utils/tauri";
 import posthog from "posthog-js";
 import ReactMarkdown from "react-markdown";
+import { ImageAltText } from "@/components/markdown/image-alt-text";
 import {
   notificationUrlTransform,
   openScreenpipeViewerLink,
@@ -660,6 +661,8 @@ export default function NotificationPanelPage() {
                     </>
                   );
                 },
+                // Bodies come from pipes, so images show alt text only.
+                img: ImageAltText,
               }}
             >
               {payload.body}

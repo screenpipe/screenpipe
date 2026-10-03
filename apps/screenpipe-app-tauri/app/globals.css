@@ -1130,6 +1130,10 @@
 [data-resize-container]:hover [data-image-delete] {
   opacity: 1;
 }
+/* A blocked note image loads into the note only while the note can change. */
+.ProseMirror[contenteditable="false"] [data-image-load] {
+  display: none;
+}
 
 /* TipTap — show the placeholder on the current empty block.
    Mirrors the muted-foreground/40 styling we use on native textareas. */

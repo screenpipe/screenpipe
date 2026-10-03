@@ -65,10 +65,14 @@ export function isAudioMediaPath(path: string): boolean {
   return /[\\/][^\\/]+\s+\((input|output)\)_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.mp4$/i.test(path);
 }
 
-// Where the media reader can find a file: an absolute Unix path (not a `//host`
-// web address), a `~/` path (the backend expands it), or a Windows drive or
-// network path. A `file:` URL is unwrapped into one of these first.
-const LOCAL_PATH_PREFIX = /^(?:\/(?!\/)|~[\\/]|[A-Z]:[\\/]|\\\\)/i;
+// Where the media reader can find a file: an absolute Unix path, a `~/` path
+// (the backend expands it), or a Windows drive path. A `file:` URL is unwrapped
+// into one of these first. Two separators at the start make a network share on
+// Windows (`\\host\share`, `//host/share`, `/\host\share`, `~/\\host\share`),
+// and reading one makes the reader contact that host. After a drive they are
+// only a doubled separator: Windows reads `C:\\Users`, the way markdown escapes
+// a backslash, as `C:\Users`.
+const LOCAL_PATH_PREFIX = /^(?:\/(?![\\/])|~[\\/](?![\\/])|[A-Z]:[\\/])/i;
 const MEDIA_EXTENSION_SUFFIX = new RegExp(`\\.(${MEDIA_EXTENSION_PATTERN})$`, "i");
 // Not one file to play: several lines listing files, a placeholder
 // (`monitor_<id>.mp4`), or a wildcard `*` before a separator (`monitor_*.mp4`,
@@ -80,7 +84,9 @@ const NOT_ONE_FILE = /[\r\n]|<[a-z][^<>]*>|\*[-_./\\]/i;
 /**
  * Whether `path` names one local audio/video file the media reader can open.
  * A bare or relative name (`demo.mp4`) has no location to read from, so it
- * stays text instead of becoming a player that can only fail.
+ * stays text instead of becoming a player that can only fail. A network share
+ * stays text too: chat text can be steered by captured content, and reading
+ * the share would contact a host that content chose.
  */
 export function isMediaFilePath(path: string): boolean {
   // Judge the path the way the player reads it: markdown hands link addresses

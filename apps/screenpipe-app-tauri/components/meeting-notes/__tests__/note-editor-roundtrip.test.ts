@@ -105,4 +105,15 @@ describe("meeting note markdown round-trip (#5369)", () => {
       expect(roundtrip(once)).toBe(once);
     }
   });
+
+  it("a block after an image keeps its own line", () => {
+    for (const md of [
+      "Notes\n\n![chart](data:image/png;base64,AAAA)\n\n## Summary",
+      "![chart](https://example.com/chart.png)\n\n- follow up",
+      '<img src="data:image/png;base64,AAAA" width="20" />\n\n## Summary',
+      "![chart](data:image/png;base64,AAAA)\n\nplain text",
+    ]) {
+      expect(roundtrip(md)).toBe(md);
+    }
+  });
 });

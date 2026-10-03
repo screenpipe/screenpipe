@@ -9,6 +9,7 @@ import { useInterval } from "@/lib/hooks/use-interval";
 import { Bell, Check, ChevronRight, ChevronDown, Copy, ExternalLink, MessageSquare, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { notificationUrlTransform, openScreenpipeViewerLink } from "@/components/markdown";
+import { ImageAltText } from "@/components/markdown/image-alt-text";
 import remarkGfm from "remark-gfm";
 import posthog from "posthog-js";
 import { commands } from "@/lib/utils/tauri";
@@ -461,6 +462,8 @@ export function NotificationInboxPanel({
                                   {children}
                                 </a>
                               ),
+                              // Bodies come from pipes, so images show alt text only.
+                              img: ImageAltText,
                             }}
                           >
                             {entry.body}
@@ -537,6 +540,7 @@ export function NotificationInboxPanel({
                                 {children}
                               </a>
                             ),
+                            img: ImageAltText,
                           }}
                         >{entry.body}</ReactMarkdown>
                       </div>

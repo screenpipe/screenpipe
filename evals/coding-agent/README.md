@@ -1285,6 +1285,47 @@ output, one-role-only repair, dropped safe HTML, styles, broken fragments and
 missing-source setup failure. These are corpus/grader checks, not agent trials,
 a full browser exploit defense or proof of execution isolation.
 
+### Remote Markdown images
+
+`app-markdown-remote-images` renders the actual chat MarkdownBlock (both roles),
+the shared MemoizedReactMarkdown and the meeting note editor (`NoteEditor` and
+`createMeetingNoteEditorExtensions`), with synthetic native media and HTTP
+ports. Seventy-two outcomes check that remote, protocol-relative, relative,
+reference-style, raw `<img>` and `<picture><source srcset>` images, and remote
+or network-share media, create no element that loads them and never reach the
+media reader, while their alt text, link or code stays visible; an image with no
+alt text shows its address. Network-share media includes a home-relative path
+that resolves to a share and local-looking strings from which the reader would
+take a share path; images whose source is removed for safety keep their alt
+text, and a local image the reader cannot open keeps its alt text and path. In a
+meeting note, remote images an AI summary wrote or a later update brings (also
+in place of an embedded image) do not load, keep their alt text and stay in the
+note's Markdown, also when the note is copied through the editor's clipboard
+handling and pasted into a note, while embedded data: images still show and keep
+their alt text and size when pasted. A web image pasted into a note that cannot
+be downloaded stays in the note's Markdown as its address. Local absolute,
+file-URL, Windows (also with doubled, Markdown-escaped backslashes) and
+home-relative files still render through the native reader. The parent fails
+sixty-four outcomes and preserves eight; the first, markdown-only fix fails
+twenty-three; the second and third fail the note copy, later-update and seven
+visible-fallback outcomes; the fourth fails the seven visible-fallback outcomes;
+the fix and current source pass all.
+
+Run `bun test evals/coding-agent/calibrate-markdown-remote-images.test.js`.
+Controls include parent/reference/current, the first four fixes, an equivalent
+plain-text address, a restored remote `<img>` fallback, an alt-text-only
+fallback, an unreadable local image that shows nothing, re-allowed
+picture/source, an extension-only media check, a media check that allows a
+second leading separator, accepts Windows network paths or reads a doubled
+backslash after a drive as a share, network shares treated as local, blanket
+image removal, a note editor that renders any source, deletes remote images from
+the note, drops pasted images it could not download, takes over pastes of
+embedded images or reuses an image view for a different source, unused correct
+source and missing-source setup failure. Webview CSP, Mermaid diagrams (jsdom
+cannot lay them out; unit tests and browser checks cover the no-network frame),
+pasting from other apps, loading a blocked note image on request, native file
+policy and execution isolation are outside this evidence.
+
 `ai-gateway-trusted-runner-admission` runs the actual HTTP entrypoint, authentication,
 Free-plan gates, chat handler and provider adapter with synthetic external ports.
 Fourteen outcomes cover successful machine and paid-human replies, forged or

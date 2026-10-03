@@ -5,6 +5,7 @@
 "use client";
 
 import ReactMarkdown from "react-markdown";
+import { ImageAltText } from "@/components/markdown/image-alt-text";
 import remarkGfm from "remark-gfm";
 import { safeAnnouncementExternalUrl } from "@/lib/announcements";
 import { cn } from "@/lib/utils";
@@ -68,7 +69,7 @@ export function AnnouncementBody({
           // Remote announcement copy does not need embedded media. Rendering
           // alt text instead prevents invisible tracking requests and keeps the
           // callout size predictable.
-          img: ({ alt }) => (alt ? <span>{alt}</span> : null),
+          img: ImageAltText,
         }}
       >
         {body}

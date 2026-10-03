@@ -158,6 +158,22 @@ describe("MemoizedReactMarkdown local media", () => {
     expect(getMediaFileCommand).not.toHaveBeenCalled();
   });
 
+  // The meeting chat hides images with its own img; media isn't an image.
+  it.each([
+    ["web", "![clip](https://example.com/clip.mp4)", "clip", () => screen.getByRole("link", { name: "clip" })],
+    ["relative", "![after](after-github.mp4)", "after after-github.mp4", () => screen.getByText("after-github.mp4")],
+  ])("keeps a %s media image visible when the caller hides images", (_label, markdown, text, find) => {
+    const { container } = render(
+      <MemoizedReactMarkdown urlTransform={chatUrlTransform} components={{ img: () => null }}>
+        {markdown}
+      </MemoizedReactMarkdown>,
+    );
+
+    expect(container.textContent).toBe(text);
+    expect(find()).toBeInTheDocument();
+    expect(getMediaFileCommand).not.toHaveBeenCalled();
+  });
+
   // The media player caches by path for the whole module, so every case below
   // uses a path no other test loads.
   it.each([

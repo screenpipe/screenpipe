@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite": "screenpipe-app-coding-agent-regressions",
-  "dataset_version": "2026-10-01-audio-off-permissions",
+  "dataset_version": "2026-10-02-remote-images-visible-fallbacks",
   "suite_type": "regression",
   "owner": "screenpipe engineering",
   "policy": {
@@ -4071,6 +4071,73 @@
           }
         ],
         "command": "cd apps/screenpipe-app-tauri && node node_modules/vitest/vitest.mjs run --config eval-html.config.mjs components/chat/eval-html-outcome.test.tsx"
+      }
+    },
+    {
+      "id": "app-markdown-remote-images",
+      "name": "Render only local images and media from untrusted Markdown and meeting notes",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "ba2985a684cb83b11be7b2dbf17db3032e205b8e"
+      },
+      "base_ref": "7274f29b6b1bb940332b4e912b9cfcb20d591d3d",
+      "oracle_ref": "ba2985a684cb83b11be7b2dbf17db3032e205b8e",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/components/markdown.tsx",
+        "apps/screenpipe-app-tauri/components/markdown/image-alt-text.tsx",
+        "apps/screenpipe-app-tauri/components/markdown/local-markdown-image.tsx",
+        "apps/screenpipe-app-tauri/lib/utils/media-file-path.ts",
+        "apps/screenpipe-app-tauri/components/chat/markdown-block.tsx",
+        "apps/screenpipe-app-tauri/app/notification-panel/page.tsx",
+        "apps/screenpipe-app-tauri/components/notification-bell.tsx",
+        "apps/screenpipe-app-tauri/components/announcement-body.tsx",
+        "apps/screenpipe-app-tauri/components/meeting-notes/note-editor.tsx",
+        "apps/screenpipe-app-tauri/components/meeting-notes/image-utils.ts",
+        "apps/screenpipe-app-tauri/components/rewind/mermaid-diagram.tsx",
+        "apps/screenpipe-app-tauri/components/rewind/mermaid-sandbox.ts"
+      ],
+      "trigger_paths": [
+        "apps/screenpipe-app-tauri/components/markdown.tsx",
+        "apps/screenpipe-app-tauri/components/markdown/local-markdown-image.tsx",
+        "apps/screenpipe-app-tauri/components/chat/markdown-block.tsx",
+        "apps/screenpipe-app-tauri/components/meeting-notes/note-editor.tsx",
+        "apps/screenpipe-app-tauri/lib/utils/media-file-path.ts"
+      ],
+      "gate": "advisory",
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "chat",
+        "markdown",
+        "meeting-notes",
+        "privacy",
+        "preserved-behavior"
+      ],
+      "prompt": "Rendered Markdown and meeting notes make the application load remote resources the moment they render. Chat replies, summaries and AI meeting notes are built from captured outside content, so steered text can put private data in an image URL that leaks without any click. Repair the chat MarkdownBlock for both user and assistant messages, the shared MemoizedReactMarkdown renderer, and the meeting note editor (NoteEditor, built from createMeetingNoteEditorExtensions). Only local files may display as images or media in Markdown: absolute paths, file URLs and Windows drive paths for images, plus home-relative paths for media, must still be read through the supplied native media port and displayed; a Windows drive path whose backslashes are doubled, the way Markdown escapes them, is still a local path. No other image source (http, https, protocol-relative, relative, reference-style, raw HTML img, or picture/source srcset) may produce an element that loads it; keep its alt text visible instead, or its address when it has no alt text, and keep the alt text when the source is removed for safety. A local image the native media port cannot read keeps its alt text and path visible. Media images, links and code that name a remote URL or a network-share path must never reach the native media reader, including a home-relative path that resolves to a share or a local-looking string from which the reader would take a share path; keep their alt text, link or code visible. In a meeting note, a remote image written by the AI or arriving with a later update, including in place of an embedded image, must not load: keep its alt text visible, keep images embedded as data: URLs displaying, and keep the note's Markdown, including the remote image reference, so viewing, saving, or copying a note and pasting it into a note loses nothing; pasted embedded images keep their alt text and size, and a web image pasted into a note that cannot be downloaded through the native HTTP port stays in the note's Markdown as its address without loading. Keep the surrounding text. Keep the public component, editor extension and native port contracts compatible. No particular sanitizer, helper or internal implementation is required. This task checks actual React/Markdown and editor rendering with synthetic native ports; it does not establish webview CSP, Mermaid diagrams, pasting from other apps, native file access policy or network isolation.",
+      "agent_timeout_seconds": 900,
+      "grader_dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        },
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "packages/workflows-ui/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 90,
+        "fixtures": [
+          {
+            "local_path": "graders/markdown-remote-image-outcomes.fixture.tsx.txt",
+            "destination_path": "apps/screenpipe-app-tauri/components/chat/eval-remote-image-outcome.test.tsx"
+          },
+          {
+            "local_path": "graders/markdown-remote-image-outcomes.config.mjs",
+            "destination_path": "apps/screenpipe-app-tauri/eval-remote-images.config.mjs"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && node node_modules/vitest/vitest.mjs run --config eval-remote-images.config.mjs components/chat/eval-remote-image-outcome.test.tsx"
       }
     },
     {
