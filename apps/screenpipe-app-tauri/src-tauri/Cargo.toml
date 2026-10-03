@@ -7,7 +7,7 @@ members = ["wer-dump-helper", "windows/persistence-supervisor", "release-router-
 
 [package]
 name = "screenpipe-app"
-version = "2.7.91"
+version = "2.7.92"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
