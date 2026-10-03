@@ -1,0 +1,30 @@
+/* screenpipe — AI that knows everything you've seen, said, or heard */
+/* https://screenpipe.com */
+.proposal {
+  max-height: 40vh;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid #8886;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.proposal h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+.proposal button {
+  margin: 6px;
+}
+.proposal ol {
+  padding-left: 20px;
+  list-style: decimal;
+}
+.proposal li {
+  margin: 12px 0;
+}
+
+.muted { opacity: .65; }
+.webFloating { position: fixed; inset: 0; pointer-events: none; z-index: 35; }
+.webFloating > * { pointer-events: auto; }
+.webDock { position: fixed; right: 0; top: 64px; bottom: 0; width: min(420px, 100vw); z-index: 35; }
+.proposal p { white-space: pre-wrap; overflow-wrap: anywhere; }

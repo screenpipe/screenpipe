@@ -7,6 +7,8 @@ import type { AssistantContext, WorkflowsAssistantPlatform } from "./assistant";
 /** A mounted page can supply an action to the existing chat without another composer. */
 export type PageAssistant = {
   context: AssistantContext;
+  platform?: WorkflowsAssistantPlatform;
+  session?: import("./workflow-assistant").WorkflowAssistantSession;
   promptRequest?: { id: string; text: string };
   ask: WorkflowsAssistantPlatform["ask"];
   onBusyChange?: (busy: boolean) => void;

@@ -55,3 +55,11 @@ it("refuses an unscoped signed-in response or merging an org inventory into memb
   await expect(loadCloudCatalog("member-session")).rejects.toThrow("scope was missing");
   expect(() => mergeCloudInventory({ licenseId: "org-a", scope: "member", workflows: [] }, payload)).toThrow("cannot include");
 });
+
+it("uses the canonical identity after generated procedures are reordered", () => {
+  const id = "a".repeat(64);
+  const saved = { ...sop, workflow_ids: { "recurring_workflows.0.steps": id }, body: { recurring_workflows: [{ name: "Collect sources", steps: [{ action: "Human correction" }] }] } };
+  expect(parseCloudCatalog({ ...payload, artifacts: [saved] }).workflows[0]).toMatchObject({ id, webWorkflowId: id, steps: [{ action: "Human correction" }] });
+  const reordered = { ...saved, workflow_ids: { "recurring_workflows.1.steps": id }, body: { recurring_workflows: [{ name: "Other", steps: [] }, ...saved.body.recurring_workflows] } };
+  expect(parseCloudCatalog({ ...payload, artifacts: [reordered] }).workflows[1].id).toBe(id);
+});
