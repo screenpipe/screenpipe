@@ -539,9 +539,11 @@ impl DatabaseManager {
                     crate::storage::schema::upgrade_recording(&mut conn, storage.has_bulk())
                         .await?;
                 crate::storage::read_schema::upgrade(&mut conn, storage).await?;
+                let starred_upgraded =
+                    crate::storage::schema::upgrade_starred_sessions(&mut conn).await?;
                 storage.verify_catalog(&db_manager.pool).await?;
                 drop(conn);
-                if upgraded {
+                if upgraded || starred_upgraded {
                     // Connections opened before the trigger migration need a
                     // schema read before their first DML preparation. Refresh
                     // every existing writer while startup still owns admission.

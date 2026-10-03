@@ -425,6 +425,54 @@ pub(crate) async fn upgrade_recording(
     Ok(true)
 }
 
+/// Existing hybrid generations skip legacy SQL migrations because their
+/// archived tables no longer have the legacy layout. Add the resident star
+/// table through the startup writer, preserving stars already copied during
+/// conversion and installing the same revision hooks as other resident tables.
+pub(crate) async fn upgrade_starred_sessions(
+    conn: &mut SqliteConnection,
+) -> Result<bool, sqlx::Error> {
+    const MIGRATION: &str = include_str!("../migrations/20261002190000_starred_sessions.sql");
+    const HOOKS: &str = r#"
+CREATE TRIGGER IF NOT EXISTS hybrid_revision_starred_sessions_INSERT AFTER INSERT ON starred_sessions
+BEGIN UPDATE storage_metadata SET revision=revision+1; END;
+CREATE TRIGGER IF NOT EXISTS hybrid_revision_starred_sessions_UPDATE AFTER UPDATE ON starred_sessions
+BEGIN UPDATE storage_metadata SET revision=revision+1; END;
+CREATE TRIGGER IF NOT EXISTS hybrid_revision_starred_sessions_DELETE AFTER DELETE ON starred_sessions
+BEGIN UPDATE storage_metadata SET revision=revision+1; END;
+CREATE TRIGGER IF NOT EXISTS hybrid_read_revoke_delete_starred_sessions AFTER DELETE ON starred_sessions
+BEGIN UPDATE _storage_revocation SET revision=revision+1; END;
+"#;
+    let checksum = format!("{:x}", Sha256::digest(format!("{MIGRATION}{HOOKS}")));
+    let installed: Option<String> =
+        sqlx::query_scalar("SELECT checksum FROM _hybrid_migrations WHERE version=7")
+            .fetch_optional(&mut *conn)
+            .await?;
+    if let Some(installed) = installed {
+        return if installed == checksum {
+            Ok(false)
+        } else {
+            Err(storage_error("starred session schema checksum mismatch"))
+        };
+    }
+    let mut tx = conn.begin().await?;
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='starred_sessions')",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if !exists {
+        sqlx::raw_sql(MIGRATION).execute(&mut *tx).await?;
+    }
+    sqlx::raw_sql(HOOKS).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO _hybrid_migrations VALUES(7,?)")
+        .bind(checksum)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
 pub(crate) async fn bootstrap(
     conn: &mut SqliteConnection,
     descriptor: &StorageDescriptor,
