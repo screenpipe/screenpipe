@@ -50,8 +50,7 @@ export function mergeCloudInventory(sops: CloudWorkflowCatalog, value: unknown):
       const identity = workflow.name.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
       if (!identity || seen.has(identity)) continue;
       seen.add(identity);
-      workflows.push({ id: item.workflow_ids?.[item.body.recurring_workflows?.length ? `recurring_workflows.${index}.steps` : "steps"] ?? `${item.artifact_id}:${index}`,
-      webWorkflowId: item.workflow_ids?.[item.body.recurring_workflows?.length ? `recurring_workflows.${index}.steps` : "steps"], title: workflow.name, summary: workflow.why,
+      workflows.push({ id: `${item.artifact_id}:${index}`, title: workflow.name, summary: workflow.why,
         frequency: workflow.recurrence, steps: [], version: item.version, updatedAt: item.updated_at });
     }
   }
