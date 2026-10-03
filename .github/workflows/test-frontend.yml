@@ -99,7 +99,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.2
+          bun-version: 1.4.2
       - name: Install desktop and browser-test dependencies
         run: |
           cd apps/screenpipe-app-tauri
