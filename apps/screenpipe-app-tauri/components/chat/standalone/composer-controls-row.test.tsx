@@ -48,9 +48,8 @@ vi.mock("@/components/chat/standalone/acp-permission-selector", () => ({
   ),
 }));
 vi.mock("@/components/thinking-level-selector", () => ({
-  ThinkingLevelSelector: ({ embedded }: { embedded?: boolean }) => (
-    <div data-testid={embedded ? "mock-inline-effort" : "mock-effort-trigger"} />
-  ),
+  useThinkingLevel: () => ({ level: "medium", setLevel: () => {}, unsupported: false }),
+  ThinkingLevelSlider: () => <div data-testid="mock-inline-effort" />,
 }));
 vi.mock("@/components/usage/usage-popover", () => ({
   UsagePopover: ({

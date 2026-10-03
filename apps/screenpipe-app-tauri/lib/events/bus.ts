@@ -112,9 +112,10 @@ async function dispatchEventNow(envelope: AgentEventEnvelope): Promise<void> {
   if (!envelope?.sessionId || !envelope.event) return;
   const fg = internals.foreground.get(envelope.sessionId);
   // Observers receive the durable event stream regardless of foreground
-  // ownership. They are for orthogonal work such as the Pipe-run recorder,
-  // never for UI state. The foreground/default branch remains exclusive so
-  // one visible message still has exactly one UI writer.
+  // ownership. They are for orthogonal work such as the Pipe-run recorder or
+  // read-only status (running pipes, the thinking level), never for rendering
+  // a message. The foreground/default branch remains exclusive so one visible
+  // message still has exactly one UI writer.
   const observers = Array.from(internals.observers).map((h) => h(envelope));
   const owner = fg
     ? [fg(envelope)]

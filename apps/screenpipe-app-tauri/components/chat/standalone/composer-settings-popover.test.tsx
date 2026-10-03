@@ -14,7 +14,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { AcpConfigSelector } from "./acp-config-selector";
-import { ThinkingLevelSelector } from "@/components/thinking-level-selector";
+import { ThinkingLevelSlider, useThinkingLevel } from "@/components/thinking-level-selector";
 import { useAcpSessionConfig } from "@/lib/stores/acp-session-config";
 
 vi.mock("@/lib/utils/tauri", () => ({
@@ -30,6 +30,12 @@ vi.mock("@/lib/hooks/use-pi-thinking-level", () => ({
 }));
 
 const SESSION = "chat-1";
+
+// Pi's dial as the composer hosts it: the composer owns the level and the
+// model picker shows the slider in its popover.
+function PiDial() {
+  return <ThinkingLevelSlider control={useThinkingLevel({ sessionId: SESSION })} />;
+}
 
 afterEach(() => {
   cleanup();
@@ -63,30 +69,6 @@ describe("composer settings control", () => {
     const acp = screen.getByTestId("acp-config-trigger");
     expect(acp).toHaveTextContent("Sonnet 4.6");
     expect(acp.className).toContain("max-w-[190px]");
-    cleanup();
-
-    render(<ThinkingLevelSelector sessionId={SESSION} />);
-    const pi = screen.getByTestId("thinking-level-trigger");
-    expect(pi).toHaveClass("w-7");
-    expect(pi.querySelector("svg")).not.toBeNull();
-    expect(pi).toHaveAccessibleName("Thinking level: Medium");
-  });
-
-  it("can embed Pi effort without rendering a second trigger", () => {
-    render(<ThinkingLevelSelector embedded sessionId={SESSION} />);
-
-    expect(screen.getByTestId("thinking-level-inline")).toBeInTheDocument();
-    expect(screen.getByTestId("thinking-level-slider")).toBeInTheDocument();
-    expect(screen.queryByTestId("thinking-level-trigger")).not.toBeInTheDocument();
-  });
-
-  it("names the active value on both triggers", () => {
-    renderAcp();
-    expect(screen.getByTestId("acp-config-trigger")).toHaveTextContent("Sonnet 4.6");
-    cleanup();
-
-    render(<ThinkingLevelSelector sessionId={SESSION} />);
-    expect(screen.getByTestId("thinking-level-trigger")).toHaveTextContent("Medium");
   });
 
   it("keeps ACP effort with its model and gives both providers the same dial", () => {
@@ -131,8 +113,7 @@ describe("composer settings control", () => {
     expect(screen.getByTestId("acp-effort-slider-value")).toHaveTextContent("High");
     cleanup();
 
-    render(<ThinkingLevelSelector sessionId={SESSION} />);
-    fireEvent.click(screen.getByTestId("thinking-level-trigger"));
+    render(<PiDial />);
     const piSlider = screen.getByTestId("thinking-level-slider");
     expect(piSlider).toHaveAttribute("role", "slider");
     expect(screen.getByTestId("thinking-level-slider-value")).toHaveTextContent("Medium");
