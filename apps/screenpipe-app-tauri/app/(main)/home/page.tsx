@@ -71,6 +71,7 @@ import { ChatHistoryView } from "@/components/chat/chat-history-view";
 import { mountPiEventRouter } from "@/lib/stores/pi-event-router";
 import { mountPipeRunRecorder } from "@/lib/events/pipe-run-recorder";
 import { mountPipeWatchWriter } from "@/lib/events/pipe-watch-writer";
+import { useRecordingStorage } from "@/lib/hooks/use-recording-storage";
 import { RecordingStatus, type RecordingDevice } from "@/components/recording-status";
 import { StarredTimeline } from "@/components/starred-sessions/starred-timeline";
 import Timeline from "@/components/rewind/timeline";
@@ -361,7 +362,7 @@ function HomeContent() {
       variant: "destructive",
     }));
   };
-  const workflowsAvailable = workflowsRolloutEnabled && isManagedDeploymentResolved && !isManagedDeployment && !trialActivationLocked;
+  const workflowsAvailable = workflowsRolloutEnabled && isManagedDeploymentResolved && !trialActivationLocked;
   const workflowsActive = workflowsAvailable && requestedMode === "workflows";
   useEffect(() => { if (workflowsActive) setWorkflowsVisited(true); }, [workflowsActive]);
   const runningPipes = useRunningPipes();
@@ -1211,7 +1212,13 @@ function HomeContent() {
   const meetingsInToolbar = false;
 
   // Chat and Workflows share the same recorder state, events and controls.
+  const recordingStorage = useRecordingStorage(isCapturePaused);
   const recordingStatusProps = {
+    storageWarning: recordingStorage.warning,
+    storageChecking: recordingStorage.checking,
+    storageError: recordingStorage.error,
+    onRefreshStorage: recordingStorage.refresh,
+    onOpenStorageSettings: () => openSettings("storage"),
     devices: recordingDevices,
     onDevicesChange: setRecordingDevices,
     meetingActive: meetingState.active ?? false,

@@ -15,6 +15,7 @@ on:
       - 'apps/screenpipe-app-tauri/**/*.ts'
       - 'apps/screenpipe-app-tauri/**/*.tsx'
       - 'apps/screenpipe-app-tauri/**/*.js'
+      - 'apps/screenpipe-workflows-web/scripts/eval-enterprise-workflows-entry.mjs'
       - 'apps/screenpipe-app-tauri/package.json'
       - 'apps/screenpipe-app-tauri/bun.lock'
       - 'apps/screenpipe-app-tauri/vitest.config.ts'
@@ -30,6 +31,7 @@ on:
       - 'apps/screenpipe-app-tauri/**/*.ts'
       - 'apps/screenpipe-app-tauri/**/*.tsx'
       - 'apps/screenpipe-app-tauri/**/*.js'
+      - 'apps/screenpipe-workflows-web/scripts/eval-enterprise-workflows-entry.mjs'
       - 'apps/screenpipe-app-tauri/package.json'
       - 'apps/screenpipe-app-tauri/bun.lock'
       - 'apps/screenpipe-app-tauri/vitest.config.ts'
@@ -88,3 +90,55 @@ jobs:
         # from there avoids the bun-script `cd` quoting headache.
         working-directory: .
         run: bunx --bun @biomejs/biome check
+
+  enterprise-workflows-entry:
+    name: Enterprise Workflows entry
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - name: Install desktop and browser-test dependencies
+        run: |
+          cd apps/screenpipe-app-tauri
+          bun install --frozen-lockfile
+          bun run i18n:prepare
+          cd ../screenpipe-workflows-web
+          bun install --frozen-lockfile
+          bun x playwright install --with-deps chromium
+      - name: Verify enterprise Home entry with fictional policy and workflow data
+        env:
+          NEXT_PUBLIC_SCREENPIPE_WEB_DEV: mock
+          NEXT_PUBLIC_SCREENPIPE_E2E: 'true'
+          CLOUD_WORKFLOWS_URL: http://127.0.0.1:1420
+          CLOUD_WORKFLOWS_SCREENSHOTS: ${{ runner.temp }}/enterprise-workflows-entry
+          PLAYWRIGHT_CHANNEL: chromium
+        run: |
+          cd apps/screenpipe-app-tauri
+          bun x next dev -H 127.0.0.1 -p 1420 > "$RUNNER_TEMP/enterprise-workflows-preview.log" 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid" 2>/dev/null || true' EXIT
+          ready=false
+          for attempt in $(seq 1 120); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:1420/home > /dev/null; then
+              ready=true
+              break
+            fi
+            kill -0 "$preview_pid" || exit 1
+            sleep 2
+          done
+          if [ "$ready" != true ]; then
+            cat "$RUNNER_TEMP/enterprise-workflows-preview.log"
+            exit 1
+          fi
+          cd ../..
+          bun apps/screenpipe-workflows-web/scripts/eval-enterprise-workflows-entry.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: enterprise-workflows-entry
+          path: |
+            ${{ runner.temp }}/enterprise-workflows-entry
+            ${{ runner.temp }}/enterprise-workflows-preview.log

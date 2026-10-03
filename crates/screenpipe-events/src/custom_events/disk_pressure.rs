@@ -6,8 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Leave enough headroom for SQLite WAL writes and capture-file finalization.
-pub const LOW_DISK_THRESHOLD_BYTES: u64 = 20 * 1024 * 1024 * 1024;
+/// Keep a 5 GiB reserve for SQLite WAL writes and capture-file finalization.
+/// A larger fixed reserve prevents otherwise usable small drives from recording.
+pub const LOW_DISK_THRESHOLD_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 /// Require meaningful headroom before treating a low-disk incident as recovered.
 /// This prevents a volume hovering around the stop threshold from repeatedly
 /// stopping capture and interrupting the user.
@@ -74,7 +75,7 @@ mod tests {
     fn event_has_stable_name_and_threshold() {
         let event = DiskSpaceLowEvent::new(123, "/tmp/screenpipe".to_string());
         assert_eq!(event.event_name(), "disk_space_low");
-        assert_eq!(event.threshold_bytes, 20 * 1024 * 1024 * 1024);
+        assert_eq!(event.threshold_bytes, 5 * 1024 * 1024 * 1024);
     }
 
     #[test]
