@@ -243,7 +243,6 @@ sha1 = "0.10"
 # on windows; linux keeps the webview one.
 screenpipe-overlay-win = { path = "../../../crates/screenpipe-overlay-win" }
 winreg = "0.52.0"
-lazy_static = "1.5.0"
 image = "0.25.5"
 windows-icons = { git = "https://github.com/tribhuwan-kumar/windows-icons.git", rev = "4dcd086b36bed286181cb87636ad6eb058ab7684" }
 base64 = "0.22.1"
@@ -266,6 +265,10 @@ windows = { version = "0.58", features = [
     # GetLastInputInfo/GetTickCount for the recording-health user-presence tier
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_SystemInformation",
+    # Store app list for /app-icon (PackageManager), without starting PowerShell
+    "ApplicationModel",
+    "Foundation_Collections",
+    "Management_Deployment",
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
