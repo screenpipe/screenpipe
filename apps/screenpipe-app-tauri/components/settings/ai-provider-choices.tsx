@@ -9,12 +9,14 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { AcpAdapterInfo } from "@/lib/utils/preset-appearance";
+import { isGeminiPreset, type AIProviderChoice } from "@/lib/utils/gemini-preset";
 import type { AIPreset } from "@/lib/utils/tauri";
 import { useGT } from "gt-react";
 
 
 export interface AIProviderCardProps {
   type:
+    | "gemini"
     | "openai"
     | "openai-chatgpt"
     | "native-ollama"
@@ -90,18 +92,20 @@ export function AIProviderCard({
 
 interface AIProviderChoicesProps {
   selectedProvider?: AIPreset["provider"];
+  selectedUrl?: string;
   selectedAcpAgentId?: string | null;
   showScreenpipeCloud: boolean;
   screenpipeDisabled: boolean;
   acpEnabled: boolean;
   primaryAcpAdapters: readonly AcpAdapterInfo[];
   customAcpAdapter?: AcpAdapterInfo;
-  onSelectProvider: (provider: AIPreset["provider"]) => void;
+  onSelectProvider: (provider: AIProviderChoice) => void;
   onSelectAcpAgent: (id: string) => void;
 }
 
 export function AIProviderChoices({
   selectedProvider,
+  selectedUrl,
   selectedAcpAgentId,
   showScreenpipeCloud,
   screenpipeDisabled,
@@ -113,6 +117,7 @@ export function AIProviderChoices({
 }: AIProviderChoicesProps) {
 
   const ui = useGT();
+  const geminiSelected = isGeminiPreset({ provider: selectedProvider, url: selectedUrl });
   const advancedSelected =
     selectedProvider === "custom" ||
     selectedProvider === "openai-chatgpt" ||
@@ -198,6 +203,15 @@ export function AIProviderChoices({
               />
 
               <AIProviderCard
+                type="gemini"
+                title={ui("Gemini")}
+                description={ui("Use Gemini models with a Google AI Studio API key.")}
+                imageSrc="/images/gemini.svg"
+                selected={geminiSelected}
+                onClick={() => onSelectProvider("gemini")}
+              />
+
+              <AIProviderCard
                 type="native-ollama"
                 title={ui("Ollama")}
                 description={ui("Use AI models running on this computer.")}
@@ -211,7 +225,7 @@ export function AIProviderChoices({
                 title={ui("Use an API key")}
                 description={ui("Connect another AI service.")}
                 imageSrc="/images/custom.png"
-                selected={selectedProvider === "custom"}
+                selected={selectedProvider === "custom" && !geminiSelected}
                 onClick={() => onSelectProvider("custom")}
               />
             </div>

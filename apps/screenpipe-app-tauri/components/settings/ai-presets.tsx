@@ -8,7 +8,7 @@ import type { SettingsField } from "./settings-search";
 /** Settings search index for this section. Co-located with the component so adding a field here means updating one file. See `SettingsField` in `./settings-search` for the schema. */
 export const searchIndex: SettingsField[] = [
   { label: msg("AI presets", {}), keywords: ["preset"] },
-  { label: msg("API key", {}), keywords: ["openai", "anthropic", "key"] },
+  { label: msg("API key", {}), keywords: ["openai", "anthropic", "gemini", "google", "ai studio", "key"] },
   { label: msg("Model", {}), keywords: ["gpt", "claude", "gemini", "llm"] },
   { label: msg("Agent harness", {}), keywords: ["acp", "codex", "claude code", "opencode", "cursor"] },
   { label: msg("Embedding", {}) },
@@ -32,6 +32,7 @@ import {
   shouldWarnLowHostedAiAllowance,
 } from "@/lib/hooks/use-usage-status";
 import { testAiPresetConnection } from "@/lib/utils/ai-preset-connection";
+import { geminiSelectionUpdate, isGeminiPreset, type AIProviderChoice } from "@/lib/utils/gemini-preset";
 import { CHATGPT_FALLBACK_MODELS } from "@/lib/utils/chatgpt-preset";
 import { openBusinessUpgradeSurface } from "@/lib/upgrade-flow";
 import { Label } from "../ui/label";
@@ -549,7 +550,15 @@ const AISection = ({
     updateSettingsPreset({ prompt: DEFAULT_PROMPT });
   }, [updateSettingsPreset]);
 
-  const handleAiProviderChange = useCallback((newValue: AIPreset["provider"]) => {
+  const handleAiProviderChange = useCallback((newValue: AIProviderChoice) => {
+    const geminiUpdate = geminiSelectionUpdate(newValue, settingsPreset);
+    if (geminiUpdate) {
+      setDiagnosticsOpen(false);
+      setModels([]);
+      updateSettingsPreset(geminiUpdate);
+      return;
+    }
+    if (newValue === "gemini") return;
     // No-op if same provider — avoids resetting UI state (e.g. chatgptChecking) unnecessarily
     if (newValue === settingsPreset?.provider) return;
 
@@ -559,7 +568,7 @@ const AISection = ({
     // chatgptChecking is managed by the status-check effect, not here
 
     let newUrl = "";
-    let newModel = settingsPreset?.model;
+    let newModel = isGeminiPreset(settingsPreset) ? "" : settingsPreset?.model;
 
     switch (newValue) {
       case "openai":
@@ -590,6 +599,7 @@ const AISection = ({
     }
 
     const updates: Partial<AIPreset> = { provider: newValue, url: newUrl, model: newModel };
+    if (isGeminiPreset(settingsPreset)) updates.apiKey = "";
     if (newValue === "acp") {
       updates.acpAgent = settingsPreset?.acpAgent || { id: "pi-acp" };
     }
@@ -635,7 +645,7 @@ const AISection = ({
       {
         provider: settingsPreset.provider,
         acpAgentId: settingsPreset.acpAgent?.id,
-        model: settingsPreset.model,
+        model: settingsPreset.model || (isGeminiPreset(settingsPreset) ? "gemini" : undefined),
       },
       visiblePresets.map((p) => p.id),
       preset?.id,
@@ -649,6 +659,7 @@ const AISection = ({
   }, [
     settingsPreset?.provider,
     settingsPreset?.model,
+    settingsPreset?.url,
     settingsPreset?.acpAgent?.id,
     preset,
     isDuplicating,
@@ -666,7 +677,7 @@ const AISection = ({
       {
         provider: settingsPreset.provider,
         acpAgentId: settingsPreset.acpAgent?.id,
-        model: settingsPreset.model,
+        model: settingsPreset.model || (isGeminiPreset(settingsPreset) ? "gemini" : undefined),
       },
       visiblePresets.map((p) => p.id),
       preset?.id,
@@ -1300,6 +1311,7 @@ const AISection = ({
         <div className="mb-4 mt-4">
           <AIProviderChoices
             selectedProvider={settingsPreset?.provider}
+            selectedUrl={settingsPreset?.url}
             selectedAcpAgentId={settingsPreset?.acpAgent?.id}
             showScreenpipeCloud={showScreenpipeCloud}
             screenpipeDisabled={!settings.user?.token}
@@ -1339,7 +1351,7 @@ const AISection = ({
         />
       )}
 
-      {settingsPreset?.provider === "custom" && (
+      {settingsPreset?.provider === "custom" && !isGeminiPreset(settingsPreset) && (
         <ValidatedInput
           id="customAiUrl"
           label={ui("Custom URL")}
@@ -1397,6 +1409,15 @@ const AISection = ({
                   )}
                 </Button>
               </div>
+              {isGeminiPreset(settingsPreset) && (
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 w-fit"
+                  onClick={() => openUrl("https://aistudio.google.com/apikey")}
+                >
+                  {ui("Get your API key in Google AI Studio")}
+                </button>
+              )}
               {settingsPreset?.provider === "anthropic" && (
                 <button
                   type="button"

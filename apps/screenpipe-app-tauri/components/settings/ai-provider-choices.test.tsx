@@ -159,3 +159,27 @@ describe("AIProviderChoices", () => {
     );
   });
 });
+
+
+it("selects Gemini and restores its card from a saved custom endpoint", () => {
+  const onSelectProvider = vi.fn();
+  render(
+    <AIProviderChoices
+      selectedProvider="custom"
+      selectedUrl="https://generativelanguage.googleapis.com/v1beta/openai/"
+      showScreenpipeCloud
+      screenpipeDisabled={false}
+      acpEnabled={false}
+      primaryAcpAdapters={[]}
+      onSelectProvider={onSelectProvider}
+      onSelectAcpAgent={vi.fn()}
+    />,
+  );
+  const gemini = screen.getByRole("button", { name: "Gemini", exact: true });
+  expect(gemini).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "Use an API key" })).toHaveAttribute("aria-pressed", "false");
+  fireEvent.keyDown(gemini, { key: "Enter" });
+  expect(onSelectProvider).toHaveBeenCalledWith("gemini");
+  fireEvent.click(screen.getByRole("button", { name: "Use an API key" }));
+  expect(onSelectProvider).toHaveBeenLastCalledWith("custom");
+});
