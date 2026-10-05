@@ -68,7 +68,7 @@ export const NOTIFICATION_GROUPS: NotificationGroup[] = [
   {
     id: "system",
     label: msg("System", {}),
-    description: msg("Monitors, docking, and power changes", {}),
+    description: msg("Monitors and docking", {}),
   },
   {
     id: "automation",
