@@ -138,15 +138,6 @@ export const NOTIFICATION_CATEGORIES: NotificationCategory[] = [
     keywords: ["monitor", "display", "dock", "clamshell", "screen"],
   },
   {
-    id: "powerModeChanges",
-    label: msg("Power mode changes", {}),
-    description:
-      msg("Tells you when battery saver turns on (Balanced or Saver). You'll still get critical alerts if recording pauses on low battery.", {}),
-    group: "system",
-    default: true,
-    keywords: ["battery", "saver", "power", "thermal", "ac"],
-  },
-  {
     id: "pipeNotifications",
     label: msg("Scheduled task alerts", {}),
     description: msg("Alerts from installed scheduled tasks", {}),
