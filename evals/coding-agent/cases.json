@@ -5284,6 +5284,42 @@
         ],
         "command": "cd apps/screenpipe-app-tauri && node node_modules/vitest/vitest.mjs run --config eval-manual-sync.config.mjs"
       }
+    },
+    {
+      "id": "app-redact-missing-schema-target",
+      "name": "Keep redaction progressing across missing schema targets",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "ac94fa0e26073ca9854a3695a308fb76d917172e",
+        "pull_request": "https://github.com/screenpipe/screenpipe/pull/4315"
+      },
+      "base_ref": "84143f2402bb9d64331427233d3ab321798b7e19",
+      "oracle_ref": "ac94fa0e26073ca9854a3695a308fb76d917172e",
+      "oracle_paths": [
+        "crates/screenpipe-redact/src/worker/mod.rs"
+      ],
+      "gate": "advisory",
+      "trigger_paths": [
+        "crates/screenpipe-redact/src/**"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "privacy",
+        "schema-compatibility"
+      ],
+      "prompt": "The background redaction Worker stalls otherwise valid targets when an earlier target table or required column is absent from the database schema. Repair the actual worker so missing-schema targets do not delay redaction of unaffected queued rows or rows inserted during later sweeps. Tests use a small synthetic SQLite database, local regex redaction, a 20ms poll interval and a 1ms minimum batch idle. With a missing elements table or its completion column before full-text work, existing and newly added full-text rows must lose their synthetic email and gain a completion marker within 700ms; preserve the nearby contact word and leave clean text unchanged while marking it complete. Keep ordinary full-text redaction working. Pause before startup must prevent effects while paused, and resume must allow pending work within 700ms. A transient rejected update must retain its original retry text and unset completion marker; once the refusal is removed after 250ms, the same worker must successfully retry within another 2400ms. Preserve the existing database-corruption backoff: a SQLite error reporting a malformed database must prevent subsequent audio-target processing during the initial 700ms, while a shutdown notification must still stop the worker within one second. Do not classify every error as a missing object, drop all work or disable pause controls. No particular helper, disabled-target collection, log wording or replacement token is required. This task concerns background reconciliation of existing synthetic rows, not schema migration, real corruption recovery or capture admission. Preserve recording authorization and durable capture; do not block or discard captures to satisfy background work. Do not contact live model services.",
+      "agent_timeout_seconds": 1800,
+      "grader": {
+        "timeout_seconds": 180,
+        "fixtures": [
+          {
+            "local_path": "graders/redaction-schema-progress.rs",
+            "destination_path": "crates/screenpipe-redact/tests/eval_missing_schema.rs"
+          }
+        ],
+        "command": "cargo test --locked -p screenpipe-redact --test eval_missing_schema -- --test-threads=1"
+      }
     }
   ]
 }

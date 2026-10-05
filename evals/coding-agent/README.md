@@ -1585,3 +1585,22 @@ bypass, equivalent, preserved-behavior and setup-error controls. Hidden fixtures
 and dependency links appear only after the trajectory. This does not establish
 native persistence, encryption, real account access, provider delivery, execution
 isolation or model improvement.
+
+## Redaction across missing schema targets
+
+`app-redact-missing-schema-target` runs the actual native Worker with local regex
+redaction and synthetic temporary SQLite data. Six outcomes cover missing tables
+and columns, later-row progress, ordinary redaction, clean-text preservation,
+pause/resume, transient-write retry and corruption-error backoff with shutdown.
+The parent fails the two missing-schema outcomes and preserves four; the
+historical reference and current source pass all six. The task discloses the
+small-workload timing bounds and does not require an exact implementation.
+
+Run the shared runner with `--case app-redact-missing-schema-target --verify`.
+The hidden fixture appears only at grading; no dependency or target-cache links
+are declared. Calibration rejects unused correct code, blanket skipping, treating
+all errors as missing schema and lost pause behavior, while accepting an
+equivalent missing-object predicate. Compilation/setup failures are infrastructure
+errors. The malformed-database error is supplied by a synthetic SQLite trigger,
+not an actually corrupt database. This does not establish migration safety,
+capture continuity, real corruption recovery, host isolation or model capability.
