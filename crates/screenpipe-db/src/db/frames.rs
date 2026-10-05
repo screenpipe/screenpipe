@@ -1433,14 +1433,19 @@ impl DatabaseManager {
                     end_time: if valid_offsets { end_offset } else { None },
                 };
 
-                // Find ALL frames within the padded audio time range
-                let matching_keys: Vec<(DateTime<Utc>, i64)> = frames_map
-                    .range((search_start, i64::MIN)..=(search_end, i64::MAX))
-                    .filter(|((frame_ts, _), _)| {
-                        *frame_ts >= search_start && *frame_ts <= search_end
-                    })
-                    .map(|(key, _)| *key)
-                    .collect();
+                // Find ALL frames within the padded audio time range.
+                // Guard against inverted bounds (search_start > search_end) which cause BTreeMap::range to panic.
+                let matching_keys: Vec<(DateTime<Utc>, i64)> = if search_start <= search_end {
+                    frames_map
+                        .range((search_start, i64::MIN)..=(search_end, i64::MAX))
+                        .filter(|((frame_ts, _), _)| {
+                            *frame_ts >= search_start && *frame_ts <= search_end
+                        })
+                        .map(|(key, _)| *key)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
 
                 // Add the audio entry to each matching frame
                 for key in &matching_keys {
