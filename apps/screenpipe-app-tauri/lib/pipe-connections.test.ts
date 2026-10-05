@@ -108,4 +108,15 @@ describe("fetchAvailablePipeConnections", () => {
       expect.objectContaining({ connected: true }),
     ]);
   });
+  it("lists Dropbox in the workflow connection picker and refreshes its status", async () => {
+    composioStatus.dropbox = { connected: true, status: "ACTIVE" };
+    const connected = await fetchAvailablePipeConnections("http://localhost:3030", [], "tok_test");
+    expect(connected.filter(({ id }) => id === "dropbox")).toEqual([
+      expect.objectContaining({ name: "Dropbox", connected: true, kind: "connection" }),
+    ]);
+    composioStatus.dropbox = { connected: false, status: null };
+    const disconnected = await fetchAvailablePipeConnections("http://localhost:3030", connected, "tok_test");
+    expect(disconnected.find(({ id }) => id === "dropbox")?.connected).toBe(false);
+  });
+
 });

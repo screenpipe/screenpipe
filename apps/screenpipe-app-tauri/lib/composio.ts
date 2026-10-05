@@ -14,12 +14,14 @@ export const COMPOSIO_TOOLKITS = [
   "googledrive",
   "googledocs",
   "googlesheets",
+  "dropbox",
 ] as const;
 
 export type ComposioToolkit = (typeof COMPOSIO_TOOLKITS)[number];
 export type ComposioStatusMap = Record<ComposioToolkit, boolean>;
 
 export const COMPOSIO_CONNECTIONS = [
+  { id: "dropbox", name: "Dropbox", icon: "dropbox", toolkit: "dropbox" },
   { id: "gmail", name: "Gmail", icon: "gmail", toolkit: "gmail" },
   { id: "zoom", name: "Zoom", icon: "zoom", toolkit: "zoom" },
   {

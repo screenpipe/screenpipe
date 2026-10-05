@@ -90,6 +90,7 @@ export const CONNECTION_CATEGORY_BY_ID: Record<string, string> = {
   // Documents — docs, spreadsheets, wikis & whiteboards
   "google-docs": "Documents",
   "google-drive": "Documents",
+  dropbox: "Documents",
   "google-sheets": "Documents",
   confluence: "Documents",
   excalidraw: "Documents",
@@ -190,6 +191,7 @@ export const CONNECTION_HARDCODED_DESCRIPTIONS: Record<string, string> = {
   "google-docs": "Read and search your Google Docs",
   gmail: "Read your Gmail inbox",
   "google-drive": "Search and read your Google Drive files",
+  dropbox: "Search and read your Dropbox files",
   "google-sheets": "Read, create, and edit Google Sheets",
   "outlook-email": "Read and send your Outlook email",
   "ics-calendar": "Add a calendar using its subscription link",

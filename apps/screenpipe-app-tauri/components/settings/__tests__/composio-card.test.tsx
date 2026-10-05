@@ -157,4 +157,35 @@ describe("ComposioCard multi-account", () => {
       alias: "personal",
     });
   });
+  it("authorizes Dropbox and retains the cloud privacy disclosure", async () => {
+    mocks.fetch.mockResolvedValue({ ok: true, json: async () => ({
+      available: true, dropbox: { connected: false, status: null, accounts: [] },
+    }) });
+    render(<ComposioCard toolkit="dropbox" initialConnected={false} />);
+    expect(screen.getByText("Let your AI search and read your Dropbox files.")).toBeTruthy();
+    expect(screen.getByText("More about privacy")).toBeTruthy();
+    expect(screen.getByText(/Files are processed through/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole("button", { name: /connect Dropbox/i })).toBeTruthy());
+    mocks.fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ redirect_url: "https://auth.example.com/dropbox" }) });
+    fireEvent.click(screen.getByRole("button", { name: /connect Dropbox/i }));
+    await waitFor(() => expect(mocks.openUrl).toHaveBeenCalledWith("https://auth.example.com/dropbox"));
+    const call = mocks.fetch.mock.calls.find(([url]) => String(url).endsWith("/authorize"));
+    expect(JSON.parse(call?.[1]?.body)).toEqual({ toolkit: "dropbox" });
+  });
+
+  it("disconnects Dropbox without removing the shared server while Gmail remains connected", async () => {
+    mocks.fetch.mockResolvedValue({ ok: true, json: async () => ({
+      available: true,
+      gmail: { connected: true, status: "ACTIVE", accounts: [{ id: "ca_gmail" }] },
+      dropbox: { connected: true, status: "ACTIVE", accounts: [{ id: "ca_dropbox", alias: "work" }] },
+    }) });
+    render(<ComposioCard toolkit="dropbox" initialConnected />);
+    await waitFor(() => expect(screen.getByText("work")).toBeTruthy());
+    mocks.fetch.mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
+    fireEvent.click(screen.getByTitle("Disconnect this account"));
+    await waitFor(() => expect(screen.queryByText("work")).toBeNull());
+    expect(mocks.fetch.mock.calls.some(([url]) => String(url).includes("toolkit=dropbox") && String(url).includes("account_id=ca_dropbox"))).toBe(true);
+    expect(mocks.localFetch).not.toHaveBeenCalledWith("/mcp-servers/composio", { method: "DELETE" });
+  });
+
 });

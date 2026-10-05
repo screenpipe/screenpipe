@@ -55,6 +55,13 @@ interface ToolkitMeta {
 }
 
 const TOOLKIT_META: Record<ComposioToolkit, ToolkitMeta> = {
+  dropbox: {
+    label: msg("Dropbox", {}),
+    provider: "Dropbox",
+    value: "Let your AI search and read your Dropbox files.",
+    data: "Files are",
+    connectedNoun: "Dropbox files",
+  },
   gmail: {
     label: msg("Gmail", {}),
     provider: "Google",

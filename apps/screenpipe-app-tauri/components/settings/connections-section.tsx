@@ -549,6 +549,7 @@ const INTEGRATION_ICONS: Record<string, React.ReactNode> = {
     gmail: <img src="/images/gmail.svg" alt="Gmail" className="w-5 h-5" />,
     "google-calendar": <img src="/images/google-calendar.svg" alt="Google Calendar" className="w-5 h-5" />,
     "google-docs": <img src="/images/google-docs.svg" alt="Google Docs" className="w-5 h-5" />,
+    dropbox: <FolderOpen className="w-5 h-5" />,
     "google-drive": <img src="/images/google-drive.svg" alt="Google Drive" className="w-5 h-5" />,
     "google-sheets": <img src="/images/google-sheets.svg" alt="Google Sheets" className="w-5 h-5" />,
     "ics-calendar": <CalendarIcon className="h-5 w-5 text-muted-foreground" />,
@@ -816,6 +817,7 @@ export const TRY_IN_CHAT_PROMPTS: Record<string, string> = {
   zoom: "Summarize my recent Zoom calls",
   gmail: "Summarize my recent emails",
   "google-drive": "Find my recent files in Google Drive",
+  dropbox: "Find my recent files in Dropbox",
   "google-sheets": "What's in my latest spreadsheet?",
   krisp: "Search my meeting transcripts for action items",
   excalidraw: "What's on my recent Excalidraw boards?",
@@ -4071,6 +4073,7 @@ export function ConnectionsSection({
       { id: "google-calendar", name: "Google Calendar", icon: "google-calendar", connected: false },
       { id: "google-docs", name: "Google Docs", icon: "google-docs", connected: false },
       { id: "gmail", name: "Gmail", icon: "gmail", connected: composioConnected.gmail },
+      { id: "dropbox", name: "Dropbox", icon: "dropbox", connected: composioConnected.dropbox },
       { id: "google-drive", name: "Google Drive", icon: "google-drive", connected: composioConnected.googledrive },
       { id: "google-sheets", name: "Google Sheets", icon: "google-sheets", connected: composioConnected.googlesheets },
       { id: "ics-calendar", name: "Other calendars", icon: "ics-calendar", connected: false },
@@ -4326,6 +4329,7 @@ export function ConnectionsSection({
           )}
         </div>
       );
+      case "dropbox": return <ComposioCard toolkit="dropbox" initialConnected={composioConnected.dropbox} onChanged={setComposioConnected} />;
       case "google-drive": return <ComposioCard toolkit="googledrive" initialConnected={composioConnected.googledrive} onChanged={setComposioConnected} />;
       case "google-sheets": return <ComposioCard toolkit="googlesheets" initialConnected={composioConnected.googlesheets} onChanged={setComposioConnected} />;
       case "gmail": return <ComposioCard toolkit="gmail" initialConnected={composioConnected.gmail} onChanged={setComposioConnected} />;
