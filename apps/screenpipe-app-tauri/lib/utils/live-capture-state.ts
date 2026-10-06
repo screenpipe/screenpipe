@@ -7,6 +7,7 @@ import { msg } from "gt-react";
 export type LiveCaptureKind =
   | "idle"
   | "recording"
+  | "capture-paused"
   | "audio-disabled"
   | "no-input-device"
   | "input-paused"
@@ -60,6 +61,7 @@ export interface LiveCaptureState {
 
 export interface ComputeLiveCaptureStateInput {
   isLive: boolean;
+  capturePaused?: boolean;
   health?: LiveCaptureHealth | null;
   devices?: LiveCaptureDevice[];
   hasTranscriptContent?: boolean;
@@ -89,6 +91,15 @@ const STATES: Record<LiveCaptureKind, LiveCaptureState> = {
       msg("listening — transcript will appear when the first segment arrives", {}),
     recordingContinues: true,
   },
+  "capture-paused": {
+    kind: "capture-paused",
+    severity: "warning",
+    label: msg("Recording paused", {}),
+    shortLabel: msg("paused", {}),
+    description: msg("Screen and audio recording are paused. Resume recording to capture this meeting.", {}),
+    transcriptEmptyCopy: msg("recording is paused — resume recording to transcribe this meeting", {}),
+    recordingContinues: false,
+  },
   "audio-disabled": {
     kind: "audio-disabled",
     severity: "warning",
@@ -105,7 +116,7 @@ const STATES: Record<LiveCaptureKind, LiveCaptureState> = {
     label: msg("No microphone", {}),
     shortLabel: msg("no mic", {}),
     description:
-      msg("No microphone was detected, so audio can't be captured for this meeting. Screen recording continues.", {}),
+      msg("No microphone was detected, so microphone audio can't be captured for this meeting.", {}),
     transcriptEmptyCopy:
       msg("no microphone detected — connect a mic to transcribe this meeting", {}),
     recordingContinues: false,
@@ -214,12 +225,14 @@ const BACKEND_STATUS_TO_KIND: Record<string, LiveCaptureKind> = {
 
 export function computeLiveCaptureState({
   isLive,
+  capturePaused = false,
   health,
   devices = [],
   hasTranscriptContent = false,
   nowMs = Date.now(),
 }: ComputeLiveCaptureStateInput): LiveCaptureState {
   if (!isLive) return STATES.idle;
+  if (capturePaused) return STATES["capture-paused"];
 
   const backendStatus = health?.capture_status?.status?.toLowerCase() ?? null;
   const backendKind = backendStatus

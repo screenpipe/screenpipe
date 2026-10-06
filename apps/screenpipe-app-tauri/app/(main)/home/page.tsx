@@ -86,6 +86,7 @@ import { useSettings } from "@/lib/hooks/use-settings";
 import { useHealthCheck } from "@/lib/hooks/use-health-check";
 import { useRunningPipes } from "@/lib/hooks/use-running-pipes";
 import { commands } from "@/lib/utils/tauri";
+import { startMeetingWithCapture } from "@/lib/utils/meeting-capture";
 import { getE2eSeedFlags } from "@/lib/e2e/native";
 import { shouldAcceptTitleSource } from "@/lib/utils/chat-title";
 import {
@@ -975,11 +976,8 @@ function HomeContent() {
         // Claim the event so it cannot also name a later meeting.
         if (seed?.calendarEventId)
           body.calendar_event_id = seed.calendarEventId;
-        const res = await localFetch("/meetings/start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
+        const res = await startMeetingWithCapture(body);
+        void refreshRecordingDevices();
         if (res.ok) {
           const meeting: MeetingRecord = await res.json();
           manualMeetingStartedAt.current = Date.now();
@@ -1004,7 +1002,7 @@ function HomeContent() {
     } finally {
       setMeetingLoading(false);
     }
-  }, [meetingState, settings.appendTypedTextToMeetingNote]);
+  }, [meetingState, settings.appendTypedTextToMeetingNote, refreshRecordingDevices]);
 
   // Native overlay already toggles the meeting in Rust. Refresh local state
   // here instead of toggling again, otherwise one click can create or stop
@@ -1153,6 +1151,7 @@ function HomeContent() {
             meetingLoading={meetingLoading}
             onToggleMeeting={toggleMeeting}
             onFocusModeChange={handleMeetingFocusModeChange}
+            capturePaused={isCapturePaused}
             captureDevices={recordingDevices}
             onCaptureDevicesRefresh={refreshRecordingDevices}
           />

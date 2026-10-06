@@ -59,6 +59,7 @@ interface MeetingNotesSectionProps {
     calendarEventId?: string;
   }) => Promise<MeetingRecord | void> | MeetingRecord | void;
   captureDevices?: LiveCaptureDevice[];
+  capturePaused?: boolean;
   onCaptureDevicesRefresh?: () => void | Promise<void>;
   /**
    * Called when the section enters or exits focused note mode.
@@ -74,6 +75,7 @@ export function MeetingNotesSection({
   meetingLoading,
   onToggleMeeting,
   captureDevices = [],
+  capturePaused = false,
   onCaptureDevicesRefresh,
   onFocusModeChange,
 }: MeetingNotesSectionProps) {
@@ -626,10 +628,11 @@ export function MeetingNotesSection({
     () =>
       localizeDefinitions(computeLiveCaptureState({
         isLive: meetingState.active === true,
+        capturePaused,
         health,
         devices: captureDevices,
       }), uiMessages),
-    [captureDevices, health, meetingState.active, uiLanguage],
+    [capturePaused, captureDevices, health, meetingState.active, uiLanguage],
   );
   const comingUp = useMemo(
     () =>

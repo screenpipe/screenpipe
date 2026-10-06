@@ -40,6 +40,31 @@ const healthyHealth: LiveCaptureHealth = {
   },
 };
 
+describe("globally paused recording", () => {
+  it.each(["no_input_device", "recording", "waiting_for_meeting", "audio_stalled"])(
+    "takes precedence over %s even with stale device data",
+    (status) => {
+      const state = computeLiveCaptureState({
+        isLive: true, capturePaused: true,
+        health: { capture_status: { status } }, devices: [activeMic],
+      });
+      expect(state.kind).toBe("capture-paused");
+      expect(state.recordingContinues).toBe(false);
+      expect(state.severity).toBe("warning");
+    },
+  );
+  it("works without a health snapshot or enumerated devices", () => {
+    expect(computeLiveCaptureState({isLive: true, capturePaused: true}).kind).toBe("capture-paused");
+  });
+  it("does not label a saved meeting as paused", () => {
+    expect(computeLiveCaptureState({isLive: false, capturePaused: true}).kind).toBe("idle");
+  });
+  it("returns to backend health after recording resumes", () => {
+    expect(computeLiveCaptureState({isLive: true, capturePaused: false,
+      health: {capture_status: {status: "waiting_for_voice"}}}).kind).toBe("waiting-for-voice");
+  });
+});
+
 describe("computeLiveCaptureState", () => {
   it("returns idle when the meeting is not live", () => {
     expect(

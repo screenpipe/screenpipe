@@ -77,6 +77,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/components/ui/use-toast";
 import { localFetch } from "@/lib/api";
+import { resumeMeetingCapture } from "@/lib/utils/meeting-capture";
 import {
   formatClock,
   formatDuration,
@@ -1619,42 +1620,47 @@ export function NoteView({
     );
     const devicesToResume =
       pausedInputDevices.length > 0 ? pausedInputDevices : activeInputDevices;
-    if (devicesToResume.length === 0) return;
+    const resumeSession = captureState?.kind === "capture-paused";
+    if (!resumeSession && devicesToResume.length === 0) return;
     setResumingCapture(true);
     try {
-      // If devices appear active but audio is stalled, stop first so the
-      // restart actually re-creates the audio stream.
-      if (pausedInputDevices.length === 0 && activeInputDevices.length > 0) {
+      if (resumeSession) {
+        await resumeMeetingCapture();
+      } else {
+        // If devices appear active but audio is stalled, stop first so the
+        // restart actually re-creates the audio stream.
+        if (pausedInputDevices.length === 0 && activeInputDevices.length > 0) {
+          await Promise.all(
+            activeInputDevices.map((device) =>
+              localFetch("/audio/device/stop", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  device_name: device.fullName ?? `${device.name} (input)`,
+                }),
+              }).catch(() => {
+                // ignore stop errors
+              }),
+            ),
+          );
+          await new Promise((r) => setTimeout(r, 500));
+        }
         await Promise.all(
-          activeInputDevices.map((device) =>
-            localFetch("/audio/device/stop", {
+          devicesToResume.map((device) =>
+            localFetch("/audio/device/start", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 device_name: device.fullName ?? `${device.name} (input)`,
               }),
-            }).catch(() => {
-              // ignore stop errors
+            }).then((response) => {
+              if (!response.ok) {
+                throw new Error(`audio device start failed: ${response.status}`);
+              }
             }),
           ),
         );
-        await new Promise((r) => setTimeout(r, 500));
       }
-      await Promise.all(
-        devicesToResume.map((device) =>
-          localFetch("/audio/device/start", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              device_name: device.fullName ?? `${device.name} (input)`,
-            }),
-          }).then((response) => {
-            if (!response.ok) {
-              throw new Error(`audio device start failed: ${response.status}`);
-            }
-          }),
-        ),
-      );
       try {
         await onCaptureDevicesRefresh?.();
       } catch (refreshErr) {
@@ -1664,12 +1670,16 @@ export function NoteView({
         );
       }
       toast({
-        title: ui("Microphone capture resumed"),
+        title: resumeSession
+          ? ui("Recording resumed")
+          : ui("Microphone capture resumed"),
         description: ui("Transcript should start once speech is detected."),
       });
     } catch (err) {
       toast({
-        title: ui("Couldn't resume microphone"),
+        title: resumeSession
+          ? ui("Couldn't resume recording")
+          : ui("Couldn't resume microphone"),
         description: String(err),
         variant: "destructive",
       });
@@ -1699,7 +1709,9 @@ export function NoteView({
     if (isLive) {
       return {
         title: captureState?.label ?? ui("Recording meeting"),
-        detail: ui("notes and transcript save automatically"),
+        detail: captureState?.kind === "capture-paused"
+          ? ui("notes save automatically · recording is paused")
+          : ui("notes and transcript save automatically"),
       };
     }
     if (resuming) {
@@ -2299,8 +2311,11 @@ export function NoteView({
             <span>{meetingStartClock}</span>
             {isLive || !meetingEndClock ? (
               <span className="inline-flex items-center gap-1 font-medium text-foreground">
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-foreground motion-reduce:animate-none" />
-                ongoing
+                <span className={cn(
+                  "h-1.5 w-1.5 rounded-full bg-foreground",
+                  captureState?.kind !== "capture-paused" && "animate-pulse motion-reduce:animate-none",
+                )} />
+                {captureState?.kind === "capture-paused" ? ui("paused") : ui("ongoing")}
               </span>
             ) : (
               <>
@@ -2639,6 +2654,7 @@ export function NoteView({
             <LiveCaptureIssueBanner
               state={captureState}
               canResumeInput={
+                captureState.kind === "capture-paused" ||
                 pausedInputDevices.length > 0 ||
                 captureState.kind === "audio-stalled" ||
                 captureState.kind === "audio-not-started"
@@ -2689,6 +2705,8 @@ export function NoteView({
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : visibleSummaryLifecycle.kind === "finalizing" ? (
                   <Check className="h-4 w-4" />
+                ) : isLive && captureState?.severity === "warning" ? (
+                  <AlertTriangle className="h-4 w-4" />
                 ) : summaryWorking ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : visibleSummaryLifecycle.kind === "completed" ? (
@@ -3087,7 +3105,7 @@ function LiveCaptureIssueBanner({
           {resuming ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            ui("Resume mic")
+            state.kind === "capture-paused" ? ui("Resume recording") : ui("Resume mic")
           )}
         </Button>
       )}
