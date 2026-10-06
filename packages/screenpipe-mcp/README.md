@@ -31,6 +31,24 @@ These are self-reported identifiers, not verified app identities; copied skills
 and callers that omit the headers cannot be reliably attributed. Historical
 generic API events cannot be assigned an app retroactively.
 
+The engine preserves every existing uncached app, MCP and named-agent
+`search_performed` event. Only explicitly API-originated requests with an unknown
+agent are sampled: the first event per 60-second monotonic window per engine
+process, separately for empty/non-empty and parsed/ordinary results (at most four
+events per window, plus the first event in each category after UTC midnight to
+preserve daily activity). An empty background poll cannot consume the successful-result
+slot, and API traffic cannot consume an app, MCP or named-agent slot.
+
+Sampled events carry `telemetry_sampling: "first_per_interval_per_result_kind"`
+and `telemetry_sample_interval_seconds: 60`; unsampled events carry `"none"` and
+`0`. Sampled events are presence diagnostics, not exact search counts or an
+unbiased sample of query properties. Their counts and property breakdowns are
+not comparable to earlier releases. `api_usage_5min.request_count` still counts
+aggregate API traffic across all routes, and `qualified_value_event` retains the
+existing successful-retrieval path, including cached searches. No new events are
+added for cache hits. Health/resource telemetry and local monitoring retain their
+existing cadence.
+
 Attribution adds fields to existing events and uses the existing analytics
 opt-out. It does not scan running apps or send prompts, search text, or raw
 client names. HTTP MCP now reports successful searches through the same
