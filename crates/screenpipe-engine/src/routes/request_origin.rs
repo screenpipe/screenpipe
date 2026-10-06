@@ -31,6 +31,11 @@ impl ExplicitApiClient {
         self.source == RequestSource::Api
     }
 
+    /// Preserve app/MCP engagement and all named-agent attribution in full.
+    pub(crate) fn sample_search_diagnostics(&self) -> bool {
+        self.is_direct_api() && self.agent == AgentClient::Unknown
+    }
+
     pub(crate) fn source_label(&self) -> &'static str {
         match self.source {
             RequestSource::App => "app",
@@ -127,6 +132,34 @@ mod tests {
         );
         assert!(!extract(None).await.is_direct_api());
         assert_eq!(extract(None).await.source_label(), "app");
+    }
+
+    #[tokio::test]
+    async fn api_flood_cannot_suppress_app_mcp_or_named_agent_searches() {
+        let reports = crate::analytics::SearchReportLimiter::new();
+        let anonymous_api = extract(Some("api")).await;
+        assert!(anonymous_api.sample_search_diagnostics());
+        assert!(reports.should_report(anonymous_api.sample_search_diagnostics(), false, true, 1));
+        assert!(!reports.should_report(anonymous_api.sample_search_diagnostics(), false, true, 1));
+
+        for (source, agent) in [
+            (None, None),
+            (Some("app"), None),
+            (Some("mcp"), None),
+            (Some("MCP"), Some("unknown")),
+            (Some("api"), Some("codex")),
+            (Some("API"), Some("claude-code")),
+        ] {
+            let client = extract_agent(source, agent).await;
+            assert!(!client.sample_search_diagnostics());
+            for _ in 0..10 {
+                assert!(reports.should_report(client.sample_search_diagnostics(), false, true, 1));
+            }
+        }
+        // Untrusted agent labels cannot create unbounded per-agent buckets.
+        assert!(extract_agent(Some("api"), Some("private-project"))
+            .await
+            .sample_search_diagnostics());
     }
 
     #[tokio::test]

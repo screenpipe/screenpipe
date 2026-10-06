@@ -623,10 +623,7 @@ impl ServerCore {
 
         // --- Resource + sleep monitors (long-lived) ---
         let resource_reporter = ResourceTelemetryReporter::new(config.analytics_enabled);
-        resource_reporter.start_monitoring(
-            Duration::from_secs(30),
-            Some(analytics::BACKGROUND_REPORT_INTERVAL),
-        );
+        resource_reporter.start_monitoring(Duration::from_secs(30), Some(Duration::from_secs(60)));
         start_sleep_monitor();
 
         // --- HTTP server ---

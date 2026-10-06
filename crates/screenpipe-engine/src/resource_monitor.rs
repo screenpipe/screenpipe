@@ -772,7 +772,7 @@ impl ResourceTelemetryReporter {
         // analytics/debug/file logging are disabled.
         let monitor = Arc::clone(self);
         let posthog_interval = posthog_interval.unwrap_or(interval);
-        let mut reports = crate::analytics::ReportCadence::new(posthog_interval);
+        let mut last_posthog_update = Instant::now();
 
         tokio::spawn(async move {
             let mut sampler = ResourceSampler::new();
@@ -808,10 +808,11 @@ impl ResourceTelemetryReporter {
                             unsafe { malloc_trim(0) };
                         }
                         let now = Instant::now();
-                        let should_send_to_posthog = reports.should_report(now);
+                        let should_send_to_posthog = now.duration_since(last_posthog_update) >= posthog_interval;
                         let snapshot = sampler.snapshot();
 
                         if should_send_to_posthog {
+                            last_posthog_update = now;
                             monitor.log_status(&snapshot).await;
                         } else {
                             monitor.log_status_local(&snapshot).await;

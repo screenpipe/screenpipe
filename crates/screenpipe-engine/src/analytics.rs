@@ -23,39 +23,40 @@ static TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(false);
 
 static ANALYTICS: Lazy<Analytics> = Lazy::new(Analytics::new);
 
-/// Routine fleet diagnostics are sparse; local health checks keep their own cadence.
-pub const BACKGROUND_REPORT_INTERVAL: Duration = Duration::from_secs(15 * 60);
 pub(crate) const SEARCH_REPORT_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Emit the first eligible snapshot promptly, then at most once per interval.
-/// A delayed tick produces one current snapshot, never a backlog of reports.
-pub(crate) struct ReportCadence {
-    interval: Duration,
-    last_report: Option<Instant>,
-}
-
-impl ReportCadence {
-    pub(crate) fn new(interval: Duration) -> Self {
-        Self {
-            interval,
-            last_report: None,
-        }
-    }
-
-    pub(crate) fn should_report(&mut self, now: Instant) -> bool {
-        if self
-            .last_report
-            .is_some_and(|last| now.duration_since(last) < self.interval)
-        {
-            return false;
-        }
-        self.last_report = Some(now);
-        true
-    }
-}
-
 static SEARCH_REPORT_START: Lazy<Instant> = Lazy::new(Instant::now);
-static SEARCH_REPORT_WINDOW: AtomicU64 = AtomicU64::new(0);
+static SEARCH_REPORTS: SearchReportLimiter = SearchReportLimiter::new();
+
+/// Only unattributed, explicitly API-originated searches share a report budget.
+/// Empty/non-empty and parsed/ordinary results have separate slots so an empty
+/// poll cannot hide the first successful retrieval or parsed-search presence.
+/// Fixed storage keeps untrusted request properties out of the limiter's keys.
+pub(crate) struct SearchReportLimiter {
+    windows: [AtomicU64; 4],
+}
+
+impl SearchReportLimiter {
+    pub(crate) const fn new() -> Self {
+        Self {
+            windows: [const { AtomicU64::new(0) }; 4],
+        }
+    }
+
+    pub(crate) fn should_report(
+        &self,
+        sampled: bool,
+        parsed: bool,
+        non_empty: bool,
+        window: u64,
+    ) -> bool {
+        if !sampled {
+            return true;
+        }
+        let slot = usize::from(parsed) * 2 + usize::from(non_empty);
+        claim_search_window(&self.windows[slot], window)
+    }
+}
 
 fn claim_search_window(last_window: &AtomicU64, window: u64) -> bool {
     last_window
@@ -65,14 +66,14 @@ fn claim_search_window(last_window: &AtomicU64, window: u64) -> bool {
         .is_ok()
 }
 
-/// Keep a search-presence signal for retention without a request-volume firehose.
-/// Successful retrieval outcomes and aggregate API request counts are independent.
-pub(crate) fn should_capture_search() -> bool {
+/// Consent is checked before claiming a slot or constructing a payload.
+/// App, MCP and named-agent requests bypass the API diagnostic limiter.
+pub(crate) fn should_capture_search(sampled: bool, parsed: bool, non_empty: bool) -> bool {
     if !is_enabled() {
         return false;
     }
     let window = SEARCH_REPORT_START.elapsed().as_secs() / SEARCH_REPORT_INTERVAL.as_secs() + 1;
-    claim_search_window(&SEARCH_REPORT_WINDOW, window)
+    SEARCH_REPORTS.should_report(sampled, parsed, non_empty, window)
 }
 
 pub struct Analytics {
@@ -295,19 +296,32 @@ mod tests {
     use std::sync::Mutex;
 
     #[test]
-    fn background_reports_keep_first_snapshot_and_skip_catch_up_bursts() {
-        let start = Instant::now();
-        let mut cadence = ReportCadence::new(BACKGROUND_REPORT_INTERVAL);
-        assert!(cadence.should_report(start));
-        for minute in 1..15 {
-            assert!(!cadence.should_report(start + Duration::from_secs(minute * 60)));
+    fn api_polling_preserves_each_result_kind_and_unlimited_unsampled_requests() {
+        let reports = SearchReportLimiter::new();
+        assert!(reports.should_report(true, false, false, 1));
+        for _ in 0..100_000 {
+            assert!(!reports.should_report(true, false, false, 1));
+            assert!(reports.should_report(false, false, false, 1));
         }
-        assert!(cadence.should_report(start + Duration::from_secs(15 * 60)));
-        let resumed = start + Duration::from_secs(3 * 60 * 60);
-        assert!(cadence.should_report(resumed));
-        assert!(!cadence.should_report(resumed));
-        assert!(!cadence.should_report(resumed + Duration::from_secs(60)));
-        assert!(cadence.should_report(resumed + BACKGROUND_REPORT_INTERVAL));
+        // The empty API flood must not hide successful or parsed results.
+        assert!(reports.should_report(true, false, true, 1));
+        assert!(reports.should_report(true, true, false, 1));
+        assert!(reports.should_report(true, true, true, 1));
+        for parsed in [false, true] {
+            for non_empty in [false, true] {
+                assert!(!reports.should_report(true, parsed, non_empty, 1));
+                assert!(reports.should_report(true, parsed, non_empty, 2));
+            }
+        }
+    }
+
+    #[test]
+    fn unsampled_searches_do_not_consume_the_api_budget() {
+        let reports = SearchReportLimiter::new();
+        for _ in 0..100 {
+            assert!(reports.should_report(false, false, true, 1));
+        }
+        assert!(reports.should_report(true, false, true, 1));
     }
 
     #[test]
