@@ -1344,8 +1344,16 @@ interface AIPresetDialogProps {
 interface AIPresetsSelectorProps {
   allowAgentPresets?: boolean;
   /** Host-owned choices rendered alongside saved presets without changing chat defaults. */
-  builtinOptions?: { id: string; label: string; selected: boolean; onSelect: () => void }[];
-  selectionLabel?: string;
+  builtinOptions?: {
+    id: string;
+    label: string;
+    icon?: ReactNode;
+    badge?: string;
+    description?: string;
+    selected: boolean;
+    onSelect: () => void;
+  }[];
+  selectionLabel?: ReactNode;
   presetFilter?: (preset: AIPreset) => boolean;
   disabled?: boolean;
   recommendedPresets?: RecommendedPreset[];
@@ -2074,12 +2082,6 @@ export const AIPresetsSelector = ({
               <CommandInput placeholder={ui("Search presets...")} />
               <CommandList>
                 <CommandEmpty>No presets found.</CommandEmpty>
-                {builtinOptions?.length ? <CommandGroup>{builtinOptions.map(option =>
-                  <CommandItem key={option.id} value={option.id} onSelect={() => { option.onSelect(); handleOpenChange(false); }}>
-                    <Check className={cn("mr-2 h-4 w-4", option.selected ? "opacity-100" : "opacity-0")} />
-                    {option.label}
-                  </CommandItem>
-                )}</CommandGroup> : null}
                 {allowNone && (
                   <CommandGroup>
                     <CommandItem
@@ -2169,6 +2171,25 @@ export const AIPresetsSelector = ({
                   </CommandGroup>
                 )}
                 <CommandGroup>
+                  {builtinOptions?.map(option => (
+                    <CommandItem
+                      key={option.id}
+                      value={option.id}
+                      aria-label={option.badge ? `${option.label} (${option.badge})` : option.label}
+                      onSelect={() => { option.onSelect(); handleOpenChange(false); }}
+                      className="flex min-h-10 py-2"
+                    >
+                      <div className="flex w-full items-center justify-between gap-2 overflow-hidden">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <Check className={cn("h-4 w-4 shrink-0", option.selected ? "opacity-100" : "opacity-0")} />
+                          {option.icon && <span className="h-4 w-4 shrink-0 opacity-80">{option.icon}</span>}
+                          <span className="truncate font-medium">{option.label}</span>
+                          {option.badge && <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs font-medium">{option.badge}</span>}
+                        </div>
+                        {option.description && <span className="truncate text-xs text-muted-foreground">{option.description}</span>}
+                      </div>
+                    </CommandItem>
+                  ))}
                   {aiPresets.map((preset) => {
 
                     const isCloud = preset.provider === "screenpipe-cloud";

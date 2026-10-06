@@ -2,6 +2,7 @@
 // https://screenpipe.com
 "use client";
 import { useEffect, useState } from "react";
+import { Shield, Sparkles } from "lucide-react";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { workflowModelPreference } from "@/lib/workflows/model-choice";
 import { supportsWorkflowPreset } from "@/lib/workflows/model-provider";
@@ -80,13 +81,22 @@ export function WorkflowModelSelector({
         presetFilter={supportsWorkflowPreset}
         controlledPresetId={mode?.startsWith("preset:") ? mode.slice(7) : null}
         selectionLabel={
-          busy
-            ? "Saving…"
-            : mode === "intelligent"
-              ? "Intelligent"
-              : mode === "private"
-                ? "Private (Beta)"
-                : undefined
+          busy ? (
+            "Saving…"
+          ) : mode === "intelligent" ? (
+            <span className="flex min-w-0 items-center gap-2">
+              <Sparkles className="h-4 w-4 shrink-0 opacity-80" />
+              <span>Intelligent</span>
+            </span>
+          ) : mode === "private" ? (
+            <span className="flex min-w-0 items-center gap-2">
+              <Shield className="h-4 w-4 shrink-0 opacity-80" />
+              <span>Private</span>
+              <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">
+                Beta
+              </span>
+            </span>
+          ) : undefined
         }
         onControlledSelect={(preset) => {
           if (preset && supportsWorkflowPreset(preset))
@@ -102,12 +112,17 @@ export function WorkflowModelSelector({
                 {
                   id: "workflow-intelligent",
                   label: "Intelligent",
+                  icon: <Sparkles className="h-4 w-4" />,
+                  description: "Automatic model selection",
                   selected: mode === "intelligent",
                   onSelect: () => void choose("intelligent"),
                 },
                 {
                   id: "workflow-private",
-                  label: "Private (Beta)",
+                  label: "Private",
+                  icon: <Shield className="h-4 w-4" />,
+                  badge: "Beta",
+                  description: "Confidential AI",
                   selected: mode === "private",
                   onSelect: () => void choose("private"),
                 },
