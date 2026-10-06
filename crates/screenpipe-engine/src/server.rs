@@ -616,7 +616,7 @@ impl SCServer {
 
         // Recording-coverage sampler: accumulates working-time-vs-healthy-capture
         // seconds every 5s. Spawned UNCONDITIONALLY (accumulation is cheap, local,
-        // and feeds /health regardless of analytics consent); only the 60s emit
+        // and feeds /health regardless of analytics consent); only the sparse emit
         // below is telemetry-gated.
         crate::recording_coverage::start_coverage_sampler(
             self.vision_metrics.clone(),
@@ -646,15 +646,19 @@ impl SCServer {
                 }
             });
 
-            // Spawn periodic vision pipeline metrics reporter (every 60 seconds)
+            // Check for the first vision snapshot every minute, then report every 15 minutes.
             let metrics_for_posthog = self.vision_metrics.clone();
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(60));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let mut reports =
+                    analytics::ReportCadence::new(analytics::BACKGROUND_REPORT_INTERVAL);
                 loop {
                     interval.tick().await;
                     let snap = metrics_for_posthog.snapshot();
                     // Only report if the pipeline has captured any frames
-                    if snap.frames_captured > 0 {
+                    if snap.frames_captured > 0 && reports.should_report(std::time::Instant::now())
+                    {
                         // Recording-coverage reliability metric: what % of the
                         // user's working time had healthy capture. Sampled
                         // independently (5s sampler); snapshotted here so the
@@ -700,16 +704,21 @@ impl SCServer {
                 }
             });
 
-            // Spawn periodic audio pipeline metrics reporter (every 60 seconds)
+            // Check for the first audio snapshot every minute, then report every 15 minutes.
             let audio_metrics_for_posthog = self.audio_metrics.clone();
             let audio_manager_for_posthog = self.audio_manager.clone();
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_secs(60));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let mut reports =
+                    analytics::ReportCadence::new(analytics::BACKGROUND_REPORT_INTERVAL);
                 loop {
                     interval.tick().await;
                     let snap = audio_metrics_for_posthog.snapshot();
                     // Only report if the pipeline has processed any chunks
-                    if snap.chunks_sent > 0 || snap.vad_rejected > 0 {
+                    if (snap.chunks_sent > 0 || snap.vad_rejected > 0)
+                        && reports.should_report(std::time::Instant::now())
+                    {
                         let devices: Vec<String> = audio_manager_for_posthog
                             .current_devices()
                             .iter()

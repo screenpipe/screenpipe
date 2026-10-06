@@ -5,7 +5,8 @@
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use tracing::{debug, trace};
 
 use crate::telemetry_context::TelemetryContext;
@@ -21,6 +22,58 @@ const POSTHOG_HOST: &str = "https://us.i.posthog.com";
 static TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(false);
 
 static ANALYTICS: Lazy<Analytics> = Lazy::new(Analytics::new);
+
+/// Routine fleet diagnostics are sparse; local health checks keep their own cadence.
+pub const BACKGROUND_REPORT_INTERVAL: Duration = Duration::from_secs(15 * 60);
+pub(crate) const SEARCH_REPORT_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Emit the first eligible snapshot promptly, then at most once per interval.
+/// A delayed tick produces one current snapshot, never a backlog of reports.
+pub(crate) struct ReportCadence {
+    interval: Duration,
+    last_report: Option<Instant>,
+}
+
+impl ReportCadence {
+    pub(crate) fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            last_report: None,
+        }
+    }
+
+    pub(crate) fn should_report(&mut self, now: Instant) -> bool {
+        if self
+            .last_report
+            .is_some_and(|last| now.duration_since(last) < self.interval)
+        {
+            return false;
+        }
+        self.last_report = Some(now);
+        true
+    }
+}
+
+static SEARCH_REPORT_START: Lazy<Instant> = Lazy::new(Instant::now);
+static SEARCH_REPORT_WINDOW: AtomicU64 = AtomicU64::new(0);
+
+fn claim_search_window(last_window: &AtomicU64, window: u64) -> bool {
+    last_window
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
+            (window > last).then_some(window)
+        })
+        .is_ok()
+}
+
+/// Keep a search-presence signal for retention without a request-volume firehose.
+/// Successful retrieval outcomes and aggregate API request counts are independent.
+pub(crate) fn should_capture_search() -> bool {
+    if !is_enabled() {
+        return false;
+    }
+    let window = SEARCH_REPORT_START.elapsed().as_secs() / SEARCH_REPORT_INTERVAL.as_secs() + 1;
+    claim_search_window(&SEARCH_REPORT_WINDOW, window)
+}
 
 pub struct Analytics {
     client: Client,
@@ -240,6 +293,58 @@ pub fn track_api_usage(request_count: usize) {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn background_reports_keep_first_snapshot_and_skip_catch_up_bursts() {
+        let start = Instant::now();
+        let mut cadence = ReportCadence::new(BACKGROUND_REPORT_INTERVAL);
+        assert!(cadence.should_report(start));
+        for minute in 1..15 {
+            assert!(!cadence.should_report(start + Duration::from_secs(minute * 60)));
+        }
+        assert!(cadence.should_report(start + Duration::from_secs(15 * 60)));
+        let resumed = start + Duration::from_secs(3 * 60 * 60);
+        assert!(cadence.should_report(resumed));
+        assert!(!cadence.should_report(resumed));
+        assert!(!cadence.should_report(resumed + Duration::from_secs(60)));
+        assert!(cadence.should_report(resumed + BACKGROUND_REPORT_INTERVAL));
+    }
+
+    #[test]
+    fn search_reports_bound_a_flood_and_allow_the_next_window() {
+        let window = AtomicU64::new(0);
+        assert!(claim_search_window(&window, 1));
+        for _ in 0..100_000 {
+            assert!(!claim_search_window(&window, 1));
+        }
+        assert!(claim_search_window(&window, 2));
+        // A delayed concurrent caller must not move the window backwards.
+        assert!(!claim_search_window(&window, 1));
+        assert!(!claim_search_window(&window, 2));
+        assert!(claim_search_window(&window, 180));
+        assert!(!claim_search_window(&window, 180));
+    }
+
+    #[test]
+    fn concurrent_searches_share_one_report_budget() {
+        let window = AtomicU64::new(0);
+        let barrier = std::sync::Barrier::new(16);
+        let emitted = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..16)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        claim_search_window(&window, 1)
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|worker| usize::from(worker.join().unwrap()))
+                .sum::<usize>()
+        });
+        assert_eq!(emitted, 1);
+    }
 
     // The three vars telemetry_disabled_by_env inspects. CI runners set
     // CI/GITHUB_ACTIONS for real, so every test saves and restores them.

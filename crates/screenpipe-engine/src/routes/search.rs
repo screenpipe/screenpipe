@@ -1640,31 +1640,37 @@ pub(crate) async fn search(
 
     debug!("search completed: found {} results", total);
 
-    let response_non_empty = !content_items.is_empty();
-    let parsed_parser_profiles = if parsed_search {
-        parsed_parser_profiles(&content_items)
-    } else {
-        Vec::new()
-    };
+    // Retain search presence for existing retention charts. Build diagnostic
+    // properties only when this process has a report slot; all requests still
+    // contribute to api_usage_5min and qualifying retrievals keep their event.
+    if analytics::should_capture_search() {
+        let response_non_empty = !content_items.is_empty();
+        let parsed_parser_profiles = if parsed_search {
+            parsed_parser_profiles(&content_items)
+        } else {
+            Vec::new()
+        };
 
-    // Track search analytics
-    analytics::capture_event_nonblocking(
-        "search_performed",
-        serde_json::json!({
-            "query_length": query.q.as_ref().map(|q| q.len()).unwrap_or(0),
-            "content_type": format!("{:?}", query.content_type),
-            "request_source": api_client.source_label(),
-            "agent_client": api_client.agent_client().as_str(),
-            "has_date_filter": query.start_time.is_some() || query.end_time.is_some(),
-            "has_app_filter": query.app_name.is_some(),
-            "result_count": total,
-            "non_empty": response_non_empty,
-            "parsed_non_empty": parsed_search && response_non_empty,
-            "parsed_parser_profiles": parsed_parser_profiles,
-            "limit": query.pagination.limit,
-            "offset": query.pagination.offset,
-        }),
-    );
+        analytics::capture_event_nonblocking(
+            "search_performed",
+            serde_json::json!({
+                "telemetry_sample_interval_seconds": analytics::SEARCH_REPORT_INTERVAL.as_secs(),
+                "telemetry_sampling": "first_per_interval",
+                "query_length": query.q.as_ref().map(|q| q.len()).unwrap_or(0),
+                "content_type": format!("{:?}", query.content_type),
+                "request_source": api_client.source_label(),
+                "agent_client": api_client.agent_client().as_str(),
+                "has_date_filter": query.start_time.is_some() || query.end_time.is_some(),
+                "has_app_filter": query.app_name.is_some(),
+                "result_count": total,
+                "non_empty": response_non_empty,
+                "parsed_non_empty": parsed_search && response_non_empty,
+                "parsed_parser_profiles": parsed_parser_profiles,
+                "limit": query.pagination.limit,
+                "offset": query.pagination.offset,
+            }),
+        );
+    }
 
     // Get cloud search metadata
     let time_range = match (query.start_time, query.end_time) {
