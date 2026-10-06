@@ -23,6 +23,7 @@ import { CloudWorkflows } from "./cloud-workflows";
 import { fixtureCloudWorkflows } from "@/lib/dev/cloud-workflows-fixture";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useEnterpriseBuildStatus } from "@/lib/hooks/use-is-enterprise-build";
+import { WorkflowModelSelector } from "./workflow-model-selector";
 import { WorkflowAccess } from "./workflow-access";
 
 function WorkflowDictation(props: WorkflowComposerAccessoryProps) {
@@ -94,7 +95,7 @@ export function DeviceWorkflows({ active, fullscreen = false, onModeChange, reco
         onConnectionClose={closeConnections}
       />}
 
-      <WorkflowsApp readyWorkflowIds={readyWorkflowIds} reviewRequest={reviewRequest} onReviewRequestHandled={handleReview} onAnalysisUnavailable={() => setAccessRequested(true)} analysisUnavailableReason={analysisUnavailableReason} composerAccessory={composerAccessory} fullscreen={fullscreen} onShareWorkflow={openShare} workflowAgentActions={workflowAgentActions} platform={platform} active={active} storageKey={null}
+      <WorkflowsApp modelControl={<WorkflowModelSelector preference={platform.modelPreference} />} readyWorkflowIds={readyWorkflowIds} reviewRequest={reviewRequest} onReviewRequestHandled={handleReview} onAnalysisUnavailable={() => setAccessRequested(true)} analysisUnavailableReason={analysisUnavailableReason} composerAccessory={composerAccessory} fullscreen={fullscreen} onShareWorkflow={openShare} workflowAgentActions={workflowAgentActions} platform={platform} active={active} storageKey={null}
         toolbarAccessory={platform.managesAnalysis ? <WorkflowAccess requested={accessRequested} onRequestChange={setAccessRequested} active={active} onAccessChange={setAnalysisUnavailableReason} /> : process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock" ? <WorkflowTasksPrompt active={active} tasks={fixtureWorkflowTasks} /> : undefined}
         recordingStatus={recordingStatus} navigationFooter={navigationFooter}
         sourceControl={sourceControl} navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />} />

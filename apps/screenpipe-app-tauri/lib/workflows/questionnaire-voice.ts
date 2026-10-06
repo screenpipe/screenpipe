@@ -11,7 +11,7 @@ import { parseVoiceAnswers, type QuestionnaireVoice } from "@screenpipe/workflow
 export const desktopQuestionnaireVoice: QuestionnaireVoice = {
   async connect(input, signal) {
     // Private mode must never silently send microphone audio to OpenAI.
-    if (await workflowModelPreference.load() === "private") throw new Error("Live voice uses cloud AI. Switch to Intelligent to use it, or answer by hand.");
+    if (await workflowModelPreference.load() !== "intelligent") throw new Error("Live voice uses cloud AI. Switch to Intelligent to use it, or answer by hand.");
     const token = await commands.getCloudToken();
     if (!token) throw new Error("Sign in to Screenpipe in Settings to use voice.");
     const response = await fetchAiGateway("/workflow-voice", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(input), signal });

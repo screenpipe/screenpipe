@@ -33,3 +33,9 @@ it("never treats damaged preferences as permission to use Intelligent", async ()
   await expect(workflowModelPreference.load()).rejects.toThrow();
   expect(fs.writeTextFile).not.toHaveBeenCalled();
 });
+
+it("persists only the custom preset reference, not its credentials", async () => {
+  await workflowModelPreference.save("preset:Clinic model");
+  expect(await workflowModelPreference.load()).toBe("preset:Clinic model");
+  expect(files.get("/test/base/workflows-model.json")).toBe('{"mode":"preset:Clinic model"}');
+});
