@@ -35,7 +35,8 @@ The engine preserves every existing uncached app, MCP and named-agent
 `search_performed` event. Only explicitly API-originated requests with an unknown
 agent are sampled: the first event per 60-second monotonic window per engine
 process, separately for empty/non-empty and parsed/ordinary results (at most four
-events per window). An empty background poll cannot consume the successful-result
+events per window, plus the first event in each category after UTC midnight to
+preserve daily activity). An empty background poll cannot consume the successful-result
 slot, and API traffic cannot consume an app, MCP or named-agent slot.
 
 Sampled events carry `telemetry_sampling: "first_per_interval_per_result_kind"`

@@ -66,13 +66,27 @@ fn claim_search_window(last_window: &AtomicU64, window: u64) -> bool {
         .is_ok()
 }
 
+/// Let the first request after UTC midnight report even when it shares the
+/// previous day's monotonic minute. This preserves daily activity presence.
+/// The high bits keep progress monotonic if the wall clock moves backwards;
+/// the low bits distinguish days within a minute. Both fields fit for thousands
+/// of years, and one atomic claim still arbitrates concurrent requests.
+fn search_report_window(elapsed: Duration, utc_timestamp: i64) -> u64 {
+    let minute = elapsed.as_secs() / SEARCH_REPORT_INTERVAL.as_secs();
+    let utc_day = utc_timestamp.div_euclid(86_400).max(0) as u64 + 1;
+    (minute << 32) | (utc_day & u64::from(u32::MAX))
+}
+
 /// Consent is checked before claiming a slot or constructing a payload.
 /// App, MCP and named-agent requests bypass the API diagnostic limiter.
 pub(crate) fn should_capture_search(sampled: bool, parsed: bool, non_empty: bool) -> bool {
     if !is_enabled() {
         return false;
     }
-    let window = SEARCH_REPORT_START.elapsed().as_secs() / SEARCH_REPORT_INTERVAL.as_secs() + 1;
+    let window = search_report_window(
+        SEARCH_REPORT_START.elapsed(),
+        chrono::Utc::now().timestamp(),
+    );
     SEARCH_REPORTS.should_report(sampled, parsed, non_empty, window)
 }
 
@@ -322,6 +336,22 @@ mod tests {
             assert!(reports.should_report(false, false, true, 1));
         }
         assert!(reports.should_report(true, false, true, 1));
+    }
+
+    #[test]
+    fn midnight_preserves_daily_presence_and_clock_rollback_does_not_stall_reporting() {
+        let reports = SearchReportLimiter::new();
+        let before_midnight = search_report_window(Duration::from_secs(10), 86_399);
+        let after_midnight = search_report_window(Duration::from_secs(11), 86_400);
+        assert!(reports.should_report(true, false, true, before_midnight));
+        assert!(reports.should_report(true, false, true, after_midnight));
+        assert!(!reports.should_report(true, false, true, after_midnight));
+        // A delayed previous-day caller cannot reopen an already used slot.
+        assert!(!reports.should_report(true, false, true, before_midnight));
+        // A clock correction cannot suppress reports beyond the current minute.
+        let rolled_back = search_report_window(Duration::from_secs(60), 86_000);
+        assert!(reports.should_report(true, false, true, rolled_back));
+        assert!(!reports.should_report(true, false, true, rolled_back));
     }
 
     #[test]
