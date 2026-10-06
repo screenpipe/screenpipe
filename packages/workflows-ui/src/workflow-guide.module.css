@@ -354,7 +354,6 @@
 }
 .guide textarea:focus-visible {
   outline: none;
-  border-color: var(--muted);
 }
 .guide textarea::placeholder {
   color: var(--muted);
