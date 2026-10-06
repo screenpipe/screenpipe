@@ -5351,6 +5351,41 @@
         ],
         "command": "cd apps/screenpipe-app-tauri && node node_modules/vitest/vitest.mjs run --config eval-manual-sync.config.mjs"
       }
+    },
+    {
+      "id": "app-memory-tag-filter-malformed-json",
+      "name": "Keep memory tag filtering usable around malformed stored tags",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "b3ce2f4d751950a85446ac7ca92366687efb4b3d"
+      },
+      "base_ref": "06b856d7395859a38b249eb2bf921524c148f921",
+      "oracle_ref": "b3ce2f4d751950a85446ac7ca92366687efb4b3d",
+      "oracle_paths": [
+        "crates/screenpipe-db/src/db/memories.rs"
+      ],
+      "gate": "advisory",
+      "trigger_paths": [
+        "crates/screenpipe-db/src/db/memories.rs"
+      ],
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "database",
+        "search"
+      ],
+      "prompt": "Memory listing and counting fail when an unrelated stored memory has empty, null or malformed JSON tags. Make exact tag-filtered reads tolerate those rows while returning and counting the correct valid memories. Requested tags use exact AND semantics; unknown tags match nothing. Preserve combined full-text search, source and minimum-importance filters, descending importance order and pagination. Empty tag filters must retain all memories, including rows with malformed tags. Preserve ordinary valid-tag behavior and do not delete or rewrite stored memories to make reads succeed. Exercise the actual database methods using disposable synthetic databases. No specific helper, query spelling or implementation is required. Do not access user databases or live services.",
+      "agent_timeout_seconds": 1800,
+      "grader": {
+        "timeout_seconds": 180,
+        "fixtures": [
+          {
+            "local_path": "graders/memory-tag-filter.rs",
+            "destination_path": "crates/screenpipe-db/tests/eval_memory_tag_filter.rs"
+          }
+        ],
+        "command": "cargo test --offline --locked -p screenpipe-db --test eval_memory_tag_filter -- --test-threads=1"
+      }
     }
   ]
 }

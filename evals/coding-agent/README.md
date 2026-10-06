@@ -67,7 +67,7 @@ The hidden fixture appears only at grading and uses no dependency links.
 This does not establish native recording continuity, real authentication,
 account-switch race safety, browser integration, isolation or model performance.
 
-The current app corpus contains 128 git-mined regressions. See
+The current app corpus contains 130 git-mined regressions. See
 [DESIGN.md](./DESIGN.md) for the Anthropic guidance, source contract, and
 history-mining workflow. The companion website manifest uses this same harness.
 
@@ -1626,3 +1626,16 @@ bypass, equivalent, preserved-behavior and setup-error controls. Hidden fixtures
 and dependency links appear only after the trajectory. This does not establish
 native persistence, encryption, real account access, provider delivery, execution
 isolation or model improvement.
+
+## Memory tags around malformed rows
+
+`app-memory-tag-filter-malformed-json` executes actual database list/count methods
+against disposable SQLite databases. Six outcomes cover malformed stored tags,
+exact multi-tag matching, missing tags, full-text search, unfiltered reads, source
+and importance filters, ordering, pagination and preservation of stored values.
+The parent fails four outcomes and preserves two; the historical source-only fix
+passes six. Run `bun test evals/coding-agent/calibrate-memory-tag-filter.test.js`
+for correct, broken, equivalent, disconnected, partial-repair, ignored-filter,
+blanket-filter and missing-source controls. Hidden fixtures appear only at grading.
+No build-cache links are declared. This does not establish sync ingestion, HTTP
+routing, hybrid storage, concurrent writes, execution isolation or model quality.
