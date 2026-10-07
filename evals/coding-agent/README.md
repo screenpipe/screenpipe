@@ -67,7 +67,7 @@ The hidden fixture appears only at grading and uses no dependency links.
 This does not establish native recording continuity, real authentication,
 account-switch race safety, browser integration, isolation or model performance.
 
-The current app corpus contains 138 git-mined regressions. See
+The current app corpus contains 139 git-mined regressions. See
 [DESIGN.md](./DESIGN.md) for the Anthropic guidance, source contract, and
 history-mining workflow. The companion website manifest uses this same harness.
 
@@ -1755,3 +1755,16 @@ for broken/correct/equivalent, unused-source, disconnected-caller, refusal,
 preserved-behavior and missing-source controls. Fixtures and runtime links appear
 only at grading. Native file access/decoding, playback, Markdown filtering,
 cache policy, enforced execution isolation and model performance are unverified.
+
+## Sign-out during account refresh
+
+`app-auth-logout-pending-load` mounts the actual SettingsProvider with synthetic
+HTTP, native event/storage/token, analytics and translation ports. Six outcomes
+cover local and peer-window sign-out, fresh sign-in, explicit verification,
+post-sign-out sign-in and unrelated preference updates. The parent restores a
+signed-out session in two cases while preserving four; the historical fix and
+current provider pass six. Run `bun test evals/coding-agent/calibrate-auth-logout.test.js`
+for correct, broken, equivalent, unused-source, refusal and preserved controls.
+This differs from `app-auth-verification-schedule`, which mocks the provider and
+checks AuthGuard scheduling. Actual multi-window delivery, native credential
+durability, provider revocation, enforced isolation and model gains are unverified.

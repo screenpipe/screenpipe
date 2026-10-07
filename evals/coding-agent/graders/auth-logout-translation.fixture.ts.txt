@@ -1,0 +1,3 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+export const msg=(s:string)=>s;export const useGT=()=>((s:string)=>s);export const useMessages=()=>((s:string)=>s);export const T=({children}:any)=>children;

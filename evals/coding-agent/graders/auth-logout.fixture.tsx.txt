@@ -1,0 +1,36 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import React from 'react';
+import {render,act,waitFor,cleanup} from '@testing-library/react';
+import {it,expect,vi,afterEach,beforeEach} from 'vitest';
+const state=vi.hoisted(()=>({settings:null as any, runtime:Promise.resolve(false),version:Promise.resolve('0.0.0'),identify:vi.fn(),alias:vi.fn(),optOut:vi.fn(),unexpected:[] as string[],listeners:new Map<string,Function>(),native:vi.fn()}));
+vi.mock('posthog-js',()=>({default:{identify:state.identify,alias:state.alias,opt_out_capturing:state.optOut,capture:vi.fn()}}));
+vi.mock('@tauri-apps/api/core',()=>({invoke:(name:string)=>{if(name==='is_telemetry_disabled_by_env')return state.runtime;state.unexpected.push(name);throw Error('unexpected native command');}}));
+vi.mock('@tauri-apps/api/app',()=>({getVersion:()=>state.version}));
+vi.mock('@tauri-apps/api/path',()=>({homeDir:async()=>'/synthetic'}));
+vi.mock('@tauri-apps/plugin-os',()=>({platform:()=>'macos',arch:()=>'aarch64'}));
+vi.mock('@tauri-apps/api/event',()=>({emit:vi.fn(async(name:string)=>{state.listeners.get(name)?.({payload:null})}),listen:vi.fn(async(name:string,callback:Function)=>{state.listeners.set(name,callback);return ()=>state.listeners.delete(name)})}));
+vi.mock('@tauri-apps/plugin-store',()=>({Store:{load:async()=>({get:async()=>structuredClone(state.settings),set:async(_k:string,v:any)=>{state.settings=structuredClone(v)},save:async()=>{},onKeyChange:async()=>()=>{}})}}));
+vi.mock('@/lib/utils/tauri',()=>({commands:{getScreenpipeBaseDir:async()=>({status:'ok',data:'/synthetic'}),reencryptStore:async()=>{},getCloudToken:async()=>null,setCloudToken:async(token:any)=>{state.native(token);return {status:'ok'}},setBrowserCookieAccessState:async()=>{}}}));
+vi.mock('@/lib/auth-guard',()=>({installAuthInterceptor:()=>()=>{}}));
+vi.mock('@/lib/analytics-id',()=>({cacheAnalyticsId:()=>{},cacheAnalyticsEnabled:()=>{}}));
+vi.mock('@/lib/analytics/settings-change',()=>({captureSettingsChange:()=>{}}));
+vi.mock('@/lib/api',()=>({configureApi:()=>{},refreshApiConfig:async()=>{},localFetch:async()=>{throw Error('unexpected network')}}));
+vi.mock('@/lib/hooks/use-is-enterprise-build',()=>({isResolvedConsumerBuild:async()=>true,resolveEnterpriseBuild:async()=>false}));
+
+let api:any;
+const account={id:'synthetic-user',clerk_id:'synthetic-clerk',email:'owner@example.invalid',cloud_subscribed:false,subscription_status:'none',billing_plan:'free',local_plan_policy:'free',plan:'free'};
+const response=()=>({ok:true,status:200,json:async()=>({success:true,user:account})});
+let release!:(value:any)=>void;
+let calls:any[];
+beforeEach(()=>{vi.resetModules();vi.clearAllMocks();state.listeners.clear();state.unexpected=[];state.runtime=Promise.resolve(false);state.version=Promise.resolve('0.0.0');localStorage.clear();calls=[];vi.stubGlobal('fetch',vi.fn(async(url:any,opts:any)=>{calls.push({url,body:JSON.parse(opts.body)});if(calls.length===1)return new Promise(r=>release=r);return response()}));});
+afterEach(()=>{cleanup();vi.unstubAllGlobals();expect(state.unexpected).toEqual([])});
+async function mount(){const m=await import('@/lib/hooks/use-settings');state.settings={...m.createDefaultSettingsObject(),deviceId:'synthetic-device',analyticsId:'synthetic-install',analyticsEnabled:false,user:null,_proCloudMigrationDone:true,_presetsSeededForUser:true};function Observer(){api=m.useSettings();return null};render(<m.SettingsProvider><Observer/></m.SettingsProvider>);await waitFor(()=>expect(api.isSettingsLoaded).toBe(true));}
+async function start(verify=false){let pending!:Promise<any>;await act(async()=>{pending=api.loadUser('synthetic-token',verify)});expect(calls.length).toBe(1);return {pending};}
+it('late successful account response cannot undo explicit sign-out',async()=>{await mount();const {pending}=await start();await act(async()=>{await api.updateSettings({user:null})});state.native.mockClear();await act(async()=>{release(response());await pending});expect(state.settings.user).toBeNull();expect(state.native).not.toHaveBeenCalledWith('synthetic-token');});
+it('peer sign-out fences this window pending account request',async()=>{await mount();const {pending}=await start();await act(async()=>{state.settings.user=null;state.listeners.get('screenpipe-auth-signout')?.({payload:null})});state.native.mockClear();await act(async()=>{release(response());await pending});expect(state.settings.user).toBeNull();expect(state.native).not.toHaveBeenCalledWith('synthetic-token');});
+it('fresh successful sign-in persists identity and native token',async()=>{await mount();const {pending}=await start();await act(async()=>{release(response());await pending});expect(state.settings.user?.id).toBe('synthetic-user');expect(state.native).toHaveBeenCalledWith('synthetic-token');});
+it('explicit verification flag reaches the account request',async()=>{await mount();const {pending}=await start(true);await act(async()=>{release(response());await pending});expect(calls[0].body).toEqual({token:'synthetic-token',verify:true});expect(state.settings.user?.id).toBe('synthetic-user');});
+it('fresh request after a completed sign-out may sign in',async()=>{await mount();await act(async()=>{await api.updateSettings({user:null})});const {pending}=await start();await act(async()=>{release(response());await pending});expect(state.settings.user?.id).toBe('synthetic-user');expect(state.native).toHaveBeenCalledWith('synthetic-token');});
+
+it('unrelated preference update does not invalidate a fresh account response',async()=>{await mount();const {pending}=await start();await act(async()=>{await api.updateSettings({analyticsEnabled:false})});await act(async()=>{release(response());await pending});expect(state.settings.user?.id).toBe('synthetic-user');expect(state.native).toHaveBeenCalledWith('synthetic-token');});

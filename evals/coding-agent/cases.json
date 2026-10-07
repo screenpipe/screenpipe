@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite": "screenpipe-app-coding-agent-regressions",
-  "dataset_version": "2026-10-07-media-file-url",
+  "dataset_version": "2026-10-07-auth-logout",
   "suite_type": "regression",
   "owner": "screenpipe engineering",
   "policy": {
@@ -5743,6 +5743,55 @@
           }
         ],
         "command": "cd apps/screenpipe-app-tauri && node node_modules/vitest/vitest.mjs run --config eval-media-file-url.config.mjs"
+      }
+    },
+    {
+      "id": "app-auth-logout-pending-load",
+      "name": "Keep sign-out authoritative over a pending account refresh",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "b19f9c2ae6a55994f5b1057c11ed89c7522e9304"
+      },
+      "base_ref": "32a3db993ea7ac0dc71a7805f20f875ca1281567",
+      "oracle_ref": "b19f9c2ae6a55994f5b1057c11ed89c7522e9304",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/lib/hooks/use-settings.tsx"
+      ],
+      "trigger_paths": [
+        "apps/screenpipe-app-tauri/lib/hooks/use-settings.tsx"
+      ],
+      "gate": "advisory",
+      "tags": [
+        "regression",
+        "escaped-failure",
+        "authentication",
+        "preserved-behavior"
+      ],
+      "prompt": "A slow successful account refresh can restore a session after the user signs out. Repair the actual SettingsProvider account-loading flow. Once this window explicitly clears its user, a previously pending account response must not persist that user or reinstall its native cloud token. The same must hold when another window clears the shared user and delivers the existing screenpipe-auth-signout notification. Preserve successful fresh sign-in: save the returned identity and pass the supplied token to the existing native token setter. Preserve explicit verification requests, a fresh sign-in begun after completed sign-out, and successful pending refreshes across unrelated preference changes. Keep the existing provider, account-request and native command contracts compatible. No particular implementation is required. Grading mounts the provider with synthetic HTTP, native event/storage/token and translation ports; real multi-window event delivery, native credential durability, identity-provider revocation and execution isolation are separate.",
+      "agent_timeout_seconds": 900,
+      "grader_dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/auth-logout.fixture.tsx.txt",
+            "destination_path": "apps/screenpipe-app-tauri/eval-auth-logout.test.tsx"
+          },
+          {
+            "local_path": "graders/auth-logout.config.mjs",
+            "destination_path": "apps/screenpipe-app-tauri/eval-auth-logout.config.mjs"
+          },
+          {
+            "local_path": "graders/auth-logout-translation.fixture.ts.txt",
+            "destination_path": "apps/screenpipe-app-tauri/eval-auth-translation.ts"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && node node_modules/vitest/vitest.mjs run --config eval-auth-logout.config.mjs"
       }
     }
   ]
