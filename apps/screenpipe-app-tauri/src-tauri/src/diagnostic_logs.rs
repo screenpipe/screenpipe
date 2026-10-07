@@ -310,6 +310,33 @@ mod tests {
         assert!(!report.contains("client-tax-return"));
     }
 
+    #[cfg(feature = "enterprise-build")]
+    #[tokio::test]
+    async fn full_quality_upload_failure_survives_support_collection_and_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::enterprise::sync::tests::check_large_frame_upload_failure(dir.path()).await;
+        let current = dir.path().join("screenpipe-app.2026-10-07.log");
+        tokio::fs::rename(&current, dir.path().join("screenpipe-app.2026-10-07.1.log"))
+            .await
+            .unwrap();
+        tokio::fs::write(&current, "INFO recorder restarted\n")
+            .await
+            .unwrap();
+        let report = collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+            .await
+            .unwrap();
+        for expected in [
+            "full-quality screenshot upload failed",
+            "screenshot remains pending",
+            "409",
+            "frame_id=1",
+            "4194304",
+            "recorder restarted",
+        ] {
+            assert!(report.contains(expected), "missing {expected}: {report}");
+        }
+    }
+
     #[tokio::test]
     async fn activity_preview_failure_survives_support_collection_and_redaction() {
         let dir = tempfile::tempdir().unwrap();

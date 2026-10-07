@@ -1439,7 +1439,7 @@ pub async fn run_sync_burst(
 // every successful sync tick the device asks for its pending ids, decodes
 // those frames from local video (the same path `/frames/{id}` serves, so
 // capture-time PII redaction is already applied when the org enables it),
-// downscales them to a readable-but-bounded JPEG and uploads.
+// uploads the original redacted JPEG without reducing its quality.
 //
 // Best-effort end to end by design: fulfillment must never fail a sync tick,
 // never touches the cursor, and never runs for direct-upload (zero-knowledge)
@@ -1470,13 +1470,6 @@ pub fn frame_batch_max(mode: crate::enterprise_policy::FrameImagesMode) -> usize
         M::All => FRAME_BATCH_MAX_ALL,
     }
 }
-/// Hard cap on a single encoded image. Matches the server's per-image limit.
-pub const FRAME_UPLOAD_MAX_BYTES: usize = 300_000;
-/// Width bound for uploaded frames — readable for SOP steps, not a raw dump.
-pub const FRAME_MAX_WIDTH: u32 = 1280;
-const FRAME_JPEG_QUALITY: u8 = 70;
-const FRAME_JPEG_QUALITY_FALLBACK: u8 = 50;
-
 /// Derive the control-plane base (e.g. `https://screenpipe.com`) from the
 /// configured ingest URL, so staging / on-prem `SCREENPIPE_ENTERPRISE_INGEST_URL`
 /// overrides keep working without a second env var.
@@ -1570,36 +1563,115 @@ fn split_frame_upload_requests(entries: Vec<FrameUploadEntry>) -> Vec<Vec<FrameU
 struct FrameUploadAck {
     #[serde(default)]
     stored: Vec<i64>,
+    #[serde(default)]
+    unavailable: Vec<i64>,
+    #[serde(default)]
+    failed: Vec<FrameUploadFailure>,
 }
 
-/// Decode → bound width at `FRAME_MAX_WIDTH` (aspect preserved) → JPEG.
-/// Re-encodes at a lower quality once if the first pass exceeds the size
-/// cap; gives up (`too_large`) rather than uploading an oversized image.
-pub fn downscale_frame_jpeg(bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
-    let img = image::load_from_memory(bytes).map_err(|_| "decode_failed")?;
-    let img = if img.width() > FRAME_MAX_WIDTH {
-        // `resize` fits within the (w, h) box preserving aspect ratio, so
-        // passing the original height only constrains the width.
-        img.resize(
-            FRAME_MAX_WIDTH,
-            img.height(),
-            image::imageops::FilterType::Triangle,
-        )
-    } else {
-        img
-    };
-    let rgb = img.into_rgb8();
-    for quality in [FRAME_JPEG_QUALITY, FRAME_JPEG_QUALITY_FALLBACK] {
-        let mut buf = Vec::with_capacity(128 * 1024);
-        let mut cursor = std::io::Cursor::new(&mut buf);
-        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, quality);
-        rgb.write_with_encoder(encoder)
-            .map_err(|_| "encode_failed")?;
-        if buf.len() <= FRAME_UPLOAD_MAX_BYTES {
-            return Ok(buf);
+#[derive(Debug, Clone, Deserialize)]
+struct FrameUploadFailure {
+    frame_id: Option<i64>,
+    reason: String,
+}
+
+/// Preserve the exact redacted JPEG from the local frame endpoint.
+pub fn prepare_frame_jpeg(bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
+    image::load_from_memory_with_format(bytes, image::ImageFormat::Jpeg)
+        .map_err(|_| "decode_failed")?;
+    Ok(bytes.to_vec())
+}
+
+/// Keep small images inline; send larger originals directly to workspace
+/// storage so the API envelope never dictates screenshot resolution or quality.
+async fn upload_frame_batch(
+    cfg: &EnterpriseSyncConfig,
+    http: &reqwest::Client,
+    batch: &[FrameUploadEntry],
+) -> Result<FrameUploadAck, EnterpriseSyncError> {
+    let base = control_plane_base(&cfg.ingest_url).ok_or(EnterpriseSyncError::BackfillImages(
+        "screenshot_endpoint_unavailable",
+    ))?;
+    let url = format!("{base}/api/enterprise/frame-uploads");
+    let body = serde_json::to_vec(&serde_json::json!({"frames": batch}))
+        .map_err(|_| EnterpriseSyncError::BackfillImages("screenshot_processing_failed"))?;
+    if body.len() > FRAME_UPLOAD_REQUEST_BYTES && batch.len() == 1 && batch[0].image_b64.is_some() {
+        use base64::Engine as _;
+        use reqwest::header::HeaderMap;
+        use screenpipe_sync::pipeline::{TicketedConfig, TicketedPipeline};
+        let entry = &batch[0];
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(entry.image_b64.as_ref().unwrap())
+            .map_err(|_| EnterpriseSyncError::BackfillImages("screenshot_processing_failed"))?;
+        let mut manifest = serde_json::json!({"action": "ticket", "frame_id": entry.frame_id,
+            "content_length": bytes.len(), "sha256": screenpipe_core::sync::crypto::compute_checksum(&bytes)});
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-license-key",
+            cfg.license_key
+                .parse()
+                .map_err(|_| EnterpriseSyncError::BackfillImages("screenshot_upload_failed"))?,
+        );
+        headers.insert(
+            "x-device-id",
+            cfg.device_id
+                .parse()
+                .map_err(|_| EnterpriseSyncError::BackfillImages("screenshot_invalid_frame"))?,
+        );
+        let pins = match &cfg.upload_mode {
+            EnterpriseUploadMode::DirectReadable(direct) => direct.pinned_hosts.clone(),
+            EnterpriseUploadMode::HostedIngest => Vec::new(),
+            _ => {
+                return Err(EnterpriseSyncError::BackfillImages(
+                    "screenshot_storage_mode_blocked",
+                ))
+            }
+        };
+        let pipeline = TicketedPipeline::new(
+            TicketedConfig::new(url.clone(), url)
+                .with_http(http.clone())
+                .with_control_headers(headers)
+                .with_pinned_upload_hosts(pins),
+        );
+        let ticket = manifest.clone();
+        manifest["action"] = serde_json::json!("complete");
+        if let Err(error) = pipeline
+            .upload(&bytes, "image/jpeg", &ticket, &manifest)
+            .await
+        {
+            warn!(frame_id = entry.frame_id, bytes = bytes.len(), error = %error,
+                "full-quality screenshot upload failed; screenshot remains pending");
+            return Err(EnterpriseSyncError::BackfillImages(
+                "screenshot_upload_failed",
+            ));
         }
+        return Ok(FrameUploadAck {
+            stored: vec![entry.frame_id],
+            ..Default::default()
+        });
     }
-    Err("too_large")
+    let response = http
+        .post(url)
+        .header("X-License-Key", &cfg.license_key)
+        .header("X-Device-Id", &cfg.device_id)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|error| {
+            warn!(%error, "frame fulfillment: upload failed; screenshots remain pending");
+            EnterpriseSyncError::BackfillImages("screenshot_upload_failed")
+        })?;
+    if !response.status().is_success() {
+        warn!(status = %response.status(), "frame fulfillment: POST failed; screenshots remain pending; retry next sync");
+        return Err(EnterpriseSyncError::BackfillImages(
+            "screenshot_upload_failed",
+        ));
+    }
+    response.json().await.map_err(|error| {
+        warn!(%error, "frame fulfillment: invalid acknowledgement; screenshots remain pending");
+        EnterpriseSyncError::BackfillImages("screenshot_ack_incomplete")
+    })
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1701,13 +1773,15 @@ pub async fn fulfill_frame_requests(
         return report;
     }
 
-    let mut entries: Vec<FrameUploadEntry> = Vec::with_capacity(ids.len());
-    for id in ids.iter().copied() {
+    let mut entries: Vec<FrameUploadEntry> = Vec::with_capacity(FRAME_UPLOAD_ENTRIES_PER_REQUEST);
+    let requested = ids.len();
+    let mut uploaded = 0usize;
+    let mut buffered_bytes = 0usize;
+    for (index, id) in ids.iter().copied().enumerate() {
         let entry = match local.fetch_frame_jpeg(id).await {
             Ok(Some(bytes)) => {
-                // CPU-bound decode/encode off the async runtime, mirroring
-                // the snapshot path.
-                match tokio::task::spawn_blocking(move || downscale_frame_jpeg(&bytes)).await {
+                // Validate the JPEG off the async runtime; preserve its bytes.
+                match tokio::task::spawn_blocking(move || prepare_frame_jpeg(&bytes)).await {
                     Ok(Ok(jpeg)) => FrameUploadEntry::image(id, &jpeg),
                     Ok(Err(reason)) => {
                         warn!("frame fulfillment: frame {id} {reason}");
@@ -1722,52 +1796,39 @@ pub async fn fulfill_frame_requests(
                 FrameUploadEntry::err(id, "fetch_failed")
             }
         };
+        buffered_bytes += entry.image_b64.as_ref().map_or(0, |image| image.len());
         entries.push(entry);
-    }
-
-    if guard_source
-        && local.upload_source_id().await.ok().as_deref() != Some(cfg.device_id.as_str())
-    {
-        warn!("frame fulfillment: database changed while fetching images; retry next tick");
-        return report;
-    }
-
-    let requested = entries.len();
-    let uploads_url = format!("{base}/api/enterprise/frame-uploads");
-    let mut uploaded = 0usize;
-    for batch in split_frame_upload_requests(entries) {
-        let resp = match http
-            .post(&uploads_url)
-            .header("X-License-Key", &cfg.license_key)
-            .header("X-Device-Id", &cfg.device_id)
-            .json(&serde_json::json!({ "frames": batch }))
-            .send()
-            .await
+        // Bound retained work, not the image: large originals are uploaded
+        // immediately instead of buffering the entire pending screenshot list.
+        if entries.len() == FRAME_UPLOAD_ENTRIES_PER_REQUEST
+            || buffered_bytes >= FRAME_UPLOAD_REQUEST_BYTES
+            || index + 1 == requested
         {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("frame fulfillment: upload failed: {e}");
+            if guard_source
+                && local.upload_source_id().await.ok().as_deref() != Some(cfg.device_id.as_str())
+            {
+                warn!("frame fulfillment: database changed while fetching images; retry next tick");
                 return FrameFulfillReport {
                     requested,
                     uploaded,
                     failed: requested.saturating_sub(uploaded),
                 };
             }
-        };
-        if !resp.status().is_success() {
-            warn!(
-                "frame fulfillment: POST {} -> {}; screenshots remain pending; retry next sync",
-                uploads_url,
-                resp.status()
-            );
-            return FrameFulfillReport {
-                requested,
-                uploaded,
-                failed: requested.saturating_sub(uploaded),
-            };
+            for batch in split_frame_upload_requests(std::mem::take(&mut entries)) {
+                match upload_frame_batch(cfg, http, &batch).await {
+                    Ok(ack) => uploaded += ack.stored.len(),
+                    Err(error) => {
+                        warn!(%error, "frame fulfillment failed; screenshots remain pending");
+                        return FrameFulfillReport {
+                            requested,
+                            uploaded,
+                            failed: requested.saturating_sub(uploaded),
+                        };
+                    }
+                }
+            }
+            buffered_bytes = 0;
         }
-        let ack: FrameUploadAck = resp.json().await.unwrap_or_default();
-        uploaded += ack.stored.len();
     }
     FrameFulfillReport {
         requested,
@@ -5198,8 +5259,7 @@ pub(crate) mod tests {
         buf
     }
 
-    /// Mock that only serves frame images: id 1 exists (oversized, exercises
-    /// the downscale), id 2 is gone from retention, anything else errors.
+    /// Mock that only serves frame images: id 1 exists at original resolution, id 2 is gone from retention, anything else errors.
     struct FrameMock;
 
     #[async_trait::async_trait]
@@ -5523,29 +5583,90 @@ pub(crate) mod tests {
         );
     }
 
-    #[test]
-    fn downscale_bounds_width_and_size() {
-        let big = synth_jpeg(1600, 900);
-        let out = downscale_frame_jpeg(&big).expect("downscale succeeds");
-        assert!(out.len() <= FRAME_UPLOAD_MAX_BYTES);
-        let decoded = image::load_from_memory(&out).expect("output is a decodable jpeg");
-        assert_eq!(decoded.width(), FRAME_MAX_WIDTH);
-        // Aspect preserved: 1600x900 → 1280x720.
-        assert_eq!(decoded.height(), 720);
+    #[tokio::test]
+    async fn full_quality_screenshot_retries_without_loss() {
+        let dir = TempDir::new().unwrap();
+        check_large_frame_upload_failure(dir.path()).await;
+    }
+
+    // Shared with the normal support collector's redaction/rotation test.
+    pub(crate) async fn check_large_frame_upload_failure(log_dir: &std::path::Path) {
+        use tracing::instrument::WithSubscriber;
+        use wiremock::{matchers::*, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let tmp = TempDir::new().unwrap();
+        let cfg = frame_test_cfg(&server.uri(), &tmp);
+        let mut jpeg = synth_jpeg(1600, 900);
+        // JPEG permits trailing bytes: exercise the large transport without
+        // replacing the production encoder or allocating a giant pixel fixture.
+        jpeg.resize(4 * 1024 * 1024, 0);
+        assert_eq!(prepare_frame_jpeg(&jpeg).unwrap(), jpeg);
+        let checksum = screenpipe_core::sync::crypto::compute_checksum(&jpeg);
+        Mock::given(method("POST")).and(path("/api/enterprise/frame-uploads"))
+            .and(body_partial_json(serde_json::json!({"action":"ticket", "frame_id": 1, "content_length": jpeg.len(), "sha256": checksum})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "method": "PUT", "upload_url": format!("{}/storage", server.uri()), "headers": {}
+            }))).expect(2).mount(&server).await;
+        let expected = jpeg.clone();
+        Mock::given(method("PUT"))
+            .and(path("/storage"))
+            .respond_with(move |r: &wiremock::Request| {
+                assert_eq!(r.body, expected);
+                assert!(!r.headers.contains_key("x-license-key"));
+                ResponseTemplate::new(200)
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+        let attempt = AtomicUsize::new(0);
+        Mock::given(method("POST")).and(path("/api/enterprise/frame-uploads"))
+            .and(body_partial_json(serde_json::json!({"action":"complete", "frame_id": 1})))
+            .respond_with(move |_: &wiremock::Request| {
+                if attempt.fetch_add(1, Ordering::SeqCst) == 0 {
+                    ResponseTemplate::new(409).set_body_json(serde_json::json!({"error":"screenshot upload verification failed; retry pending"}))
+                } else {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"stored":[1],"unavailable":[],"failed":[]}))
+                }
+            }).expect(2).mount(&server).await;
+        let entries = vec![FrameUploadEntry::image(1, &jpeg)];
+        let file = std::fs::File::create(log_dir.join("screenpipe-app.2026-10-07.log")).unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(file))
+            .finish();
+        let http = reqwest::Client::new();
+        assert!(upload_frame_batch(&cfg, &http, &entries)
+            .with_subscriber(subscriber)
+            .await
+            .is_err());
+        let ack = upload_frame_batch(&cfg, &http, &entries).await.unwrap();
+        assert_eq!(ack.stored, vec![1]);
+        assert!(ack.unavailable.is_empty());
     }
 
     #[test]
-    fn downscale_keeps_small_frames_unscaled() {
+    fn screenshot_preserves_original_resolution_and_bytes() {
+        let big = synth_jpeg(1600, 900);
+        let out = prepare_frame_jpeg(&big).expect("JPEG is valid");
+        assert_eq!(out, big);
+        let decoded = image::load_from_memory(&out).expect("output is a decodable jpeg");
+        assert_eq!(decoded.width(), 1600);
+        // Preserve the original evidence, including all pixels.
+        assert_eq!(decoded.height(), 900);
+    }
+
+    #[test]
+    fn screenshot_preserves_small_frames() {
         let small = synth_jpeg(640, 400);
-        let out = downscale_frame_jpeg(&small).expect("downscale succeeds");
+        let out = prepare_frame_jpeg(&small).expect("JPEG is valid");
         let decoded = image::load_from_memory(&out).unwrap();
         assert_eq!((decoded.width(), decoded.height()), (640, 400));
     }
 
     #[test]
-    fn downscale_rejects_garbage() {
-        assert_eq!(downscale_frame_jpeg(b"not a jpeg"), Err("decode_failed"));
-        assert_eq!(downscale_frame_jpeg(&[]), Err("decode_failed"));
+    fn screenshot_rejects_garbage() {
+        assert_eq!(prepare_frame_jpeg(b"not a jpeg"), Err("decode_failed"));
+        assert_eq!(prepare_frame_jpeg(&[]), Err("decode_failed"));
     }
 
     #[test]
@@ -5657,8 +5778,8 @@ pub(crate) mod tests {
             }
         );
 
-        // Inspect the actual upload body: one real image (downscaled,
-        // bounded), and the two failure modes reported so the server can
+        // Inspect the actual upload body: one original image
+        // and the two failure modes reported so the server can
         // drop those ids from the manifest.
         let reqs = server.received_requests().await.unwrap();
         let upload = reqs
@@ -5674,8 +5795,8 @@ pub(crate) mod tests {
         let jpeg = base64::engine::general_purpose::STANDARD
             .decode(b64)
             .unwrap();
-        assert!(jpeg.len() <= FRAME_UPLOAD_MAX_BYTES);
-        assert_eq!(image::load_from_memory(&jpeg).unwrap().width(), 1280);
+        assert_eq!(jpeg, synth_jpeg(1600, 900));
+        assert_eq!(image::load_from_memory(&jpeg).unwrap().width(), 1600);
         assert_eq!(frames[1]["error"], "not_found");
         assert_eq!(frames[2]["error"], "fetch_failed");
 
