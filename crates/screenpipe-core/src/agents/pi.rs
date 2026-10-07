@@ -2233,22 +2233,23 @@ impl AgentExecutor for PiExecutor {
         // 1. Explicit provider from pipe frontmatter → use it
         // 2. No provider specified → screenpipe cloud (default)
         let workflow_task = crate::workflows::pipeline::task_at(working_dir).is_some();
-        let model = if workflow_task {
-            crate::workflows::model_choice::selected_model()?
+        let workflow_provider = if workflow_task {
+            Some(crate::workflows::model_choice::selected_provider()?)
         } else {
-            model
-        };
-        let provider = if workflow_task {
-            Some("screenpipe")
-        } else {
-            provider
-        };
-        let provider_url = if workflow_task { None } else { provider_url };
-        let provider_api_key = if workflow_task {
             None
-        } else {
-            provider_api_key
         };
+        let model = workflow_provider
+            .as_ref()
+            .map_or(model, |p| p.model.as_str());
+        let provider = workflow_provider
+            .as_ref()
+            .map_or(provider, |p| p.provider.as_deref());
+        let provider_url = workflow_provider
+            .as_ref()
+            .map_or(provider_url, |p| p.url.as_deref());
+        let provider_api_key = workflow_provider
+            .as_ref()
+            .map_or(provider_api_key, |p| p.api_key.as_deref());
         if workflow_task {
             if !crate::workflows::pipeline::has_pending_input(working_dir).await? {
                 return Ok(AgentOutput {
@@ -2258,10 +2259,11 @@ impl AgentExecutor for PiExecutor {
                     pid: None,
                 });
             }
-            crate::workflows::pipeline::check_admission(
+            crate::workflows::pipeline::check_admission_for_provider(
                 &self.api_url,
                 self.current_user_token().as_deref(),
                 model,
+                provider.unwrap_or("screenpipe"),
             )
             .await?;
         }
@@ -2324,7 +2326,7 @@ impl AgentExecutor for PiExecutor {
                 provider_api_key,
                 shared_pid.clone(),
                 continue_session,
-                None, // no pipe system prompt for trait-based calls
+                workflow_provider.as_ref().and_then(|p| p.prompt.as_deref()),
             )
             .await?;
 
@@ -2360,7 +2362,7 @@ impl AgentExecutor for PiExecutor {
                     provider_api_key,
                     None,
                     continue_session,
-                    None,
+                    workflow_provider.as_ref().and_then(|p| p.prompt.as_deref()),
                 )
                 .await?;
         }
@@ -2399,22 +2401,33 @@ impl AgentExecutor for PiExecutor {
         _executor_config: Option<&serde_json::Value>,
     ) -> Result<AgentOutput> {
         let workflow_task = crate::workflows::pipeline::task_at(working_dir).is_some();
-        let model = if workflow_task {
-            crate::workflows::model_choice::selected_model()?
+        let workflow_provider = if workflow_task {
+            Some(crate::workflows::model_choice::selected_provider()?)
         } else {
-            model
-        };
-        let provider = if workflow_task {
-            Some("screenpipe")
-        } else {
-            provider
-        };
-        let provider_url = if workflow_task { None } else { provider_url };
-        let provider_api_key = if workflow_task {
             None
-        } else {
-            provider_api_key
         };
+        let workflow_system_prompt = workflow_provider.as_ref().and_then(|preset| {
+            preset.prompt.as_deref().map(|preset_prompt| {
+                [pipe_system_prompt.unwrap_or(""), preset_prompt]
+                    .into_iter()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            })
+        });
+        let pipe_system_prompt = workflow_system_prompt.as_deref().or(pipe_system_prompt);
+        let model = workflow_provider
+            .as_ref()
+            .map_or(model, |p| p.model.as_str());
+        let provider = workflow_provider
+            .as_ref()
+            .map_or(provider, |p| p.provider.as_deref());
+        let provider_url = workflow_provider
+            .as_ref()
+            .map_or(provider_url, |p| p.url.as_deref());
+        let provider_api_key = workflow_provider
+            .as_ref()
+            .map_or(provider_api_key, |p| p.api_key.as_deref());
         if workflow_task {
             if !crate::workflows::pipeline::has_pending_input(working_dir).await? {
                 return Ok(AgentOutput {
@@ -2424,10 +2437,11 @@ impl AgentExecutor for PiExecutor {
                     pid: None,
                 });
             }
-            crate::workflows::pipeline::check_admission(
+            crate::workflows::pipeline::check_admission_for_provider(
                 &self.api_url,
                 self.current_user_token().as_deref(),
                 model,
+                provider.unwrap_or("screenpipe"),
             )
             .await?;
         }

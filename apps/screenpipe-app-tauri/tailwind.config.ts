@@ -233,6 +233,15 @@ module.exports = {
 			"0%": { transform: "translateX(-100%)" },
 			"100%": { transform: "translateX(400%)" },
 		  },
+		  // Dialogs fade in place. tailwindcss-animate's animate-in/animate-out
+		  // keyframes always write `transform`, even for a plain fade, which
+		  // replaces the translate that centers a dialog and slides it in.
+		  "dialog-fade-in": {
+			from: { opacity: "0" },
+		  },
+		  "dialog-fade-out": {
+			to: { opacity: "0" },
+		  },
 		},
 		animation: {
 		  "accordion-down": "accordion-down 0.2s ease-out",
@@ -241,6 +250,8 @@ module.exports = {
 		  rainbow: "rainbow var(--speed, 2s) infinite linear",
 		  "owned-browser-load":
 			"owned-browser-load 1.1s ease-in-out infinite",
+		  "dialog-fade-in": "dialog-fade-in 150ms ease",
+		  "dialog-fade-out": "dialog-fade-out 150ms ease",
 		},
 	  }
 	  

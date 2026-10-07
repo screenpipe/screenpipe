@@ -1,7 +1,9 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 "use client";
+import type { WorkflowModelMode } from "@screenpipe/workflows-ui";
 import { workflowModelPreference } from "@/lib/workflows/model-choice";
+import { useSettings } from "@/lib/hooks/use-settings";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useUsageStatusQuery } from "@/lib/hooks/use-usage-status";
@@ -20,14 +22,17 @@ export function WorkflowAccess({ active, requested = false, onRequestChange, onA
   const { health, isServerDown } = useHealthCheck();
   const backendReady = !!health && !isServerDown;
   const router = useRouter();
-  const [mode, setMode] = useState<"intelligent" | "private">("intelligent");
+  const [mode, setMode] = useState<WorkflowModelMode>("intelligent");
   useEffect(() => {
     const refresh = () => { void workflowModelPreference.load().then(setMode).catch(() => setMode("intelligent")); };
     refresh(); window.addEventListener("workflows:model-changed", refresh);
     window.addEventListener("focus", refresh);
     return () => { window.removeEventListener("workflows:model-changed", refresh); window.removeEventListener("focus", refresh); };
   }, []);
-  const access = workflowAccess(query.usage, mode);
+  const { settings } = useSettings();
+  const preset = mode.startsWith("preset:") ? settings.aiPresets.find(p => p.id === mode.slice(7)) : undefined;
+  const customProvider = !!preset && ["openai", "openai-chatgpt", "anthropic", "custom", "native-ollama"].includes(preset.provider);
+  const access = workflowAccess(query.usage, mode, customProvider);
   const reason = query.isLoading ? "Checking workflow access…" : access.state === "ready" ? undefined : access.message;
   useEffect(() => { onAccessChange?.(reason); }, [onAccessChange, reason]);
   useEffect(() => { if (requested && access.state === "ready") onRequestChange?.(false); }, [requested, access.state, onRequestChange]);

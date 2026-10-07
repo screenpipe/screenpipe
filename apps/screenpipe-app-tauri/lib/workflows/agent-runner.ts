@@ -2,7 +2,7 @@
 // https://screenpipe.com
 
 import { workflowModelPreference } from "./model-choice";
-import { WORKFLOW_MODELS } from "@screenpipe/workflows-ui";
+import { resolveWorkflowProvider } from "./model-provider";
 import { commands, type PiProviderConfig } from "@/lib/utils/tauri";
 import { mountAgentEventBus, registerForeground, onTerminated, onEvicted } from "@/lib/events/bus";
 import type { AgentInnerEvent } from "@/lib/events/types";
@@ -46,6 +46,8 @@ export async function runWorkflowAgent({ name, prompt, config, signal, onProgres
       if (base.status === "error") throw new Error("Couldn’t open your local workspace.");
       // Use the same encrypted account token that hydrates normal chat's
       // settings.user.token. Read it for each run so login/logout is current.
+      const choice = await workflowModelPreference.load(); assertActive();
+      config = await resolveWorkflowProvider(choice, config); assertActive();
       const userToken = await commands.getCloudToken(); assertActive();
       if (config.provider === "screenpipe-cloud" && !userToken) {
         throw new Error("Sign in to Screenpipe in Settings to continue.");
@@ -76,8 +78,6 @@ export async function runWorkflowAgent({ name, prompt, config, signal, onProgres
       }));
       unregister.push(onTerminated((event) => { if (event.sessionId === sessionId) fail(new Error("The conversation was interrupted. Try again.")); }));
       unregister.push(onEvicted((event) => { if (event.sessionId === sessionId) fail(new Error("The conversation was interrupted. Try again.")); }));
-      const choice = await workflowModelPreference.load(); assertActive();
-      config = { ...config, provider: "screenpipe-cloud", model: WORKFLOW_MODELS[choice].model, url: "", apiKey: null, acpAgent: null, backend: null, maxContextChars: null };
       const started = await commands.piStart(sessionId, projectPath ?? `${base.data}/pi-workflows-${name}`, userToken, config);
       assertActive();
       if (started.status === "error" || !started.data.running) throw new Error(started.status === "error" ? started.error : "Couldn’t start the assistant.");

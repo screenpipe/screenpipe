@@ -248,6 +248,14 @@ describe("MarkdownBlock", () => {
     expect(getMediaFileMock).not.toHaveBeenCalled();
   });
 
+  it("keeps an image address with a line break in it on its line", () => {
+    const { container } = render(<MarkdownBlock text="see ![a](rel%0Aname.png) here" isUser={false} />);
+
+    expect(container.querySelector("p")).toHaveTextContent("see a rel name.png here");
+    expect(container.querySelector("p code")).toHaveTextContent("rel name.png");
+    expect(container.querySelector("pre, button")).toBeNull();
+  });
+
   it("never plays a different file than a chat link names", () => {
     const { container } = render(
       <MarkdownBlock
@@ -512,10 +520,49 @@ describe("MarkdownBlock", () => {
 
     it("neutralizes javascript: URLs in raw HTML attributes", () => {
       const container = renderHtml(
-        `<a href="javascript:alert(1)">click</a> <img src="https://example.com/x.png" longdesc="javascript:alert(1)">`,
+        `<a href="javascript:alert(1)">click</a> <img src="https://example.com/x.png" alt="remote chart" longdesc="javascript:alert(1)">\n\n<blockquote cite="javascript:alert(1)">quoted</blockquote>`,
       );
+      expect(screen.getByText("click")).toBeInTheDocument();
       expect(container.querySelector("a[href^='javascript']")).toBeNull();
-      expect(container.querySelector("img")?.getAttribute("longdesc")).toBeNull();
+      expect(container.querySelector("img")).toBeNull();
+      expect(container).toHaveTextContent("remote chart");
+      const quote = container.querySelector("blockquote");
+      expect(quote).toHaveTextContent("quoted");
+      expect(quote?.getAttribute("cite") ?? "").not.toMatch(/javascript:/i);
+      expect(container.innerHTML).not.toMatch(/javascript:/i);
+    });
+
+    // A remote image loads as soon as it renders and sends its URL (and any
+    // data the AI was steered into putting there) to that server.
+    it.each([
+      ["markdown image", `![remote chart](https://example.com/x.png?d=secret)`],
+      ["raw img", `<img src="https://example.com/x.png?d=secret" alt="remote chart">`],
+      ["protocol-relative raw img", `<img src="//example.com/x.png" alt="remote chart">`],
+    ])("shows a remote %s as alt text without loading it", (_name, html) => {
+      const container = renderHtml(`before\n\n${html}\n\nafter`);
+      expect(container).toHaveTextContent("before");
+      expect(container).toHaveTextContent("remote chart");
+      expect(container).toHaveTextContent("after");
+      expect(container.querySelector("img")).toBeNull();
+    });
+
+    it("drops picture/source so a srcset cannot replace a local image", async () => {
+      getMediaFileMock.mockResolvedValueOnce({
+        status: "ok",
+        data: { data: "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", mimeType: "image/gif" },
+      });
+      URL.createObjectURL = vi.fn(() => "blob:local-picture");
+      URL.revokeObjectURL = vi.fn();
+
+      const container = renderHtml(
+        `before\n\n<picture><source srcset="https://example.com/x.png?d=secret"><img src="/tmp/local.gif" alt="pic"></picture>\n\nafter`,
+      );
+
+      expect(await screen.findByAltText("pic")).toHaveAttribute("src", "blob:local-picture");
+      expect(getMediaFileMock).toHaveBeenCalledWith("/tmp/local.gif");
+      expect(container.querySelector("picture, source, [srcset]")).toBeNull();
+      expect(container).toHaveTextContent("before");
+      expect(container).toHaveTextContent("after");
     });
 
     it("keeps safe formatting and collapsible details", () => {

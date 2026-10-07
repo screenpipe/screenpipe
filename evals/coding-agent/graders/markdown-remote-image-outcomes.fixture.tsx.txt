@@ -1,0 +1,321 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { Editor } from "@tiptap/core";
+import { MarkdownBlock } from "./markdown-block";
+import { MemoizedReactMarkdown } from "@/components/markdown";
+import { createMeetingNoteEditorExtensions, NoteEditor } from "@/components/meeting-notes/note-editor";
+
+const GIF = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+const { readMediaMock, ownedBrowserNavigateMock, copyTextToClipboardMock, openViewerWindowMock, showWindowMock } =
+  vi.hoisted(() => ({
+    // Synthetic native media reader: the only way a local file reaches the page.
+    readMediaMock: vi.fn(async (_path: string) => ({
+      status: "ok" as const,
+      data: { data: "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", mimeType: "image/gif" },
+    })),
+    ownedBrowserNavigateMock: vi.fn(async () => ({ status: "ok" as const, data: null })),
+    copyTextToClipboardMock: vi.fn(async () => ({ status: "ok" as const, data: null })),
+    openViewerWindowMock: vi.fn(async () => ({ status: "ok" as const })),
+    showWindowMock: vi.fn(async () => ({ status: "ok" as const })),
+  }));
+
+vi.mock("@/lib/utils/tauri", () => ({
+  commands: {
+    getMediaFile: readMediaMock,
+    ownedBrowserNavigate: ownedBrowserNavigateMock,
+    copyTextToClipboard: copyTextToClipboardMock,
+    openViewerWindow: openViewerWindowMock,
+    showWindow: showWindowMock,
+  },
+}));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn(async () => undefined) }));
+vi.mock("@/components/ui/use-toast", () => ({ toast: vi.fn() }));
+vi.mock("@tauri-apps/api/event", () => ({ emit: vi.fn(async () => undefined) }));
+vi.mock("@/lib/hooks/use-timeline-store", () => ({
+  useTimelineStore: { getState: () => ({ setPendingNavigation: vi.fn() }) },
+}));
+vi.mock("@/lib/notifications/actions", () => ({ routeNotificationDeeplink: vi.fn(async () => undefined) }));
+// Synthetic native HTTP port: every download fails, as one behind a login does.
+const { nativeHttpMock } = vi.hoisted(() => ({
+  nativeHttpMock: vi.fn(async () => { throw new Error("Eval native download denied"); }),
+}));
+vi.mock("@tauri-apps/plugin-http", () => ({ fetch: nativeHttpMock }));
+// The note's formatting menus play no part in what the note shows.
+vi.mock("@/components/meeting-notes/editor-menus", () => ({ FormatToolbar: () => null, SlashCommandMenu: () => null }));
+
+vi.hoisted(() => { globalThis.fetch = (() => { throw new Error("Eval network denied"); }) as typeof fetch; });
+
+type Renderer = (text: string) => HTMLElement;
+const chatAssistant: Renderer = (text) => render(<MarkdownBlock text={text} isUser={false} />).container;
+const chatUser: Renderer = (text) => render(<MarkdownBlock text={text} isUser />).container;
+const shared: Renderer = (text) => render(<MemoizedReactMarkdown>{text}</MemoizedReactMarkdown>).container;
+const CHAT: [string, Renderer][] = [["chat assistant", chatAssistant], ["chat user", chatUser]];
+const RENDERERS: [string, Renderer][] = [...CHAT, ["shared markdown", shared]];
+
+// Elements that make the webview request something as soon as they render.
+// Local images arrive as blob: URLs after the native reader returns bytes.
+function fetchingElements(container: HTMLElement): string[] {
+  return [...container.querySelectorAll("img, picture, source, video, audio, [srcset]")]
+    .filter((element) => !(element.tagName === "IMG" && element.getAttribute("src")?.startsWith("blob:")))
+    .map((element) => element.outerHTML);
+}
+
+async function settle() {
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+}
+
+beforeEach(() => {
+  let next = 0;
+  URL.createObjectURL = vi.fn(() => `blob:eval-${++next}`);
+  URL.revokeObjectURL = vi.fn();
+});
+afterEach(() => { vi.clearAllMocks(); });
+
+const BLOCKED_MARKDOWN: [string, string, string][] = [
+  ["https image", "![remote chart](https://example.com/x.png?d=secret)", "remote chart"],
+  ["http image", "![remote chart](http://example.com/x.png)", "remote chart"],
+  ["protocol-relative image", "![remote chart](//example.com/x.png)", "remote chart"],
+  ["reference-style image", "![remote chart][r]\n\n[r]: https://example.com/x.png", "remote chart"],
+  ["relative image", "![remote chart](chart.png)", "remote chart"],
+  ["network-share image", "![share chart](/\\host\\share\\x.png)", "share chart"],
+  ["remote media image", "![clip](https://example.com/a.mp4)", "clip"],
+  ["remote media link", "[clip](https://example.com/a.mp4)", "clip"],
+  ["remote media code", "`https://example.com/a.mp4`", "https://example.com/a.mp4"],
+  ["network-share media image", "![clip](//host/share/a.mp4)", "clip"],
+  ["network-share media code", "`\\\\host\\share\\a.mp4`", "\\\\host\\share\\a.mp4"],
+  // Home-relative, but the reader would join home with an absolute share path.
+  ["home-relative network-share media code", "`~/\\\\host\\share\\a.mp4`", "~/\\\\host\\share\\a.mp4"],
+  // Local-looking prefixes the reader would not read: it takes the share after them.
+  ["network share after a quote in a media link", '[clip](</tmp/x"//host/share/a.mp4>)', "clip"],
+  ["network share on a second line of a media code block", "```\n/tmp/x\n//host/share/a.mp4\n```", "//host/share/a.mp4"],
+  // Sources removed for safety still leave their alt text.
+  ["data: image", "![remote chart](data:image/png;base64,iVBORw0KGgo=)", "remote chart"],
+  ["javascript: image", "![remote chart](javascript:alert(1))", "remote chart"],
+];
+
+describe("remote markdown sources", () => {
+  describe.each(RENDERERS)("%s", (_renderer, renderMarkdown) => {
+    it.each(BLOCKED_MARKDOWN)("does not load a %s and keeps its text", async (_case, markdown, text) => {
+      const container = renderMarkdown(`before\n\n${markdown}\n\nafter`);
+      await settle();
+      expect(container).toHaveTextContent("before");
+      expect(container).toHaveTextContent(text);
+      expect(container).toHaveTextContent("after");
+      expect(fetchingElements(container)).toEqual([]);
+      expect(readMediaMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps the address of a remote image that has no alt text", async () => {
+      const container = renderMarkdown("before\n\n![](https://example.com/x.png?d=secret)\n\nafter");
+      await settle();
+      expect(container).toHaveTextContent("before");
+      expect(container).toHaveTextContent("https://example.com/x.png?d=secret");
+      expect(container).toHaveTextContent("after");
+      expect(fetchingElements(container)).toEqual([]);
+      expect(readMediaMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps the alt text and path of a local image that can't be read", async () => {
+      readMediaMock.mockResolvedValueOnce({ status: "error", error: "File does not exist" } as never);
+      const container = renderMarkdown("before\n\n![local chart](/tmp/eval-missing.gif)\n\nafter");
+      await waitFor(() => expect(container).toHaveTextContent("/tmp/eval-missing.gif"));
+      expect(container).toHaveTextContent("before");
+      expect(container).toHaveTextContent("local chart");
+      expect(container).toHaveTextContent("after");
+      expect(readMediaMock).toHaveBeenCalledWith("/tmp/eval-missing.gif");
+      expect(fetchingElements(container)).toEqual([]);
+    });
+  });
+
+  describe.each(CHAT)("%s raw HTML", (renderer, renderChat) => {
+    it.each([
+      ["remote img", `<img src="https://example.com/x.png?d=secret" alt="remote chart">`],
+      ["protocol-relative img", `<img src="//example.com/x.png" alt="remote chart">`],
+    ])("does not load a %s and keeps its alt text", async (_case, html) => {
+      const container = renderChat(`before\n\n${html}\n\nafter`);
+      await settle();
+      expect(container).toHaveTextContent("before");
+      expect(container).toHaveTextContent("remote chart");
+      expect(container).toHaveTextContent("after");
+      expect(fetchingElements(container)).toEqual([]);
+      expect(readMediaMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps a picture source from replacing the local image beside it", async () => {
+      const path = `/tmp/eval-picture-${renderer.replace(/\W/g, "-")}.gif`;
+      const container = renderChat(
+        `before\n\n<picture><source srcset="https://example.com/x.png?d=secret"><img src="${path}" alt="pic"></picture>\n\nafter`,
+      );
+      expect(await screen.findByAltText("pic")).toHaveAttribute("src", expect.stringMatching(/^blob:/));
+      expect(readMediaMock).toHaveBeenCalledWith(path);
+      expect(container).toHaveTextContent("before");
+      expect(container).toHaveTextContent("after");
+      expect(fetchingElements(container)).toEqual([]);
+    });
+  });
+});
+
+describe("local markdown files", () => {
+  it.each([
+    ["absolute image in chat", chatAssistant, "![local chart](/tmp/eval-absolute.gif)", "/tmp/eval-absolute.gif"],
+    ["file URL image in chat", chatAssistant, "![local chart](file:///tmp/eval-file-url.gif)", "/tmp/eval-file-url.gif"],
+    ["Windows image in chat", chatAssistant, "![local chart](C:\\Users\\me\\eval-windows.gif)", "C:\\Users\\me\\eval-windows.gif"],
+    ["absolute image in shared markdown", shared, "![local chart](/tmp/eval-shared.gif)", "/tmp/eval-shared.gif"],
+  ] as [string, Renderer, string, string][])("still shows an %s through the native reader", async (_case, renderMarkdown, markdown, path) => {
+    renderMarkdown(markdown);
+    expect(await screen.findByAltText("local chart")).toHaveAttribute("src", expect.stringMatching(/^blob:/));
+    expect(readMediaMock).toHaveBeenCalledWith(path);
+  });
+
+  it.each([
+    ["absolute media image in chat", chatAssistant, "![clip](/Users/me/eval-absolute.mp4)", "/Users/me/eval-absolute.mp4"],
+    ["home-relative media code in chat", chatAssistant, "`~/Downloads/eval-home.mp4`", "~/Downloads/eval-home.mp4"],
+    ["absolute media link in shared markdown", shared, "[clip](/Users/me/eval-shared.mp4)", "/Users/me/eval-shared.mp4"],
+    // Markdown escapes a backslash as `\\`; only two at the very start make a network share.
+    [
+      "Windows recording link with doubled backslashes in chat",
+      chatAssistant,
+      "[call](C:\\\\Users\\\\me\\\\Mic (Realtek Audio) (input)_2026-05-25_21-42-22.mp4)",
+      "C:\\Users\\me\\Mic (Realtek Audio) (input)_2026-05-25_21-42-22.mp4",
+    ],
+  ] as [string, Renderer, string, string][])("still reads %s through the native reader", async (_case, renderMarkdown, markdown, path) => {
+    renderMarkdown(markdown);
+    await waitFor(() => expect(readMediaMock).toHaveBeenCalledWith(path));
+  });
+});
+
+// The meeting note editor shows notes that an AI meeting summary writes.
+describe("meeting note editor", () => {
+  const EMBEDDED = `data:image/gif;base64,${GIF}`;
+  let editor: Editor | null = null;
+  afterEach(() => { editor?.destroy(); editor = null; document.body.innerHTML = ""; });
+  // jsdom has no layout; the note scrolls its caret into view after edits.
+  beforeAll(() => {
+    Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
+    Range.prototype.getBoundingClientRect = () => ({ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }) as DOMRect;
+    vi.spyOn(window, "scrollBy").mockImplementation(() => {});
+  });
+  afterAll(() => {
+    delete (Range.prototype as Partial<Range>).getClientRects;
+    delete (Range.prototype as Partial<Range>).getBoundingClientRect;
+    vi.mocked(window.scrollBy).mockRestore();
+  });
+
+  function mountNote(markdown: string) {
+    const element = document.createElement("div");
+    document.body.appendChild(element);
+    editor = new Editor({ element, extensions: createMeetingNoteEditorExtensions(""), content: markdown });
+    return element;
+  }
+  // The note editor component as the meeting view uses it.
+  async function renderNoteEditor(value: string) {
+    const saved = vi.fn();
+    const { container, rerender } = render(<NoteEditor value={value} onChange={saved} />);
+    const editable = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>("[contenteditable]");
+      if (!element) throw new Error("note editor did not mount");
+      return element;
+    });
+    return {
+      container,
+      editable,
+      lastSaved: () => saved.mock.calls.at(-1)?.[0] as string | undefined,
+      update: (next: string) => rerender(<NoteEditor value={next} onChange={saved} />),
+    };
+  }
+  const remoteImages = (element: HTMLElement) =>
+    fetchingElements(element).filter((html) => !html.includes(EMBEDDED));
+  const markdownOf = () => (editor!.storage as unknown as { markdown: { getMarkdown(): string } }).markdown.getMarkdown();
+
+  it("does not load images an AI summary wrote, keeps their alt text and keeps them in the note", async () => {
+    const element = mountNote([
+      "before",
+      "",
+      "![sales chart](https://example.com/chart.png?d=secret)",
+      "",
+      '<img src="https://example.com/raw.png?d=secret" alt="raw chart" width="40" height="40" />',
+      "",
+      `![pasted screenshot](${EMBEDDED})`,
+      "",
+      "after",
+    ].join("\n"));
+    await settle();
+    expect(element).toHaveTextContent("before");
+    expect(element).toHaveTextContent("sales chart");
+    expect(element).toHaveTextContent("raw chart");
+    expect(element).toHaveTextContent("after");
+    expect(remoteImages(element)).toEqual([]);
+    // An image the note carries itself still shows.
+    expect(element.querySelector(`img[src="${EMBEDDED}"]`)).not.toBeNull();
+    // Viewing or saving the note loses nothing.
+    expect(markdownOf()).toContain("https://example.com/chart.png?d=secret");
+    expect(markdownOf()).toContain("https://example.com/raw.png?d=secret");
+  });
+
+  it("keeps every image when a note is copied and pasted into a note", async () => {
+    mountNote([
+      "before",
+      "",
+      "![sales chart](https://example.com/chart.png?d=secret)",
+      "",
+      `<img src="${EMBEDDED}" alt="whiteboard" width="40" height="30" />`,
+    ].join("\n"));
+    // A copy through the editor's own clipboard handling.
+    const clipboard = new Map<string, string>();
+    editor!.commands.selectAll();
+    const copy = new Event("copy", { bubbles: true, cancelable: true });
+    Object.defineProperty(copy, "clipboardData", {
+      value: { clearData: () => clipboard.clear(), setData: (type: string, data: string) => clipboard.set(type, data), getData: (type: string) => clipboard.get(type) ?? "" },
+    });
+    editor!.view.dom.dispatchEvent(copy);
+    expect(clipboard.get("text/html")).toBeTruthy();
+
+    // Pasted into the note editor as a browser delivers a paste.
+    const note = await renderNoteEditor("");
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", {
+      value: { files: [], items: [], types: [...clipboard.keys()], getData: (type: string) => clipboard.get(type) ?? "" },
+    });
+    fireEvent(note.editable, paste);
+    await waitFor(() => expect(note.lastSaved()).toContain("https://example.com/chart.png?d=secret"));
+    await settle();
+    expect(note.container).toHaveTextContent("before");
+    expect(note.container).toHaveTextContent("sales chart");
+    expect(remoteImages(note.container)).toEqual([]);
+    // The embedded image keeps its alt text and size.
+    expect(note.container.querySelector(`img[src="${EMBEDDED}"]`)).toHaveAttribute("alt", "whiteboard");
+    expect(note.lastSaved()).toContain('width="40"');
+  });
+
+  it("keeps a pasted web image that can't be downloaded in the note as its address", async () => {
+    const note = await renderNoteEditor("before");
+    const html = '<p>pasted text</p><img src="https://example.com/web.png?d=secret" alt="web chart">';
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(paste, "clipboardData", {
+      value: {
+        files: [], items: [], types: ["text/html", "text/plain"],
+        getData: (type: string) => (type === "text/html" ? html : type === "text/plain" ? "pasted text" : ""),
+      },
+    });
+    fireEvent(note.editable, paste);
+    await waitFor(() => expect(note.lastSaved()).toContain("https://example.com/web.png?d=secret"));
+    await settle();
+    expect(note.container).toHaveTextContent("before");
+    expect(note.container).toHaveTextContent("pasted text");
+    expect(fetchingElements(note.container)).toEqual([]);
+  });
+
+  it("does not load a remote image that arrives with a later update", async () => {
+    const note = await renderNoteEditor(`before\n\n![pasted screenshot](${EMBEDDED})\n\nafter`);
+    note.update("before\n\n![sales chart](https://example.com/late.png?d=secret)\n\nafter");
+    await settle();
+    expect(note.container).toHaveTextContent("sales chart");
+    expect(note.container).toHaveTextContent("after");
+    // The earlier embedded image is gone too; nothing may show in its place.
+    expect(fetchingElements(note.container)).toEqual([]);
+  });
+});

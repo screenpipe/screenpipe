@@ -8,6 +8,20 @@ import { RecordingStatus } from "@/components/recording-status";
 import { SidebarFooter } from "@/components/sidebar-footer";
 import { DeviceWorkflows as IntegratedWorkflows, workflowAgentTask } from "./integrated-workflows";
 
+// DeviceWorkflows is normally mounted beneath the app shell's settings and policy providers.
+vi.mock("@/lib/hooks/use-settings", () => ({
+  useSettings: () => ({ settings: { aiPresets: [], user: {} }, updateSettings: vi.fn() }),
+}));
+vi.mock("@/lib/hooks/use-model-upsell-gating", () => ({
+  useModelUpsellGating: () => false,
+}));
+vi.mock("@/lib/hooks/use-managed-policy", () => ({
+  useManagedPolicy: () => ({ isManagedDeployment: false, policy: {} }),
+}));
+vi.mock("@/lib/hooks/use-pi-models", () => ({
+  usePiModels: () => ({ piModels: [], isLoading: false, upgradeEligible: false }),
+}));
+
 vi.mock("@/lib/workflows/desktop-platform", async () => {
   const { createFixtureWorkflowsPlatform, fixtureWorkflowAnalysis } = await import("@screenpipe/workflows-ui/fixture");
   return { desktopWorkflowsPlatform: {

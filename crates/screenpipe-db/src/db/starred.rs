@@ -100,6 +100,9 @@ impl DatabaseManager {
 
     /// One bounded query per search page, never one query per capture/frame.
     pub async fn starred_timestamps(&self, timestamps: &[String]) -> Result<Vec<bool>, SqlxError> {
+        if timestamps.is_empty() {
+            return Ok(Vec::new());
+        }
         let values =
             serde_json::to_string(timestamps).map_err(|e| SqlxError::Protocol(e.to_string()))?;
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM starred_sessions s WHERE s.start <= j.value AND s.end > j.value) FROM json_each(?1) j ORDER BY CAST(j.key AS INTEGER)")

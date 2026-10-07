@@ -2249,8 +2249,11 @@ async fn execute_single_write(
                 .iter()
                 .map(|(id, pos)| format!("WHEN {} THEN {}", id, pos))
                 .collect();
+            // Keep all bindings anonymous. SQLx counts anonymous parameters
+            // separately from numbered ones: mixing ?1 with ? reuses chunk_id
+            // as the first frame ID and omits the final frame in the batch.
             let sql = format!(
-                "UPDATE frames SET video_chunk_id = ?1, offset_index = CASE id {} ELSE offset_index END, snapshot_path = NULL WHERE id IN ({}) AND snapshot_path IS NOT NULL",
+                "UPDATE frames SET video_chunk_id = ?, offset_index = CASE id {} ELSE offset_index END, snapshot_path = NULL WHERE id IN ({}) AND snapshot_path IS NOT NULL",
                 case_clauses.join(" "), placeholders.join(",")
             );
             let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(chunk_id);

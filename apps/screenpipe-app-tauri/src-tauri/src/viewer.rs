@@ -12,7 +12,7 @@
 
 use base64::Engine;
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::io::AsyncReadExt;
 use tracing::{error, info};
@@ -28,6 +28,11 @@ const MAX_VIEWER_FILE_BYTES: u64 = 10 * 1024 * 1024;
 /// `~\…` is also expanded on Windows, where `\` is the native separator. On
 /// Unix `\` is a valid filename character, so `~\foo` there is a real relative
 /// path, not a home reference, and is left alone.
+///
+/// A remainder that is itself rooted (`~//etc`) or, on Windows, carries a
+/// drive or network-share prefix (`~/\\host\share`) is also left alone:
+/// `Path::join` would discard home for it, and reading a share contacts that
+/// host and hands it the user's Windows credentials.
 pub(crate) fn expand_tilde(path: &str) -> PathBuf {
     if path == "~" {
         return dirs::home_dir().unwrap_or_else(|| PathBuf::from(path));
@@ -35,6 +40,12 @@ pub(crate) fn expand_tilde(path: &str) -> PathBuf {
     let rest = path.strip_prefix("~/");
     #[cfg(windows)]
     let rest = rest.or_else(|| path.strip_prefix("~\\"));
+    let rest = rest.filter(|rest| {
+        !matches!(
+            Path::new(rest).components().next(),
+            Some(Component::Prefix(_) | Component::RootDir)
+        )
+    });
     if let Some(rest) = rest {
         if let Some(home) = dirs::home_dir() {
             return home.join(rest);
@@ -467,6 +478,28 @@ mod tests {
         // On Unix `\` is a valid filename char, so `~\foo` is NOT home-relative.
         #[cfg(not(windows))]
         assert_eq!(expand_tilde("~\\foo.mp4"), PathBuf::from("~\\foo.mp4"));
+    }
+
+    #[test]
+    fn expand_tilde_keeps_rooted_remainders_out_of_home_join() {
+        // `home.join("/etc/hosts")` would be `/etc/hosts`, leaving home.
+        assert_eq!(expand_tilde("~//etc/hosts"), PathBuf::from("~//etc/hosts"));
+        // On Windows the same join would yield the share itself, and reading
+        // it contacts the host.
+        #[cfg(windows)]
+        {
+            for path in [
+                "~/\\\\evil.example\\share\\clip.mp4",
+                "~\\\\\\evil.example\\share\\clip.mp4",
+                "~///evil.example/share/clip.mp4",
+                "~/C:\\Windows\\clip.mp4",
+            ] {
+                assert_eq!(expand_tilde(path), PathBuf::from(path), "{path}");
+            }
+        }
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(expand_tilde("~/a/../b.md"), home.join("a/../b.md"));
+        }
     }
 
     #[test]

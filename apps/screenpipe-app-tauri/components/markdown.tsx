@@ -1,10 +1,11 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
-import { FC, isValidElement, memo, type ReactNode } from 'react'
+import { createContext, FC, isValidElement, memo, useContext, type ReactNode } from 'react'
 import ReactMarkdown, { defaultUrlTransform, Options } from 'react-markdown'
 import { commands } from "@/lib/utils/tauri";
 import { MediaComponent } from "@/components/rewind/media";
 import { LocalMarkdownImage } from "@/components/markdown/local-markdown-image";
+import { ImageAltText } from "@/components/markdown/image-alt-text";
 import { imageMimeFromName } from "@/components/meeting-notes/image-utils";
 import {
   decodeLinkAddress,
@@ -32,10 +33,8 @@ export function resolveLocalPathFromMarkdownUrl(url: string): string | null {
   const urlWithoutFragment = raw.split("#", 1)[0] ?? raw;
 
   let candidate = urlWithoutFragment;
-  let wasFileUri = false;
 
   if (/^file:\/\//i.test(candidate)) {
-    wasFileUri = true;
     const withoutScheme = candidate.replace(/^file:\/\//i, "");
     candidate = `/${withoutScheme.replace(/^\/+/, "")}`;
   }
@@ -50,7 +49,9 @@ export function resolveLocalPathFromMarkdownUrl(url: string): string | null {
     candidate = candidate.slice(1);
   }
 
-  if (candidate.startsWith("/") && (wasFileUri || !candidate.startsWith("//"))) {
+  // A second leading slash or backslash is a network share on Windows
+  // (//host/share, /\host\share); reading it would contact that host.
+  if (/^\/(?![\\/])/.test(candidate)) {
     return candidate;
   }
 
@@ -140,7 +141,8 @@ export function rewriteLocalMarkdownLinksForChat(text: string): string {
   return rewriteLocalMediaLinksForChat(text).replace(
     /(!?)\[([^\]\n]+)\]\((<[^>\n]+>|[^)\n]+)\)/g,
     (match, sigil: string, label: string, rawUrl: string) => {
-      if (sigil === "!") {
+      // An image, or one a link is wrapped around (`[![shot](/a.png)](…)`).
+      if (sigil === "!" || label.includes("![")) {
         return match;
       }
 
@@ -161,8 +163,10 @@ export function rewriteLocalMarkdownLinksForChat(text: string): string {
 type MarkdownComponents = NonNullable<Options["components"]>;
 
 // A web address (`https:`, `mailto:`, `//host`) that opens by itself. Requiring
-// two letters before the colon keeps a Windows drive (`C:`) from matching.
-const WEB_ADDRESS = /^(?:[a-z][a-z\d+.-]+:|\/\/)/i;
+// two letters before the colon keeps a Windows drive (`C:`) from matching. A
+// `file:` address names a file, not a page: clicking one does nothing on macOS,
+// and on Windows `file://host/share` could reach out to that host.
+const WEB_ADDRESS = /^(?!file:)(?:[a-z][a-z\d+.-]+:|\/\/)/i;
 
 // The words a node renders, such as a link's label.
 function textOf(node: ReactNode): string {
@@ -179,28 +183,37 @@ function normalizeMarkdownChildren(children: Options["children"]): Options["chil
   return children;
 }
 
+// True inside a link's words. A link there would nest in it, and one click
+// would open both.
+const InsideLink = createContext(false);
+
+function OutsideLinkOnly({ children, inside }: { children: ReactNode; inside: ReactNode }) {
+  return <>{useContext(InsideLink) ? inside : children}</>;
+}
+
 export function createMediaAwareMarkdownComponents(
   components: Options["components"],
 ): MarkdownComponents {
   const base = components ?? {};
 
-  // A media name with nothing to play reads the way inline code does here.
-  const mediaNameAsText = (address: string) => {
-    const name = decodeLinkAddress(address);
+  // An address with nothing to show reads the way inline code does here, on
+  // its line: a decoded line break would make it a code block.
+  const addressAsCode = (address: string) => {
+    const name = decodeLinkAddress(address).replace(/[\r\n]+/g, " ");
     const CustomCode = base.code;
     return CustomCode ? <CustomCode>{name}</CustomCode> : <code>{name}</code>;
   };
 
-  // A media link or image with nothing to play keeps its words (an image's
+  // A link or image with nothing to play or show keeps its words (an image's
   // alt text) and shows the address it named, alone if the words are empty or
   // that address. Nothing in the app opens a relative address, so leaving it
   // a link would do nothing when clicked.
-  const mediaLinkAsText = (address: string, words: ReactNode) => {
+  const addressAsText = (address: string, words: ReactNode) => {
     const said = textOf(words).trim();
     return !said || said === decodeLinkAddress(address).trim() ? (
-      mediaNameAsText(address)
+      addressAsCode(address)
     ) : (
-      <>{words} {mediaNameAsText(address)}</>
+      <>{words} {addressAsCode(address)}</>
     );
   };
 
@@ -209,7 +222,22 @@ export function createMediaAwareMarkdownComponents(
     if (CustomAnchor) {
       return <CustomAnchor href={href} {...props}>{children}</CustomAnchor>;
     }
-    return <a href={href} {...props}>{children}</a>;
+    // A plain web link would load the site inside the app window. The opener
+    // plugin sends `_blank` http(s) clicks to the system browser instead.
+    const webLink = href && /^https?:/i.test(href)
+      ? { target: "_blank", rel: "noopener noreferrer" }
+      : {};
+    return <a href={href} {...props} {...webLink}>{children}</a>;
+  };
+
+  // An image that doesn't show keeps its alt text and where it pointed, so it
+  // never vanishes without a trace. A web address becomes a link, which opens
+  // only when clicked.
+  const imageAsText = (src: string | undefined, alt: string | undefined) => {
+    // The url transform removed an unsafe address; there is none to show.
+    if (!src) return <ImageAltText alt={alt} />;
+    if (!WEB_ADDRESS.test(src)) return addressAsText(src, alt);
+    return <OutsideLinkOnly inside={alt || src}>{link(src, alt || src)}</OutsideLinkOnly>;
   };
 
   return {
@@ -220,53 +248,45 @@ export function createMediaAwareMarkdownComponents(
           <MediaComponent
             filePath={href}
             className="my-2"
-            fallback={mediaLinkAsText(href, children)}
+            fallback={addressAsText(href, children)}
           />
         );
       }
       if (href && isMediaAddress(href) && !WEB_ADDRESS.test(href)) {
-        return mediaLinkAsText(href, children);
+        return addressAsText(href, children);
       }
-      return link(href, children, props);
+      return link(href, <InsideLink.Provider value>{children}</InsideLink.Provider>, props);
     },
-    img({ src, alt, ...props }) {
-      if (!src) return null;
-
-      // An <img> can't show audio or video, so a media address plays, opens
-      // as a web link, or reads as text.
-      if (isMediaFilePath(src)) {
-        return <MediaComponent filePath={src} className="my-2" fallback={mediaLinkAsText(src, alt)} />;
-      }
-      if (isMediaAddress(src)) {
-        return WEB_ADDRESS.test(src) ? link(src, alt || src) : mediaLinkAsText(src, alt);
+    img({ src, alt }) {
+      // An <img> can't show audio or video, so a local media file plays.
+      if (src && isMediaFilePath(src)) {
+        return <MediaComponent filePath={src} className="my-2" fallback={imageAsText(src, alt)} />;
       }
 
-      const localPath = resolveLocalPathFromMarkdownUrl(src);
+      const localPath = src ? resolveLocalPathFromMarkdownUrl(src) : null;
       if (localPath && imageMimeFromName(localPath)) {
         return (
           <LocalMarkdownImage
             path={localPath}
             alt={alt}
             className="max-w-full h-auto rounded-md my-2 border border-border"
+            fallback={imageAsText(src, alt)}
           />
         );
       }
 
+      // Media that can't play isn't a picture: it keeps its link or address
+      // even where a caller hides images.
+      if (src && isMediaAddress(src)) return imageAsText(src, alt);
+
+      // Only local files render as images. A caller's img never receives the
+      // src, so it cannot load it either.
       const CustomImage = base.img;
       if (CustomImage) {
-        return <CustomImage src={src} alt={alt} {...props} />;
+        return <CustomImage alt={alt} />;
       }
 
-      return (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={src}
-          alt={alt || ""}
-          className="max-w-full h-auto rounded-md my-2 border border-border"
-          loading="lazy"
-          {...props}
-        />
-      );
+      return imageAsText(src, alt);
     },
     code({ className, children, ...props }) {
       const CustomCode = base.code;

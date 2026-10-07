@@ -63,7 +63,7 @@ def main():
     if platform.system() != "Darwin" or os.geteuid() != 0:
         raise RuntimeError("Expected root on the dedicated release Mac")
     with open("/Users/ec2-user/actions-runner/.runner", encoding="utf-8-sig") as config:
-        if json.load(config)["agentName"] != "screenpipe-release-mac":
+        if json.load(config)["agentName"] not in {"screenpipe-release-mac", "screenpipe-release-mac-intel"}:
             raise RuntimeError("Not the release builder")
     usage, processes = measure()
     print("Radio/audio daemon CPU: {:.1f}% of one core".format(usage), flush=True)

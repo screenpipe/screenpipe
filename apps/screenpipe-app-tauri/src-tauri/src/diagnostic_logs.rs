@@ -277,6 +277,39 @@ mod tests {
         assert!(!report.contains("private-person@example.com"));
     }
 
+    #[cfg(feature = "enterprise-build")]
+    #[tokio::test]
+    async fn exact_frame_failure_survives_support_collection_and_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::enterprise::sync::tests::check_exact_frame_failure(dir.path()).await;
+        let current = dir.path().join("screenpipe-app.2026-10-05.log");
+        tokio::fs::rename(&current, dir.path().join("screenpipe-app.2026-10-05.1.log"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            &current,
+            "INFO recorder restarted contact=private-person@example.com\n",
+        )
+        .await
+        .unwrap();
+        let report = collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+            .await
+            .unwrap();
+        for expected in [
+            "enterprise exact screenshot read failed",
+            "snapshot_read_failed",
+            "PermissionDenied",
+            "retry_pending",
+            "frame_id=1",
+            "recorder restarted",
+        ] {
+            assert!(report.contains(expected), "missing {expected}: {report}");
+        }
+        assert!(!report.contains("private-person@example.com"));
+        assert!(!report.contains("/Users/private"));
+        assert!(!report.contains("client-tax-return"));
+    }
+
     #[tokio::test]
     async fn activity_preview_failure_survives_support_collection_and_redaction() {
         let dir = tempfile::tempdir().unwrap();

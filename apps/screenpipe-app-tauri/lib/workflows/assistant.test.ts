@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (e: AgentEventEnvelope) => void>(),
   start: vi.fn(), prompt: vi.fn(), stop: vi.fn(), save: vi.fn(), token: vi.fn(),
 }));
+const presetStore = vi.hoisted(() => ({ get: vi.fn() }));
+vi.mock("@/lib/hooks/use-settings", () => ({ getStore: async () => presetStore }));
 vi.mock("./model-choice", () => ({ workflowModelPreference: { load: vi.fn(async () => "intelligent") } }));
 vi.mock("./disk-storage", () => ({ loadAssistantFromDisk: vi.fn(), saveAssistantToDisk: mocks.save }));
 vi.mock("@/lib/events/bus", () => ({
@@ -161,4 +163,18 @@ describe("workflow assistant agent transport", () => {
     expect(prompt).toContain("do not establish how long");
     expect(prompt).toContain("actually search memory");
   });
+});
+
+it("starts a custom workflow provider without a Screenpipe cloud token", async () => {
+  vi.mocked(workflowModelPreference.load).mockResolvedValue("preset:Own API");
+  presetStore.get.mockResolvedValue({ aiPresets: [{ id: "Own API", provider: "custom", model: "private-model", url: "http://localhost:1234/v1", apiKey: "fixture-key", maxContextChars: 64000, maxTokens: 1000, prompt: "", defaultPreset: false }] });
+  mocks.token.mockResolvedValue(null);
+  mocks.start.mockResolvedValue({ status: "ok", data: { running: true } });
+  mocks.prompt.mockImplementation(async (id: string) => {
+    mocks.handlers.get(id)?.({ sessionId: id, source: "pi", event: { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Custom answer" } } });
+    mocks.handlers.get(id)?.({ sessionId: id, source: "pi", event: { type: "agent_end" } });
+    return { status: "ok" };
+  });
+  await expect(desktopAssistant.ask({ question: "Find a task", context: null, history: [], signal: new AbortController().signal, onProgress: vi.fn() })).resolves.toBe("Custom answer");
+  expect(mocks.start).toHaveBeenLastCalledWith(expect.any(String), expect.any(String), null, expect.objectContaining({ provider: "custom", model: "private-model", url: "http://localhost:1234/v1", apiKey: "fixture-key" }));
 });

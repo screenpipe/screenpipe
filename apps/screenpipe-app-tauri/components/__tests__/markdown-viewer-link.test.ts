@@ -182,6 +182,24 @@ describe("rewriteLocalMarkdownLinksForChat", () => {
     expect(rewriteLocalMarkdownLinksForChat(input)).toBe(expected);
   });
 
+  it("leaves a local image inside a link for the image to show", () => {
+    for (const input of [
+      "[![shot](/Users/me/shot.png)](https://example.com)",
+      "[see ![shot](/Users/me/shot.png)](https://example.com)",
+    ]) {
+      expect(rewriteLocalMarkdownLinksForChat(input)).toBe(input);
+    }
+  });
+
+  it("keeps a Windows recording written with doubled backslashes as a local path", () => {
+    // Markdown escapes a backslash as `\\`; Windows reads `C:\\Users` as `C:\Users`.
+    const recording = String.raw`C:\\Users\\me\\Mic (Realtek Audio) (input)_2026-05-25_21-42-22.mp4`;
+    expect(rewriteLocalMarkdownLinksForChat(`[call](${recording})`)).toBe(`[call](<${recording}>)`);
+    expect(rewriteLocalMarkdownLinksForChat(String.raw`[clip](C:\\Users\\me\\clip.mp4)`)).toBe(
+      String.raw`[clip](<C:\\Users\\me\\clip.mp4>)`,
+    );
+  });
+
   it("opens a document whose name contains a media extension in the viewer, not a player", () => {
     expect(rewriteLocalMarkdownLinksForChat("[notes](/Users/me/clip.mp4.txt)")).toBe(
       "[notes](screenpipe://view?path=%2FUsers%2Fme%2Fclip.mp4.txt)",

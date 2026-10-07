@@ -119,6 +119,19 @@ describe("compact notification panel", () => {
     expect(bridge.hide).toHaveBeenCalledTimes(1);
   });
 
+  it("shows a remote image in the body as alt text without loading it", async () => {
+    const { container } = render(<NotificationPanelPage />);
+    await deliver({
+      ...payload,
+      body: "chart below ![remote chart](https://example.com/x.png?d=secret)",
+    });
+    // The panel's own app icon is an <img>, so check only the body.
+    const body = container.querySelector(".notif-md");
+    expect(body).toHaveTextContent("chart below remote chart");
+    expect(body?.querySelector("img")).toBeNull();
+    expect(container.querySelector("img[src*='example.com']")).toBeNull();
+  });
+
   it("pauses expiration while options are open and resumes when closed", async () => {
     vi.useFakeTimers();
     render(<NotificationPanelPage />);

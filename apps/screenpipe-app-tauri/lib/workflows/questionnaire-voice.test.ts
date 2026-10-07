@@ -32,3 +32,9 @@ it('uses the existing agent with no tools and only accepts known unlocked ground
  expect(stubs.run).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ allowedTools: [] }) }));
  expect(() => parseVoiceAnswers('{}', [], '', [])).toThrow();
 });
+
+it('does not send custom-preset voice input to the hosted provider', async () => {
+ stubs.mode.mockResolvedValueOnce('preset:Own API');
+ await expect(desktopQuestionnaireVoice.connect({ sdp: 'v=0', title: 'Fixture', questions: [] }, new AbortController().signal)).rejects.toThrow('Switch to Intelligent');
+ expect(stubs.fetch).not.toHaveBeenCalled();
+});

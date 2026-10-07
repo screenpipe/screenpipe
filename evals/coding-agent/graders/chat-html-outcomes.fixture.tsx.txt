@@ -95,11 +95,12 @@ describe("HTML outcome probe", () => { afterEach(() => { vi.clearAllMocks(); });
       const container = renderHtml(
         `<a href="javascript:alert(1)">click</a> <img src="https://example.com/x.png" longdesc="javascript:alert(1)">`,
       );
+      // The message must render before the absence checks mean anything.
+      expect(container).toHaveTextContent("click");
       expect(container.querySelector("a[href^='javascript']")).toBeNull();
-      const image = container.querySelector("img");
-      expect(image).not.toBeNull();
-      expect(image?.getAttribute("src")).toBe("https://example.com/x.png");
-      expect(image?.getAttribute("longdesc") ?? "").not.toMatch(/^\s*javascript:/i);
+      // Whether the remote image renders is a later product rule
+      // (app-markdown-remote-images); wherever it does, no javascript: URL may.
+      expect(container.innerHTML).not.toMatch(/javascript:/i);
     });
 
     it("keeps safe formatting and collapsible details", () => {

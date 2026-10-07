@@ -2967,6 +2967,25 @@
       "notes": "Calls the shell plugin from a real app webview. The removed exec-sh, sh, cmd and any-argument open entries are rejected by the capability scope. On macOS, a caller-supplied PATH cannot replace the system launcher, and the Claude/Cursor install check still reaches fs exists."
     },
     {
+      "spec": "webview-remote-ipc.spec.ts",
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "tauri-command",
+        "storage-privacy"
+      ],
+      "features": [
+        "webview-remote-ipc"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "ux": "command",
+      "notes": "Loads a page from another localhost port in the Home window, which the old remote capability trusted. The IPC bridge is still injected there, but fs and store calls are rejected by the ACL and create nothing; the same fs call from the app's own page still works."
+    },
+    {
       "spec": "window-activation.spec.ts",
       "platforms": [
         "macos"

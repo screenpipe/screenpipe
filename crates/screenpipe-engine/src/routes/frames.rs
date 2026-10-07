@@ -948,155 +948,168 @@ pub async fn get_frame_data(
             }
         }
 
-        // If not in cache or cache disabled, get from database
-        match state.db.get_frame(frame_id).await {
-            Ok(Some((file_path, offset_index, is_snapshot))) => {
-                // Synced frame from another device — no local file exists.
-                // Return metadata (OCR text, app/window context) instead of 410.
-                if file_path.starts_with("cloud://") {
-                    let ocr_text = state
-                        .db
-                        .get_frame_ocr_text_json(frame_id)
-                        .await
-                        .ok()
-                        .flatten();
-                    let timestamp = state.db.get_frame_timestamp(frame_id).await.ok().flatten();
-                    let (acc_text, _) = state
-                        .db
-                        .get_frame_accessibility_data(frame_id)
-                        .await
-                        .unwrap_or((None, None));
+        // Compaction commits the same frame's MP4 location before removing its
+        // JPEG. A reader can hold the old path across that commit. Re-resolve
+        // this exact ID once before classifying a missing file; never borrow
+        // another frame for an exact export.
+        for attempt in 0..2 {
+            return match state.db.get_frame(frame_id).await {
+                Ok(Some((file_path, offset_index, is_snapshot))) => {
+                    // Synced frame from another device — no local file exists.
+                    // Return metadata (OCR text, app/window context) instead of 410.
+                    if file_path.starts_with("cloud://") {
+                        let ocr_text = state
+                            .db
+                            .get_frame_ocr_text_json(frame_id)
+                            .await
+                            .ok()
+                            .flatten();
+                        let timestamp = state.db.get_frame_timestamp(frame_id).await.ok().flatten();
+                        let (acc_text, _) = state
+                            .db
+                            .get_frame_accessibility_data(frame_id)
+                            .await
+                            .unwrap_or((None, None));
 
-                    let metadata = json!({
-                        "error": "Frame is on a remote device",
-                        "error_type": "remote_device",
-                        "frame_id": frame_id,
-                        "timestamp": timestamp,
-                        // Neutral name for the frame's text, consistent with the
-                        // rest of the API. `ocr_text` is a deprecated alias.
-                        "text": acc_text,
-                        "ocr_text": ocr_text,
-                        "accessibility_text": acc_text,
-                    });
-                    return Err((StatusCode::NOT_FOUND, JsonResponse(metadata)));
-                }
+                        let metadata = json!({
+                            "error": "Frame is on a remote device",
+                            "error_type": "remote_device",
+                            "frame_id": frame_id,
+                            "timestamp": timestamp,
+                            // Neutral name for the frame's text, consistent with the
+                            // rest of the API. `ocr_text` is a deprecated alias.
+                            "text": acc_text,
+                            "ocr_text": ocr_text,
+                            "accessibility_text": acc_text,
+                        });
+                        return Err((StatusCode::NOT_FOUND, JsonResponse(metadata)));
+                    }
 
-                if is_snapshot {
-                    // Snapshot frame — serve JPEG directly (no ffmpeg needed)
-                    match serve_file(&file_path).await {
-                        Ok(resp) => {
-                            // Cache snapshot path
-                            if let Some(cache) = &state.frame_image_cache {
-                                if let Ok(mut cache) = cache.try_lock() {
-                                    cache.put(frame_id, (file_path.clone(), Instant::now()));
+                    if is_snapshot {
+                        // Snapshot frame — serve JPEG directly (no ffmpeg needed)
+                        match serve_file(&file_path).await {
+                            Ok(resp) => {
+                                // Cache snapshot path
+                                if let Some(cache) = &state.frame_image_cache {
+                                    if let Ok(mut cache) = cache.try_lock() {
+                                        cache.put(frame_id, (file_path.clone(), Instant::now()));
+                                    }
                                 }
+                                debug!(
+                                    "Snapshot frame {} served in {:?}",
+                                    frame_id,
+                                    start_time.elapsed()
+                                );
+                                return Ok(resp);
                             }
-                            debug!(
-                                "Snapshot frame {} served in {:?}",
-                                frame_id,
-                                start_time.elapsed()
-                            );
-                            return Ok(resp);
+                            Err((status, body)) => {
+                                if status != StatusCode::NOT_FOUND {
+                                    return Err((status, JsonResponse(json!({
+                                        "error": "Snapshot could not be read",
+                                        "error_type": "snapshot_read_failed",
+                                        "io_error_kind": body.0.get("io_error_kind"),
+                                        "frame_id": frame_id
+                                    }))));
+                                }
+                                if attempt == 0 {
+                                    continue;
+                                }
+                                if query.fallback {
+                                    if let Some(fallback) = try_nearest_frame(&state, frame_id).await {
+                                        return Ok(fallback);
+                                    }
+                                }
+                                return Err((
+                                    StatusCode::NOT_FOUND,
+                                    JsonResponse(json!({
+                                        "error": "Exact snapshot file is missing after rechecking its location",
+                                        "error_type": "snapshot_missing",
+                                        "frame_id": frame_id
+                                    })),
+                                ));
+                            }
                         }
-                        Err(_) => {
-                            // Snapshot file missing (compacted/deleted) — try nearest frame
+                    }
+
+                    // Legacy video-chunk frame — extract via ffmpeg
+                    match try_extract_and_serve_frame(&state, frame_id, &file_path, offset_index)
+                        .await
+                    {
+                        Ok(response) => {
+                            debug!("Frame {} extracted in {:?}", frame_id, start_time.elapsed());
+                            Ok(response)
+                        }
+                        Err(e) => {
+                            // Extraction failed — try the nearest valid frame as fallback
                             debug!(
-                                "Snapshot file missing for frame {}, trying nearest frame",
-                                frame_id
+                                "Frame {} extraction failed ({}), trying nearest frame",
+                                frame_id, e
                             );
                             if query.fallback {
                                 if let Some(fallback) = try_nearest_frame(&state, frame_id).await {
                                     return Ok(fallback);
                                 }
                             }
-                            return Err((
-                                StatusCode::NOT_FOUND,
-                                JsonResponse(json!({
-                                    "error": "Snapshot file missing and no nearby frame available",
-                                    "error_type": "snapshot_missing",
-                                    "frame_id": frame_id
-                                })),
-                            ));
-                        }
-                    }
-                }
 
-                // Legacy video-chunk frame — extract via ffmpeg
-                match try_extract_and_serve_frame(&state, frame_id, &file_path, offset_index)
-                    .await
-                {
-                    Ok(response) => {
-                        debug!("Frame {} extracted in {:?}", frame_id, start_time.elapsed());
-                        Ok(response)
-                    }
-                    Err(e) => {
-                        // Extraction failed — try the nearest valid frame as fallback
-                        debug!(
-                            "Frame {} extraction failed ({}), trying nearest frame",
-                            frame_id, e
-                        );
-                        if query.fallback {
-                            if let Some(fallback) = try_nearest_frame(&state, frame_id).await {
-                                return Ok(fallback);
+                            // No fallback found either
+                            let err_str = e.to_string();
+                            if err_str.contains("FFPROBE_NOT_FOUND") {
+                                error!("ffprobe not found — frame extraction will fail for all compacted frames: {}", err_str);
+                                Err((
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    JsonResponse(json!({
+                                        "error": "ffprobe not found - install ffprobe alongside ffmpeg to extract frames from compacted videos",
+                                        "error_type": "ffprobe_not_found",
+                                        "frame_id": frame_id,
+                                        "file_path": file_path,
+                                        "details": err_str
+                                    })),
+                                ))
+                            } else if err_str.contains("VIDEO_CORRUPTED")
+                                || err_str.contains("VIDEO_NOT_FOUND")
+                            {
+                                Err((
+                                    StatusCode::GONE,
+                                    JsonResponse(json!({
+                                        "error": "Frame unavailable - video file corrupted or missing",
+                                        "error_type": "video_corrupted",
+                                        "frame_id": frame_id,
+                                        "file_path": file_path,
+                                        "details": err_str
+                                    })),
+                                ))
+                            } else {
+                                error!("Failed to extract frame {}: {}", frame_id, e);
+                                Err((
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    JsonResponse(json!({
+                                        "error": format!("Failed to extract frame: {}", e),
+                                        "frame_id": frame_id,
+                                        "file_path": file_path
+                                    })),
+                                ))
                             }
                         }
-
-                        // No fallback found either
-                        let err_str = e.to_string();
-                        if err_str.contains("FFPROBE_NOT_FOUND") {
-                            error!("ffprobe not found — frame extraction will fail for all compacted frames: {}", err_str);
-                            Err((
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                JsonResponse(json!({
-                                    "error": "ffprobe not found - install ffprobe alongside ffmpeg to extract frames from compacted videos",
-                                    "error_type": "ffprobe_not_found",
-                                    "frame_id": frame_id,
-                                    "file_path": file_path,
-                                    "details": err_str
-                                })),
-                            ))
-                        } else if err_str.contains("VIDEO_CORRUPTED")
-                            || err_str.contains("VIDEO_NOT_FOUND")
-                        {
-                            Err((
-                                StatusCode::GONE,
-                                JsonResponse(json!({
-                                    "error": "Frame unavailable - video file corrupted or missing",
-                                    "error_type": "video_corrupted",
-                                    "frame_id": frame_id,
-                                    "file_path": file_path,
-                                    "details": err_str
-                                })),
-                            ))
-                        } else {
-                            error!("Failed to extract frame {}: {}", frame_id, e);
-                            Err((
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                JsonResponse(json!({
-                                    "error": format!("Failed to extract frame: {}", e),
-                                    "frame_id": frame_id,
-                                    "file_path": file_path
-                                })),
-                            ))
-                        }
                     }
                 }
-            }
-            Ok(None) => Err((
-                StatusCode::NOT_FOUND,
-                JsonResponse(json!({
-                    "error": "Frame not found",
-                    "frame_id": frame_id
-                })),
-            )),
-            Err(e) => Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                JsonResponse(json!({
-                    "error": format!("Database error: {}", e),
-                    "frame_id": frame_id
-                })),
-            )),
+                Ok(None) => Err((
+                    StatusCode::NOT_FOUND,
+                    JsonResponse(json!({
+                        "error": "Frame has no available media location",
+                        "error_type": "frame_media_unavailable",
+                        "frame_id": frame_id
+                    })),
+                )),
+                Err(e) => Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    JsonResponse(json!({
+                        "error": format!("Database error: {}", e),
+                        "frame_id": frame_id
+                    })),
+                )),
+            };
         }
+        unreachable!("the second exact-frame lookup returns a result")
     })
     .await
     {
@@ -1965,7 +1978,10 @@ pub(crate) async fn serve_file(path: &str) -> Result<Response, (StatusCode, Json
             };
             Err((
                 status,
-                JsonResponse(json!({"error": format!("Failed to open file: {}", e)})),
+                JsonResponse(json!({
+                    "error": format!("Failed to open file: {}", e),
+                    "io_error_kind": format!("{:?}", e.kind())
+                })),
             ))
         }
     }

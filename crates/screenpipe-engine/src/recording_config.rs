@@ -18,6 +18,11 @@ use std::time::Duration;
 
 use crate::vision_manager::VisionManagerConfig;
 
+/// Smallest non-native capture width. Narrower captures make OCR unreadable,
+/// and since stored snapshots are never upscaled they would also shrink every
+/// stored frame below the `low` preset (1280). Smaller values are raised.
+const MIN_CAPTURE_MAX_WIDTH: u32 = 1280;
+
 /// Unified recording configuration used by both the CLI binary and the Tauri embedded server.
 /// Replaces the former `EmbeddedServerConfig` and eliminates duplicate field mapping.
 #[derive(Clone, Debug)]
@@ -162,6 +167,9 @@ pub struct RecordingConfig {
     /// Video quality preset controlling JPEG quality during frame extraction.
     /// Values: "low", "balanced", "high", "max". Default: "balanced".
     pub video_quality: String,
+    /// Max width (px) of the macOS screen capture that OCR reads. 0 = native,
+    /// otherwise at least `MIN_CAPTURE_MAX_WIDTH`.
+    pub capture_max_width: u32,
 
     // Misc
     pub use_chinese_mirror: bool,
@@ -386,6 +394,10 @@ impl RecordingConfig {
             openai_compatible_raw_audio: settings.openai_compatible_raw_audio,
             user_name: settings.user_name.clone(),
             video_quality: settings.video_quality.clone(),
+            capture_max_width: match settings.capture_max_width {
+                0 => 0,
+                width => width.max(MIN_CAPTURE_MAX_WIDTH),
+            },
             use_chinese_mirror: settings.use_chinese_mirror,
             analytics_enabled: settings.analytics_enabled,
             analytics_id: settings.analytics_id.clone(),
@@ -553,6 +565,7 @@ impl RecordingConfig {
             pause_on_drm_content: self.pause_on_drm_content,
             languages: self.languages.clone(),
             video_quality: self.video_quality.clone(),
+            capture_max_width: self.capture_max_width,
             disable_screenshots: self.disable_screenshots,
             enable_semantic_context: self.enable_semantic_context,
             semantic_context_mode: self.semantic_context_mode,
@@ -845,6 +858,7 @@ mod tests {
             monitor_ids: vec!["MONITOR-1".to_string()],
             use_all_monitors: false,
             video_quality: "high".to_string(),
+            capture_max_width: 2560,
             idle_capture_interval_ms: Some(2_000),
             visual_check_interval_ms: Some(350),
             visual_change_threshold: Some(0.18),
@@ -873,6 +887,7 @@ mod tests {
         assert!(vision.enhanced_incognito_detection);
         assert!(vision.pause_on_drm_content);
         assert_eq!(vision.video_quality, "high");
+        assert_eq!(vision.capture_max_width, 2560);
         assert!(!vision.disable_screenshots);
         assert_eq!(vision.idle_capture_interval_ms, Some(2_000));
         assert_eq!(vision.visual_check_interval_ms, Some(350));
@@ -880,6 +895,40 @@ mod tests {
         assert_eq!(vision.min_capture_interval_ms, Some(120));
         assert_eq!(vision.capture_on_keystroke, Some(true));
         assert_eq!(vision.capture_on_clipboard, Some(true));
+    }
+
+    /// OCR reads the captured frame, so no storage preset may shrink the
+    /// capture by default (#7393).
+    #[test]
+    fn capture_defaults_to_native_for_every_video_quality() {
+        for quality in ["low", "balanced", "high", "max"] {
+            let settings = screenpipe_config::RecordingSettings {
+                video_quality: quality.to_string(),
+                ..Default::default()
+            };
+            let vision = build(&settings).to_vision_manager_config(
+                String::new(),
+                std::sync::Arc::new(PipelineMetrics::new()),
+            );
+            assert_eq!(vision.capture_max_width, 0, "videoQuality={quality}");
+        }
+    }
+
+    /// A tiny cap would store 1-pixel-wide frames and lose the recording.
+    #[test]
+    fn capture_max_width_below_floor_is_raised() {
+        for (configured, effective) in [(0, 0), (1, 1280), (1279, 1280), (1280, 1280), (2560, 2560)]
+        {
+            let settings = screenpipe_config::RecordingSettings {
+                capture_max_width: configured,
+                ..Default::default()
+            };
+            assert_eq!(
+                build(&settings).capture_max_width,
+                effective,
+                "captureMaxWidth={configured}"
+            );
+        }
     }
 
     fn langs(items: &[&str]) -> Vec<String> {

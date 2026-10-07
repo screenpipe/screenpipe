@@ -694,28 +694,13 @@ mod imp {
             // video, with capture-time PII redaction already applied when the
             // org policy enables it. Full resolution here; the core fulfiller
             // downscales + bounds size before upload.
-            let img_url = exact_frame_url(&self.api_url_base, frame_id);
-            let resp = self
-                .auth(self.http.get(&img_url))
-                .send()
-                .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
-            if resp.status() == reqwest::StatusCode::NOT_FOUND {
-                // Exact local lookup returned 404; its underlying cause is unknown.
-                return Ok(None);
-            }
-            if !resp.status().is_success() {
-                return Err(EnterpriseSyncError::LocalApi(format!(
-                    "GET {} -> {}",
-                    img_url,
-                    resp.status()
-                )));
-            }
-            let bytes = resp
-                .bytes()
-                .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
-            Ok(Some(bytes.to_vec()))
+            ee_sync::fetch_exact_frame_jpeg(
+                &self.http,
+                &self.api_url_base,
+                self.current_api_key().as_deref(),
+                frame_id,
+            )
+            .await
         }
 
         async fn fetch_memories_since(

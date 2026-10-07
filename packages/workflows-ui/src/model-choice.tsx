@@ -10,7 +10,10 @@ import styles from "./model-choice.module.css";
 import { useGT, msg, useMessages } from "gt-react";
 
 
-export type WorkflowModelMode = "intelligent" | "private";
+export type WorkflowModelMode = "intelligent" | "private" | `preset:${string}`;
+export function isWorkflowPreset(mode: string): mode is `preset:${string}` {
+  return mode.startsWith("preset:") && mode.slice(7).trim().length > 0;
+}
 export type WorkflowModelPreference = {
   verification?: ConfidentialVerificationSource;
   load(): Promise<WorkflowModelMode>;
@@ -23,7 +26,7 @@ export const WORKFLOW_MODELS = {
 export function parseWorkflowModel(text: string | null): WorkflowModelMode {
   if (text === null) return "intelligent";
   const mode = JSON.parse(text)?.mode;
-  if (mode !== "intelligent" && mode !== "private") throw new Error("Could not read your saved AI choice.");
+  if (mode !== "intelligent" && mode !== "private" && !(typeof mode === "string" && isWorkflowPreset(mode))) throw new Error("Could not read your saved AI choice.");
   return mode;
 }
 export function WorkflowModelControl({ preference }: { preference: WorkflowModelPreference }) {
@@ -78,7 +81,7 @@ export function WorkflowModelControl({ preference }: { preference: WorkflowModel
         if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); setOpen(true); }
       }}>
       {mode === "private" ? <Shield size={15} aria-hidden="true" /> : <Sparkles size={15} aria-hidden="true" />}
-      <span>{busy ? ui("Saving…") : mode ? uiMessages(WORKFLOW_MODELS[mode].label) : ui("Choose AI")}</span><ChevronDown size={13} aria-hidden="true" />
+      <span>{busy ? ui("Saving…") : mode ? isWorkflowPreset(mode) ? mode.slice(7) : uiMessages(WORKFLOW_MODELS[mode].label) : ui("Choose AI")}</span><ChevronDown size={13} aria-hidden="true" />
     </button>
     {open && <div ref={menu} id={menuId} className={styles.menu} role="menu" aria-label={ui("Workflows AI")} onKeyDown={event => {
       if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || (event.target as HTMLElement).closest("dialog")) return;

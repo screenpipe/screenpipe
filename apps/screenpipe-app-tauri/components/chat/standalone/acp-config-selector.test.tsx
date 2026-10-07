@@ -12,6 +12,7 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -43,6 +44,18 @@ const modelOption = (currentValue: string) => ({
   values: [
     { value: "sonnet", name: "Sonnet 4.6" },
     { value: "opus", name: "Opus 4.1" },
+  ],
+});
+
+const effortOption = (currentValue: string) => ({
+  id: "reasoning_effort",
+  name: "Reasoning effort",
+  type: "select",
+  currentValue,
+  values: [
+    { value: "low", name: "Low" },
+    { value: "medium", name: "Medium" },
+    { value: "high", name: "High" },
   ],
 });
 
@@ -404,7 +417,7 @@ describe("ACP config trigger", () => {
     );
 
     fireEvent.click(screen.getByTestId("acp-config-trigger"));
-    fireEvent.click(document.querySelector('[data-effort-step="high"]') as HTMLElement);
+    fireEvent.keyDown(screen.getByTestId("acp-effort-slider"), { key: "End" });
 
     expect(onPersistDefault).toHaveBeenCalledWith({
       optionId: "reasoning_effort",
@@ -418,6 +431,82 @@ describe("ACP config trigger", () => {
         null,
       ),
     );
+  });
+
+  it("holds the chosen effort while the adapter applies it", async () => {
+    // The adapter confirms a change a round trip later. Until then the dial
+    // must not snap back to the old step.
+    seedSession([modelOption("sonnet"), effortOption("low")]);
+    let reply!: (value: { status: string; data: null }) => void;
+    mocks.setConfigOption.mockReturnValue(new Promise((resolve) => { reply = resolve; }));
+
+    render(<AcpConfigSelector sessionId={SESSION} agentId="codex-acp" />);
+    fireEvent.click(screen.getByTestId("acp-config-trigger"));
+    fireEvent.keyDown(screen.getByTestId("acp-effort-slider"), { key: "End" });
+    expect(screen.getByTestId("acp-effort-slider-value")).toHaveTextContent("High");
+
+    // The adapter sends its new config, then replies.
+    act(() => seedSession([modelOption("sonnet"), effortOption("high")]));
+    await act(async () => reply({ status: "ok", data: null }));
+    expect(screen.getByTestId("acp-effort-slider-value")).toHaveTextContent("High");
+    expect(screen.getByTestId("acp-effort-slider")).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("returns the dial to the real effort when the adapter rejects it", async () => {
+    seedSession([modelOption("sonnet"), effortOption("low")]);
+    let reply!: (value: { status: string; error: string }) => void;
+    mocks.setConfigOption.mockReturnValue(new Promise((resolve) => { reply = resolve; }));
+
+    render(<AcpConfigSelector sessionId={SESSION} agentId="codex-acp" />);
+    fireEvent.click(screen.getByTestId("acp-config-trigger"));
+    fireEvent.keyDown(screen.getByTestId("acp-effort-slider"), { key: "End" });
+    expect(screen.getByTestId("acp-effort-slider-value")).toHaveTextContent("High");
+
+    await act(async () => reply({ status: "error", error: "unsupported effort" }));
+    expect(screen.getByTestId("acp-effort-slider-value")).toHaveTextContent("Low");
+  });
+
+  it("keeps a pending effort in the chat it was chosen in", () => {
+    useAcpSessionConfig.setState({
+      sessions: {
+        [SESSION]: { options: [modelOption("sonnet"), effortOption("low")], modes: null } as never,
+        "chat-2": { options: [modelOption("sonnet"), effortOption("medium")], modes: null } as never,
+      },
+      byAgent: {},
+    });
+    mocks.setConfigOption.mockReturnValue(new Promise(() => {}));
+
+    const { rerender } = render(<AcpConfigSelector sessionId={SESSION} agentId="codex-acp" />);
+    fireEvent.click(screen.getByTestId("acp-config-trigger"));
+    fireEvent.keyDown(screen.getByTestId("acp-effort-slider"), { key: "End" });
+    expect(screen.getByTestId("acp-effort-slider-value")).toHaveTextContent("High");
+
+    // The first chat's adapter hasn't answered; the second chat shows its own.
+    rerender(<AcpConfigSelector sessionId="chat-2" agentId="codex-acp" />);
+    expect(screen.getByTestId("acp-effort-slider-value")).toHaveTextContent("Medium");
+  });
+
+  it("does not let an earlier effort's answer clear a later one", async () => {
+    seedSession([modelOption("sonnet"), effortOption("low")]);
+    const replies: Array<(value: { status: string; data: null }) => void> = [];
+    mocks.setConfigOption.mockImplementation(
+      () => new Promise((resolve) => replies.push(resolve)),
+    );
+    const ok = { status: "ok", data: null };
+
+    render(<AcpConfigSelector sessionId={SESSION} agentId="codex-acp" />);
+    fireEvent.click(screen.getByTestId("acp-config-trigger"));
+    // A model change and an effort change in flight together. The model's
+    // answer re-enables the dial before the effort's own answer arrives.
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "opus" } });
+    fireEvent.keyDown(screen.getByTestId("acp-effort-slider"), { key: "ArrowRight" });
+    await act(async () => replies[0](ok));
+    fireEvent.keyDown(screen.getByTestId("acp-effort-slider"), { key: "End" });
+    expect(screen.getByTestId("acp-effort-slider-value")).toHaveTextContent("High");
+
+    // The Medium change answers; High is still waiting for its own answer.
+    await act(async () => replies[1](ok));
+    expect(screen.getByTestId("acp-effort-slider-value")).toHaveTextContent("High");
   });
 
   it("shows an error toast when the live session rejects a change", async () => {
@@ -439,9 +528,11 @@ describe("ACP config trigger", () => {
       target: { value: "opus" },
     });
 
-    const toast = await screen.findByTestId("toast-error");
-    expect(toast).toHaveTextContent("Could not change model");
-    expect(toast).toHaveTextContent("adapter rejected model");
+    // Toasts outlive a test, so wait for this one rather than the first.
+    await waitFor(() =>
+      expect(screen.getByTestId("toast-error")).toHaveTextContent("Could not change model"),
+    );
+    expect(screen.getByTestId("toast-error")).toHaveTextContent("adapter rejected model");
   });
 
   it("keeps a two-value effort axis visible as a select", () => {

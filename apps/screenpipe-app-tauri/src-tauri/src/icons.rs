@@ -1,3 +1,6 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -120,16 +123,27 @@ pub async fn get_app_icon(
     }
 }
 
+/// Windows icon lookups that may run at once.
 #[cfg(target_os = "windows")]
-use lazy_static::lazy_static;
-#[cfg(target_os = "windows")]
-use std::sync::Arc;
-#[cfg(target_os = "windows")]
-use tokio::sync::Semaphore;
+static ICON_LOOKUPS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 
-#[cfg(target_os = "windows")]
-lazy_static! {
-    static ref SEMAPHORE: Arc<Semaphore> = Arc::new(Semaphore::new(5));
+/// Runs `lookup` on a blocking thread once `limit` has a free slot. A blocking
+/// thread keeps running after its request is dropped, so the slot is held until
+/// `lookup` returns, not until the caller stops waiting. Otherwise lookups that
+/// hang (a stuck Store listing) would take a new thread for every request until
+/// the runtime's shared blocking pool ran out.
+#[cfg(any(target_os = "windows", test))]
+async fn run_limited<T: Send + 'static>(
+    limit: &'static tokio::sync::Semaphore,
+    lookup: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    let slot = limit.acquire().await.map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        let _slot = slot;
+        lookup()
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(target_os = "windows")]
@@ -137,34 +151,38 @@ pub async fn get_app_icon(
     app_name: &str,
     app_path: Option<String>,
 ) -> Result<Option<AppIcon>, String> {
+    // The searches read the registry and walk folders, and the icon is read from
+    // the file, so all of it runs on a blocking thread rather than the async
+    // runtime that serves the app's other requests.
+    let app_name = app_name.to_string();
+    run_limited(&ICON_LOOKUPS, move || windows_app_icon(&app_name, app_path)).await?
+}
+
+#[cfg(target_os = "windows")]
+fn windows_app_icon(app_name: &str, app_path: Option<String>) -> Result<Option<AppIcon>, String> {
     use image::codecs::png::PngEncoder;
     use image::{ExtendedColorType, ImageEncoder};
     use std::io::Cursor;
     use windows_icons::get_icon_by_path;
 
-    async fn find_exe_path(app_name: &str) -> Option<String> {
-        if let Some(path) = get_exe_by_reg_key(app_name) {
-            return Some(path);
-        }
-        if let Some(path) = get_exe_by_appx(app_name).await {
-            return Some(path);
-        }
-        if let Some(path) = get_exe_from_potential_path(app_name).await {
-            return Some(path);
-        }
-        None
-    }
-
     let path = match app_path {
         Some(p) => p,
-        None => find_exe_path(app_name)
-            .await
+        None => get_exe_by_reg_key(app_name)
+            .or_else(|| get_exe_by_appx(app_name))
+            .or_else(|| get_exe_from_potential_path(app_name))
             .ok_or_else(|| "app_path is None and could not find executable path".to_string())?,
     };
 
-    let image_buffer = async { get_icon_by_path(&path) }
-        .await
-        .map_err(|e| e.to_string())?;
+    // One icon read at a time: when the first reads in a process overlap, about
+    // 1 in 7 fail with "Failed to get icon info", and none do when serialized.
+    static ICON_READS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let image_buffer = {
+        let _one_at_a_time = ICON_READS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        get_icon_by_path(&path)
+    }
+    .map_err(|e| e.to_string())?;
 
     let mut data = Vec::new();
     {
@@ -283,14 +301,31 @@ fn get_exe_by_reg_key(app_name: &str) -> Option<String> {
     None
 }
 
-#[cfg(target_os = "windows")]
-fn powershell_exe() -> std::path::PathBuf {
-    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
-    std::path::PathBuf::from(system_root)
-        .join("System32")
-        .join("WindowsPowerShell")
-        .join("v1.0")
-        .join("powershell.exe")
+/// Returns the first `.exe` under `dir` whose file name contains `name_lower`
+/// (case-insensitive), descending at most `max_depth` folder levels. A folder's
+/// own files win over its subfolders', as with `Get-ChildItem -Recurse`. Junctions
+/// and symlinked folders are not followed.
+#[cfg(any(target_os = "windows", test))]
+fn find_exe(dir: &std::path::Path, name_lower: &str, max_depth: usize) -> Option<String> {
+    let mut subfolders = Vec::new();
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            if max_depth > 0 {
+                subfolders.push(entry.path());
+            }
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().to_lowercase();
+        if file_name.ends_with(".exe") && file_name.contains(name_lower) {
+            return Some(entry.path().to_string_lossy().into_owned());
+        }
+    }
+    subfolders
+        .iter()
+        .find_map(|folder| find_exe(folder, name_lower, max_depth - 1))
 }
 
 /// Strip dots, dashes, underscores and spaces so "screenpi.pe" matches "screenpipe",
@@ -318,9 +353,8 @@ fn names_match(folder: &str, search: &str) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-async fn get_exe_from_potential_path(app_name: &str) -> Option<String> {
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    let app_name = app_name.strip_suffix(".exe").unwrap_or(&app_name);
+fn get_exe_from_potential_path(app_name: &str) -> Option<String> {
+    let app_name = app_name.strip_suffix(".exe").unwrap_or(app_name);
 
     let app_lower = app_name.to_lowercase();
 
@@ -399,146 +433,118 @@ async fn get_exe_from_potential_path(app_name: &str) -> Option<String> {
                             }
                         }
                     }
-                    // Also check for direct exe match
-                    let direct_exe = entry.path().join(format!("{}.exe", app_name));
-                    if direct_exe.exists() {
-                        return Some(direct_exe.to_string_lossy().to_string());
-                    }
                 }
             }
         }
     }
 
-    let potential_paths = [
-        (
-            r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs",
-            true,
-        ),
-        (r"C:\Windows\", false),
-    ];
-    for (path, recursive) in &potential_paths {
-        let command = if *recursive {
-            format!(
-                r#"
-                    Get-ChildItem -Path "{}" -Filter "*{}*.exe" -Recurse | ForEach-Object {{ $_.FullName }}
-                    "#,
-                path, app_name
-            )
-        } else {
-            format!(
-                r#"
-                    Get-ChildItem -Path "{}" -Filter "*{}*.exe" | ForEach-Object {{ $_.FullName }}
-                    "#,
-                path, app_name
-            )
-        };
-
-        let _permit = SEMAPHORE.acquire().await.unwrap();
-
-        let output = tokio::process::Command::new(powershell_exe())
-            .arg("-NoProfile")
-            .arg("-WindowStyle")
-            .arg("hidden")
-            .arg("-Command")
-            .arg(command)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .await
-            .ok()?;
-
-        if output.status.success() {
-            let stdout = std::str::from_utf8(&output.stdout).ok()?;
-            if !stdout.is_empty() {
-                return stdout.lines().next().map(str::to_string);
-            }
-        }
-    }
-    None
+    // Start Menu (a few levels deep), then system tools such as notepad.exe.
+    find_exe(
+        std::path::Path::new(r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs"),
+        &app_lower,
+        4,
+    )
+    .or_else(|| find_exe(std::path::Path::new(r"C:\Windows"), &app_lower, 0))
 }
 
+/// Installed Store (Appx/MSIX) apps as (package name, install folder).
+#[cfg(any(target_os = "windows", test))]
+type AppxPackages = Vec<(String, std::path::PathBuf)>;
+
+/// How long the Store package list is reused, so new installs still show up.
 #[cfg(target_os = "windows")]
-async fn get_exe_by_appx(app_name: &str) -> Option<String> {
-    use std::str;
+const APPX_PACKAGES_TTL: std::time::Duration = std::time::Duration::from_secs(300);
 
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    let app_name = app_name.strip_suffix(".exe").unwrap_or(&app_name);
-    let app_name_withoutspace = app_name.replace(" ", "");
+/// Deep enough for packaged desktop apps under `VFS\ProgramFilesX64\<vendor>\...`.
+#[cfg(any(target_os = "windows", test))]
+const APPX_EXE_DEPTH: usize = 8;
 
-    let _permit = SEMAPHORE.acquire().await.unwrap();
+/// Finds the app among installed Store packages. The name is only compared with
+/// the package list here; it is never passed to another program.
+#[cfg(target_os = "windows")]
+fn get_exe_by_appx(app_name: &str) -> Option<String> {
+    static PACKAGES: std::sync::Mutex<Option<(std::time::Instant, std::sync::Arc<AppxPackages>)>> =
+        std::sync::Mutex::new(None);
+    let packages = cached_appx_packages(&PACKAGES, APPX_PACKAGES_TTL, list_appx_packages);
+    find_appx_exe(&packages, app_name)
+}
 
-    let output = tokio::process::Command::new(powershell_exe())
-        .arg("-NoProfile")
-        .arg("-WindowStyle")
-        .arg("hidden")
-        .arg("-Command")
-        .arg(format!(
-            r#"Get-AppxPackage | Where-Object {{ $_.Name -like "*{}*" }}"#,
-            app_name_withoutspace
-        ))
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .await
-        .ok()?;
+/// Returns the list in `slot`, listing again once it is older than `ttl`. The
+/// lock is held while listing, so callers at the same moment share one listing.
+/// A failed listing isn't cached: callers keep the last list that worked, and
+/// the next call tries again.
+#[cfg(any(target_os = "windows", test))]
+fn cached_appx_packages<E: std::fmt::Display>(
+    slot: &std::sync::Mutex<Option<(std::time::Instant, std::sync::Arc<AppxPackages>)>>,
+    ttl: std::time::Duration,
+    list: impl FnOnce() -> Result<AppxPackages, E>,
+) -> std::sync::Arc<AppxPackages> {
+    let mut slot = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((listed, packages)) = slot.as_ref() {
+        if listed.elapsed() < ttl {
+            return packages.clone();
+        }
+    }
+    match list() {
+        Ok(packages) => {
+            let packages = std::sync::Arc::new(packages);
+            *slot = Some((std::time::Instant::now(), packages.clone()));
+            packages
+        }
+        Err(error) => {
+            tracing::warn!("could not list Store packages: {error}");
+            slot.as_ref()
+                .map(|(_, packages)| packages.clone())
+                .unwrap_or_default()
+        }
+    }
+}
 
-    if !output.status.success() {
+/// Lists the current user's Store apps (main packages; frameworks and resource
+/// packs hold no apps) through the Windows package API, without starting a
+/// process. `InstalledPath` needs Windows 10 1903 or later.
+#[cfg(target_os = "windows")]
+fn list_appx_packages() -> windows::core::Result<AppxPackages> {
+    use windows::core::HSTRING;
+    use windows::Management::Deployment::{PackageManager, PackageTypes};
+
+    // An empty security ID means the current user, which needs no admin rights.
+    // `First()` rather than `into_iter()`, which unwraps the same call and would
+    // panic if it failed.
+    let packages = PackageManager::new()?
+        .FindPackagesByUserSecurityIdWithPackageTypes(&HSTRING::new(), PackageTypes::Main)?
+        .First()?;
+    Ok(packages
+        .filter_map(|package| {
+            let name = package.Id().ok()?.Name().ok()?.to_string();
+            let folder = package.InstalledPath().ok()?.to_string();
+            Some((name, std::path::PathBuf::from(folder)))
+        })
+        .collect())
+}
+
+/// Picks the first package whose name contains the app name (spaces removed, any
+/// case), then the first `.exe` in its folder named like the app, trying the name
+/// without and then with spaces.
+#[cfg(any(target_os = "windows", test))]
+fn find_appx_exe(packages: &AppxPackages, app_name: &str) -> Option<String> {
+    let lower = app_name.to_lowercase();
+    let name = lower.strip_suffix(".exe").unwrap_or(&lower);
+    let compact = name.replace(' ', "");
+    if compact.is_empty() {
+        // An empty search term would match every package.
         return None;
     }
-
-    let stdout = str::from_utf8(&output.stdout).ok()?;
-    let package_name = stdout
-        .lines()
-        .find(|line| line.contains("PackageFullName"))
-        .and_then(|line| line.split(':').nth(1))
-        .map(str::trim)?;
-
-    let exe_output = tokio::process::Command::new(powershell_exe())
-        .arg("-NoProfile")
-        .arg("-WindowStyle")
-        .arg("hidden")
-        .arg("-Command")
-        .arg(format!(
-            r#"
-                        Get-ChildItem -Path "C:\Program Files\WindowsApps\{}\*" -Filter "*{}*.exe" -Recurse | ForEach-Object {{ $_.FullName }}
-                    "#,
-            package_name,
-            app_name_withoutspace
-        ))
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .await
-        .ok()?;
-
-    if exe_output.status.success() {
-        let exe_stdout = str::from_utf8(&exe_output.stdout).ok()?;
-        if !exe_stdout.is_empty() {
-            return exe_stdout.lines().next().map(str::to_string);
-        }
+    let (_, folder) = packages
+        .iter()
+        .find(|(package, _)| package.to_lowercase().contains(&compact))?;
+    let found = find_exe(folder, &compact, APPX_EXE_DEPTH);
+    if found.is_some() || name == compact {
+        return found;
     }
-    // second attempt with space if the first attempt couldn't find exe
-    let exe_output = tokio::process::Command::new(powershell_exe())
-        .arg("-NoProfile")
-        .arg("-WindowStyle")
-        .arg("hidden")
-        .arg("-Command")
-        .arg(format!(
-            r#"
-                        Get-ChildItem -Path "C:\Program Files\WindowsApps\{}\*" -Filter "*{}*.exe" -Recurse | ForEach-Object {{ $_.FullName }}
-                    "#,
-            package_name,
-            app_name
-        ))
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .await
-        .ok()?;
-
-    if exe_output.status.success() {
-        let exe_stdout = str::from_utf8(&exe_output.stdout).ok()?;
-        if !exe_stdout.is_empty() {
-            return exe_stdout.lines().next().map(str::to_string);
-        }
-    }
-    None
+    find_exe(folder, name, APPX_EXE_DEPTH)
 }
 
 #[cfg(target_os = "linux")]
@@ -966,4 +972,258 @@ pub fn list_installed_apps() -> Vec<String> {
     }
 
     names.into_iter().collect()
+}
+
+#[cfg(test)]
+mod find_exe_tests {
+    use super::find_exe;
+    use std::path::Path;
+
+    fn touch(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"").unwrap();
+    }
+
+    #[test]
+    fn finds_exe_case_insensitively_within_depth() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = root
+            .path()
+            .join("Vendor")
+            .join("bin")
+            .join("WezTerm-GUI.EXE");
+        touch(&exe);
+
+        assert_eq!(
+            find_exe(root.path(), "wezterm", 2),
+            Some(exe.to_string_lossy().into_owned())
+        );
+        assert_eq!(find_exe(root.path(), "wezterm", 1), None);
+        assert_eq!(find_exe(root.path(), "wezterm", 0), None);
+    }
+
+    #[test]
+    fn ignores_files_that_are_not_exe() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["notepad.txt", "notepad.exe.bak", "notepad.lnk"] {
+            touch(&root.path().join(name));
+        }
+        assert_eq!(find_exe(root.path(), "notepad", 0), None);
+
+        let exe = root.path().join("notepad.exe");
+        touch(&exe);
+        assert_eq!(
+            find_exe(root.path(), "notepad", 0),
+            Some(exe.to_string_lossy().into_owned())
+        );
+    }
+
+    #[test]
+    fn prefers_an_exe_in_the_folder_over_one_in_a_subfolder() {
+        let root = tempfile::tempdir().unwrap();
+        // Several subfolders, so at least one is listed before `app.exe` whatever
+        // order the filesystem returns.
+        for folder in ["a-helpers", "bin", "helpers", "x64", "z-tools"] {
+            touch(&root.path().join(folder).join("app-helper.exe"));
+        }
+        let exe = root.path().join("app.exe");
+        touch(&exe);
+
+        assert_eq!(
+            find_exe(root.path(), "app", 2),
+            Some(exe.to_string_lossy().into_owned())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn does_not_follow_symlinked_folders() {
+        let target = tempfile::tempdir().unwrap();
+        touch(&target.path().join("app.exe"));
+        let root = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(target.path(), root.path().join("link")).unwrap();
+
+        assert_eq!(find_exe(root.path(), "app", 3), None);
+    }
+}
+
+#[cfg(test)]
+mod appx_tests {
+    use super::{cached_appx_packages, find_appx_exe, AppxPackages};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    fn touch(path: &std::path::Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"").unwrap();
+    }
+
+    #[test]
+    fn finds_the_exe_of_the_first_matching_package() {
+        let root = tempfile::tempdir().unwrap();
+        let store = root.path().join("store");
+        let calc = root.path().join("calc");
+        touch(&store.join("WinStore.App.exe"));
+        let calc_exe = calc.join("VFS").join("bin").join("Calculator.exe");
+        touch(&calc_exe);
+        let packages: AppxPackages = vec![
+            ("Microsoft.WindowsStore".into(), store),
+            ("Microsoft.WindowsCalculator".into(), calc),
+        ];
+
+        let found = Some(calc_exe.to_string_lossy().into_owned());
+        assert_eq!(find_appx_exe(&packages, "Calculator"), found);
+        assert_eq!(find_appx_exe(&packages, "Calculator.EXE"), found);
+        // The package matches without spaces; the exe is named with them.
+        let spaced = root.path().join("calc").join("Windows Calculator.exe");
+        touch(&spaced);
+        std::fs::remove_file(&calc_exe).unwrap();
+        assert_eq!(
+            find_appx_exe(&packages, "Windows Calculator"),
+            Some(spaced.to_string_lossy().into_owned())
+        );
+
+        assert_eq!(find_appx_exe(&packages, "Slack"), None);
+        assert_eq!(find_appx_exe(&packages, " "), None);
+        assert_eq!(find_appx_exe(&packages, ".exe"), None);
+    }
+
+    fn counting_listing<'a>(
+        listings: &'a AtomicUsize,
+        result: Result<AppxPackages, &'static str>,
+    ) -> impl FnOnce() -> Result<AppxPackages, &'static str> + 'a {
+        move || {
+            listings.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(50));
+            result
+        }
+    }
+
+    fn one_package() -> AppxPackages {
+        vec![("Pkg".to_string(), PathBuf::from("/pkg"))]
+    }
+
+    #[test]
+    fn callers_at_the_same_time_share_one_listing() {
+        let slot = Mutex::new(None);
+        let listings = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..50 {
+                scope.spawn(|| {
+                    let list = counting_listing(&listings, Ok(one_package()));
+                    let packages = cached_appx_packages(&slot, Duration::from_secs(60), list);
+                    assert_eq!(packages[0].0, "Pkg");
+                });
+            }
+        });
+        assert_eq!(listings.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn lists_again_once_the_list_is_stale() {
+        let slot = Mutex::new(None);
+        let listings = AtomicUsize::new(0);
+        for ttl in [
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            Duration::ZERO,
+        ] {
+            cached_appx_packages(&slot, ttl, counting_listing(&listings, Ok(one_package())));
+        }
+        // The second call reused the list; the third found it stale.
+        assert_eq!(listings.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_failed_listing_keeps_the_last_list_and_is_retried() {
+        let slot = Mutex::new(None);
+        let listings = AtomicUsize::new(0);
+        let call =
+            |ttl, result| cached_appx_packages(&slot, ttl, counting_listing(&listings, result));
+        let ttl = Duration::from_secs(60);
+
+        // A failure isn't cached, so the next call lists again.
+        assert!(call(ttl, Err("package service unavailable")).is_empty());
+        assert_eq!(call(ttl, Ok(one_package()))[0].0, "Pkg");
+        // A failed refresh keeps the list that worked.
+        assert_eq!(
+            call(Duration::ZERO, Err("package service unavailable"))[0].0,
+            "Pkg"
+        );
+        assert_eq!(listings.load(Ordering::SeqCst), 3);
+    }
+}
+
+#[cfg(test)]
+mod run_limited_tests {
+    use super::run_limited;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{mpsc, Arc};
+    use std::time::Duration;
+    use tokio::sync::Semaphore;
+
+    #[tokio::test]
+    async fn hung_lookups_hold_their_slots_after_the_request_is_dropped() {
+        static LIMIT: Semaphore = Semaphore::const_new(2);
+        let started = Arc::new(AtomicUsize::new(0));
+        let mut releases = Vec::new();
+
+        // Ten requests whose lookups hang, each dropped after a short wait, as when
+        // a client gives up on a request.
+        for _ in 0..10 {
+            let (release, released) = mpsc::channel::<()>();
+            releases.push(release);
+            let started = started.clone();
+            let hung = run_limited(&LIMIT, move || {
+                started.fetch_add(1, Ordering::SeqCst);
+                let _ = released.recv();
+            });
+            assert!(tokio::time::timeout(Duration::from_millis(50), hung)
+                .await
+                .is_err());
+        }
+        assert_eq!(started.load(Ordering::SeqCst), 2);
+
+        // Once the hung lookups return, their slots are free again.
+        drop(releases);
+        assert_eq!(run_limited(&LIMIT, || 7).await, Ok(7));
+        assert_eq!(started.load(Ordering::SeqCst), 2);
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_icon_tests {
+    use super::{find_appx_exe, find_exe, get_app_icon, get_exe_by_appx, list_appx_packages};
+
+    #[tokio::test]
+    async fn resolves_a_store_app() {
+        let packages = list_appx_packages().unwrap();
+        assert!(!packages.is_empty(), "no Store apps listed");
+        // Any app whose exe is named after its package, such as
+        // ShellExperienceHost.exe in Microsoft.Windows.ShellExperienceHost.
+        let (name, exe) = packages
+            .iter()
+            .filter_map(|(_, folder)| std::fs::read_dir(folder).ok())
+            .flat_map(|entries| entries.flatten())
+            .filter_map(|entry| {
+                let file = entry.file_name().to_string_lossy().to_lowercase();
+                file.strip_suffix(".exe").map(str::to_string)
+            })
+            .find_map(|name| Some((name.clone(), find_appx_exe(&packages, &name)?)))
+            .expect("no Store app is named after its package");
+        eprintln!("{} packages; {name} -> {exe}", packages.len());
+
+        assert_eq!(get_exe_by_appx(&name), Some(exe));
+        let icon = get_app_icon(&name, None).await.unwrap().unwrap();
+        assert!(icon.data.starts_with(b"\x89PNG"), "{name}");
+    }
+
+    #[tokio::test]
+    async fn resolves_a_windows_tool() {
+        assert!(find_exe(std::path::Path::new(r"C:\Windows"), "notepad", 0).is_some());
+        let icon = get_app_icon("notepad", None).await.unwrap().unwrap();
+        assert!(icon.data.starts_with(b"\x89PNG"));
+    }
 }

@@ -401,7 +401,9 @@ pub struct StarredSearchHit {
     #[serde(flatten)]
     pub item: ContentItem,
     /// User marked this capture's timestamp as important. Not an accuracy score.
-    pub starred: bool,
+    /// Omitted when optional star metadata is unavailable, never guessed false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub starred: Option<bool>,
 }
 
 fn captured_at(item: &ContentItem) -> String {
@@ -1638,31 +1640,39 @@ pub(crate) async fn search(
 
     debug!("search completed: found {} results", total);
 
+    // Only repetitive, unattributed API diagnostics are sampled. App/MCP and
+    // named-agent searches keep their existing events and occurrence timestamps.
+    // All requests still contribute to api_usage_5min; qualified outcomes are
+    // independent. Decide before building the diagnostic payload or spawning.
+    let sampled = api_client.sample_search_diagnostics();
     let response_non_empty = !content_items.is_empty();
-    let parsed_parser_profiles = if parsed_search {
-        parsed_parser_profiles(&content_items)
-    } else {
-        Vec::new()
-    };
+    if analytics::should_capture_search(sampled, parsed_search, response_non_empty) {
+        let parsed_parser_profiles = if parsed_search {
+            parsed_parser_profiles(&content_items)
+        } else {
+            Vec::new()
+        };
 
-    // Track search analytics
-    analytics::capture_event_nonblocking(
-        "search_performed",
-        serde_json::json!({
-            "query_length": query.q.as_ref().map(|q| q.len()).unwrap_or(0),
-            "content_type": format!("{:?}", query.content_type),
-            "request_source": api_client.source_label(),
-            "agent_client": api_client.agent_client().as_str(),
-            "has_date_filter": query.start_time.is_some() || query.end_time.is_some(),
-            "has_app_filter": query.app_name.is_some(),
-            "result_count": total,
-            "non_empty": response_non_empty,
-            "parsed_non_empty": parsed_search && response_non_empty,
-            "parsed_parser_profiles": parsed_parser_profiles,
-            "limit": query.pagination.limit,
-            "offset": query.pagination.offset,
-        }),
-    );
+        analytics::capture_event_nonblocking(
+            "search_performed",
+            serde_json::json!({
+                "telemetry_sample_interval_seconds": if sampled { analytics::SEARCH_REPORT_INTERVAL.as_secs() } else { 0 },
+                "telemetry_sampling": if sampled { "first_per_interval_per_result_kind" } else { "none" },
+                "query_length": query.q.as_ref().map(|q| q.len()).unwrap_or(0),
+                "content_type": format!("{:?}", query.content_type),
+                "request_source": api_client.source_label(),
+                "agent_client": api_client.agent_client().as_str(),
+                "has_date_filter": query.start_time.is_some() || query.end_time.is_some(),
+                "has_app_filter": query.app_name.is_some(),
+                "result_count": total,
+                "non_empty": response_non_empty,
+                "parsed_non_empty": parsed_search && response_non_empty,
+                "parsed_parser_profiles": parsed_parser_profiles,
+                "limit": query.pagination.limit,
+                "offset": query.pagination.offset,
+            }),
+        );
+    }
 
     // Get cloud search metadata
     let time_range = match (query.start_time, query.end_time) {
@@ -1679,21 +1689,37 @@ pub(crate) async fn search(
     };
 
     let timestamps: Vec<_> = content_items.iter().map(captured_at).collect();
-    let starred = state
-        .db
-        .starred_timestamps(&timestamps)
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                JsonResponse(json!({"error":"could not read starred metadata"})),
-            )
-        })?;
+    // Stars annotate these results; failure must not hide already-retrieved
+    // recordings from chat or workflow evidence research. Explicit star filters
+    // are resolved above and still fail rather than broadening the search.
+    let starred = match tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        state.db.starred_timestamps(&timestamps),
+    )
+    .await
+    {
+        Ok(Ok(starred)) => Some(starred),
+        Ok(Err(error)) => {
+            warn!(%error, "search returned recordings without optional star metadata");
+            None
+        }
+        Err(_) => {
+            warn!("search star metadata timed out; returning recordings without annotations");
+            None
+        }
+    };
+    let starred_metadata_available = starred.is_some();
     let response = SearchResponse {
         data: content_items
             .into_iter()
-            .zip(starred)
-            .map(|(item, starred)| StarredSearchHit { item, starred })
+            .enumerate()
+            .map(|(index, item)| StarredSearchHit {
+                item,
+                starred: starred
+                    .as_ref()
+                    .and_then(|values| values.get(index))
+                    .copied(),
+            })
             .collect(),
         pagination: PaginationInfo {
             limit: query.pagination.limit,
@@ -1707,6 +1733,7 @@ pub(crate) async fn search(
     capture_direct_api_search_value(&api_client, response.data.len());
 
     let cache_entry = if !history_restricted
+        && starred_metadata_available
         && !query.include_frames
         && cacheable_render
         && !pipe_data_restricted
@@ -2790,7 +2817,7 @@ mod tests {
                 .into_iter()
                 .map(|item| StarredSearchHit {
                     item,
-                    starred: false,
+                    starred: Some(false),
                 })
                 .collect(),
             pagination: PaginationInfo {

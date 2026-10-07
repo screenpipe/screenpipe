@@ -12,8 +12,10 @@
   outline: none;
   overflow-wrap: anywhere;
 }
-.editable :global(.ProseMirror):focus-visible {
-  border-color: currentColor;
+/* The caret identifies text focus; keep the document surface unchanged. */
+.editable :global(.ProseMirror) {
+  cursor: text;
+  caret-color: currentColor;
 }
 .document :global(.ProseMirror) > * + * {
   margin-top: 0.65em;

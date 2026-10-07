@@ -452,6 +452,89 @@ pub trait LocalApiClient: Send + Sync {
     }
 }
 
+/// Read the exact local image, preserving the local failure classification.
+/// An unclassified 404 is not a durable missing-image acknowledgement: it may
+/// be a routing/read failure and must leave the backfill cursor retryable.
+/// Only bounded diagnostic codes are logged, never the response's paths/text.
+pub async fn fetch_exact_frame_jpeg(
+    http: &reqwest::Client,
+    api_url_base: &str,
+    api_key: Option<&str>,
+    frame_id: i64,
+) -> Result<Option<Vec<u8>>, EnterpriseSyncError> {
+    let mut request = http.get(format!("{api_url_base}/frames/{frame_id}?fallback=false"));
+    if let Some(key) = api_key {
+        request = request.bearer_auth(key);
+    }
+    let mut response = request
+        .send()
+        .await
+        .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
+    let status = response.status();
+    if status.is_success() {
+        return response
+            .bytes()
+            .await
+            .map(|bytes| Some(bytes.to_vec()))
+            .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()));
+    }
+    // The caller's HTTP timeout covers the body as well as response headers.
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?
+    {
+        if body.len() + chunk.len() > 16 * 1024 {
+            body.clear();
+            break;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let detail: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    let reason = match detail["error_type"].as_str() {
+        Some("snapshot_missing") => "snapshot_missing",
+        Some("frame_media_unavailable") => "frame_media_unavailable",
+        Some("snapshot_read_failed") => "snapshot_read_failed",
+        Some("remote_device") => "remote_device",
+        Some("video_corrupted") => "video_corrupted",
+        Some("ffprobe_not_found") => "ffprobe_not_found",
+        _ => "unclassified_response",
+    };
+    let io_kind = match detail["io_error_kind"].as_str() {
+        Some("PermissionDenied") => "PermissionDenied",
+        Some("NotFound") => "NotFound",
+        Some("WouldBlock") => "WouldBlock",
+        Some("Interrupted") => "Interrupted",
+        Some("TimedOut") => "TimedOut",
+        _ => "unknown",
+    };
+    let terminal = status == reqwest::StatusCode::NOT_FOUND
+        && detail["frame_id"].as_i64() == Some(frame_id)
+        && matches!(reason, "snapshot_missing" | "frame_media_unavailable");
+    let outcome = if terminal {
+        "unavailable"
+    } else {
+        "retry_pending"
+    };
+    warn!(
+        frame_id,
+        status = status.as_u16(),
+        reason,
+        io_kind,
+        outcome,
+        "enterprise exact screenshot read failed"
+    );
+    if terminal {
+        Ok(None)
+    } else {
+        Err(EnterpriseSyncError::LocalApi(format!(
+            "exact screenshot frame={frame_id} status={} reason={reason} io={io_kind}; retry pending",
+            status.as_u16()
+        )))
+    }
+}
+
 // ─── Wire types — what we POST upstream ─────────────────────────────────────
 //
 // The record schema (`TelemetryRecord` + the `*Row` flattenings) is the
@@ -5160,6 +5243,165 @@ pub(crate) mod tests {
             upload_mode: EnterpriseUploadMode::HostedIngest,
             log_dirs: vec![tmp.path().to_path_buf()],
         }
+    }
+
+    /// Uses the production exact-image reader against an actual HTTP server.
+    struct HttpFrameMock(String);
+
+    #[async_trait::async_trait]
+    impl LocalApiClient for HttpFrameMock {
+        async fn fetch_frames_since(
+            &self,
+            _: Option<&str>,
+            _: u32,
+            _: u32,
+        ) -> Result<Vec<FrameRow>, EnterpriseSyncError> {
+            Ok(vec![])
+        }
+        async fn fetch_audio_since(
+            &self,
+            _: Option<&str>,
+            _: u32,
+            _: u32,
+        ) -> Result<Vec<AudioRow>, EnterpriseSyncError> {
+            Ok(vec![])
+        }
+        async fn fetch_frame_jpeg(&self, id: i64) -> Result<Option<Vec<u8>>, EnterpriseSyncError> {
+            fetch_exact_frame_jpeg(&reqwest::Client::new(), &self.0, Some("test-api-key"), id).await
+        }
+    }
+
+    #[tokio::test]
+    async fn exact_frame_reader_requires_classified_same_frame_absence() {
+        use wiremock::{matchers::*, Mock, MockServer, ResponseTemplate};
+        for (status, detail, terminal) in [
+            (404, serde_json::json!({"error": "Frame not found"}), false),
+            (
+                404,
+                serde_json::json!({"frame_id": 2, "error_type": "snapshot_missing"}),
+                false,
+            ),
+            (
+                404,
+                serde_json::json!({"frame_id": 1, "error_type": "remote_device"}),
+                false,
+            ),
+            (
+                404,
+                serde_json::json!({"frame_id": 1, "error_type": "snapshot_missing"}),
+                true,
+            ),
+            (
+                404,
+                serde_json::json!({"frame_id": 1, "error_type": "frame_media_unavailable"}),
+                true,
+            ),
+            (
+                500,
+                serde_json::json!({"frame_id": 1, "error_type": "snapshot_read_failed", "io_error_kind": "PermissionDenied", "error": "/Users/private/client-tax-return.jpg"}),
+                false,
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/frames/1"))
+                .and(query_param("fallback", "false"))
+                .and(header("Authorization", "Bearer test-api-key"))
+                .respond_with(ResponseTemplate::new(status).set_body_json(detail))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let result = HttpFrameMock(server.uri()).fetch_frame_jpeg(1).await;
+            if terminal {
+                assert!(result.unwrap().is_none());
+            } else {
+                let error = result.unwrap_err().to_string();
+                assert!(error.contains("retry pending"));
+                assert!(!error.contains("/Users/private"));
+                if status == 500 {
+                    assert!(error.contains("PermissionDenied"));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn exact_frame_read_failure_keeps_backfill_pending_until_pixels_upload() {
+        let dir = TempDir::new().unwrap();
+        check_exact_frame_failure(dir.path()).await;
+    }
+
+    // Also invoked by the normal support collector's rotation/redaction test.
+    pub(crate) async fn check_exact_frame_failure(log_dir: &std::path::Path) {
+        use tracing::instrument::WithSubscriber;
+        use wiremock::{matchers::*, Mock, MockServer, ResponseTemplate};
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
+        let _restore = RestoreDefaultSyncStreams;
+        crate::enterprise_policy::set_sync_streams(
+            true,
+            false,
+            true,
+            true,
+            true,
+            true,
+            "off".into(),
+            "all".into(),
+        );
+        let server = MockServer::start().await;
+        let attempt = AtomicUsize::new(0);
+        let jpeg = synth_jpeg(160, 90);
+        Mock::given(method("GET")).and(path("/frames/1"))
+            .and(query_param("fallback", "false"))
+            .respond_with(move |_: &wiremock::Request| {
+                if attempt.fetch_add(1, Ordering::SeqCst) == 0 {
+                    ResponseTemplate::new(500).set_body_json(serde_json::json!({
+                        "frame_id": 1, "error_type": "snapshot_read_failed",
+                        "io_error_kind": "PermissionDenied", "error": "/Users/private/client-tax-return.jpg"
+                    }))
+                } else {
+                    ResponseTemplate::new(200).set_body_bytes(jpeg.clone())
+                }
+            }).expect(2).mount(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/api/enterprise/frame-uploads"))
+            .respond_with(|request: &wiremock::Request| {
+                let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+                assert_eq!(body["frames"][0]["frame_id"], 1);
+                assert!(body["frames"][0].get("error").is_none());
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(body["frames"][0]["image_b64"].as_str().unwrap())
+                    .unwrap();
+                assert_eq!(image::load_from_memory(&bytes).unwrap().width(), 160);
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"stored": [1], "unavailable": []}))
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+        let tmp = TempDir::new().unwrap();
+        let cfg = frame_test_cfg(&server.uri(), &tmp);
+        let rows = vec![frame(1, "2026-01-01T00:00:00Z", "test", "")];
+        let local = HttpFrameMock(server.uri());
+        let http = reqwest::Client::new();
+        let file = std::fs::File::create(log_dir.join("screenpipe-app.2026-10-05.log")).unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(file))
+            .finish();
+        let failure = backfill::upload_page_images(&cfg, &local, &http, &rows)
+            .with_subscriber(subscriber)
+            .await
+            .unwrap_err();
+        assert!(failure.to_string().contains("screenshot_fetch_failed"));
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            1,
+            "a failed read must not upload a terminal missing-image status"
+        );
+        let result = backfill::upload_page_images(&cfg, &local, &http, &rows)
+            .await
+            .unwrap();
+        assert_eq!((result.uploaded, result.unavailable), (1, 0));
     }
 
     #[tokio::test]

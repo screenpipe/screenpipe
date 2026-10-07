@@ -839,11 +839,22 @@ export function NoteView({
         const images: string[] = [];
         for (const path of imagePaths) {
           const raw = imageBytesToDataUrl(path, await readFile(path));
-          if (raw) images.push(await resizeImageDataUrl(raw));
+          const image = raw && (await resizeImageDataUrl(raw));
+          if (image) images.push(image);
         }
         if (images.length === 0) return;
         const { x, y } = toClient(pos);
-        noteEditorRef.current?.insertImages(images, { clientX: x, clientY: y });
+        const editor = noteEditorRef.current;
+        // The note closed (another meeting opened) while the files were read.
+        if (!editor) return;
+        if (!editor.insertImages(images, { clientX: x, clientY: y })) {
+          // The note is read-only while a summary is written into it.
+          toast({
+            title: ui("Couldn't insert image"),
+            description: ui("Wait for the summary to finish, then drop the image again."),
+          });
+          return;
+        }
         posthog.capture("meeting_note_images_inserted", {
           meeting_id: meeting.id,
           count: images.length,
@@ -2239,7 +2250,7 @@ export function NoteView({
         initialDestination={requestedShareDestination}
       />
       {meetingConfirmations}
-      {isDraggingImage && (
+      {isDraggingImage && !summaryWorking && (
         <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-background/60">
           <div className="border border-foreground bg-foreground px-12 py-10 text-background">
             <span className="text-sm font-medium tracking-tight">

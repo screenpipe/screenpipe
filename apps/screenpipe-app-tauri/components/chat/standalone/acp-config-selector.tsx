@@ -165,6 +165,15 @@ export function AcpConfigSelector({
   const presetConfig = activePreset?.acpAgent?.config ?? {};
   const presetModeId = activePreset?.acpAgent?.modeId ?? null;
   const [pendingId, setPendingId] = useState<string | null>(null);
+  // An effort step being applied to the live session. The adapter confirms it
+  // a round trip later; until then the dial shows it, or after a drag the
+  // thumb would snap back to the old step and then forward again. It belongs
+  // to the chat it was made in.
+  const [pendingEffort, setPendingEffort] = useState<{
+    sessionId: string | null | undefined;
+    optionId: string;
+    value: string;
+  } | null>(null);
   const [open, setOpen] = useState(false);
   const [reauthPending, setReauthPending] = useState(false);
   const allSelects = (config?.options ?? []).filter(
@@ -263,13 +272,13 @@ export function AcpConfigSelector({
     persist: AcpConfigDefaultChange,
     live: (activeSessionId: string) => Promise<{ status: string; error?: string }>,
     label: string,
-  ) => {
+  ): Promise<void> => {
     onPersistDefault?.(persist);
     // Some focused surfaces start a fresh private session per turn. They still
     // need to choose the adapter-advertised model before that session exists;
     // the persisted default is applied by the ACP runtime when the turn starts.
-    if (!sessionId) return;
-    void run(
+    if (!sessionId) return Promise.resolve();
+    return run(
       key,
       async () => {
         const result = await live(sessionId);
@@ -336,10 +345,25 @@ export function AcpConfigSelector({
             key={option.id}
             label={option.name}
             testId="acp-effort-slider"
-            value={selectedValue(option)}
+            value={
+              pendingEffort?.optionId === option.id &&
+              pendingEffort.sessionId === sessionId
+                ? pendingEffort.value
+                : selectedValue(option)
+            }
             disabled={pendingId === option.id}
             steps={option.values}
-            onValueChange={apply}
+            onValueChange={(value) => {
+              const pending = { sessionId, optionId: option.id, value };
+              setPendingEffort(pending);
+              // Drop it once the adapter answers. It sends the new config
+              // before its reply, so the live value has moved by then; after
+              // a failure the dial goes back to the real value. A later
+              // change waits for its own answer.
+              void apply(value).finally(() =>
+                setPendingEffort((current) => (current === pending ? null : current)),
+              );
+            }}
           />
         ) : (
           <ComposerSettingsSelect

@@ -1406,7 +1406,7 @@ async fn main() {
                 );
                 std::io::Error::other(e)
             })?;
-            let search_only_startup = crate::search_only::initialize();
+            let search_only_startup = crate::search_only::initialize(from_autostart);
 
             #[cfg(feature = "e2e")]
             e2e::seeds::apply_settings(app.handle(), &mut store);

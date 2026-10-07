@@ -136,11 +136,8 @@
   border-radius: 4px;
   padding: 3px 5px;
 }
-.block textarea:hover {
-  background: var(--soft, #f1f2ec);
-}
 .block textarea:focus-visible {
-  outline: 1px solid var(--muted, #777b70);
+  outline: none;
 }
 
 .block textarea.heading { font-size:24px; font-weight:600; line-height:1.4; }

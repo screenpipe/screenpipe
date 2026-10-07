@@ -177,6 +177,20 @@ mod tests {
         assert_eq!(loaded.height(), 1080);
     }
 
+    /// Capture can be wider than storage (#7393), so the writer itself must
+    /// cap the stored JPEG.
+    #[test]
+    fn test_write_downscales_to_max_width() {
+        let tmp = TempDir::new().unwrap();
+        let writer = SnapshotWriter::new(tmp.path(), 80, 1920);
+        let img = test_image(4000, 2000);
+
+        let path = writer.write(&img, Utc::now(), 0).unwrap();
+
+        let loaded = image::open(&path).unwrap();
+        assert_eq!((loaded.width(), loaded.height()), (1920, 960));
+    }
+
     #[test]
     fn test_write_creates_date_directory() {
         let tmp = TempDir::new().unwrap();

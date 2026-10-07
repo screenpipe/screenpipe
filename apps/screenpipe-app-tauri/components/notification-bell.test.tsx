@@ -71,6 +71,29 @@ describe("NotificationInboxPanel", () => {
     expect(screen.getByTestId("notification-bell-view-all")).toHaveTextContent("0");
   });
 
+  it("shows remote images in bodies as alt text in both row views", async () => {
+    // Pipes write these bodies; a rendered remote image would send its URL
+    // to that server the moment the inbox opens.
+    const remoteImage = {
+      ...entries[0],
+      id: "remote-image",
+      body: "chart below ![remote chart](https://example.com/x.png?d=secret)",
+    };
+    appServerFetch.mockImplementation(() =>
+      Promise.resolve({ ok: true, json: () => Promise.resolve([remoteImage]) }),
+    );
+    const { container } = render(<NotificationInboxPanel />);
+
+    const row = await screen.findByTestId("notification-bell-item-remote-image");
+    expect(row).toHaveTextContent("chart below remote chart");
+    expect(container.querySelector("img")).toBeNull();
+
+    fireEvent.click(row);
+    const expanded = await screen.findByTestId("notification-bell-expanded-remote-image");
+    expect(expanded).toHaveTextContent("chart below remote chart");
+    expect(container.querySelector("img")).toBeNull();
+  });
+
   it("hides clear all only when there is nothing to clear", async () => {
     appServerFetch.mockImplementation(() =>
       Promise.resolve({ ok: true, json: () => Promise.resolve([]) }),

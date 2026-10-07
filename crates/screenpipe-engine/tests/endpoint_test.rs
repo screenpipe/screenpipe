@@ -390,6 +390,192 @@ mod tests {
         assert_eq!(value["data"][0]["revision"], 2);
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exact_frame_read_error_is_retryable_and_recovers_without_substitution() {
+        use std::os::unix::fs::PermissionsExt;
+        let (app, db) = setup_test_app().await;
+        let dir = tempfile::tempdir().unwrap();
+        let snapshot = dir.path().join("original.jpg");
+        RgbImage::from_pixel(160, 90, Rgb([190, 30, 20]))
+            .save(&snapshot)
+            .unwrap();
+        db.insert_video_chunk("placeholder.mp4", "exact-device")
+            .await
+            .unwrap();
+        let id = db
+            .insert_frame(
+                "exact-device",
+                Some(Utc::now()),
+                None,
+                Some("Test"),
+                Some("Test"),
+                true,
+                Some(0),
+            )
+            .await
+            .unwrap();
+        sqlx::query("UPDATE frames SET snapshot_path = ? WHERE id = ?")
+            .bind(snapshot.to_string_lossy().to_string())
+            .bind(id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let uri = format!("/frames/{id}?fallback=false");
+        std::fs::set_permissions(&snapshot, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        std::fs::set_permissions(&snapshot, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["error_type"], "snapshot_read_failed");
+        assert_eq!(body["io_error_kind"], "PermissionDenied");
+        assert_eq!(body["frame_id"], id);
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.as_ref(), std::fs::read(&snapshot).unwrap());
+
+        // Another readable frame cannot satisfy an exact request whose file disappeared.
+        let nearby = db
+            .insert_frame(
+                "exact-device",
+                Some(Utc::now()),
+                None,
+                Some("Other"),
+                Some("Other"),
+                true,
+                Some(1),
+            )
+            .await
+            .unwrap();
+        let other = dir.path().join("other.jpg");
+        RgbImage::from_pixel(160, 90, Rgb([20, 30, 190]))
+            .save(&other)
+            .unwrap();
+        sqlx::query("UPDATE frames SET snapshot_path = ? WHERE id = ?")
+            .bind(other.to_string_lossy().to_string())
+            .bind(nearby)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        std::fs::remove_file(&snapshot).unwrap();
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["error_type"], "snapshot_missing");
+        assert_eq!(body["frame_id"], id);
+        // Ordinary timeline requests still retain their opt-in-by-default fallback.
+        let fallback = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/frames/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(fallback.status(), StatusCode::OK);
+        let bytes = to_bytes(fallback.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(bytes.as_ref(), std::fs::read(&other).unwrap());
+    }
+
+    #[tokio::test]
+    async fn exact_frame_survives_compaction_with_original_frame_id() {
+        let (app, db) = setup_test_app().await;
+        let dir = tempfile::tempdir().unwrap();
+        let snapshot = dir.path().join("original.jpg");
+        RgbImage::from_pixel(160, 90, Rgb([190, 30, 20]))
+            .save(&snapshot)
+            .unwrap();
+        db.insert_video_chunk("placeholder.mp4", "compaction-device")
+            .await
+            .unwrap();
+        let id = db
+            .insert_frame(
+                "compaction-device",
+                Some(Utc::now()),
+                None,
+                Some("Test"),
+                Some("Test"),
+                true,
+                Some(0),
+            )
+            .await
+            .unwrap();
+        sqlx::query("UPDATE frames SET snapshot_path = ? WHERE id = ?")
+            .bind(snapshot.to_string_lossy().to_string())
+            .bind(id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let uri = format!("/frames/{id}?fallback=false");
+        let before = app
+            .clone()
+            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(before.status(), StatusCode::OK);
+        let _ = to_bytes(before.into_body(), usize::MAX).await.unwrap();
+        let video = dir.path().join("compacted.mp4");
+        let ffmpeg = screenpipe_core::find_ffmpeg_path().expect("ffmpeg is required by the engine");
+        let output = screenpipe_core::ffmpeg_cmd(ffmpeg)
+            .args(["-loop", "1", "-i"])
+            .arg(&snapshot)
+            .args([
+                "-t", "1", "-r", "1", "-c:v", "mpeg4", "-pix_fmt", "yuv420p", "-y",
+            ])
+            .arg(&video)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let chunk = db
+            .insert_video_chunk_with_fps(&video.to_string_lossy(), "compaction-device", 1.0)
+            .await
+            .unwrap();
+        db.compact_snapshots_queued(chunk, vec![(id, 0)])
+            .await
+            .unwrap();
+        assert_eq!(
+            db.get_frame(id).await.unwrap(),
+            Some((video.to_string_lossy().to_string(), 0, false)),
+            "compaction must commit the replacement location before deleting the JPEG"
+        );
+        std::fs::remove_file(&snapshot).unwrap();
+        let after = app
+            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(after.status(), StatusCode::OK);
+        let bytes = to_bytes(after.into_body(), usize::MAX).await.unwrap();
+        let decoded = image::load_from_memory(&bytes).unwrap().to_rgb8();
+        assert_eq!(decoded.dimensions(), (160, 90));
+        let pixel = decoded.get_pixel(80, 45);
+        assert!(
+            pixel[0] > 170 && pixel[1] < 50 && pixel[2] < 40,
+            "wrong frame pixels: {pixel:?}"
+        );
+    }
+
     #[tokio::test]
     async fn frame_thumbnail_endpoint_resizes_caches_and_invalidates_snapshot() {
         let (app, db) = setup_test_app().await;

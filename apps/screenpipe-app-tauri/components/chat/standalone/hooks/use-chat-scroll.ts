@@ -147,6 +147,8 @@ export function useChatScroll({
       }
     });
     observer.observe(content);
+    // A taller composer shrinks the viewport without resizing the content.
+    observer.observe(container);
     return () => observer.disconnect();
   }, [scheduleScrollToBottom, scrollContainerRef, syncScrollState]);
 

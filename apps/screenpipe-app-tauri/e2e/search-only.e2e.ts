@@ -60,6 +60,7 @@ const counts = async () => {
     history,
     framesWritten: health.pipeline?.frames_db_written,
     uiEvents: health.ui_recorder?.events_inserted,
+    lastFrame: health.last_frame_timestamp,
     lastAudio: health.last_audio_timestamp,
   };
 };
@@ -127,20 +128,18 @@ for (let cycle = 0; cycle < 2; cycle++) {
     async () => (await state()).webviews.includes("home"),
     "Reopen shows Home",
   );
-  const reopened = await state();
-  assert.equal(reopened.pid, initial.pid);
-  assert(
-    !reopened.capture_running && !reopened.capture_intended,
-    "Reopen must leave capture paused",
-  );
-  assert(
-    (await request(control, "/e2e/search-only/resume", "POST")).resumed,
-    "Explicit resume works",
-  );
   await until(
-    async () => (await state()).capture_running,
-    "Recording resumes explicitly",
+    async () => {
+      const s = await state();
+      return s.capture_running && s.capture_intended;
+    },
+    "Reopening resumes recording without a separate Start action",
   );
+  assert.equal((await state()).pid, initial.pid);
+  await until(async () => {
+    const resumed = await counts();
+    return Date.parse(resumed.lastFrame) > Date.parse(stopped.lastFrame);
+  }, "Reopened capture persists new frames");
 }
 
 await request(control, "/e2e/search-only/quit", "POST");
@@ -178,6 +177,25 @@ assert.deepEqual(
   beforeRestart,
   "Relaunch creates no captures",
 );
+await request(control, "/e2e/search-only/reopen", "POST");
+await until(async () => {
+  const s = await state();
+  return !s.search_only && s.capture_running && s.capture_intended;
+}, "Manual reopen after an updater restart resumes capture");
+const recordingBeforeUpdate = await state();
+await request(control, "/e2e/search-only/restart", "POST");
+await until(async () => {
+  try {
+    const s = await state();
+    return (
+      s.pid !== recordingBeforeUpdate.pid &&
+      s.capture_intended &&
+      s.capture_running
+    );
+  } catch {
+    return false;
+  }
+}, "Updater relaunch while recording restores recording");
 console.log(
-  "PASS: two Quit/search/reopen/resume cycles, same PID, stable capture counts, blocked mutations, updater relaunch restores search with recording paused",
+  "PASS: two Quit/search/reopen cycles resume and persist frames in the same PID; Quit blocks captures and mutations; updater relaunch preserves paused search or active recording",
 );

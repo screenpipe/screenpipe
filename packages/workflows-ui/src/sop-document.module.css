@@ -41,7 +41,6 @@
 }
 .title:focus-visible {
   outline: none;
-  border-color: var(--muted, currentColor);
 }
 .subtitle {
   margin: 12px 0 0 5px;

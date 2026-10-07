@@ -67,7 +67,7 @@ The hidden fixture appears only at grading and uses no dependency links.
 This does not establish native recording continuity, real authentication,
 account-switch race safety, browser integration, isolation or model performance.
 
-The current app corpus contains 128 git-mined regressions. See
+The current app corpus contains 133 git-mined regressions. See
 [DESIGN.md](./DESIGN.md) for the Anthropic guidance, source contract, and
 history-mining workflow. The companion website manifest uses this same harness.
 
@@ -1319,6 +1319,47 @@ output, one-role-only repair, dropped safe HTML, styles, broken fragments and
 missing-source setup failure. These are corpus/grader checks, not agent trials,
 a full browser exploit defense or proof of execution isolation.
 
+### Remote Markdown images
+
+`app-markdown-remote-images` renders the actual chat MarkdownBlock (both roles),
+the shared MemoizedReactMarkdown and the meeting note editor (`NoteEditor` and
+`createMeetingNoteEditorExtensions`), with synthetic native media and HTTP
+ports. Seventy-two outcomes check that remote, protocol-relative, relative,
+reference-style, raw `<img>` and `<picture><source srcset>` images, and remote
+or network-share media, create no element that loads them and never reach the
+media reader, while their alt text, link or code stays visible; an image with no
+alt text shows its address. Network-share media includes a home-relative path
+that resolves to a share and local-looking strings from which the reader would
+take a share path; images whose source is removed for safety keep their alt
+text, and a local image the reader cannot open keeps its alt text and path. In a
+meeting note, remote images an AI summary wrote or a later update brings (also
+in place of an embedded image) do not load, keep their alt text and stay in the
+note's Markdown, also when the note is copied through the editor's clipboard
+handling and pasted into a note, while embedded data: images still show and keep
+their alt text and size when pasted. A web image pasted into a note that cannot
+be downloaded stays in the note's Markdown as its address. Local absolute,
+file-URL, Windows (also with doubled, Markdown-escaped backslashes) and
+home-relative files still render through the native reader. The parent fails
+sixty-four outcomes and preserves eight; the first, markdown-only fix fails
+twenty-three; the second and third fail the note copy, later-update and seven
+visible-fallback outcomes; the fourth fails the seven visible-fallback outcomes;
+the fix and current source pass all.
+
+Run `bun test evals/coding-agent/calibrate-markdown-remote-images.test.js`.
+Controls include parent/reference/current, the first four fixes, an equivalent
+plain-text address, a restored remote `<img>` fallback, an alt-text-only
+fallback, an unreadable local image that shows nothing, re-allowed
+picture/source, an extension-only media check, a media check that allows a
+second leading separator, accepts Windows network paths or reads a doubled
+backslash after a drive as a share, network shares treated as local, blanket
+image removal, a note editor that renders any source, deletes remote images from
+the note, drops pasted images it could not download, takes over pastes of
+embedded images or reuses an image view for a different source, unused correct
+source and missing-source setup failure. Webview CSP, Mermaid diagrams (jsdom
+cannot lay them out; unit tests and browser checks cover the no-network frame),
+pasting from other apps, loading a blocked note image on request, native file
+policy and execution isolation are outside this evidence.
+
 `ai-gateway-trusted-runner-admission` runs the actual HTTP entrypoint, authentication,
 Free-plan gates, chat handler and provider adapter with synthetic external ports.
 Fourteen outcomes cover successful machine and paid-human replies, forged or
@@ -1585,6 +1626,48 @@ bypass, equivalent, preserved-behavior and setup-error controls. Hidden fixtures
 and dependency links appear only after the trajectory. This does not establish
 native persistence, encryption, real account access, provider delivery, execution
 isolation or model improvement.
+
+The `app-native-calendar-unavailable-poll` case executes the actual frontend
+calendar module with synthetic HTTP and native-command ports. Nine outcomes
+cover repeated unavailable polls, explicit disconnected responses, stale or
+unknown status recovery, connected empty calendars, authorized HTTP failures,
+and preserved Google/ICS providers. The parent fails two intended outcomes and
+preserves seven; reference and current source pass nine.
+Run `bun test evals/coding-agent/calibrate-calendar-unavailable.test.js` for eleven
+controls, including equivalent implementations, unused repairs, blanket native
+suppression and missing-module setup errors. Only the frontend calendar module
+is applied from the historical fix. Native endpoint mappings, OS permissions,
+OAuth refresh, publisher backoff, enforced agent isolation and model performance
+remain outside this evidence. Fixtures and dependencies are installed at grading.
+
+
+`app-meeting-stop-save-refusal` mounts the real historical NoteView with synthetic
+editor-input, HTTP and native ports. Five outcomes preserve draft-save ordering,
+overlapping edits, ordinary autosave and unchanged notes, while ensuring an
+explicit Stop still runs once after a failed save, with a warning and no false
+Saved indication. The parent fails that Stop outcome and preserves four; the
+historical reference passes five. Separate current-component checks preserve
+these outcomes with current display and inactive-service adapters.
+Run `bun test evals/coding-agent/calibrate-meeting-stop.test.js` with desktop test
+dependencies available for eleven historical grader controls, including inline warnings, empty feedback, changed
+warning copy, unused correct source, early/duplicate Stop, silent refusal, false
+Saved status and missing-source classification. Hidden fixtures and dependency
+links appear only when grading begins. This does not test editor internals,
+native stop/deferral release, database durability, global recording pause, full
+current dependency parity, execution isolation or model improvement.
+
+## Memory tags around malformed rows
+
+`app-memory-tag-filter-malformed-json` executes actual database list/count methods
+against disposable SQLite databases. Six outcomes cover malformed stored tags,
+exact multi-tag matching, missing tags, full-text search, unfiltered reads, source
+and importance filters, ordering, pagination and preservation of stored values.
+The parent fails four outcomes and preserves two; the historical source-only fix
+passes six. Run `bun test evals/coding-agent/calibrate-memory-tag-filter.test.js`
+for correct, broken, equivalent, disconnected, partial-repair, ignored-filter,
+blanket-filter and missing-source controls. Hidden fixtures appear only at grading.
+No build-cache links are declared. This does not establish sync ingestion, HTTP
+routing, hybrid storage, concurrent writes, execution isolation or model quality.
 
 ## Redaction across missing schema targets
 

@@ -23,7 +23,8 @@
   padding: 3px 5px; background: transparent; color: var(--ink);
   font: inherit; font-size: 14px; line-height: 1.6;
 }
-.editor textarea:focus-visible { outline: none; border-color: var(--muted); }
+/* Text focus uses the caret; buttons and selectors retain their focus rings. */
+.editor textarea:focus-visible { outline: none; }
 .editor textarea::placeholder { color: var(--muted); }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 0 0 12px; margin-bottom: 8px; }
 .toolbar > div { display: flex; align-items: center; gap: 6px; }

@@ -38,10 +38,19 @@ import { useGT } from "gt-react";
 // which react-markdown applies after rehype and which already allows
 // screenpipe:// and local file links that the default protocol list would
 // strip; attributes urlTransform never sees keep the default protocol check.
+// <picture>/<source> are dropped: srcset is one of those attributes, has no
+// protocol rule, and would make the browser fetch a remote image in place of
+// a local <img> next to it. Images render only through the shared img
+// component, which loads local files and nothing else.
 const CLOBBER_PREFIX = "user-content-";
 const chatSanitizeSchema = {
   ...defaultSchema,
-  tagNames: [...(defaultSchema.tagNames ?? []), "u", "mark", "small"],
+  tagNames: [
+    ...(defaultSchema.tagNames ?? []).filter((tag) => tag !== "picture" && tag !== "source"),
+    "u",
+    "mark",
+    "small",
+  ],
   protocols: { ...defaultSchema.protocols, href: [], src: [] },
   clobberPrefix: CLOBBER_PREFIX,
   strip: [...(defaultSchema.strip ?? []), "style"],

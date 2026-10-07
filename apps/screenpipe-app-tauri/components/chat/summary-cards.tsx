@@ -95,6 +95,13 @@ export function homeCardSlugsForGoal(category: UserGoalCategory): string[] {
   return HOME_CARD_SLUGS_BY_GOAL[category];
 }
 
+// Chip labels centre in the whole chip. The agent logos only appear on hover,
+// focus or while a launch opens (always on touch screens), so room for them
+// opens only then; reserving it at rest pushed every label off-centre by a
+// different amount.
+const CHIP_LABEL_ROOM =
+  "px-2 group-hover/home-card:pr-12 group-focus-within/home-card:pr-12 group-has-[[data-expanded=true]]/home-card:pr-12 [@media(hover:none)]:pr-12";
+
 const QUICK_SUMMARY_TASKS = [
   {
     name: "meeting-prep",
@@ -343,7 +350,7 @@ export function SummaryCards({
                 previewPromptForPipe(pipe),
                 onPreviewPrompt,
               )}
-              className="group/card-primary h-10 w-full cursor-pointer rounded-md border border-foreground/20 bg-card pl-2 pr-12 text-[11px] text-foreground/75 transition-colors duration-150 hover:border-foreground hover:bg-foreground hover:text-background focus-visible:border-foreground focus-visible:bg-foreground focus-visible:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
+              className={`group/card-primary h-10 w-full cursor-pointer rounded-md border border-foreground/20 bg-card ${CHIP_LABEL_ROOM} text-[11px] text-foreground/75 transition-[color,background-color,border-color,padding] duration-150 ease-out hover:border-foreground hover:bg-foreground hover:text-background focus-visible:border-foreground focus-visible:bg-foreground focus-visible:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none`}
             >
               <span className="transition-opacity duration-150 motion-reduce:transition-none">
                 {templateLabel(pipe, "title")}
@@ -374,7 +381,7 @@ export function SummaryCards({
                   "other_builtin",
                 );
               }}
-              className="group/card-primary h-10 w-full cursor-pointer rounded-md border border-foreground/20 bg-card pl-2 pr-12 text-[11px] text-foreground/75 transition-colors duration-150 hover:border-foreground hover:bg-foreground hover:text-background focus-visible:border-foreground focus-visible:bg-foreground focus-visible:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
+              className={`group/card-primary h-10 w-full cursor-pointer rounded-md border border-foreground/20 bg-card ${CHIP_LABEL_ROOM} text-[11px] text-foreground/75 transition-[color,background-color,border-color,padding] duration-150 ease-out hover:border-foreground hover:bg-foreground hover:text-background focus-visible:border-foreground focus-visible:bg-foreground focus-visible:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none`}
             >
               <span className="transition-opacity duration-150 motion-reduce:transition-none">
                 {task.title}
@@ -405,7 +412,7 @@ export function SummaryCards({
               )}
               onClick={() => handleCustomTemplateClick(ct)}
               title={ct.description || ct.timeRange}
-              className="group/card-primary inline-flex h-10 w-full cursor-pointer items-center justify-center gap-1 rounded-md border border-foreground/20 bg-card pl-2 pr-12 text-[11px] text-foreground/70 transition-colors duration-150 hover:border-foreground hover:bg-foreground hover:text-background focus-visible:border-foreground focus-visible:bg-foreground focus-visible:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
+              className={`group/card-primary inline-flex h-10 w-full cursor-pointer items-center justify-center gap-1 rounded-md border border-foreground/20 bg-card ${CHIP_LABEL_ROOM} text-[11px] text-foreground/70 transition-[color,background-color,border-color,padding] duration-150 ease-out hover:border-foreground hover:bg-foreground hover:text-background focus-visible:border-foreground focus-visible:bg-foreground focus-visible:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none`}
             >
               <span className="inline-flex min-w-0 items-center gap-1 transition-opacity duration-150 motion-reduce:transition-none">
                 <Pin className="h-3 w-3 shrink-0" strokeWidth={1.5} />
@@ -419,13 +426,17 @@ export function SummaryCards({
             />
           </div>
         ))}
+        {/* An empty slot, not a ready action. Hover inverts like the other
+            chips, but the dashes take the background colour: in the fill's
+            colour they vanish and the slot reads as a solid block. */}
         <button
           type="button"
           onClick={() => {
             posthog.capture("home_card_clicked", { kind: "custom_summary_open" });
             setShowBuilder(true);
           }}
-          className="group/card-primary h-10 min-w-[148px] flex-1 cursor-pointer rounded-md border border-dashed border-foreground/25 px-1 text-[11px] text-muted-foreground transition-colors duration-150 hover:border-foreground hover:bg-foreground hover:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
+          data-testid="custom-summary-open"
+          className="h-10 min-w-[148px] flex-1 cursor-pointer rounded-md border border-dashed border-foreground/25 px-1 text-[11px] text-muted-foreground transition-colors duration-150 ease-out hover:border-background/50 hover:bg-foreground hover:text-background focus-visible:border-background/50 focus-visible:bg-foreground focus-visible:text-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground focus-visible:ring-offset-1 focus-visible:ring-offset-background motion-reduce:transition-none"
         >
           + Custom
         </button>

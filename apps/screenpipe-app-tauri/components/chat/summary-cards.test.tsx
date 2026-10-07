@@ -188,6 +188,60 @@ describe("SummaryCards", () => {
     expect(quickAction.className).toContain("focus-visible:ring-1");
   });
 
+  it("centres chip labels until the agent logos need room", () => {
+    render(
+      <SummaryCards
+        onSendMessage={vi.fn()}
+        customTemplates={[{ id: "t1", title: "Client recap", description: "", prompt: "p", timeRange: "today", createdAt: "" }]}
+        onSaveCustomTemplate={vi.fn()}
+        onUpdateCustomTemplate={vi.fn()}
+        onDeleteCustomTemplate={vi.fn()}
+        userGoalCategory="work_memory"
+      />,
+    );
+
+    for (const name of ["Time Breakdown", "Meeting Prep", "Client recap"]) {
+      const chip = screen.getByRole("button", { name });
+      // Reserving the logos' slot at rest pushed each label off-centre.
+      expect(chip).toHaveClass("px-2");
+      expect(chip.className).not.toMatch(/(^|\s)p[lr]-12(\s|$)/);
+      expect(chip).toHaveClass(
+        "group-hover/home-card:pr-12",
+        "group-focus-within/home-card:pr-12",
+        // A launch keeps the logos open after the pointer leaves.
+        "group-has-[[data-expanded=true]]/home-card:pr-12",
+        "[@media(hover:none)]:pr-12",
+      );
+    }
+  });
+
+  it("inverts the dashed Custom slot on hover without hiding its dashes", () => {
+    render(
+      <SummaryCards
+        onSendMessage={vi.fn()}
+        customTemplates={[]}
+        onSaveCustomTemplate={vi.fn()}
+        onUpdateCustomTemplate={vi.fn()}
+        onDeleteCustomTemplate={vi.fn()}
+      />,
+    );
+
+    const custom = screen.getByTestId("custom-summary-open");
+    // Hover inverts, as for every other chip.
+    expect(custom).toHaveClass(
+      "border-dashed",
+      "hover:bg-foreground",
+      "hover:text-background",
+      "focus-visible:bg-foreground",
+      "focus-visible:text-background",
+    );
+    // Dashes in the fill's colour vanish, leaving a solid block, so they take
+    // the background colour instead.
+    expect(custom).toHaveClass("hover:border-background/50", "focus-visible:border-background/50");
+    expect(custom.className).not.toMatch(/(hover|focus-visible):border-foreground/);
+    expect(custom.className).toContain("motion-reduce:transition-none");
+  });
+
   it("previews a card prompt on hover and keyboard focus without sending", () => {
     const onPreviewPrompt = vi.fn();
     const onSendMessage = vi.fn();

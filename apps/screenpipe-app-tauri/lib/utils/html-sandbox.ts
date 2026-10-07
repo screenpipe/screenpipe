@@ -147,12 +147,31 @@ parent.postMessage({source:TAG,type:'openLink',url:href},'*');
 })();</script>`;
 
 /**
+ * Removes every `<link>` tag from artifact HTML. The CSP blocks what a link
+ * loads, except WebKit's connection hints (`preconnect`, `dns-prefetch`),
+ * which reach their host anyway, and the host name alone can carry data out.
+ * Only a tag name the parser would read as `link` matches (`<link` then a
+ * space, `/` or `>`), so script such as `i<link.length` and elements such as
+ * `<link-card>` stay intact. Repeats until nothing changes, so a removal can't
+ * join the text around it into a new link. This covers the markup only: where
+ * scripts run (the full viewer), a script can still add a link itself.
+ */
+export function withoutLinkElements(html: string): string {
+  let previous: string;
+  do {
+    previous = html;
+    html = html.replace(/<link(?=[\s/>])[^>]*>?/gi, "");
+  } while (html !== previous);
+  return html;
+}
+
+/**
  * Wrap raw artifact HTML into a self-contained document that carries our CSP
- * and bridge. Handles three shapes so the CSP is always the first thing in the
- * head (and therefore governs everything that follows):
- *  - full doc with `<head>`  → inject right after `<head>`
- *  - has `<html>` but no head → insert a `<head>` with our payload
- *  - bare fragment            → wrap in a minimal document
+ * and bridge. They go in front of the artifact, never into it: the parser puts
+ * them first in the head whatever shape the artifact has (full document,
+ * fragment, a `<header>` or a `<head>` inside a comment), so the CSP governs
+ * everything that follows. The artifact's own head content still lands in the
+ * head, and its `<html>` and `<body>` attributes still apply.
  * Returned string is meant for an iframe `srcdoc`.
  */
 export function wrapHtmlForSandbox(raw: string): string {
@@ -171,15 +190,5 @@ export function wrapHtmlForSandbox(raw: string): string {
     base +
     BRIDGE_SCRIPT;
 
-  const headOpen = /<head[^>]*>/i;
-  if (headOpen.test(raw)) {
-    return raw.replace(headOpen, (m) => `${m}${head}`);
-  }
-
-  const htmlOpen = /<html[^>]*>/i;
-  if (htmlOpen.test(raw)) {
-    return raw.replace(htmlOpen, (m) => `${m}<head>${head}</head>`);
-  }
-
-  return `<!doctype html><html><head>${head}</head><body>${raw}</body></html>`;
+  return `<!doctype html><html><head>${head}</head>${withoutLinkElements(raw)}`;
 }

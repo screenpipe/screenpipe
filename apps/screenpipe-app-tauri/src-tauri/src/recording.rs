@@ -1865,7 +1865,7 @@ async fn spawn_screenpipe_after_migration(
 ///
 /// Lock-first pattern matches `start_capture` so a concurrent `start_capture`
 /// can't build a parallel session and clobber ours.
-async fn start_capture_internal(
+pub(crate) async fn start_capture_internal(
     state: &RecordingState,
     app: &tauri::AppHandle,
 ) -> Result<(), String> {

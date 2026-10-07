@@ -678,3 +678,50 @@ describe("AIPresetsSelector preset copy", () => {
     expect(within(dialog).getByRole("button", { name: "save changes" })).toBeInTheDocument();
   });
 });
+
+describe("Workflows model selection", () => {
+  beforeEach(() => {
+    mocks.settings.current = { aiPresets: [originalPreset], user: {} };
+    mocks.settings.listeners.clear();
+    mocks.updateSettings.mockClear();
+    mocks.acpEnabled.current = false;
+  });
+
+  it("persists the workflow choice without changing the chat default", async () => {
+    const { WorkflowModelSelector } = await import("../workflows/workflow-model-selector");
+    const preference = { load: vi.fn(async () => "intelligent" as const), save: vi.fn(async () => {}) };
+    render(<WorkflowModelSelector preference={preference} />);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Workflows AI" })).toHaveTextContent("Intelligent"));
+    fireEvent.click(screen.getByRole("combobox", { name: "Workflows AI" }));
+    fireEvent.click(screen.getByRole("option", { name: new RegExp(originalPreset.id) }));
+    await waitFor(() => expect(preference.save).toHaveBeenCalledWith(`preset:${originalPreset.id}`));
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Workflows AI" })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole("combobox", { name: "Workflows AI" }));
+    fireEvent.click(screen.getByRole("option", { name: "Private (Beta)" }));
+    await waitFor(() => expect(preference.save).toHaveBeenLastCalledWith("private"));
+  });
+
+  it("offers model presets without unsupported agents in the workflow create dialog", async () => {
+    mocks.acpEnabled.current = true;
+    const { WorkflowModelSelector } = await import("../workflows/workflow-model-selector");
+    const preference = { load: vi.fn(async () => "intelligent" as const), save: vi.fn(async () => {}) };
+    render(<WorkflowModelSelector preference={preference} />);
+    fireEvent.click(screen.getByRole("combobox", { name: "Workflows AI" }));
+    fireEvent.click(await screen.findByText("Create new preset"));
+    expect(screen.queryByRole("button", { name: /Claude Code/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Codex/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Advanced/ })).toBeInTheDocument();
+  });
+
+  it("keeps the previous choice and reports a failed save", async () => {
+    const { WorkflowModelSelector } = await import("../workflows/workflow-model-selector");
+    const preference = { load: vi.fn(async () => "intelligent" as const), save: vi.fn(async () => { throw new Error("disk unavailable"); }) };
+    render(<WorkflowModelSelector preference={preference} />);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Workflows AI" })).toHaveTextContent("Intelligent"));
+    fireEvent.click(screen.getByRole("combobox", { name: "Workflows AI" }));
+    fireEvent.click(screen.getByRole("option", { name: "Private (Beta)" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not save");
+    expect(screen.getByRole("combobox", { name: "Workflows AI" })).toHaveTextContent("Intelligent");
+  });
+});

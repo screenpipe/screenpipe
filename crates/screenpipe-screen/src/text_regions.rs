@@ -322,148 +322,133 @@ fn otsu_threshold(pixels: &[u8]) -> u8 {
 /// inter-glyph gaps of up to 8px into a single word/line blob.
 fn close_9x1(binary: &[u8], w: usize, h: usize) -> Vec<u8> {
     const R: usize = 4;
-    let mut dilated = vec![0u8; w * h];
-    for y in 0..h {
-        let row = &binary[y * w..(y + 1) * w];
-        let out = &mut dilated[y * w..(y + 1) * w];
-        // Sliding count of white pixels in the in-bounds window [x-R, x+R].
-        let mut count: u32 = 0;
-        for x in 0..R.min(w) {
-            count += row[x] as u32;
-        }
-        for x in 0..w {
-            if x + R < w {
-                count += row[x + R] as u32;
-            }
-            out[x] = u8::from(count > 0);
-            if x >= R {
-                count -= row[x - R] as u32;
-            }
-        }
-    }
     let mut closed = vec![0u8; w * h];
-    for y in 0..h {
-        let row = &dilated[y * w..(y + 1) * w];
-        let out = &mut closed[y * w..(y + 1) * w];
-        let mut count: u32 = 0;
-        for x in 0..R.min(w) {
-            count += row[x] as u32;
+    for (row, out) in binary.chunks_exact(w).zip(closed.chunks_exact_mut(w)) {
+        let mut x = 0;
+        let mut pending: Option<(usize, usize)> = None;
+        let fill = |out: &mut [u8], start: usize, end: usize| {
+            // Dilation clips at the image border; erosion treats outside
+            // pixels as white. A run within R pixels therefore reaches it.
+            let start = if start <= R { 0 } else { start };
+            let end = if w - end <= R { w } else { end };
+            out[start..end].fill(1);
+        };
+        while x < w {
+            let Some(offset) = row[x..].iter().position(|&p| p != 0) else {
+                break;
+            };
+            let start = x + offset;
+            x = start + 1;
+            while x < w && row[x] != 0 {
+                x += 1;
+            }
+            pending = Some(match pending {
+                Some((left, right)) if start - right <= 2 * R => (left, x),
+                Some((left, right)) => {
+                    fill(out, left, right);
+                    (start, x)
+                }
+                None => (start, x),
+            });
         }
-        for x in 0..w {
-            if x + R < w {
-                count += row[x + R] as u32;
-            }
-            // In-bounds window size at this position; out-of-bounds cells
-            // count as white for erosion.
-            let win = (x.min(R) + 1 + R.min(w - 1 - x)) as u32;
-            out[x] = u8::from(count == win);
-            if x >= R {
-                count -= row[x - R] as u32;
-            }
+        if let Some((left, right)) = pending {
+            fill(out, left, right);
         }
     }
     closed
 }
 
-/// Bounding boxes of 8-connected components of white pixels, via two-pass
-/// union-find labelling. Equivalent to cv2 `findContours(RETR_EXTERNAL)` +
-/// `boundingRect` for this pipeline's blobs (closed strokes don't produce
-/// the nested-island topology where the two differ).
+/// Bounding boxes of 8-connected foreground components. Track horizontal
+/// runs and their overlaps with the previous row instead of materializing
+/// a full-frame label raster and scanning it again. The first encountered
+/// label remains the root, preserving both native bounds and output order.
 fn connected_component_boxes(binary: &[u8], w: usize, h: usize) -> Vec<TextRegion> {
-    const NO_LABEL: u32 = u32::MAX;
-    let mut labels = vec![NO_LABEL; w * h];
-    let mut parent: Vec<u32> = Vec::new();
-
-    fn find(parent: &mut [u32], mut i: u32) -> u32 {
-        while parent[i as usize] != i {
-            parent[i as usize] = parent[parent[i as usize] as usize];
-            i = parent[i as usize];
+    #[derive(Clone, Copy)]
+    struct Run {
+        start: usize,
+        end: usize, // exclusive
+        label: usize,
+    }
+    fn find(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
         }
         i
     }
-    fn union(parent: &mut [u32], a: u32, b: u32) {
-        let (ra, rb) = (find(parent, a), find(parent, b));
-        if ra != rb {
-            parent[ra.max(rb) as usize] = ra.min(rb);
-        }
+    fn extend(a: &mut TextRegion, b: TextRegion) {
+        let right = (a.x + a.width).max(b.x + b.width);
+        let bottom = (a.y + a.height).max(b.y + b.height);
+        a.x = a.x.min(b.x);
+        a.y = a.y.min(b.y);
+        a.width = right - a.x;
+        a.height = bottom - a.y;
     }
-
-    for y in 0..h {
-        for x in 0..w {
-            if binary[y * w + x] == 0 {
+    let mut parent = Vec::new();
+    let mut boxes: Vec<TextRegion> = Vec::new();
+    let mut previous: Vec<Run> = Vec::new();
+    let mut current: Vec<Run> = Vec::new();
+    for (y, row) in binary.chunks_exact(w).take(h).enumerate() {
+        current.clear();
+        let (mut x, mut above) = (0, 0);
+        while x < w {
+            if row[x] == 0 {
+                x += 1;
                 continue;
             }
-            // 8-connectivity: W, NW, N, NE (already-visited neighbors).
-            let mut neighbor_label = NO_LABEL;
-            let mut consider = |lbl: u32, parent: &mut Vec<u32>| {
-                if lbl != NO_LABEL {
-                    if neighbor_label == NO_LABEL {
-                        neighbor_label = lbl;
-                    } else {
-                        union(parent, neighbor_label, lbl);
+            let start = x;
+            while x < w && row[x] != 0 {
+                x += 1;
+            }
+            let end = x;
+            // Include corner-touching runs: exclusive end == start is
+            // diagonal adjacency, as is previous.start == current.end.
+            while above < previous.len() && previous[above].end < start {
+                above += 1;
+            }
+            let mut label = None;
+            for run in previous[above..].iter().take_while(|run| run.start <= end) {
+                let root = find(&mut parent, run.label);
+                label = Some(match label {
+                    None => root,
+                    Some(old) => {
+                        let old = find(&mut parent, old);
+                        let (keep, remove) = (old.min(root), old.max(root));
+                        if keep != remove {
+                            parent[remove] = keep;
+                            let other = boxes[remove];
+                            extend(&mut boxes[keep], other);
+                        }
+                        keep
                     }
+                });
+            }
+            let bounds = TextRegion {
+                x: start as u32,
+                y: y as u32,
+                width: (end - start) as u32,
+                height: 1,
+            };
+            let label = match label {
+                Some(label) => {
+                    extend(&mut boxes[label], bounds);
+                    label
+                }
+                None => {
+                    let label = parent.len();
+                    parent.push(label);
+                    boxes.push(bounds);
+                    label
                 }
             };
-            if x > 0 {
-                consider(labels[y * w + x - 1], &mut parent);
-            }
-            if y > 0 {
-                if x > 0 {
-                    consider(labels[(y - 1) * w + x - 1], &mut parent);
-                }
-                consider(labels[(y - 1) * w + x], &mut parent);
-                if x + 1 < w {
-                    consider(labels[(y - 1) * w + x + 1], &mut parent);
-                }
-            }
-            labels[y * w + x] = if neighbor_label == NO_LABEL {
-                let new = parent.len() as u32;
-                parent.push(new);
-                new
-            } else {
-                neighbor_label
-            };
+            current.push(Run { start, end, label });
         }
+        std::mem::swap(&mut previous, &mut current);
     }
-
-    // Second pass: accumulate per-root extents.
-    #[derive(Clone, Copy)]
-    struct Extent {
-        min_x: u32,
-        min_y: u32,
-        max_x: u32,
-        max_y: u32,
-    }
-    let mut extents: Vec<Option<Extent>> = vec![None; parent.len()];
-    for y in 0..h {
-        for x in 0..w {
-            let lbl = labels[y * w + x];
-            if lbl == NO_LABEL {
-                continue;
-            }
-            let root = find(&mut parent, lbl) as usize;
-            let e = extents[root].get_or_insert(Extent {
-                min_x: x as u32,
-                min_y: y as u32,
-                max_x: x as u32,
-                max_y: y as u32,
-            });
-            e.min_x = e.min_x.min(x as u32);
-            e.min_y = e.min_y.min(y as u32);
-            e.max_x = e.max_x.max(x as u32);
-            e.max_y = e.max_y.max(y as u32);
-        }
-    }
-
-    extents
+    boxes
         .into_iter()
-        .flatten()
-        .map(|e| TextRegion {
-            x: e.min_x,
-            y: e.min_y,
-            width: e.max_x - e.min_x + 1,
-            height: e.max_y - e.min_y + 1,
-        })
+        .enumerate()
+        .filter_map(|(i, bounds)| (parent[i] == i).then_some(bounds))
         .collect()
 }
 
@@ -488,6 +473,104 @@ mod tests {
 
     fn light_canvas(w: u32, h: u32) -> RgbImage {
         RgbImage::from_pixel(w, h, Rgb([235, 235, 235]))
+    }
+
+    // Independent flood-fill reference for the run-based component scan.
+    fn flood_components(binary: &[u8], w: usize, h: usize) -> Vec<TextRegion> {
+        let mut visited = vec![false; binary.len()];
+        let mut boxes = Vec::new();
+        for first in 0..binary.len() {
+            if visited[first] || binary[first] == 0 {
+                continue;
+            }
+            visited[first] = true;
+            let mut pending = vec![first];
+            let (mut min_x, mut max_x) = (first % w, first % w);
+            let (mut min_y, mut max_y) = (first / w, first / w);
+            while let Some(i) = pending.pop() {
+                let (x, y) = (i % w, i / w);
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                min_y = min_y.min(y);
+                max_y = max_y.max(y);
+                for yy in y.saturating_sub(1)..=(y + 1).min(h - 1) {
+                    for xx in x.saturating_sub(1)..=(x + 1).min(w - 1) {
+                        let j = yy * w + xx;
+                        if !visited[j] && binary[j] != 0 {
+                            visited[j] = true;
+                            pending.push(j);
+                        }
+                    }
+                }
+            }
+            boxes.push(TextRegion {
+                x: min_x as u32,
+                y: min_y as u32,
+                width: (max_x - min_x + 1) as u32,
+                height: (max_y - min_y + 1) as u32,
+            });
+        }
+        boxes
+    }
+
+    #[test]
+    fn run_close_matches_dilate_then_erode_exhaustively() {
+        for w in 1usize..=16 {
+            for bits in 0u32..(1 << w) {
+                let row: Vec<u8> = (0..w).map(|x| ((bits >> x) & 1) as u8).collect();
+                let dilated: Vec<u8> = (0..w)
+                    .map(|x| {
+                        *row[x.saturating_sub(4)..=(x + 4).min(w - 1)]
+                            .iter()
+                            .max()
+                            .unwrap()
+                    })
+                    .collect();
+                let expected: Vec<u8> = (0..w)
+                    .map(|x| {
+                        *dilated[x.saturating_sub(4)..=(x + 4).min(w - 1)]
+                            .iter()
+                            .min()
+                            .unwrap()
+                    })
+                    .collect();
+                assert_eq!(close_9x1(&row, w, 1), expected, "width {w}, mask {bits}");
+            }
+        }
+    }
+
+    #[test]
+    fn run_components_match_every_four_by_four_binary_image() {
+        for bits in 0u32..=u16::MAX as u32 {
+            let pixels: Vec<u8> = (0..16).map(|i| ((bits >> i) & 1) as u8).collect();
+            assert_eq!(
+                connected_component_boxes(&pixels, 4, 4),
+                flood_components(&pixels, 4, 4),
+                "mask {bits}"
+            );
+        }
+    }
+
+    #[test]
+    fn run_components_match_sparse_dense_and_narrow_images() {
+        let mut state = 0xa449_u64;
+        for (w, h) in [(1, 97), (97, 1), (3, 73), (73, 3), (63, 47)] {
+            for density in [0, 1, 8, 32, 64, 128, 192, 254, 255] {
+                let pixels: Vec<u8> = (0..w * h)
+                    .map(|_| {
+                        state ^= state << 13;
+                        state ^= state >> 7;
+                        state ^= state << 17;
+                        u8::from((state & 255) < density)
+                    })
+                    .collect();
+                assert_eq!(
+                    connected_component_boxes(&pixels, w, h),
+                    flood_components(&pixels, w, h),
+                    "{w}x{h} density {density}"
+                );
+            }
+        }
     }
 
     #[test]

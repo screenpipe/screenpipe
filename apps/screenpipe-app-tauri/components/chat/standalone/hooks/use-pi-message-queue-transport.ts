@@ -21,7 +21,6 @@ export function createPiMessageQueueTransport(
     activePreset,
     consumePendingAttachments,
     input,
-    inputRef,
     messages,
     pastedImages,
     piInfo,
@@ -55,7 +54,6 @@ export function createPiMessageQueueTransport(
     const queuedAttachments = consumePendingAttachments();
 
     setInput("");
-    if (inputRef.current) inputRef.current.style.height = "auto";
     if (hadPastedImages) setPastedImages([]);
 
     // Same recovery contract as normal sends. Rust strips the wrapper for a

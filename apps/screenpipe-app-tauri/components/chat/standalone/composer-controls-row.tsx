@@ -14,7 +14,10 @@ import {
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { AcpConfigSelector } from "@/components/chat/standalone/acp-config-selector";
 import { AcpPermissionSelector } from "@/components/chat/standalone/acp-permission-selector";
-import { ThinkingLevelSelector } from "@/components/thinking-level-selector";
+import {
+  ThinkingLevelSlider,
+  useThinkingLevel,
+} from "@/components/thinking-level-selector";
 import { ComposerUtilityMenu } from "@/components/chat/standalone/composer-utility-menu";
 import { ComposerDictationControl } from "@/components/chat/standalone/composer-dictation-control";
 import { UsagePopover } from "@/components/usage/usage-popover";
@@ -66,6 +69,14 @@ export function ComposerControlsRow({
   // preset/model popover below.
   const isAcp = modelControls.activePreset?.provider === "acp";
   const acpAgentId = modelControls.activePreset?.acpAgent?.id ?? null;
+  // Owned here rather than inside the preset popover: the popover unmounts on
+  // close, and the level (plus any change waiting for a reply to finish) must
+  // survive that.
+  const thinkingLevel = useThinkingLevel({
+    sessionId: modelControls.currentQueueSessionId,
+    streaming: isStreaming,
+    enabled: !isAcp,
+  });
 
   return (
     // Keep the row compact, but give primary controls a reliable 32px target.
@@ -181,11 +192,7 @@ export function ComposerControlsRow({
         popoverFooter={
           !isAcp ? (
             <div className="flex flex-col gap-2">
-              <ThinkingLevelSelector
-                embedded
-                streaming={isStreaming}
-                sessionId={modelControls.currentQueueSessionId}
-              />
+              <ThinkingLevelSlider control={thinkingLevel} />
               {privateVerification}
             </div>
           ) : undefined

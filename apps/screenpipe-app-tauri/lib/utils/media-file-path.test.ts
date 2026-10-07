@@ -95,12 +95,20 @@ describe("isMediaFilePath", () => {
     expect(isMediaFilePath(String.raw`C:\Users\me\clip.mp4`)).toBe(true);
     expect(isMediaFilePath("c:/Users/me/clip.mp4")).toBe(true);
     expect(isMediaFilePath("file:///Users/me/clip.mp4")).toBe(true);
-    expect(isMediaFilePath(String.raw`\\nas\recordings\clip.mp4`)).toBe(true);
     expect(
       isMediaFilePath("/Users/ansh/.screenpipe/data/System Audio (output)_2026-05-25_11-27-00.mp4"),
     ).toBe(true);
     // The player strips wrapping quotes before reading, so the path inside counts.
     expect(isMediaFilePath('"/Users/me/clip.mp4"')).toBe(true);
+  });
+
+  it("accepts a drive path with doubled backslashes, the way markdown escapes them", () => {
+    // Only two separators at the very start make a network share; Windows
+    // reads `C:\\Users` as `C:\Users`.
+    expect(isMediaFilePath(String.raw`C:\\Users\\me\\clip.mp4`)).toBe(true);
+    expect(isMediaFilePath(String.raw`C:\\nas\recordings\clip.mp4`)).toBe(true);
+    expect(isMediaFilePath("C://Users/me/clip.mp4")).toBe(true);
+    expect(isMediaFilePath("C:%5C%5CUsers%5C%5Cme%5C%5Cclip.mp4")).toBe(true);
   });
 
   it("reads percent-encoded link addresses the way the media reader will", () => {
@@ -115,6 +123,21 @@ describe("isMediaFilePath", () => {
     expect(isMediaFilePath("./demo.mp4")).toBe(false);
     expect(isMediaFilePath("https://example.com/demo.mp4")).toBe(false);
     expect(isMediaFilePath("//cdn.example.com/demo.mp4")).toBe(false);
+  });
+
+  it("rejects network shares, which the reader would fetch from their host", () => {
+    for (const path of [
+      String.raw`\\nas\recordings\clip.mp4`,
+      "//nas/recordings/clip.mp4",
+      String.raw`/\nas\recordings\clip.mp4`,
+      String.raw`~/\\nas\recordings\clip.mp4`,
+      "~//nas/recordings/clip.mp4",
+      "%5C%5Cnas%5Crecordings%5Cclip.mp4",
+      "/%5C%5Cnas%5Crecordings%5Cclip.mp4",
+      "~%2F%5C%5Cnas%5Crecordings%5Cclip.mp4",
+    ]) {
+      expect(isMediaFilePath(path), path).toBe(false);
+    }
   });
 
   it("rejects text that is not one concrete file", () => {

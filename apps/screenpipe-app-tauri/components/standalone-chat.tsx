@@ -974,7 +974,6 @@ export function StandaloneChat({
     conversationId,
     setConversationId,
     setInput,
-    inputRef,
     isLoading,
     isStreaming,
     piStreamingTextRef,

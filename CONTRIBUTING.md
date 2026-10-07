@@ -167,6 +167,13 @@ next to the released app without taking over its identity or updater settings.
 - `Microsoft VC143/144/145 CRT not found` means the Visual Studio C++ workload is
   missing. A `libclang.dll` or bindgen error usually means `LIBCLANG_PATH` is not
   set in the current terminal.
+- `EPERM: failed copying files from cache to destination for package
+  @screenpipe/workflows-ui` from `bun install` is a Bun bug on Windows
+  ([oven-sh/bun#13379](https://github.com/oven-sh/bun/issues/13379)). Bun
+  installs local `file:` packages as one symlink per file, and creating those
+  needs an elevated terminal. The package folder is left empty, so the app then
+  fails with `Module not found: Can't resolve '@screenpipe/workflows-ui/chat'`.
+  Run `bun install` once from an elevated terminal.
 
 ### linux
 
