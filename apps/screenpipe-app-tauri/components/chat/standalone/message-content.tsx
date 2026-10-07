@@ -1465,7 +1465,7 @@ function ToolActivityGroup({
 
   return (
     <div
-      className="w-full min-w-0 self-stretch py-1"
+      className="w-full min-w-0 self-stretch py-0"
       data-testid="tool-activity-widget"
       data-activity-state={widgetState}
     >
