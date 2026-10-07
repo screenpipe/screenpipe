@@ -188,7 +188,8 @@ Resources:
             security import "$APPLE_CERT_DIR/DeveloperIDG2CA.cer" \
               -t cert -k /Library/Keychains/System.keychain || true
 
-            sudo -u ec2-user -H /bin/bash <<'BOOTSTRAP'
+            # Run a file: installers must not consume the remaining shell input.
+            cat > /var/tmp/screenpipe-release-runner-bootstrap-user.sh <<'BOOTSTRAP'
             set -euo pipefail
             eval "$(/opt/homebrew/bin/brew shellenv)"
             brew update
@@ -208,6 +209,9 @@ Resources:
               rm actions-runner-osx-arm64-2.336.0.tar.gz
             fi
             BOOTSTRAP
+            sudo -u ec2-user -H /bin/bash /var/tmp/screenpipe-release-runner-bootstrap-user.sh </dev/null
+            test -x /Users/ec2-user/.cargo/bin/rustup
+            test -x "$RUNNER_ROOT/config.sh"
 
             touch /var/db/screenpipe-release-runner-bootstrap-complete
 
