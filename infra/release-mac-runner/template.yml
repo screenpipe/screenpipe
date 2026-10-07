@@ -194,7 +194,17 @@ Resources:
             eval "$(/opt/homebrew/bin/brew shellenv)"
             brew update
             brew install aria2 bun cmake ffmpeg gh git-lfs jq node sccache wget
-            brew install xcodesorg/made/xcodes
+            # The source formula needs Swift compatibility libraries absent
+            # from the stock AMI. Use the checksum-pinned upstream binary.
+            if [[ ! -x /opt/homebrew/bin/xcodes ]]; then
+              XCODES_TMP=$(mktemp -d)
+              curl -fsSL -o "$XCODES_TMP/xcodes.zip" \
+                https://github.com/XcodesOrg/xcodes/releases/download/2.1.0/xcodes.zip
+              echo "f1519afe934a513e85dd9b32fc872394becbbb6a41db15d9ac3926a09a891888  $XCODES_TMP/xcodes.zip" | shasum -a 256 -c -
+              ditto -x -k "$XCODES_TMP/xcodes.zip" "$XCODES_TMP"
+              install -m 0755 "$XCODES_TMP/xcodes" /opt/homebrew/bin/xcodes
+              rm -rf "$XCODES_TMP"
+            fi
 
             if [[ ! -x "$HOME/.cargo/bin/rustup" ]]; then
               curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
