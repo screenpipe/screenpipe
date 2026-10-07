@@ -1062,12 +1062,13 @@ async fn main() -> anyhow::Result<()> {
     analytics::check_macos_version();
 
     screenpipe_core::health_diagnostics::startup_phase("migrating_database");
-    let database_path =
-        screenpipe_db::storage::resolve_database_path(&local_data_dir.join("db.sqlite"))?;
+    let mut database_path = local_data_dir.join("db.sqlite");
     let (db, startup_guard) = loop {
         let open = async {
             let startup_guard =
                 screenpipe_engine::cli::db::prepare_database_startup(&local_data_dir).await?;
+            database_path =
+                screenpipe_db::storage::resolve_database_path(&local_data_dir.join("db.sqlite"))?;
             DatabaseManager::new(&database_path.to_string_lossy(), config.db_config.clone())
                 .await
                 .map(|database| (Arc::new(database), startup_guard))

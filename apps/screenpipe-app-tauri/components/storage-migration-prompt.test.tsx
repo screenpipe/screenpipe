@@ -105,6 +105,7 @@ describe("automatic storage migration prompt", () => {
 
   it.each([
     { can_migrate: false, source_bytes: 0 },
+    { can_migrate: false, source_bytes: 0, completed: false, using_new_storage: true, generation: "fresh-generation" },
     { can_migrate: false, completed: true, using_new_storage: true },
     { can_migrate: false, blocked_reason: "Vault protection is enabled." },
   ])("does not interrupt users without an eligible migration: %j", async (overrides) => {

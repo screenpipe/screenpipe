@@ -407,6 +407,9 @@ impl ServerCore {
         // A crash during repair may leave the committed WAL archived separately
         // from the main file. Reconcile the swap before ordinary DB diagnosis.
         let startup_guard = prepare_database_startup(&local_data_dir).await?;
+        // Fresh startup may have published a new physical index. Recovery must
+        // follow that generation before any recording is admitted.
+        crate::db_relaunch::set_active_database(&local_data_dir);
         let db_path =
             screenpipe_db::storage::resolve_database_path(&local_data_dir.join("db.sqlite"))
                 .map_err(|e| e.to_string())?
@@ -1585,6 +1588,44 @@ impl ServerCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn fresh_storage_failure_survives_restart_and_support_redaction() {
+        let root = tempfile::tempdir().unwrap();
+        // Prevent the fresh initializer from creating its generation directory.
+        std::fs::write(root.path().join("storage"), b"not a directory").unwrap();
+        let error = match prepare_database_startup(root.path()).await {
+            Ok(_) => panic!("initialization unexpectedly succeeded"),
+            Err(error) => error,
+        };
+        assert!(error.contains("failed to initialize new history storage"));
+        assert!(error.contains("os error"));
+        assert!(!root.path().join("storage.json").exists());
+        assert!(!root.path().join("db.sqlite").exists());
+
+        std::fs::remove_file(root.path().join("storage")).unwrap();
+        let _restarted = prepare_database_startup(root.path()).await.unwrap();
+        assert!(root.path().join("storage.json").exists());
+        for day in 1..=7 {
+            std::fs::write(
+                root.path()
+                    .join(format!("screenpipe-app.2026-10-{day:02}.log")),
+                "app restarted\n",
+            )
+            .unwrap();
+        }
+        let report =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[root.path().to_path_buf()])
+                .await
+                .unwrap();
+        assert!(report.contains("database_startup_failed"));
+        assert!(report.contains("failed to initialize new history storage"));
+        assert!(
+            report.contains(&error),
+            "support must retain the originating OS error"
+        );
+        assert!(report.contains("outcome=recording_blocked"));
+    }
 
     #[tokio::test]
     async fn failed_privacy_setup_releases_owner_and_preserves_recordings() {

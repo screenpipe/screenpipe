@@ -970,9 +970,37 @@ pub fn database_generation_diagnostic(data_dir: &Path) -> String {
 pub async fn prepare_database_startup(data_dir: &Path) -> Result<DatabaseStartupGuard> {
     let lock = DbLock::acquire_inner(data_dir, "database startup", false)?;
     let legacy = data_dir.join("db.sqlite");
-    let live = screenpipe_db::storage::resolve_database_path(&legacy)?;
+    // A fresh initialization has its own durable journal. The ordinary path
+    // resolver intentionally rejects it until construction has been resumed.
+    let initializing = data_dir.join("storage-init.json").exists();
+    let live = if initializing {
+        legacy.clone()
+    } else {
+        screenpipe_db::storage::resolve_database_path(&legacy)?
+    };
     if live == legacy {
         reconcile_interrupted_recovery(data_dir, &live).await?;
+    }
+    // Recover existing history before deciding the root is fresh. Keep legacy
+    // databases (including empty ones), pending migrations and protected vaults
+    // on their existing path; only a new root starts directly in hybrid storage.
+    if initializing
+        || (live == legacy
+            && !legacy.try_exists()?
+            && !sqlite_sidecar(&legacy, "-wal").try_exists()?
+            && !sqlite_sidecar(&legacy, "-shm").try_exists()?
+            && !data_dir.join("storage-migration.json").try_exists()?
+            && !data_dir.join("vault.meta").try_exists()?
+            && !data_dir.join(".vault_locked").try_exists()?)
+    {
+        let db = screenpipe_db::DatabaseManager::new_hybrid(
+            data_dir,
+            Default::default(),
+            Default::default(),
+        )
+        .await
+        .context("failed to initialize new history storage")?;
+        db.close().await;
     }
     Ok(DatabaseStartupGuard { _lock: lock })
 }
@@ -2193,6 +2221,112 @@ mod recovery_tests {
             b"wal-bytes"
         );
         assert!(live.exists());
+    }
+
+    #[tokio::test]
+    async fn startup_creates_current_storage_and_reopens_recorded_history() {
+        use screenpipe_db::storage::{StorageDescriptor, StorageMode};
+        use screenpipe_db::DatabaseManager;
+
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("db.sqlite");
+        let guard = prepare_database_startup(dir.path()).await.unwrap();
+        let descriptor = StorageDescriptor::read(dir.path()).unwrap().unwrap();
+        assert_eq!(descriptor.mode, StorageMode::HybridParquetV1);
+        assert!(!legacy.exists());
+        assert!(!dir.path().join("storage-init.json").exists());
+        assert!(!dir.path().join("storage-migration.json").exists());
+        assert!(!dir.path().join("storage-migration-complete.json").exists());
+        assert!(DbLock::acquire_inner(dir.path(), "competing startup", false).is_err());
+
+        let db = DatabaseManager::new(legacy.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        db.insert_audio_chunk("first-recording.wav", None)
+            .await
+            .unwrap();
+        db.close().await;
+        drop(guard);
+
+        let _restarted = prepare_database_startup(dir.path()).await.unwrap();
+        assert_eq!(
+            StorageDescriptor::read(dir.path()).unwrap().unwrap(),
+            descriptor
+        );
+        let db = DatabaseManager::new(legacy.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        assert!(db
+            .find_audio_chunk_id("first-recording.wav")
+            .await
+            .unwrap()
+            .is_some());
+        db.insert_audio_chunk("after-restart.wav", None)
+            .await
+            .unwrap();
+        db.close().await;
+    }
+
+    #[tokio::test]
+    async fn startup_preserves_existing_legacy_database_even_when_empty() {
+        for populated in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let legacy = dir.path().join("db.sqlite");
+            let db = Connection::open(&legacy).unwrap();
+            if populated {
+                db.execute_batch("CREATE TABLE records(value TEXT); INSERT INTO records VALUES ('existing history');").unwrap();
+            }
+            drop(db);
+            let original = fs::read(&legacy).unwrap();
+            let _guard = prepare_database_startup(dir.path()).await.unwrap();
+            assert_eq!(fs::read(&legacy).unwrap(), original);
+            assert!(!dir.path().join("storage.json").exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn startup_resumes_fresh_initialization_before_and_after_activation() {
+        for activated in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let db = screenpipe_db::DatabaseManager::new_hybrid(
+                dir.path(),
+                Default::default(),
+                Default::default(),
+            )
+            .await
+            .unwrap();
+            db.close().await;
+            let descriptor = fs::read(dir.path().join("storage.json")).unwrap();
+            fs::write(dir.path().join("storage-init.json"), &descriptor).unwrap();
+            if !activated {
+                fs::remove_file(dir.path().join("storage.json")).unwrap();
+            }
+            let _guard = prepare_database_startup(dir.path()).await.unwrap();
+            assert_eq!(
+                fs::read(dir.path().join("storage.json")).unwrap(),
+                descriptor
+            );
+            assert!(!dir.path().join("storage-init.json").exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn startup_does_not_initialize_over_protection_or_orphaned_sidecars() {
+        for marker in [
+            "vault.meta",
+            ".vault_locked",
+            "db.sqlite-wal",
+            "db.sqlite-shm",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::write(dir.path().join(marker), b"existing state").unwrap();
+            let _guard = prepare_database_startup(dir.path()).await.unwrap();
+            assert!(!dir.path().join("storage.json").exists());
+            assert_eq!(
+                fs::read(dir.path().join(marker)).unwrap(),
+                b"existing state"
+            );
+        }
     }
 
     #[tokio::test]
