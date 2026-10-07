@@ -49,7 +49,6 @@ import {
   RefreshCw,
   Save,
   Search,
-  ShieldCheck,
   SlidersHorizontal,
   Share2,
   Sparkles,
