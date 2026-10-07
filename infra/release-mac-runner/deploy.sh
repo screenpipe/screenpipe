@@ -6,16 +6,22 @@
 set -euo pipefail
 
 REGION="${AWS_REGION:-}"
-STACK_NAME="${STACK_NAME:-screenpipe-release-mac}"
+RUNNER_NAME="${RUNNER_NAME:-screenpipe-release-mac}"
+STACK_NAME="${STACK_NAME:-$RUNNER_NAME}"
 INSTANCE_TYPE="${INSTANCE_TYPE:-}"
 EXISTING_HOST_ID="${EXISTING_HOST_ID:-}"
+
+if [[ ! "$RUNNER_NAME" =~ ^screenpipe-release-mac(-[a-z0-9-]+)?$ ]]; then
+  echo "Invalid release runner name: $RUNNER_NAME" >&2
+  exit 1
+fi
 
 if [[ -z "$EXISTING_HOST_ID" && -z "$INSTANCE_TYPE" ]]; then
   for candidate_region in "${REGION:-us-east-2}" us-east-1 us-west-2; do
     EXISTING_INSTANCE_ID=$(aws ec2 describe-instances \
       --region "$candidate_region" \
       --filters \
-        Name=tag:Name,Values=screenpipe-release-mac \
+        "Name=tag:Name,Values=$RUNNER_NAME" \
         Name=instance-state-name,Values=pending,running,stopping,stopped \
       --query 'Reservations[0].Instances[0].InstanceId' \
       --output text 2>/dev/null || true)
@@ -35,7 +41,7 @@ if [[ -z "$EXISTING_HOST_ID" && -z "$INSTANCE_TYPE" ]]; then
   for candidate_region in us-east-2 us-east-1 us-west-2; do
     EXISTING_HOST_ID=$(aws ec2 describe-hosts \
       --region "$candidate_region" \
-      --filter Name=tag:Name,Values=screenpipe-release-mac Name=state,Values=available \
+      --filter "Name=tag:Name,Values=$RUNNER_NAME" Name=state,Values=available \
       --query 'Hosts[0].HostId' \
       --output text 2>/dev/null || true)
     if [[ -n "$EXISTING_HOST_ID" && "$EXISTING_HOST_ID" != "None" ]]; then
@@ -60,7 +66,7 @@ if [[ -z "$EXISTING_HOST_ID" && -z "$INSTANCE_TYPE" ]]; then
           --auto-placement off \
           --host-recovery on \
           --tag-specifications \
-            'ResourceType=dedicated-host,Tags=[{Key=Name,Value=screenpipe-release-mac},{Key=Workload,Value=screenpipe-release}]' \
+            "ResourceType=dedicated-host,Tags=[{Key=Name,Value=$RUNNER_NAME},{Key=Workload,Value=screenpipe-release}]" \
           --query 'HostIds[0]' \
           --output text 2>/dev/null); then
           REGION="$candidate_region"
@@ -121,6 +127,7 @@ aws cloudformation deploy \
   --template-file "$(dirname "$0")/template.yml" \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
+    "RunnerName=$RUNNER_NAME" \
     "AvailabilityZone=$AVAILABILITY_ZONE" \
     "InstanceType=$INSTANCE_TYPE" \
     "ExistingHostId=$EXISTING_HOST_ID" \

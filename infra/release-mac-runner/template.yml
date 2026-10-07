@@ -6,6 +6,11 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: Persistent EC2 Mac for trusted Screenpipe release workflows.
 
 Parameters:
+  RunnerName:
+    Type: String
+    Default: screenpipe-release-mac
+    AllowedPattern: "^screenpipe-release-mac(-[a-z0-9-]+)?$"
+    Description: Unique name for this independently provisioned release runner.
   AvailabilityZone:
     Type: AWS::EC2::AvailabilityZone::Name
     Description: Availability Zone that offers the selected EC2 Mac type.
@@ -45,7 +50,7 @@ Resources:
       EnableDnsSupport: true
       Tags:
         - Key: Name
-          Value: screenpipe-release-mac
+          Value: !Ref RunnerName
 
   RunnerInternetGateway:
     Type: AWS::EC2::InternetGateway
@@ -65,7 +70,7 @@ Resources:
       VpcId: !Ref RunnerVpc
       Tags:
         - Key: Name
-          Value: screenpipe-release-mac
+          Value: !Ref RunnerName
 
   RunnerRouteTable:
     Type: AWS::EC2::RouteTable
@@ -111,7 +116,7 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
       Tags:
         - Key: Name
-          Value: screenpipe-release-mac
+          Value: !Ref RunnerName
 
   RunnerInstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -132,7 +137,7 @@ Resources:
       InstanceType: !Ref InstanceType
       Tags:
         - Key: Name
-          Value: screenpipe-release-mac
+          Value: !Ref RunnerName
         - Key: Workload
           Value: screenpipe-release
 
@@ -230,7 +235,7 @@ Resources:
       Tenancy: host
       Tags:
         - Key: Name
-          Value: screenpipe-release-mac
+          Value: !Ref RunnerName
         - Key: Workload
           Value: screenpipe-release
 
@@ -256,6 +261,6 @@ Outputs:
   InstanceId:
     Value: !Ref RunnerInstance
   RunnerName:
-    Value: screenpipe-release-mac
+    Value: !Ref RunnerName
   RunnerLabel:
     Value: screenpipe-release-macos

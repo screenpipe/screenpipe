@@ -135,8 +135,8 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           else
             {
-              echo "macos_arm_runner=screenpipe-release-macos"
-              echo "macos_x64_runner=screenpipe-release-macos"
+              echo "macos_arm_runner=screenpipe-release-macos-arm64"
+              echo "macos_x64_runner=screenpipe-release-macos-x64"
               echo "windows_runner=screenpipe-release-windows"
               echo "windows_arm_runner=screenpipe-release-windows-arm64"
               echo "linux_runner=screenpipe-release-linux"
