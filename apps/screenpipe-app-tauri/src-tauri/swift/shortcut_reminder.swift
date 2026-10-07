@@ -1219,6 +1219,73 @@ struct ShortcutReminderView: View {
     }
 }
 
+/// AppKit owns the scroll offset so live SwiftUI updates cannot pull a reader
+/// away from older text. Follow only when the viewport was already at the end.
+@available(macOS 13.0, *)
+private struct MeetingTranscriptScroll: NSViewRepresentable {
+    let content: AnyView
+
+    func makeNSView(context: Context) -> MeetingTranscriptScrollView {
+        MeetingTranscriptScrollView()
+    }
+
+    func updateNSView(_ view: MeetingTranscriptScrollView, context: Context) {
+        view.update(content)
+    }
+}
+
+@available(macOS 13.0, *)
+private final class MeetingTranscriptScrollView: NSScrollView {
+    private let hosting = NSHostingView(rootView: AnyView(EmptyView()))
+    private var content = AnyView(EmptyView())
+    private var layingOutContent = false
+    private var hasContentLayout = false
+    private var contentNeedsLayout = true
+    private var lastViewportSize = NSSize.zero
+
+    init() {
+        super.init(frame: .zero)
+        drawsBackground = false
+        hasVerticalScroller = true
+        hasHorizontalScroller = false
+        autohidesScrollers = true
+        scrollerStyle = .overlay
+        scrollerKnobStyle = .light
+        documentView = hosting
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func update(_ content: AnyView) {
+        self.content = content
+        contentNeedsLayout = true
+        layoutContent()
+    }
+
+    override func layout() {
+        super.layout()
+        layoutContent()
+    }
+
+    private func layoutContent() {
+        guard !layingOutContent, contentSize.width > 0, contentSize.height > 0 else { return }
+        guard contentNeedsLayout || contentSize != lastViewportSize else { return }
+        contentNeedsLayout = false
+        lastViewportSize = contentSize
+        layingOutContent = true
+        defer { layingOutContent = false }
+        let oldOffset = contentView.bounds.origin
+        let followsLatest = !hasContentLayout || hosting.frame.height - contentView.bounds.maxY <= 4
+        hosting.rootView = AnyView(content.frame(width: contentSize.width).fixedSize(horizontal: false, vertical: true))
+        let height = hosting.fittingSize.height
+        hosting.setFrameSize(NSSize(width: contentSize.width, height: height))
+        let bottom = max(0, height - contentSize.height)
+        contentView.scroll(to: NSPoint(x: 0, y: followsLatest ? bottom : min(oldOffset.y, bottom)))
+        reflectScrolledClipView(contentView)
+        hasContentLayout = true
+    }
+}
+
 @available(macOS 13.0, *)
 struct MeetingTranscriptPreview: View {
     @ObservedObject private var uiLocalization = UILocalization.shared
@@ -1230,11 +1297,31 @@ struct MeetingTranscriptPreview: View {
 
     private func s(_ value: CGFloat) -> CGFloat { value * scale }
 
-    /// Suppress before slicing, so a dropped mic echo does not consume one of the
-    /// four visible rows. State keeps every raw item, so an output copy arriving
-    /// after the echo still retroactively suppresses it.
-    private var visibleItems: ArraySlice<MeetingOverlayTranscriptItem> {
-        MeetingTranscriptEcho.suppress(metrics.meetingTranscriptItems).suffix(4)
+    /// Keep the retained history available, including full text of long turns.
+    private var visibleItems: [MeetingOverlayTranscriptItem] {
+        MeetingTranscriptEcho.suppress(metrics.meetingTranscriptItems)
+    }
+
+    private var transcriptHistory: some View {
+        MeetingTranscriptScroll(content: AnyView(
+            VStack(alignment: .leading, spacing: s(7)) {
+                ForEach(visibleItems) { item in
+                    HStack(alignment: .firstTextBaseline, spacing: s(7)) {
+                        Text(item.displaySpeaker.lowercased())
+                            .font(Brand.swiftUIMonoFont(size: 7 * scale, weight: .medium))
+                            .foregroundColor(.white.opacity(0.4))
+                            .frame(width: s(48), alignment: .trailing)
+                            .lineLimit(1)
+                        Text(item.text)
+                            .font(Brand.swiftUIMonoFont(size: 8 * scale))
+                            .foregroundColor(.white.opacity(item.isFinal ? 0.84 : 0.58))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+        ))
+        .id(metrics.activeMeetingId)
     }
 
     var body: some View {
@@ -1352,22 +1439,11 @@ struct MeetingTranscriptPreview: View {
                             .foregroundColor(.white.opacity(0.48))
                     }
                 } else {
-                    ForEach(visibleItems) { item in
-                        HStack(alignment: .firstTextBaseline, spacing: s(7)) {
-                            Text(item.displaySpeaker.lowercased())
-                                .font(Brand.swiftUIMonoFont(size: 7 * scale, weight: .medium))
-                                .foregroundColor(.white.opacity(0.4))
-                                .frame(width: s(48), alignment: .trailing)
-                                .lineLimit(1)
-                            Text(item.text)
-                                .font(Brand.swiftUIMonoFont(size: 8 * scale))
-                                .foregroundColor(.white.opacity(item.isFinal ? 0.84 : 0.58))
-                                .lineLimit(2)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
+                    transcriptHistory
                 }
-                Spacer(minLength: 0)
+                if metrics.meetingStopError != nil || visibleItems.isEmpty {
+                    Spacer(minLength: 0)
+                }
             }
             .padding(.horizontal, s(12))
             .padding(.vertical, s(10))

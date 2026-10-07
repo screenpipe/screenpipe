@@ -15,6 +15,7 @@
     "eval:activity-episode-retrieval": "bun scripts/eval-activity-episode-retrieval.ts",
     "eval:daily-summary-prompt": "bun run eval:daily-summary-agent",
     "test:bun": "bun scripts/run-bun-tests.ts",
+    "test:meeting-transcript-scroll": "./scripts/test-meeting-transcript-scroll.sh",
     "test:shortcut-overlay": "./scripts/test-shortcut-overlay.sh",
     "test:timeline": "./scripts/test-timeline.sh",
     "eval:workflow-video-edit": "bun ../../scripts/evals/workflow-video/run.ts",
