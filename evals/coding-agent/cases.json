@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite": "screenpipe-app-coding-agent-regressions",
-  "dataset_version": "2026-10-02-remote-images-visible-fallbacks",
+  "dataset_version": "2026-10-07-meeting-stop-save-refusal",
   "suite_type": "regression",
   "owner": "screenpipe engineering",
   "policy": {
@@ -5396,6 +5396,53 @@
         ],
         "command": "cd apps/screenpipe-app-tauri && node node_modules/vitest/vitest.mjs run --config eval-calendar-unavailable.config.mjs"
       }
+    },
+    {
+      "id": "app-meeting-stop-save-refusal",
+      "name": "Preserve explicit meeting Stop when saving the current note fails",
+      "source": {
+        "kind": "git_regression",
+        "fix_commit": "f3cd3f8b8d462a8df686b236e75a702db8cad033"
+      },
+      "base_ref": "c89551d84a2f2c8065aa0e08dc706ef467643f74",
+      "oracle_ref": "f3cd3f8b8d462a8df686b236e75a702db8cad033",
+      "oracle_paths": [
+        "apps/screenpipe-app-tauri/components/meeting-notes/note-view.tsx"
+      ],
+      "tags": [
+        "regression",
+        "meetings",
+        "user-control",
+        "persistence",
+        "escaped-failure"
+      ],
+      "gate": "advisory",
+      "prompt": "The live meeting note view prevents Stop when saving the latest draft fails. Repair the actual NoteView Stop action so a rejected pre-stop save warns the user and still invokes the supplied Stop callback exactly once, without reporting that the note was saved. Preserve successful-save ordering: wait for an in-flight save of the current draft before stopping. An unchanged note must stop without an unnecessary save. Preserve ordinary autosave and ensure an older in-flight save cannot overwrite a newer draft after overlapping edits, including the visible note and persisted request data. Keep the public component interfaces compatible. This task checks the real React component with synthetic editor-input, HTTP and native ports; actual editor internals, native meeting-stop/deferral release, database durability and global recording pause are outside scope. No particular queue implementation, callback name or warning copy is required.",
+      "agent_timeout_seconds": 900,
+      "grader_dependency_links": [
+        {
+          "source_path": "apps/screenpipe-app-tauri/node_modules",
+          "destination_path": "apps/screenpipe-app-tauri/node_modules"
+        }
+      ],
+      "grader": {
+        "timeout_seconds": 60,
+        "fixtures": [
+          {
+            "local_path": "graders/meeting-stop.fixture.tsx.txt",
+            "destination_path": "apps/screenpipe-app-tauri/note-save-probe.test.tsx"
+          },
+          {
+            "local_path": "graders/meeting-stop.config.ts",
+            "destination_path": "apps/screenpipe-app-tauri/note-save.config.ts"
+          }
+        ],
+        "command": "cd apps/screenpipe-app-tauri && node node_modules/vitest/vitest.mjs run --config note-save.config.ts"
+      },
+      "trigger_paths": [
+        "apps/screenpipe-app-tauri/components/meeting-notes/note-view.tsx",
+        "apps/screenpipe-app-tauri/components/meeting-notes/note-save-queue.ts"
+      ]
     }
   ]
 }

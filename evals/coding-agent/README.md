@@ -1639,3 +1639,19 @@ suppression and missing-module setup errors. Only the frontend calendar module
 is applied from the historical fix. Native endpoint mappings, OS permissions,
 OAuth refresh, publisher backoff, enforced agent isolation and model performance
 remain outside this evidence. Fixtures and dependencies are installed at grading.
+
+
+`app-meeting-stop-save-refusal` mounts the real historical NoteView with synthetic
+editor-input, HTTP and native ports. Five outcomes preserve draft-save ordering,
+overlapping edits, ordinary autosave and unchanged notes, while ensuring an
+explicit Stop still runs once after a failed save, with a warning and no false
+Saved indication. The parent fails that Stop outcome and preserves four; the
+historical reference passes five. Separate current-component checks preserve
+these outcomes with current display and inactive-service adapters.
+Run `bun test evals/coding-agent/calibrate-meeting-stop.test.js` with desktop test
+dependencies available for eleven historical grader controls, including inline warnings, empty feedback, changed
+warning copy, unused correct source, early/duplicate Stop, silent refusal, false
+Saved status and missing-source classification. Hidden fixtures and dependency
+links appear only when grading begins. This does not test editor internals,
+native stop/deferral release, database durability, global recording pause, full
+current dependency parity, execution isolation or model improvement.
