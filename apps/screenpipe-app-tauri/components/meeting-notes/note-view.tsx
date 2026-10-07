@@ -102,6 +102,7 @@ import {
 } from "@/lib/utils/calendar";
 import { cn } from "@/lib/utils";
 import { AttendeesPill } from "./attendees-pill";
+import { MeetingAppLabel } from "./meeting-app-label";
 import { CalendarNudge } from "./calendar-nudge";
 import { Receipts } from "./receipts";
 import { ReplayStrip } from "./replay-strip";
@@ -2161,6 +2162,21 @@ export function NoteView({
   }
   const meetingMenuGroups: MeetingMenuGroup[] = [
     { label: ui("Summary"), items: summaryMenuItems },
+    ...(onOpenCalendarConnections
+      ? [
+          {
+            label: ui("Settings"),
+            items: [
+              {
+                key: "calendar-connections",
+                label: ui("Calendar connections"),
+                icon: Calendar,
+                onSelect: onOpenCalendarConnections,
+              },
+            ],
+          },
+        ]
+      : []),
     ...(isLive || resuming
       ? []
       : [
@@ -2319,12 +2335,7 @@ export function NoteView({
                 <span>{meetingDurationLabel}</span>
               </>
             )}
-            {meeting.meeting_app && meeting.meeting_app !== "manual" && (
-              <>
-                <span aria-hidden>·</span>
-                <span>{meeting.meeting_app}</span>
-              </>
-            )}
+            <MeetingAppLabel app={meeting.meeting_app} />
             <span className="ml-1">
               <AttendeesPill
                 value={attendees}

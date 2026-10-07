@@ -46,16 +46,7 @@ export function CalendarNudge({
     };
   }, [meeting.id]);
 
-  if (!visible)
-    return (
-      <button
-        type="button"
-        className="mb-3 text-xs text-muted-foreground hover:text-foreground"
-        onClick={onConnect}
-      >
-        {ui("Calendar connections")}
-      </button>
-    );
+  if (!visible) return null;
   return (
     <div
       className="mb-4 flex items-start gap-3 rounded-md border border-border bg-muted/20 p-3"

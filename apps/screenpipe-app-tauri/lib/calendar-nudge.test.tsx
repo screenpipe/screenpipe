@@ -167,8 +167,8 @@ describe("shared calendar prompt budget", () => {
       screen.queryByRole("button", { name: "Connect calendar", exact: true }),
     ).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Calendar connections" }),
-    ).toBeTruthy();
+      screen.queryByRole("button", { name: "Calendar connections" }),
+    ).toBeNull();
     await sendCalendarReminder(ui, idle);
     expect(mocks.notify).not.toHaveBeenCalled();
   });
