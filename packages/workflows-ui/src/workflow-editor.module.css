@@ -126,3 +126,17 @@
 .readOnlyText { display: block; padding: 3px 5px; color: var(--ink); font-size: 14px; line-height: 1.6; }
 .titleRow > h1 { flex: 1; min-width: 0; padding: 3px 5px; }
 .endpoint .readOnlyText { margin-left: -5px; }
+
+/* Static document text uses the same geometry as editable fields. */
+.editor h1, .editor h2, .editor p { margin-top: 0; }
+.editor .readOnlyText { margin-bottom: 0; overflow-wrap: anywhere; }
+.readOnlyKind { grid-column: 2; grid-row: 1; padding: 6px 4px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.stepApps { margin: 4px 0 0 29px; color: var(--muted); font-size: 11px; }
+.reference { margin: 4px 5px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.reference summary { cursor: pointer; }
+.reference blockquote { margin: 8px 0; max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.reference small { display: block; }
+@container workflow-editor (max-width: 560px) {
+  .readOnlyKind { grid-column: 1; grid-row: 2; }
+  .stepApps { margin-left: 25px; }
+}
