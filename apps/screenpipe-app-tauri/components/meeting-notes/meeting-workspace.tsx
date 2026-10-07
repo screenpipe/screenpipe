@@ -4,6 +4,7 @@
 "use client";
 
 import React from "react";
+import { NoteEditor } from "./note-editor";
 import { MemoizedReactMarkdown } from "@/components/markdown";
 import { cn } from "@/lib/utils";
 import {
@@ -159,13 +160,37 @@ export function MeetingWorkspaceTabs({
   );
 }
 
-export function extractMeetingSummary(markdown: string): string | null {
+function meetingSummaryHeading(markdown: string): RegExpExecArray | null {
   const heading = /^#{1,6}[\t ]+summary[\t ]*$/gim;
   let match: RegExpExecArray | null;
   let latest: RegExpExecArray | null = null;
   while ((match = heading.exec(markdown)) !== null) latest = match;
-  if (!latest) return null;
+  return latest;
+}
 
+export function replaceMeetingSummary(note: string, summary: string): string {
+  const heading = meetingSummaryHeading(note);
+  if (!heading) return note;
+  return `${note.slice(0, heading.index + heading[0].length)}\n${summary}`;
+}
+
+/** Reveal automatic work once, without trapping a reader who switches back. */
+export function useMeetingSummaryTab(
+  working: boolean,
+  setTab: React.Dispatch<React.SetStateAction<MeetingWorkspaceTab>>,
+) {
+  const wasWorking = React.useRef(false);
+  React.useEffect(() => {
+    if (working && !wasWorking.current) {
+      setTab((tab) => (tab === "transcript" ? "summary" : tab));
+    }
+    wasWorking.current = working;
+  }, [working, setTab]);
+}
+
+export function extractMeetingSummary(markdown: string): string | null {
+  const latest = meetingSummaryHeading(markdown);
+  if (!latest) return null;
   const body = markdown.slice(latest.index + latest[0].length).trim();
   // A refusal is an error outcome, even when an older run saved it under
   // the Summary heading. Match the server's narrow failure-prefix check.
@@ -237,8 +262,10 @@ export function MeetingSummarySurface({
   canGenerate,
   recovery,
   activity,
+  onNoteChange,
 }: {
   note: string;
+  onNoteChange?: (note: string) => void;
   state: "idle" | "working" | "ready" | "attention";
   detail: string;
   streamedSummary?: string;
@@ -264,6 +291,9 @@ export function MeetingSummarySurface({
   const isStreaming = state === "working" && showingLiveSummary;
   const summary = showingLiveSummary ? liveSummary : savedSummary;
   const attention = state === "attention" ? recovery : undefined;
+  const editable =
+    Boolean(onNoteChange) && state !== "working" && !showingLiveSummary;
+  const hasSummarySection = meetingSummaryHeading(note) !== null;
 
   return (
     <section
@@ -421,7 +451,24 @@ export function MeetingSummarySurface({
           data-testid="meeting-summary-reading-column"
           className={cn(MEETING_READING_COLUMN_CLASS, "select-text")}
         >
-          {summary ? (
+          {editable && hasSummarySection ? (
+            <NoteEditor
+              value={savedSummary ?? ""}
+              onChange={(markdown) =>
+                onNoteChange?.(replaceMeetingSummary(note, markdown))
+              }
+              ariaLabel={ui("Meeting summary")}
+              placeholder={ui("Write a summary…")}
+              className={cn(
+                "[&_.ProseMirror]:min-h-[30vh] [&_.ProseMirror]:text-sm [&_.ProseMirror]:leading-7",
+                "[&_.ProseMirror_p]:leading-7 [&_.ProseMirror_li]:leading-7",
+                "[&_.ProseMirror_:is(h1,h2,h3,h4,h5,h6)]:font-mono",
+                "[&_.ProseMirror_:is(h1,h2,h3,h4,h5,h6)]:text-xs",
+                "[&_.ProseMirror_:is(h1,h2,h3,h4,h5,h6)]:tracking-[0.12em]",
+                "[&_.ProseMirror>:first-child]:mt-0",
+              )}
+            />
+          ) : summary ? (
             <div aria-busy={isStreaming}>
               <MemoizedReactMarkdown className="prose prose-sm max-w-none flex flex-col items-start break-words text-foreground dark:prose-invert prose-headings:font-mono prose-headings:text-xs prose-headings:normal-case prose-headings:tracking-[0.12em] prose-p:leading-7 prose-li:leading-7 [&>*:first-child]:mt-0">
                 {summary}

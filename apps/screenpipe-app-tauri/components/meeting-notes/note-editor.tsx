@@ -303,6 +303,7 @@ export interface NoteEditorProps {
   value: string;
   onChange: (markdown: string) => void;
   placeholder?: string;
+  ariaLabel?: string;
   className?: string;
   autoFocus?: boolean;
   readOnly?: boolean;
@@ -449,6 +450,7 @@ function NoteEditor(
     value,
     onChange,
     placeholder,
+    ariaLabel,
     className,
     autoFocus,
     readOnly = false,
@@ -588,6 +590,9 @@ function NoteEditor(
       attributes: {
         class: PROSE_CLASSES,
         "data-testid": "note-editor",
+        ...(ariaLabel
+          ? { role: "textbox", "aria-label": ariaLabel, "aria-multiline": "true" }
+          : {}),
       },
       // Keep the caret comfortably in view after Enter / typing near the
       // viewport edge. ProseMirror walks up parent scroll containers, so this
