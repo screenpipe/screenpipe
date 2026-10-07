@@ -22,6 +22,7 @@ const SESSION_FILE: &str = "search-session.json";
 struct Session {
     capture_paused: bool,
     resume_search_only: bool,
+    restart_pending: bool,
 }
 
 pub fn is_active() -> bool {
@@ -59,13 +60,14 @@ fn load_at(root: &Path) -> Result<Session, String> {
     }
 }
 
-fn persist(resume_search_only: bool) -> Result<(), String> {
+fn persist(restart_pending: bool) -> Result<(), String> {
     let _guard = SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     persist_at(
         &crate::config::app_data_dir(),
         &Session {
             capture_paused: capture_paused(),
-            resume_search_only,
+            resume_search_only: restart_pending && is_active(),
+            restart_pending,
         },
     )
 }
@@ -74,30 +76,40 @@ fn diagnostic(event: &str, detail: &str) {
     crate::recording::recovery_log::append(&crate::config::app_data_dir(), event, detail);
 }
 
-/// Restore stopped capture before any native startup or UI callback can run.
-/// Only an updater/relaunch handoff restores hidden UI; a later manual launch
-/// after a normal process exit opens the UI with recording still stopped.
-pub fn initialize() -> bool {
-    let session = load_at(&crate::config::app_data_dir()).unwrap_or_else(|error| {
-        diagnostic(
-            "search_session_read_failed",
-            &format!("cause={error}; outcome=capture_paused"),
-        );
-        Session {
-            capture_paused: true,
-            resume_search_only: false,
-        }
-    });
+fn restore_at(root: &Path, from_autostart: bool) -> Result<Session, String> {
+    let mut session = load_at(root)?;
+    // A restart handoff preserves Quit's pause for one launch. A subsequent
+    // manual launch is a request to record again; OS login is not.
+    if !from_autostart && !session.restart_pending && !session.resume_search_only {
+        session.capture_paused = false;
+    }
+    persist_at(
+        root,
+        &Session {
+            capture_paused: session.capture_paused,
+            ..Session::default()
+        },
+    )?;
+    Ok(session)
+}
+
+/// Resolve Quit's pause before startup publishes capture intent. Updater
+/// handoffs retain search-only mode; manual launches resume normal recording.
+pub fn initialize(from_autostart: bool) -> bool {
+    let session =
+        restore_at(&crate::config::app_data_dir(), from_autostart).unwrap_or_else(|error| {
+            diagnostic(
+                "search_session_restore_failed",
+                &format!("cause={error}; outcome=capture_paused"),
+            );
+            Session {
+                capture_paused: true,
+                ..Session::default()
+            }
+        });
     CAPTURE_PAUSED.store(session.capture_paused, Ordering::SeqCst);
     let background = session.capture_paused && session.resume_search_only;
     screenpipe_core::background_work::set_suspended(background);
-    if let Err(error) = persist(false) {
-        diagnostic(
-            "search_session_restore_failed",
-            &format!("cause={error}; outcome=capture_paused"),
-        );
-        CAPTURE_PAUSED.store(true, Ordering::SeqCst);
-    }
     background
 }
 
@@ -120,18 +132,51 @@ pub fn resume_capture() -> Result<(), String> {
     Ok(())
 }
 
-/// Opening a window restores ordinary background work, never capture intent.
-pub fn wake() -> bool {
+/// An explicit reopen ends Quit's pause, using the existing capture owner.
+/// Ordinary window opens while already awake do not undo a recording pause.
+pub fn wake(app: &AppHandle) -> bool {
     if ENTERING.load(Ordering::SeqCst) || !is_active() {
         return false;
     }
     screenpipe_core::background_work::set_suspended(false);
-    info!("search-only: UI reopened; recording remains paused");
+    if let Err(error) = resume_capture() {
+        report_reopen_failure(&crate::config::app_data_dir(), &error);
+        return true;
+    }
+    // Publish intent before scheduling work. The capture helper rechecks it
+    // under the capture lock, so a later Stop or Quit wins over this request.
+    app.state::<crate::recording::RecordingState>()
+        .set_capture_intent(true);
+    diagnostic(
+        "search_reopen_resume_requested",
+        "source=manual_reopen; outcome=start_requested",
+    );
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = crate::recording::start_capture_internal(
+            &app.state::<crate::recording::RecordingState>(),
+            &app,
+        )
+        .await
+        {
+            report_reopen_failure(&crate::config::app_data_dir(), &error);
+        }
+    });
+    info!("search-only: UI reopened; recording resume requested");
     true
 }
 
+fn report_reopen_failure(root: &Path, error: &str) {
+    warn!("search-only: recording could not resume after reopening: {error}");
+    crate::recording::recovery_log::append(
+        root,
+        "search_reopen_failed",
+        &format!("cause={error}; outcome=resume_failed"),
+    );
+}
+
 pub fn prepare_restart() -> Result<(), String> {
-    persist(is_active()).map_err(|error| {
+    persist(true).map_err(|error| {
         diagnostic(
             "search_restart_persist_failed",
             &format!("cause={error}; outcome=restart_deferred"),
@@ -285,7 +330,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn restart_snapshot_keeps_capture_off_and_is_consumed_without_clearing_pause() {
+    fn updater_preserves_pause_once_then_manual_launch_resumes() {
         let dir = tempfile::tempdir().unwrap();
         assert!(!load_at(dir.path()).unwrap().capture_paused);
         persist_at(
@@ -293,31 +338,58 @@ mod tests {
             &Session {
                 capture_paused: true,
                 resume_search_only: true,
+                ..Session::default()
             },
         )
         .unwrap();
-        let restored = load_at(dir.path()).unwrap();
+        let restored = restore_at(dir.path(), false).unwrap();
         assert!(restored.capture_paused && restored.resume_search_only);
+        let manual = restore_at(dir.path(), false).unwrap();
+        assert!(!manual.capture_paused);
+        assert!(!manual.resume_search_only);
+        assert!(!load_at(dir.path()).unwrap().capture_paused);
+    }
+
+    #[test]
+    fn manual_launch_clears_quit_pause_but_login_does_not() {
+        let dir = tempfile::tempdir().unwrap();
         persist_at(
             dir.path(),
             &Session {
-                resume_search_only: false,
-                ..restored
+                capture_paused: true,
+                ..Session::default()
             },
         )
         .unwrap();
-        let manual = load_at(dir.path()).unwrap();
-        assert!(manual.capture_paused);
-        assert!(!manual.resume_search_only);
-        persist_at(dir.path(), &Session::default()).unwrap();
-        assert!(!load_at(dir.path()).unwrap().capture_paused);
+        assert!(restore_at(dir.path(), true).unwrap().capture_paused);
+        assert!(!restore_at(dir.path(), false).unwrap().capture_paused);
+        assert!(!restore_at(dir.path(), false).unwrap().capture_paused);
+    }
+
+    #[test]
+    fn updater_preserves_pause_even_with_the_ui_open() {
+        let dir = tempfile::tempdir().unwrap();
+        persist_at(
+            dir.path(),
+            &Session {
+                capture_paused: true,
+                restart_pending: true,
+                ..Session::default()
+            },
+        )
+        .unwrap();
+        let updated = restore_at(dir.path(), false).unwrap();
+        assert!(updated.capture_paused);
+        assert!(!updated.resume_search_only);
+        assert!(!load_at(dir.path()).unwrap().restart_pending);
+        assert!(!restore_at(dir.path(), false).unwrap().capture_paused);
     }
 
     #[test]
     fn damaged_session_is_an_error_not_permission_to_record() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(SESSION_FILE), b"{interrupted").unwrap();
-        assert!(load_at(dir.path()).is_err());
+        assert!(restore_at(dir.path(), false).is_err());
     }
 
     #[tokio::test]
@@ -330,6 +402,7 @@ mod tests {
             &Session {
                 capture_paused: true,
                 resume_search_only: true,
+                ..Session::default()
             },
         )
         .unwrap_err();
@@ -356,5 +429,28 @@ mod tests {
         assert!(report.contains("restart_deferred"));
         assert!(report.contains(&cause));
         assert!(!report.contains("private-person@example.com"));
+    }
+
+    #[tokio::test]
+    async fn reopen_persistence_failure_reaches_collected_redacted_report() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(SESSION_FILE)).unwrap();
+        let cause = persist_at(dir.path(), &Session::default()).unwrap_err();
+        report_reopen_failure(dir.path(), &cause);
+        for day in 1..=7 {
+            std::fs::write(
+                dir.path()
+                    .join(format!("screenpipe-app.2026-10-{day:02}.log")),
+                "restarted\n",
+            )
+            .unwrap();
+        }
+        let report =
+            crate::diagnostic_logs::collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+                .await
+                .unwrap();
+        assert!(report.contains("search_reopen_failed"));
+        assert!(report.contains("outcome=resume_failed"));
+        assert!(report.contains(&cause));
     }
 }

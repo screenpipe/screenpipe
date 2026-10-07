@@ -246,7 +246,7 @@ pub fn wake_from_tray(app: &AppHandle) -> bool {
     if crate::enterprise_policy::is_app_ui_hidden() || crate::search_only::is_entering() {
         return false;
     }
-    crate::search_only::wake();
+    crate::search_only::wake(app);
     if !UI_DORMANT.swap(false, Ordering::SeqCst) {
         return false;
     }

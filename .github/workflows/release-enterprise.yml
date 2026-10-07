@@ -873,14 +873,16 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
+            runner: screenpipe-release-macos-arm64
             target: aarch64-apple-darwin
             features: metal,parakeet-mlx,enterprise-build
             package_arch: arm64
           - platform: macos-26
+            runner: screenpipe-release-macos-x64
             target: x86_64-apple-darwin
             features: metal,redact-onnx-coreml,enterprise-build
             package_arch: x64
-    runs-on: ${{ inputs.force_github_runners && matrix.platform || 'screenpipe-release-macos' }}
+    runs-on: ${{ inputs.force_github_runners && matrix.platform || matrix.runner }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4

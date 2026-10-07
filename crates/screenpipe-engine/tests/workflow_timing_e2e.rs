@@ -54,6 +54,15 @@ async fn get(client: &reqwest::Client, base: &str, path: &str) -> Value {
 
 #[tokio::test]
 async fn timing_survives_verified_publication_retries_and_disk_reload() {
+    run_timing_case(false).await;
+}
+
+#[tokio::test]
+async fn timing_research_survives_unavailable_optional_star_metadata() {
+    run_timing_case(true).await;
+}
+
+async fn run_timing_case(missing_stars: bool) {
     let input: Value = std::env::var("WORKFLOW_TIMING_AGENT_INPUT")
         .ok()
         .map(|path| serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap())
@@ -130,6 +139,91 @@ async fn timing_survives_verified_publication_retries_and_disk_reload() {
     let serving = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let base = format!("http://{address}");
     let client = reqwest::Client::new();
+    if missing_stars {
+        // Reproduce the installed compressed-database failure without touching
+        // the user's recorder. Missing annotations must not block source reads.
+        let mut tx = db.begin_immediate_with_retry().await.unwrap();
+        sqlx::query("DROP TABLE starred_sessions")
+            .execute(&mut **tx.conn())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let source_dates: Vec<_> = input["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                chrono::DateTime::parse_from_rfc3339(row["timestamp"].as_str().unwrap())
+                    .unwrap()
+                    .with_timezone(&Utc)
+            })
+            .collect();
+        let query = format!(
+            "/search?content_type=ocr&limit=20&start_time={}&end_time={}",
+            (*source_dates.iter().min().unwrap() - Duration::seconds(1))
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            (*source_dates.iter().max().unwrap() + Duration::seconds(1))
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        );
+        let found = get(&client, &base, &query).await;
+        let hits = found["data"].as_array().unwrap();
+        assert_eq!(hits.len(), input["rows"].as_array().unwrap().len());
+        assert!(hits.iter().all(|hit| hit.get("starred").is_none()));
+        for row in input["rows"].as_array().unwrap() {
+            assert!(hits
+                .iter()
+                .any(|hit| hit["content"]["text"] == row["quote"]));
+        }
+        assert_eq!(found["pagination"]["total"], json!(hits.len()));
+        for filter in ["starred_only=true", "starred_session_id=missing"] {
+            let response = client
+                .get(format!("{base}{query}&{filter}"))
+                .bearer_auth("timing-test-key")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status().as_u16(),
+                500,
+                "explicit filters must not widen: {filter}"
+            );
+        }
+        let empty = get(
+            &client,
+            &base,
+            &format!("{query}&app_name=NoSuchFixtureApp"),
+        )
+        .await;
+        assert!(empty["data"].as_array().unwrap().is_empty());
+        // A degraded response must not poison the cache after metadata recovers.
+        let mut tx = db.begin_immediate_with_retry().await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../screenpipe-db/src/migrations/20261002190000_starred_sessions.sql"
+        ))
+        .execute(&mut **tx.conn())
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        let recovered = get(&client, &base, &query).await;
+        assert!(recovered["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|hit| hit["starred"] == false));
+        if let Ok(output) = std::env::var("WORKFLOW_TIMING_SEARCH_OUTPUT") {
+            tokio::fs::write(output, serde_json::to_vec_pretty(&json!({
+                "status":200,"fixture":"Fictional invoice recordings; starred_sessions unavailable",
+                "response":found,"explicitStarFilters":"500; did not broaden search",
+                "recovery":"Same query immediately restored starred=false after schema repair"
+            })).unwrap()).await.unwrap();
+        }
+        let mut tx = db.begin_immediate_with_retry().await.unwrap();
+        sqlx::query("DROP TABLE starred_sessions")
+            .execute(&mut **tx.conn())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
     let path = dir.path().join("workflows/catalog.json");
     tokio::fs::create_dir_all(path.parent().unwrap())
         .await

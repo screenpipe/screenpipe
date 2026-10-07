@@ -135,6 +135,9 @@
       },
     },
   },
+  "patchedDependencies": {
+    "framer-motion@11.18.2": "patches/framer-motion@11.18.2.patch",
+  },
   "packages": {
     "@adobe/css-tools": ["@adobe/css-tools@4.4.4", "", {}, "sha512-Elp+iwUx5rN5+Y8xLt5/GRoG20WGoDCQ/1Fb+1LiGtvwbDavuSk0jhD/eZdckHAuzcDzccnkv+rEjyWfRx18gg=="],
 

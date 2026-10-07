@@ -779,6 +779,7 @@
       "files": [
         "tests/audio_duplicate_test.rs",
         "tests/audio_search_speaker_join_test.rs",
+        "tests/audio_segment_search_test.rs",
         "tests/chunk_outcome_test.rs",
         "tests/meeting_context_test.rs",
         "tests/meeting_end_generation_test.rs",

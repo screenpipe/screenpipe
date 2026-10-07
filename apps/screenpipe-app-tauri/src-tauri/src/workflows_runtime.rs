@@ -644,13 +644,18 @@ fn scope_workflow_agent(mut config: PiProviderConfig, skill: bool) -> PiProvider
     } else {
         WORKFLOW_TOOLS.iter().map(|name| name.to_string()).collect()
     });
+    let workflow_prompt = if skill {
+        SKILL_SYSTEM_PROMPT
+    } else {
+        WORKFLOW_SYSTEM_PROMPT
+    };
     config.system_prompt = Some(
-        if skill {
-            SKILL_SYSTEM_PROMPT
-        } else {
-            WORKFLOW_SYSTEM_PROMPT
-        }
-        .to_string(),
+        [Some(workflow_prompt), config.system_prompt.as_deref()]
+            .into_iter()
+            .flatten()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
     );
     config.max_tokens = if skill {
         6_000
@@ -663,20 +668,43 @@ fn scope_workflow_agent(mut config: PiProviderConfig, skill: bool) -> PiProvider
     config
 }
 
+fn workflow_provider_config(preset: screenpipe_core::pipes::ResolvedPreset) -> PiProviderConfig {
+    let provider = match preset.provider.as_deref() {
+        Some("screenpipe") => "screenpipe-cloud",
+        Some("ollama") => "native-ollama",
+        Some(provider) => provider,
+        None => "screenpipe-cloud",
+    }
+    .to_string();
+    PiProviderConfig {
+        provider,
+        model: preset.model,
+        url: preset.url.unwrap_or_default(),
+        api_key: preset.api_key,
+        backend: None,
+        acp_agent: None,
+        max_tokens: 4096,
+        max_context_chars: None,
+        system_prompt: preset.prompt,
+        allowed_tools: None,
+        resume_session_id: None,
+        unattended: true,
+    }
+}
+
 async fn configured_workflow_agent(
     app: &AppHandle,
     skill: bool,
 ) -> Result<(PiProviderConfig, Option<String>), String> {
     let settings = crate::store::SettingsStore::get(app)?.ok_or("Settings are not available")?;
-    let config = PiProviderConfig {
-        provider: "screenpipe-cloud".into(),
-        model: screenpipe_core::workflows::model_choice::selected_model()
-            .map_err(|error| error.to_string())?.into(),
-        url: String::new(), api_key: None, backend: None, acp_agent: None,
-        max_tokens: 4096, max_context_chars: None, system_prompt: None,
-        allowed_tools: None, resume_session_id: None, unattended: true,
-    };
-    let token = settings.user.token.clone().filter(|token| !token.is_empty());
+    let preset = screenpipe_core::workflows::model_choice::selected_provider()
+        .map_err(|error| error.to_string())?;
+    let config = workflow_provider_config(preset);
+    let token = settings
+        .user
+        .token
+        .clone()
+        .filter(|token| !token.is_empty());
     let token = match token {
         Some(token) => Some(token),
         None => cloud_token().await,
@@ -1525,6 +1553,38 @@ mod tests {
         assert!(reference.contains("/workflows/wf-"));
         assert!(reference.contains("Re-observe the current app"));
         assert!(reference.contains("Retrieval is not permission to execute"));
+    }
+
+    #[test]
+    fn workflow_selection_keeps_custom_credentials_and_workflow_permissions() {
+        let preset = screenpipe_core::pipes::ResolvedPreset {
+            provider: Some("custom".into()),
+            model: "local-model".into(),
+            url: Some("http://localhost:1234/v1".into()),
+            api_key: Some("fixture-key".into()),
+            prompt: Some("Prefer concise answers".into()),
+            executor: None,
+            executor_config: None,
+        };
+        let config = scope_workflow_agent(workflow_provider_config(preset), false);
+        assert_eq!(config.provider, "custom");
+        assert_eq!(config.model, "local-model");
+        assert_eq!(config.url, "http://localhost:1234/v1");
+        assert_eq!(config.api_key.as_deref(), Some("fixture-key"));
+        assert_eq!(
+            config.allowed_tools,
+            Some(WORKFLOW_TOOLS.iter().map(|s| s.to_string()).collect())
+        );
+        assert!(config
+            .system_prompt
+            .as_deref()
+            .unwrap()
+            .starts_with(WORKFLOW_SYSTEM_PROMPT));
+        assert!(config
+            .system_prompt
+            .as_deref()
+            .unwrap()
+            .ends_with("Prefer concise answers"));
     }
 
     #[test]

@@ -1,0 +1,84 @@
+diff --git a/dist/cjs/index.js b/dist/cjs/index.js
+index 2918c45f931f419182ddea09ada8a50edac89a11..9ab66a6ae5bc25350f7aa41d27118cb64910afb3 100644
+--- a/dist/cjs/index.js
++++ b/dist/cjs/index.js
+@@ -457,7 +457,7 @@ class MotionValue {
+         /**
+          * An object containing a SubscriptionManager for each active event.
+          */
+-        this.events = {};
++        this.events = Object.create(null);
+         this.updateAndNotify = (v, render = true) => {
+             const currentTime = time.now();
+             /**
+@@ -5315,7 +5315,7 @@ class VisualElement {
+         /**
+          * Cleanup functions for active features (hover/tap/exit etc)
+          */
+-        this.features = {};
++        this.features = Object.create(null);
+         /**
+          * A map of every subscription that binds the provided or generated
+          * motion values onChange listeners to this visual element.
+@@ -5330,7 +5330,7 @@ class VisualElement {
+         /**
+          * An object containing a SubscriptionManager for each active event.
+          */
+-        this.events = {};
++        this.events = Object.create(null);
+         /**
+          * An object containing an unsubscribe function for each prop event subscription.
+          * For example, every "Update" event can have multiple subscribers via
+@@ -5475,7 +5475,7 @@ class VisualElement {
+     }
+     updateFeatures() {
+         let key = "animation";
+-        for (key in featureDefinitions) {
++        for (key of Object.keys(featureDefinitions)) {
+             const featureDefinition = featureDefinitions[key];
+             if (!featureDefinition)
+                 continue;
+diff --git a/dist/es/render/VisualElement.mjs b/dist/es/render/VisualElement.mjs
+index b11a0ac66cce0fbdcb5ee5e0ea0b6778a811a72e..6a95e4146a516191bda1d2c65a777b36d724451c 100644
+--- a/dist/es/render/VisualElement.mjs
++++ b/dist/es/render/VisualElement.mjs
+@@ -77,7 +77,7 @@ class VisualElement {
+         /**
+          * Cleanup functions for active features (hover/tap/exit etc)
+          */
+-        this.features = {};
++        this.features = Object.create(null);
+         /**
+          * A map of every subscription that binds the provided or generated
+          * motion values onChange listeners to this visual element.
+@@ -92,7 +92,7 @@ class VisualElement {
+         /**
+          * An object containing a SubscriptionManager for each active event.
+          */
+-        this.events = {};
++        this.events = Object.create(null);
+         /**
+          * An object containing an unsubscribe function for each prop event subscription.
+          * For example, every "Update" event can have multiple subscribers via
+@@ -237,7 +237,7 @@ class VisualElement {
+     }
+     updateFeatures() {
+         let key = "animation";
+-        for (key in featureDefinitions) {
++        for (key of Object.keys(featureDefinitions)) {
+             const featureDefinition = featureDefinitions[key];
+             if (!featureDefinition)
+                 continue;
+diff --git a/dist/es/value/index.mjs b/dist/es/value/index.mjs
+index 7b53de65242cc7434dd055154530bc8692a1e0c5..4c1d05c507ad8e084b269bf2d9737589ca04c5d1 100644
+--- a/dist/es/value/index.mjs
++++ b/dist/es/value/index.mjs
+@@ -46,7 +46,7 @@ class MotionValue {
+         /**
+          * An object containing a SubscriptionManager for each active event.
+          */
+-        this.events = {};
++        this.events = Object.create(null);
+         this.updateAndNotify = (v, render = true) => {
+             const currentTime = time.now();
+             /**

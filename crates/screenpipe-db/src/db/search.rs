@@ -1202,9 +1202,10 @@ impl DatabaseManager {
             format!("WHERE {}", conditions.join(" AND "))
         };
 
-        // complete sql with group, order, limit and offset
+        // Group only tag-join duplicates. Distinct speech segments can share a
+        // chunk and offset_index, so grouping by those loses recorded speech.
         let sql = format!(
-            "{} {} GROUP BY audio_transcriptions.audio_chunk_id, audio_transcriptions.offset_index ORDER BY audio_transcriptions.timestamp {order_dir}, audio_transcriptions.audio_chunk_id {order_dir}, audio_transcriptions.offset_index {order_dir} LIMIT ? OFFSET ?",
+            "{} {} GROUP BY audio_transcriptions.id ORDER BY audio_transcriptions.timestamp {order_dir}, audio_transcriptions.audio_chunk_id {order_dir}, audio_transcriptions.offset_index {order_dir}, audio_transcriptions.id {order_dir} LIMIT ? OFFSET ?",
             base_sql,
             where_clause,
             order_dir = match order {

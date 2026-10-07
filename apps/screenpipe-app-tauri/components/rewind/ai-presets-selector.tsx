@@ -160,6 +160,7 @@ type RecommendedPreset = BaseRecommendedPreset &
 type PresetDialogMode = "create" | "edit" | "copy";
 
 interface AIProviderConfigProps {
+  allowAgentPresets?: boolean;
   onSubmit: (data: AIPreset) => void;
   defaultPreset?: AIPreset;
   showLoginCta?: boolean;
@@ -240,6 +241,7 @@ function ChatGptSignInButton({
 }
 
 export function AIProviderConfig({
+  allowAgentPresets = true,
   onSubmit,
   defaultPreset,
   showLoginCta = true,
@@ -335,7 +337,8 @@ export function AIProviderConfig({
   // Second ACP entry point (the first is Settings → AI presets). Same
   // fail-closed rollout gate, otherwise this selector would hand every user a
   // coding-agent provider the settings page deliberately hides.
-  const acpEnabled = useAcpRolloutEnabled();
+  const acpRolloutEnabled = useAcpRolloutEnabled();
+  const acpEnabled = allowAgentPresets && acpRolloutEnabled;
   const acpAdapters = useSelectableAcpAdapters(formData.acpAgent?.id);
   const primaryAcpAdapters = primaryAcpAdapterChoices(acpAdapters);
   const customAcpAdapter = acpAdapters.find(
@@ -1329,6 +1332,7 @@ export function AIProviderConfig({
 }
 
 interface AIPresetDialogProps {
+  allowAgentPresets?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (preset: Partial<AIPreset>) => void;
@@ -1338,6 +1342,20 @@ interface AIPresetDialogProps {
 }
 
 interface AIPresetsSelectorProps {
+  allowAgentPresets?: boolean;
+  /** Host-owned choices rendered alongside saved presets without changing chat defaults. */
+  builtinOptions?: {
+    id: string;
+    label: string;
+    icon?: ReactNode;
+    badge?: string;
+    description?: string;
+    selected: boolean;
+    onSelect: () => void;
+  }[];
+  selectionLabel?: ReactNode;
+  presetFilter?: (preset: AIPreset) => boolean;
+  disabled?: boolean;
   recommendedPresets?: RecommendedPreset[];
   shortcutKey?: string;
   onPresetChange?: (preset: AIPreset) => void;
@@ -1372,6 +1390,7 @@ interface AIPresetsSelectorProps {
 }
 
 export const AIPresetDialog = ({
+  allowAgentPresets = true,
   open,
   onOpenChange,
   onSave,
@@ -1449,6 +1468,7 @@ export const AIPresetDialog = ({
           </DialogDescription>
         </DialogHeader>
         <AIProviderConfig
+          allowAgentPresets={allowAgentPresets}
           onSubmit={handleProviderSubmit}
           defaultPreset={defaultPreset}
           showLoginCta={showLoginCta}
@@ -1460,6 +1480,8 @@ export const AIPresetDialog = ({
 };
 
 export const AIPresetsSelector = ({
+  allowAgentPresets = true,
+  builtinOptions, selectionLabel, presetFilter, disabled = false,
   recommendedPresets,
   shortcutKey = "/",
   onPresetChange,
@@ -1504,11 +1526,11 @@ export const AIPresetsSelector = ({
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const aiPresets = useMemo(() => {
-    const presets = (settings?.aiPresets || []) as AIPreset[];
+    const presets = ((settings?.aiPresets || []) as AIPreset[]).filter(preset => !presetFilter || presetFilter(preset));
     return isManagedDeployment
       ? filterPresetsForEnterprisePolicy(presets, aiPresetPolicy)
       : presets;
-  }, [settings?.aiPresets, isManagedDeployment, aiPresetPolicy]);
+  }, [settings?.aiPresets, isManagedDeployment, aiPresetPolicy, presetFilter]);
 
   const selectedPreset = useMemo(() => {
     if (isControlled) {
@@ -1556,6 +1578,7 @@ export const AIPresetsSelector = ({
   useEffect(() => {
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (!shortcutKey || disabled) return;
       // Check for Cmd/Ctrl + /
       if ((e.metaKey || e.ctrlKey) && e.key === shortcutKey) {
         e.preventDefault();
@@ -1589,7 +1612,7 @@ export const AIPresetsSelector = ({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [aiPresets, selectedPreset, updateSettings, shortcutKey, onPresetSaved, isControlled, onControlledSelect]);
+  }, [aiPresets, selectedPreset, updateSettings, shortcutKey, disabled, onPresetSaved, isControlled, onControlledSelect]);
 
   const handleSavePreset = (preset: Partial<AIPreset>) => {
     if (!canManageEmployeePresets) {
@@ -1906,6 +1929,7 @@ export const AIPresetsSelector = ({
                   type="button"
                   variant="outline"
                   role="combobox"
+                  disabled={disabled}
                   aria-label={
                     triggerAriaLabel ??
                     (providerIconOnly
@@ -1920,7 +1944,7 @@ export const AIPresetsSelector = ({
                     triggerClassName
                   )}
                 >
-                  {selectedPreset ? (
+                  {selectionLabel ? <span>{selectionLabel}</span> : selectedPreset ? (
                     showModelOnly ? (
                       <div className={cn(
                         "flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden",
@@ -2147,6 +2171,25 @@ export const AIPresetsSelector = ({
                   </CommandGroup>
                 )}
                 <CommandGroup>
+                  {builtinOptions?.map(option => (
+                    <CommandItem
+                      key={option.id}
+                      value={option.id}
+                      aria-label={option.badge ? `${option.label} (${option.badge})` : option.label}
+                      onSelect={() => { option.onSelect(); handleOpenChange(false); }}
+                      className="flex min-h-10 py-2"
+                    >
+                      <div className="flex w-full items-center justify-between gap-2 overflow-hidden">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <Check className={cn("h-4 w-4 shrink-0", option.selected ? "opacity-100" : "opacity-0")} />
+                          {option.icon && <span className="h-4 w-4 shrink-0 opacity-80">{option.icon}</span>}
+                          <span className="truncate font-medium">{option.label}</span>
+                          {option.badge && <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs font-medium">{option.badge}</span>}
+                        </div>
+                        {option.description && <span className="truncate text-xs text-muted-foreground">{option.description}</span>}
+                      </div>
+                    </CommandItem>
+                  ))}
                   {aiPresets.map((preset) => {
 
                     const isCloud = preset.provider === "screenpipe-cloud";
@@ -2333,6 +2376,7 @@ export const AIPresetsSelector = ({
         </div>
       </div>
       <AIPresetDialog
+        allowAgentPresets={allowAgentPresets}
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         onSave={handleSavePreset}

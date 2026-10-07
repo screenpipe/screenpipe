@@ -1,0 +1,40 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import React from 'react';
+import {test,expect,vi,beforeEach,afterEach} from 'vitest';
+import {render,screen,act,fireEvent,cleanup} from '@testing-library/react';
+import {NoteView} from '@/components/meeting-notes/note-view';
+const p=vi.hoisted(()=>({requests:[] as any[],persisted:'initial',saved:vi.fn(),stop:vi.fn(),toast:vi.fn(),unexpected:[] as string[]}));
+vi.mock('@/lib/api',()=>({localFetch:async(path:string,opts:any={})=>{
+ if(path==='/meetings/42'&&opts.method==='PUT'){const body=JSON.parse(opts.body);return new Promise(resolve=>p.requests.push({body,finish:(ok=true)=>{if(ok)p.persisted=body.note;resolve({ok,status:ok?200:503})}}))}
+ if(path==='/health')return {ok:true,json:async()=>({})};
+ p.unexpected.push(path);throw Error('Unexpected API '+path);
+}}));
+vi.mock('@/lib/hooks/use-settings',()=>({useSettings:()=>({settings:{aiPresets:[],languages:['english'],user:null},updateSettings:vi.fn()})}));
+vi.mock('@/components/ui/use-toast',()=>({useToast:()=>({toast:p.toast})}));
+vi.mock('@/lib/chat-utils',()=>({showChatWithPrefill:()=>{throw Error('Chat forbidden')}}));
+vi.mock('@/lib/utils/tauri',()=>({commands:new Proxy({},{get:()=>()=>{throw Error('Native forbidden')}})}));
+vi.mock('@tauri-apps/api/event',()=>({listen:async()=>()=>{}}));
+vi.mock('@tauri-apps/api/webview',()=>({getCurrentWebview:()=>({onDragDropEvent:async()=>()=>{}})}));
+vi.mock('@tauri-apps/plugin-shell',()=>({open:()=>{throw Error('Navigation forbidden')}}));
+vi.mock('@tauri-apps/plugin-dialog',()=>({save:()=>{throw Error('Dialog forbidden')}}));
+vi.mock('@tauri-apps/plugin-fs',()=>({readFile:()=>{throw Error('Filesystem forbidden')}}));
+vi.mock('posthog-js',()=>({default:{capture:vi.fn()}}));
+vi.mock('@/lib/utils/meeting-context',()=>({fetchMeetingContext:async()=>null,fetchMeetingAudio:async()=>[]}));
+vi.mock('@/components/meeting-notes/receipts',()=>({Receipts:()=>null}));
+vi.mock('@/components/meeting-notes/replay-strip',()=>({ReplayStrip:()=>null}));
+vi.mock('@/components/meeting-notes/listening-sticks',()=>({ListeningSticks:()=>null}));
+vi.mock('@/components/meeting-notes/transcript-panel',()=>({TranscriptPanel:()=>null}));
+vi.mock('@/components/meeting-notes/note-editor',()=>({NoteEditor:React.forwardRef((props:any,_ref)=><textarea aria-label="Synthetic note editor" value={props.value} onChange={e=>props.onChange(e.target.value)}/>)}));
+async function mount(){function Host(){const [meeting,setMeeting]=React.useState({id:42,meeting_start:'2026-06-11T10:00:00Z',meeting_end:null,meeting_app:'zoom',title:'Synthetic meeting',attendees:null,note:'initial',detection_source:'manual',created_at:'2026-06-11T10:00:00Z'});return <NoteView meeting={meeting as any} isLive={true} stopping={false} resuming={false} onBack={()=>{}} onStop={()=>{p.stop(p.persisted)}} onResume={()=>{}} onDeleted={()=>{}} onSaved={(value:any)=>{p.saved(value);setMeeting(value)}}/>}await act(async()=>{render(<Host/>)});}
+async function edit(text:string){await act(async()=>{fireEvent.change(screen.getByRole('textbox',{name:'Synthetic note editor'}),{target:{value:text}})});}
+async function tick(ms=810){await act(async()=>{await vi.advanceTimersByTimeAsync(ms)})}
+async function finish(r:any,ok=true){await act(async()=>{r.finish(ok)});}
+async function stop(){await act(async()=>{fireEvent.click(screen.getByRole('button',{name:/^stop$/i}))})}
+beforeEach(()=>{vi.useFakeTimers();vi.setSystemTime(new Date('2026-06-11T10:10:00Z'));p.requests=[];p.persisted='initial';p.saved.mockClear();p.stop.mockClear();p.toast.mockClear();p.unexpected=[];localStorage.clear();globalThis.fetch=vi.fn(async()=>{throw Error('External network forbidden')}) as any;Object.defineProperty(window,'matchMedia',{writable:true,value:()=>({matches:true,addListener(){},removeListener(){},addEventListener(){},removeEventListener(){}})});globalThis.ResizeObserver=class{observe(){}unobserve(){}disconnect(){}} as any;HTMLElement.prototype.scrollIntoView=()=>{};});
+afterEach(()=>{cleanup();vi.useRealTimers();expect(p.unexpected).toEqual([])});
+test('latest draft wins even if an older in-flight save completes later',async()=>{await mount();await edit('older');await tick();const first=p.requests[0];expect(first).toBeTruthy();await edit('latest');await tick();const completed=new Set<any>();if(p.requests[1]){await finish(p.requests[1]);completed.add(p.requests[1])}await finish(first);completed.add(first);for(const r of p.requests)if(!completed.has(r))await finish(r);expect(p.persisted).toBe('latest');expect((screen.getByRole('textbox',{name:'Synthetic note editor'}) as HTMLTextAreaElement).value).toBe('latest');});
+test('Stop waits until the current draft is persisted',async()=>{await mount();await edit('latest');await stop();expect(p.stop).not.toHaveBeenCalled();expect(p.requests.length).toBeGreaterThan(0);await finish(p.requests[0]);expect(p.stop).toHaveBeenCalledWith('latest');});
+test('failed save warns without blocking explicit Stop or pretending the note was saved',async()=>{await mount();await edit('latest');await stop();expect(p.requests.length).toBeGreaterThan(0);await finish(p.requests[0],false);expect(p.stop).toHaveBeenCalledTimes(1);expect(p.toast.mock.calls.some(([v])=>Boolean(v?.title||v?.description)) || screen.queryAllByRole('alert').some(el=>Boolean(el.textContent?.trim()))).toBe(true);expect(p.saved).not.toHaveBeenCalled();expect(screen.queryAllByText(/^saved\s*·/i)).toHaveLength(0);expect(p.persisted).toBe('initial');});
+test('unchanged note stops without a write',async()=>{await mount();await stop();expect(p.requests).toHaveLength(0);expect(p.stop).toHaveBeenCalledWith('initial');});
+test('ordinary autosave retains note and reports the saved value',async()=>{await mount();await edit('ordinary');await tick();await finish(p.requests[0]);expect(p.persisted).toBe('ordinary');expect(p.saved.mock.calls.at(-1)[0].note).toBe('ordinary');});

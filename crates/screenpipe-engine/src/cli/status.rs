@@ -762,9 +762,10 @@ mod tests {
         assert_eq!(payload["database_counts_available"], true);
         assert_eq!(payload["last_capture"], "2026-08-21T16:59:57Z");
         assert_eq!(payload["last_audio_capture"], "2026-08-21T16:59:28Z");
+        let expected_db_path = PathBuf::from("/Users/test/.screenpipe").join("db.sqlite");
         assert_eq!(
             payload["database_path"],
-            "/Users/test/.screenpipe/db.sqlite"
+            expected_db_path.to_string_lossy().as_ref()
         );
         assert_eq!(payload["health"]["status"], "healthy");
     }

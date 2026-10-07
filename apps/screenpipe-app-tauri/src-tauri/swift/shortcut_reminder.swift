@@ -1502,7 +1502,8 @@ private struct OverlayNotificationView: View {
                                 ? Color.white.opacity(0.92)
                                 : Color.white.opacity(0.10)
                         )
-                        .contentShape(Rectangle())
+                        .clipShape(RoundedRectangle(cornerRadius: s(6)))
+                        .contentShape(RoundedRectangle(cornerRadius: s(6)))
                 }
                 .buttonStyle(.plain)
                 .fixedSize()
@@ -1524,7 +1525,8 @@ private struct OverlayNotificationView: View {
             height: kBaseNotificationH * scale
         )
         .background(Color.black)
-        .overlay(Rectangle().stroke(Color.white.opacity(0.42), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: s(8)))
+        .overlay(RoundedRectangle(cornerRadius: s(8)).stroke(Color.white.opacity(0.42), lineWidth: 1))
     }
 }
 

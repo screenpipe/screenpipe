@@ -149,6 +149,7 @@ export type WorkflowRecording = {
 };
 
 export type WorkflowsAppProps = {
+  modelControl?: import("react").ReactNode;
   /** Quiet in-app alternative to interrupting a focused workflow reader. */
   readyWorkflowIds?: string[];
   /** Host-owned request survives cold startup until the saved catalog loads. */

@@ -5,7 +5,8 @@
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use tracing::{debug, trace};
 
 use crate::telemetry_context::TelemetryContext;
@@ -21,6 +22,73 @@ const POSTHOG_HOST: &str = "https://us.i.posthog.com";
 static TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(false);
 
 static ANALYTICS: Lazy<Analytics> = Lazy::new(Analytics::new);
+
+pub(crate) const SEARCH_REPORT_INTERVAL: Duration = Duration::from_secs(60);
+
+static SEARCH_REPORT_START: Lazy<Instant> = Lazy::new(Instant::now);
+static SEARCH_REPORTS: SearchReportLimiter = SearchReportLimiter::new();
+
+/// Only unattributed, explicitly API-originated searches share a report budget.
+/// Empty/non-empty and parsed/ordinary results have separate slots so an empty
+/// poll cannot hide the first successful retrieval or parsed-search presence.
+/// Fixed storage keeps untrusted request properties out of the limiter's keys.
+pub(crate) struct SearchReportLimiter {
+    windows: [AtomicU64; 4],
+}
+
+impl SearchReportLimiter {
+    pub(crate) const fn new() -> Self {
+        Self {
+            windows: [const { AtomicU64::new(0) }; 4],
+        }
+    }
+
+    pub(crate) fn should_report(
+        &self,
+        sampled: bool,
+        parsed: bool,
+        non_empty: bool,
+        window: u64,
+    ) -> bool {
+        if !sampled {
+            return true;
+        }
+        let slot = usize::from(parsed) * 2 + usize::from(non_empty);
+        claim_search_window(&self.windows[slot], window)
+    }
+}
+
+fn claim_search_window(last_window: &AtomicU64, window: u64) -> bool {
+    last_window
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
+            (window > last).then_some(window)
+        })
+        .is_ok()
+}
+
+/// Let the first request after UTC midnight report even when it shares the
+/// previous day's monotonic minute. This preserves daily activity presence.
+/// The high bits keep progress monotonic if the wall clock moves backwards;
+/// the low bits distinguish days within a minute. Both fields fit for thousands
+/// of years, and one atomic claim still arbitrates concurrent requests.
+fn search_report_window(elapsed: Duration, utc_timestamp: i64) -> u64 {
+    let minute = elapsed.as_secs() / SEARCH_REPORT_INTERVAL.as_secs();
+    let utc_day = utc_timestamp.div_euclid(86_400).max(0) as u64 + 1;
+    (minute << 32) | (utc_day & u64::from(u32::MAX))
+}
+
+/// Consent is checked before claiming a slot or constructing a payload.
+/// App, MCP and named-agent requests bypass the API diagnostic limiter.
+pub(crate) fn should_capture_search(sampled: bool, parsed: bool, non_empty: bool) -> bool {
+    if !is_enabled() {
+        return false;
+    }
+    let window = search_report_window(
+        SEARCH_REPORT_START.elapsed(),
+        chrono::Utc::now().timestamp(),
+    );
+    SEARCH_REPORTS.should_report(sampled, parsed, non_empty, window)
+}
 
 pub struct Analytics {
     client: Client,
@@ -240,6 +308,87 @@ pub fn track_api_usage(request_count: usize) {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn api_polling_preserves_each_result_kind_and_unlimited_unsampled_requests() {
+        let reports = SearchReportLimiter::new();
+        assert!(reports.should_report(true, false, false, 1));
+        for _ in 0..100_000 {
+            assert!(!reports.should_report(true, false, false, 1));
+            assert!(reports.should_report(false, false, false, 1));
+        }
+        // The empty API flood must not hide successful or parsed results.
+        assert!(reports.should_report(true, false, true, 1));
+        assert!(reports.should_report(true, true, false, 1));
+        assert!(reports.should_report(true, true, true, 1));
+        for parsed in [false, true] {
+            for non_empty in [false, true] {
+                assert!(!reports.should_report(true, parsed, non_empty, 1));
+                assert!(reports.should_report(true, parsed, non_empty, 2));
+            }
+        }
+    }
+
+    #[test]
+    fn unsampled_searches_do_not_consume_the_api_budget() {
+        let reports = SearchReportLimiter::new();
+        for _ in 0..100 {
+            assert!(reports.should_report(false, false, true, 1));
+        }
+        assert!(reports.should_report(true, false, true, 1));
+    }
+
+    #[test]
+    fn midnight_preserves_daily_presence_and_clock_rollback_does_not_stall_reporting() {
+        let reports = SearchReportLimiter::new();
+        let before_midnight = search_report_window(Duration::from_secs(10), 86_399);
+        let after_midnight = search_report_window(Duration::from_secs(11), 86_400);
+        assert!(reports.should_report(true, false, true, before_midnight));
+        assert!(reports.should_report(true, false, true, after_midnight));
+        assert!(!reports.should_report(true, false, true, after_midnight));
+        // A delayed previous-day caller cannot reopen an already used slot.
+        assert!(!reports.should_report(true, false, true, before_midnight));
+        // A clock correction cannot suppress reports beyond the current minute.
+        let rolled_back = search_report_window(Duration::from_secs(60), 86_000);
+        assert!(reports.should_report(true, false, true, rolled_back));
+        assert!(!reports.should_report(true, false, true, rolled_back));
+    }
+
+    #[test]
+    fn search_reports_bound_a_flood_and_allow_the_next_window() {
+        let window = AtomicU64::new(0);
+        assert!(claim_search_window(&window, 1));
+        for _ in 0..100_000 {
+            assert!(!claim_search_window(&window, 1));
+        }
+        assert!(claim_search_window(&window, 2));
+        // A delayed concurrent caller must not move the window backwards.
+        assert!(!claim_search_window(&window, 1));
+        assert!(!claim_search_window(&window, 2));
+        assert!(claim_search_window(&window, 180));
+        assert!(!claim_search_window(&window, 180));
+    }
+
+    #[test]
+    fn concurrent_searches_share_one_report_budget() {
+        let window = AtomicU64::new(0);
+        let barrier = std::sync::Barrier::new(16);
+        let emitted = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..16)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        claim_search_window(&window, 1)
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|worker| usize::from(worker.join().unwrap()))
+                .sum::<usize>()
+        });
+        assert_eq!(emitted, 1);
+    }
 
     // The three vars telemetry_disabled_by_env inspects. CI runners set
     // CI/GITHUB_ACTIONS for real, so every test saves and restores them.

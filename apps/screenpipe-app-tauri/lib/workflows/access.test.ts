@@ -37,3 +37,11 @@ it("keeps Private usable after Intelligent is exhausted while retaining verified
   expect(workflowAccess(null, "private").state).toBe("unavailable");
   expect(workflowAccess(usage({ hosted_ai: { plan: "free" } }), "private").state).toBe("upgrade");
 });
+
+it("custom provider bypasses hosted allowance without bypassing Business entitlement", () => {
+  const exhausted = usage({ remaining: 0, cost_limit_reached: true });
+  expect(workflowAccess(exhausted, "preset:Own API", true).state).toBe("ready");
+  expect(workflowAccess(exhausted, "preset:Hosted preset", false).state).toBe("paused");
+  expect(workflowAccess(usage({ hosted_ai: { plan: "free" } }), "preset:Own API", true).state).toBe("upgrade");
+  expect(workflowAccess(null, "preset:Own API", true).state).toBe("unavailable");
+});

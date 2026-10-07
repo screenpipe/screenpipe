@@ -285,6 +285,8 @@ replace `<EXISTING_NOTE>` with the meeting's current `note` field (empty string 
 const LEGACY_MEETING_AUDIO_FETCH: &str = r###"  curl -s -G -H "$A" --data-urlencode "start_time=$S" --data-urlencode "end_time=$E" \
     -d content_type=audio -d limit=500 "http://localhost:3030/search" -o /tmp/audio.json &"###;
 
+const LEGACY_MEETING_TITLE_SAVE_RULE: &str = r###"`-f` matters: if this call fails, say so in your closing message instead of reporting success. for the title: if the current title is missing, generic ("untitled", "meeting", just the app name) or doesn't capture what actually happened, pass a 5-8 word plain-english title (no quotes, no "meeting about…" prefix) — otherwise pass the empty string so a user-set title is left alone. if there's nothing useful to summarize (empty transcript, irrelevant audio), say so out loud and skip the save — don't write a placeholder."###;
+
 /// Swaps for `meeting-summary`, oldest defect first.
 fn meeting_summary_swaps() -> Vec<FragmentSwap> {
     let mut swaps = vec![
@@ -548,6 +550,18 @@ fn meeting_summary_swaps() -> Vec<FragmentSwap> {
         swaps.push(FragmentSwap {
             why: "do not reject readable meeting speech because screen evidence is unrelated",
             old: "summarize what happened: key topics, decisions, action items. use accessibility",
+            new: rule,
+        });
+    }
+
+    if let Some(rule) = section_between(
+        bundled_prompt("meeting-summary").unwrap_or(""),
+        "`-f` matters:",
+        "\n\nstep 4",
+    ) {
+        swaps.push(FragmentSwap {
+            why: "have the summary agent choose a useful title and verify its save",
+            old: LEGACY_MEETING_TITLE_SAVE_RULE,
             new: rule,
         });
     }
@@ -932,6 +946,28 @@ fn replace_prompt_body_when_hash_matches(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn migrates_meeting_title_instructions_without_changing_user_settings() {
+        let prompt = bundled("meeting-summary");
+        let rule = section_between(prompt, "`-f` matters:", "\n\nstep 4").unwrap();
+        let stale = format!(
+            "{}\nMy custom instructions stay here.\n",
+            prompt
+                .replace(rule, LEGACY_MEETING_TITLE_SAVE_RULE)
+                .replace("enabled: true", "enabled: false")
+        );
+        let migrated = migrate_builtin_pipe_text("meeting-summary", &stale).unwrap();
+        assert!(migrated.contains("Naming the meeting is part of summarizing it"));
+        assert!(migrated.contains("If the title changed while you were working"));
+        assert!(migrated.contains("verify that the summary and any title you supplied are present"));
+        assert!(migrated.contains("skip the save and leave the title unchanged"));
+        assert!(migrated.contains("enabled: false"));
+        assert!(migrated.ends_with("My custom instructions stay here.\n"));
+        assert!(migrate_builtin_pipe_text("meeting-summary", &migrated).is_none());
+        assert!(migrate_builtin_pipe_text("day-recap", &stale).is_none());
+        assert!(migrate_builtin_pipe_text("meeting-summary", "My custom summary prompt").is_none());
+    }
+
     #[test]
     fn default_discovery_cadence_upgrades_without_enabling_or_changing_custom_schedules() {
         let bundled = super::bundled_prompt("workflow-discover").unwrap();

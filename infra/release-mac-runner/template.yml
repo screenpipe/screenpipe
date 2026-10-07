@@ -6,6 +6,11 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: Persistent EC2 Mac for trusted Screenpipe release workflows.
 
 Parameters:
+  RunnerName:
+    Type: String
+    Default: screenpipe-release-mac
+    AllowedPattern: "^screenpipe-release-mac(-[a-z0-9-]+)?$"
+    Description: Unique name for this independently provisioned release runner.
   AvailabilityZone:
     Type: AWS::EC2::AvailabilityZone::Name
     Description: Availability Zone that offers the selected EC2 Mac type.
@@ -45,7 +50,7 @@ Resources:
       EnableDnsSupport: true
       Tags:
         - Key: Name
-          Value: screenpipe-release-mac
+          Value: !Ref RunnerName
 
   RunnerInternetGateway:
     Type: AWS::EC2::InternetGateway
@@ -65,7 +70,7 @@ Resources:
       VpcId: !Ref RunnerVpc
       Tags:
         - Key: Name
-          Value: screenpipe-release-mac
+          Value: !Ref RunnerName
 
   RunnerRouteTable:
     Type: AWS::EC2::RouteTable
@@ -111,7 +116,7 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
       Tags:
         - Key: Name
-          Value: screenpipe-release-mac
+          Value: !Ref RunnerName
 
   RunnerInstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -132,7 +137,7 @@ Resources:
       InstanceType: !Ref InstanceType
       Tags:
         - Key: Name
-          Value: screenpipe-release-mac
+          Value: !Ref RunnerName
         - Key: Workload
           Value: screenpipe-release
 
@@ -183,12 +188,23 @@ Resources:
             security import "$APPLE_CERT_DIR/DeveloperIDG2CA.cer" \
               -t cert -k /Library/Keychains/System.keychain || true
 
-            sudo -u ec2-user -H /bin/bash <<'BOOTSTRAP'
+            # Run a file: installers must not consume the remaining shell input.
+            cat > /var/tmp/screenpipe-release-runner-bootstrap-user.sh <<'BOOTSTRAP'
             set -euo pipefail
             eval "$(/opt/homebrew/bin/brew shellenv)"
             brew update
             brew install aria2 bun cmake ffmpeg gh git-lfs jq node sccache wget
-            brew install xcodesorg/made/xcodes
+            # The source formula needs Swift compatibility libraries absent
+            # from the stock AMI. Use the checksum-pinned upstream binary.
+            if [[ ! -x /opt/homebrew/bin/xcodes ]]; then
+              XCODES_TMP=$(mktemp -d)
+              curl -fsSL -o "$XCODES_TMP/xcodes.zip" \
+                https://github.com/XcodesOrg/xcodes/releases/download/2.1.0/xcodes.zip
+              echo "f1519afe934a513e85dd9b32fc872394becbbb6a41db15d9ac3926a09a891888  $XCODES_TMP/xcodes.zip" | shasum -a 256 -c -
+              ditto -x -k "$XCODES_TMP/xcodes.zip" "$XCODES_TMP"
+              install -m 0755 "$XCODES_TMP/xcodes" /opt/homebrew/bin/xcodes
+              rm -rf "$XCODES_TMP"
+            fi
 
             if [[ ! -x "$HOME/.cargo/bin/rustup" ]]; then
               curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
@@ -203,6 +219,9 @@ Resources:
               rm actions-runner-osx-arm64-2.336.0.tar.gz
             fi
             BOOTSTRAP
+            sudo -u ec2-user -H /bin/bash /var/tmp/screenpipe-release-runner-bootstrap-user.sh </dev/null
+            test -x /Users/ec2-user/.cargo/bin/rustup
+            test -x "$RUNNER_ROOT/config.sh"
 
             touch /var/db/screenpipe-release-runner-bootstrap-complete
 
@@ -230,7 +249,7 @@ Resources:
       Tenancy: host
       Tags:
         - Key: Name
-          Value: screenpipe-release-mac
+          Value: !Ref RunnerName
         - Key: Workload
           Value: screenpipe-release
 
@@ -256,6 +275,6 @@ Outputs:
   InstanceId:
     Value: !Ref RunnerInstance
   RunnerName:
-    Value: screenpipe-release-mac
+    Value: !Ref RunnerName
   RunnerLabel:
     Value: screenpipe-release-macos

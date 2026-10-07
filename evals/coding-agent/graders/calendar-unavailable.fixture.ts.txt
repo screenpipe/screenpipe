@@ -1,0 +1,75 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+import { beforeEach, expect, test, vi } from 'vitest';
+const ports = vi.hoisted(() => ({ localFetch: vi.fn(), commands: {
+  calendarStatus: vi.fn(), oauthStatus: vi.fn(), oauthListInstances: vi.fn(),
+  icsCalendarGetEntries: vi.fn(), icsCalendarGetUpcoming: vi.fn(),
+}}));
+vi.mock('@/lib/api', () => ({localFetch: ports.localFetch}));
+vi.mock('@/lib/utils/tauri', () => ({commands: ports.commands}));
+import { fetchUpcomingCalendarSnapshot } from './lib/utils/calendar';
+const ok = (data: unknown) => ({status:'ok', data});
+const event = (title='Synthetic meeting') => ({id:title,title,start:'2030-01-02T10:00:00Z',end:'2030-01-02T11:00:00Z'});
+const nativeStatus = (available:boolean, authorized=false, calendarCount=0) =>
+  ports.commands.calendarStatus.mockResolvedValue(ok({available, authorized, calendarCount}));
+const nativeCalls = () => ports.localFetch.mock.calls.filter(([url])=>url.startsWith('/connections/calendar/events?'));
+const response = (body: unknown, success=true) => ({ok:success,json:async()=>body});
+beforeEach(()=>{
+  vi.resetAllMocks(); nativeStatus(false);
+  ports.commands.oauthStatus.mockResolvedValue(ok({connected:false}));
+  ports.commands.oauthListInstances.mockResolvedValue(ok([]));
+  ports.commands.icsCalendarGetEntries.mockResolvedValue(ok([]));
+  ports.commands.icsCalendarGetUpcoming.mockResolvedValue(ok([]));
+  ports.localFetch.mockResolvedValue(response({},false));
+});
+test('repeated known-unavailable polls make no native request and stay disconnected',async()=>{
+  for(let i=0;i<2;i++) {
+    const s=await fetchUpcomingCalendarSnapshot();
+    expect(s.connectedSources).toEqual([]);expect(s.failedSources).toEqual([]);expect(s.events).toEqual([]);
+  }
+  expect(nativeCalls()).toHaveLength(0);
+});
+test('unknown native status and explicit disconnected HTTP body stay disconnected',async()=>{
+  ports.commands.calendarStatus.mockRejectedValue(new Error('synthetic status unavailable'));
+  ports.localFetch.mockResolvedValue(response({connected:false,data:[]}));
+  const s=await fetchUpcomingCalendarSnapshot();
+  expect(nativeCalls()).toHaveLength(1);expect(s.connectedSources).toEqual([]);expect(s.failedSources).toEqual([]);expect(s.events).toEqual([]);
+});
+test('available but stale unauthorized status still recovers events through HTTP',async()=>{
+  nativeStatus(true);ports.localFetch.mockResolvedValue(response({data:[event()]}));
+  const s=await fetchUpcomingCalendarSnapshot({hoursBack:2,hoursAhead:6});
+  expect(nativeCalls()).toHaveLength(1);
+  const url=new URL(nativeCalls()[0][0],'http://localhost');expect(url.searchParams.get('hours_back')).toBe('2');expect(url.searchParams.get('hours_ahead')).toBe('6');
+  expect(s.connectedSources).toEqual(['native']);expect(s.failedSources).toEqual([]);expect(s.events).toMatchObject([{title:'Synthetic meeting',source:'native'}]);
+});
+test('authorized empty native calendar remains connected and healthy',async()=>{
+  nativeStatus(true,true,1);ports.localFetch.mockResolvedValue(response({data:[]}));
+  const s=await fetchUpcomingCalendarSnapshot();expect(s.connectedSources).toEqual(['native']);expect(s.failedSources).toEqual([]);expect(s.events).toEqual([]);
+});
+test('unknown native status may recover a successful nonempty HTTP result',async()=>{
+  ports.commands.calendarStatus.mockResolvedValue({status:'error',error:'synthetic status unavailable'});
+  ports.localFetch.mockResolvedValue(response({data:[event()]}));
+  const s=await fetchUpcomingCalendarSnapshot();expect(s.connectedSources).toEqual(['native']);expect(s.failedSources).toEqual([]);expect(s.events).toHaveLength(1);
+});
+test('authorized native HTTP failure remains a connected failed source',async()=>{
+  nativeStatus(true,true,1);const s=await fetchUpcomingCalendarSnapshot();
+  expect(nativeCalls()).toHaveLength(1);expect(s.connectedSources).toEqual(['native']);expect(s.failedSources).toEqual(['native']);expect(s.events).toEqual([]);
+});
+test('disconnected Google account makes no Google request',async()=>{
+  await fetchUpcomingCalendarSnapshot();expect(ports.localFetch.mock.calls.filter(([url])=>url.includes('/google-calendar/'))).toHaveLength(0);
+});
+test('both connected Google accounts retain their events with unavailable native calendar',async()=>{
+  ports.commands.oauthListInstances.mockResolvedValue(ok([{instance:'one@example.com'},{instance:'two@example.com'}]));
+  ports.commands.oauthStatus.mockResolvedValue(ok({connected:true}));
+  ports.localFetch.mockImplementation(async(raw:string)=>{
+    const url=new URL(raw,'http://localhost');
+    return url.pathname==='/connections/google-calendar/events'?response([event(url.searchParams.get('instance')!)]):response({},false);
+  });
+  const s=await fetchUpcomingCalendarSnapshot();expect(s.connectedSources).toEqual(['google']);expect(s.failedSources).toEqual([]);
+  expect(s.events.map(e=>e.title).sort()).toEqual(['one@example.com','two@example.com']);expect(s.events.every(e=>e.source==='google')).toBe(true);
+});
+test('enabled ICS events survive unavailable native calendar',async()=>{
+  ports.commands.icsCalendarGetEntries.mockResolvedValue(ok([{id:'synthetic-feed',enabled:true}]));
+  ports.commands.icsCalendarGetUpcoming.mockResolvedValue(ok([event('Synthetic ICS')]));
+  const s=await fetchUpcomingCalendarSnapshot();expect(s.connectedSources).toEqual(['ics']);expect(s.failedSources).toEqual([]);expect(s.events).toMatchObject([{title:'Synthetic ICS',source:'ics'}]);
+});

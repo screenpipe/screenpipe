@@ -67,7 +67,7 @@ The hidden fixture appears only at grading and uses no dependency links.
 This does not establish native recording continuity, real authentication,
 account-switch race safety, browser integration, isolation or model performance.
 
-The current app corpus contains 130 git-mined regressions. See
+The current app corpus contains 132 git-mined regressions. See
 [DESIGN.md](./DESIGN.md) for the Anthropic guidance, source contract, and
 history-mining workflow. The companion website manifest uses this same harness.
 
@@ -1626,6 +1626,35 @@ bypass, equivalent, preserved-behavior and setup-error controls. Hidden fixtures
 and dependency links appear only after the trajectory. This does not establish
 native persistence, encryption, real account access, provider delivery, execution
 isolation or model improvement.
+
+The `app-native-calendar-unavailable-poll` case executes the actual frontend
+calendar module with synthetic HTTP and native-command ports. Nine outcomes
+cover repeated unavailable polls, explicit disconnected responses, stale or
+unknown status recovery, connected empty calendars, authorized HTTP failures,
+and preserved Google/ICS providers. The parent fails two intended outcomes and
+preserves seven; reference and current source pass nine.
+Run `bun test evals/coding-agent/calibrate-calendar-unavailable.test.js` for eleven
+controls, including equivalent implementations, unused repairs, blanket native
+suppression and missing-module setup errors. Only the frontend calendar module
+is applied from the historical fix. Native endpoint mappings, OS permissions,
+OAuth refresh, publisher backoff, enforced agent isolation and model performance
+remain outside this evidence. Fixtures and dependencies are installed at grading.
+
+
+`app-meeting-stop-save-refusal` mounts the real historical NoteView with synthetic
+editor-input, HTTP and native ports. Five outcomes preserve draft-save ordering,
+overlapping edits, ordinary autosave and unchanged notes, while ensuring an
+explicit Stop still runs once after a failed save, with a warning and no false
+Saved indication. The parent fails that Stop outcome and preserves four; the
+historical reference passes five. Separate current-component checks preserve
+these outcomes with current display and inactive-service adapters.
+Run `bun test evals/coding-agent/calibrate-meeting-stop.test.js` with desktop test
+dependencies available for eleven historical grader controls, including inline warnings, empty feedback, changed
+warning copy, unused correct source, early/duplicate Stop, silent refusal, false
+Saved status and missing-source classification. Hidden fixtures and dependency
+links appear only when grading begins. This does not test editor internals,
+native stop/deferral release, database durability, global recording pause, full
+current dependency parity, execution isolation or model improvement.
 
 ## Memory tags around malformed rows
 

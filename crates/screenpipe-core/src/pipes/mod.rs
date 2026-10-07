@@ -1999,10 +1999,21 @@ fn read_store_bin(path: &Path) -> Option<serde_json::Value> {
 /// Falls back to the default preset if `preset_id` is `"default"`.
 /// Creates store.bin with a default preset if it doesn't exist (CLI mode).
 fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
+    resolve_preset_inner(pipes_dir, preset_id, false)
+}
+
+pub(crate) fn resolve_exact_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
+    resolve_preset_inner(pipes_dir, preset_id, true)
+}
+
+fn resolve_preset_inner(pipes_dir: &Path, preset_id: &str, exact: bool) -> Option<ResolvedPreset> {
     // store.bin lives at ~/.screenpipe/store.bin (sibling of pipes/)
     let store_path = pipes_dir.parent()?.join("store.bin");
 
     if !store_path.exists() {
+        if exact {
+            return None;
+        }
         // Bootstrap for CLI users who don't have the app.
         // Default to screenpipe cloud — user needs SCREENPIPE_API_KEY env var.
         // Mirrors the app's first-install seed (use-settings.tsx makeDefaultPresets):
@@ -2045,6 +2056,7 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
 
     // Normalize legacy preset IDs to current names
     let normalized_id = match preset_id {
+        id if exact => id,
         "pi-agent" => "screenpipe-cloud",
         "auto" => "default",
         other => other,
@@ -2054,7 +2066,7 @@ fn resolve_preset(pipes_dir: &Path, preset_id: &str) -> Option<ResolvedPreset> {
         preset.get("provider").and_then(|value| value.as_str()) != Some("acp")
     };
 
-    let preset = if normalized_id == "default" {
+    let preset = if !exact && normalized_id == "default" {
         // Preserve existing scheduled behavior when the user's chat default is
         // ACP: only an explicit pipe selection opts into the ACP executor.
         // Otherwise prefer the dedicated `pipes` preset, then another raw one.
