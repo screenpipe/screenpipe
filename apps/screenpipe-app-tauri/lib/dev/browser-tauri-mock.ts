@@ -533,6 +533,9 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
           source,
           sourceId: `${source}-browser-dev-${index}`,
           importedAt: timestamp,
+          config: source === "codex"
+            ? { model: "gpt-5.4", reasoningEffort: "high" }
+            : { model: "claude-sonnet-4-6", modeId: "plan" },
           harness,
         },
         messages: [

@@ -91,7 +91,7 @@ function seedStore(messages: any[], overrides: Partial<SessionRecord> = {}) {
   });
 }
 
-function useHarness() {
+function useHarness(options: Partial<Parameters<typeof useChatConversations>[0]> = {}) {
   const messagesRef = useRef<any[]>([]);
   const conversationIdRef = useRef<string | null>(null);
   const piSessionIdRef = useRef("");
@@ -128,6 +128,7 @@ function useHarness() {
     settings: { chatHistory: { historyEnabled: true } },
     inlineHistoryEnabled: false,
     selectedPreset: null,
+    ...options,
   });
   return {
     hook,
@@ -354,5 +355,60 @@ describe("direct conversation hydration", () => {
     expect(state.sessions["chat-target"]).toBeUndefined();
     expect(state.ephemeralSideConversationIds["chat-target"]).toBe(true);
     expect(result.current.messagesRef.current).toEqual([]);
+  });
+});
+
+
+describe("conversation preset restoration", () => {
+  const preset = { id: "codex", provider: "acp", model: "codex-acp", apiKey: null,
+    maxContextChars: 512000, prompt: "", defaultPreset: false,
+    acpAgent: { id: "codex-acp", config: { model: "gpt-5.4" } } } as const;
+
+  it("resolves source metadata and persists the preset before showing the imported composer", async () => {
+    const imported = { ...conversation([user, completed]),
+      importedFrom: { source: "codex", sourceId: "original", importedAt: 1,
+        config: { model: "gpt-5.4" } } };
+    loadConversationFile.mockResolvedValue(imported);
+    const resolveConversationPreset = vi.fn(async () => preset);
+    const onRestorePreset = vi.fn();
+    const { result } = renderHook(() => useHarness({ resolveConversationPreset, onRestorePreset }));
+    await act(async () => { await result.current.hook.loadConversation(imported as any); });
+    expect(resolveConversationPreset).toHaveBeenCalledWith(expect.objectContaining({ importedFrom: imported.importedFrom }));
+    expect(updateConversationFlags).toHaveBeenCalledWith("chat-target", { presetId: "codex" });
+    expect(onRestorePreset).toHaveBeenCalledWith(preset);
+    expect(useChatStore.getState().sessions["chat-target"].presetId).toBe("codex");
+    expect(emit).not.toHaveBeenCalledWith("chat-preset-restore", expect.anything());
+  });
+
+  it("keeps the latest in-memory user choice when resolving a previously imported chat", async () => {
+    seedStore([user], { presetId: "cloud-choice" });
+    loadConversationFile.mockResolvedValue({ ...conversation([user]), presetId: "old-agent" });
+    const resolveConversationPreset = vi.fn(async () => undefined);
+    const { result } = renderHook(() => useHarness({ resolveConversationPreset }));
+    await act(async () => { await result.current.hook.loadConversation(conversation([]) as any); });
+    expect(resolveConversationPreset).toHaveBeenCalledWith(expect.objectContaining({ presetId: "cloud-choice" }));
+  });
+
+  it("ignores a slow preset resolution after navigation to another chat", async () => {
+    loadConversationFile.mockImplementation(async (id: string) => ({ ...conversation([user]), id }));
+    let finish!: (value: typeof preset) => void;
+    const resolveConversationPreset = vi.fn()
+      .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValueOnce({ ...preset, id: "claude" });
+    const onRestorePreset = vi.fn();
+    const { result } = renderHook(() => useHarness({ resolveConversationPreset, onRestorePreset }));
+    let first!: Promise<void>;
+    await act(async () => {
+      first = result.current.hook.loadConversation(conversation([]) as any);
+      await vi.waitFor(() => expect(resolveConversationPreset).toHaveBeenCalledTimes(1));
+    });
+    await act(async () => {
+      await result.current.hook.loadConversation({ ...conversation([]), id: "second" } as any);
+      finish(preset);
+      await first;
+    });
+    expect(onRestorePreset).toHaveBeenCalledTimes(1);
+    expect(onRestorePreset).toHaveBeenCalledWith(expect.objectContaining({ id: "claude" }));
+    expect(updateConversationFlags).not.toHaveBeenCalledWith("chat-target", { presetId: "codex" });
   });
 });

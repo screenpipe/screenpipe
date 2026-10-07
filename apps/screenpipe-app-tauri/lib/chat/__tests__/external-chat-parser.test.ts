@@ -144,6 +144,7 @@ describe("external agent chat parsers", () => {
       source: "claude-code",
       sourceId: "claude-session",
       importedAt: 99,
+      config: { model: "claude-test" },
     });
   });
 

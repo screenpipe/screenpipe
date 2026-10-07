@@ -163,6 +163,7 @@ function importedConversationIsUnchanged(
     || existing.title !== incoming.title
     || existing.titleSource !== incoming.titleSource
     || existing.lastViewedAt !== incoming.lastViewedAt
+    || JSON.stringify(existing.importedFrom) !== JSON.stringify(incoming.importedFrom)
     || existing.messages.length !== incoming.messages.length
   ) {
     return false;

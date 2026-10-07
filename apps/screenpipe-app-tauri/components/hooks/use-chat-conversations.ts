@@ -108,6 +108,8 @@ interface UseChatConversationsOpts {
   selectedPreset?: AIPreset | null;
   selectedPresetRef?: MutableRefObject<AIPreset | undefined | null>;
   inlineHistoryEnabled?: boolean;
+  resolveConversationPreset?: (conversation: ChatConversation | ConversationMeta) => Promise<AIPreset | undefined>;
+  onRestorePreset?: (preset: AIPreset) => void;
 }
 
 interface SaveConversationOptions {
@@ -1384,6 +1386,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
             messageCount: persisted.messages?.length ?? 0,
             createdAt: persisted.createdAt ?? Date.now(),
             updatedAt: persisted.updatedAt ?? Date.now(),
+            importedFrom: persisted.importedFrom,
             pinned: persisted.pinned === true,
             unread: false,
             ...(persisted.hidden === true ? { hidden: true } : {}),
@@ -1554,6 +1557,29 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // do not let this older request overwrite the panel when it resumes.
     if (!isLatestRequest()) return;
 
+    // Resolve before exposing the incoming composer: imported chats must not
+    // briefly send through the previous conversation's provider.
+    let restoredPreset: AIPreset | undefined;
+    if (opts.resolveConversationPreset) {
+      const session = useChatStore.getState().sessions[conv.id];
+      restoredPreset = await opts.resolveConversationPreset({
+        ...conv,
+        ...(persisted ?? {}),
+        importedFrom: persisted?.importedFrom ?? session?.importedFrom ?? conv.importedFrom,
+        messages: messagesForPanel as ChatConversation["messages"],
+        presetId: session?.presetId ?? persisted?.presetId ?? conv.presetId,
+      });
+      if (!isLatestRequest()) return;
+      if (restoredPreset) {
+        if (!isEphemeralSideChat) {
+          await updateConversationFlags(conv.id, { presetId: restoredPreset.id });
+          if (!isLatestRequest()) return;
+        }
+        opts.onRestorePreset?.(restoredPreset);
+        store.actions.patch(conv.id, { presetId: restoredPreset.id });
+      }
+    }
+
     // Keep the outgoing draft visible during async restoration. Replace it
     // atomically with the incoming transcript/draft once this request wins.
     setInput("");
@@ -1618,7 +1644,7 @@ export function useChatConversations(opts: UseChatConversationsOpts) {
     // Emit the preset ID so the chat panel can restore the model selection.
     // This ensures the model selector reflects the preset used in this chat.
     const presetId = useChatStore.getState().sessions[conv.id]?.presetId ?? persisted?.presetId ?? (conv as ChatConversation).presetId;
-    if (presetId && isLatestRequest()) {
+    if (!opts.onRestorePreset && presetId && isLatestRequest()) {
       try {
         await emit("chat-preset-restore", { presetId });
       } catch {

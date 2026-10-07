@@ -200,6 +200,13 @@ export interface ChatMessage {
  *                    rather than "Recents". */
 export type ConversationKind = "chat" | "pipe-watch" | "pipe-run";
 
+/** Portable defaults explicitly recorded by the source transcript. */
+export interface ImportedAgentConfig {
+	model?: string;
+	reasoningEffort?: string;
+	modeId?: string;
+}
+
 /** The client surface that hosted an imported agent conversation. */
 export type AgentHarness = "terminal" | "cursor" | "github-copilot" | "screenpipe";
 
@@ -225,6 +232,7 @@ export interface ChatConversation {
 		importedAt: number;
 		/** Optional when the transcript exposes which client hosted the run. */
 		harness?: AgentHarness;
+		config?: ImportedAgentConfig;
 	};
 	/** User pinned this conversation in the chat sidebar — keeps it at the top.
 	 *  Persists across app restarts via the on-disk conversation file. */

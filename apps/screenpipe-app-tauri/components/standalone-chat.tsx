@@ -6,9 +6,12 @@
 import * as React from "react";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
-import { deleteConversationFile } from "@/lib/chat-storage";
+import { updateConversationFlags, deleteConversationFile } from "@/lib/chat-storage";
 import { writeActiveAiPresetId } from "@/lib/active-ai-preset";
-import { useSettings } from "@/lib/hooks/use-settings";
+import { useSettings, getStore, DEFAULT_PROMPT } from "@/lib/hooks/use-settings";
+import { resolveImportedChatPreset, type ImportedPresetConversation } from "@/lib/chat/imported-chat-preset";
+import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
+import { DEFAULT_ENTERPRISE_AI_PRESET_POLICY, filterPresetsForEnterprisePolicy } from "@/lib/enterprise-ai-preset-policy";
 import { cn } from "@/lib/utils";
 import {
   hasOpenShortcutBlockingLayer,
@@ -204,6 +207,35 @@ export function StandaloneChat({
   // every one of them unreachable. Fails closed — an undefined flag (offline,
   // PostHog blocked, opt-out) hides ACP.
   const acpEnabled = useAcpRolloutEnabled();
+  const { isManagedDeployment, policy: enterprisePolicy } = useManagedPolicy();
+  const aiPresetPolicy = enterprisePolicy.aiPresetPolicy ?? DEFAULT_ENTERPRISE_AI_PRESET_POLICY;
+  const presetRestoreQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const resolveConversationPreset = (conversation: ImportedPresetConversation): Promise<AIPreset | undefined> => {
+    const resolve = async () => {
+      // Read after prior creations finish, rather than append to a React
+      // snapshot captured before another chat was opened.
+      const store = await getStore();
+      const fresh = await store.get<{ aiPresets?: AIPreset[] }>("settings");
+      const allPresets = fresh?.aiPresets ?? settings.aiPresets;
+      const visible = filterAcpPresets(
+        isManagedDeployment ? filterPresetsForEnterprisePolicy(allPresets, aiPresetPolicy) : allPresets,
+        acpEnabled,
+      );
+      const resolution = resolveImportedChatPreset(conversation, visible,
+        acpEnabled && (!isManagedDeployment || aiPresetPolicy.allow_employee_custom_presets),
+        allPresets.map(preset => preset.id));
+      if (!resolution) return undefined;
+      if (resolution.created) {
+        const preset = { ...resolution.preset, prompt: DEFAULT_PROMPT };
+        await updateSettings({ aiPresets: [...allPresets, preset] });
+        return preset;
+      }
+      return resolution.preset;
+    };
+    const pending = presetRestoreQueue.current.then(resolve);
+    presetRestoreQueue.current = pending.catch(() => undefined);
+    return pending;
+  };
   const availableAiPresets = React.useMemo(
     () => filterAcpPresets(settings.aiPresets, acpEnabled),
     [settings.aiPresets, acpEnabled],
@@ -357,6 +389,17 @@ export function StandaloneChat({
       }
     }
   }, []);
+
+  const handleSelectPreset = useCallback((preset: AIPreset) => {
+    handleSetActivePreset(preset);
+    const state = useChatStore.getState();
+    const id = state.panelSessionId ?? state.currentId;
+    if (!id || !state.sessions[id]) return;
+    state.actions.patch(id, { presetId: preset.id });
+    void updateConversationFlags(id, { presetId: preset.id }).catch((error) => {
+      console.warn("Failed to save chat preset:", error);
+    });
+  }, [handleSetActivePreset]);
 
   // Persist an ACP config choice (a select option value, or the mode) onto the
   // active preset's acpAgent defaults, so `apply_session_defaults` applies it on
@@ -998,6 +1041,8 @@ export function StandaloneChat({
     settings: rolloutSettings,
     selectedPreset: activePreset ?? null,
     selectedPresetRef: activePresetRef,
+    resolveConversationPreset,
+    onRestorePreset: handleSetActivePreset,
     inlineHistoryEnabled: !hideInlineHistory,
   });
   const loadConversationRef = useRef(loadConversation);
@@ -2170,7 +2215,7 @@ export function StandaloneChat({
       switch (action.type) {
         case "preset":
           if (conversationId) useChatStore.getState().actions.patch(conversationId, { presetId: action.preset.id });
-          handleSetActivePreset(action.preset); handlePiRestart(action.preset); break;
+          handleSelectPreset(action.preset); handlePiRestart(action.preset); break;
         case "acp": handleAcpConfigDefault(action.change); break;
         case "reauthenticate": return handleReauthenticate();
         case "command": return runComposerCommandRef.current?.(action.command);
@@ -2587,7 +2632,7 @@ export function StandaloneChat({
           activePipeExecution,
           currentQueueSessionId,
           onPresetSaved: handlePiRestart,
-          onSelectPreset: handleSetActivePreset,
+          onSelectPreset: handleSelectPreset,
           onAcpConfigDefault: handleAcpConfigDefault,
           onReauthenticate: handleReauthenticate,
         }}

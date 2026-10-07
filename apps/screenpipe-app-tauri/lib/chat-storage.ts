@@ -369,12 +369,7 @@ export interface ConversationMeta {
    *  the model selection when switching between chats. */
   presetId?: string;
   /** Provenance for a local Codex or Claude conversation copied into screenpipe. */
-  importedFrom?: {
-    source: "claude-code" | "codex";
-    sourceId: string;
-    importedAt: number;
-    harness?: AgentHarness;
-  };
+  importedFrom?: ChatConversation["importedFrom"];
 }
 
 interface ConversationEntry {
@@ -787,7 +782,7 @@ export async function searchConversations(
  */
 export async function updateConversationFlags(
   id: string,
-  patch: Partial<Pick<ChatConversation, "pinned" | "hidden" | "title" | "titleSource" | "browserState" | "lastViewedAt" | "sidebarGroup">>
+  patch: Partial<Pick<ChatConversation, "pinned" | "hidden" | "title" | "titleSource" | "browserState" | "lastViewedAt" | "sidebarGroup" | "presetId">>
 ): Promise<void> {
   if (isEphemeralSideConversationNamespaceId(id)) return;
   // The read MUST happen inside the lock. Loading first and saving second was

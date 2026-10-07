@@ -545,7 +545,7 @@ export const useChatStore = create<ChatStore>((set) => ({
             sidebarGroup: existing.sidebarGroup ?? r.sidebarGroup,
             dedupKey: existing.dedupKey ?? r.dedupKey,
             branchedFrom: existing.branchedFrom ?? r.branchedFrom,
-            importedFrom: existing.importedFrom ?? r.importedFrom,
+            importedFrom: r.importedFrom ?? existing.importedFrom,
           };
           merged.unread = restoreUnread(existing, merged);
           next[r.id] = merged;
