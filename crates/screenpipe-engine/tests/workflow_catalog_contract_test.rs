@@ -372,17 +372,28 @@ async fn publication_outage_preserves_a_retryable_draft(
     duplicate_payload["id"] = Value::Null;
     let response = post(json!({"task":"workflow-discover","action":"propose",
         "expected_revision":workspace::revision(&workspace::state(&resolved)),
-        "assignee":"workflow-review","payload":duplicate_payload,"note":"Review this candidate"})).await.unwrap();
+        "assignee":"workflow-review","payload":duplicate_payload,"note":"Review this candidate"}))
+    .await
+    .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), 100_000).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 100_000).await.unwrap()).unwrap();
     let response = post(json!({"task":"workflow-review","action":"publish",
         "expected_revision":body["revision"],"catalog_revision":resolved["revision"].as_u64().unwrap_or(0),
         "draft_id":body["draft_id"],"note":"Update existing workflow"})).await.unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
-    let error: Value = serde_json::from_slice(&to_bytes(response.into_body(), 100_000).await.unwrap()).unwrap();
-    assert!(error["error"].as_str().unwrap().contains("exactly duplicates"));
+    let error: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 100_000).await.unwrap()).unwrap();
+    assert!(error["error"]
+        .as_str()
+        .unwrap()
+        .contains("exactly duplicates"));
     let unchanged: Value = serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
     assert_eq!(unchanged["analysis"], resolved["analysis"]);
     assert_eq!(unchanged["checkedThrough"], resolved["checkedThrough"]);
-    assert!(unchanged["agentWorkspace"]["drafts"][body["draft_id"].as_str().unwrap()]["publicationRetry"].is_null());
+    assert!(
+        unchanged["agentWorkspace"]["drafts"][body["draft_id"].as_str().unwrap()]
+            ["publicationRetry"]
+            .is_null()
+    );
 }
