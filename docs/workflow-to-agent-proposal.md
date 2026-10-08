@@ -1,28 +1,80 @@
 <!-- screenpipe — AI that knows everything you've seen, said, or heard -->
 <!-- https://screenpipe.com -->
 
-# Turn discovered workflows into agents
+# Turn a workflow into an agent
 
 <!-- doc-covers: packages/workflows-ui/src, apps/screenpipe-app-tauri/components/workflows/integrated-workflows.tsx, apps/screenpipe-app-tauri/components/chat/home-card-agent-actions.tsx -->
 <!-- doc-verified: 6bb353a863b1d805cc6752fb3f0e1f95a62bec00 -->
 
-**Architecture proposal, October 7, 2026. No runtime implementation.** Background
-workflow miners should discover work across recordings and supported local agent
-transcripts, then persist an automation proposal on the workflow. The workflow
-shows **Turn into agent** when that proposal is ready. A foreground chat or a new
-answer is not required.
+**Design proposal only. Runtime integration is not implemented.**
 
-Home, Context, Library and navigation retain their existing layouts. The compact
-Screenpipe / Claude / Codex picker belongs to the selected workflow's existing
-detail. The Figma mockups below show the workflow before publication, the saved
-proposal action and the provider picker. Runtime implementation remains pending.
+A background workflow miner writes a prompt and a boolean on the workflow.
+The UI shows a small **Turn into agent** action in the existing toolbar when
+that boolean is true. Clicking hands the prompt to the existing agent loop or
+creation flow. Provider choice and scheduling stay in that existing flow.
+
+## Minimal contract
+
+Proposed names, not existing runtime fields:
+
+```ts
+type WorkflowAgentFields = {
+  canAutomate: boolean;
+  agentPrompt: string | null;
+};
+```
+
+`canAutomate` means the miner recommends offering agent creation. It does not
+mean a loop is enabled or running. When true, `agentPrompt` must be nonempty.
+Old workflows default to false. Keep evidence, source references and user edits
+in the workflow's existing fields. There is no separate `agentProposal` object,
+proposal status machine or duplicate schedule store.
+
+```text
+Background miner reads recordings and supported local chats
+  → writes canAutomate + agentPrompt through workflow_workspace
+  → existing Review publishes the workflow
+  → toolbar shows Turn into agent when canAutomate is true
+  → click passes agentPrompt and workflow ID into the existing agent flow
+```
+
+The miner uses judgment: is there a useful task an agent can carry out, and can
+it write a clear prompt for that task? Put inputs, expected output and any review
+step into the prompt. Reuse the workflow's existing evidence for that judgment.
+No foreground chat answer or fixed repetition count is required. The existing
+Review role checks this along with the workflow; no additional review pipeline.
+
+The integration needs to pass the stored prompt into the existing agent flow;
+it is not wired by this documentation PR. The current `workflowAgentTask`
+already constructs a handoff prompt from the workflow's title and ID. Extend
+that route to use `agentPrompt` rather than inventing another executor. Reuse
+existing provider controls and existing loop/schedule ownership. A generated
+prompt is not proof that the agent can complete the task successfully.
+
+## UI
+
+Keep **Turn into agent** alongside Create SOP and Create skill, with the same
+quiet toolbar styling. It is one action, without a chevron, provider menu,
+source-count panel or detached control beside the trigger. Home and Context
+retain their existing layouts. A click opens the existing agent flow with the
+prompt prefilled; it does not start recurring work merely because the miner
+set the boolean.
+
+## Native chat mining still needs wiring
+
+The smaller workflow contract does not make native transcripts available to
+scheduled miners. Reuse the existing local Claude Code/Codex readers through a
+shared read-only retrieval path that works without the sidebar open. Give the
+miners original messages and stable evidence references; extend the existing
+publication verifier to resolve those references. Other Pipes and digital clone
+can reuse that same source access. Hermes requires its own adapter.
 
 ## What exists in the inspected source
 
 | Capability | Current implementation | Gap for this feature |
 | --- | --- | --- |
 | Background workflow mining | Discover, Deepen, Review and Maintain run as scheduled Pipes. Discover requests hourly coverage. Their prompts and allowed APIs research recorder activity, parsed screen history and meetings. | Native transcript coverage is not configured in these agents. Reading a captured Codex window is not reading its native chat history. |
-| Workflow writes | `workflow_workspace` exposes context, propose, handoff and publish, with role restrictions, revisions and durable receipts. Review publishes to the catalog. | There is no supported automation-proposal field that drives this picker through the workflow model and UI. |
+| Workflow writes | `workflow_workspace` exposes context, propose, handoff and publish, with role restrictions, revisions and durable receipts. Review publishes to the catalog. | Add the boolean and prompt to the existing workflow contract, normalization and UI. |
 | Local Claude Code and Codex import | `external-chat-sync.ts` watches `~/.claude/projects` and `~/.codex/sessions`. The desktop chat sidebar starts it. Imports are stored in the Screenpipe chat store. Reconciliation is bounded to seven days and 100 candidates per source. | A UI-mounted importer is not a recorder-independent background mining service or complete historical coverage. |
 | Native chat search | `chat-control.ts` provides `search_chats`; core `chat_control.rs` searches Screenpipe, Codex, Claude, Cursor and Gemini CLI chats. | Scheduled Pipe setup does not install this chat-control extension. Search results are bounded previews, not a full evidence-read contract. |
 | Background chat leads | The separate skill-learning Pipe can call `/agent/learning/chats`, reusing native discovery for up to five recent, inactive chat results from the last day. | Workflow miners do not allow this route. This lead-only endpoint is insufficient for complete workflow evidence. |
@@ -45,105 +97,33 @@ agents or successful runs on an installed app. Claude here means supported local
 Claude Code transcripts; arbitrary Claude web conversations are not covered by
 that reader.
 
-## Proposed background flow
+## Verification required for implementation
 
-```text
-Supported local transcripts + Screenpipe activity
-  → shared incremental retrieval with stable source references
-  → Discover / Deepen investigate jobs and automation opportunities
-  → Review verifies evidence and publishes through workflow_workspace
-  → saved workflow includes its automation proposal
-  → workflow UI renders Turn into agent
-  → user clicks → Screenpipe / Claude / Codex → existing setup / handoff
-```
-
-Reuse the native parsers behind a shared, read-only search and evidence-read
-surface available to scheduled Pipes. It must work without the chat sidebar
-being open. Track source-specific cursors, changed messages, duplicate imported
-copies and unavailable sources. Return original message references and coverage
-gaps, not only generated summaries. Digital clone and other Pipes can use the
-same authorized retrieval surface; digital clone synthesis is optional context,
-not the only route to original transcripts.
-
-Extend the existing workflow publication contract rather than adding a separate
-UI-only suggestion store. A proposed `agentProposal` field would contain status,
-reason, referenced evidence, executable scope, instructions, required inputs,
-expected output, unresolved prerequisites and an optional suggested trigger.
-The field name and exact schema remain proposed. Preserve workflow identity,
-user corrections and dismissal state across subsequent mining runs.
-
-Discover or Deepen can propose the automation while researching the workflow.
-Review verifies the cited original messages and publishes a ready proposal when
-it can explain a useful task an agent can perform, its inputs and expected
-output. A partial workflow can offer automation of only its supported portion.
-Missing prerequisites remain explicit. A fixed number of recurrences or a
-completed foreground answer is not the button's trigger. The trigger is the
-published proposal state. A useful workflow without a ready proposal remains
-visible with its normal controls.
-
-Native chat evidence must also be supported by publication validation and
-catalog round trips. The current verifier resolves recorder evidence; merely
-putting a transcript quotation into a draft is not a complete implementation.
-Keep user requests, assistant claims, tool receipts and observed results distinct.
-
-The UI reads the persisted proposal; it does not run mining on render. Selecting
-**Turn into agent** opens the provider picker with existing icons. Show a short
-reason and the proposed scope in the existing workflow detail. Provider readiness
-is resolved by the actual provider adapter. Creation or scheduling continues
-through existing controls with the instructions prefilled. An opened provider
-is not proof of a created agent or active schedule.
-
-## Implementation acceptance
-
-- A scheduled run discovers a workflow from a supported native transcript that
-  was never visible in a recording and while the chat sidebar is closed.
-- Review reads original messages and persists the proposal through
-  `workflow_workspace`; it survives catalog normalization and an app restart.
-- The workflow action appears from the saved ready proposal with no foreground
-  chat turn. A pending, dismissed or already-created proposal has the appropriate
-  state, without duplicate creation on retries.
-- Source cursors and deduplication survive retries. Missing or unsupported
-  sources are reported as gaps, not successful empty scans. Hermes is reported
-  unsupported until its reader is implemented and verified.
-- A second authorized Pipe can retrieve the same source references without
-  rescanning all transcripts or depending on a digital-clone summary.
-- The picker reuses provider icons and controls. Verify keyboard behavior and
-  truthful handoff states; suggestions alone do not activate schedules.
-- Preserve existing Home and Context. Capture the implemented workflow states
-  before claiming visual or runtime completion. Reuse existing scoped checks;
-  this proposal does not add CI jobs.
+- Publish and reload the two fields through the existing workflow write path;
+  reject true with an empty prompt and preserve user-edited instructions.
+- A true flag shows the toolbar action; false and legacy records do not.
+- Clicking hands the stored prompt and workflow identity into the existing
+  agent flow. It does not create a second scheduler or activate a loop itself.
+- Mine native transcript evidence with the sidebar closed, including work never
+  captured on screen. Report unsupported or unavailable sources accurately.
+- Reuse existing scoped checks. No new CI jobs are part of this proposal.
 
 ## Visual evidence
 
-[Editable Figma frames](https://www.figma.com/design/kQbZmiUwApaPTaKjPXuhzy?node-id=21-5).
-All captures use fictional data in the actual shared-UI browser preview. The
-proposed controls are editable Figma overlays on locked screenshots. Sources and
-counts in the picker are illustrative, not results of live transcript mining.
+[Editable Figma frame](https://www.figma.com/design/kQbZmiUwApaPTaKjPXuhzy?node-id=21-5).
+These are static Figma overlays on the existing shared-UI browser preview, with
+fictional workflow content. No live agent execution is demonstrated.
 
-### Before publication
+### Existing workflow
 
-![Existing workflow without a proposal](pr-assets/workflow-to-agent/02-workflow-before.png)
+![Existing workflow](pr-assets/workflow-to-agent/02-workflow-before.png)
 
-### Published proposal
+### Simple action in the existing toolbar
 
-The action appears alongside the workflow trigger after Review publishes a ready
-proposal. Existing toolbar controls and the underlying document remain intact.
-
-![Workflow with a ready agent proposal](pr-assets/workflow-to-agent/03-miner-proposal.png)
-
-### User opens the picker
-
-The menu is anchored below the action. It describes the proposed task, gives
-source context, and offers the existing Screenpipe, Claude and Codex icons.
-
-![Provider picker for the saved proposal](pr-assets/workflow-to-agent/04-choose-agent.png)
+![Turn into agent without a dropdown](pr-assets/workflow-to-agent/03-simple-agent-action.png)
 
 ### Existing Home and Context
 
-![Existing Home reference](pr-assets/workflow-to-agent/01-home-unchanged.png)
+![Existing Home](pr-assets/workflow-to-agent/01-home-unchanged.png)
 
-![Existing Context reference](pr-assets/workflow-to-agent/05-context-unchanged.png)
-
-The prior chat-only exploration is superseded. These frames illustrate the
-background-miner proposal but do not establish working mining, persistence,
-provider setup or scheduling.
+![Existing Context](pr-assets/workflow-to-agent/05-context-unchanged.png)
