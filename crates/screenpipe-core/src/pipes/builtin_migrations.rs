@@ -756,16 +756,18 @@ fn meeting_summary_evidence_steps() -> Option<&'static str> {
 fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> {
     let shipped_hashes: &[&str] = match name {
         // v2.7.56: retain observed knowledge work while repairing unsupported outcomes.
-        "workflow-discover" => &["d4d8181286615282", "c68d5744f8a33504"],
+        "workflow-discover" => &["eff1a9452fd99dd9", "d4d8181286615282", "c68d5744f8a33504"],
         // Upgrade the shipped knowledge-work prompts too; otherwise existing
         // tasks never receive the observed-scope repair in a new app build.
         "workflow-deepen" => &[
+            "621e5a8c003ddcc2",
             "45c67de30edcc651",
             "b278bd6a8abcfc77",
             "996ff7f9a6026e05",
             "cf31ccaa932b7784",
         ],
         "workflow-review" => &[
+            "e37a7bd572729618",
             "6512c73c08db5ceb",
             "ac29fac407670584",
             "182e0b733f5c2bce",
@@ -774,6 +776,7 @@ fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> 
             "09a0ab9de50d94ff",
         ],
         "workflow-maintain" => &[
+            "73bda92bb418e095",
             "6e11baeed08afb5e",
             "a769acb2f48eb6c3",
             "3fd301c337d95126",
