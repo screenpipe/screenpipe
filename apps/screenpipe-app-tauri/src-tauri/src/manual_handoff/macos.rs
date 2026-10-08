@@ -34,6 +34,7 @@ const EXPECTED_BUILD_ENV: &str = "SCREENPIPE_MANUAL_HANDOFF_BUILD";
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 static LAUNCH_LOCK: Mutex<Option<File>> = Mutex::new(None);
 static PENDING: AtomicBool = AtomicBool::new(false);
+static CAPTURE_BEFORE_HANDOFF: AtomicBool = AtomicBool::new(false);
 
 struct Runtime {
     identity: Identity,
@@ -247,7 +248,7 @@ async fn initialize_inner(root: PathBuf) -> Result<()> {
     let lock = acquire(&runtime.lock).await?;
     let existing = exchange(&runtime, false).await?;
     if let Some(old) = existing {
-        record_selection(&runtime, &old.identity);
+        record_selection(&runtime, &old.identity, &runtime.identity);
         let mut replaced = false;
         if manual_launch() {
             match select(&old.identity, &runtime.identity) {
@@ -321,14 +322,14 @@ async fn focus_existing(old: &Identity) -> Result<()> {
     Ok(())
 }
 
-fn record_selection(runtime: &Runtime, old: &Identity) {
+fn record_selection(runtime: &Runtime, source: &Identity, target: &Identity) {
     crate::update_diagnostics::append(
         &runtime.root,
         "manual_handoff_candidate",
         &format!(
             "source={}; target={}",
-            serde_json::to_string(old).unwrap_or_default(),
-            serde_json::to_string(&runtime.identity).unwrap_or_default()
+            serde_json::to_string(source).unwrap_or_default(),
+            serde_json::to_string(target).unwrap_or_default()
         ),
     );
 }
@@ -395,6 +396,7 @@ async fn serve(app: &tauri::AppHandle, runtime: &Runtime, stream: &mut UnixStrea
     if candidate.hash != peer.hash {
         bail!("incoming bundle changed during launch");
     }
+    record_selection(runtime, &runtime.identity, &peer);
     match prepare(app).await {
         Ok(guard) => {
             if !signing::is_same_process(&peer) {
@@ -440,9 +442,6 @@ async fn prepare(app: &tauri::AppHandle) -> Result<tokio::sync::RwLockWriteGuard
         if crate::search_only::is_entering() {
             bail!("Quit is still stopping capture; reopen this copy once Quit completes");
         }
-        if !crate::search_only::is_active() {
-            bail!("the existing copy is still active; quit it before switching builds");
-        }
         let guard = crate::update_restart::RESTART_SAFETY
             .prepare_restart(WAIT)
             .await
@@ -450,21 +449,41 @@ async fn prepare(app: &tauri::AppHandle) -> Result<tokio::sync::RwLockWriteGuard
         crate::store::persist_store_before_restart(app).map_err(anyhow::Error::msg)?;
         // A manual launch must not inherit the automatic updater's hidden restart marker.
         crate::search_only::prepare_manual_handoff().map_err(anyhow::Error::msg)?;
+        // Opening a verified replacement is the user's restart request. Drain
+        // the current recorder through its normal shutdown before releasing
+        // the database, whether the UI is open or Quit left search running.
+        CAPTURE_BEFORE_HANDOFF.store(
+            app.state::<crate::recording::RecordingState>()
+                .capture_intended(),
+            Ordering::SeqCst,
+        );
         drain_started = true;
-        match crate::recording::bounded_teardown(
-            crate::recording::PRE_EXIT_TEARDOWN_TIMEOUT,
-            async {
-                crate::recording::stop_screenpipe(
-                    app.state::<crate::recording::RecordingState>(),
-                    app.clone(),
-                )
-                .await
-            },
-        )
-        .await
-        {
+        let stopping_app = app.clone();
+        // A timeout must not cancel a recorder halfway through flushing its
+        // durable writer. Recovery joins this task via the lifecycle lock.
+        let stop = tauri::async_runtime::spawn(async move {
+            crate::recording::stop_screenpipe(
+                stopping_app.state::<crate::recording::RecordingState>(),
+                stopping_app.clone(),
+            )
+            .await
+        });
+        let drain_started_at = std::time::Instant::now();
+        // The five-second forced-exit budget is too short for an active
+        // recorder (capture + durable database close took 6.5s in acceptance).
+        // Use the existing IPC reply deadline instead. Exceeding it cancels
+        // this replacement, but the owned stop task still finishes and the
+        // previous owner recovers without abandoning pending writes.
+        match wait_for_drain(stop, WAIT).await {
             crate::recording::TeardownOutcome::Completed => {}
-            other => bail!("search shutdown did not complete: {other:?}"),
+            crate::recording::TeardownOutcome::Failed(error) => {
+                bail!("recording and search shutdown failed: {error}");
+            }
+            crate::recording::TeardownOutcome::TimedOut => bail!(
+                "recording and search shutdown still pending; elapsed_ms={}; timeout_ms={}; remaining_work=finish_shutdown_and_restore_previous_owner; replacement_cancelled=true",
+                drain_started_at.elapsed().as_millis(),
+                WAIT.as_millis(),
+            ),
         }
         tokio::time::timeout(
             crate::recording::PRE_EXIT_TEARDOWN_TIMEOUT,
@@ -485,9 +504,41 @@ async fn prepare(app: &tauri::AppHandle) -> Result<tokio::sync::RwLockWriteGuard
     result
 }
 
+async fn wait_for_drain(
+    stop: tauri::async_runtime::JoinHandle<Result<(), String>>,
+    timeout: Duration,
+) -> crate::recording::TeardownOutcome {
+    crate::recording::bounded_teardown(timeout, async {
+        stop.await.map_err(|error| error.to_string())?
+    })
+    .await
+}
+
 fn recover(app: &tauri::AppHandle) {
-    PENDING.store(false, Ordering::SeqCst);
-    crate::search_only::recover_after_failed_update(app.clone());
+    app.state::<crate::recording::RecordingState>()
+        .set_capture_intent(CAPTURE_BEFORE_HANDOFF.load(Ordering::SeqCst));
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<crate::recording::RecordingState>();
+        let _lifecycle = state.server_lifecycle.lock().await;
+        crate::update_diagnostics::record(
+            "manual_handoff_recovery_started",
+            "outcome=restoring_previous_owner",
+        );
+        let result = crate::recording::spawn_screenpipe_inner(&state, app.clone()).await;
+        PENDING.store(false, Ordering::SeqCst);
+        match result {
+            Ok(()) => crate::update_diagnostics::record(
+                "manual_handoff_recovery_startup_completed",
+                &format!("capture_intended={}", state.capture_intended()),
+            ),
+            Err(error) => {
+                if let Some(runtime) = RUNTIME.get() {
+                    report_failure(&runtime.root, "restore_previous_owner", &error);
+                }
+            }
+        }
+    });
 }
 
 pub(crate) fn reopen(app: &tauri::AppHandle, trigger: &'static str) -> bool {
@@ -592,7 +643,7 @@ async fn legacy_takeover(runtime: &Runtime) -> Result<()> {
         if old.identifier != runtime.identity.identifier {
             continue;
         }
-        record_selection(runtime, &old);
+        record_selection(runtime, &old, &runtime.identity);
         match select(&old, &runtime.identity) {
             Selection::Focus => {
                 focus_existing(&old).await?;
@@ -719,6 +770,47 @@ async fn verify_legacy_stopped(api: &crate::recording::LocalApiContext) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn completed_drain_and_originating_failure_reach_handoff() {
+        use crate::recording::TeardownOutcome;
+        let stop = tauri::async_runtime::spawn(async { Ok(()) });
+        assert_eq!(wait_for_drain(stop, WAIT).await, TeardownOutcome::Completed);
+        let stop = tauri::async_runtime::spawn(async { Err("writer flush failed".into()) });
+        assert_eq!(
+            wait_for_drain(stop, WAIT).await,
+            TeardownOutcome::Failed("writer flush failed".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_deadline_retains_flush_and_excludes_recovery_until_it_finishes() {
+        use crate::recording::TeardownOutcome;
+        use std::sync::Arc;
+        let lifecycle = Arc::new(tokio::sync::Mutex::new(()));
+        let guard = lifecycle.clone().lock_owned().await;
+        let (finish, pending_write) = tokio::sync::oneshot::channel();
+        let flushed = Arc::new(AtomicBool::new(false));
+        let task_flushed = flushed.clone();
+        let stop = tauri::async_runtime::spawn(async move {
+            let _guard = guard;
+            pending_write.await.map_err(|error| error.to_string())?;
+            task_flushed.store(true, Ordering::SeqCst);
+            Ok(())
+        });
+        // At the deadline, unfinished work remains owned by the stop task.
+        assert_eq!(
+            wait_for_drain(stop, Duration::ZERO).await,
+            TeardownOutcome::TimedOut
+        );
+        assert!(lifecycle.try_lock().is_err());
+        assert!(!flushed.load(Ordering::SeqCst));
+        // Completion after the deadline still flushes before recovery can
+        // acquire the same lifecycle lock and reopen the database.
+        finish.send(()).unwrap();
+        let _recovery = lifecycle.lock().await;
+        assert!(flushed.load(Ordering::SeqCst));
+    }
 
     #[tokio::test]
     async fn socket_uses_os_peer_and_rejects_supplied_pid() {
