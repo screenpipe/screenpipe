@@ -758,7 +758,8 @@ fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> 
     let shipped_hashes: &[&str] = match name {
         // v2.7.56: retain observed knowledge work while repairing unsupported outcomes.
         "workflow-discover" => &[
-            // Native history and execution-readiness checks for existing installs.
+            "c26b8f82a0acbaab",
+            // Native history and native-chat research instructions for existing installs.
             "eff1a9452fd99dd9",
             "672653afb18886a6",
             "d4d8181286615282",
@@ -767,7 +768,8 @@ fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> 
         // Upgrade the shipped knowledge-work prompts too; otherwise existing
         // tasks never receive the observed-scope repair in a new app build.
         "workflow-deepen" => &[
-            // Native history and execution-readiness checks for existing installs.
+            "3630640776a0eb7c",
+            // Native history and native-chat research instructions for existing installs.
             "621e5a8c003ddcc2",
             "a8c1d6f536dd17e5",
             "45c67de30edcc651",
@@ -776,7 +778,8 @@ fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> 
             "cf31ccaa932b7784",
         ],
         "workflow-review" => &[
-            // Native history and execution-readiness checks for existing installs.
+            "4422082c16aa2862",
+            // Native history and native-chat research instructions for existing installs.
             "e37a7bd572729618",
             "5211cba1af0de07f",
             "6512c73c08db5ceb",
@@ -787,7 +790,8 @@ fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> 
             "09a0ab9de50d94ff",
         ],
         "workflow-maintain" => &[
-            // Native history and execution-readiness checks for existing installs.
+            "2437a8e1197c3ea7",
+            // Native history and native-chat research instructions for existing installs.
             "73bda92bb418e095",
             "f6e72eb88785ea2a",
             "6e11baeed08afb5e",
@@ -1121,7 +1125,7 @@ mod tests {
                         original_config["permissions"]["deny"],
                         updated_config["permissions"]["deny"]
                     );
-                    assert!(updated.contains("working execution path"));
+                    assert!(updated.contains("Use local_chat_history"));
                 }
                 for key in ["enabled", "schedule", "model", "timeout", "trigger"] {
                     assert_eq!(original_config[key], updated_config[key], "{name} {key}");

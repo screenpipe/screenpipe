@@ -483,28 +483,6 @@ fn contains_source_quote(text: &str, quote: &str) -> bool {
             .contains(&quote)
 }
 
-/// Older maps remain readable; explicit eligibility must carry a usable prompt.
-fn automation_fields(item: &Value) -> Result<(bool, Option<String>), String> {
-    let enabled = match item.get("canAutomate") {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(value)) => *value,
-        _ => return Err("canAutomate must be a boolean".into()),
-    };
-    if !enabled {
-        return Ok((false, None));
-    }
-    let prompt = item
-        .get("agentPrompt")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or("An automatable workflow needs an agentPrompt")?;
-    if prompt.chars().count() > 12_000 {
-        return Err("agentPrompt must be at most 12000 characters".into());
-    }
-    Ok((true, Some(prompt.to_string())))
-}
-
 pub fn normalize_procedure(stage: &Value, evidence: &[Value]) -> Vec<Value> {
     stage
         .get("procedure")
@@ -948,11 +926,8 @@ pub fn normalize_analysis(
             }
         }
 
-        let (can_automate, agent_prompt) = automation_fields(item)?;
         normalized.push(json!({
             "id": item.get("id").cloned().unwrap_or(Value::Null),
-            "canAutomate": can_automate,
-            "agentPrompt": agent_prompt,
             "rank": normalized.len() + 1,
             "analysisDays": days,
             "title": title,
@@ -1622,26 +1597,6 @@ mod quote_tests {
     use super::*;
 
     #[test]
-    fn automation_requires_an_explicit_boolean_and_nonempty_bounded_prompt() {
-        assert_eq!(automation_fields(&json!({})).unwrap(), (false, None));
-        assert_eq!(
-            automation_fields(&json!({"canAutomate":false,"agentPrompt":"obsolete"})).unwrap(),
-            (false, None)
-        );
-        assert_eq!(
-            automation_fields(&json!({"canAutomate":true,"agentPrompt":" Draft the report. "}))
-                .unwrap(),
-            (true, Some("Draft the report.".into()))
-        );
-        for value in [
-            json!({"canAutomate":"true","agentPrompt":"task"}),
-            json!({"canAutomate":true,"agentPrompt":" "}),
-            json!({"canAutomate":true,"agentPrompt":"x".repeat(12001)}),
-        ] {
-            assert!(automation_fields(&value).is_err());
-        }
-    }
-    #[test]
     fn native_procedure_requires_the_exact_message_identity_and_quote() {
         let evidence = vec![
             json!({"timestamp":"2026-10-01T10:00:00Z","app":"Codex","detail":"Compare original sources.","source":"chat:codex:session:52"}),
@@ -1748,16 +1703,10 @@ mod quote_tests {
             "procedure":[{"kind":"action","text":quote,"quote":quote,"timestamp":timestamp,"app":"Receipts"}]
         })).collect();
         let raw = json!({"evidenceVersion":2,"workflows":[{"title":"Record invoice","description":"Enter and save invoice","stages":stages,
-            "canAutomate":true,"agentPrompt":"Draft the invoice and verify its source. ".repeat(20),
             "totalMinutes":500,"durationSource":"measured","timing":{"averageMinutes":500},
             "quality":{"evidenceCount":999,"screenshotCount":999}}]});
         let mut result = normalize_analysis(raw.clone(), 90, &catalog).unwrap();
         workspace::validate_publication(&raw, &result).unwrap();
-        assert_eq!(result["workflows"][0]["canAutomate"], true);
-        assert_eq!(
-            result["workflows"][0]["agentPrompt"],
-            raw["workflows"][0]["agentPrompt"].as_str().unwrap().trim()
-        );
         // Reused citations count once. Model-proposed totals cannot invent
         // observations, screenshots or a measured duration from text alone.
         attach_screenshot_quality(&mut result);

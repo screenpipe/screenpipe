@@ -135,8 +135,6 @@ export function sanitizeWorkflowAnalysis(analysis: WorkflowAnalysis): WorkflowAn
     const evidenceHasProvenance = workflow.evidence.length > 0 && workflow.evidence.every((item) => Boolean(item.source));
     return {
       ...workflow,
-      canAutomate: workflow.canAutomate === true && Boolean(workflow.agentPrompt?.trim()),
-      agentPrompt: workflow.canAutomate === true ? workflow.agentPrompt?.trim() || null : null,
       timing: workflowTiming(workflow.timing),
       totalMinutes: durationIsMeasured ? workflow.totalMinutes : 0,
       activeMinutes: 0,

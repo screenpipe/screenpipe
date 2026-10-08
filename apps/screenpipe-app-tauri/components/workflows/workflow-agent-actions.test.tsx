@@ -11,41 +11,41 @@ import { toast } from "@/components/ui/use-toast";
 vi.mock("@/lib/chat-utils", () => ({ showChatWithPrefill: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/components/ui/use-toast", () => ({ toast: vi.fn() }));
 vi.mock("@/lib/first-run/agent-handoff", async importOriginal => ({ ...await importOriginal<object>(), performAgentHandoff: vi.fn().mockResolvedValue({ prefilled: true, copied: true }) }));
-const workflow = { ...fixtureWorkflowAnalysis.analysis.workflows[0], id: "wf-source", canAutomate: true, agentPrompt: "Compare new research papers, cite each source and draft a summary." };
+const workflow = { ...fixtureWorkflowAnalysis.analysis.workflows[0], id: "wf-source" };
 async function choose(name: string) {
-  fireEvent.keyDown(screen.getByRole("button", { name: "Turn into agent" }), { key: "ArrowDown" });
+  fireEvent.keyDown(screen.getByRole("button", { name: "Open in agent" }), { key: "ArrowDown" });
   fireEvent.click(await screen.findByRole("menuitem", { name }));
 }
 describe("workflow agent handoff", () => {
   it("puts Codex first without changing the selected runner", async () => {
     render(<WorkflowAgentActions workflow={workflow} />);
-    fireEvent.keyDown(screen.getByRole("button", { name: "Turn into agent" }), { key: "ArrowDown" });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Open in agent" }), { key: "ArrowDown" });
     await screen.findByRole("menuitem", { name: "Codex" });
-    expect(screen.getAllByRole("menuitem").map(item => item.textContent)).toEqual(["Codex", "Claude", "Screenpipe"]);
+    expect(screen.getAllByRole("menuitem").map(item => item.textContent)).toEqual(["Codex", "Claude", "Cursor", "Screenpipe"]);
   });
-  it.each([{}, { canAutomate: false, agentPrompt: "prompt" }, { canAutomate: true, agentPrompt: " " }])("hides incomplete or ineligible workflows %j", fields => {
-    render(<WorkflowAgentActions workflow={{ ...workflow, canAutomate: undefined, agentPrompt: undefined, ...fields }} />);
-    expect(screen.queryByRole("button", { name: "Turn into agent" })).not.toBeInTheDocument();
+  it("offers the handoff for a normal workflow without automation metadata", () => {
+    render(<WorkflowAgentActions workflow={workflow} />);
+    expect(screen.getByRole("button", { name: "Open in agent" })).toBeEnabled();
   });
   it("prefills the existing Screenpipe flow without sending or enabling a schedule", async () => {
     render(<WorkflowAgentActions workflow={workflow} />); await choose("Screenpipe");
-    expect(showChatWithPrefill).toHaveBeenCalledWith(expect.objectContaining({ autoSend: false, useHomeChat: true, prompt: expect.stringContaining(workflow.agentPrompt) }));
-    expect(vi.mocked(showChatWithPrefill).mock.calls.at(-1)?.[0]?.prompt).toContain("verify current access in this selected agent");
+    expect(showChatWithPrefill).toHaveBeenCalledWith(expect.objectContaining({ autoSend: false, useHomeChat: true, prompt: expect.stringContaining("Help me carry it out") }));
+    expect(vi.mocked(showChatWithPrefill).mock.calls.at(-1)?.[0]?.prompt).not.toContain("recurring");
   });
-  it.each(["Claude", "Codex"])("hands the saved prompt and identity to %s", async label => {
+  it.each(["Claude", "Codex", "Cursor"])("hands the generic workflow task and identity to %s", async label => {
     vi.mocked(performAgentHandoff).mockClear();
     render(<WorkflowAgentActions workflow={workflow} />); await choose(label);
-    expect(performAgentHandoff).toHaveBeenCalledWith(expect.objectContaining({ id: label.toLowerCase() }), expect.any(Object), expect.stringContaining(workflow.agentPrompt));
+    expect(performAgentHandoff).toHaveBeenCalledWith(expect.objectContaining({ id: label.toLowerCase() }), expect.any(Object), expect.stringContaining("Help me carry it out"));
     const prompt = vi.mocked(performAgentHandoff).mock.calls[0][2]!;
     expect(prompt).toContain("wf-source");
-    expect(prompt).toContain("verify current access in this selected agent");
-    expect(prompt).toContain("do not enable the loop");
-    await waitFor(() => expect(screen.getByRole("button", { name: "Turn into agent" })).toBeEnabled());
+    expect(prompt).toContain("Retrieve its current steps and sources");
+    expect(prompt).not.toContain("recurring");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Open in agent" })).toBeEnabled());
   });
   it("shows the clipboard fallback and permits retry when the external app cannot open", async () => {
     vi.mocked(performAgentHandoff).mockResolvedValueOnce({ prefilled: false, copied: true, launched: false, replayed: false });
     render(<WorkflowAgentActions workflow={workflow} />); await choose("Codex");
     await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Prompt copied" })));
-    expect(screen.getByRole("button", { name: "Turn into agent" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Open in agent" })).toBeEnabled();
   });
 });

@@ -33,8 +33,6 @@ vi.mock("@/lib/workflows/desktop-platform", async () => {
         workflow.id = `wf-fixture-${index}`;
         // The persisted catalog represents unanswered corrections as null.
         workflow.userCorrection = null;
-        workflow.canAutomate = true;
-        workflow.agentPrompt = "Summarize new research and cite the original sources.";
       });
       return catalog;
     },
@@ -94,10 +92,10 @@ it("opens the existing sharing review from the selected workflow in the main app
   const card = (await screen.findByRole("heading", { name: "Research synthesis" })).closest("article")!;
   fireEvent.click(within(card).getByRole("button", { name: "Open map" }));
   expect(screen.queryByRole("dialog", { name: "Sharing review" })).not.toBeInTheDocument();
-  const agent = screen.getByRole("button", { name: "Turn into agent" });
+  const agent = screen.getByRole("button", { name: "Open in agent" });
   expect(agent.parentElement).toContainElement(screen.getByRole("button", { name: "Create SOP" }));
   fireEvent.keyDown(agent, { key: "ArrowDown" });
-  for (const name of ["Screenpipe", "Claude", "Codex"]) {
+  for (const name of ["Codex", "Claude", "Cursor", "Screenpipe"]) {
     expect(await screen.findByRole("menuitem", { name })).toBeVisible();
   }
   fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
@@ -127,8 +125,8 @@ it("hands off workflow identity without embedding captured content", async () =>
   const task = workflowAgentTask({ ...workflow, id: "wf-example", title: 'Review "launch"' });
   expect(task.previewPrompt).toContain('wf-example');
   expect(task.previewPrompt).toContain(JSON.stringify('Review "launch"'));
-  expect(task.previewPrompt).toContain("Read its current steps and sources");
-  expect(task.previewPrompt).toContain("Confirm before sending");
+  expect(task.previewPrompt).toContain("Retrieve its current steps and sources");
+  expect(task.previewPrompt).toContain("confirm before sending");
   expect(task.previewPrompt).not.toContain(workflow.stages[0].evidence[0].detail);
 });
 

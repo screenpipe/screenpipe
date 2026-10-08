@@ -323,6 +323,41 @@ mod tests {
         assert!(next["next_offset"].is_null());
     }
     #[test]
+    fn reads_original_claude_messages_with_roles_and_provenance() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claude-session.jsonl");
+        let lines = [
+            json!({"type":"user","sessionId":"claude-session","timestamp":"2026-10-01T10:00:00Z","message":{"role":"user","content":"Compare the source documents."}}),
+            json!({"type":"assistant","timestamp":"2026-10-01T10:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Here is a draft comparison."},{"type":"tool_use","id":"tool","name":"bash","input":{"command":"private command"}}]}}),
+        ];
+        fs::write(
+            &path,
+            lines
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        let first = read_file(Source::Claude, "claude-session", &path, 0, 1).unwrap();
+        assert_eq!(
+            first["messages"][0]["text"],
+            "Compare the source documents."
+        );
+        assert_eq!(first["messages"][0]["role"], "user");
+        assert_eq!(
+            first["messages"][0]["source"],
+            "chat:claude:claude-session:0"
+        );
+        assert_eq!(first["next_offset"], 1);
+        let next = read_file(Source::Claude, "claude-session", &path, 1, 1).unwrap();
+        assert_eq!(next["messages"][0]["role"], "assistant");
+        assert_eq!(next["messages"][0]["text"], "Here is a draft comparison.");
+        assert!(!next.to_string().contains("private command"));
+        assert!(next["next_offset"].is_null());
+    }
+
+    #[test]
     fn reads_original_codex_messages_after_metadata_and_filters_injected_context() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("chat.jsonl");

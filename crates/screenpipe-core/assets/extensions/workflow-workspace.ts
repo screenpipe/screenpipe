@@ -20,7 +20,7 @@ export function workflowIndex(workflow: any) {
     .filter((at: unknown) => typeof at === "string" && Number.isFinite(Date.parse(at)))
     .sort((a: string, b: string) => Date.parse(a) - Date.parse(b));
   const runs = Array.isArray(workflow.timingRuns) ? workflow.timingRuns : [];
-  return {canAutomate:workflow.canAutomate === true,id:workflow.id,title:workflow.title,trigger:workflow.trigger,outcome:workflow.outcome,
+  return {id:workflow.id,title:workflow.title,trigger:workflow.trigger,outcome:workflow.outcome,
     userCorrection:workflow.userCorrection,quality:workflow.quality,openQuestions:workflow.openQuestions,
     lastReviewedAt:workflow.lastReviewedAt,userEdits:workflow.userEdits,
     evidenceCoverage:{stageCount:stages.length,stagesWithProcedure:stages.filter((s:any)=>s.procedure?.length).length,stagesWithVerifiedScreenshot:stages.filter((s:any)=>[...(s.screenshots ?? []), s.screenshot].some(image => image?.visualVerified)).length},
