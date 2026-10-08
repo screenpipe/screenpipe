@@ -30,6 +30,8 @@ import {
   flushMcpTelemetry,
   initMcpTelemetry,
 } from "./telemetry";
+import { createCallObserver, currentMcpRequestId, observeSearchResult } from "./call-observation";
+import { formatSearchHit, searchContentCap, searchResultHeader } from "./search-result";
 import { PKG_VERSION } from "./version";
 import { BUNDLED_SKILLS_TOOL, readBundledSkills } from "./bundled-skills";
 import { normalizeTimeFields } from "./time-normalization";
@@ -172,6 +174,7 @@ const TOOLS = [
           default: "all",
         },
         limit: { type: "integer", description: "Max results. Default: 10" },
+        max_content_length: { type: "integer", minimum: 0, description: "Text characters per result; default 1000. Use 0 only for an explicitly scoped full-text read." },
         offset: { type: "integer", description: "Skip N results for pagination. Default: 0" },
         start_time: {
           type: "string",
@@ -211,6 +214,7 @@ function makeFetchAPI(screenpipePort: number, client: () => McpClient) {
       headers: {
         "Content-Type": "application/json",
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        ...(currentMcpRequestId() ? { "x-screenpipe-request-id": currentMcpRequestId()! } : {}),
         "x-screenpipe-client": "mcp",
         "x-screenpipe-agent": client(),
         ...options.headers,
@@ -234,12 +238,13 @@ async function handleSearchContent(
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     const detail = typeof body?.error === "string" ? `: ${body.error.slice(0, 500)}` : "";
-    throw new Error(`HTTP error: ${response.status}${detail}`);
+    throw Object.assign(new Error(`HTTP error: ${response.status}${detail}`), { status: response.status });
   }
 
   const data = await response.json();
   const results = data.data || [];
   const pagination = data.pagination || {};
+  observeSearchResult(results.length, false);
 
   if (results.length === 0) {
     return {
@@ -252,44 +257,12 @@ async function handleSearchContent(
     };
   }
 
-  const formattedResults: string[] = [];
-  for (const result of results) {
-    const content = result.content;
-    if (!content) continue;
-    if (result.starred) formattedResults.push("[Starred moment]");
-
-    if (result.type === "OCR") {
-      formattedResults.push(
-        `[OCR] ${content.app_name || "?"} | ${content.window_name || "?"}\n` +
-          `${content.timestamp || ""}\n` +
-          `${content.text || ""}`
-      );
-    } else if (result.type === "Audio") {
-      formattedResults.push(
-        `[Audio] ${content.device_name || "?"}\n` +
-          `${content.timestamp || ""}\n` +
-          `${content.transcription || ""}`
-      );
-    } else if (result.type === "UI" || result.type === "Accessibility") {
-      formattedResults.push(
-        `[Accessibility] ${content.app_name || "?"} | ${content.window_name || "?"}\n` +
-          `${content.timestamp || ""}\n` +
-          `${content.text || ""}`
-      );
-    } else if (result.type === "Parsed") {
-      formattedResults.push(
-        `[Parsed] ${content.app_name || "?"} | ${content.window_name || "?"} | frame ${content.frame_id || "?"}\n` +
-          `${content.timestamp || ""}\n` +
-          `${content.text || ""}`
-      );
-    }
-  }
-
-  const header =
-    `Results: ${results.length}/${pagination.total || "?"}` +
-    (pagination.total > results.length
-      ? ` (use offset=${(pagination.offset || 0) + results.length} for more)`
-      : "");
+  const cap = searchContentCap(args.max_content_length);
+  const hits = results.map((result: unknown) => formatSearchHit(result, cap))
+    .filter((hit: ReturnType<typeof formatSearchHit>) => hit !== null);
+  observeSearchResult(results.length, hits.some((hit: NonNullable<ReturnType<typeof formatSearchHit>>) => hit.truncated));
+  const formattedResults = hits.map((hit: NonNullable<ReturnType<typeof formatSearchHit>>) => hit.text);
+  const header = searchResultHeader(results.length, pagination);
 
   if (formattedResults.length > 0) qualifiedValue.searchResult();
 
@@ -327,13 +300,20 @@ function createMcpServer(screenpipePort: number): Server {
 
   s.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...TOOLS, BUNDLED_SKILLS_TOOL] }));
 
-  s.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const observeCall = createCallObserver({
+    tools: [...TOOLS.map(tool => tool.name), BUNDLED_SKILLS_TOOL.name], transport: "http", client,
+    send: async (payload, signal) => {
+      const response = await fetchAPI("/internal/telemetry/mcp-call", { method: "POST", body: JSON.stringify(payload), signal });
+      if (!response.ok) throw new Error("Telemetry unavailable");
+    },
+  });
+  s.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(request.params.name, async () => {
     const { name, arguments: args } = request.params;
     if (name === BUNDLED_SKILLS_TOOL.name) return readBundledSkills(args);
-    if (!args) throw new Error("Missing arguments");
+    if (!args) throw Object.assign(new Error("Missing arguments"), { status: 400 });
     if (name === "search_content") return handleSearchContent(fetchAPI, args, qualifiedValue);
-    throw new Error(`Unknown tool: ${name}`);
-  });
+    throw Object.assign(new Error(`Unknown tool: ${name}`), { status: 400 });
+  }));
 
   return s;
 }

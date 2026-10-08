@@ -32,7 +32,7 @@ import {
 } from "./qualified-value";
 import { discoverTeamConfig } from "./team-config";
 import { teamFrameContent, teamFramePath } from "./team-frame";
-import { WORKFLOW_TOOLS, readWorkflowTool, frameAutomationContent, inputEventContent } from "./workflow-tools";
+import { WORKFLOW_TOOLS, readWorkflowTool, frameAutomationContent } from "./workflow-tools";
 import { PKG_VERSION } from "./version";
 import { BUNDLED_SKILLS_TOOL, readBundledSkills } from "./bundled-skills";
 import { formatForElementPurpose } from "./element-format";
@@ -42,6 +42,8 @@ import {
   normalizeTime,
   normalizeTimeFields,
 } from "./time-normalization";
+import { createCallObserver, currentMcpRequestId, observeMcpError, observeSearchResult } from "./call-observation";
+import { formatSearchHit, searchContentCap, searchResultHeader } from "./search-result";
 import { resolveScreenpipeApiBase } from "./api-base";
 
 initMcpTelemetry({ transport: "stdio" });
@@ -1324,6 +1326,7 @@ async function fetchAPI(
       headers: {
         "Content-Type": "application/json",
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        ...(currentMcpRequestId() ? { "x-screenpipe-request-id": currentMcpRequestId()! } : {}),
         "x-screenpipe-client": "mcp",
         "x-screenpipe-agent": currentMcpClient(),
         ...options.headers,
@@ -1405,13 +1408,18 @@ function screenTag(textSource: unknown): string {
 // ---------------------------------------------------------------------------
 // Tool handlers
 // ---------------------------------------------------------------------------
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+const observeCall = createCallObserver({
+  tools: [...TOOLS.map(tool => tool.name), ...TEAM_TOOLS.map(tool => tool.name), ...WORKFLOW_TOOLS.map(tool => tool.name), BUNDLED_SKILLS_TOOL.name],
+  transport: "stdio", client: currentMcpClient,
+  send: (payload, signal) => callAPI("/internal/telemetry/mcp-call", { method: "POST", body: JSON.stringify(payload), signal }),
+});
+server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(request.params.name, async () => {
   const { name, arguments: args } = request.params;
 
   if (name === BUNDLED_SKILLS_TOOL.name) return readBundledSkills(args);
 
   if (!args) {
-    throw new Error("Missing arguments");
+    throw Object.assign(new Error("Missing arguments"), { status: 400 });
   }
 
   try {
@@ -1608,12 +1616,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Default text cap if the caller didn't pass max_content_length.
         // Keeps single calls under Claude Code's per-tool output limit.
         const userCap = normalized.max_content_length;
-        const effectiveCap =
-          typeof userCap === "number"
-            ? userCap
-            : userCap === undefined
-            ? DEFAULT_SEARCH_CONTENT_TRUNCATE
-            : Number(userCap);
+        const effectiveCap = searchContentCap(userCap);
         const params = new URLSearchParams();
         for (const [key, value] of Object.entries(normalized)) {
           if (value !== null && value !== undefined) {
@@ -1625,6 +1628,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const data = await response.json();
         const results = data.data || [];
         const pagination = data.pagination || {};
+        observeSearchResult(results.length, false);
 
         if (results.length === 0) {
           return {
@@ -1646,72 +1650,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const formattedResults: string[] = [];
         const images: Array<{ data: string; context: string }> = [];
+        let truncated = false;
 
         for (const result of results) {
           const content = result.content;
           if (!content) continue;
-          if (result.starred) formattedResults.push("[Starred moment]");
-
-          if (result.type === "OCR") {
-            const tagsStr = content.tags?.length ? `\nTags: ${content.tags.join(", ")}` : "";
-            // result.type is "OCR" by historical naming, but content.text_source
-            // tells us if the text actually came from the accessibility tree
-            // (primary path) or OCR (fallback). Use it to label honestly.
-            const tag = screenTag(content.text_source);
-            formattedResults.push(
-              `${tag} ${content.app_name || "?"} | ${content.window_name || "?"}\n` +
-                `${content.timestamp || ""}\n` +
-                `${truncateMiddle(content.text || "", effectiveCap)}` +
-                tagsStr
-            );
-            if (includeFrames && content.frame) {
-              images.push({
-                data: content.frame,
-                context: `${content.app_name} at ${content.timestamp}`,
-              });
-            }
-          } else if (result.type === "Audio") {
-            const tagsStr = content.tags?.length ? `\nTags: ${content.tags.join(", ")}` : "";
-            formattedResults.push(
-              `[Audio] ${content.device_name || "?"}\n` +
-                `${content.timestamp || ""}\n` +
-                `${truncateMiddle(content.transcription || "", effectiveCap)}` +
-                tagsStr
-            );
-          } else if (result.type === "UI" || result.type === "Accessibility") {
-            formattedResults.push(
-              `[Accessibility] ${content.app_name || "?"} | ${content.window_name || "?"}\n` +
-                `${content.timestamp || ""}\n` +
-                `${truncateMiddle(content.text || "", effectiveCap)}`
-            );
-          } else if (result.type === "Input") {
-            formattedResults.push(inputEventContent(content, effectiveCap));
-          } else if (result.type === "Memory") {
-            const tagsStr = content.tags?.length ? ` [${content.tags.join(", ")}]` : "";
-            const importance =
-              content.importance != null ? ` (importance: ${content.importance})` : "";
-            // frame_id links a memory back to the exact moment — jump there with
-            // frame-context / get-frame-elements (frame_id=N).
-            const frameRef = content.frame_id != null ? ` frame:${content.frame_id}` : "";
-            formattedResults.push(
-              `[Memory #${content.id}]${tagsStr}${importance}${frameRef}\n` +
-                `${content.created_at || ""}\n` +
-                `${truncateMiddle(content.content || "", effectiveCap)}`
-            );
-          } else if (result.type === "Parsed") {
-            formattedResults.push(
-              `[Parsed] ${content.app_name || "?"} | ${content.window_name || "?"} | frame ${content.frame_id || "?"}\n` +
-                `${content.timestamp || ""}\n` +
-                `${truncateMiddle(content.text || "", effectiveCap)}`
-            );
+          const hit = formatSearchHit(result, effectiveCap);
+          if (hit) { formattedResults.push(hit.text); truncated ||= hit.truncated; }
+          if (includeFrames && result.type === "OCR" && content.frame) {
+            images.push({ data: content.frame, context: `${content.app_name} at ${content.timestamp}` });
           }
         }
 
-        const header =
-          `Results: ${results.length}/${pagination.total || "?"}` +
-          (pagination.total > results.length
-            ? ` (use offset=${(pagination.offset || 0) + results.length} for more)`
-            : "");
+        observeSearchResult(results.length, truncated);
+        const header = searchResultHeader(results.length, pagination);
 
         // Co-occurring tags (only present when include_related=true + tags set).
         // Compact one-liner per namespace so it's cheap to read.
@@ -2441,6 +2393,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error(`Unknown tool: ${name}`);
     }
   } catch (error) {
+    observeMcpError(error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     if (!(error instanceof BackendDownError) && !(error instanceof BackendHttpError)) {
       captureMcpMessage("tool call failed", "error", { phase: "tool_call", tool: name });
@@ -2452,7 +2405,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       content: [{ type: "text", text: `Error executing ${name}: ${errorMessage}` }],
     };
   }
-});
+}));
 
 // Run the server
 async function main() {
@@ -2462,6 +2415,16 @@ async function main() {
   console.error(`[screenpipe-mcp] v${PKG_VERSION} phase=connect target=${SCREENPIPE_API}`);
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  // The SDK does not close its transport on stdin EOF. An outstanding fetch
+  // can otherwise keep an abandoned helper alive indefinitely after its host
+  // exits. This process belongs to this one stdio client only.
+  process.stdin.once("end", () => {
+    const deadline = setTimeout(() => process.exit(0), 500);
+    void server.close()
+      .then(() => flushMcpTelemetry(250))
+      .catch(() => {})
+      .finally(() => { clearTimeout(deadline); process.exit(0); });
+  });
   console.error("[screenpipe-mcp] phase=connected transport=stdio");
   // Warm the API key in the background so the first tool call doesn't pay the
   // discovery latency. Never awaited here — key discovery must not gate attach.

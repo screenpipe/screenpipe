@@ -55,6 +55,55 @@ client names. HTTP MCP now reports successful searches through the same
 best-effort local telemetry endpoint as stdio MCP; empty/failed searches do not
 produce qualified-value events.
 
+## Call diagnostics and source references
+
+New engine builds accept `POST /internal/telemetry/mcp-call` through the same
+local API authentication and analytics consent boundary as other private MCP
+telemetry. `mcp_tool_call_completed` records one best-effort observation per
+completed dispatcher call: schema version, random request ID, package version,
+fixed client/tool/transport names, `ok`/`empty`/`error`, normalized error category,
+duration, content bytes, optional search count/truncation and known report loss.
+No arguments, result text, error strings or raw client names are included.
+The existing `qualified_value_event` definition is unchanged.
+
+`ok` means the dispatcher returned without a protocol/tool error. It does not
+mean the answer was correct or the user completed their task. Search alone sets
+`result_count` and `truncated`; absent fields on other tools remain unknown.
+`response_bytes` counts UTF-8 text and base64 content bytes, not total serialized
+JSON or model tokens. Duration includes tool execution, excluding report delivery.
+
+The request ID is returned in `_meta["screenpipe/request_id"]` and forwarded to
+the local API as `x-screenpipe-request-id`. It is one call's correlation key, not
+a user, session or task ID. This change does not add engine log persistence for
+that header. Local helpers report to the engine, which applies its telemetry
+opt-out. `SCREENPIPE_DISABLE_TELEMETRY` and `SCREENPIPE_TELEMETRY_DISABLED` also
+suppress call reporting; CI suppresses it by default. Delivery is capped at eight
+pending requests per reporter and expires after one second. Old engines, opt-out,
+backend outages and process exit can lose reports. `dropped_reports` reports
+known local losses on a later delivery, not complete observation coverage.
+
+Screen/audio/input search results preserve backend source identifiers and deep
+links. Both package transports cap text at 1,000 characters per hit by default;
+`max_content_length=0` requests full text for a scoped read. The cap excludes
+metadata, tags and images, so callers should also limit result count. Final pages
+do not suggest another offset. In stdio, pass a returned `frame_id` to
+`frame-context` or `get-frame-elements` to inspect evidence beyond the snippet.
+HTTP clients can open the returned Screenpipe link or make a narrower search.
+A missing source ID stays missing.
+
+| Package capability | stdio | HTTP |
+|---|---|---|
+| Search with source references and text caps | `search-content` | `search_content` |
+| Bundled guides | `screenpipe-skills` | `screenpipe-skills` |
+| Frame inspection and saved workflows | Available | Not exposed |
+| Enterprise team tools | With team configuration | Not exposed |
+| Call diagnostics | Best effort | Best effort, per session |
+
+This describes this package, not the separate hosted personal or enterprise MCP
+services. A hung backend read no longer keeps a stdio helper alive after stdin
+EOF: shutdown is bounded to 500 ms and affects only that client's process.
+This does not diagnose desktop recording health or reap another client's process.
+
 ## Installable plugins
 
 Build the local Claude Desktop extension and the cloud plugin from source:
@@ -490,7 +539,8 @@ Questions or concerns: open an issue at
 
 `list-workflows` searches the desktop Workflows catalog; `get-workflow` returns
 ordered steps, gaps and historical accessibility evidence through the same
-authenticated API. Both tools are available in stdio and HTTP modes. The running
+authenticated API. Both tools are available in stdio mode. The package HTTP mode exposes
+`search_content` and `screenpipe-skills`; it does not expose workflow tools. The running
 desktop engine must support `/workflows`; an older engine returns an error.
 Connected clients can use this context to plan automation, but retrieval neither
 authorizes nor executes actions. Captured bounds/IDs must be resolved again in

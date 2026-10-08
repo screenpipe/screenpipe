@@ -82,6 +82,7 @@ pub mod power;
 pub mod privacy_filter;
 pub mod process_priority;
 mod qualified_value;
+mod mcp_call;
 pub mod recording_config;
 pub mod recording_coverage;
 pub mod recording_detail;

@@ -63,16 +63,22 @@ async fn full_router_exposes_openapi_and_private_axum_routes() {
     // This intentionally plain Axum handler caused v2.5.143's oasgen panic
     // when it was accidentally registered inside the OpenAPI route builder.
     // A malformed request may be rejected, but the route must still exist.
-    let private_route = router
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/internal/telemetry/mcp-value")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("request private Axum route");
-    assert_ne!(private_route.status(), StatusCode::NOT_FOUND);
-    assert_ne!(private_route.status(), StatusCode::METHOD_NOT_ALLOWED);
+    for path in [
+        "/internal/telemetry/mcp-value",
+        "/internal/telemetry/mcp-call",
+    ] {
+        let private_route = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("request private Axum route");
+        assert_ne!(private_route.status(), StatusCode::NOT_FOUND);
+        assert_ne!(private_route.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
 }

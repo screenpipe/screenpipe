@@ -1136,6 +1136,10 @@ impl SCServer {
                 axum::routing::post(crate::routes::internal_telemetry::record_mcp_value),
             )
             .route(
+                "/internal/telemetry/mcp-call",
+                axum::routing::post(crate::routes::internal_telemetry::record_mcp_call),
+            )
+            .route(
                 "/outputs/targets",
                 get(crate::routes::structured_outputs::assigned_targets_handler),
             )
