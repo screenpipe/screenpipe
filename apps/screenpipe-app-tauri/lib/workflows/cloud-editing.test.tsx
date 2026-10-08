@@ -69,6 +69,21 @@ function view(request = api(), extra = {}) {
   );
 }
 describe("cloud workflow editor", () => {
+  it.each([
+    { can_edit: false, review: procedure.review, message: "View only. Your admin controls workflow editing." },
+    { can_edit: true, review: { frozen: true, status: "approved" }, message: "Approved workflow. Ask an admin to reopen it before editing." },
+  ])("keeps the document view without writes when policy is $message", async ({ can_edit, review, message }) => {
+    const request = vi.fn<typeof fetch>().mockResolvedValue(json({ ...procedure, can_edit, review }));
+    view(request);
+    expect(await screen.findByText(message)).toBeVisible();
+    expect(screen.getByRole('region', { name: 'Workflow document' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Check order' })).toBeVisible();
+    expect(screen.getByText('Matched')).toBeVisible();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open chat' })).not.toBeInTheDocument();
+    expect(request.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
+  });
+
   it("saves the canonical revision and preserves fields outside the edited text", async () => {
     const request = api();
     view(request);

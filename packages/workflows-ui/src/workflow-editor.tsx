@@ -21,6 +21,7 @@ import {
   type WorkflowEdit,
   type StageEdit,
 } from "./workflow-edits";
+import { WorkflowRichText } from "./rich-text";
 import { InlineText } from "./inline-text";
 import { TimingDisclosure } from "./timing-disclosure";
 import styles from "./workflow-editor.module.css";
@@ -582,4 +583,62 @@ export function WorkflowEditor({ workflow, save, actions, renderSource, stepsOnl
       </span>
     </section>
   );
+}
+
+/** Read-only workflows share the editor's document layout without mounting draft
+ * recovery, autosave, or editable controls. Permission changes do not change the
+ * reading experience. */
+export function WorkflowDocument({ workflow, actions, sourceLabel, renderSource }: {
+  workflow: WorkflowMap;
+  actions?: ReactNode;
+  sourceLabel?: string;
+  renderSource?: (stage: WorkflowStage) => ReactNode;
+}) {
+  return <section className={styles.editor} aria-label="Workflow document">
+    <header className={styles.toolbar}>
+      <div><span>{sourceLabel}</span></div>
+      <div>{actions}</div>
+    </header>
+    <div className={styles.intro}>
+      <div className={styles.titleRow}>
+        <h1 className={styles.title}>{workflow.title}</h1>
+        <TimingDisclosure label="Workflow timing" value={workflow.timing}
+          measured={workflow.durationSource === "measured-meeting" ? { minutes: workflow.totalMinutes, samples: workflow.durationSampleCount ?? 0 } : undefined} />
+      </div>
+      <p className={styles.readOnlyText}>{workflow.description}</p>
+    </div>
+    <div className={styles.endpoint}>Starts when<span className={styles.readOnlyText}>{workflow.trigger}</span></div>
+    <div className={styles.stepsHeading}><strong>Steps</strong></div>
+    <div className={styles.steps}>
+      {workflow.stages.map((stage, index) => <article className={styles.step} key={index} aria-label={`Step ${index + 1}`}>
+        <div className={styles.stepTop}>
+          <span className={styles.number}>{String(index + 1).padStart(2, "0")}</span>
+          <h2 className={`${styles.title} ${styles.readOnlyText}`}>{stage.name}</h2>
+          <div className={styles.stepActions}><TimingDisclosure label={`Timing for step ${index + 1}`} value={stage.timing} /></div>
+        </div>
+        {stage.description && <WorkflowRichText label={`Step ${index + 1} description`} value={stage.description} />}
+        <div className={styles.blocks}>
+          {stage.procedure?.map((detail, detailIndex) => {
+            // Cloud catalogs also carry the summary as an action block. Keep its
+            // reference, but do not repeat the same paragraph in the document.
+            const repeatsSummary = detail.kind === "action" && detail.text.trim() === stage.description.trim();
+            return <div key={detailIndex}>
+              {!repeatsSummary && <div className={styles.block}>
+                <WorkflowRichText label={`Block ${detailIndex + 1} in step ${index + 1}`} value={detail.text} />
+                {detail.kind !== "action" && <span className={styles.readOnlyKind}>{detail.kind === "check" ? "Completion check" : detail.kind}</span>}
+              </div>}
+              {detail.quote && <details className={styles.reference}>
+                <summary>{detail.userEdited || stage.userEdited ? "Original reference" : "Source excerpt"} · {detail.app}</summary>
+                <blockquote>{detail.quote}</blockquote>
+                <small>{detail.timestamp} · {detail.userEdited || stage.userEdited ? "Edited instructions are not verified by this reference" : "Text match, not execution verification"}</small>
+              </details>}
+            </div>;
+          })}
+        </div>
+        {!!stage.apps.length && <p className={styles.stepApps}>{stage.apps.join(" · ")}</p>}
+        {renderSource && <div className={styles.source}>{renderSource(stage)}</div>}
+      </article>)}
+    </div>
+    <div className={styles.endpoint}>Ends with<span className={styles.readOnlyText}>{workflow.outcome}</span></div>
+  </section>;
 }

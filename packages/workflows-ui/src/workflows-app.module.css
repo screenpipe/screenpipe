@@ -289,7 +289,7 @@
 .spinner { width: 26px; height: 26px; }
 .spinnerSmall { width: 13px; height: 13px; border-color: rgba(255,255,255,.3); border-top-color: var(--lime); }
 @keyframes workflowSpin { to { transform: rotate(360deg); } }
-.detailStats span, .detailTotal span, .bottleneckTime span { display: block; color: #8c8f86; font-size: 8px; font-weight: 700; letter-spacing: .07em; text-transform: none; }
+.bottleneckTime span { display: block; color: #8c8f86; font-size: 8px; font-weight: 700; letter-spacing: .07em; text-transform: none; }
 
 .sectionHeading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 0 0 15px; }
 .sectionHeading > div > span, .panelTitle > div > span { display: block; margin-bottom: 6px; color: #7b825d; font-size: 8px; font-weight: 750; letter-spacing: .12em; text-transform: none; }
@@ -314,22 +314,10 @@
 .errorNotice strong { font-size: 10px; }
 .errorNotice p { margin: 4px 0 0; font-size: 9px; line-height: 1.45; }
 .errorNotice button { min-height: 31px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; border: 1px solid currentColor; border-radius: 6px; background: transparent; color: inherit; font-size: 8px; font-weight: 700; cursor: pointer; }
-.workflowQuality summary::-webkit-details-marker { display: none; }
-.workflowQuality[open] summary > svg { transform: rotate(180deg); }
 
 .depthNotice { margin: 0 0 18px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas, #f6f6f3); font-size: 12px; line-height: 1.6; }
 .depthNotice p { margin: 6px 0 0; color: #6e7269; }
 .depthNotice ul { margin: 8px 0 0; padding-left: 20px; }
-.procedureDetails { grid-column: 1 / -1; min-width: 0; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
-.procedureDetails > ol { margin: 0; padding: 0 0 0 22px; }
-.procedureDetails > ol > li { padding: 8px 8px 16px; border-bottom: 1px solid var(--line); }
-.procedureKind { font-size: 10px; text-transform: none; letter-spacing: .06em; color: #6e7269; }
-.procedureDetails p { margin: 5px 0 9px; }
-.procedureDetails summary { cursor: pointer; font-size: 11px; color: #6e7269; }
-.procedureDetails blockquote { margin: 10px 0; padding: 8px 12px; border-left: 2px solid var(--line); white-space: pre-wrap; }
-.procedureDetails small { color: #6e7269; font-size: 10px; }
-.procedureQuestions { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
-.procedureQuestions ul { margin: 6px 0 0; padding-left: 18px; }
 .pageHeader { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; margin: 25px 0 42px; }
 .pageHeader h1 { margin: 0; font-size: clamp(34px,3.8vw,50px); letter-spacing: -.052em; }
 .pageHeader p { max-width: 700px; margin: 9px 0 0; color: #6e7269; font-size: 12px; line-height: 1.6; }
@@ -361,10 +349,6 @@
 .workflowCard:hover .cardOpenLabel, .workflowCard:focus-within .cardOpenLabel { opacity: 1; }
 @media (hover: none) { .cardOpenLabel { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .cardOpenLabel { transition: none; } }
-
-.detailHeader { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 16px; align-items: start; margin-bottom: 29px; }
-.detailHeader h1 { margin: 16px 0 9px; font-size: clamp(32px,4vw,49px); letter-spacing: -.052em; }
-.detailHeader > div > p { max-width: 760px; margin: 0; color: #70746a; font-size: 12px; line-height: 1.6; }
 .workflowActions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 17px; }
 .workflowActions .skillButton { margin-top: 0; }
 .workflowActions [data-placement="toolbar"] { align-self: center; gap: 2px; padding: 0; border: 0; background: transparent; color: var(--muted); }
@@ -376,70 +360,13 @@
 .workflowActions [data-placement="toolbar"] button:focus-visible { background: var(--soft); }
 .skillButton { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; margin-top: 17px; padding: 0 12px; border: 1px solid #20221e; border-radius: 6px; background: #fff; color: #20221e; font-size: 8.5px; font-weight: 750; letter-spacing: .04em; text-transform: none; cursor: pointer; transition: .15s ease; }
 .skillButton:hover { background: #20221e; color: #fff; }
-.detailTotal { padding: 18px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
-.detailTotal strong { display: block; margin: 8px 0 4px; font-size: 31px; letter-spacing: -.04em; }
-.detailTotal small { color: #7d8177; font-size: 8px; }
-.detailStats { display: grid; grid-template-columns: repeat(5,1fr); margin-bottom: 17px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
-.detailStats > div { min-width: 0; padding: 15px 17px; border-right: 1px solid #e6e7e1; }
-.detailStats > div:last-child { border: 0; }
 /* Respond to the remaining work area, not the full window behind a chat. */
 @container workflow-pane (max-width: 720px) {
-  .detailHeader { grid-template-columns: 1fr; gap: 20px; }
-  .detailHeader h1 { font-size: clamp(30px, 7cqw, 44px); line-height: 1.12; }
-  .detailTotal { max-width: none; }
-  .detailStats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .detailStats > div { border-bottom: 1px solid var(--line); }
-  .detailStats > div:nth-child(2n) { border-right: 0; }
-  .detailStats > div:last-child { grid-column: 1 / -1; }
-  .workflowGrid, .detailColumns, .profileKpiDetails, .profileAdvancedGrid { grid-template-columns: 1fr; }
+  .workflowGrid, .profileKpiDetails, .profileAdvancedGrid { grid-template-columns: 1fr; }
   .topbar { padding-left: 16px; padding-right: 16px; gap: 8px; }
   .dragRegion { display: none; }
   .search { flex: 1; min-width: 0; width: auto; margin: 0; }
 }
-.detailStats strong { display: block; overflow: hidden; margin-top: 6px; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-
-.workflowQuality { margin: 0 0 14px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
-.workflowQuality summary { min-height: 47px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 13px; list-style: none; cursor: pointer; }
-.workflowQuality summary > div { display: flex; align-items: center; gap: 10px; }
-.workflowQuality summary > div > span { color: #7f8379; font-size: 8px; }
-.workflowQuality ul { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin: 0; padding: 12px 14px 14px; border-top: 1px solid #e7e8e2; list-style: none; }
-.workflowQuality li { display: flex; align-items: flex-start; gap: 6px; color: #6f7467; font-size: 8px; line-height: 1.45; }
-.workflowQuality li svg { flex: 0 0 auto; color: #75952d; }
-
-.flowMap { margin-bottom: 14px; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: #f3f4ef; }
-.flowMapHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -2px 0 13px; }
-.flowMapHeader > div { display: flex; flex-direction: column; gap: 3px; }
-.flowMapHeader span { color: #868b7f; font-size: 7px; font-weight: 750; letter-spacing: .09em; text-transform: none; }
-.flowMapHeader strong { font-size: 10px; }
-.flowMapHeader button { padding: 6px 8px; border: 0; background: transparent; color: #686d62; font-size: 8px; font-weight: 650; cursor: pointer; }
-.flowEndpoint { display: grid; grid-template-columns: 90px 1fr; gap: 14px; align-items: center; min-height: 42px; padding: 10px 14px; border: 1px solid #dcddd7; border-radius: 7px; background: #fff; }
-.flowEndpoint span { color: #8c8f86; font-size: 8px; font-weight: 700; letter-spacing: .08em; text-transform: none; }
-.flowEndpoint strong { font-size: 10px; }
-.stageList { position: relative; display: flex; flex-direction: column; padding: 14px 0 14px 35px; }
-.stageList::before { content: ""; position: absolute; top: 0; bottom: 0; left: 48px; width: 1px; background: #cfd1c8; }
-.stageList article { position: relative; z-index: 1; overflow: visible; border: 1px solid #dddeda; border-radius: 8px; background: #fff; }
-.stageList article + article { margin-top: 8px; }
-.stageList .stageBottleneck { border-color: #dfca89; box-shadow: inset 3px 0 0 #efc64d; }
-.stageList .stageConstraint { border-color: #d6d9d1; box-shadow: inset 3px 0 0 #b8bdb2; }
-.stageList .stageOpen { border-color: #bfc3b6; box-shadow: 0 8px 22px rgba(35,38,28,.06); }
-.stageSummary { width: 100%; min-height: 91px; display: grid; grid-template-columns: 34px minmax(0,1fr) 115px 18px; gap: 13px; align-items: center; padding: 13px 15px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
-.stageSummary:hover { background: #fbfcf8; }
-.stageNumber { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 4px; background: var(--soft); color: var(--signal); font-size: 10px; }
-.stageBody > div { display: flex; align-items: center; gap: 8px; }
-.stageBody h3 { margin: 0; font-size: 11px; }
-.stageBody p { margin: 5px 0; color: #7a7e74; font-size: 9px; line-height: 1.45; }
-.stageBody > span { color: #979a92; font-size: 8px; }
-.stageTime { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; padding-left: 15px; border-left: 1px solid #e6e7e1; }
-.stageTime strong { font-size: 16px; }
-.stageTime span { color: #8d9087; font-size: 8px; }
-.stageChevron { color: #8a8e84; transition: transform .15s ease; }
-.stageOpen .stageChevron { transform: rotate(180deg); }
-.stageDisclosure { display: grid; grid-template-columns: minmax(260px,.95fr) minmax(0,1.05fr); gap: 0; border-top: 1px solid #e2e4dc; background: #fafbf7; }
-.screenshotUnavailable { min-height: 145px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 20px; border: 1px dashed #d2d5cc; border-radius: 6px; color: #8a8e84; text-align: center; }
-.screenshotUnavailable strong { color: #666b60; font-size: 9px; }
-.screenshotUnavailable span { max-width: 290px; font-size: 8px; line-height: 1.45; }
-
-.detailColumns { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 13px; margin-bottom: 42px; }
 .panel { padding: 21px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
 .panelTitle { display: flex; align-items: flex-start; justify-content: space-between; padding-bottom: 16px; border-bottom: 1px solid #e6e7e1; }
 .panelTitle h2 { margin: 0; font-size: 13px; }
@@ -617,17 +544,9 @@
 }
 
 @media (max-width: 820px) {
-  .workflowGrid, .detailColumns { grid-template-columns: 1fr; }
-  .detailHeader { grid-template-columns: 1fr; gap: 20px; }
-  .detailTotal { max-width: 260px; }
-  .detailStats { grid-template-columns: repeat(2,1fr); }
-  .detailStats > div { border-right: 1px solid #e6e7e1; border-bottom: 1px solid #e6e7e1; }
-  .detailStats > div:nth-child(2n) { border-right: 0; }
-  .detailStats > div:last-child { grid-column: 1 / -1; border-right: 0; border-bottom: 0; }
+  .workflowGrid { grid-template-columns: 1fr; }
   .bottleneckList article { grid-template-columns: 30px 1fr 115px; }
   .bottleneckList .iconLink { display: none; }
-  .stageDisclosure { grid-template-columns: 1fr; }
-  .workflowQuality ul { grid-template-columns: 1fr; }
   .profileAdvancedGrid { grid-template-columns: 1fr; }
 }
 
@@ -648,12 +567,6 @@
   .scopeControl select { max-width: 105px; }
   .main { padding: 28px 18px 55px; }
   .pageHeader { align-items: flex-start; flex-direction: column; }
-  .stageList { padding-left: 0; }
-  .stageList::before { display: none; }
-  .stageList article { grid-template-columns: 31px 1fr; }
-  .stageSummary { grid-template-columns: 31px 1fr 18px; }
-  .stageTime { grid-column: 2; align-items: flex-start; padding: 8px 0 0; border: 0; }
-  .stageSummary > .stageChevron { grid-column: 3; grid-row: 1; }
   .bottleneckList article { grid-template-columns: 26px 1fr; }
   .bottleneckTime { grid-column: 2; padding: 10px 0 0; border: 0; }
   .filterBar { align-items: flex-start; flex-wrap: wrap; }
@@ -681,7 +594,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .spinner, .spinnerSmall { animation: none; }
-  .workflowCard, .stageChevron { transition: none; }
+  .workflowCard { transition: none; }
   .commandBackdrop, .commandPalette { animation: none; }
   .skillBackdrop, .skillDialog, .skillLiveDraft pre i { animation: none; }
 }
@@ -773,8 +686,6 @@
 
 .refreshControls { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); }
 .workflowReviewState { margin: -12px 0 22px; color: var(--muted); font-size: 12px; }
-.procedureDetails { padding: 16px 20px; }
-.procedureDetails blockquote { max-height: 160px; overflow-y: auto; }
 @media (max-width: 640px) { .refreshControls { flex-wrap: wrap; justify-content: flex-end; } }
 
 
@@ -835,9 +746,6 @@
 .workflowNotes .bottleneckMain > div { flex-wrap: wrap; gap: 8px; }
 .workflowNotes .bottleneckMain h3 { margin: 8px 0 4px; font-size: 14px; line-height: 1.5; }
 .workflowNotes .bottleneckMain p { margin: 0; font-size: 13px; line-height: 1.6; }
-.workflowNotes > .workflowQuality { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; }
-.workflowNotes > .workflowQuality > summary { min-height: 36px; padding: 8px 0; font-size: 13px; }
-.workflowNotes > .workflowQuality > summary > div { flex-wrap: wrap; gap: 6px; }
 @container workflow-pane (max-width: 540px) {
   .workflowNotes .bottleneckList article { grid-template-columns: 20px minmax(0, 1fr); }
   .workflowNotes .bottleneckTime { grid-column: 2; }
@@ -912,11 +820,3 @@
   .sourceTopbar { height: auto; min-height: 59px; flex-wrap: wrap; padding-top: 12px; padding-bottom: 12px; }
   .sourceTopbar .search { flex: 1 1 220px; min-width: 220px; width: auto; margin-right: 0; }
 }
-
-/* Keep timing outside the step expansion button for keyboard and touch use. */
-.stageHeadingRow { display: flex; align-items: flex-start; gap: 4px; }
-.stageHeadingRow > button { flex: 1; min-width: 0; }
-.stageHeadingRow > span { margin: 12px 12px 0 0; }
-
-.stageList article:hover, .stageList article:focus-within { z-index: 2; }
-.detailHeader > span { justify-self: end; }

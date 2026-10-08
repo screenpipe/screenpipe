@@ -79,6 +79,7 @@ fn owned_log_files(files: Vec<LogFile>) -> Vec<LogFile> {
 fn is_screenpipe_owned_log_name(name: &str) -> bool {
     crate::log_files::is_panic_log(name)
         || name == crate::recording::recovery_log::LOG_NAME
+        || is_enterprise_takeover_log(name)
         || crate::update_diagnostics::is_update_log(name)
         || matches!(
             name,
@@ -90,6 +91,16 @@ fn is_screenpipe_owned_log_name(name: &str) -> bool {
         )
         || is_dated_rolling_log(name, "screenpipe.")
         || is_dated_rolling_log(name, "screenpipe-app.")
+}
+
+#[cfg(target_os = "windows")]
+fn is_enterprise_takeover_log(name: &str) -> bool {
+    crate::windows_enterprise_takeover::is_takeover_log(name)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_enterprise_takeover_log(_name: &str) -> bool {
+    false
 }
 
 fn is_dated_rolling_log(name: &str, prefix: &str) -> bool {

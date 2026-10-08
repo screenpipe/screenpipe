@@ -212,6 +212,30 @@ describe("scanExternalChatHistory", () => {
     expect(mocks.saveConversationFile).not.toHaveBeenCalled();
   });
 
+  it("repairs missing images during sync even when text and timestamps are unchanged", async () => {
+    const { parseCodexTranscript } = await import("./external-chat-parser");
+    const image = "data:image/png;base64,aGVsbG8=";
+    const jsonl = JSON.stringify({ type: "response_item", payload: {
+      type: "message", id: "u1", role: "user", content: [
+        { type: "input_text", text: "Review this" },
+        { type: "input_image", image_url: image },
+      ],
+    } });
+    const existing = parseCodexTranscript(jsonl, { sourceId: "images", fallbackTimestamp: 1 })!;
+    delete existing.messages[0].images;
+    existing.lastViewedAt = 1;
+    mocks.stat.mockResolvedValue({ size: 1024 });
+    mocks.readTextFile.mockResolvedValue(jsonl);
+    mocks.loadConversationFile.mockResolvedValue(existing);
+    const candidate = { source: "codex" as const, path: "/fixture/images.jsonl", sourceId: "images", modifiedAt: 1, size: 1024 };
+
+    expect(await importExternalChatHistory([candidate], { skipUnchanged: true })).toMatchObject({ updated: 1, skipped: 0 });
+    const saved = mocks.saveConversationFile.mock.calls[0][0];
+    expect(saved.messages[0].images).toEqual([image]);
+    mocks.loadConversationFile.mockResolvedValue(saved);
+    expect(await importExternalChatHistory([candidate], { skipUnchanged: true })).toMatchObject({ updated: 0, skipped: 1 });
+  });
+
   it("broadcasts active and completed Codex turn state even when disk content is unchanged", async () => {
     const userAt = Date.parse("2026-08-27T15:00:02Z");
     const toolAt = Date.parse("2026-08-27T15:00:03Z");

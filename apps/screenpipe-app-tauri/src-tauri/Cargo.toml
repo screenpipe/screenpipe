@@ -7,7 +7,7 @@ members = ["wer-dump-helper", "windows/persistence-supervisor", "release-router-
 
 [package]
 name = "screenpipe-app"
-version = "2.7.99"
+version = "2.7.100"
 description = "24/7 memory for your desktop. 100% local."
 authors = ["you"]
 license = ""
@@ -261,6 +261,7 @@ windows = { version = "0.58", features = [
     "Win32_System_ErrorReporting",
     "Win32_System_Registry",
     "Win32_System_Threading",
+    "Win32_System_RemoteDesktop",
     "Win32_Security_Cryptography",
     # GetLastInputInfo/GetTickCount for the recording-health user-presence tier
     "Win32_UI_Input_KeyboardAndMouse",

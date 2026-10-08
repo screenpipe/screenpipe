@@ -127,6 +127,7 @@ pub(crate) async fn collect_log_files(dirs: &[PathBuf]) -> Vec<LogFile> {
                 .is_some_and(|name| {
                     is_panic_log(name)
                         || name == crate::recording::recovery_log::LOG_NAME
+                        || is_enterprise_takeover_log(name)
                         || crate::update_diagnostics::is_update_log(name)
                 }),
             std::cmp::Reverse(
@@ -161,6 +162,16 @@ pub(crate) async fn collect_log_files(dirs: &[PathBuf]) -> Vec<LogFile> {
             }
         })
         .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn is_enterprise_takeover_log(name: &str) -> bool {
+    crate::windows_enterprise_takeover::is_takeover_log(name)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_enterprise_takeover_log(_name: &str) -> bool {
+    false
 }
 
 /// Push log entries from a single directory into `entries`, deduping by

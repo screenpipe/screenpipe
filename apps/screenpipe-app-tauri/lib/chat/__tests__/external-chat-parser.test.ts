@@ -425,7 +425,7 @@ describe("external agent chat parsers", () => {
 
     expect(conversation?.title).toBe("fix this sidebar");
     expect(conversation?.messages[0].content).toBe(
-      "fix this sidebar\n<image name=[Image #1] path=\"/tmp/screenshot.png\">",
+      "fix this sidebar\n\n![Image #1](</tmp/screenshot.png>)",
     );
   });
 

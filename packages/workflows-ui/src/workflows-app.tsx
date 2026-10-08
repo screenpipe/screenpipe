@@ -8,7 +8,7 @@ import { serializeWorkflowData } from "./screenshots";
 import { useNavigationWidth } from "./use-navigation-width";
 import { WorkflowQuestions } from "./workflow-questions";
 import { WorkflowStepEvidence } from "./workflow-step-evidence";
-import { WorkflowEditor, type WorkflowEditorOptions } from "./workflow-editor";
+import { WorkflowDocument, WorkflowEditor, type WorkflowEditorOptions } from "./workflow-editor";
 import { retainNewerWorkflowEdits, type WorkflowEdit } from "./workflow-edits";
 import { WorkflowModelControl } from "./model-choice";
 import { matchesSidebarShortcut, useSidebarShortcuts } from "./sidebar-shortcuts";
@@ -49,7 +49,6 @@ import {
   RefreshCw,
   Save,
   Search,
-  ShieldCheck,
   SlidersHorizontal,
   Share2,
   Sparkles,
@@ -158,18 +157,6 @@ function appViewFromLocation(): AppView {
   const params = new URLSearchParams(window.location.search);
   const requested = params.get("view") ?? params.get("section");
   return isPrimaryAppView(requested) ? requested : "workflows";
-}
-
-function formatEvidenceTimestamp(value: string) {
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date);
 }
 
 function hasMeasuredDuration(workflow: WorkflowMap) {
@@ -670,7 +657,6 @@ function WorkflowCorrection({ workflow, save }: { workflow: WorkflowMap; save: (
 // Saved coverage notes can contain legacy capture names. Keep source quotations intact.
 export function WorkflowDetail({ editorOptions, sourceLabel, observationsAvailable = true, canSaveAnswers, composerAccessory, active, onAnswersSaved, workflow, navigate, platform, workProfile, saveCorrection, saveEdits, onShareWorkflow, workflowAgentActions }: { editorOptions?: WorkflowEditorOptions; sourceLabel?: string; observationsAvailable?: boolean; canSaveAnswers: boolean; composerAccessory?: WorkflowsAppProps["composerAccessory"]; active: boolean; onAnswersSaved: (workflow: WorkflowMap) => void; workflow: WorkflowMap | null; navigate: (view: AppView) => void; platform: WorkflowsPlatform; workProfile: WorkProfile | null; saveCorrection?: (note: string) => Promise<void>; saveEdits?: (draft: WorkflowEdit) => Promise<WorkflowMap>; onShareWorkflow?: WorkflowsAppProps["onShareWorkflow"]; workflowAgentActions?: WorkflowsAppProps["workflowAgentActions"] }) {
   const ui = useGT();
-  const [expandedStages, setExpandedStages] = useState<Set<number>>(() => new Set());
   const [guideOpen, setGuideOpen] = useState(false);
   const [hasGuide, setHasGuide] = useState(false);
   useEffect(() => {
@@ -687,7 +673,6 @@ export function WorkflowDetail({ editorOptions, sourceLabel, observationsAvailab
   const [skillError, setSkillError] = useState("");
   const [skillProgress, setSkillProgress] = useState<WorkflowSkillProgress>({ phase: "reading", message: "Reading the mapped steps" });
   useEffect(() => {
-    setExpandedStages(new Set());
     setSkillOpen(false);
     setGuideOpen(false);
     setSkillDraft(null);
@@ -736,60 +721,18 @@ export function WorkflowDetail({ editorOptions, sourceLabel, observationsAvailab
   if (workflow && guideOpen && platform.guides) return <WorkflowGuide key={workflow.id || workflow.title} workflow={workflow} platform={platform.guides} loadScreenshot={platform.loadWorkflowScreenshot} close={() => setGuideOpen(false)} />;
   if (!workflow) return <section className={styles.emptyState}><ListTree size={23} /><h2>No workflow selected</h2><button className={styles.primaryButton} onClick={() => navigate("workflows")}>View workflows</button></section>;
 
-  const allStagesOpen = expandedStages.size === workflow.stages.length;
   const actionableFriction = workflow.bottlenecks.filter(isActionableBottleneck);
   const constraints = workflow.bottlenecks.filter((item) => !isActionableBottleneck(item));
-  const toggleStage = (index: number) => setExpandedStages((current) => {
-    const next = new Set(current);
-    if (next.has(index)) next.delete(index);
-    else next.add(index);
-    return next;
-  });
   const agentActions = workflowAgentActions?.(workflow);
   const workflowActions = <div className={styles.workflowActions}>{agentActions}{platform.guides && <button className={styles.skillButton} type="button" aria-label={hasGuide ? "Open SOP" : "Create SOP"} title={hasGuide ? "Open SOP" : "Create SOP"} onClick={() => setGuideOpen(true)}><BookOpen size={16} aria-hidden="true"/>{hasGuide ? ui("Open SOP") : ui("Create SOP")}</button>}{platform.generateWorkflowSkill && platform.saveWorkflowSkill && <button className={styles.skillButton} type="button" onClick={openSkill}><Sparkles size={14} />{skillGenerating ? ui("Creating skill…") : skillSaved ? platform.skillInstallMode === "preview" ? ui("Skill preview") : ui("Skill installed") : skillDraft ? ui("Review skill") : ui("Create skill")}</button>}{onShareWorkflow && <button className={styles.skillButton} type="button" onClick={() => onShareWorkflow(workflow)}><Share2 size={14} />Share with team</button>}{platform.assistant?.saveFeedback && <button className={styles.skillButton} type="button" onClick={() => window.dispatchEvent(new CustomEvent("workflows:feedback", { detail: { key: `feedback:${workflow.id || workflow.title}`, title: workflow.title, workflow, purpose: "feedback" } }))}><MessageCircle size={14} />Feedback</button>}</div>;
   return (
     <>
       <button className={styles.backButton} onClick={() => navigate("workflows")}><ArrowLeft size={14} />All workflows</button>
-      {saveEdits ? <WorkflowEditor {...editorOptions} key={workflow.id || workflow.title} workflow={workflow} save={saveEdits} actions={workflowActions} renderSource={observationsAvailable ? stage => <WorkflowStepEvidence workflow={workflow} stage={stage} platform={platform} /> : undefined} /> : <section className={styles.detailHeader}>
-        <div><Pill>{sourceLabel ?? <>Evidence on {workflow.repetitions} captured day{workflow.repetitions === 1 ? "" : "s"}</>}</Pill><h1>{workflow.title}</h1><p>{workflow.description}</p>{workflowActions}</div>
-        <TimingDisclosure label="Workflow timing" value={workflow.timing} measured={hasMeasuredDuration(workflow) ? { minutes: workflow.totalMinutes, samples: workflow.durationSampleCount ?? 0 } : undefined} />
-      </section>}
+      {saveEdits ? <WorkflowEditor {...editorOptions} key={workflow.id || workflow.title} workflow={workflow} save={saveEdits} actions={workflowActions} renderSource={observationsAvailable ? stage => <WorkflowStepEvidence workflow={workflow} stage={stage} platform={platform} /> : undefined} /> : <WorkflowDocument workflow={workflow} actions={workflowActions} sourceLabel={sourceLabel}
+        renderSource={observationsAvailable ? stage => <WorkflowStepEvidence workflow={workflow} stage={stage} platform={platform} /> : undefined} />}
       <div className={styles.workflowNotes}>
       <p className={styles.workflowReviewState}>{workflow.userEditedAt ? ui("Edited by you · sources kept as references") : workflow.evidenceStatus === "supported-steps" ? ui("Source-backed steps · not execution-tested") : ui("Needs review")}</p>
       {saveCorrection && !platform.assistant?.saveFeedback && <WorkflowCorrection key={`correction:${workflow.title}`} workflow={workflow} save={saveCorrection} />}
-      {!saveEdits && <section className={styles.flowMap}>
-        <div className={styles.flowMapHeader}><div><strong>Steps</strong></div><button onClick={() => setExpandedStages(allStagesOpen ? new Set() : new Set(workflow.stages.map((_, index) => index)))}>{allStagesOpen ? ui("Collapse all") : ui("Expand all")}</button></div>
-        <div className={styles.flowEndpoint}><span>Starts when</span><strong>{workflow.trigger}</strong></div>
-        <div className={styles.stageList}>
-          {workflow.stages.map((stage, index) => {
-            const stageFriction = workflow.bottlenecks.filter((item) => item.stage.toLowerCase() === stage.name.toLowerCase());
-            const actionableStageFriction = stageFriction.some(isActionableBottleneck);
-            const constraint = stageFriction.find((item) => !isActionableBottleneck(item));
-            const open = expandedStages.has(index);
-            return <article key={`${stage.name}-${index}`} className={`${actionableStageFriction ? styles.stageBottleneck : ""} ${constraint ? styles.stageConstraint : ""} ${open ? styles.stageOpen : ""}`}>
-              <div className={styles.stageHeadingRow}>
-              <button className={styles.stageSummary} onClick={() => toggleStage(index)} aria-expanded={open}>
-                <div className={styles.stageNumber}>{index + 1}</div>
-                <div className={styles.stageBody}><div><h3>{stage.name}</h3>{actionableStageFriction && <Pill tone="warm"><AlertTriangle size={11} />Actionable friction</Pill>}{!actionableStageFriction && constraint && <Pill><ShieldCheck size={11} />{controlLabel(constraint)}</Pill>}</div><p>{stage.description}</p><span>{stage.apps.join(" · ") || ui("App not clear")}{observationsAvailable && <> · {ui("{count, plural, one {# observation} other {# observations}}", { count: stage.observedOccurrences })} across {ui("{count, plural, one {# day} other {# days}}", { count: stage.observedDays })}</>}</span></div>
-                <ChevronDown className={styles.stageChevron} size={15} />
-              </button>
-              <TimingDisclosure label={`Timing for step ${index + 1}`} value={stage.timing} />
-              </div>
-              {open && <div className={styles.stageDisclosure}>
-                <section className={styles.procedureDetails} aria-label={ui("Procedure details for {value1}", { value1: stage.name })}>
-                  {stage.procedure?.length ? <ol>{stage.procedure.map((detail, detailIndex) => <li key={`${detail.kind}-${detailIndex}`}>
-                    <span className={styles.procedureKind}>{detail.kind === "check" ? ui("Completion check") : detail.kind}</span>
-                    <p>{detail.text}</p>
-                    {detail.quote && <details><summary>{detail.userEdited || stage.userEdited ? "Original reference" : "Source excerpt"} · {detail.app}</summary><blockquote>{detail.quote}</blockquote><small>{formatEvidenceTimestamp(detail.timestamp)} · {detail.userEdited || stage.userEdited ? "Edited instructions are not verified by this reference" : "Text match, not execution verification"}</small></details>}
-                  </li>)}</ol> : <p>Step not yet verified.</p>}
-                </section>
-                <WorkflowStepEvidence workflow={workflow} stage={stage} platform={platform} />
-              </div>}
-            </article>;
-          })}
-        </div>
-        <div className={styles.flowEndpoint}><span>Ends with</span><strong>{workflow.outcome}</strong></div>
-      </section>}
       {observationsAvailable && <WorkflowQuestions workflow={workflow} active={active} voice={platform.questionnaireVoice} save={canSaveAnswers && platform.saveWorkflowAnswers ? async correction => {
         try {
           const saved = await platform.saveWorkflowAnswers!(workflow, correction);
