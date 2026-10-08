@@ -1427,7 +1427,7 @@ jobs:
             fi
 
             cd apps/screenpipe-app-tauri
-            # Build the styled DMG below, including the signed recovery companion.
+            # Build the styled DMG below, with the app and Applications shortcut.
             BUNDLE_ARGS=(--bundles app)
             if bunx tauri build -v $TAURI_ARGS "${BUNDLE_ARGS[@]}" 2>&1 | tee /tmp/tauri-build-$attempt.log; then
               echo "✅ Build succeeded on attempt $attempt"
@@ -1485,26 +1485,6 @@ jobs:
           done
           echo "all .app bundles pass codesign --verify --deep --strict"
 
-      - name: Build and notarize update recovery launcher
-        if: matrix.os_type == 'macos'
-        shell: bash
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle"
-          APP_PATH="${BUNDLE_DIR}/macos/screenpipe.app"
-          # Older selected source revisions predate authenticated handoff.
-          rm -rf "${BUNDLE_DIR}/recovery"
-          if /usr/libexec/PlistBuddy -c 'Print :ScreenpipeManualHandoffProtocol' "$APP_PATH/Contents/Info.plist" >/dev/null 2>&1; then
-            bash .release-workflow/.github/scripts/build-macos-update-recovery.sh "$APP_PATH" "${BUNDLE_DIR}/recovery"
-            bash .release-workflow/.github/scripts/finalize-macos-updater.sh \
-              "${BUNDLE_DIR}/recovery" "$GITHUB_WORKSPACE/apps/screenpipe-app-tauri" --app-only
-          fi
-
       - name: Create headless DMG (macOS)
         if: matrix.os_type == 'macos'
         shell: bash
@@ -1524,11 +1504,7 @@ jobs:
           esac
           APP_PATH="${BUNDLE_DIR}/macos/screenpipe.app"
           DMG_PATH="${BUNDLE_DIR}/dmg/screenpipe_${VERSION}_${PACKAGE_ARCH}.dmg"
-          RECOVERY_ARGS=()
-          if [[ -d "${BUNDLE_DIR}/recovery/Open updated Screenpipe.app" ]]; then
-            RECOVERY_ARGS=("${BUNDLE_DIR}/recovery/Open updated Screenpipe.app")
-          fi
-          bash .release-workflow/.github/scripts/create-headless-dmg.sh "$APP_PATH" "$DMG_PATH" "screenpipe" "${RECOVERY_ARGS[@]}"
+          bash .release-workflow/.github/scripts/create-headless-dmg.sh "$APP_PATH" "$DMG_PATH" "screenpipe"
 
       - name: Notarize and staple DMGs (macOS)
         if: matrix.os_type == 'macos'

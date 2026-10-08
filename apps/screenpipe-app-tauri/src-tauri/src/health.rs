@@ -1325,6 +1325,19 @@ const WRITE_QUEUE_FAILURE_THRESHOLD: u64 = 3;
 /// Suppress re-notification for this long after showing one.
 const NOTIFICATION_COOLDOWN: Duration = Duration::from_secs(300); // 5 minutes
 
+/// Park the recording/tray poll while Quit retains only the history API.
+/// Return whether it resumed so the caller can discard pre-Quit stall samples.
+async fn next_health_poll(timer: &mut tokio::time::Interval) -> bool {
+    timer.tick().await;
+    if !crate::search_only::is_active() {
+        return false;
+    }
+    screenpipe_core::background_work::wait_until_resumed().await;
+    // Do not replay timer ticks accumulated while the app was quit.
+    timer.reset();
+    true
+}
+
 /// Starts a background task that periodically checks the health of the sidecar
 /// and updates the tray icon accordingly.
 pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
@@ -1376,7 +1389,15 @@ pub async fn start_health_check(app: tauri::AppHandle) -> Result<()> {
 
     tokio::spawn(async move {
         loop {
-            interval.tick().await;
+            if next_health_poll(&mut interval).await {
+                consecutive_failures = 0;
+                consecutive_unhealthy = 0;
+                consecutive_audio_stall = 0;
+                consecutive_vision_stall = 0;
+                stale_tier.reset();
+                vision_hard_notified = false;
+                vision_progress = VisionProgressTracker::default();
+            }
 
             let theme = dark_light::detect().unwrap_or(Mode::Dark);
             let health_result = check_health(&app, &client).await;
@@ -2147,6 +2168,48 @@ async fn check_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn health_poll_parks_after_quit_and_resumes_without_catch_up() {
+        use screenpipe_core::background_work;
+
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                background_work::set_suspended(false);
+            }
+        }
+        let _reset = Reset;
+        background_work::set_suspended(false);
+        let period = Duration::from_secs(60);
+        let mut timer = interval(period);
+        assert!(!next_health_poll(&mut timer).await);
+
+        for _ in 0..2 {
+            background_work::set_suspended(true);
+            // An overdue tick models a long Quit, including startup directly
+            // into search-only mode. No health/device request may be admitted.
+            timer.reset_at(tokio::time::Instant::now() - period * 5);
+            {
+                let poll = next_health_poll(&mut timer);
+                tokio::pin!(poll);
+                assert!(futures::poll!(&mut poll).is_pending());
+                assert!(futures::poll!(&mut poll).is_pending());
+                background_work::set_suspended(false);
+                assert!(poll.await, "reopen releases the parked poll");
+            }
+            {
+                let next = next_health_poll(&mut timer);
+                tokio::pin!(next);
+                assert!(
+                    futures::poll!(&mut next).is_pending(),
+                    "reopen must not burst through missed ticks"
+                );
+            }
+        }
+        timer.reset_immediately();
+        assert!(!next_health_poll(&mut timer).await);
+    }
 
     #[test]
     fn ocr_unavailable_alert_emits_on_entry_and_reentry_only() {

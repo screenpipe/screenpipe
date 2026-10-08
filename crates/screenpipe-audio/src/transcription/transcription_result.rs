@@ -15,9 +15,7 @@ use crate::speaker::identify_gate::{
     segment_duration_secs, speaker_identify_decision, SpeakerIdentifyDecision,
 };
 
-use super::{
-    text_utils::longest_common_word_substring, AudioInput, TranscriptionDiarizationSegment,
-};
+use super::{AudioInput, TranscriptionDiarizationSegment};
 
 #[derive(Debug, Clone)]
 pub struct TranscriptionResult {
@@ -34,30 +32,23 @@ pub struct TranscriptionResult {
 }
 
 impl TranscriptionResult {
-    // TODO --optimize
+    /// Remove only a matching suffix/prefix at a verified audio overlap.
+    /// The caller must establish overlapping capture intervals first. Never
+    /// rewrite the previous transcript: it is the retained copy of these words.
     pub fn cleanup_overlap(&mut self, previous_transcript: String) -> Option<(String, String)> {
-        if let Some(transcription) = &self.transcription {
-            let transcription = transcription.to_string();
-            if let Some((prev_idx, cur_idx, match_len)) =
-                longest_common_word_substring(previous_transcript.as_str(), transcription.as_str())
-            {
-                // strip old transcript from prev_idx word pos (keep words before the overlap)
-                let prev_words: Vec<&str> = previous_transcript.split_whitespace().collect();
-                let new_prev = prev_words[..prev_idx].join(" ");
-
-                // strip new transcript AFTER the overlap ends (skip the overlapped portion)
-                let curr_words: Vec<&str> = transcription.split_whitespace().collect();
-                let skip_until = cur_idx + match_len;
-                let new_cur = if skip_until < curr_words.len() {
-                    curr_words[skip_until..].join(" ")
-                } else {
-                    String::new() // Entire current transcript was overlap
-                };
-
-                return Some((new_prev, new_cur));
+        let current = self.transcription.as_ref()?;
+        let previous_words: Vec<&str> = previous_transcript.split_whitespace().collect();
+        let current_words: Vec<&str> = current.split_whitespace().collect();
+        // One or two common words are too weak to establish a speech boundary.
+        for count in (3..=previous_words.len().min(current_words.len())).rev() {
+            let matches = previous_words[previous_words.len() - count..]
+                .iter()
+                .zip(&current_words[..count])
+                .all(|(left, right)| left.eq_ignore_ascii_case(right));
+            if matches {
+                return Some((previous_transcript, current_words[count..].join(" ")));
             }
         }
-
         None
     }
 }

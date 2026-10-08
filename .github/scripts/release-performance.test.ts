@@ -143,7 +143,7 @@ esac
   f.stub("codesign", 'if [[ "${REJECT_EXTRACTED:-}" == 1 && "${@: -1}" != "$ORIGINAL_APP" ]]; then exit 1; fi\n');
   f.stub("spctl", ":\n");
   f.stub("bunx", 'if [[ "${FAIL_SIGN:-}" == 1 ]]; then exit 1; fi\necho fixture-signature > "$4.sig"\n');
-  const run = (extra = {}, args: string[] = []) => f.run("finalize-macos-updater.sh", [join(f.root, "bundle"), f.root, ...args], {
+  const run = (extra = {}) => f.run("finalize-macos-updater.sh", [join(f.root, "bundle"), f.root], {
     APPLE_ID: "fixture", APPLE_PASSWORD: "fixture", APPLE_TEAM_ID: "fixture", MODE: mode, ORIGINAL_APP: app, ...extra,
   });
   return { ...f, app, run };
@@ -168,28 +168,16 @@ test("an invalid extracted bundle fails the gate even when the original app vali
   const f = notarization("valid"); expect(f.run({ REJECT_EXTRACTED: "1" }).status).not.toBe(0);
 });
 
-test("recovery companion is notarized and assessed without becoming an updater payload", () => {
-  const f = notarization("missing");
-  expect(f.run({}, ["--app-only"]).status).toBe(0);
-  expect(f.calls()).toContain("notarytool submit");
-  expect(f.calls()).toContain("stapler validate");
-  expect(existsSync(`${f.app}.tar.gz`)).toBe(false);
-  expect(existsSync(`${f.app}.tar.gz.sig`)).toBe(false);
-  const rejected = notarization("rejected");
-  expect(rejected.run({}, ["--app-only"]).status).not.toBe(0);
-});
-
-test("recovery companion is included in consumer and enterprise DMGs on every Mac runner", () => {
+test("consumer and enterprise DMGs open the regular app without a separate launcher", () => {
   for (const name of ["release-app.yml", "release-enterprise.yml"]) {
-    const workflow = Bun.YAML.parse(readFileSync(join(scripts, "../workflows", name), "utf8")) as any;
-    const jobs = Object.values(workflow.jobs) as any[];
-    const steps = jobs.flatMap(job => job.steps ?? []);
-    const recovery = steps.find(step => step.name === "Build and notarize update recovery launcher");
-    expect(recovery.run).toContain(".release-workflow/.github/scripts/build-macos-update-recovery.sh");
-    expect(recovery.run).toContain("--app-only");
+    const source = readFileSync(join(scripts, "../workflows", name), "utf8");
+    const workflow = Bun.YAML.parse(source) as any;
+    const steps = (Object.values(workflow.jobs) as any[]).flatMap(job => job.steps ?? []);
     const dmg = steps.find(step => step.name?.startsWith("Create headless DMG"));
     expect(dmg.if ?? "").not.toContain("self-hosted");
-    expect(dmg.run).toContain('"${RECOVERY_ARGS[@]}"');
+    expect(dmg.run).toContain('create-headless-dmg.sh "$APP_PATH" "$DMG_PATH"');
+    expect(source).not.toContain("build-macos-update-recovery");
+    expect(source).not.toContain("RECOVERY_ARGS");
   }
 });
 

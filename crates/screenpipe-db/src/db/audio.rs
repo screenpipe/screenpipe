@@ -4,6 +4,31 @@
 
 use super::*;
 
+// Preserve numbers, signs, contractions and word order. Only sentence-ending
+// punctuation/case differences are harmless for cross-device echo matching.
+fn duplicate_words(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .map(|word| {
+            word.trim_end_matches(['.', ',', '!', '?', ';', ':'])
+                .to_lowercase()
+        })
+        .collect()
+}
+
+// Segment offsets are relative to the recording's capture timestamp.
+fn speech_interval(
+    timestamp: DateTime<Utc>,
+    start: Option<f64>,
+    end: Option<f64>,
+) -> Option<(f64, f64)> {
+    let (start, end) = (start?, end?);
+    if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
+        return None;
+    }
+    let base = timestamp.timestamp() as f64 + timestamp.timestamp_subsec_nanos() as f64 / 1e9;
+    Some((base + start, base + end))
+}
+
 impl DatabaseManager {
     pub async fn insert_audio_chunk(
         &self,
@@ -359,7 +384,7 @@ impl DatabaseManager {
         // sweep even though we DID process it (the other device kept the
         // text).
         if self
-            .has_similar_recent_transcription(trimmed, DEDUP_TIME_WINDOW_SECS)
+            .has_duplicate_from_other_device(trimmed, device, timestamp, start_time, end_time)
             .await?
         {
             debug!(
@@ -459,7 +484,7 @@ impl DatabaseManager {
             false
         } else {
             match self
-                .has_similar_recent_transcription(trimmed, DEDUP_TIME_WINDOW_SECS)
+                .has_duplicate_from_other_device(trimmed, device, timestamp, start_time, end_time)
                 .await
             {
                 Ok(is_duplicate) => is_duplicate,
@@ -504,35 +529,55 @@ impl DatabaseManager {
         }
     }
 
-    /// Check if a similar transcription exists in the recent time window.
-    /// Used for cross-device deduplication.
-    async fn has_similar_recent_transcription(
+    /// Deduplicate matching words captured by another device at the same time.
+    /// Similar wording is not evidence of duplicate speech: a new number,
+    /// negation or longer sentence must survive, as must repetition on one mic.
+    async fn has_duplicate_from_other_device(
         &self,
         transcription: &str,
-        time_window_secs: i64,
+        device: &AudioDevice,
+        timestamp: Option<DateTime<Utc>>,
+        start_time: Option<f64>,
+        end_time: Option<f64>,
     ) -> Result<bool, sqlx::Error> {
-        // Fetch recent transcriptions from ALL devices
-        let recent: Vec<(String,)> = sqlx::query_as(
-            "SELECT transcription FROM audio_transcriptions
-             WHERE timestamp > strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?1)
+        let captured = timestamp.unwrap_or_else(Utc::now);
+        let window = chrono::Duration::seconds(DEDUP_TIME_WINDOW_SECS);
+        // Bound by capture time, not processing time, so a deferred recording
+        // cannot be discarded because similar speech happens to be live now.
+        let recent: Vec<(String, DateTime<Utc>, Option<f64>, Option<f64>)> = sqlx::query_as(
+            "SELECT transcription, timestamp, start_time, end_time FROM audio_transcriptions
+             WHERE timestamp >= ?1 AND timestamp <= ?2
+               AND (device != ?3 OR is_input_device != ?4)
              ORDER BY timestamp DESC
              LIMIT 50",
         )
-        .bind(format!("-{} seconds", time_window_secs))
+        .bind(captured - window)
+        .bind(captured + window)
+        .bind(&device.name)
+        .bind(device.device_type == DeviceType::Input)
         .fetch_all(&self.pool)
         .await?;
 
-        // Normalize the incoming transcription once, then reuse it across every
-        // recent row instead of re-tokenizing it on each comparison (up to 50x
-        // per inserted chunk, 24/7).
-        let new_words = normalize_transcription(transcription);
-        for (existing,) in recent {
-            if is_similar_to_normalized(&new_words, &existing, DEDUP_SIMILARITY_THRESHOLD) {
-                return Ok(true);
+        let new_words = duplicate_words(transcription);
+        Ok(recent.into_iter().any(|(existing, at, start, end)| {
+            // Chunk start times can match while two utterances are separate.
+            // Known segment intervals must overlap before words can be an echo.
+            // Legacy rows without either offset keep the capture-time fallback;
+            // partial or invalid offsets are not evidence for deleting speech.
+            let current = speech_interval(captured, start_time, end_time);
+            let previous = speech_interval(at, start, end);
+            if (current.is_none() && (start_time.is_some() || end_time.is_some()))
+                || (previous.is_none() && (start.is_some() || end.is_some()))
+            {
+                return false;
             }
-        }
-
-        Ok(false)
+            if let (Some((a, b)), Some((c, d))) = (current, previous) {
+                if a >= d || c >= b {
+                    return false;
+                }
+            }
+            new_words == duplicate_words(&existing)
+        }))
     }
 
     pub async fn update_audio_transcription(

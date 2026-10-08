@@ -172,25 +172,16 @@ mod tests {
         let report = crate::diagnostic_logs::collect_redacted_from_dirs(&[root.into()])
             .await
             .unwrap();
-        let evidence = if std::env::var_os("HANDOFF_TEST_RECOVERY_LAUNCHER").is_some() {
-            vec![
-                "manual_recovery",
-                "stage=recovery_validation",
-                "source=",
-                "target=",
-                "cause=",
-                "selected_copy_not_started",
-            ]
-        } else {
-            vec![
-                "manual_handoff_candidate",
-                "source=",
-                "target=",
-                "manual_handoff_failed",
-                "cannot authenticate the legacy search API",
-                "selected_copy_not_started",
-            ]
-        };
+        let expected_cause = std::env::var("HANDOFF_TEST_EXPECTED_CAUSE")
+            .unwrap_or_else(|_| "cannot authenticate the legacy search API".into());
+        let evidence = [
+            "manual_handoff_candidate",
+            "source=",
+            "target=",
+            "manual_handoff_failed",
+            expected_cause.as_str(),
+            "selected_copy_not_started",
+        ];
         for evidence in evidence {
             assert!(report.contains(evidence), "support report lost {evidence}");
         }

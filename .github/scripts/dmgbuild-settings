@@ -21,15 +21,6 @@ icon_locations = {
     "Applications": (480, 170),
 }
 hide_extensions = [app_name]
-recovery_path = defines.get("recovery_path")
-if recovery_path:
-    recovery = Path(recovery_path).resolve()
-    files.append(str(recovery))
-    icon_size = 96
-    icon_locations[app_name] = (180, 140)
-    icon_locations["Applications"] = (480, 140)
-    icon_locations[recovery.name] = (330, 250)
-    hide_extensions.append(recovery.name)
 show_status_bar = False
 show_tab_view = False
 show_toolbar = False

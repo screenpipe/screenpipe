@@ -5,19 +5,14 @@
 
 set -euo pipefail
 
-if [[ $# -lt 3 || $# -gt 4 ]]; then
-	echo "usage: create-headless-dmg.sh <app-path> <output-dmg> <volume-name> [recovery-app]" >&2
+if [[ $# -ne 3 ]]; then
+	echo "usage: create-headless-dmg.sh <app-path> <output-dmg> <volume-name>" >&2
 	exit 2
 fi
 
 app_path="$1"
 output_dmg="$2"
 volume_name="$3"
-recovery_path="${4:-}"
-if [[ -n "$recovery_path" ]]; then
-	[[ -d "$recovery_path" ]] || { echo "recovery launcher missing: $recovery_path" >&2; exit 1; }
-	codesign --verify --deep --strict "$recovery_path"
-fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 background_path="$repo_root/apps/screenpipe-app-tauri/src-tauri/assets/dmg-background.png"
@@ -35,6 +30,5 @@ dmgbuild \
 	-s "$settings_path" \
 	-D "app_path=$app_path" \
 	-D "background_path=$background_path" \
-	-D "recovery_path=$recovery_path" \
 	"$volume_name" \
 	"$output_dmg"

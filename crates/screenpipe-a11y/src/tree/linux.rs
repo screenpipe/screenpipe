@@ -218,6 +218,9 @@ const EXCLUDED_APPS: &[&str] = &[
     // Window managers / desktop shells — no user content
     "xfwm4",
     "mutter",
+    // GNOME Shell (Wayland) exposes its "Main stage" window as always FOCUSED and
+    // is listed first by the AT-SPI registry, so it would shadow the real ACTIVE window.
+    "gnome-shell",
     "muffin",
     "kwin",
     "marco",
@@ -1524,6 +1527,7 @@ mod tests {
     fn test_excluded_apps() {
         assert!(EXCLUDED_APPS.iter().any(|ex| "1password".contains(ex)));
         assert!(EXCLUDED_APPS.iter().any(|ex| "keepassxc".contains(ex)));
+        assert!(EXCLUDED_APPS.iter().any(|ex| "gnome-shell".contains(ex)));
         assert!(!EXCLUDED_APPS.iter().any(|ex| "firefox".contains(ex)));
     }
 

@@ -6,8 +6,6 @@
 set -euo pipefail
 MACOS_DIR="${1:?expected macOS bundle directory}"
 APP_PROJECT="${2:?expected Tauri project directory}"
-mode="${3:-updater}"
-[[ "$mode" == updater || "$mode" == --app-only ]] || { echo "invalid finalization mode: $mode" >&2; exit 2; }
 notary_auth=(
   --apple-id "$APPLE_ID"
   --password "$APPLE_PASSWORD"
@@ -101,11 +99,6 @@ for app in "${apps[@]}"; do
   xcrun stapler validate "$app"
   codesign --verify --deep --strict --verbose=2 "$app"
   spctl --assess --type execute --verbose "$app"
-
-  # The recovery companion is shipped in the DMG, never as an updater payload.
-  if [[ "$mode" == --app-only ]]; then
-    continue
-  fi
 
   # Keep the offline Gatekeeper invariant from #5036: archive the validated
   # app and sign these exact bytes, even when Tauri supplied the ticket.

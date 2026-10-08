@@ -9,7 +9,7 @@ use crate::{
     transcription::process_transcription_result,
 };
 use screenpipe_db::{ChunkOutcome, DatabaseManager};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 use super::TranscriptionResult;
 
@@ -80,8 +80,7 @@ pub async fn handle_new_transcript(
     // The overlap cleanup logic compares current transcript against the previous one
     // from the SAME device — without per-device tracking, device A's transcript
     // could incorrectly trim device B's content.
-    let mut prev_transcript_by_device: HashMap<String, String> = HashMap::new();
-    let mut prev_id_by_device: HashMap<String, i64> = HashMap::new();
+    let mut previous_by_device: HashMap<String, (String, f64, f64)> = HashMap::new();
     // Never block a Tokio worker here: the previous DB write may have just
     // woken the shared writer into this worker's non-stealable LIFO slot.
     while let Ok(mut transcription) = transcription_receiver.recv_async().await {
@@ -121,47 +120,42 @@ pub async fn handle_new_transcript(
 
         // Insert the new transcript after fetching
         let device_key = transcription.input.device.to_string();
-        let previous_transcript = prev_transcript_by_device
-            .get(&device_key)
-            .cloned()
-            .unwrap_or_default();
-        let previous_transcript_id = prev_id_by_device.get(&device_key).copied();
-        let mut current_transcript: Option<String> = transcription.transcription.clone();
-        let mut processed_previous: Option<String> = None;
+        let current_start = transcription.timestamp as f64 + transcription.start_time;
+        let current_end = transcription.timestamp as f64 + transcription.end_time;
+        let mut current_transcript = transcription.transcription.clone();
         let mut was_trimmed = false;
 
-        if let Some((previous, current)) =
-            transcription.cleanup_overlap(previous_transcript.clone())
+        if let Some((previous, previous_start, previous_end)) = previous_by_device.get(&device_key)
         {
-            // If current is empty after cleanup, the entire transcript was a duplicate - skip it
-            if current.is_empty() {
-                metrics.record_duplicate_blocked();
-                finish_without_text(&db, &transcription.path, ChunkOutcome::Duplicate).await;
-                info!(
-                    "device {} skipping duplicate transcript (entire content overlaps with previous)",
-                    transcription.input.device
-                );
-                continue;
-            }
-
-            // Update previous transcript if it was trimmed
-            if !previous.is_empty() && previous != previous_transcript {
-                processed_previous = Some(previous);
-            }
-
-            // Use the cleaned current transcript (with overlap removed)
-            if current != current_transcript.clone().unwrap_or_default() {
-                current_transcript = Some(current);
-                was_trimmed = true;
-                metrics.record_overlap_trimmed();
+            // Sharing words is not sharing audio. Require valid intervals in
+            // capture order with a real overlap, even for segments in one file.
+            let overlaps = previous_start.is_finite()
+                && previous_end.is_finite()
+                && previous_end > previous_start
+                && current_start.is_finite()
+                && current_end.is_finite()
+                && current_end > current_start
+                && current_start >= *previous_start
+                && current_start < *previous_end;
+            if overlaps {
+                if let Some((_, current)) = transcription.cleanup_overlap(previous.clone()) {
+                    if current.is_empty() {
+                        metrics.record_duplicate_blocked();
+                        finish_without_text(&db, &transcription.path, ChunkOutcome::Duplicate)
+                            .await;
+                        continue;
+                    }
+                    was_trimmed = current_transcript.as_ref() != Some(&current);
+                    current_transcript = Some(current);
+                    if was_trimmed {
+                        metrics.record_overlap_trimmed();
+                    }
+                }
             }
         }
 
         transcription.transcription = current_transcript.clone();
-        if current_transcript.is_some() {
-            prev_transcript_by_device
-                .insert(device_key.clone(), current_transcript.clone().unwrap());
-        } else {
+        if current_transcript.is_none() {
             continue;
         }
 
@@ -187,8 +181,8 @@ pub async fn handle_new_transcript(
             transcription,
             transcription_engine.clone(),
             diarization_mode,
-            processed_previous,
-            previous_transcript_id,
+            None,
+            None,
             use_pii_removal,
             output_path.as_path(),
         )
@@ -196,10 +190,13 @@ pub async fn handle_new_transcript(
         {
             Err(e) => error!("Error processing audio result: {}", e),
             Ok(result) => {
-                if let Some(ref result) = result {
-                    prev_id_by_device.insert(device_key.clone(), result.audio_chunk_id);
-                } else {
-                    prev_id_by_device.remove(&device_key);
+                if result.is_some() {
+                    // Only persisted text can justify removing words from a
+                    // later segment. A failed write must not become evidence.
+                    previous_by_device.insert(
+                        device_key.clone(),
+                        (insert_transcription.clone(), current_start, current_end),
+                    );
                 }
                 metrics.record_db_insert(word_count as u64);
 
@@ -392,7 +389,13 @@ mod tests {
         for (index, (name, text, _)) in cases.iter().enumerate() {
             let path = dir.path().join(format!("{name}.mp4"));
             std::fs::write(&path, b"durable recording").unwrap();
-            let timestamp = captured + chrono::Duration::seconds(index as i64);
+            // A duplicate is the same captured interval, not a later
+            // repetition of the same words.
+            let timestamp = if *name == "duplicate" {
+                captured
+            } else {
+                captured + chrono::Duration::seconds(index as i64)
+            };
             let id = db
                 .insert_audio_chunk(path.to_str().unwrap(), Some(timestamp))
                 .await

@@ -27,8 +27,4 @@ codesign --force --options runtime --entitlements src-tauri/entitlements.plist -
 
 codesign --verify --deep --strict "$APP_PATH"
 
-APPLE_SIGNING_IDENTITY="$IDENTITY" SCREENPIPE_RECOVERY_DEVELOPMENT=1 \
-  bash ../../.github/scripts/build-macos-update-recovery.sh "$APP_PATH" \
-  src-tauri/target/debug-dev/bundle/recovery
-
 echo "Build completed successfully!"

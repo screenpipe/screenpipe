@@ -1337,23 +1337,16 @@ impl DatabaseManager {
                   AND TRIM(at.transcription) != ''
                   AND ac.file_path NOT LIKE 'cloud://%'
                   AND (s.id IS NULL OR s.hallucination = 0)
-                  -- Drop background rows already covered by a live segment in the
-                  -- same meeting (within ±15s). Live + background both writing the
-                  -- same audio is by design (live = real-time, background = post-hoc
-                  -- archival via reconciliation), but consumers should see one copy.
-                  -- The window is half a typical chunk; gaps in live coverage stay
-                  -- visible because their background rows won't have a nearby live row.
-                  --
-                  -- The match MUST be scoped to the same direction (input vs
-                  -- output). Input and output are independent captures: when the
-                  -- user is the primary speaker their input live segments are
-                  -- dense, and a direction-agnostic window would suppress every
-                  -- backfilled *output* (other participants') row that merely
-                  -- happens to fall within 15s of the user talking — silently
-                  -- dropping the audience from the transcript.
+                  -- Suppress only matching text from the same capture source.
+                  -- A nearby live fragment does not cover a different sentence
+                  -- recovered from saved audio, even when both use the same mic.
+                  -- Keep richer or differently punctuated ASR results intact:
+                  -- fuzzy matching can erase corrections, numbers and negations.
                   AND NOT EXISTS (
                       SELECT 1 FROM meeting_transcript_segments mts
                       WHERE mts.meeting_id = mw.meeting_id
+                        AND mts.device_name = at.device
+                        AND TRIM(mts.transcript) = TRIM(at.transcription)
                         AND mts.device_type = CASE
                               WHEN COALESCE(at.is_input_device, 1) THEN 'input'
                               ELSE 'output'
