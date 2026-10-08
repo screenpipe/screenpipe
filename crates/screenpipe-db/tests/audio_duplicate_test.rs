@@ -141,11 +141,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            id2, 0,
-            "Transcription containing duplicate content should be rejected"
+        assert!(
+            id2 > 0,
+            "a longer transcript contains new information and must survive"
         );
-        println!("✓ Short-in-long cross-device duplicate was correctly rejected");
     }
 
     /// Test the production case: nearly identical transcriptions with minor Whisper variations
@@ -248,12 +247,11 @@ mod tests {
             .await
             .unwrap();
 
-        // This MUST be rejected - it was the exact bug
-        assert_eq!(
-            id2, 0,
-            "REGRESSION: This is the exact production bug - must be rejected"
+        // The repeated ending does not cover the additional sentences.
+        assert!(
+            id2 > 0,
+            "preserve the extra speech around the shared phrase"
         );
-        println!("✓ REGRESSION TEST PASSED: Production duplicate scenario is now fixed");
     }
 
     /// Test that legitimately different content from different devices is allowed
@@ -496,7 +494,7 @@ mod tests {
 
     /// Test rapid consecutive inserts (potential race condition scenario)
     #[tokio::test]
-    async fn test_rapid_inserts_deduplicated() {
+    async fn test_rapid_cross_device_echoes_do_not_erase_same_device_repetition() {
         let db = setup_test_db().await;
 
         let text = "This is a test transcription that should only appear once in the database.";
@@ -527,10 +525,9 @@ mod tests {
         }
 
         assert_eq!(
-            successful, 1,
-            "Only first of 5 rapid duplicate inserts should succeed"
+            successful, 3,
+            "retain each output occurrence while suppressing its input echo"
         );
-        println!("✓ Rapid consecutive duplicates correctly deduplicated (1 of 5 inserted)");
     }
 
     // ===========================================================================

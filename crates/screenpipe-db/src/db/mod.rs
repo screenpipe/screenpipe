@@ -27,7 +27,6 @@ use std::collections::BTreeMap;
 use zerocopy::AsBytes;
 
 use crate::{
-    text_similarity::{is_similar_to_normalized, normalize_transcription},
     AudioChunkProcessingSnapshot, AudioChunksResponse, AudioDevice, AudioEntry, AudioResult,
     AudioResultRaw, ChunkOutcome, ContentType, DeviceType, Element, ElementRow, ElementSource,
     FrameData, FrameRow, FrameRowLight, FrameWindowData, InsertUiEvent, MeetingRecord,
@@ -48,9 +47,6 @@ const DEDUP_TIME_WINDOW_SECS: i64 = 45;
 /// stall threw away recordings the write path could have stored (CLI-SN).
 const PRE_READ_ATTEMPTS: u32 = 3;
 
-/// Similarity threshold for cross-device deduplication (0.0 to 1.0).
-/// Higher = stricter matching, lower = more aggressive deduplication.
-const DEDUP_SIMILARITY_THRESHOLD: f64 = 0.85;
 const FRAMES_FTS_EXTERNAL_CONTENT_MIGRATION_VERSION: i64 = 20260415000000;
 /// Migration that retires the ocr_text table: backfills its data onto frames
 /// (app/window/focused + per-word text_json) then drops it. Scans the whole
