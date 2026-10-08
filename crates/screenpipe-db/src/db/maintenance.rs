@@ -1382,6 +1382,35 @@ impl DatabaseManager {
         )
     }
 
+    fn planner_diagnostics_root(&self) -> Option<std::path::PathBuf> {
+        let options = self.write_pool.connect_options();
+        if options.get_filename() == std::path::Path::new(":memory:")
+            || options.get_filename().to_string_lossy().contains("mode=memory")
+        {
+            return None;
+        }
+        self.storage.as_ref().map(|s| s.root.clone()).or_else(|| {
+            options
+                .get_filename()
+                .parent()
+                .map(std::path::Path::to_path_buf)
+        })
+    }
+
+    /// Attempt the same sampled, coordinated maintenance used by the hourly
+    /// background task. Start only with an idle writer and yield between tables;
+    /// an analysis already running finishes before waiting writes proceed.
+    pub async fn maintain_planner_statistics(&self) -> crate::planner_stats::Attempt {
+        crate::planner_stats::run_and_report(
+            &self.write_pool,
+            &self.write_semaphore,
+            &self.write_queue_health,
+            &self.close_token,
+            self.planner_diagnostics_root().as_deref(),
+        )
+        .await
+    }
+
     /// Spawn the background task that owns routine WAL checkpointing.
     ///
     /// Since `wal_autocheckpoint = 0` (see [`WAL_SAFETY_PRAGMAS`]), committing
@@ -1391,6 +1420,7 @@ impl DatabaseManager {
     /// finish; backlog alone must not interrupt capture.
     pub fn start_wal_maintenance(&self) {
         let pool = self.write_pool.clone();
+        let diagnostics_root = self.planner_diagnostics_root();
         let shutdown = self.close_token.clone();
         let write_queue_health = self.write_queue_health.clone();
         let write_semaphore = std::sync::Arc::clone(&self.write_semaphore);
@@ -1401,6 +1431,7 @@ impl DatabaseManager {
             const INTERVAL: Duration = Duration::from_secs(60);
             let mut interval = tokio::time::interval(INTERVAL);
             let mut backlog_since = None;
+            let mut next_planner_run = tokio::time::Instant::now();
             // `interval()` yields its first tick immediately. Startup has just
             // run a serialized checkpoint, so consume that tick and wait a
             // full interval instead of racing callers' first transactions.
@@ -1449,16 +1480,22 @@ impl DatabaseManager {
                     Err(e) => warn!("wal checkpoint failed: {}", e),
                 }
 
-                // Nothing else refreshes SQLite's query-planner statistics on a
-                // 24/7 recorder — ANALYZE otherwise only runs inside the
-                // emergency `repair_database()` path. `PRAGMA optimize` is
-                // designed to be cheap to call on every tick: it only does
-                // real work on tables whose content has changed enough since
-                // the last run to make stale stats likely, so piggybacking it
-                // on this existing 60s tick keeps planner stats fresh without
-                // a dedicated schedule.
-                if let Err(e) = sqlx::query("PRAGMA optimize").execute(&pool).await {
-                    warn!("pragma optimize failed: {}", e);
+                drop(_write_guard);
+                // Repair existing histories on the first background tick;
+                // check hourly thereafter, retrying deferred work next tick.
+                if tokio::time::Instant::now() >= next_planner_run {
+                    let attempt = crate::planner_stats::run_and_report(
+                        &pool,
+                        &write_semaphore,
+                        &write_queue_health,
+                        &shutdown,
+                        diagnostics_root.as_deref(),
+                    )
+                    .await;
+                    if attempt.status == "complete" {
+                        next_planner_run =
+                            tokio::time::Instant::now() + crate::planner_stats::INTERVAL;
+                    }
                 }
             }
         });

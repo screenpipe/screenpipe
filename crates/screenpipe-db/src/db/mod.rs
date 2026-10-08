@@ -466,6 +466,8 @@ mod elements;
 mod feedback;
 mod frames;
 mod maintenance;
+#[cfg(test)]
+mod planner_stats_tests;
 mod meetings;
 mod memories;
 mod starred;

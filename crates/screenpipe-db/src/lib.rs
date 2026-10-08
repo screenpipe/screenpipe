@@ -31,6 +31,7 @@ mod cancellable_query;
 mod db;
 #[cfg(test)]
 mod failpoint_vfs;
+pub mod planner_stats;
 mod recovery;
 mod sqlite_error;
 pub mod storage;

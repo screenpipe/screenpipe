@@ -346,6 +346,10 @@ async fn collect_migration_diagnostics_from_root(root: std::path::PathBuf) -> St
             // if the snapshot directory is missing or unreadable.
             json!({
                 "attempts": attempts,
+                "sqlite_planner": match screenpipe_db::planner_stats::report(&root) {
+                    Ok(report) => json!(report),
+                    Err(_) => json!({"error": "Could not read SQLite planner maintenance diagnostics"}),
+                },
                 "retry_block": crate::storage_migration::saved_migration_error(&root),
             })
         }),
@@ -1359,6 +1363,35 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn planner_maintenance_failure_survives_restart_and_reaches_redacted_support() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("db.sqlite");
+        let db = screenpipe_db::DatabaseManager::new(
+            path.to_str().unwrap(),
+            screenpipe_config::DbConfig { write_pool_max: 1, ..Default::default() },
+        )
+        .await
+        .unwrap();
+        db.execute_raw_sql_write("INSERT INTO frames(timestamp,full_text) VALUES('2026-10-08','private history password=hunter2')").await.unwrap();
+        db.execute_raw_sql_write("PRAGMA query_only=ON").await.unwrap();
+        // A genuine SQLite failure, not a fabricated diagnostic record.
+        let attempt = db.maintain_planner_statistics().await;
+        assert_eq!(attempt.sqlite_code.as_deref(), Some("8"));
+        db.execute_raw_sql_write("PRAGMA query_only=OFF").await.unwrap();
+        db.close().await;
+        // The originating engine and its rolling logs are gone. Collect and
+        // redact the persisted attempt, then inspect the mock support upload.
+        assert_migration_report_uploaded(
+            root.path(),
+            &[
+                "sqlite_planner", "duration_ms", "last_failure", "deferred",
+                "attempt to write a readonly database", "sqlite_code",
+            ],
+        )
+        .await;
     }
 
     #[tokio::test]
