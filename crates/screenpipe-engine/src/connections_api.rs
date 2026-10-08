@@ -1491,6 +1491,7 @@ fn google_calendar_event_json(item: &Value, calendar_label: &str) -> Value {
         "attendees": attendees,
         "location": item["location"].as_str(),
         "meetingUrl": meeting_url,
+        "excludeFromMeetingDetection": google_calendar_event_is_reference_reminder(item),
         "calendarName": calendar_label,
         "isAllDay": is_all_day,
     })
@@ -1536,7 +1537,29 @@ fn gcal_event_start_epoch(event: &Value) -> i64 {
     i64::MAX
 }
 
+// A free personal reminder may reference a later call in its notes. Decide
+// before normalization loses URL provenance; keep the event and reference URL
+// available to calendar readers, but not to automatic meeting consumers.
+fn google_calendar_event_is_reference_reminder(item: &Value) -> bool {
+    item["transparency"].as_str() == Some("transparent")
+        && !item["attendees"].as_array().is_some_and(|attendees| {
+            attendees.iter().any(|attendee| {
+                attendee["self"].as_bool() != Some(true)
+                    && attendee["resource"].as_bool() != Some(true)
+            })
+        })
+        && google_calendar_conference_url(item).is_none()
+        && extract_meeting_url(item["location"].as_str()).is_none()
+        && extract_meeting_url(item["description"].as_str()).is_some()
+}
+
 fn google_calendar_meeting_url(item: &Value) -> Option<String> {
+    google_calendar_conference_url(item)
+        .or_else(|| extract_meeting_url(item["location"].as_str()))
+        .or_else(|| extract_meeting_url(item["description"].as_str()))
+}
+
+fn google_calendar_conference_url(item: &Value) -> Option<String> {
     item["hangoutLink"]
         .as_str()
         .and_then(|s| normalize_meeting_url(Some(s.to_string())))
@@ -1552,8 +1575,6 @@ fn google_calendar_meeting_url(item: &Value) -> Option<String> {
                         .and_then(|uri| normalize_meeting_url(Some(uri.to_string())))
                 })
         })
-        .or_else(|| extract_meeting_url(item["location"].as_str()))
-        .or_else(|| extract_meeting_url(item["description"].as_str()))
 }
 
 fn normalize_meeting_url(raw: Option<String>) -> Option<String> {
@@ -4382,6 +4403,63 @@ mod tests {
         assert!(!serialized.contains("secret.ics"));
         assert_eq!(summaries[0]["name"], "Work");
         assert_eq!(summaries[0]["enabled"], true);
+    }
+
+    #[test]
+    fn google_calendar_reference_reminder_keeps_reference_but_excludes_automatic_meetings() {
+        let raw = json!({
+            "id": "prep", "summary": "Prepare for the later call",
+            "start": {"dateTime": "2026-10-08T16:15:00-07:00"},
+            "end": {"dateTime": "2026-10-08T16:25:00-07:00"},
+            "transparency": "transparent", "attendees": [],
+            "description": "Review notes for https://meet.google.com/abc-defg-hij"
+        });
+        assert!(google_calendar_event_is_available(&raw));
+        let event = google_calendar_event_json(&raw, "Personal");
+        assert_eq!(event["excludeFromMeetingDetection"], true);
+        assert_eq!(event["meetingUrl"], "https://meet.google.com/abc-defg-hij");
+        assert_eq!(event["start"], raw["start"]["dateTime"]);
+        assert_eq!(event["title"], raw["summary"]);
+    }
+
+    #[test]
+    fn google_calendar_reference_reminder_policy_preserves_real_meeting_links() {
+        let reference = json!({
+            "transparency": "transparent",
+            "description": "https://meet.google.com/abc-defg-hij"
+        });
+        for (key, value) in [
+            ("transparency", json!("opaque")),
+            ("transparency", Value::Null),
+            ("attendees", json!([{"email": "guest@example.test"}])),
+            ("hangoutLink", json!("https://meet.google.com/abc-defg-hij")),
+            (
+                "conferenceData",
+                json!({"entryPoints": [{"entryPointType": "video", "uri": "https://meet.google.com/abc-defg-hij"}]}),
+            ),
+            ("location", json!("https://meet.google.com/abc-defg-hij")),
+        ] {
+            let mut raw = reference.clone();
+            raw[key] = value;
+            assert!(!google_calendar_event_is_reference_reminder(&raw), "{key}");
+            assert_eq!(
+                google_calendar_meeting_url(&raw).as_deref(),
+                Some("https://meet.google.com/abc-defg-hij")
+            );
+        }
+        // Provider representations can include the owner or a room resource.
+        for attendees in [
+            json!([]),
+            json!([{"self": true}]),
+            json!([{"resource": true}]),
+        ] {
+            let mut raw = reference.clone();
+            raw["attendees"] = attendees;
+            assert!(google_calendar_event_is_reference_reminder(&raw));
+        }
+        assert!(!google_calendar_event_is_reference_reminder(&json!({
+            "transparency": "transparent", "description": "https://docs.google.com/document/test"
+        })));
     }
 
     #[test]

@@ -583,8 +583,14 @@ async fn fetch_google_calendar_events(app: &AppHandle) -> Vec<CalendarEventSigna
         return Vec::new();
     }
 
-    match resp.json::<Vec<CalendarEventSignal>>().await {
-        Ok(events) => events,
+    match resp.json::<serde_json::Value>().await {
+        Ok(value) => match crate::google_calendar::parse_meeting_events(value) {
+            Ok(events) => events.into_iter().map(CalendarEventSignal::from).collect(),
+            Err(err) => {
+                warn!("meeting live notes: failed to parse Google Calendar events: {err}");
+                Vec::new()
+            }
+        },
         Err(err) => {
             warn!("meeting live notes: failed to parse Google Calendar events: {err}");
             Vec::new()

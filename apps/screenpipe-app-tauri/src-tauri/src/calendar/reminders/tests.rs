@@ -34,6 +34,24 @@ fn snapshot(events: Vec<CalendarEventItem>) -> snapshots::CalendarSnapshots {
 }
 
 #[test]
+fn reference_reminder_does_not_schedule_or_suppress_the_later_call() {
+    let items = crate::google_calendar::parse_meeting_events(json!([
+        {"id":"prep", "start":"2026-10-08T16:15:00-07:00", "end":"2026-10-08T16:25:00-07:00", "meetingUrl":"https://meet.google.com/abc-defg-hij", "excludeFromMeetingDetection":true},
+        {"id":"call", "start":"2026-10-08T17:00:00-07:00", "end":"2026-10-08T17:30:00-07:00", "meetingUrl":"https://meet.google.com/abc-defg-hij"}
+    ])).unwrap();
+    let snapshot = snapshot(items);
+    let prep_time = DateTime::parse_from_rfc3339("2026-10-08T16:14:30-07:00")
+        .unwrap()
+        .timestamp();
+    let mut ledger = Ledger::default();
+    ledger.reconcile(&snapshot, prep_time);
+    assert!(ledger.due(&snapshot, prep_time, 30).is_empty());
+    let due = ledger.due(&snapshot, prep_time + 45 * 60, 30);
+    assert_eq!(due.len(), 1);
+    assert_eq!(due[0].1.id, "call");
+}
+
+#[test]
 fn reminder_clock_fires_at_configured_offset_without_another_calendar_refresh() {
     let snapshot = snapshot(vec![event("one", 120)]);
     let ledger = Ledger::default();

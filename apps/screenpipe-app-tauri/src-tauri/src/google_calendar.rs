@@ -62,6 +62,8 @@ struct GoogleCalendarEventDto {
     calendar_name: Option<String>,
     #[serde(default)]
     is_all_day: bool,
+    #[serde(default)]
+    exclude_from_meeting_detection: bool,
 }
 
 pub async fn start_google_calendar_publisher(app: AppHandle) {
@@ -142,14 +144,11 @@ fn account_updates(
         .map(|source| (source.clone(), Ok(Vec::new())))
         .collect();
     for snapshot in snapshots {
-        let result = snapshot
-            .events
-            .map(|events| events.into_iter().map(into_calendar_event_item).collect())
-            .ok_or_else(|| {
-                snapshot
-                    .error
-                    .unwrap_or_else(|| "account snapshot unavailable".into())
-            });
+        let result = snapshot.events.map(meeting_event_items).ok_or_else(|| {
+            snapshot
+                .error
+                .unwrap_or_else(|| "account snapshot unavailable".into())
+        });
         updates.push((account_source(snapshot.instance.as_deref()), result));
     }
     *previous = current;
@@ -181,6 +180,23 @@ async fn local_api_config(app: &AppHandle) -> Option<(u16, Option<String>)> {
     let guard = state.server.lock().await;
     let core = guard.as_ref()?;
     Some((core.port, core.local_api_key.clone()))
+}
+
+fn meeting_event_items(events: Vec<GoogleCalendarEventDto>) -> Vec<CalendarEventItem> {
+    events
+        .into_iter()
+        .filter(|event| !event.exclude_from_meeting_detection)
+        .map(into_calendar_event_item)
+        .collect()
+}
+
+// The startup fallback and the scheduled publisher must apply the same policy.
+// Clearing only the URL would still let time-only matching bind a preparation
+// reminder to a detected call.
+pub(crate) fn parse_meeting_events(
+    value: serde_json::Value,
+) -> Result<Vec<CalendarEventItem>, serde_json::Error> {
+    serde_json::from_value(value).map(meeting_event_items)
 }
 
 fn into_calendar_event_item(event: GoogleCalendarEventDto) -> CalendarEventItem {
@@ -226,6 +242,33 @@ fn format_display(start: &str, end: &str) -> (String, String) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn reference_reminders_are_excluded_from_publisher_and_fresh_meeting_lookup() {
+        let events = json!([
+            {"id":"prep", "title":"Prepare", "start":"2026-10-08T16:15:00-07:00", "end":"2026-10-08T16:25:00-07:00", "meetingUrl":"https://meet.google.com/abc-defg-hij", "excludeFromMeetingDetection":true},
+            {"id":"call", "title":"Call", "start":"2026-10-08T17:00:00-07:00", "end":"2026-10-08T17:30:00-07:00", "meetingUrl":"https://meet.google.com/abc-defg-hij", "excludeFromMeetingDetection":false},
+            {"id":"next-call", "title":"Call", "start":"2026-10-08T17:30:00-07:00", "end":"2026-10-08T18:00:00-07:00", "meetingUrl":"https://meet.google.com/abc-defg-hij"}
+        ]);
+        let fresh = parse_meeting_events(events.clone()).unwrap();
+        assert_eq!(
+            fresh.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            ["call", "next-call"]
+        );
+        let snapshots = serde_json::from_value(json!([
+            {"instance":"personal@example.test", "events":[events[0]], "error":null},
+            {"instance":"work@example.test", "events":[events[1], events[2]], "error":null}
+        ]))
+        .unwrap();
+        let updates = account_updates(&mut BTreeSet::new(), snapshots);
+        assert!(updates[0].1.as_ref().unwrap().is_empty());
+        let published = updates[1].1.as_ref().unwrap();
+        assert_eq!(
+            published.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            ["call", "next-call"]
+        );
+        assert_eq!(published[0].meeting_url, published[1].meeting_url);
+    }
 
     #[tokio::test]
     async fn failed_account_does_not_block_healthy_refresh_or_clear_its_previous_snapshot() {
