@@ -56,7 +56,7 @@ prompt is not proof that the agent can complete the task successfully.
 ## UI
 
 Keep **Turn into agent** alongside Create SOP and Create skill, with the same
-quiet toolbar styling and a small chevron. Its compact dropdown contains only
+quiet toolbar styling, the existing 16px Lucide Bot icon and a small chevron. Its compact dropdown contains only
 three icon-and-label rows: Screenpipe, Claude and Codex. Use existing provider
 icons. The menu is anchored directly below the toolbar action. Home and Context
 retain their existing layouts. Choosing a runner prefills its existing agent
