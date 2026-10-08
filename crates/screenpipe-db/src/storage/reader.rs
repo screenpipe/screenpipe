@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tokio::sync::{OwnedMutexGuard, OwnedRwLockReadGuard};
 
+const RESPONSE_PAYLOAD_BUDGET_ERROR: &str = "frame storage: response payload budget exceeded";
+
 impl Projection {
     fn sqlite_columns(self) -> &'static str {
         match self {
@@ -195,67 +197,101 @@ impl DatabaseManager {
         rows: &mut [crate::OCRResultRaw],
         detail: bool,
     ) -> Result<(), sqlx::Error> {
-        if self.storage.is_none() {
-            return Ok(());
-        }
-        let ids: Vec<_> = rows.iter().map(|r| r.frame_id).collect();
-        let mut payloads = self
-            .frame_payloads(
-                &ids,
+        let projection = if detail {
+            Projection::All
+        } else {
+            Projection::Search
+        };
+        self.hydrate_frame_payload_rows(
+            rows,
+            projection,
+            |row| row.frame_id,
+            |row, payload| {
+                row.ocr_text = payload
+                    .full_text
+                    .or(payload.accessibility_text)
+                    .unwrap_or_default();
                 if detail {
-                    Projection::All
-                } else {
-                    Projection::Search
-                },
-            )
-            .await?;
-        for row in rows {
-            let payload = payloads
-                .remove(&row.frame_id)
-                .ok_or_else(|| storage_error("selected frame disappeared"))?;
-            row.ocr_text = payload.text().to_owned();
-            if detail {
-                row.text_json = payload.text_json.unwrap_or_default();
-            }
-        }
-        Ok(())
+                    row.text_json = payload.text_json.unwrap_or_default();
+                }
+            },
+        )
+        .await
     }
 
     pub(crate) async fn hydrate_frame_rows(
         &self,
         rows: &mut [crate::FrameRow],
     ) -> Result<(), sqlx::Error> {
-        if self.storage.is_none() {
-            return Ok(());
-        }
-        let ids: Vec<_> = rows.iter().map(|r| r.id).collect();
-        let mut payloads = self.frame_payloads(&ids, Projection::All).await?;
-        for row in rows {
-            let payload = payloads
-                .remove(&row.id)
-                .ok_or_else(|| storage_error("selected frame disappeared"))?;
-            row.ocr_text = payload.text().to_owned();
-            row.text_json = payload.text_json.unwrap_or_default();
-            row.accessibility_tree_json = payload.accessibility_tree_json;
-        }
-        Ok(())
+        self.hydrate_frame_payload_rows(
+            rows,
+            Projection::All,
+            |row| row.id,
+            |row, payload| {
+                row.ocr_text = payload
+                    .full_text
+                    .or(payload.accessibility_text)
+                    .unwrap_or_default();
+                row.text_json = payload.text_json.unwrap_or_default();
+                row.accessibility_tree_json = payload.accessibility_tree_json;
+            },
+        )
+        .await
     }
 
     pub(crate) async fn hydrate_accessibility_rows(
         &self,
         rows: &mut [crate::UiContent],
     ) -> Result<(), sqlx::Error> {
+        self.hydrate_frame_payload_rows(
+            rows,
+            Projection::Search,
+            |row| row.id,
+            |row, payload| {
+                row.text = payload
+                    .full_text
+                    .or(payload.accessibility_text)
+                    .unwrap_or_default();
+            },
+        )
+        .await
+    }
+
+    async fn hydrate_frame_payload_rows<T>(
+        &self,
+        rows: &mut [T],
+        projection: Projection,
+        frame_id: impl Fn(&T) -> i64,
+        hydrate: impl Fn(&mut T, FramePayload),
+    ) -> Result<(), sqlx::Error> {
         if self.storage.is_none() {
             return Ok(());
         }
-        let ids: Vec<_> = rows.iter().map(|r| r.id).collect();
-        let payloads = self.frame_payloads(&ids, Projection::Search).await?;
-        for row in rows {
-            row.text = payloads
-                .get(&row.id)
-                .ok_or_else(|| storage_error("selected frame disappeared"))?
-                .text()
-                .to_owned();
+        let mut pending = vec![rows];
+        while let Some(batch) = pending.pop() {
+            let ids: Vec<_> = batch.iter().map(&frame_id).collect();
+            let mut payloads = match self.frame_payloads(&ids, projection).await {
+                Ok(payloads) => payloads,
+                Err(sqlx::Error::Protocol(reason))
+                    if batch.len() > 1 && reason == RESPONSE_PAYLOAD_BUDGET_ERROR =>
+                {
+                    // Search already selected this complete page in a read
+                    // snapshot. Bound hydration batches without rejecting a
+                    // response the same history returned before migration.
+                    let middle = batch.len() / 2;
+                    let (left, right) = batch.split_at_mut(middle);
+                    pending.push(right);
+                    pending.push(left);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            for row in batch {
+                let payload = payloads
+                    .remove(&frame_id(row))
+                    .ok_or_else(|| storage_error("selected frame disappeared"))?;
+                hydrate(row, payload);
+            }
         }
         Ok(())
     }
@@ -347,8 +383,15 @@ impl HybridStorage {
             .bind(&ids_json)
             .fetch_one(&mut *snapshot)
             .await?;
-        if total < 0 || total as usize > self.descriptor.budget.response_bytes {
-            return Err(storage_error("response payload budget exceeded"));
+        // A single indivisible migrated record must remain retrievable. The
+        // aggregate response budget still bounds requests for multiple frames.
+        let response_limit = if ids.len() == 1 {
+            usize::MAX
+        } else {
+            self.descriptor.budget.response_bytes
+        };
+        if total < 0 || total as usize > response_limit {
+            return Err(sqlx::Error::Protocol(RESPONSE_PAYLOAD_BUDGET_ERROR.into()));
         }
         let sql = format!("SELECT f.id,p.generation,p.state,p.file_id,p.bytes,{columns},pf.search_path,pf.detail_path,pf.search_checksum,pf.detail_checksum FROM frames f JOIN frame_payloads p ON p.frame_id=f.id LEFT JOIN payload_files pf ON pf.id=p.file_id WHERE f.id IN (SELECT value FROM json_each(?))");
         let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
@@ -465,8 +508,8 @@ impl HybridStorage {
                 .chain(decoded.values())
                 .map(FramePayload::bytes)
                 .sum();
-            if bytes > self.descriptor.budget.response_bytes {
-                return Err(storage_error("response payload budget exceeded"));
+            if bytes > response_limit {
+                return Err(sqlx::Error::Protocol(RESPONSE_PAYLOAD_BUDGET_ERROR.into()));
             }
             out.extend(decoded);
         }

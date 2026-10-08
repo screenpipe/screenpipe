@@ -23,7 +23,7 @@ beforeEach(() => {
     app_session_id: "app-launch-1",
     root: "/fixture", busy: false, message: "", error: null, pending: false, in_place: false, bytes_saved: null, available_bytes: null,
     completed: false, using_new_storage: false, generation: null, source_bytes: 20 * 1024 ** 3,
-    migrated_bytes: null, can_migrate: true, can_cancel: false, can_delete_source: false,
+    migrated_bytes: null, can_migrate: true, can_compact: false, compaction: false, can_cancel: false, can_delete_source: false,
     blocked_reason: null,
   };
   commands.getStorageMigrationStatus.mockImplementation(async () => ({ status: "ok", data: { ...status } }));
@@ -36,6 +36,25 @@ afterEach(() => {
 });
 
 describe("automatic storage migration prompt", () => {
+  it.each([
+    { compaction: false, can_compact: true, pending: false, error: null },
+    { compaction: true, can_compact: true, pending: true, error: "Not enough disk space." },
+    { compaction: true, can_compact: true, pending: false, error: "Recording could not resume." },
+    { compaction: true, can_compact: false, pending: false, error: null },
+  ])("never offers compaction or its retry/result on Home: %j", async (compaction) => {
+    Object.assign(status, { using_new_storage: true, completed: true, in_place: true,
+      can_migrate: false, source_bytes: 0, ...compaction });
+    for (const session of ["app-launch-1", "app-launch-2"]) {
+      status.app_session_id = session;
+      const app = render(<StorageMigrationPrompt activity={{ ...idle, completed: compaction.compaction }} />);
+      await waitFor(() => expect(commands.getStorageMigrationStatus).toHaveBeenCalled());
+      await act(async () => {});
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(commands.startStorageMigration).not.toHaveBeenCalled();
+      app.unmount();
+      commands.getStorageMigrationStatus.mockClear();
+    }
+  });
   it.each([
     { busy: true },
     { blocked_reason: "Screenpipe is restarting or restoring recording. Wait for startup to finish." },

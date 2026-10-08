@@ -126,6 +126,7 @@ pub fn read_selected(
         return Err(storage_error("unsupported Parquet schema"));
     }
     let metadata = reader.metadata();
+    let budget = &budget.archive_read_budget(metadata.file_metadata().num_rows());
     let decoded: i64 = metadata
         .row_groups()
         .iter()

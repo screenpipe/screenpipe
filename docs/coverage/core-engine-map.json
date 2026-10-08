@@ -399,6 +399,31 @@
       "notes": "Active /search route test builds an audio-disabled router, seeds captured-screen-shaped OCR data into an in-memory DB, and asserts the HTTP response and pagination."
     },
     {
+      "id": "engine-migration-api-acceptance",
+      "label": "Oversized migration API parity and disk allocation",
+      "crate": "screenpipe-engine",
+      "files": [
+        "tests/migration_api_acceptance.rs"
+      ],
+      "platforms": [
+        "macos",
+        "linux"
+      ],
+      "layers": [
+        "local-api",
+        "db-search",
+        "database"
+      ],
+      "flows": [
+        "local-api-search",
+        "performance-liveness"
+      ],
+      "criticality": "high",
+      "confidence": "strong",
+      "kind": "integration",
+      "notes": "Opt-in production-budget fixture checks complete HTTP response hashes across SQLite and two Parquet reopens, oversized frame and element payloads, 144 MiB search responses, physical disk allocation, latency, and continued capture. Generates approximately 1 GiB of synthetic history; run explicitly with --ignored."
+    },
+    {
       "id": "engine-db-recovery-cli",
       "label": "Engine offline database recovery lifecycle",
       "crate": "screenpipe-engine",

@@ -153,6 +153,7 @@ pub(super) fn read(
 ) -> Result<Vec<Record>, sqlx::Error> {
     let reader = checked_reader(path, hash, table, budget)?;
     let count = reader.metadata().file_metadata().num_rows();
+    let budget = &budget.archive_read_budget(count);
     let mut rows = Vec::with_capacity(count as usize);
     let mut decoded = 0;
     for row in reader.get_row_iter(None).map_err(storage_error)? {
@@ -200,6 +201,7 @@ pub(super) fn checked_reader(
         return Err(storage_error("unsupported bulk schema"));
     }
     let count = reader.metadata().file_metadata().num_rows();
+    let budget = &budget.archive_read_budget(count);
     let bytes: i64 = reader
         .metadata()
         .row_groups()
@@ -221,6 +223,7 @@ pub(super) fn read_positions(
     positions: &[usize],
 ) -> Result<Vec<Record>, sqlx::Error> {
     let file = checked_reader(path, hash, table, budget)?;
+    let budget = &budget.archive_read_budget(file.metadata().file_metadata().num_rows());
     let mut output = Vec::with_capacity(positions.len());
     let mut offset = 0;
     let mut bytes = 0;

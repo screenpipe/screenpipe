@@ -53,12 +53,12 @@ impl HybridStorage {
         }
         // Keep the pending index as the outer loop so LIMIT bounds work before
         // materializing IDs from a large history.
-        let candidates=sqlx::query(sqlx::AssertSqlSafe(format!("SELECT v.id,({bytes}) AS bytes FROM main.{t} pending CROSS JOIN (SELECT * FROM {view} WHERE {eligible}) v ON v.id=pending.id WHERE {condition} AND ({bytes})<=? ORDER BY pending.id LIMIT {FILE_ROWS}",bytes=table.all_bytes("v."),view=table.view(),t=table.name,eligible=table.eligible))).bind(self.descriptor.budget.record_bytes as i64).fetch_all(pool).await?;
+        let candidates=sqlx::query(sqlx::AssertSqlSafe(format!("SELECT v.id,({bytes}) AS bytes FROM main.{t} pending CROSS JOIN (SELECT * FROM {view} WHERE {eligible}) v ON v.id=pending.id WHERE {condition} AND ({bytes})<=? ORDER BY pending.id LIMIT {FILE_ROWS}",bytes=table.all_bytes("v."),view=table.view(),t=table.name,eligible=table.eligible))).bind(self.archive_record_limit() as i64).fetch_all(pool).await?;
         let mut ids = Vec::new();
         let mut bytes = 0;
         for candidate in candidates {
             let size = candidate.try_get::<i64, _>("bytes")? as usize;
-            if !ids.is_empty() && bytes + size > self.descriptor.budget.file_bytes {
+            if !ids.is_empty() && bytes + size > self.descriptor.budget.archive_batch_bytes() {
                 break;
             }
             ids.push(candidate.try_get::<i64, _>("id")?);
@@ -80,6 +80,7 @@ impl HybridStorage {
             Some(ids.len() as u64),
             Some(bytes as u64),
         );
+        self.reserve_archive(bytes)?;
         crate::storage::diagnostics::stage("reading_bulk_records");
         let rows=sqlx::query(sqlx::AssertSqlSafe(format!("SELECT v.id,e._archive_generation,{columns} FROM {view} v JOIN main.{t} e ON e.id=v.id WHERE v.id IN (SELECT value FROM json_each(?)) ORDER BY v.id",view=table.view(),t=table.name)))
             .bind(serde_json::to_string(&ids).map_err(storage_error)?).fetch_all(pool).await?;
@@ -126,12 +127,7 @@ impl HybridStorage {
             sqlx::query_as("SELECT policy,required_surfaces FROM storage_metadata")
                 .fetch_one(pool)
                 .await?;
-        if fs2::available_space(&self.root)?
-            < self.descriptor.budget.disk_reserve_bytes
-                + self.descriptor.budget.file_bytes as u64 * 2
-        {
-            return Err(storage_error("bulk temporary disk reserve reached"));
-        }
+        self.reserve_archive(rows.iter().map(Record::bytes).sum())?;
         let relative = self
             .descriptor
             .payloads

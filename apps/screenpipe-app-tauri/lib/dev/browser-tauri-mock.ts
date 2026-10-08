@@ -479,7 +479,7 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
     app_session_id: crypto.randomUUID(),
     root: "/Users/screenpipe/.screenpipe", busy: false, message: "", error: null,
     pending: false, in_place: true, bytes_saved: null, available_bytes: 3_000_000_000, completed: false, using_new_storage: false, generation: null,
-    source_bytes: 13_000_000_000, migrated_bytes: null, can_migrate: true,
+    source_bytes: 13_000_000_000, migrated_bytes: null, can_migrate: true, can_compact: false, compaction: false,
     can_cancel: false, can_delete_source: false, blocked_reason: null,
   };
   let migrationStartedAt = 0;

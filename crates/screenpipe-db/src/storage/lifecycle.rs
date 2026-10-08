@@ -289,6 +289,10 @@ pub struct MigrationReport {
     pub source_bytes: u64,
     pub index_bytes: u64,
     pub payload_bytes: u64,
+    /// All eligible payloads present at conversion were archived, regardless
+    /// of size. Older receipts did not establish this completion condition.
+    #[serde(default)]
+    pub all_eligible_payloads_archived: bool,
     #[serde(default)]
     pub source_identity: Option<RetainedSourceIdentity>,
     #[serde(default)]
@@ -353,6 +357,8 @@ enum Phase {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Journal {
     format: u32,
+    #[serde(default)]
+    compaction: bool,
     phase: Phase,
     descriptor: StorageDescriptor,
     source: Vec<TableParity>,
@@ -532,6 +538,15 @@ pub fn migration_requires_resume(root: &Path) -> Result<bool, sqlx::Error> {
         return Ok(false);
     }
     Ok(read_journal(root)?.format == 2)
+}
+
+/// A pending compaction keeps its explicit operation identity in the journal,
+/// including when storage is restored without desktop preference files.
+pub fn compaction_requires_resume(root: &Path) -> Result<bool, sqlx::Error> {
+    if !root.join("storage-migration.json").exists() {
+        return Ok(false);
+    }
+    Ok(read_journal(root)?.compaction)
 }
 
 /// A paused in-place migration has a complete writable resident schema, but
@@ -733,17 +748,65 @@ pub async fn migrate_with_progress(
         root,
         "conversion",
         |_, _| {},
-        migrate_observed(root, config, options, progress),
+        migrate_observed(root, config, options, false, progress),
     )
     .await
+}
+
+/// Explicit, one-time compaction of resident history left by an older completed
+/// in-place migration. Startup and ordinary migration never start this pass.
+pub async fn compact_migrated_storage_with_progress(
+    root: &Path,
+    config: DbConfig,
+    options: MigrationOptions,
+    progress: impl Fn(MigrationProgress) + Send + Sync,
+) -> Result<MigrationReport, sqlx::Error> {
+    super::diagnostics::observe(
+        root,
+        "compaction",
+        |_, _| {},
+        migrate_observed(root, config, options, true, progress),
+    )
+    .await
+}
+
+async fn checkpoint_source_before_rename(source: &Path) -> Result<(), sqlx::Error> {
+    use sqlx::Connection;
+    super::diagnostics::stage("checkpointing_source_before_rename");
+    // Detect external SQLite readers and flush a retained WAL before journaling
+    // or moving the file. Keep genuine busy/integrity failures fail-closed.
+    let mut exclusive = sqlx::SqliteConnection::connect_with(
+        &sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(source)
+            .create_if_missing(false)
+            .pragma("locking_mode", "EXCLUSIVE")
+            .busy_timeout(std::time::Duration::from_secs(5)),
+    )
+    .await?;
+    let check = async {
+        sqlx::raw_sql("BEGIN EXCLUSIVE; COMMIT;")
+            .execute(&mut exclusive)
+            .await?;
+        super::schema::construction_checkpoint(&mut exclusive).await
+    }
+    .await;
+    exclusive.close().await?;
+    check
 }
 
 async fn migrate_observed(
     root: &Path,
     config: DbConfig,
     options: MigrationOptions,
+    compaction: bool,
     progress: impl Fn(MigrationProgress) + Send + Sync,
 ) -> Result<MigrationReport, sqlx::Error> {
+    if root.join("storage-migration.json").exists() && read_journal(root)?.compaction != compaction
+    {
+        return Err(storage_error(
+            "resume the requested storage operation explicitly",
+        ));
+    }
     // Old unpublished conversions still own a complete original. Retire only
     // their verified disposable candidate before choosing the new strategy.
     if root.join("storage-migration.json").exists() && read_journal(root)?.format == 1 {
@@ -766,10 +829,61 @@ async fn migrate_observed(
     let journal_path = root.join("storage-migration.json");
     let source_path = root.join("db.sqlite");
     let mut journal = if journal_path.exists() {
-        read_journal(&root)?
+        let journal = read_journal(&root)?;
+        if compaction || journal.phase == Phase::Complete {
+            if let Some(report) = migration_report(&root)?.filter(|r| {
+                r.database_id == journal.descriptor.database_id
+                    && r.generation == journal.descriptor.generation
+                    && (!compaction || r.all_eligible_payloads_archived)
+            }) {
+                if StorageDescriptor::read(&root)?.as_ref() != Some(&journal.descriptor) {
+                    return Err(storage_error(
+                        "completed storage descriptor differs from journal",
+                    ));
+                }
+                // A crash after saving completion can leave only journal
+                // cleanup outstanding. Do not rerun an acknowledged migration.
+                std::fs::remove_file(&journal_path)?;
+                sync_directory(&root)?;
+                return Ok(report);
+            }
+        }
+        journal
+    } else if let Some(descriptor) = StorageDescriptor::read(&root)? {
+        let report = migration_report(&root)?
+            .filter(|r| {
+                r.database_id == descriptor.database_id && r.generation == descriptor.generation
+            })
+            .ok_or_else(|| storage_error("active storage has no matching migration receipt"))?;
+        // An old receipt is still a completed migration. Only the separate
+        // compaction entry point may archive its remaining resident history.
+        if !compaction || report.all_eligible_payloads_archived {
+            return Ok(report);
+        }
+        if report.allocated_before_bytes.is_none() {
+            return Err(storage_error(
+                "finishing resident history requires an in-place migration receipt",
+            ));
+        }
+        // An explicit second pass uses the same database and committed files.
+        // The paused path refreshes parity against current history, including
+        // recordings added since the old migration declared completion.
+        let journal = Journal {
+            format: 2,
+            compaction: true,
+            phase: Phase::Paused,
+            descriptor,
+            source: report.tables,
+            snapshot: None,
+            report: None,
+            allocated_before_bytes: Some(super::reclaim::footprint(&root)?),
+            search_receipts: Vec::new(),
+        };
+        durable_json(&journal_path, &journal)?;
+        journal
     } else {
-        if StorageDescriptor::read(&root)?.is_some() {
-            return Err(storage_error("root already has active storage"));
+        if compaction {
+            return Err(storage_error("compaction requires a completed migration"));
         }
         if !source_path.is_file() {
             return Err(storage_error("source database is missing"));
@@ -817,28 +931,12 @@ async fn migrate_observed(
         source.close().await;
         drop(source);
         let (receipts, searches) = original?;
-        // Detect external SQLite readers before journaling or moving the file.
-        let mut exclusive = sqlx::SqliteConnection::connect_with(
-            &sqlx::sqlite::SqliteConnectOptions::new()
-                .filename(&source_path)
-                .create_if_missing(false)
-                .pragma("locking_mode", "EXCLUSIVE")
-                .busy_timeout(std::time::Duration::from_secs(5)),
-        )
-        .await?;
-        let check = async {
-            sqlx::raw_sql("BEGIN EXCLUSIVE; COMMIT;")
-                .execute(&mut exclusive)
-                .await?;
-            super::schema::construction_checkpoint(&mut exclusive).await
-        }
-        .await;
-        exclusive.close().await?;
-        check?;
+        checkpoint_source_before_rename(&source_path).await?;
         let generation = uuid::Uuid::new_v4().to_string();
         let directory = PathBuf::from("storage").join(&generation);
         let journal = Journal {
             format: 2,
+            compaction: false,
             phase: Phase::Building,
             descriptor: StorageDescriptor {
                 format: 1,
@@ -869,6 +967,15 @@ async fn migrate_observed(
         && !index.exists()
         && journal.phase == Phase::Building
         && source_identity(&root)? != journal.snapshot;
+    // Older attempts may already be at verification/activation while still
+    // retaining oversized rows. Finish them against the original receipts;
+    // only the paused recording-recovery path may refresh the logical source.
+    if matches!(
+        journal.phase,
+        Phase::Ready | Phase::Active | Phase::Complete
+    ) {
+        journal.phase = Phase::Building;
+    }
     if recheck_unrenamed_source {
         // A timestamp/checkpoint change alone must not strand valid history.
         // Verify its saved logical receipts before accepting a new identity.
@@ -921,6 +1028,11 @@ async fn migrate_observed(
                     .await?;
                 searches.push((term.clone(), ids));
             }
+            // Recording recovery leaves this marker intact. Only an explicit
+            // archival retry may invalidate it and start another conversion.
+            if index.is_file() {
+                db.execute_raw_sql_write("DELETE FROM _storage_conversion_steps WHERE step IN ('conversion-complete','conversion-all-records','suspend-original-triggers')").await?;
+            }
             Ok::<_, sqlx::Error>((receipts, searches))
         }
         .await;
@@ -930,6 +1042,12 @@ async fn migrate_observed(
         super::diagnostics::stage("closing_retry_history");
         db.close().await;
         let (receipts, searches) = refreshed?;
+        if !index.is_file() {
+            // A final read-only connection can leave a committed WAL behind
+            // after both pools close. Retry needs the same exclusive checkpoint
+            // as the first attempt before recording the file's new identity.
+            checkpoint_source_before_rename(&source_path).await?;
+        }
         journal.source = receipts;
         super::diagnostics::tables(&journal.source);
         journal.search_receipts = searches;
@@ -973,7 +1091,7 @@ async fn migrate_observed(
         return Err(storage_error("migration index is missing"));
     }
     if journal.phase == Phase::Building {
-        let storage = HybridStorage::new(root.clone(), journal.descriptor.clone())?;
+        let storage = HybridStorage::for_migration(root.clone(), journal.descriptor.clone())?;
         super::in_place::convert(
             storage,
             journal.allocated_before_bytes.unwrap_or(0),
@@ -1007,6 +1125,7 @@ async fn migrate_observed(
             // Includes the full SQLite integrity check. Running it here too
             // scans every table and index twice without intervening writes.
             db.verify_storage().await?;
+            super::in_place::verify_payloads_archived(&db.pool).await?;
             if table_receipts(&db, Some(&journal.source)).await? != journal.source {
                 return Err(storage_error(
                     "migration logical data differs; converted data has been kept for diagnosis",
@@ -1043,6 +1162,7 @@ async fn migrate_observed(
             source_bytes: journal.snapshot.as_ref().map_or(0, |s| s.bytes),
             index_bytes: std::fs::metadata(&index)?.len(),
             payload_bytes: directory_bytes(&root.join(&journal.descriptor.payloads))?,
+            all_eligible_payloads_archived: true,
             source_identity: None,
             allocated_before_bytes: journal.allocated_before_bytes,
             allocated_after_bytes: Some(super::reclaim::footprint(&root)?),

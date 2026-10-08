@@ -806,7 +806,30 @@ async fn interrupted_desktop_migration_restores_recording_without_conversion_ret
                 search(&db, "recording").await.as_array().unwrap().len(),
                 (id - 7) as usize
             );
+            let mut last_reader = if point == "migration_before_rename" {
+                let mut reader = sqlx::SqliteConnection::connect_with(
+                    &sqlx::sqlite::SqliteConnectOptions::new()
+                        .filename(&path)
+                        .read_only(true),
+                )
+                .await
+                .unwrap();
+                sqlx::query("SELECT count(*) FROM frames")
+                    .fetch_one(&mut reader)
+                    .await
+                    .unwrap();
+                Some(reader)
+            } else {
+                None
+            };
             db.close().await;
+            if let Some(reader) = last_reader.take() {
+                reader.close().await.unwrap();
+                assert!(
+                    root.path().join("db.sqlite-wal").exists(),
+                    "read-only last closer must exercise retained WAL recovery"
+                );
+            }
         }
         assert!(root.path().join("storage-migration.json").exists());
         let report = migrate(root.path(), Default::default(), Default::default())

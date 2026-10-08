@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StorageMigrationStatus } from "@/lib/utils/tauri";
 
 const commands = vi.hoisted(() => ({
-  getStorageMigrationStatus: vi.fn(), startStorageMigration: vi.fn(),
+  getStorageMigrationStatus: vi.fn(), startStorageMigration: vi.fn(), startStorageCompaction: vi.fn(),
   cancelStorageMigration: vi.fn(), deleteOriginalStorageDatabase: vi.fn(),
 }));
 vi.mock("@/lib/utils/tauri", () => ({ commands }));
@@ -28,7 +28,7 @@ beforeEach(() => {
     app_session_id: "app-launch-1",
     root: "/fixture", busy: false, message: "", error: null, pending: false, in_place: false, bytes_saved: null, available_bytes: null,
     completed: false, using_new_storage: false, generation: null, source_bytes: 12000,
-    migrated_bytes: null, can_migrate: true, can_cancel: false, can_delete_source: false,
+    migrated_bytes: null, can_migrate: true, can_compact: false, compaction: false, can_cancel: false, can_delete_source: false,
     blocked_reason: null,
   };
   commands.getStorageMigrationStatus.mockImplementation(async () => ({ status: "ok", data: { ...status } }));
@@ -44,6 +44,42 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("storage migration", () => {
+  it("offers one-time compaction only after an explicit Settings confirmation", async () => {
+    migrated({ in_place: true, source_bytes: 0, can_compact: true, can_delete_source: false });
+    commands.startStorageCompaction.mockImplementation(async () => {
+      Object.assign(status, { compaction: true, can_compact: false });
+      return { status: "ok", data: null };
+    });
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Compact database" }));
+    expect(screen.getByText(/one-time operation compresses records/i)).toBeTruthy();
+    expect(commands.startStorageCompaction).not.toHaveBeenCalled();
+    expect(commands.startStorageMigration).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Start compaction" }));
+    await waitFor(() => expect(commands.startStorageCompaction).toHaveBeenCalledWith("/fixture"));
+    expect(await screen.findByText("One-time compaction complete.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Compact database" })).toBeNull();
+    expect(commands.startStorageMigration).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed compaction retry in Settings without calling it an unfinished migration", async () => {
+    migrated({ in_place: true, source_bytes: 0, compaction: true, pending: true,
+      can_compact: true, can_delete_source: false, error: "Not enough free disk space." });
+    commands.startStorageCompaction.mockResolvedValue({ status: "ok", data: null });
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Resume compaction" }));
+    expect(screen.queryByText(/Migration is unfinished/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Start compaction" }));
+    await waitFor(() => expect(commands.startStorageCompaction).toHaveBeenCalledWith("/fixture"));
+    expect(commands.startStorageMigration).not.toHaveBeenCalled();
+  });
+
+  it("does not offer compaction again after reopening Settings following success", async () => {
+    migrated({ in_place: true, compaction: true, can_compact: false, can_delete_source: false });
+    mount();
+    expect(await screen.findByText("One-time compaction complete.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Compact|Migrate|Resume/ })).toBeNull();
+  });
   it("shows physical savings without a deletion action for in-place migrations", async () => {
     migrated({ in_place: true, source_bytes: 0, bytes_saved: 4 * 1024 ** 3, can_delete_source: false });
     mount();

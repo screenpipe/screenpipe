@@ -299,18 +299,18 @@ impl HybridStorage {
         pool: &SqlitePool,
         writer: &SqliteWritePool,
     ) -> Result<usize, sqlx::Error> {
-        // Existing oversized frames remain readable through the staged SQLite
-        // path. Filter before LIMIT so they cannot starve later sealable frames.
+        // Background turns defer oversized captures. Offline migration includes
+        // them and the file byte target isolates each large record.
         super::diagnostics::batch("frames", None, None, None, None);
         super::diagnostics::stage("selecting_staged_frames");
         let candidates = sqlx::query("SELECT p.frame_id,p.bytes FROM frame_payloads p CROSS JOIN storage_metadata m WHERE p.state='staged' AND p.bytes<=? AND p.policy=m.policy AND (p.completed_surfaces & m.required_surfaces)=m.required_surfaces ORDER BY p.frame_id LIMIT ?")
-            .bind(self.descriptor.budget.record_bytes as i64)
+            .bind(self.archive_record_limit() as i64)
             .bind(self.descriptor.budget.file_rows as i64).fetch_all(pool).await?;
         let mut ids = Vec::new();
         let mut bytes = 0;
         for row in candidates {
             let size = row.get::<i64, _>("bytes") as usize;
-            if !ids.is_empty() && bytes + size > self.descriptor.budget.file_bytes {
+            if !ids.is_empty() && bytes + size > self.descriptor.budget.archive_batch_bytes() {
                 break;
             }
             ids.push(row.get("frame_id"));
@@ -326,6 +326,7 @@ impl HybridStorage {
             Some(ids.len() as u64),
             Some(bytes as u64),
         );
+        self.reserve_archive(bytes)?;
         super::diagnostics::stage("reading_frame_payloads");
         // Ordinary captures must not invalidate a read of older frames.
         // Reuse request snapshots, retaining deletion/privacy revocation.
@@ -351,12 +352,7 @@ impl HybridStorage {
             sqlx::query_as("SELECT policy,required_surfaces FROM storage_metadata")
                 .fetch_one(pool)
                 .await?;
-        if fs2::available_space(&self.root)?
-            < self.descriptor.budget.disk_reserve_bytes
-                + self.descriptor.budget.file_bytes as u64 * 2
-        {
-            return Err(storage_error("temporary disk reserve reached"));
-        }
+        self.reserve_archive(rows.iter().map(FramePayload::bytes).sum())?;
         let id = uuid::Uuid::new_v4().to_string();
         let base = self
             .descriptor
@@ -465,7 +461,9 @@ impl HybridStorage {
             }
         }
         let freed = if replaces.is_none() {
-            rows.iter().map(|r| r.bytes() as i64).sum()
+            rows.iter()
+                .map(|r| self.descriptor.budget.staged_frame_bytes(r.bytes()) as i64)
+                .sum()
         } else {
             0
         };

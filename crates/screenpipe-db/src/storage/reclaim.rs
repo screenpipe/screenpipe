@@ -90,9 +90,13 @@ fn unsupported(error: &std::io::Error) -> bool {
         return true;
     }
     // Darwin ENOTSUP is Uncategorized in Rust, unlike Linux EOPNOTSUPP.
+    // HFS+ returns ENOTTY for the unsupported F_PUNCHHOLE ioctl.
     #[cfg(unix)]
     return error.raw_os_error().is_some_and(|code| {
-        code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::ENOSYS
+        code == libc::ENOTSUP
+            || code == libc::EOPNOTSUPP
+            || code == libc::ENOSYS
+            || code == libc::ENOTTY
     });
     #[cfg(windows)]
     return matches!(error.raw_os_error(), Some(1 | 50)); // INVALID_FUNCTION / NOT_SUPPORTED
@@ -364,10 +368,12 @@ mod tests {
         assert!(!probe_with(root.path(), |_, _, _| Ok(())).unwrap());
         #[cfg(unix)]
         {
-            assert!(!probe_with(root.path(), |_, _, _| {
-                Err(std::io::Error::from_raw_os_error(libc::ENOTSUP).into())
-            })
-            .unwrap());
+            for code in [libc::ENOTSUP, libc::ENOTTY] {
+                assert!(!probe_with(root.path(), |_, _, _| {
+                    Err(std::io::Error::from_raw_os_error(code).into())
+                })
+                .unwrap());
+            }
             assert!(!unsupported(&std::io::Error::from_raw_os_error(libc::EIO)));
         }
     }

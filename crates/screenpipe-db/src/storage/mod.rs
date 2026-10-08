@@ -30,7 +30,8 @@ pub use backup::restore;
 pub use command::run_command;
 pub use inventory::{artifact_bytes, inventory};
 pub use lifecycle::{
-    cancel_migration, migrate, migrate_with_progress, migration_report, migration_requires_resume,
+    cancel_migration, compact_migrated_storage_with_progress, compaction_requires_resume, migrate,
+    migrate_with_progress, migration_report, migration_requires_resume,
     pause_interrupted_migration, recover_interrupted_migration,
     recover_interrupted_migration_with_progress, MigrationOptions, MigrationProgress,
     MigrationReport,
@@ -76,7 +77,8 @@ pub struct StorageBudget {
     pub row_group_rows: usize,
     pub file_rows: usize,
     pub file_bytes: usize,
-    /// Maximum record the archiver processes; larger captures remain in SQLite.
+    /// Background processing limit. Offline migration archives larger records
+    /// individually rather than leaving them in SQLite.
     pub record_bytes: usize,
     pub decode_bytes: usize,
     pub response_bytes: usize,
@@ -110,6 +112,23 @@ impl Default for StorageBudget {
 }
 
 impl StorageBudget {
+    pub(super) fn archive_batch_bytes(&self) -> usize {
+        // Also isolate records above a custom record target smaller than the
+        // file target; only singleton files may exceed decoder record limits.
+        self.file_bytes.min(self.record_bytes)
+    }
+
+    /// An indivisible legacy record gets its own archive file. Batch budgets
+    /// cannot make that file unreadable after its SQLite payload is released.
+    pub(super) fn archive_read_budget(&self, rows: i64) -> Self {
+        let mut budget = self.clone();
+        if rows == 1 {
+            budget.record_bytes = usize::MAX;
+            budget.decode_bytes = usize::MAX;
+        }
+        budget
+    }
+
     /// Oversized frames are resident history, not work for the sealer.
     pub(super) fn staged_frame_bytes(&self, bytes: usize) -> usize {
         if bytes <= self.record_bytes {
@@ -205,6 +224,7 @@ pub(crate) struct HybridStorage {
     pub closing: tokio_util::sync::CancellationToken,
     pub privacy_ready: std::sync::atomic::AtomicBool,
     pub bulk: bulk::Runtime,
+    offline_migration: bool,
 }
 
 const FRAME_CAPABILITIES: [&str; 3] =
@@ -391,6 +411,38 @@ pub(crate) fn durable_json<T: Serialize>(path: &Path, value: &T) -> Result<(), s
 }
 
 impl HybridStorage {
+    pub(super) fn archive_record_limit(&self) -> usize {
+        if self.offline_migration {
+            i64::MAX as usize
+        } else {
+            self.descriptor.budget.record_bytes
+        }
+    }
+
+    /// Reserve for the actual batch, including a singleton larger than the
+    /// usual file target. Source rows are retained if space is unavailable.
+    pub(super) fn reserve_archive(&self, bytes: usize) -> Result<(), sqlx::Error> {
+        let required = self.descriptor.budget.disk_reserve_bytes.saturating_add(
+            (bytes.max(self.descriptor.budget.file_bytes) as u64).saturating_mul(2),
+        );
+        let available = fs2::available_space(&self.root)?;
+        if available < required {
+            return Err(storage_error(format!(
+                "archive batch needs {required} free bytes; {available} available; source payloads retained"
+            )));
+        }
+        Ok(())
+    }
+
+    pub(super) fn for_migration(
+        root: PathBuf,
+        descriptor: StorageDescriptor,
+    ) -> Result<Arc<Self>, sqlx::Error> {
+        let mut storage = Self::new(root, descriptor)?;
+        Arc::get_mut(&mut storage).unwrap().offline_migration = true;
+        Ok(storage)
+    }
+
     pub fn payload_path(&self, relative: &Path) -> Result<PathBuf, sqlx::Error> {
         if !relative.starts_with(&self.descriptor.payloads) {
             return Err(storage_error("file is outside its payload root"));
@@ -481,6 +533,7 @@ impl HybridStorage {
             closing: tokio_util::sync::CancellationToken::new(),
             privacy_ready: std::sync::atomic::AtomicBool::new(false),
             bulk: bulk::Runtime::default(),
+            offline_migration: false,
         }))
     }
 }

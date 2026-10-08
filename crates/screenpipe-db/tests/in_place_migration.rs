@@ -6,6 +6,22 @@ use screenpipe_db::{
     DatabaseManager,
 };
 
+async fn checkpoint_fixture(db: &DatabaseManager) {
+    // PASSIVE may stop at an active reader's snapshot. Fixture construction
+    // must wait for that reader before using the checkpoint as a disk baseline.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let (busy, logged, checkpointed) = db.wal_checkpoint().await.unwrap();
+            if busy == 0 && logged == checkpointed {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("fixture WAL did not drain before disk measurement");
+}
+
 async fn fixture(root: &std::path::Path) {
     let db = DatabaseManager::new(root.join("db.sqlite").to_str().unwrap(), Default::default())
         .await
@@ -19,13 +35,93 @@ async fn fixture(root: &std::path::Path) {
     tx.commit().await.unwrap();
     // The size baseline must include committed payloads, even when a final
     // read-only connection leaves a WAL behind while the pools close.
-    let (busy, logged, checkpointed) = db.wal_checkpoint().await.unwrap();
-    assert_eq!((busy, logged), (0, checkpointed));
+    checkpoint_fixture(&db).await;
     db.close().await;
 }
 
 #[tokio::test]
-async fn oversized_legacy_bulk_records_do_not_block_migration_or_recording() {
+async fn many_archive_files_complete_verification_without_exhausting_runtime_budget() {
+    const CHILD_ROOT: &str = "SCREENPIPE_MANY_ARCHIVE_FILES_CHILD";
+    let Ok(root) = std::env::var(CHILD_ROOT) else {
+        let root = tempfile::tempdir().unwrap();
+        // The regression spins inside a synchronous SQLite callback. A child
+        // process gives this test a real timeout that also stops the spinner.
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(90),
+            tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "many_archive_files_complete_verification_without_exhausting_runtime_budget",
+                    "--nocapture",
+                ])
+                .env(CHILD_ROOT, root.path())
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .expect("verification stalled across many immutable files")
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    };
+    let root = std::path::Path::new(&root);
+    let path = root.join("db.sqlite");
+    let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+        .await
+        .unwrap();
+    let detail = "archive detail ".repeat(512);
+    let mut tx = db.begin_immediate_with_retry().await.unwrap();
+    for id in 1..=160 {
+        sqlx::query("INSERT INTO frames(id,timestamp,full_text,accessibility_tree_json) VALUES(?,'2026-09-21','verification history',?)")
+            .bind(id).bind(&detail).execute(&mut **tx.conn()).await.unwrap();
+        sqlx::query("INSERT INTO elements(id,frame_id,source,role,text,properties) VALUES(?,?,'accessibility','AXText','verification element',?)")
+            .bind(id).bind(id).bind(&detail).execute(&mut **tx.conn()).await.unwrap();
+    }
+    tx.commit().await.unwrap();
+    db.close().await;
+    let mut options = MigrationOptions::default();
+    options.budget.file_bytes = 1024;
+    options.budget.record_bytes = 2048;
+    options.budget.decode_bytes = 8192;
+    options.budget.response_bytes = 8192;
+    let report = migrate(root, Default::default(), options).await.unwrap();
+    assert!(report.all_eligible_payloads_archived);
+    assert_eq!(report.frames, 160);
+    assert!(
+        screenpipe_db::storage::inventory(root)
+            .unwrap()
+            .iter()
+            .filter(|path| path.extension().is_some_and(|ext| ext == "parquet"))
+            .count()
+            >= 160
+    );
+    let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+        .await
+        .unwrap();
+    db.verify_storage().await.unwrap();
+    assert_eq!(
+        db.frame_payloads(&[160], Projection::All).await.unwrap()[&160]
+            .accessibility_tree_json
+            .as_deref(),
+        Some(detail.as_str())
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT properties FROM elements WHERE id=160")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        detail
+    );
+    db.close().await;
+}
+
+#[tokio::test]
+async fn oversized_legacy_bulk_records_are_archived_and_remain_readable() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("db.sqlite");
     let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
@@ -119,7 +215,7 @@ async fn oversized_legacy_bulk_records_do_not_block_migration_or_recording() {
         .fetch_one(&db.pool)
         .await
         .unwrap(),
-        2
+        1
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
@@ -128,7 +224,7 @@ async fn oversized_legacy_bulk_records_do_not_block_migration_or_recording() {
         .fetch_one(&db.pool)
         .await
         .unwrap(),
-        2
+        3
     );
     for (table, column, _) in other_payloads {
         for id in [2, 4] {
@@ -148,7 +244,7 @@ async fn oversized_legacy_bulk_records_do_not_block_migration_or_recording() {
             .fetch_one(&db.pool)
             .await
             .unwrap(),
-            2
+            if table == "ui_events" { 3 } else { 4 }
         );
     }
     for table in [
@@ -182,6 +278,369 @@ async fn oversized_legacy_bulk_records_do_not_block_migration_or_recording() {
         "new recording"
     );
     db.close().await;
+}
+
+#[tokio::test]
+async fn completed_migration_requires_explicit_one_time_compaction() {
+    use screenpipe_db::storage::{
+        compact_migrated_storage_with_progress, inventory, migration_report, StorageDescriptor,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("db.sqlite");
+    let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+        .await
+        .unwrap();
+    db.execute_raw_sql_write(
+        "INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-09-19','archived history')",
+    )
+    .await
+    .unwrap();
+    db.close().await;
+    let mut options = MigrationOptions::default();
+    options.budget.record_bytes = 1024;
+    options.budget.file_bytes = 1024;
+    options.budget.decode_bytes = 2048;
+    options.budget.response_bytes = 1024;
+    migrate(root.path(), Default::default(), options)
+        .await
+        .unwrap();
+    let descriptor = StorageDescriptor::read(root.path()).unwrap().unwrap();
+    let published: Vec<_> = inventory(root.path())
+        .unwrap()
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|ext| ext == "parquet"))
+        .map(|p| {
+            let bytes = std::fs::read(&p).unwrap();
+            (p, bytes)
+        })
+        .collect();
+    let large = "uncompressed history 東京\0tail ".repeat(4096);
+    let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+        .await
+        .unwrap();
+    let mut tx = db.begin_immediate_with_retry().await.unwrap();
+    sqlx::query("INSERT INTO frames(id,timestamp,full_text,accessibility_tree_json) VALUES(2,'2026-09-19','remaining history',?)")
+        .bind(&large).execute(&mut **tx.conn()).await.unwrap();
+    sqlx::query("INSERT INTO elements(id,frame_id,source,role,text,properties) VALUES(1,2,'accessibility','AXText','remaining element',?)")
+        .bind(&large).execute(&mut **tx.conn()).await.unwrap();
+    sqlx::query("INSERT INTO outputs(id,source,title,output_path,preview) VALUES(1,'test','remaining output','test',?)")
+        .bind(&large).execute(&mut **tx.conn()).await.unwrap();
+    tx.commit().await.unwrap();
+    // Model the old completion marker with oversized resident records.
+    db.execute_raw_sql_write(
+        "DELETE FROM _storage_conversion_steps WHERE step='conversion-all-records'",
+    )
+    .await
+    .unwrap();
+    db.close().await;
+    let receipt = root.path().join("storage-migration-complete.json");
+    let mut old: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+    old.as_object_mut()
+        .unwrap()
+        .remove("all_eligible_payloads_archived");
+    std::fs::write(&receipt, serde_json::to_vec(&old).unwrap()).unwrap();
+    let original_receipt = std::fs::read(&receipt).unwrap();
+    // Upgrading or invoking the ordinary migration does not revisit a completed
+    // database, even though its old receipt predates full payload archival.
+    let report = migrate(root.path(), Default::default(), Default::default())
+        .await
+        .unwrap();
+    assert!(!report.all_eligible_payloads_archived);
+    assert_eq!(std::fs::read(&receipt).unwrap(), original_receipt);
+    assert!(!root.path().join("storage-migration.json").exists());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let destination = published[0].0.parent().unwrap().parent().unwrap();
+        let permissions = std::fs::metadata(destination).unwrap().permissions();
+        std::fs::set_permissions(destination, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let failed = compact_migrated_storage_with_progress(
+            root.path(),
+            Default::default(),
+            Default::default(),
+            |_| {},
+        )
+        .await;
+        // Recording recovery must work even while the archive remains unwritable.
+        screenpipe_db::storage::recover_interrupted_migration(root.path(), Default::default())
+            .await
+            .unwrap();
+        std::fs::set_permissions(destination, permissions).unwrap();
+        assert!(failed.is_err());
+        assert_eq!(std::fs::read(&receipt).unwrap(), original_receipt);
+        let journal = root.path().join("storage-migration.json");
+        let paused = std::fs::read(&journal).unwrap();
+        assert!(screenpipe_db::storage::compaction_requires_resume(root.path()).unwrap());
+        assert!(migrate(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("explicitly"));
+        assert_eq!(std::fs::read(&journal).unwrap(), paused);
+        let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            db.frame_payloads(&[2], Projection::All).await.unwrap()[&2]
+                .accessibility_tree_json
+                .as_deref(),
+            Some(large.as_str())
+        );
+        db.execute_raw_sql_write("INSERT INTO ui_events(id,timestamp,event_type,text_content) VALUES(99,'2026-09-19','text','recorded during paused compaction')").await.unwrap();
+        db.close().await;
+    }
+    let report = compact_migrated_storage_with_progress(
+        root.path(),
+        Default::default(),
+        Default::default(),
+        |_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.generation, descriptor.generation);
+    assert_eq!(report.frames, 2);
+    assert!(report.all_eligible_payloads_archived);
+    assert!(!root.path().join("storage-migration.json").exists());
+    for (path, bytes) in published {
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+    let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM frame_payloads WHERE state='staged'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM _bulk_element_rows")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM main.outputs WHERE _archive_mask!=0")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        db.frame_payloads(&[2], Projection::All).await.unwrap()[&2]
+            .accessibility_tree_json
+            .as_deref(),
+        Some(large.as_str())
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT properties FROM elements WHERE id=1")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        large
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT preview FROM outputs WHERE id=1")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap(),
+        large
+    );
+    db.verify_storage().await.unwrap();
+    db.execute_raw_sql_write("INSERT INTO frames(id,timestamp,full_text) VALUES(3,'2026-09-19','new recording after repair')").await.unwrap();
+    db.close().await;
+    let completed_receipt = std::fs::read(&receipt).unwrap();
+    let report = compact_migrated_storage_with_progress(
+        root.path(),
+        Default::default(),
+        Default::default(),
+        |_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        report.frames, 2,
+        "a second request must not compact new recordings"
+    );
+    assert_eq!(std::fs::read(&receipt).unwrap(), completed_receipt);
+    // A crash after the durable receipt, followed by recording recovery, may
+    // leave a paused journal. Retrying only retires it, without a second pass.
+    let journal = root.path().join("storage-migration.json");
+    std::fs::write(
+        &journal,
+        serde_json::to_vec(&serde_json::json!({
+            "format": 2, "compaction": true, "phase": "paused", "descriptor": descriptor,
+            "source": report.tables, "report": report, "snapshot": null
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    compact_migrated_storage_with_progress(
+        root.path(),
+        Default::default(),
+        Default::default(),
+        |_| {},
+    )
+    .await
+    .unwrap();
+    assert!(!journal.exists());
+    assert_eq!(std::fs::read(&receipt).unwrap(), completed_receipt);
+    assert!(
+        migration_report(root.path())
+            .unwrap()
+            .unwrap()
+            .all_eligible_payloads_archived
+    );
+}
+
+#[tokio::test]
+async fn completion_receipt_requires_all_eligible_payloads_to_leave_sqlite() {
+    use screenpipe_db::storage::{diagnostics, StorageDescriptor};
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("db.sqlite");
+    let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+        .await
+        .unwrap();
+    db.execute_raw_sql_write(
+        "INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-09-19','private history')",
+    )
+    .await
+    .unwrap();
+    db.close().await;
+    let report = migrate(root.path(), Default::default(), Default::default())
+        .await
+        .unwrap();
+    let descriptor = StorageDescriptor::read(root.path()).unwrap().unwrap();
+    let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+        .await
+        .unwrap();
+    db.execute_raw_sql_write("INSERT INTO frames(id,timestamp,full_text) VALUES(2,'2026-09-19','private history left resident')").await.unwrap();
+    db.close().await;
+    let receipt = root.path().join("storage-migration-complete.json");
+    std::fs::remove_file(&receipt).unwrap();
+    // A prematurely committed conversion marker is insufficient evidence.
+    std::fs::write(
+        root.path().join("storage-migration.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "format": 2, "phase": "building", "descriptor": descriptor,
+            "source": report.tables, "snapshot": null, "report": null
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let error = migrate(root.path(), Default::default(), Default::default())
+        .await
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("migration incomplete: 1 eligible frames records (29 bytes) remain in SQLite"));
+    assert!(!receipt.exists());
+    assert!(root.path().join("storage-migration.json").exists());
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if diagnostics::recent(root.path()).unwrap().iter().any(|s| {
+                s.status == "failed"
+                    && s.failure_stage.as_deref() == Some("verifying_no_eligible_resident_payloads")
+                    && s.table.as_deref() == Some("frames")
+                    && s.batch_bytes == Some(29)
+                    && s.error.as_deref().is_some_and(|e| {
+                        e.contains("remain in SQLite") && !e.contains("private history")
+                    })
+            }) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn older_verified_attempt_finishes_large_rows_against_its_original_receipts() {
+    use screenpipe_db::storage::StorageDescriptor;
+    for tampered in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("db.sqlite");
+        let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        db.execute_raw_sql_write("INSERT INTO frames(id,timestamp,full_text,accessibility_tree_json) VALUES(1,'2026-09-19','original history',printf('%.*c',65536,'x'))").await.unwrap();
+        db.close().await;
+        let mut options = MigrationOptions::default();
+        options.budget.record_bytes = 1024;
+        options.budget.file_bytes = 4096;
+        options.budget.decode_bytes = 8192;
+        options.budget.response_bytes = 1024;
+        let report = migrate(root.path(), Default::default(), options)
+            .await
+            .unwrap();
+        let descriptor = StorageDescriptor::read(root.path()).unwrap().unwrap();
+        let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        let mut payload = db
+            .frame_payloads(&[1], Projection::All)
+            .await
+            .unwrap()
+            .remove(&1)
+            .unwrap();
+        if tampered {
+            payload.full_text = Some("changed after verification".into());
+        }
+        // Restore the original logical row to SQLite without changing its
+        // privacy columns, as the older size-limited converter left it.
+        assert!(db
+            .replace_frame_payload(&payload, "", 0, None, None)
+            .await
+            .unwrap());
+        db.execute_raw_sql_write(
+            "DELETE FROM _storage_conversion_steps WHERE step='conversion-all-records'",
+        )
+        .await
+        .unwrap();
+        db.close().await;
+        std::fs::remove_file(root.path().join("storage-migration-complete.json")).unwrap();
+        std::fs::write(
+            root.path().join("storage-migration.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "format": 2, "phase": "ready", "descriptor": descriptor,
+                "source": report.tables, "snapshot": null, "report": null
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let result = migrate(root.path(), Default::default(), Default::default()).await;
+        if tampered {
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("migration logical data differs"));
+            assert!(!root.path().join("storage-migration-complete.json").exists());
+        } else {
+            assert!(result.unwrap().all_eligible_payloads_archived);
+            let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
+                .await
+                .unwrap();
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT count(*) FROM frame_payloads WHERE state='staged'"
+                )
+                .fetch_one(&db.pool)
+                .await
+                .unwrap(),
+                0
+            );
+            assert_eq!(
+                db.frame_payloads(&[1], Projection::All).await.unwrap()[&1].accessibility_tree_json,
+                payload.accessibility_tree_json
+            );
+            db.close().await;
+        }
+    }
 }
 
 #[tokio::test]
@@ -480,8 +939,7 @@ async fn migration_completes_with_less_free_space_than_its_final_payloads() {
         // Keep fixture generation from accumulating a second multi-GiB WAL
         // before the constrained migration itself has even started.
         if id % 128 == 0 || id == count {
-            let (busy, logged, checkpointed) = db.wal_checkpoint().await.unwrap();
-            assert_eq!((busy, logged), (0, checkpointed));
+            checkpoint_fixture(&db).await;
         }
     }
     db.close().await;
@@ -856,9 +1314,9 @@ async fn sparse_privacy_backlog_completes_migration_and_preserves_recording() {
 }
 
 #[tokio::test]
-#[ignore = "requires a marked disposable filesystem without hole punching"]
+#[ignore = "requires a marked disposable volume; network mounts also exercise rollback journal recovery"]
 #[cfg(target_os = "macos")]
-async fn network_wal_verification_and_reopen_preserve_committed_rows() {
+async fn retained_wal_verification_and_reopen_preserve_committed_rows() {
     use sqlx::Connection;
     const CHILD: &str = "SCREENPIPE_NAS_WAL_CHILD";
     if let Ok(path) = std::env::var(CHILD) {
@@ -880,6 +1338,13 @@ async fn network_wal_verification_and_reopen_preserve_committed_rows() {
     }
     let volume = std::path::PathBuf::from(std::env::var("SCREENPIPE_UNSUPPORTED_VOLUME").unwrap());
     assert!(volume.join(".screenpipe-disposable-volume").is_file());
+    // Unsupported hole punching does not make a local HFS+ volume a network
+    // filesystem. Only actual network mounts use rollback journaling.
+    let expected_journal = if screenpipe_fs::is_network_volume(&volume).unwrap() {
+        "delete"
+    } else {
+        "wal"
+    };
     let root = tempfile::tempdir_in(volume).unwrap();
     let path = root.path().join("db.sqlite");
     let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
@@ -890,7 +1355,7 @@ async fn network_wal_verification_and_reopen_preserve_committed_rows() {
         .args([
             "--ignored",
             "--exact",
-            "network_wal_verification_and_reopen_preserve_committed_rows",
+            "retained_wal_verification_and_reopen_preserve_committed_rows",
         ])
         .env(CHILD, &path)
         .output()
@@ -939,7 +1404,7 @@ async fn network_wal_verification_and_reopen_preserve_committed_rows() {
             .fetch_one(&db.pool)
             .await
             .unwrap(),
-        "delete"
+        expected_journal
     );
     assert!(!screenpipe_sqlite_coordinator::sqlite_verification_pending_exists(&path));
     db.execute_raw_sql_write("INSERT INTO nas_wal VALUES('recorded after recovery')")
@@ -957,7 +1422,7 @@ async fn network_wal_verification_and_reopen_preserve_committed_rows() {
         2
     );
     db.close().await;
-    println!("NAS WAL: verification preserved database and committed WAL bytes; pending incident recovered; acknowledged and new rows survive restart in rollback mode");
+    println!("retained WAL: verification preserved database and committed WAL bytes; pending incident recovered; acknowledged and new rows survive restart in {expected_journal} mode");
 }
 
 #[tokio::test]
@@ -1120,7 +1585,7 @@ async fn failed_payload_write_resumes_without_discarding_published_files() {
 }
 
 #[tokio::test]
-#[ignore = "fills a marked disposable volume to exercise saved disk-full progress"]
+#[ignore = "fills a marked disposable non-sparse volume to exercise saved disk-full progress"]
 async fn exhausted_volume_resumes_after_space_is_restored() {
     use std::io::Write;
     let volume = std::path::PathBuf::from(std::env::var("SCREENPIPE_CONSTRAINED_VOLUME").unwrap());
@@ -1128,6 +1593,8 @@ async fn exhausted_volume_resumes_after_space_is_restored() {
     assert!(fs2::total_space(&volume).unwrap() <= 512 * 1024 * 1024);
     let root = tempfile::tempdir_in(&volume).unwrap();
     fixture(root.path()).await;
+    // Sparse filesystems can reclaim SQLite blocks after the injected ENOSPC
+    // and finish successfully. Use a non-sparse volume to require a retry.
     let filler = root.path().join("unrelated-data");
     let filled = std::sync::atomic::AtomicBool::new(false);
     let mut options = MigrationOptions::default();
@@ -1145,19 +1612,21 @@ async fn exhausted_volume_resumes_after_space_is_restored() {
                 return;
             }
             let mut file = std::fs::File::create(&filler).unwrap();
-            let block = vec![0x5a; 1024 * 1024];
-            while fs2::available_space(&volume).unwrap() > 2 * 1024 * 1024 {
-                if file
-                    .write_all(&block)
-                    .and_then(|_| file.sync_all())
-                    .is_err()
-                {
+            // Two MiB of headroom can still finish this highly compressible
+            // fixture. Exercise an actual full filesystem, not a guessed
+            // reserve threshold that can silently stop injecting a failure.
+            let block = vec![0x5a; 64 * 1024];
+            loop {
+                if let Err(error) = file.write_all(&block).and_then(|_| file.sync_all()) {
+                    assert_eq!(error.kind(), std::io::ErrorKind::StorageFull);
+                    eprintln!("injected actual disk exhaustion: {error}");
                     break;
                 }
             }
         },
     )
     .await;
+    assert!(filled.load(std::sync::atomic::Ordering::SeqCst));
     assert!(result.is_err());
     assert!(screenpipe_db::storage::migration_requires_resume(root.path()).unwrap());
     assert!(DatabaseManager::new(
@@ -1482,7 +1951,7 @@ async fn recording_recovery_is_durable_when_interrupted_before_or_after_activati
 
 #[tokio::test]
 async fn migration_verification_does_not_use_the_response_payload_budget() {
-    for retain_oversized in [false, true] {
+    for include_oversized in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("db.sqlite");
         let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
@@ -1492,7 +1961,7 @@ async fn migration_verification_does_not_use_the_response_payload_budget() {
         let oversized = ordinary.repeat(4);
         let mut tx = db.begin_immediate_with_retry().await.unwrap();
         for id in 1..=132 {
-            let detail = if retain_oversized && id == 1 {
+            let detail = if include_oversized && id == 1 {
                 &oversized
             } else {
                 &ordinary
@@ -1524,11 +1993,17 @@ async fn migration_verification_does_not_use_the_response_payload_budget() {
             .unwrap_err()
             .to_string()
             .contains("response payload budget exceeded"));
-        if retain_oversized {
-            let (state, detail): (String, String) = sqlx::query_as("SELECT p.state,f.accessibility_tree_json FROM frames f JOIN frame_payloads p ON p.frame_id=f.id WHERE f.id=1")
+        if include_oversized {
+            let (state, detail): (String, Option<String>) = sqlx::query_as("SELECT p.state,f.accessibility_tree_json FROM frames f JOIN frame_payloads p ON p.frame_id=f.id WHERE f.id=1")
                 .fetch_one(&db.pool).await.unwrap();
-            assert_eq!(state, "staged");
-            assert_eq!(detail, oversized);
+            assert_eq!(state, "sealed");
+            assert!(detail.is_none());
+            assert_eq!(
+                db.frame_payloads(&[1], Projection::All).await.unwrap()[&1]
+                    .accessibility_tree_json
+                    .as_deref(),
+                Some(oversized.as_str())
+            );
         }
         assert_eq!(
             db.frame_payloads(&[132], Projection::All).await.unwrap()[&132]
@@ -1542,7 +2017,7 @@ async fn migration_verification_does_not_use_the_response_payload_budget() {
 }
 
 #[tokio::test]
-async fn oversized_legacy_frames_remain_readable_without_blocking_migration_or_capture() {
+async fn oversized_legacy_frames_are_archived_without_blocking_capture() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("db.sqlite");
     let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
@@ -1564,13 +2039,19 @@ async fn oversized_legacy_frames_remain_readable_without_blocking_migration_or_c
     options.budget.record_bytes = 1024 * 1024;
     options.budget.decode_bytes = 2 * 1024 * 1024;
     options.budget.staging_bytes = 1024 * 1024;
-    // Each old record exceeds both decode and staging budgets. Migration must
-    // keep it in SQLite rather than loading it or growing the capture backlog.
+    // Each old record exceeds both decode and staging budgets. The one-time
+    // migration must archive it in its own file and release its SQLite pages.
     assert!(detail.len() > options.budget.decode_bytes);
     let report = migrate(root.path(), Default::default(), options)
         .await
         .unwrap();
     assert_eq!(report.frames, 3);
+    eprintln!(
+        "oversized migration disk allocation: before={} after={} parquet={}",
+        report.allocated_before_bytes.unwrap(),
+        report.allocated_after_bytes.unwrap(),
+        report.payload_bytes
+    );
     let db = DatabaseManager::new(path.to_str().unwrap(), Default::default())
         .await
         .unwrap();
@@ -1593,7 +2074,16 @@ async fn oversized_legacy_frames_remain_readable_without_blocking_migration_or_c
     assert_eq!(
         sqlx::query_as::<_, (i64, i64)>("SELECT staging_bytes,(SELECT count(*) FROM frame_payloads WHERE state='sealed') FROM storage_metadata")
             .fetch_one(&db.pool).await.unwrap(),
-        (0, 1)
+        (0, 3)
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM main.frames WHERE accessibility_tree_json IS NOT NULL"
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap(),
+        0
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
@@ -1606,11 +2096,11 @@ async fn oversized_legacy_frames_remain_readable_without_blocking_migration_or_c
     );
     assert_eq!(db.seal_frame_payloads().await.unwrap(), 0);
 
-    // Metadata and privacy updates must work on retained history. Once reduced
-    // below the encoder limit, it joins the ordinary staging/sealing path.
-    db.execute_raw_sql_write("UPDATE frames SET window_name='renamed window' WHERE id=2")
+    // Archived records still support coordinated metadata/privacy updates.
+    assert!(db
+        .replace_frame_payload(&payloads[&2], "", 15, Some("renamed window"), None)
         .await
-        .unwrap();
+        .unwrap());
     let mut payload = payloads.remove(&1).unwrap();
     payload.accessibility_tree_json = Some("x".repeat(2 * 1024 * 1024));
     assert!(db
@@ -1720,7 +2210,7 @@ async fn oversized_legacy_frame_resumes_after_staging_without_rebuilding_sealed_
             .fetch_one(&db.pool)
             .await
             .unwrap(),
-        2
+        3
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT staging_bytes FROM storage_metadata")

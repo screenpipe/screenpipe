@@ -77,7 +77,7 @@ export function StorageMigrationPrompt({ activity }: { activity: StorageMigratio
 
   const success = activity.root === status?.root && activity.completed && status?.completed && status.using_new_storage;
   const failure = error || status?.error;
-  const open = Boolean(!activity.busy && status && !status.busy && !status.blocked_reason && dismissed !== status.root &&
+  const open = Boolean(!activity.busy && status && !status.compaction && !status.busy && !status.blocked_reason && dismissed !== status.root &&
     (status.can_migrate || success || failure));
 
   function dismiss() {

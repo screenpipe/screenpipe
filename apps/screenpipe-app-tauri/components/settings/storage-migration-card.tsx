@@ -25,6 +25,7 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [migrationRoot, setMigrationRoot] = useState<string | null>(null);
+  const [compactionRoot, setCompactionRoot] = useState<string | null>(null);
   const [deletion, setDeletion] = useState<{ root: string; generation: string } | null>(null);
   const [confirmed, setConfirmed] = useState(false);
 
@@ -41,6 +42,7 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
     setStatus(null);
     setError(null);
     setMigrationRoot(null);
+    setCompactionRoot(null);
     setDeletion(null);
     const poll = async () => {
       try {
@@ -71,6 +73,7 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
       const result = await action();
       if (result.status === "error") throw new Error(String(result.error));
       setMigrationRoot(null);
+      setCompactionRoot(null);
       setDeletion(null);
       setConfirmed(false);
       await refresh();
@@ -103,12 +106,12 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
         {!status && !failure && <p className="text-xs text-muted-foreground" role="status">Checking storage…</p>}
         {failure && <p className="text-xs text-destructive" role="alert">{failure}</p>}
         {status?.blocked_reason && <p className="text-xs text-muted-foreground">{status.blocked_reason}</p>}
-        {status?.pending && !status.busy && (
+        {status?.pending && !status.compaction && !status.busy && (
           <p className="text-xs text-muted-foreground">
             {status.in_place ? ui("Migration is unfinished. Completed progress is saved; retry migration when ready.") : ui("Migration is unfinished. Resume to continue. Your original database is still kept.")}
           </p>
         )}
-        {status?.completed && !status.using_new_storage && !status.busy && (
+        {status?.completed && !status.compaction && !status.using_new_storage && !status.busy && (
           <p className="text-xs text-muted-foreground">Migration passed verification. Restart on the new storage to finish switching.</p>
         )}
         {status?.completed && (
@@ -127,6 +130,18 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
             onClick={() => setMigrationRoot(status.root)}>
             {status.completed ? ui("Finish switching") : status.pending ? ui("Resume migration") : ui("Migrate storage")}
           </Button>
+        )}
+        {status?.can_compact && (
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">A one-time compaction can compress larger records left by your earlier migration and recover more disk space.</p>
+            <Button variant="outline" size="sm" className="h-7 text-xs" disabled={busy}
+              onClick={() => setCompactionRoot(status.root)}>
+              {status.compaction && (status.pending || status.error) ? "Resume compaction" : "Compact database"}
+            </Button>
+          </div>
+        )}
+        {status?.compaction && !status.busy && !status.pending && !status.blocked_reason && !failure && !status.can_compact && (
+          <p className="text-xs text-muted-foreground">One-time compaction complete.</p>
         )}
         {status?.can_cancel && (
           <Button variant="ghost" size="sm" className="h-7 text-xs" disabled={busy}
@@ -167,6 +182,25 @@ export function StorageMigrationCard({ dataDirectory, onBusyChange }: {
               <Button disabled={busy || !status?.can_migrate || migrationRoot !== status?.root}
                 onClick={() => { if (migrationRoot) void run(() => commands.startStorageMigration(migrationRoot)); }}>
                 {submitting ? ui("Starting…") : ui("Start now")}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <AlertDialog open={compactionRoot !== null} onOpenChange={(open) => { if (!open && !submitting) setCompactionRoot(null); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Compact database?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This one-time operation compresses records left by your earlier migration. Recording and history access will pause while Screenpipe compacts and verifies your history, then your recording preference will be restored. Keep Screenpipe open; your computer will stay awake. If interrupted, you can resume compaction here in Settings.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            {error && <p className="text-xs text-destructive" role="alert">{error}</p>}
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={submitting}>Cancel</AlertDialogCancel>
+              <Button disabled={busy || !status?.can_compact || compactionRoot !== status?.root}
+                onClick={() => { if (compactionRoot) void run(() => commands.startStorageCompaction(compactionRoot)); }}>
+                {submitting ? "Starting…" : "Start compaction"}
               </Button>
             </AlertDialogFooter>
           </AlertDialogContent>

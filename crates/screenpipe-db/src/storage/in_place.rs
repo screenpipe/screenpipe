@@ -81,8 +81,8 @@ async fn run(
         progress(MigrationProgress::phase("checking interrupted storage"));
     }
     super::diagnostics::stage("checking_index_before_open");
-    crate::recovery::verify_database_before_reopen(&index).await?;
     crate::db::register_sqlite_extensions()?;
+    crate::recovery::verify_database_before_reopen(&index).await?;
     // Do not close this fd while SQLite holds its process-wide Unix locks.
     let file = OpenOptions::new().read(true).write(true).open(&index)?;
     #[cfg(target_os = "macos")]
@@ -157,6 +157,12 @@ async fn run(
             super::diagnostics::stage("building_migration_schema");
             schema::bootstrap_in_place(&mut conn, &storage.descriptor).await?;
             super::read_schema::upgrade(&mut conn, &storage).await?;
+            if schema::converted_step(&mut conn,"conversion-all-records").await?
+                || (!archive && schema::converted_step(&mut conn,"conversion-complete").await?) { return Ok(()); }
+            if archive && schema::converted_step(&mut conn,"conversion-complete").await? {
+                // Older completed conversions already restored these triggers.
+                sqlx::query("DELETE FROM _storage_conversion_steps WHERE step IN ('conversion-complete','suspend-original-triggers')").execute(&mut *conn).await?;
+            }
             if !schema::converted_step(&mut conn, "suspend-original-triggers").await? {
                 let mut tx=conn.begin().await?;
                 let names: Vec<String> = sqlx::query_scalar("SELECT t.name FROM _storage_conversion_triggers t JOIN sqlite_master m ON m.name=t.name AND m.type='trigger' AND m.sql=t.sql").fetch_all(&mut *tx).await?;
@@ -167,7 +173,6 @@ async fn run(
                 schema::finish_step(&mut tx,"suspend-original-triggers").await?;
                 tx.commit().await?;
             }
-            if schema::converted_step(&mut conn,"conversion-complete").await? { return Ok(()); }
             // Compatibility with pre-v6 triggers during interrupted conversion.
             // The v6 startup upgrade removes capture admission limits entirely.
             sqlx::query("UPDATE storage_metadata SET staging_limit=?")
@@ -198,7 +203,7 @@ async fn run(
             super::diagnostics::stage("selecting_resident_frames");
             let last: Option<i64> = sqlx::query_scalar("SELECT max(frame_id) FROM frame_payloads").fetch_one(&pool).await?;
             // Staging is SQL-to-SQL. Only read IDs and lengths here so even a
-            // legacy frame larger than the decoder budget stays in SQLite.
+            // legacy frame is staged without first allocating its payload.
             let range = resident_range(&pool, "frames", last, storage.descriptor.budget.file_bytes,
                 archive.then_some(storage.descriptor.budget.file_rows)).await?;
             let Some((first, last)) = range else { break };
@@ -231,11 +236,11 @@ async fn run(
                     }
                 }
                 if !source_exists { break; }
-                // Everything currently staged was visited. Retained private or
-                // oversized rows must not be rescanned for every source batch.
+                // Everything currently staged was visited. Retained private
+                // rows must not be rescanned for every source batch.
                 after = sqlx::query_scalar("SELECT max(id) FROM _bulk_element_rows").fetch_one(&pool).await?;
                 // Move existing records inside SQLite, including records larger
-                // than any encoder/decoder batch. Sealing can leave them resident.
+                // than the background encoder/decoder batch.
                 let range = resident_range(&pool, "_bulk_elements_source", None,
                     storage.descriptor.budget.file_bytes, archive.then_some(bulk::FILE_ROWS)).await?;
                 let Some((first, last)) = range else { break };
@@ -294,6 +299,9 @@ async fn run(
             backfill_bulk_fts(&storage, &pool, &writer, table, file, &mut reclamation, archive).await?;
         }
         if !archive { progress(MigrationProgress::phase("finishing recording recovery")); }
+        if archive {
+            verify_payloads_archived(&pool).await?;
+        }
         {
             let permit = writer.lock().await?;
             let mut conn = permit.pool().acquire().await?;
@@ -309,6 +317,7 @@ async fn run(
                     .bind(storage.descriptor.budget.staging_bytes as i64)
                     .execute(&mut *tx).await?;
                 schema::finish_step(&mut tx,"conversion-complete").await?;
+                schema::finish_step(&mut tx,"conversion-all-records").await?;
             } else {
                 // Restored application triggers must be suspended again only
                 // if the user explicitly retries archival later.
@@ -335,6 +344,46 @@ async fn run(
     drop(owner.file.take());
     drop(owner.lease.take());
     result
+}
+
+// Count physical resident payloads, never the logical views that hydrate
+// Parquet. Privacy-pending and mutable rows are intentionally ineligible.
+async fn remaining_payloads(pool: &SqlitePool) -> Result<Vec<(String, i64, i64)>, sqlx::Error> {
+    let mut remaining = Vec::new();
+    let (rows, bytes): (i64, i64) = sqlx::query_as("SELECT count(*),COALESCE(sum(p.bytes),0) FROM frame_payloads p CROSS JOIN storage_metadata m WHERE p.state='staged' AND p.policy=m.policy AND (p.completed_surfaces & m.required_surfaces)=m.required_surfaces")
+        .fetch_one(pool).await?;
+    if rows != 0 {
+        remaining.push(("frames".into(), rows, bytes));
+    }
+    for table in bulk::TABLES {
+        let (source, condition) = if table.name == "elements" {
+            ("_bulk_element_rows".into(), "_archive_deleted=0")
+        } else {
+            (format!("main.{}", table.name), "_archive_mask!=0")
+        };
+        let size = table.all_bytes("");
+        let (rows, bytes): (i64, i64) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*),COALESCE(sum({size}),0) FROM {source} WHERE {condition} AND ({})",
+            table.eligible
+        )))
+        .fetch_one(pool)
+        .await?;
+        if rows != 0 {
+            remaining.push((table.name.into(), rows, bytes));
+        }
+    }
+    Ok(remaining)
+}
+
+pub(super) async fn verify_payloads_archived(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    super::diagnostics::stage("verifying_no_eligible_resident_payloads");
+    if let Some((table, rows, bytes)) = remaining_payloads(pool).await?.first() {
+        super::diagnostics::batch(table, None, None, Some(*rows as u64), Some(*bytes as u64));
+        return Err(storage_error(format!(
+            "migration incomplete: {rows} eligible {table} records ({bytes} bytes) remain in SQLite"
+        )));
+    }
+    Ok(())
 }
 
 // Only identifiers chosen by the offline runner reach this helper. Recovery

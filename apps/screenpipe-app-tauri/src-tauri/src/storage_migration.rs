@@ -15,8 +15,28 @@ use tauri::{Emitter, Manager, State};
 static APP_SESSION_ID: LazyLock<String> = LazyLock::new(|| uuid::Uuid::new_v4().to_string());
 
 const MIGRATION_ERROR_FILE: &str = "storage-migration-error.txt";
+const COMPACTION_REQUEST_FILE: &str = "storage-compaction-request.txt";
 const INTERRUPTED_MIGRATION: &str =
     "The previous storage migration did not finish. Automatic retries are disabled; retry explicitly.";
+const INTERRUPTED_COMPACTION: &str =
+    "The previous compaction did not finish. Resume it in Settings when ready.";
+
+fn compaction_requested(
+    root: &Path,
+    descriptor: Option<&StorageDescriptor>,
+) -> Result<bool, String> {
+    if screenpipe_db::storage::compaction_requires_resume(root).map_err(|e| e.to_string())? {
+        return Ok(true);
+    }
+    let Some(descriptor) = descriptor else {
+        return Ok(false);
+    };
+    match std::fs::read_to_string(root.join(COMPACTION_REQUEST_FILE)) {
+        Ok(generation) => Ok(generation == descriptor.generation),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("Could not read the compaction request: {error}")),
+    }
+}
 
 pub(crate) fn saved_migration_error(root: &Path) -> Option<String> {
     match std::fs::read_to_string(root.join(MIGRATION_ERROR_FILE)) {
@@ -65,6 +85,7 @@ struct Operation {
     available_bytes: Option<u64>,
     completed: bool,
     background: bool,
+    compaction: bool,
 }
 
 impl Operation {
@@ -82,8 +103,8 @@ impl Operation {
             total_records: self.total_records,
             bytes_saved: self.bytes_saved,
             available_bytes: self.available_bytes,
-            // A hidden migration can remove the old recovery copy.
-            completed: self.completed && !self.background,
+            // Home acknowledges explicit migrations only; compaction stays in Settings.
+            completed: self.completed && !self.background && !self.compaction,
         }
     }
 }
@@ -142,6 +163,8 @@ pub struct StorageMigrationStatus {
     pub bytes_saved: Option<u64>,
     pub available_bytes: Option<u64>,
     pub can_migrate: bool,
+    pub can_compact: bool,
+    pub compaction: bool,
     pub can_cancel: bool,
     pub can_delete_source: bool,
     pub blocked_reason: Option<String>,
@@ -160,6 +183,7 @@ fn should_start_hidden_ui_migration(
         // Failures and interrupted attempts stay blocked across app restarts.
         && status.error.is_none()
         && !status.pending
+        && !status.compaction
         && status.blocked_reason.is_none()
         && (status.can_migrate || status.can_delete_source)
 }
@@ -179,6 +203,7 @@ pub(crate) async fn maybe_start_hidden_ui_migration(app: tauri::AppHandle) {
             app.state::<RecordingState>(),
             root.display().to_string(),
             true,
+            false,
         )
         .await
     }
@@ -293,6 +318,11 @@ pub(crate) async fn resume_before_startup(
         return Err("Stop Screenpipe before resuming migration.".into());
     }
     let root = root.canonicalize().map_err(|e| e.to_string())?;
+    let descriptor = StorageDescriptor::read(&root).map_err(|e| e.to_string())?;
+    let compaction = compaction_requested(&root, descriptor.as_ref()).unwrap_or_else(|error| {
+        tracing::warn!(%error, "compaction identity unavailable during recording recovery");
+        false
+    });
     if let Some(wants_recording) = preference {
         recording.set_capture_intent(
             wants_recording && crate::recording::recording_access_allowed(app, &settings),
@@ -319,6 +349,7 @@ pub(crate) async fn resume_before_startup(
                 busy: true,
                 message: "restoring recording after an interrupted migration".into(),
                 recovering: true,
+                compaction,
                 started_at: Some(Instant::now()),
                 ..Default::default()
             };
@@ -362,6 +393,7 @@ pub(crate) async fn resume_before_startup(
             root: Some(root.clone()),
             busy: true,
             message: "resuming saved migration".into(),
+            compaction,
             started_at: Some(Instant::now()),
             ..Default::default()
         };
@@ -432,7 +464,9 @@ async fn verify_recording_ready(
 
 fn finish_operation(app: &tauri::AppHandle, root: &Path, result: &Result<(), String>) {
     if result.is_ok() {
-        track_completed_migration(app, root);
+        let descriptor = StorageDescriptor::read(root).ok().flatten();
+        let compaction = compaction_requested(root, descriptor.as_ref()).unwrap_or(false);
+        track_completed_migration(app, root, compaction);
     }
     update_operation(app, |operation| {
         operation.elapsed_seconds = operation.activity().elapsed_seconds;
@@ -440,7 +474,13 @@ fn finish_operation(app: &tauri::AppHandle, root: &Path, result: &Result<(), Str
         operation.busy = false;
         operation.completed = result.is_ok();
         operation.error = result.as_ref().err().cloned();
-        operation.message = if operation.completed {
+        operation.message = if operation.compaction {
+            if operation.completed {
+                "Database compaction is complete. Your recording preference has been restored."
+            } else {
+                "Compaction needs attention. Resume it in Settings when ready."
+            }
+        } else if operation.completed {
             if app.state::<RecordingState>().capture_intended() {
                 "Your history has been migrated and recording has resumed."
             } else {
@@ -510,7 +550,9 @@ async fn finish_recovery_operation(
             .err()
             .cloned()
             .or_else(|| saved_migration_error(root));
-        operation.message = if result.is_ok() {
+        operation.message = if result.is_ok() && operation.compaction {
+            "Storage is ready for recording. Compaction can be resumed in Settings."
+        } else if result.is_ok() {
             "Storage is ready for recording. Migration remains paused."
         } else {
             "Recording recovery needs attention. Saved progress has been kept."
@@ -519,7 +561,7 @@ async fn finish_recovery_operation(
     });
 }
 
-fn track_completed_migration(app: &tauri::AppHandle, root: &Path) {
+fn track_completed_migration(app: &tauri::AppHandle, root: &Path, compaction: bool) {
     let Some(analytics) = app.try_state::<std::sync::Arc<crate::analytics::AnalyticsManager>>()
     else {
         return;
@@ -540,7 +582,11 @@ fn track_completed_migration(app: &tauri::AppHandle, root: &Path) {
     if migrated_db_bytes == 0 {
         return;
     }
-    let event = "storage_migration_completed";
+    let event = if compaction {
+        "storage_compaction_completed"
+    } else {
+        "storage_migration_completed"
+    };
     let properties = serde_json::json!({
         "$insert_id": format!("{event}:{}", report.generation),
         "original_db_bytes": original_db_bytes,
@@ -605,6 +651,7 @@ async fn storage_migration_status(
         .as_ref()
         .zip(report.as_ref())
         .is_some_and(|(d, r)| d.database_id == r.database_id && d.generation == r.generation);
+    let compaction = compaction_requested(&root, descriptor.as_ref())?;
     let pending = root.join("storage-migration.json").exists();
     let in_place = if pending {
         screenpipe_db::storage::migration_requires_resume(&root).map_err(|e| e.to_string())?
@@ -663,9 +710,20 @@ async fn storage_migration_status(
     };
     let can_migrate = !operation.busy
         && blocked_reason.is_none()
+        && !compaction
         && (pending
             || (!completed && descriptor.is_none() && source_bytes > 0)
             || (completed && needs_storage_activation(using_new_storage, error.as_deref())));
+    let can_compact = !operation.busy
+        && blocked_reason.is_none()
+        && completed
+        && in_place
+        && (compaction || (!pending && error.is_none()))
+        && (using_new_storage == Some(true) || compaction)
+        && (report
+            .as_ref()
+            .is_some_and(|r| !r.all_eligible_payloads_archived)
+            || (compaction && (pending || error.is_some())));
     Ok(StorageMigrationStatus {
         root: root.display().to_string(),
         app_session_id: APP_SESSION_ID.clone(),
@@ -693,6 +751,8 @@ async fn storage_migration_status(
             .or(operation.bytes_saved),
         available_bytes: fs2::available_space(&root).ok(),
         can_migrate,
+        can_compact,
+        compaction,
         can_cancel: !operation.busy
             && !in_place
             && blocked_reason.is_none()
@@ -715,7 +775,18 @@ pub async fn start_storage_migration(
     recording: State<'_, RecordingState>,
     root: String,
 ) -> Result<(), String> {
-    start_storage_migration_inner(app, recording, root, false).await
+    start_storage_migration_inner(app, recording, root, false, false).await
+}
+
+/// Offered only by Settings after an older migration has completed.
+#[tauri::command]
+#[specta::specta]
+pub async fn start_storage_compaction(
+    app: tauri::AppHandle,
+    recording: State<'_, RecordingState>,
+    root: String,
+) -> Result<(), String> {
+    start_storage_migration_inner(app, recording, root, false, true).await
 }
 
 async fn acquire_migration_lifecycle(
@@ -739,6 +810,7 @@ async fn start_storage_migration_inner(
     recording: State<'_, RecordingState>,
     root: String,
     background: bool,
+    compaction: bool,
 ) -> Result<(), String> {
     require_selected_root(&app, &root)?;
     let Some(lifecycle) =
@@ -774,7 +846,11 @@ async fn start_storage_migration_inner(
         ) {
             return Ok(());
         }
-    } else if !status.can_migrate {
+    } else if !(if compaction {
+        status.can_compact
+    } else {
+        status.can_migrate
+    }) {
         if status.completed
             && status.using_new_storage
             && !status.pending
@@ -788,6 +864,16 @@ async fn start_storage_migration_inner(
             .blocked_reason
             .unwrap_or_else(|| "Migration is unavailable in the current storage state.".into()));
     }
+    if compaction {
+        // Retain the operation's identity across failures, recovery and restart.
+        // Its result and retry must remain in Settings, never the Home prompt.
+        let generation = status
+            .generation
+            .as_deref()
+            .ok_or("Migrated storage is unavailable.")?;
+        crate::store::durable_write(&root.join(COMPACTION_REQUEST_FILE), generation.as_bytes())
+            .map_err(|e| format!("Could not save the compaction request: {e}"))?;
+    }
     // Independent of the recording preference, which startup reapplies during switchover.
     // Acquire before pausing so a failed wake lock never strands recording.
     let awake = screenpipe_engine::power::KeepAwakeGuard::acquire_async()
@@ -800,7 +886,15 @@ async fn start_storage_migration_inner(
         })?;
     // Write BEFORE pausing recording. A crash, kill, or failed error write must
     // never erase the block and let the next launch pause recording again.
-    save_migration_error(&root, INTERRUPTED_MIGRATION).map_err(|error| {
+    save_migration_error(
+        &root,
+        if compaction {
+            INTERRUPTED_COMPACTION
+        } else {
+            INTERRUPTED_MIGRATION
+        },
+    )
+    .map_err(|error| {
         report_migration_failure(&app, &root, &error);
         error
     })?;
@@ -820,6 +914,7 @@ async fn start_storage_migration_inner(
             .into(),
             started_at: Some(Instant::now()),
             background,
+            compaction,
             ..Default::default()
         };
     });
@@ -837,7 +932,16 @@ async fn start_storage_migration_inner(
             if !background || !status.can_delete_source {
                 screenpipe_db::storage::diagnostics::stage("pausing_recording");
                 crate::recording::stop_screenpipe_inner(&recording).await?;
-                if !status.completed || status.pending {
+                if compaction {
+                    screenpipe_db::storage::compact_migrated_storage_with_progress(
+                        &root,
+                        Default::default(),
+                        Default::default(),
+                        |message| progress(&app, message),
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                } else if !status.completed || status.pending {
                     screenpipe_db::storage::migrate_with_progress(
                         &root,
                         Default::default(),
@@ -900,7 +1004,11 @@ async fn start_storage_migration_inner(
         };
         let mut result = screenpipe_db::storage::diagnostics::observe(
             &root,
-            "conversion",
+            if compaction {
+                "compaction"
+            } else {
+                "conversion"
+            },
             move |event, snapshot| track_migration_diagnostic(&telemetry_app, event, snapshot),
             migration,
         )
@@ -1252,6 +1360,8 @@ mod tests {
             bytes_saved: None,
             available_bytes: None,
             can_migrate: true,
+            can_compact: false,
+            compaction: false,
             can_cancel: false,
             can_delete_source: false,
             blocked_reason: None,
@@ -1305,6 +1415,59 @@ mod tests {
             &resumed, true, true, true
         ));
         assert!(resumed.can_migrate);
+    }
+
+    #[test]
+    fn completed_migration_compaction_is_never_automatic() {
+        let status = StorageMigrationStatus {
+            using_new_storage: true,
+            completed: true,
+            can_migrate: false,
+            can_compact: true,
+            ..legacy_status()
+        };
+        assert!(!should_start_hidden_ui_migration(&status, true, true, true));
+        let retry = StorageMigrationStatus {
+            compaction: true,
+            pending: true,
+            ..status
+        };
+        assert!(!should_start_hidden_ui_migration(&retry, true, true, true));
+        let operation = Operation {
+            completed: true,
+            compaction: true,
+            ..Default::default()
+        };
+        assert!(
+            !operation.activity().completed,
+            "compaction must not reopen the Home success prompt"
+        );
+    }
+
+    #[tokio::test]
+    async fn compaction_request_survives_restart_and_is_bound_to_the_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let db = screenpipe_db::DatabaseManager::new(
+            root.path().join("db.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        db.close().await;
+        screenpipe_db::storage::migrate(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap();
+        let mut descriptor = StorageDescriptor::read(root.path()).unwrap().unwrap();
+        assert!(!compaction_requested(root.path(), Some(&descriptor)).unwrap());
+        crate::store::durable_write(
+            &root.path().join(COMPACTION_REQUEST_FILE),
+            descriptor.generation.as_bytes(),
+        )
+        .unwrap();
+        // No in-memory Operation is needed to route retries after a new launch.
+        assert!(compaction_requested(root.path(), Some(&descriptor)).unwrap());
+        descriptor.generation = "other-generation".into();
+        assert!(!compaction_requested(root.path(), Some(&descriptor)).unwrap());
     }
 
     #[test]

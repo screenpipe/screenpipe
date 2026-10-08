@@ -1090,6 +1090,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn incomplete_payload_migration_reaches_support_after_log_rotation_and_redaction() {
+        use screenpipe_db::{storage, DatabaseManager};
+        for compaction in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let source = root.path().join("db.sqlite");
+            let db = DatabaseManager::new(source.to_str().unwrap(), Default::default())
+                .await
+                .unwrap();
+            db.execute_raw_sql_write(
+            "INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-09-19','private history')",
+        )
+        .await
+        .unwrap();
+            db.close().await;
+            let report = storage::migrate(root.path(), Default::default(), Default::default())
+                .await
+                .unwrap();
+            let descriptor = storage::StorageDescriptor::read(root.path())
+                .unwrap()
+                .unwrap();
+            let db = DatabaseManager::new(source.to_str().unwrap(), Default::default())
+                .await
+                .unwrap();
+            db.execute_raw_sql_write("INSERT INTO frames(id,timestamp,full_text) VALUES(2,'2026-09-19','private history left resident')").await.unwrap();
+            db.close().await;
+            // Even a prematurely committed conversion marker cannot produce a
+            // successful receipt while an eligible payload remains in SQLite.
+            if !compaction {
+                std::fs::remove_file(root.path().join("storage-migration-complete.json")).unwrap();
+            } else {
+                let mut older_report = report.clone();
+                older_report.all_eligible_payloads_archived = false;
+                std::fs::write(
+                    root.path().join("storage-migration-complete.json"),
+                    serde_json::to_vec(&older_report).unwrap(),
+                )
+                .unwrap();
+            }
+            std::fs::write(
+            root.path().join("storage-migration.json"),
+            serde_json::to_vec(&json!({
+                "format": 2, "compaction": compaction, "phase": "building", "descriptor": descriptor,
+                "source": report.tables, "snapshot": null, "report": null
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+            let result = if compaction {
+                storage::compact_migrated_storage_with_progress(
+                    root.path(),
+                    Default::default(),
+                    Default::default(),
+                    |_| {},
+                )
+                .await
+            } else {
+                storage::migrate(root.path(), Default::default(), Default::default()).await
+            };
+            let error = result.unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("migration incomplete: 1 eligible frames records"));
+            assert_eq!(
+                root.path().join("storage-migration-complete.json").exists(),
+                compaction
+            );
+            assert_migration_failure_uploaded(
+                root.path(),
+                &[
+                    if compaction {
+                        "\"kind\": \"compaction\""
+                    } else {
+                        "\"kind\": \"conversion\""
+                    },
+                    "verifying_no_eligible_resident_payloads",
+                    "migration incomplete: 1 eligible frames records",
+                    "remain in SQLite",
+                    "\"status\": \"failed\"",
+                    "\"table\": \"frames\"",
+                    "\"batch_bytes\": 29",
+                ],
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
     async fn migration_conflict_reaches_support_after_log_rotation_and_redaction() {
         use screenpipe_db::{storage, DatabaseManager};
         const RESTART_ROOT: &str = "SCREENPIPE_TEST_MIGRATION_REPORT_ROOT";

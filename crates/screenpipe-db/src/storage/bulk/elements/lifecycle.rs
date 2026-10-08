@@ -75,7 +75,7 @@ pub(crate) async fn seal_after(
         let lower = after.map_or_else(|| "1".to_owned(), |id| format!("id>{id}"));
         let id: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT id FROM _bulk_element_rows WHERE _archive_deleted=0 AND {lower} AND ({}) ORDER BY id LIMIT 1",
-            TABLE.sealable()
+            TABLE.sealable(storage.archive_record_limit())
         )))
         .fetch_optional(pool)
         .await?;
@@ -83,7 +83,7 @@ pub(crate) async fn seal_after(
         let range: Option<(i64, i64, i64)> = sqlx::query_as("SELECT first_id,last_id,file_id FROM _bulk_element_ranges WHERE first_id=(SELECT max(first_id) FROM _bulk_element_ranges WHERE first_id<=?1) AND last_id>=?1")
             .bind(id).fetch_optional(pool).await?;
         if let Some((first, last, _)) = range {
-            if range_blocked(pool, first, last).await? {
+            if range_blocked(storage, pool, first, last).await? {
                 after = Some(last);
                 continue;
             }
@@ -94,10 +94,15 @@ pub(crate) async fn seal_after(
     }
 }
 
-async fn range_blocked(pool: &SqlitePool, first: i64, last: i64) -> Result<bool, sqlx::Error> {
+async fn range_blocked(
+    storage: &HybridStorage,
+    pool: &SqlitePool,
+    first: i64,
+    last: i64,
+) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT EXISTS(SELECT 1 FROM elements WHERE id BETWEEN ? AND ? AND NOT ({}))",
-        TABLE.sealable()
+        TABLE.sealable(storage.archive_record_limit())
     )))
     .bind(first)
     .bind(last)
@@ -110,12 +115,7 @@ async fn encode(
     writer: &SqliteWritePool,
     rows: Vec<Record>,
 ) -> Result<Encoded, sqlx::Error> {
-    if fs2::available_space(&storage.root)?
-        < storage.descriptor.budget.disk_reserve_bytes
-            + storage.descriptor.budget.file_bytes as u64 * 2
-    {
-        return Err(storage_error("element temporary disk reserve reached"));
-    }
+    storage.reserve_archive(rows.iter().map(Record::bytes).sum())?;
     let relative = storage
         .descriptor
         .payloads
@@ -221,7 +221,7 @@ async fn rewrite(
             .fetch_one(pool)
             .await?;
     let (first, last) = if let Some((first, last, _)) = range {
-        if range_blocked(pool, first, last).await? {
+        if range_blocked(storage, pool, first, last).await? {
             return Ok((0, None));
         }
         (first, last)
@@ -274,9 +274,9 @@ async fn rewrite(
             let size = usize::try_from(size).map_err(storage_error)?;
             // End the range before a retained record so future rewrites never
             // need to decode that record or remove its SQLite contents.
-            if size > storage.descriptor.budget.record_bytes
+            if size > storage.archive_record_limit()
                 || (!ids.is_empty()
-                    && bytes.saturating_add(size) > storage.descriptor.budget.file_bytes)
+                    && bytes.saturating_add(size) > storage.descriptor.budget.archive_batch_bytes())
             {
                 break;
             }
@@ -290,6 +290,7 @@ async fn rewrite(
             Some(ids.len() as u64),
             Some(bytes as u64),
         );
+        storage.reserve_archive(bytes)?;
         crate::storage::diagnostics::stage("reading_elements_to_seal");
         let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id,_archive_generation,{} FROM {source} WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id", names()
@@ -334,7 +335,8 @@ async fn rewrite(
     // generations, including tombstones and newly eligible gap inserts.
     let valid = current_policy == policy
         && (current == version
-            || resident_range_unchanged(&mut tx, first, last, &files, range.is_some()).await?);
+            || resident_range_unchanged(storage, &mut tx, first, last, &files, range.is_some())
+                .await?);
     if !valid {
         for file in files {
             sqlx::query("UPDATE _bulk_files SET state='retired' WHERE id=?")
@@ -348,7 +350,10 @@ async fn rewrite(
     let selection = if range.is_some() {
         "1".into()
     } else {
-        format!("_archive_deleted=1 OR ({})", TABLE.sealable())
+        format!(
+            "_archive_deleted=1 OR ({})",
+            TABLE.sealable(storage.archive_record_limit())
+        )
     };
     let freed:i64=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COALESCE(SUM({}),0) FROM _bulk_element_rows WHERE id BETWEEN ? AND ? AND ({selection})",TABLE.all_bytes("")))).bind(first).bind(last).fetch_one(&mut *tx).await?;
     sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -400,6 +405,7 @@ async fn rewrite(
 }
 
 async fn resident_range_unchanged(
+    storage: &HybridStorage,
     conn: &mut sqlx::SqliteConnection,
     first: i64,
     last: i64,
@@ -408,7 +414,7 @@ async fn resident_range_unchanged(
 ) -> Result<bool, sqlx::Error> {
     let mut rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT id,_archive_generation,_archive_deleted,({}) AS sealable FROM _bulk_element_rows WHERE id BETWEEN ? AND ? ORDER BY id",
-        TABLE.sealable()
+        TABLE.sealable(storage.archive_record_limit())
     )))
     .bind(first).bind(last).fetch(&mut *conn);
     while let Some(row) = rows.try_next().await? {

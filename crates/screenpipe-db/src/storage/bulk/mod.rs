@@ -111,9 +111,9 @@ pub(super) static TABLES: &[Table] = &[
 
 impl Table {
     // An encoder bound selects work; it cannot reject valid resident history.
-    fn sealable(&self) -> String {
+    fn sealable(&self, record_limit: usize) -> String {
         format!(
-            "({}) AND ({})<=(SELECT record_limit FROM storage_metadata)",
+            "({}) AND ({})<={record_limit}",
             self.eligible,
             self.all_bytes("")
         )
@@ -146,7 +146,7 @@ impl Table {
             .collect::<Vec<_>>()
             .join("+")
     }
-    fn all_bytes(&self, prefix: &str) -> String {
+    pub(in crate::storage) fn all_bytes(&self, prefix: &str) -> String {
         self.columns
             .iter()
             .map(|c| c.bytes(prefix))
