@@ -197,7 +197,10 @@ async fn native_point(
         .send()
         .await
         .map_err(|_| VerificationError::Unavailable("Native chat verification unavailable"))?;
-    if response.status().is_server_error() {
+    if response.status().is_server_error()
+        || response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || response.status() == reqwest::StatusCode::REQUEST_TIMEOUT
+    {
         return Err(VerificationError::Unavailable(
             "Native chat verification unavailable",
         ));

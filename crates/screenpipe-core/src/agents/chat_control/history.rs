@@ -99,11 +99,18 @@ pub fn citation(value: &str) -> Result<(Source, String, usize), String> {
     ))
 }
 fn files(source: Source) -> Result<Vec<PathBuf>, String> {
-    match source {
-        Source::Claude => Ok(collect_jsonl_files(&home_dir()?.join(".claude/projects"))),
-        Source::Codex => Ok(codex_session_files()),
-        Source::Hermes => Ok(vec![]),
-    }
+    let root = match source {
+        Source::Claude => home_dir()?.join(".claude/projects"),
+        Source::Codex => home_dir()?.join(".codex/sessions"),
+        Source::Hermes => return Ok(vec![]),
+    };
+    fs::read_dir(&root)
+        .map_err(|_| format!("{} history directory is unavailable", source.label()))?;
+    Ok(if source == Source::Codex {
+        codex_session_files()
+    } else {
+        collect_jsonl_files(&root)
+    })
 }
 fn summary(source: Source, path: &Path) -> Result<(ChatSearchResult, String), String> {
     match source {
