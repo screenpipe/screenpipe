@@ -129,7 +129,10 @@ pub async fn handle_new_transcript(
         {
             // Sharing words is not sharing audio. Require valid intervals in
             // capture order with a real overlap, even for segments in one file.
-            let overlaps = current_start.is_finite()
+            let overlaps = previous_start.is_finite()
+                && previous_end.is_finite()
+                && previous_end > previous_start
+                && current_start.is_finite()
                 && current_end.is_finite()
                 && current_end > current_start
                 && current_start >= *previous_start

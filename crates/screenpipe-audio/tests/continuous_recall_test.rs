@@ -228,3 +228,145 @@ async fn later_segments_of_one_chunk_do_not_overlap_earlier_segments() {
         original
     );
 }
+
+// A labeled evaluation against the production handler and paginated DB search.
+// Both retain and suppress controls are needed: keeping everything would pass
+// retention-only tests but regress genuine overlap removal.
+#[tokio::test]
+async fn boundary_retention_and_echo_eval_matrix() {
+    let prior = "Send the complete proposal tomorrow.";
+    let next = "the complete proposal tomorrow. Include the appendix.";
+    let novel = "Include the appendix.";
+    let cases = [
+        ("true_overlap", (0, 0.0, 20.0), (15, 0.0, 20.0), novel),
+        ("adjacent_chunks", (0, 0.0, 20.0), (20, 0.0, 20.0), next),
+        ("separated_chunks", (0, 0.0, 20.0), (60, 0.0, 20.0), next),
+        ("out_of_order", (30, 0.0, 20.0), (0, 0.0, 20.0), next),
+        ("same_file_overlap", (0, 0.0, 20.0), (0, 15.0, 30.0), novel),
+        ("same_file_adjacent", (0, 0.0, 15.0), (0, 15.0, 30.0), next),
+        ("same_file_gap", (0, 0.0, 10.0), (0, 15.0, 30.0), next),
+        ("unknown_current_end", (0, 0.0, 20.0), (15, 0.0, 0.0), next),
+        ("reversed_current", (0, 0.0, 20.0), (15, 5.0, 1.0), next),
+        (
+            "nonfinite_current",
+            (0, 0.0, 20.0),
+            (15, 0.0, f64::INFINITY),
+            next,
+        ),
+        (
+            "nonfinite_previous",
+            (0, 0.0, f64::INFINITY),
+            (60, 0.0, 20.0),
+            next,
+        ),
+        (
+            "negative_infinite_previous_start",
+            (0, f64::NEG_INFINITY, 20.0),
+            (15, 0.0, 20.0),
+            next,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (name, first_window, second_window, expected_second) in cases {
+        let actual = replay_windows(&[prior, next], &[first_window, second_window]).await;
+        let mut expected = vec![prior, expected_second];
+        if first_window.0 > second_window.0 {
+            expected.reverse();
+        }
+        let passed = actual == expected;
+        eprintln!(
+            "RECALL_EVAL {}",
+            serde_json::json!({
+                "case": name, "passed": passed, "expected": expected, "actual": actual
+            })
+        );
+        if !passed {
+            failures.push(name);
+        }
+    }
+    assert!(failures.is_empty(), "boundary eval failures: {failures:?}");
+}
+
+#[tokio::test]
+async fn vocabulary_retention_and_echo_eval_matrix() {
+    let cases: &[(&str, &str, &str, &str)] = &[
+        (
+            "one_common_word",
+            "Order chairs tomorrow.",
+            "tomorrow. Buy desks.",
+            "tomorrow. Buy desks.",
+        ),
+        (
+            "two_common_words",
+            "Please order chairs tomorrow.",
+            "chairs tomorrow. Buy desks.",
+            "chairs tomorrow. Buy desks.",
+        ),
+        (
+            "three_boundary_words",
+            "Please order chairs tomorrow.",
+            "order chairs tomorrow. Buy desks.",
+            "Buy desks.",
+        ),
+        (
+            "case_only_echo",
+            "Please order chairs tomorrow.",
+            "ORDER CHAIRS TOMORROW. Buy desks.",
+            "Buy desks.",
+        ),
+        (
+            "changed_number",
+            "Order exactly twelve chairs tomorrow.",
+            "Order exactly twenty chairs tomorrow.",
+            "Order exactly twenty chairs tomorrow.",
+        ),
+        (
+            "negation",
+            "Please approve the payment.",
+            "Please do not approve the payment.",
+            "Please do not approve the payment.",
+        ),
+        (
+            "word_order",
+            "Please ship from London to Paris.",
+            "Please ship from Paris to London.",
+            "Please ship from Paris to London.",
+        ),
+        (
+            "interior_phrase",
+            "We need twelve chairs for the workshop.",
+            "We need twenty desks for the office.",
+            "We need twenty desks for the office.",
+        ),
+        (
+            "punctuation_mismatch_kept",
+            "Please order chairs tomorrow.",
+            "order chairs tomorrow! Buy desks.",
+            "order chairs tomorrow! Buy desks.",
+        ),
+        (
+            "non_latin_exact_echo",
+            "明日 会議 の 準備 を お願いします。",
+            "準備 を お願いします。 資料 も 必要です。",
+            "資料 も 必要です。",
+        ),
+    ];
+    let mut failures = Vec::new();
+    for &(name, prior, next, expected_second) in cases {
+        let actual = replay_windows(&[prior, next], &[(0, 0.0, 20.0), (15, 0.0, 20.0)]).await;
+        let passed = actual == [prior, expected_second];
+        eprintln!(
+            "RECALL_EVAL {}",
+            serde_json::json!({
+                "case": name, "passed": passed, "expected": [prior, expected_second], "actual": actual
+            })
+        );
+        if !passed {
+            failures.push(name);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "vocabulary eval failures: {failures:?}"
+    );
+}

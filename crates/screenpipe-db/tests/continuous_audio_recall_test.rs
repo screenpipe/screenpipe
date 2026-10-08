@@ -399,3 +399,175 @@ async fn measure_continuous_transcript_insert_latency() {
         micros[990]
     );
 }
+
+#[tokio::test]
+async fn cross_device_retention_and_echo_eval_matrix() {
+    // Both public insertion routes must make the same retention decision.
+    let cases = [
+        (
+            "exact_echo",
+            "Send the complete proposal tomorrow.",
+            "Send the complete proposal tomorrow.",
+            true,
+            0,
+            1,
+        ),
+        (
+            "case_punctuation_echo",
+            "Send the complete proposal tomorrow.",
+            "SEND THE COMPLETE PROPOSAL TOMORROW!",
+            true,
+            0,
+            1,
+        ),
+        (
+            "whitespace_echo",
+            "Send the complete proposal tomorrow.",
+            "Send  the complete proposal tomorrow.",
+            true,
+            0,
+            1,
+        ),
+        (
+            "same_device_repetition",
+            "Send the complete proposal tomorrow.",
+            "Send the complete proposal tomorrow.",
+            false,
+            0,
+            2,
+        ),
+        (
+            "old_unrelated_speech",
+            "Send the complete proposal tomorrow.",
+            "Send the complete proposal tomorrow.",
+            true,
+            -3600,
+            2,
+        ),
+        (
+            "future_unrelated_speech",
+            "Send the complete proposal tomorrow.",
+            "Send the complete proposal tomorrow.",
+            true,
+            3600,
+            2,
+        ),
+        (
+            "changed_number",
+            "Order exactly 12 chairs tomorrow.",
+            "Order exactly 20 chairs tomorrow.",
+            true,
+            0,
+            2,
+        ),
+        (
+            "changed_decimal",
+            "The adjustment is -12.5 dollars.",
+            "The adjustment is -125 dollars.",
+            true,
+            0,
+            2,
+        ),
+        (
+            "changed_sign",
+            "The adjustment is -12.5 dollars.",
+            "The adjustment is +12.5 dollars.",
+            true,
+            0,
+            2,
+        ),
+        (
+            "added_negation",
+            "Please approve the payment.",
+            "Please do not approve the payment.",
+            true,
+            0,
+            2,
+        ),
+        (
+            "extra_detail",
+            "Send the proposal tomorrow.",
+            "Send the proposal tomorrow. Include the appendix.",
+            true,
+            0,
+            2,
+        ),
+        (
+            "word_order",
+            "Please ship from London to Paris.",
+            "Please ship from Paris to London.",
+            true,
+            0,
+            2,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for combined in [false, true] {
+        for (name, first, second, other_direction, delay, expected) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let db = DatabaseManager::new(
+                dir.path().join("eval.sqlite").to_str().unwrap(),
+                Default::default(),
+            )
+            .await
+            .unwrap();
+            let base = Utc::now() - chrono::Duration::hours(2);
+            for (i, text) in [first, second].iter().enumerate() {
+                // Same hardware name can expose both input and output streams.
+                let device = AudioDevice {
+                    name: "Synthetic duplex device".into(),
+                    device_type: if i == 1 && other_direction {
+                        DeviceType::Output
+                    } else {
+                        DeviceType::Input
+                    },
+                };
+                let at = base + chrono::Duration::seconds(if i == 0 { 0 } else { delay });
+                let file = format!("chunk-{i}.mp4");
+                if combined {
+                    db.insert_audio_chunk_and_transcription(
+                        &file,
+                        text,
+                        0,
+                        "fixture",
+                        &device,
+                        None,
+                        Some(0.0),
+                        Some(5.0),
+                        Some(at),
+                    )
+                    .await
+                    .unwrap();
+                } else {
+                    let chunk = db.insert_audio_chunk(&file, Some(at)).await.unwrap();
+                    db.insert_audio_transcription(
+                        chunk,
+                        text,
+                        0,
+                        "fixture",
+                        &device,
+                        None,
+                        Some(0.0),
+                        Some(5.0),
+                        Some(at),
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
+            let actual: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audio_transcriptions")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+            let passed = actual == expected;
+            eprintln!("DB_RECALL_EVAL {{\"case\":\"{name}\",\"combined\":{combined},\"passed\":{passed},\"expected_rows\":{expected},\"actual_rows\":{actual}}}");
+            if !passed {
+                failures.push(format!("{name}/combined={combined}"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "cross-device eval failures: {failures:?}"
+    );
+}
