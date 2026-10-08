@@ -1105,14 +1105,6 @@ impl SCServer {
         // Build the main router with all routes
         let router = Router::new()
             .merge(server.into_router())
-            .route(
-                "/agent/chat-history/search",
-                axum::routing::get(crate::chat_history::search),
-            )
-            .route(
-                "/agent/chat-history/read",
-                axum::routing::get(crate::chat_history::read),
-            )
             // Agent self-improvement lives behind one validated local API so
             // native Pi and ACP share profile safety, prompt rendering, skill
             // provenance, optimistic concurrency, and bundled protection.

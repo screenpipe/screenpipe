@@ -748,8 +748,7 @@ fn meeting_summary_evidence_steps() -> Option<&'static str> {
 }
 
 /// Upgrade only recognized shipped staged-workflow instruction bodies.
-/// Preserve user configuration and add only the two native-history read grants
-/// for recognized workflow-miner bodies. Final review uses
+/// Keep frontmatter byte-for-byte for enrichment stages. Final review uses
 /// its existing permission migration below. Preserve disabled state and custom
 /// schedules; upgrade the shipped daily discovery default to hourly.
 /// Customized instructions are never overwritten. Hashes cover
@@ -757,31 +756,16 @@ fn meeting_summary_evidence_steps() -> Option<&'static str> {
 fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> {
     let shipped_hashes: &[&str] = match name {
         // v2.7.56: retain observed knowledge work while repairing unsupported outcomes.
-        "workflow-discover" => &[
-            "c26b8f82a0acbaab",
-            // Native history and native-chat research instructions for existing installs.
-            "eff1a9452fd99dd9",
-            "672653afb18886a6",
-            "d4d8181286615282",
-            "c68d5744f8a33504",
-        ],
+        "workflow-discover" => &["d4d8181286615282", "c68d5744f8a33504"],
         // Upgrade the shipped knowledge-work prompts too; otherwise existing
         // tasks never receive the observed-scope repair in a new app build.
         "workflow-deepen" => &[
-            "3630640776a0eb7c",
-            // Native history and native-chat research instructions for existing installs.
-            "621e5a8c003ddcc2",
-            "a8c1d6f536dd17e5",
             "45c67de30edcc651",
             "b278bd6a8abcfc77",
             "996ff7f9a6026e05",
             "cf31ccaa932b7784",
         ],
         "workflow-review" => &[
-            "4422082c16aa2862",
-            // Native history and native-chat research instructions for existing installs.
-            "e37a7bd572729618",
-            "5211cba1af0de07f",
             "6512c73c08db5ceb",
             "ac29fac407670584",
             "182e0b733f5c2bce",
@@ -790,10 +774,6 @@ fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> 
             "09a0ab9de50d94ff",
         ],
         "workflow-maintain" => &[
-            "2437a8e1197c3ea7",
-            // Native history and native-chat research instructions for existing installs.
-            "73bda92bb418e095",
-            "f6e72eb88785ea2a",
             "6e11baeed08afb5e",
             "a769acb2f48eb6c3",
             "3fd301c337d95126",
@@ -829,39 +809,11 @@ fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> 
     }
     // Upgrade only the shipped daily discovery cadence. Keep explicit custom
     // schedules, disabled state and customized prompt bodies unchanged.
-    let mut frontmatter = if name == "workflow-discover" {
+    let frontmatter = if name == "workflow-discover" {
         parts[1].replace("\nschedule: every 24h\n", "\nschedule: every 1h\n")
     } else {
         parts[1].to_owned()
     };
-    // Only a recognized older body gains the new capability. If an owner
-    // removes a grant after upgrading, a later restart must not put it back.
-    if body != replacement
-        && matches!(
-            name,
-            "workflow-discover" | "workflow-deepen" | "workflow-review" | "workflow-maintain"
-        )
-    {
-        let mut config: serde_yaml::Value = serde_yaml::from_str(&frontmatter).ok()?;
-        let allow = config
-            .get_mut("permissions")?
-            .get_mut("allow")?
-            .as_sequence_mut()?;
-        let mut changed = false;
-        for rule in [
-            "Api(GET /agent/chat-history/search)",
-            "Api(GET /agent/chat-history/read)",
-        ] {
-            let grant = serde_yaml::Value::String(rule.into());
-            if !allow.contains(&grant) {
-                allow.push(grant);
-                changed = true;
-            }
-        }
-        if changed {
-            frontmatter = format!("\n{}", serde_yaml::to_string(&config).ok()?);
-        }
-    }
     if body == replacement && frontmatter == parts[1] {
         return None;
     }
@@ -1041,10 +993,6 @@ mod tests {
     #[test]
     fn all_staged_workflow_prompts_upgrade_without_changing_user_configuration() {
         let fixtures = [
-            ("workflow-discover", include_str!("../../assets/pipes/legacy-workflow-prompts/before-agent-readiness-workflow-discover.md")),
-            ("workflow-deepen", include_str!("../../assets/pipes/legacy-workflow-prompts/before-agent-readiness-workflow-deepen.md")),
-            ("workflow-review", include_str!("../../assets/pipes/legacy-workflow-prompts/before-agent-readiness-workflow-review.md")),
-            ("workflow-maintain", include_str!("../../assets/pipes/legacy-workflow-prompts/before-agent-readiness-workflow-maintain.md")),
             ("workflow-discover", include_str!("../../assets/pipes/legacy-workflow-prompts/before-research-checkpoints-workflow-discover.md")),
             ("workflow-deepen", include_str!("../../assets/pipes/legacy-workflow-prompts/before-research-checkpoints-workflow-deepen.md")),
             ("workflow-maintain", include_str!("../../assets/pipes/legacy-workflow-prompts/before-research-checkpoints-workflow-maintain.md")),
@@ -1102,31 +1050,6 @@ mod tests {
                     serde_yaml::from_str(original.splitn(3, "---").nth(1).unwrap()).unwrap();
                 let updated_config: serde_yaml::Value =
                     serde_yaml::from_str(updated.splitn(3, "---").nth(1).unwrap()).unwrap();
-                if matches!(
-                    name,
-                    "workflow-discover"
-                        | "workflow-deepen"
-                        | "workflow-review"
-                        | "workflow-maintain"
-                ) {
-                    let allow = updated_config["permissions"]["allow"]
-                        .as_sequence()
-                        .unwrap();
-                    for rule in [
-                        "Api(GET /agent/chat-history/search)",
-                        "Api(GET /agent/chat-history/read)",
-                    ] {
-                        assert!(
-                            allow.contains(&serde_yaml::Value::String(rule.into())),
-                            "{name} history access"
-                        );
-                    }
-                    assert_eq!(
-                        original_config["permissions"]["deny"],
-                        updated_config["permissions"]["deny"]
-                    );
-                    assert!(updated.contains("Use local_chat_history"));
-                }
                 for key in ["enabled", "schedule", "model", "timeout", "trigger"] {
                     assert_eq!(original_config[key], updated_config[key], "{name} {key}");
                 }
@@ -1154,30 +1077,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn native_history_upgrade_preserves_denials_and_later_permission_removal() {
-        let old = include_str!(
-            "../../assets/pipes/legacy-workflow-prompts/before-agent-readiness-workflow-review.md"
-        );
-        let original = old.replace(
-            "permissions:\n",
-            "permissions:\n  deny:\n    - Api(GET /agent/chat-history/read)\n",
-        );
-        let updated = super::migrate_builtin_pipe_text("workflow-review", &original).unwrap();
-        let config: serde_yaml::Value =
-            serde_yaml::from_str(updated.splitn(3, "---").nth(1).unwrap()).unwrap();
-        assert_eq!(
-            config["permissions"]["deny"][0].as_str(),
-            Some("Api(GET /agent/chat-history/read)")
-        );
-        // An owner can subsequently remove the capability from the current template.
-        let current = super::bundled_prompt("workflow-review")
-            .unwrap()
-            .replace("    - Api(GET /agent/chat-history/search)\n", "")
-            .replace("    - Api(GET /agent/chat-history/read)\n", "");
-        assert!(super::migrate_builtin_pipe_text("workflow-review", &current).is_none());
     }
 
     #[test]

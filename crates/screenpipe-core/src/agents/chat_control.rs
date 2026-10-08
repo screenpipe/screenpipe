@@ -8,8 +8,6 @@
 //! agent-to-host protocol live here. The desktop app implements only the
 //! [`ScreenpipeChatHost`] adapter because it owns the live Pi process pool.
 
-pub mod history;
-
 use async_trait::async_trait;
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};

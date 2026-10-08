@@ -108,7 +108,6 @@ export type WorkflowStage = {
   screenshot?: WorkflowScreenshot | null;
   screenshots?: WorkflowScreenshot[];
   procedure?: Array<{
-    source?: string | null;
     userEdited?: boolean;
     kind: "action" | "input" | "output" | "decision" | "check";
     text: string;

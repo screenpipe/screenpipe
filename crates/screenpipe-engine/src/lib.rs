@@ -43,7 +43,6 @@ pub mod auth_key;
 mod auto_destruct;
 pub mod calendar_speaker_id;
 mod capture_exclusions;
-mod chat_history;
 pub mod cli;
 pub mod cli_reminder;
 pub mod cloud_search;

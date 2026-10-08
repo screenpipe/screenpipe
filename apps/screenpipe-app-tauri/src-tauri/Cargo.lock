@@ -11572,7 +11572,6 @@ dependencies = [
  "rand 0.9.2",
  "regex",
  "reqwest 0.13.4",
- "rusqlite",
  "screenpipe-cpu-features",
  "screenpipe-events",
  "screenpipe-fs",

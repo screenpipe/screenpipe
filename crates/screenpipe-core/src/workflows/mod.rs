@@ -343,11 +343,6 @@ pub fn clean_evidence(value: &Value, limit: usize, catalog: &EvidenceCatalog) ->
                 .with_timezone(&Utc);
             let requested_app = non_empty_string(item, "app").unwrap_or_default();
             let point = catalog.resolve(timestamp, &requested_app)?;
-            if point.source.starts_with("chat:")
-                && item.get("source").and_then(Value::as_str) != Some(point.source.as_str())
-            {
-                return None;
-            }
             let timestamp = point.timestamp.to_rfc3339();
             let key = format!("{}|{}", timestamp, point.app.to_lowercase());
             seen.insert(key).then_some(json!({
@@ -515,7 +510,6 @@ pub fn normalize_procedure(stage: &Value, evidence: &[Value]) -> Vec<Value> {
                         .get("app")
                         .and_then(Value::as_str)
                         .is_some_and(|name| name.eq_ignore_ascii_case(app))
-                    && (!source["source"].as_str().is_some_and(|s| s.starts_with("chat:")) || detail["source"] == source["source"])
                     && !matches!(
                         source.get("source").and_then(Value::as_str),
                         Some("audio" | "meeting")
@@ -527,7 +521,7 @@ pub fn normalize_procedure(stage: &Value, evidence: &[Value]) -> Vec<Value> {
             })?;
             Some(
                 json!({"kind": kind, "text": text.chars().take(800).collect::<String>(),
-                "quote": quote, "timestamp": source["timestamp"], "app": source["app"], "source": source["source"]}),
+                "quote": quote, "timestamp": source["timestamp"], "app": source["app"]}),
             )
         })
         .take(12)
@@ -1595,23 +1589,6 @@ pub mod timing;
 #[cfg(test)]
 mod quote_tests {
     use super::*;
-
-    #[test]
-    fn native_procedure_requires_the_exact_message_identity_and_quote() {
-        let evidence = vec![
-            json!({"timestamp":"2026-10-01T10:00:00Z","app":"Codex","detail":"Compare original sources.","source":"chat:codex:session:52"}),
-        ];
-        let mut stage = json!({"procedure":[{"kind":"action","text":"Compare sources","quote":"Compare original sources.","timestamp":"2026-10-01T10:00:00Z","app":"Codex","source":"chat:codex:session:52"}]});
-        assert_eq!(
-            normalize_procedure(&stage, &evidence)[0]["source"],
-            "chat:codex:session:52"
-        );
-        stage["procedure"][0]["source"] = json!("chat:codex:different:52");
-        assert!(normalize_procedure(&stage, &evidence).is_empty());
-        stage["procedure"][0]["source"] = json!("chat:codex:session:52");
-        stage["procedure"][0]["quote"] = json!("Published successfully");
-        assert!(normalize_procedure(&stage, &evidence).is_empty());
-    }
 
     #[test]
     fn multiple_screenshots_keep_order_legacy_compatibility_and_stage_coverage() {
