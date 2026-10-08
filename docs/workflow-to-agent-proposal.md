@@ -10,8 +10,9 @@
 
 A background workflow miner writes a prompt and a boolean on the workflow.
 The UI shows a small **Turn into agent** action in the existing toolbar when
-that boolean is true. Clicking hands the prompt to the existing agent loop or
-creation flow. Provider choice and scheduling stay in that existing flow.
+that boolean is true. A small chevron opens a compact Screenpipe / Claude / Codex menu. Selecting a
+runner hands the same prompt to its existing agent flow. Loop and scheduling
+controls stay in that existing flow.
 
 ## Minimal contract
 
@@ -35,7 +36,8 @@ Background miner reads recordings and supported local chats
   → writes canAutomate + agentPrompt through workflow_workspace
   → existing Review publishes the workflow
   → toolbar shows Turn into agent when canAutomate is true
-  → click passes agentPrompt and workflow ID into the existing agent flow
+  → click opens compact runner menu
+  → selected runner receives agentPrompt and workflow ID in its existing flow
 ```
 
 The miner uses judgment: is there a useful task an agent can carry out, and can
@@ -54,11 +56,11 @@ prompt is not proof that the agent can complete the task successfully.
 ## UI
 
 Keep **Turn into agent** alongside Create SOP and Create skill, with the same
-quiet toolbar styling. It is one action, without a chevron, provider menu,
-source-count panel or detached control beside the trigger. Home and Context
-retain their existing layouts. A click opens the existing agent flow with the
-prompt prefilled; it does not start recurring work merely because the miner
-set the boolean.
+quiet toolbar styling and a small chevron. Its compact dropdown contains only
+three icon-and-label rows: Screenpipe, Claude and Codex. Use existing provider
+icons. The menu is anchored directly below the toolbar action. Home and Context
+retain their existing layouts. Choosing a runner prefills its existing agent
+flow with the saved prompt; the boolean alone does not start recurring work.
 
 ## Native chat mining still needs wiring
 
@@ -102,8 +104,9 @@ that reader.
 - Publish and reload the two fields through the existing workflow write path;
   reject true with an empty prompt and preserve user-edited instructions.
 - A true flag shows the toolbar action; false and legacy records do not.
-- Clicking hands the stored prompt and workflow identity into the existing
-  agent flow. It does not create a second scheduler or activate a loop itself.
+- Clicking opens the compact menu; choosing a runner hands the stored prompt
+  and workflow identity into its existing agent flow. Escape closes the menu
+  and returns focus. Existing loop and scheduling controls remain authoritative.
 - Mine native transcript evidence with the sidebar closed, including work never
   captured on screen. Report unsupported or unavailable sources accurately.
 - Reuse existing scoped checks. No new CI jobs are part of this proposal.
@@ -120,7 +123,11 @@ fictional workflow content. No live agent execution is demonstrated.
 
 ### Simple action in the existing toolbar
 
-![Turn into agent without a dropdown](pr-assets/workflow-to-agent/03-simple-agent-action.png)
+![Consistent toolbar action with a small chevron](pr-assets/workflow-to-agent/03-simple-agent-action.png)
+
+### Compact runner menu
+
+![Screenpipe, Claude and Codex in a compact dropdown](pr-assets/workflow-to-agent/04-compact-agent-menu.png)
 
 ### Existing Home and Context
 
