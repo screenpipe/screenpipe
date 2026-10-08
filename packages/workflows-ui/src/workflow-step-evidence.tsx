@@ -30,10 +30,11 @@ export function WorkflowStepEvidence({ workflow, stage, platform }: {
       && Date.parse(e.timestamp) === Date.parse(selected.timestamp)),
   } : stage] }), [workflow, stage, selected]);
   const attached = verifiedStageScreenshots(stage);
-  const preview = useSourceScreenshot(stage, attached.length > 0, platform.loadWorkflowScreenshot);
+  const nativeOnly = stage.evidence.length > 0 && stage.evidence.every(e => e.source?.startsWith("chat:"));
+  const preview = useSourceScreenshot(stage, attached.length > 0 || nativeOnly, platform.loadWorkflowScreenshot);
   const screenshots = attached.length ? attached : preview.image ? [preview.image] : [];
   const screenshot = screenshots[0];
-  const canReplay = platform.loadWorkflowRecording && stage.evidence.some(e => !["audio", "meeting"].includes(e.source ?? "") && Number.isFinite(Date.parse(e.timestamp)));
+  const canReplay = platform.loadWorkflowRecording && stage.evidence.some(e => !e.source?.startsWith("chat:") && !["audio", "meeting"].includes(e.source ?? "") && Number.isFinite(Date.parse(e.timestamp)));
   const openRecording = async (capture = screenshot) => {
     if (!platform.openCapturedMoment) { setSelected(capture ?? null); setPlaying(true); return; }
     setOpening(true); setOpenError(false);

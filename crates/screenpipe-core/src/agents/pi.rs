@@ -1277,6 +1277,16 @@ impl PiExecutor {
         Ok(())
     }
 
+    pub fn ensure_local_chat_history_extension(project_dir: &Path) -> Result<()> {
+        let dir = project_dir.join(".pi/extensions");
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(
+            dir.join("local-chat-history.ts"),
+            include_str!("../../assets/extensions/local-chat-history.ts"),
+        )?;
+        Ok(())
+    }
+
     pub fn ensure_workflow_workspace_extension(project_dir: &Path) -> Result<()> {
         let dir = project_dir.join(".pi/extensions");
         std::fs::create_dir_all(&dir)?;

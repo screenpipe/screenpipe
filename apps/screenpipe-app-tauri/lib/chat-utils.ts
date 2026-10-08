@@ -302,7 +302,8 @@ export async function showChatWithPrefill(data: ChatPrefillData): Promise<void> 
     const url = new URL(window.location.href);
     const isHomeRoute = url.pathname === "/home";
     const isHomeSection = url.searchParams.get("section") === "home";
-    if (!isHomeRoute || !isHomeSection) {
+    const isChatMode = url.searchParams.get("mode") !== "workflows";
+    if (!isHomeRoute || !isHomeSection || !isChatMode) {
       sessionStorage.setItem(
         PENDING_CHAT_PREFILL_KEY,
         JSON.stringify({ ...data, targetWindow }),

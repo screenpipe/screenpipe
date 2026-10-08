@@ -2930,6 +2930,9 @@ async fn setup_pipe_permissions(
     if let Err(e) = PiExecutor::ensure_register_artifact_extension(pipe_dir) {
         warn!("failed to install register-artifact extension: {}", e);
     }
+    if let Err(e) = PiExecutor::ensure_local_chat_history_extension(pipe_dir) {
+        tracing::warn!("failed to install local chat history extension: {}", e);
+    }
     if let Err(e) = PiExecutor::ensure_workflow_workspace_extension(pipe_dir) {
         warn!("failed to install workflow workspace extension: {}", e);
     }

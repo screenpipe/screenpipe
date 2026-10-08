@@ -132,6 +132,104 @@ fn source_points(payload: &Value, at: DateTime<Utc>, app: &str) -> Vec<EvidenceP
         .collect()
 }
 
+// Native messages retain their own source address, distinct from recordings.
+fn native_sources(
+    value: &Value,
+    sources: &mut HashMap<(DateTime<Utc>, String), String>,
+) -> Result<(), String> {
+    match value {
+        Value::Object(object) => {
+            if let Some(source) = object
+                .get("source")
+                .and_then(Value::as_str)
+                .filter(|s| s.starts_with("chat:"))
+            {
+                crate::agents::chat_control::history::citation(source)?;
+                let at = object
+                    .get("timestamp")
+                    .and_then(Value::as_str)
+                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                    .ok_or("Native chat evidence needs its original timestamp")?
+                    .with_timezone(&Utc);
+                let app = object
+                    .get("app")
+                    .and_then(Value::as_str)
+                    .ok_or("Native chat evidence needs its original app")?
+                    .to_lowercase();
+                if sources
+                    .insert((at, app), source.into())
+                    .is_some_and(|old| old != source)
+                {
+                    return Err("Conflicting native messages at one evidence address".into());
+                }
+            }
+            for child in object.values() {
+                native_sources(child, sources)?;
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                native_sources(child, sources)?;
+            }
+        }
+        _ => (),
+    }
+    Ok(())
+}
+
+async fn native_point(
+    endpoint: &RecorderEndpoint,
+    client: &reqwest::Client,
+    source: &str,
+    at: DateTime<Utc>,
+    app: &str,
+) -> Result<EvidencePoint, VerificationError> {
+    use crate::agents::chat_control::history::{citation, Message};
+    let (provider, id, offset) = citation(source)?;
+    let mut url = reqwest::Url::parse(&format!("{}/agent/chat-history/read", endpoint.base_url))
+        .map_err(|e| e.to_string())?;
+    url.query_pairs_mut()
+        .append_pair("source", provider.label())
+        .append_pair("id", &id)
+        .append_pair("offset", &offset.to_string())
+        .append_pair("limit", "1");
+    let response = apply_auth(endpoint, client.get(url).timeout(Duration::from_secs(20)))
+        .send()
+        .await
+        .map_err(|_| VerificationError::Unavailable("Native chat verification unavailable"))?;
+    if response.status().is_server_error() {
+        return Err(VerificationError::Unavailable(
+            "Native chat verification unavailable",
+        ));
+    }
+    let payload = response
+        .error_for_status()
+        .map_err(|_| "Native chat source could not be verified")?
+        .json::<Value>()
+        .await
+        .map_err(|_| VerificationError::Unavailable("Invalid native chat response"))?;
+    let original: Message = serde_json::from_value(payload["messages"][0].clone())
+        .map_err(|_| "Native chat message no longer available")?;
+    let timestamp = DateTime::parse_from_rfc3339(&original.timestamp)
+        .map_err(|_| "Invalid native timestamp")?
+        .with_timezone(&Utc);
+    if original.source != source
+        || timestamp != at
+        || !original.app.eq_ignore_ascii_case(app)
+        || !matches!(original.role.as_str(), "user" | "assistant")
+        || original.truncated
+    {
+        return Err("Native chat identity mismatch or incomplete message".into());
+    }
+    Ok(EvidencePoint {
+        timestamp,
+        app: original.app,
+        detail: original.text,
+        source: original.source,
+        speaker: Some(original.role),
+    })
+}
+
 #[derive(Debug)]
 pub enum VerificationError {
     Unavailable(&'static str),
@@ -184,12 +282,19 @@ pub async fn resolve_references(
         .max()
         .ok_or("Missing capture period")?;
     let refs = references(value, start, end)?;
+    let mut native = HashMap::new();
+    native_sources(value, &mut native)?;
     let reads = refs.len();
     let client = reqwest::Client::new();
     let results = stream::iter(refs)
         .map(|(at, app)| {
             let client = &client;
+            let source = native.get(&(at, app.to_lowercase()));
             async move {
+                if let Some(source) = source {
+                    let point = native_point(endpoint, client, source, at, &app).await?;
+                    return Ok((at, app, vec![point], vec![]));
+                }
                 let mut url = reqwest::Url::parse(&format!("{}/search", endpoint.base_url))
                     .map_err(|e| e.to_string())?;
                 url.query_pairs_mut()
@@ -294,6 +399,46 @@ pub async fn resolve_references(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn verifies_native_messages_through_authenticated_read_api() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = RecorderEndpoint {
+            source: "fixture".into(),
+            base_url: format!("http://{}", listener.local_addr().unwrap()),
+            api_key: Some("fixture-key".into()),
+            health: json!({}),
+        };
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 4096];
+            let size = socket.read(&mut buffer).await.unwrap();
+            let request = String::from_utf8_lossy(&buffer[..size]);
+            assert!(request
+                .contains("/agent/chat-history/read?source=codex&id=session&offset=52&limit=1"));
+            assert!(request
+                .to_lowercase()
+                .contains("authorization: bearer fixture-key"));
+            let payload = json!({"messages":[{"source":"chat:codex:session:52","timestamp":"2026-10-01T10:00:00Z","app":"Codex","role":"user","text":"Original message","truncated":false}]}).to_string();
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",payload.len(),payload).as_bytes()).await.unwrap();
+        });
+        let at = DateTime::parse_from_rfc3339("2026-10-01T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let value = json!({"workflows":[{"evidence":[{"timestamp":at.to_rfc3339(),"app":"Codex","source":"chat:codex:session:52","detail":"Model fabricated text"}]}]});
+        let activity = vec![
+            json!({"start":(at-ChronoDuration::days(1)).to_rfc3339(),"end":(at+ChronoDuration::days(1)).to_rfc3339()}),
+        ];
+        let (catalog, reads) =
+            resolve_references(&endpoint, &value, EvidenceCatalog::default(), &activity)
+                .await
+                .unwrap();
+        assert_eq!(reads, 1);
+        assert_eq!(catalog.points[0].detail, "Original message");
+        assert!(catalog.frames.is_empty());
+        server.await.unwrap();
+    }
+
     #[tokio::test]
     async fn recorder_verification_uses_auth_exact_bounds_and_original_text() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

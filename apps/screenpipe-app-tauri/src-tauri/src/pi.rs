@@ -318,6 +318,7 @@ fn coding_workspace_resource_args(project_dir: &Path) -> Result<Vec<String>, Str
         .chain([
             "self-improvement.ts",
             "chat-control.ts",
+    "local-chat-history.ts",
             "context-usage.ts",
         ])
         .collect::<Vec<_>>();
@@ -1830,6 +1831,8 @@ fn ensure_context_pruning_extension(project_dir: &str) -> Result<(), String> {
 fn ensure_shared_pi_extensions(project_dir: &str) -> Result<(), String> {
     ensure_self_improvement_extension(project_dir)?;
     ensure_chat_control_extension(project_dir)?;
+    screenpipe_core::agents::pi::PiExecutor::ensure_local_chat_history_extension(Path::new(project_dir))
+        .map_err(|e| e.to_string())?;
     ensure_context_usage_extension(project_dir)?;
     ensure_context_pruning_extension(project_dir)?;
     screenpipe_core::agents::pi::PiExecutor::ensure_tinfoil_extension(Path::new(project_dir))

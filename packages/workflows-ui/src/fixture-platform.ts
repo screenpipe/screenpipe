@@ -77,6 +77,7 @@ function screenshot(label: string, app: string, frameId: number) {
 }
 
 type FixtureWorkflow = {
+  agentPrompt?: string;
   title: string;
   description: string;
   trigger: string;
@@ -97,6 +98,8 @@ function fixtureWorkflow(input: FixtureWorkflow, index: number): WorkflowMap {
   const allEvidence = [firstEvidence, secondEvidence, thirdEvidence];
   const stageActive = Math.max(2, Math.round(input.activeMinutes / 3));
   return {
+    canAutomate: Boolean(input.agentPrompt),
+    agentPrompt: input.agentPrompt ?? null,
     rank: index + 1,
     analysisDays: 90,
     title: input.title,
@@ -195,7 +198,7 @@ const workflows = [
   fixtureWorkflow({ title: "Weekly product review", description: "Pull together recent product signals and turn them into a focused weekly decision review.", trigger: "Weekly review block starts", outcome: "Priorities and owners are clear", apps: ["Linear", "Notion", "Slack"], stageNames: ["Gather signals", "Compare priorities", "Share decisions"], activeMinutes: 46, waitingMinutes: 12, friction: "Review depends on missing updates", control: "influence" }, 1),
   fixtureWorkflow({ title: "Website release check", description: "Validate a website change from implementation through the final live-page review.", trigger: "A change is ready to review", outcome: "The release is verified", apps: ["GitHub", "Figma", "Chrome"], stageNames: ["Inspect the change", "Compare the experience", "Verify the live page"], activeMinutes: 34, waitingMinutes: 18, friction: "Deployment queue adds a wait", control: "external" }, 2),
   fixtureWorkflow({ title: "Partner meeting preparation", description: "Collect the relevant relationship history and prepare a concise meeting brief.", trigger: "A partner meeting is upcoming", outcome: "A focused brief is ready", apps: ["Calendar", "Gmail", "Docs"], stageNames: ["Confirm the meeting", "Review the history", "Write the brief"], activeMinutes: 24, waitingMinutes: 6, friction: "Details require a manual cross-check", control: "required" }, 3),
-  fixtureWorkflow({ title: "Research synthesis", description: "Move from a bounded research question to a traceable summary of findings and open questions.", trigger: "A research question is defined", outcome: "Findings are ready for review", apps: ["Chrome", "Docs", "Slack"], stageNames: ["Collect sources", "Compare findings", "Share the synthesis"],
+  fixtureWorkflow({ agentPrompt: "Collect sources for the research question, compare findings and draft a synthesis with source links and open questions. Ask for the question and audience if missing. Keep sharing as a review step.", title: "Research synthesis", description: "Move from a bounded research question to a traceable summary of findings and open questions.", trigger: "A research question is defined", outcome: "Findings are ready for review", apps: ["Chrome", "Docs", "Slack"], stageNames: ["Collect sources", "Compare findings", "Share the synthesis"],
     stageDetails: [
       { description: "Build a source list around the question you need to answer.", blocks: [
         { kind: "action", text: "Write the research question and intended audience at the top of the document." },

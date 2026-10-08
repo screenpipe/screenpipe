@@ -112,6 +112,7 @@ pub(crate) async fn context(
     };
     let workflows: Vec<Value> = value["analysis"]["workflows"].as_array().into_iter().flatten().map(|w| json!({
         "id":workflow_id(w), "title":w["title"], "trigger":w["trigger"], "outcome":w["outcome"],
+        "canAutomate":w["canAutomate"], "agentPrompt":w["agentPrompt"],
         "description":w["description"], "userEdits":w["userEdits"], "userCorrection":w["userCorrection"], "lastReviewedAt":w["lastReviewedAt"],
         "confidence":w["confidence"], "people":w["people"], "teams":w["teams"], "handoffs":w["handoffs"], "variations":w["variations"], "bottlenecks":w["bottlenecks"], "captureSequence":w["captureSequence"],
         "timingRuns":w["timing"]["runs"], "limitations":w["limitations"], "openQuestions":w["openQuestions"], "quality":w["quality"], "apps":w["apps"],

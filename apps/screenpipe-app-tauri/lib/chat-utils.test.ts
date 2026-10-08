@@ -246,3 +246,15 @@ describe("normalizeComposerMentionsForModel", () => {
     expect(result.modelInput).toBe("$nope on this");
   });
 });
+
+
+it("preserves an unsent prefill while leaving the Workflows mode for Home chat", async () => {
+  const { showChatWithPrefill } = await import("./chat-utils");
+  getCurrentWindowMock.mockReturnValue({ label: "home" });
+  window.history.replaceState(null, "", "/home?section=home&mode=workflows");
+  sessionStorage.clear(); emitMock.mockClear(); showWindowMock.mockClear();
+  await showChatWithPrefill({ context: "Create an agent", prompt: "Draft the research brief", useHomeChat: true, autoSend: false });
+  expect(JSON.parse(sessionStorage.getItem("pendingChatPrefill")!)).toMatchObject({ prompt: "Draft the research brief", autoSend: false, targetWindow: "home" });
+  expect(emitMock).not.toHaveBeenCalled();
+  expect(showWindowMock).not.toHaveBeenCalled();
+});

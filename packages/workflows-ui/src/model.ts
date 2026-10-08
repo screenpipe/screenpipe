@@ -108,6 +108,7 @@ export type WorkflowStage = {
   screenshot?: WorkflowScreenshot | null;
   screenshots?: WorkflowScreenshot[];
   procedure?: Array<{
+    source?: string | null;
     userEdited?: boolean;
     kind: "action" | "input" | "output" | "decision" | "check";
     text: string;
@@ -158,6 +159,9 @@ export type WorkflowTiming = {
 };
 
 export type WorkflowMap = {
+  /** Set by workflow review; absent on catalogs created before agent handoff. */
+  canAutomate?: boolean;
+  agentPrompt?: string | null;
   id?: string;
   revision?: number;
   userCorrection?: string | null;

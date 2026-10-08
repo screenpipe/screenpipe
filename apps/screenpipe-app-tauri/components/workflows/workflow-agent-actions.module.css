@@ -1,0 +1,9 @@
+/* screenpipe — AI that knows everything you've seen, said, or heard */
+/* https://screenpipe.com */
+.trigger { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 5px; padding: 6px 8px; background: transparent; color: var(--ink-muted, #78786f); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; }
+.trigger:hover, .trigger[data-state="open"] { background: var(--wash, #f0f0eb); color: var(--ink, #30302b); }
+.trigger:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.trigger:disabled { opacity: .6; cursor: wait; }
+.menu { width: 180px; padding: 7px; border: 1px solid #dedfd8; border-radius: 6px; background: #fff; color: #30302b; box-shadow: 0 3px 10px #0000000c; }
+.item { display: flex; align-items: center; gap: 9px; height: 36px; padding: 0 8px; font-size: 13px; cursor: pointer; }
+.item img { width: 16px; height: 16px; object-fit: contain; }

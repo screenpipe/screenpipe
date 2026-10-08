@@ -33,6 +33,8 @@ vi.mock("@/lib/workflows/desktop-platform", async () => {
         workflow.id = `wf-fixture-${index}`;
         // The persisted catalog represents unanswered corrections as null.
         workflow.userCorrection = null;
+        workflow.canAutomate = true;
+        workflow.agentPrompt = "Summarize new research and cite the original sources.";
       });
       return catalog;
     },
@@ -92,12 +94,13 @@ it("opens the existing sharing review from the selected workflow in the main app
   const card = (await screen.findByRole("heading", { name: "Research synthesis" })).closest("article")!;
   fireEvent.click(within(card).getByRole("button", { name: "Open map" }));
   expect(screen.queryByRole("dialog", { name: "Sharing review" })).not.toBeInTheDocument();
-  const agents = screen.getByRole("group", { name: "Run Research synthesis in another agent" });
-  expect(agents.parentElement).toContainElement(screen.getByRole("button", { name: "Create SOP" }));
-  fireEvent.focus(within(agents).getByRole("button", { name: "Choose an AI agent" }));
-  for (const name of ["Claude", "Cursor", "Codex"]) {
-    expect(within(agents).getByRole("button", { name: `Run in ${name}` })).toBeVisible();
+  const agent = screen.getByRole("button", { name: "Turn into agent" });
+  expect(agent.parentElement).toContainElement(screen.getByRole("button", { name: "Create SOP" }));
+  fireEvent.keyDown(agent, { key: "ArrowDown" });
+  for (const name of ["Screenpipe", "Claude", "Codex"]) {
+    expect(await screen.findByRole("menuitem", { name })).toBeVisible();
   }
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
   fireEvent.click(screen.getByRole("button", { name: "Share with team" }));
   expect(screen.getByRole("dialog", { name: "Sharing review" })).toHaveTextContent("Research synthesis");
   expect(screen.getByRole("dialog", { name: "Sharing review" })).toHaveTextContent("workflow");
@@ -124,8 +127,8 @@ it("hands off workflow identity without embedding captured content", async () =>
   const task = workflowAgentTask({ ...workflow, id: "wf-example", title: 'Review "launch"' });
   expect(task.previewPrompt).toContain('wf-example');
   expect(task.previewPrompt).toContain(JSON.stringify('Review "launch"'));
-  expect(task.previewPrompt).toContain("Retrieve its current steps and sources");
-  expect(task.previewPrompt).toContain("confirm before sending");
+  expect(task.previewPrompt).toContain("Read its current steps and sources");
+  expect(task.previewPrompt).toContain("Confirm before sending");
   expect(task.previewPrompt).not.toContain(workflow.stages[0].evidence[0].detail);
 });
 

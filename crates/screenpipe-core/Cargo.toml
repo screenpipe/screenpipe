@@ -12,6 +12,7 @@ license-file = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+rusqlite = { workspace = true }
 screenpipe-fs = { path = "../screenpipe-fs" }
 screenpipe-cpu-features = { path = "../screenpipe-cpu-features" }
 screenpipe-events = { path = "../screenpipe-events" }
