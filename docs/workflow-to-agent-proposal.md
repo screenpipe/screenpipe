@@ -14,8 +14,8 @@ answer is not required.
 
 Home, Context, Library and navigation retain their existing layouts. The compact
 Screenpipe / Claude / Codex picker belongs to the selected workflow's existing
-actions. Updated visual mockups remain pending; the chat-only mockups below are
-superseded and must not be used as implementation acceptance evidence.
+detail. The Figma mockups below show the workflow before publication, the saved
+proposal action and the provider picker. Runtime implementation remains pending.
 
 ## What exists in the inspected source
 
@@ -113,19 +113,37 @@ is not proof of a created agent or active schedule.
   before claiming visual or runtime completion. Reuse existing scoped checks;
   this proposal does not add CI jobs.
 
-## Visual status
+## Visual evidence
 
-[Figma working file](https://www.figma.com/design/kQbZmiUwApaPTaKjPXuhzy).
-All existing captures use fictional data in a browser preview, not live results.
-Home and Context are retained as fidelity references:
+[Editable Figma frames](https://www.figma.com/design/kQbZmiUwApaPTaKjPXuhzy?node-id=21-5).
+All captures use fictional data in the actual shared-UI browser preview. The
+proposed controls are editable Figma overlays on locked screenshots. Sources and
+counts in the picker are illustrative, not results of live transcript mining.
+
+### Before publication
+
+![Existing workflow without a proposal](pr-assets/workflow-to-agent/02-workflow-before.png)
+
+### Published proposal
+
+The action appears alongside the workflow trigger after Review publishes a ready
+proposal. Existing toolbar controls and the underlying document remain intact.
+
+![Workflow with a ready agent proposal](pr-assets/workflow-to-agent/03-miner-proposal.png)
+
+### User opens the picker
+
+The menu is anchored below the action. It describes the proposed task, gives
+source context, and offers the existing Screenpipe, Claude and Codex icons.
+
+![Provider picker for the saved proposal](pr-assets/workflow-to-agent/04-choose-agent.png)
+
+### Existing Home and Context
 
 ![Existing Home reference](pr-assets/workflow-to-agent/01-home-unchanged.png)
 
 ![Existing Context reference](pr-assets/workflow-to-agent/05-context-unchanged.png)
 
-The following assets document the superseded chat-only exploration. They do not
-represent the proposed background-miner interaction:
-
-- [Existing fictional chat baseline](pr-assets/workflow-to-agent/02-chat-before.png)
-- [Superseded chat offer](pr-assets/workflow-to-agent/03-contextual-offer.png)
-- [Superseded chat picker](pr-assets/workflow-to-agent/04-choose-runner.png)
+The prior chat-only exploration is superseded. These frames illustrate the
+background-miner proposal but do not establish working mining, persistence,
+provider setup or scheduling.
