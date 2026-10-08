@@ -121,6 +121,14 @@ pub(crate) async fn update(
                 return Ok(Json(ws["drafts"][id]["receipt"].clone()));
             }
         }
+        if let Some(duplicate) = workflows
+            .first()
+            .and_then(|payload| workspace::exact_duplicate(&catalog, payload))
+        {
+            return Err(error(StatusCode::CONFLICT, &format!(
+                "This new-workflow payload exactly duplicates saved workflow {duplicate}. No changes were saved. Read that workflow and reject the redundant draft with duplicate_of and current catalog_revision. For useful new information, change the actual payload and set its existing id; note does not edit the payload."
+            )));
+        }
         let through = ws["cycle"]["end"]
             .as_str()
             .ok_or_else(|| error(StatusCode::CONFLICT, "Start an update first."))?;
@@ -222,6 +230,14 @@ pub(crate) async fn update(
     }
     let previous = read_catalog(&source).await?;
     let mut ws = workspace::state(&previous);
+    if body.get("duplicate_of").is_some_and(|id| !id.is_null())
+        && body["catalog_revision"].as_u64() != Some(previous["revision"].as_u64().unwrap_or(0))
+    {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "Read the current catalog and supply catalog_revision before rejecting a duplicate.",
+        ));
+    }
     let receipt = if action == "pause" {
         // A model may finish its own work, but only the owner can stop the group.
         if perms.0.is_some() {
@@ -250,7 +266,8 @@ pub(crate) async fn update(
     } else {
         let change = serde_json::from_value(body.clone())
             .map_err(|_| error(StatusCode::BAD_REQUEST, "Invalid workspace change."))?;
-        workspace::apply(&mut ws, task, &change).map_err(|e| error(StatusCode::CONFLICT, &e))?
+        workspace::apply_with_catalog(&mut ws, task, &change, &previous)
+            .map_err(|e| error(StatusCode::CONFLICT, &e))?
     };
     let mut next = previous.clone();
     next["agentWorkspace"] = ws.clone();

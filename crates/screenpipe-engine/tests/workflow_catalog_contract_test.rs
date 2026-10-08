@@ -277,11 +277,22 @@ async fn publication_outage_preserves_a_retryable_draft(
 ) {
     use screenpipe_core::workflows::workspace;
     let mut catalog: Value = serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
+    // The read-API fixture above uses legacy records with embedded images.
+    // Workspace writes use stable IDs and the persisted image-free shape.
+    for workflow in catalog["analysis"]["workflows"].as_array_mut().unwrap() {
+        workflow["id"] = json!("wf-existing");
+        for stage in workflow["stages"].as_array_mut().unwrap() {
+            if stage["screenshot"].is_object() {
+                stage["screenshot"]["dataUrl"] = json!("");
+            }
+        }
+    }
     let mut ws = workspace::empty();
     workspace::start(&mut ws, &catalog);
     let payload = json!({"title":"Prepare project status report","description":"Review captured work","stages":[]});
     let proposal = workspace::Change {
         action: "propose".into(),
+        duplicate_of: None,
         expected_revision: workspace::revision(&ws),
         draft_id: None,
         assignee: Some("workflow-review".into()),
@@ -321,4 +332,57 @@ async fn publication_outage_preserves_a_retryable_draft(
     assert_eq!(rejected.status(), StatusCode::CONFLICT);
     let unchanged: Value = serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
     assert_eq!(unchanged, after);
+    let duplicate = after["analysis"]["workflows"][0]["id"].as_str().unwrap();
+    let mut rejection = json!({"task":"workflow-review","action":"reject",
+        "expected_revision":workspace::revision(&saved),"draft_id":id,
+        "duplicate_of":duplicate,"note":"Read the saved workflow: the same supported procedure is already preserved, with no useful new detail in this draft."});
+    // Missing/stale catalog reads cannot discard a duplicate after user edits.
+    assert_eq!(
+        post(rejection.clone()).await.unwrap().status(),
+        StatusCode::CONFLICT
+    );
+    rejection["catalog_revision"] = json!(after["revision"].as_u64().unwrap_or(0) + 1);
+    assert_eq!(
+        post(rejection.clone()).await.unwrap().status(),
+        StatusCode::CONFLICT
+    );
+    rejection["catalog_revision"] = json!(after["revision"].as_u64().unwrap_or(0));
+    rejection["duplicate_of"] = json!("missing-workflow");
+    assert_eq!(
+        post(rejection.clone()).await.unwrap().status(),
+        StatusCode::CONFLICT
+    );
+    let unchanged: Value = serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
+    assert_eq!(unchanged, after);
+    rejection["duplicate_of"] = json!(duplicate);
+    assert_eq!(post(rejection).await.unwrap().status(), StatusCode::OK);
+    let resolved: Value = serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
+    assert_eq!(
+        resolved["agentWorkspace"]["drafts"][&id]["status"],
+        "rejected"
+    );
+    assert_eq!(
+        resolved["agentWorkspace"]["drafts"][&id]["duplicateOf"],
+        duplicate
+    );
+    assert_eq!(resolved["analysis"], after["analysis"]);
+    assert_eq!(resolved["checkedThrough"], after["checkedThrough"]);
+    assert_eq!(resolved["agentWorkspace"]["cycle"]["status"], "running");
+    let mut duplicate_payload = resolved["analysis"]["workflows"][0].clone();
+    duplicate_payload["id"] = Value::Null;
+    let response = post(json!({"task":"workflow-discover","action":"propose",
+        "expected_revision":workspace::revision(&workspace::state(&resolved)),
+        "assignee":"workflow-review","payload":duplicate_payload,"note":"Review this candidate"})).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), 100_000).await.unwrap()).unwrap();
+    let response = post(json!({"task":"workflow-review","action":"publish",
+        "expected_revision":body["revision"],"catalog_revision":resolved["revision"].as_u64().unwrap_or(0),
+        "draft_id":body["draft_id"],"note":"Update existing workflow"})).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let error: Value = serde_json::from_slice(&to_bytes(response.into_body(), 100_000).await.unwrap()).unwrap();
+    assert!(error["error"].as_str().unwrap().contains("exactly duplicates"));
+    let unchanged: Value = serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
+    assert_eq!(unchanged["analysis"], resolved["analysis"]);
+    assert_eq!(unchanged["checkedThrough"], resolved["checkedThrough"]);
+    assert!(unchanged["agentWorkspace"]["drafts"][body["draft_id"].as_str().unwrap()]["publicationRetry"].is_null());
 }

@@ -826,6 +826,8 @@ fn migrate_staged_workflow_prompt(name: &str, original: &str) -> Option<String> 
     ))
 }
 
+const LEGACY_WORKFLOW_CHECKPOINT_GUIDANCE: &str = r#"On resume, read cycle.checkpoints for your role before repeating research. After a useful research batch, checkpoint the source references and intervals inspected, queries that failed, remaining gaps and the next focused query. Keep this note compact; it replaces your previous checkpoint. Save candidates in drafts as soon as they are useful. As the execution budget runs low, hand off owned drafts or checkpoint unfinished research and stop. A checkpoint never completes your role or advances checkedThrough. Call finish only when the existing completion requirements are met. If a broad source query fails, narrow its time range or scope; do not restart an exhaustive scan or treat the failure as no activity."#;
+
 /// Apply every known repair for `name` to an installed prompt.
 ///
 /// Returns the rewritten content only when something actually changed, so the
@@ -903,11 +905,34 @@ pub(super) fn migrate_builtin_pipe_text(name: &str, original: &str) -> Option<St
         );
     }
 
+    if matches!(
+        name,
+        "workflow-discover" | "workflow-deepen" | "workflow-review" | "workflow-maintain"
+    ) {
+        let guidance = bundled_prompt(name).and_then(|prompt| {
+            section_between(
+                prompt,
+                "On resume, read cycle.checkpoints",
+                "\n\nAlso inspect relevant local AI chats",
+            )
+        })?;
+        // Replace only the exact shipped guidance; keep custom instructions,
+        // local-chat support, schedules and model/permission settings intact.
+        let updated = original.replace(LEGACY_WORKFLOW_CHECKPOINT_GUIDANCE, guidance);
+        if updated != original {
+            tracing::debug!(
+                pipe = name,
+                why = "recover blocked duplicates without treating checkpoints as authority",
+                "repairing installed pipe.md"
+            );
+            return Some(updated);
+        }
+        return None;
+    }
     let swaps = match name {
         "meeting-summary" => meeting_summary_swaps(),
         _ => return None,
     };
-
     let mut updated = original.to_string();
     for swap in &swaps {
         if !updated.contains(swap.old) {
@@ -949,6 +974,40 @@ fn replace_prompt_body_when_hash_matches(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn recovery_guidance_preserves_local_chat_support_and_custom_settings() {
+        for role in [
+            "workflow-discover",
+            "workflow-deepen",
+            "workflow-review",
+            "workflow-maintain",
+        ] {
+            let prompt = super::bundled_prompt(role).unwrap();
+            let recovery = super::section_between(
+                prompt,
+                "On resume, read cycle.checkpoints",
+                "\n\nAlso inspect relevant local AI chats",
+            )
+            .unwrap();
+            let old = format!(
+                "{}\nOwner-specific instructions stay here.\n",
+                prompt
+                    .replace(recovery, super::LEGACY_WORKFLOW_CHECKPOINT_GUIDANCE)
+                    .replace("enabled: false", "enabled: true")
+                    .replace("timeout: 900", "timeout: 731")
+            );
+            let migrated = super::migrate_builtin_pipe_text(role, &old).unwrap();
+            assert!(migrated.contains(recovery));
+            assert!(migrated.contains("Also inspect relevant local AI chats"));
+            assert_eq!(
+                old.splitn(3, "---").nth(1),
+                migrated.splitn(3, "---").nth(1)
+            );
+            assert!(migrated.ends_with("Owner-specific instructions stay here.\n"));
+            assert!(super::migrate_builtin_pipe_text(role, &migrated).is_none());
+        }
+    }
+
     #[test]
     fn migrates_meeting_title_instructions_without_changing_user_settings() {
         let prompt = bundled("meeting-summary");

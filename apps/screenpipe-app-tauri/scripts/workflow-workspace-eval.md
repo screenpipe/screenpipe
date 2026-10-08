@@ -276,3 +276,42 @@ persistence evaluations, not an installed-app end-to-end test.
 The original bundled prompt is retained as a migration fixture. The native
 migration suite verifies that recognized bodies receive this repair while
 preserving enabled state, schedule, model, timeout, trigger and custom instructions.
+
+### Duplicate recovery, October 8
+
+A publication retry hold could prevent Review from rejecting a redundant draft.
+The recovery contract now accepts `reject` with `duplicate_of`, requiring an
+existing saved workflow, current workspace/catalog revisions and Review ownership.
+It preserves the draft, comparison decision and previous retry state, without
+publishing or advancing coverage. Outage-only rejection remains invalid. Stop,
+stale writes, unknown targets and independent work retain their existing checks.
+
+New-workflow publication also rejects an exact copy of a saved payload before
+source verification. This is equality of the proposed fields, excluding its null
+ID, not a semantic title matcher or automatic merge. New evidence and updates to
+an existing ID still follow normal source validation. A note never edits a payload.
+
+```sh
+WORKFLOW_EVAL_NOW=2026-10-08T15:00:00Z WORKFLOW_EVAL_TIMEOUT_MS=90000 \
+  bun scripts/eval-workflow-workspace.ts --duplicate-recovery
+# Adjacent cases under the same clock/provider/budget:
+# no flag: normal publication; --no-change; --publication-failure=persistent
+```
+
+The duplicate case contains a supported exact copy, a misleading assistant-only
+claim, a retry hold and stale agent instructions prohibiting recovery. The oracle
+requires reading the saved workflow, rejecting the duplicate and unsupported
+claim, finishing without publication, and avoiding an empty handoff. Native HTTP
+tests independently exercise the real writer and readback. The replay substitutes
+fictional recorder/persistence endpoints and prohibits real user-file access.
+
+Two prompt-only candidate replays failed: Review read the existing workflow but
+published an unchanged `id:null` payload while claiming to update the saved ID.
+The failed traces were retained. With the exact-copy check, the duplicate replay
+passed. Normal publication, no-change and persistent-outage replays also passed
+with `auto`, including normal publication with the final exact-copy guard. The outage
+case preserved pending work and stopped without claiming cycle completion.
+These are small isolated samples, not fleet accuracy or installed-app validation.
+Execution-history `completed` still describes a run, not overall cycle completion;
+new workspace receipts distinguish research checkpoints, draft saves/rejections
+and role completion. No scheduler changes or additional CI jobs were added.
