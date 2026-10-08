@@ -4,7 +4,7 @@
 # Turn a workflow into an agent
 
 <!-- doc-covers: packages/workflows-ui/src, apps/screenpipe-app-tauri/components/workflows, apps/screenpipe-app-tauri/lib/chat-utils.ts, crates/screenpipe-core/src/workflows, crates/screenpipe-core/src/agents/chat_control, crates/screenpipe-core/assets/extensions/local-chat-history.ts, crates/screenpipe-engine/src/chat_history.rs -->
-<!-- doc-verified: f5c5ecc47 -->
+<!-- doc-verified: ec487aff8 -->
 
 Implemented in the local Workflows mode of the main Screenpipe app. Home and
 Context retain their existing layout.
@@ -14,17 +14,32 @@ Recordings + local_chat_history (Claude Code / Codex / Hermes)
   → Discover / Deepen save research through workflow_workspace
   → Review rereads originals and publishes canAutomate + agentPrompt
   → eligible workflow shows Turn into agent
-  → Screenpipe / Claude / Codex receives the prompt and workflow identity
+  → Codex / Claude / Screenpipe receives the prompt and workflow identity
   → user reviews it and chooses a loop or schedule in the existing agent flow
 ```
 
 ## When the action appears
 
-The background agents propose `canAutomate: true` when they can express a useful
-repeatable task with explicit inputs and a checkable result. They put that task
-in `agentPrompt`. Review makes the publication decision using the existing
-workflow evidence. There is no fixed confidence threshold or foreground chat
-requirement.
+The background agents offer automation only when original evidence supports a
+working execution path for a useful repeatable task: its executor/environment,
+required tools, access scopes, available inputs and checkable result. A request
+inside Codex or an assistant completion claim does not prove credentials or
+successful execution. Success in Codex is evidence for that environment, not
+for Claude or Screenpipe. Read access does not establish write permission.
+
+Review checks the latest relevant evidence for unresolved authentication errors,
+missing connectors, revoked permissions and required manual login/OTP. Required
+access that is unknown or blocked keeps `canAutomate` false; the workflow stays
+saved with its specific limitation. A later access failure invalidates an older
+success. A supported draft-only job may qualify within that exact scope.
+
+The saved `agentPrompt` names the evidenced executor, access requirements,
+working-path source references, inputs, output and checks, without secrets.
+Every handoff instructs the chosen agent to recheck current access using
+non-destructive checks in its own environment before proposing or enabling a
+loop. Missing or unverifiable access must stop setup. These are instructions to
+the review and execution agents, not a deterministic credential test or a
+production guarantee; no live credential trial is performed by the miner.
 
 The catalog persists these two fields on the existing workflow. Old workflows
 default to false. True requires a nonempty prompt of at most 12,000 characters;
@@ -32,11 +47,29 @@ invalid values fail publication. False clears the prompt. The UI also checks
 both fields before showing the action. These fields do not enable a schedule.
 
 The button uses a 16px Bot icon and a small chevron. Its menu contains only the
-Screenpipe, Claude and Codex icons and names. Screenpipe opens the existing Home
+Codex, Claude and Screenpipe icons and names, in that order. Screenpipe opens the existing Home
 chat with the prompt unsent. Claude and Codex use the existing deep-link handoff
 and clipboard fallback. The prompt includes the saved workflow identity and
 asks the selected agent to retrieve current steps, request missing inputs and
 confirm the loop or schedule before enabling it.
+
+## Which agents run this
+
+Workflows installs four bundled, initially disabled background tasks through
+`ensureWorkflowTask`: Discover, Deepen, Review and Maintain. The user's existing
+Workflows processing controls enable or run them using Screenpipe's Pi harness,
+selected model/provider and existing access/allowance checks. Discover and
+Deepen investigate jobs, Review publishes supported workflows, and Maintain
+revisits existing workflows and corrections. They do not require a digital clone.
+
+The digital clone is a separate optional task. Like another Pipe, it can reuse
+the shared history tool only with the required endpoint grants; this feature
+does not silently install or enable it. The Codex/Claude menu choice selects the
+agent that will help execute the workflow, not the background mining agent.
+
+Recognized installed miner templates receive the updated instructions and two
+read-only history grants. User-written prompt bodies, existing deny rules,
+custom schedules and enabled state are preserved.
 
 ## Native chat research
 
@@ -79,6 +112,7 @@ The screenshots in `docs/pr-assets/workflow-to-agent/06-*.jpg` through
 `12-*.jpg` show the real main-app components with fictional browser-mock data.
 The before capture uses the prior toolbar implementation at `6cb816c`; the after
 captures use implementation `1d11a1845`, at the same 1280 × 720 viewport.
+`13-codex-first-menu.jpg` supersedes the earlier menu capture with Codex first.
 
 Checked the main-app workspace switcher, eligibility, provider icons, Escape
 focus restoration and Screenpipe's unsent prompt. Claude/Codex handoffs are
@@ -91,8 +125,10 @@ Focused checks:
   persistence of a prompt longer than the generic 400-character text normalizer.
 - Native history: 4 tests, including a match beyond the first search page,
   original Codex messages, Hermes pagination and invalid source addresses.
-- Main-app UI/navigation: 33 tests across the integrated screen, dropdown and
-  chat utilities.
+- Main-app UI/navigation and workflow setup: 72 tests across the integrated
+  screen, dropdown, chat utilities and scheduled-discovery controls.
+- Built-in prompt migrations: 30 tests, including history grants, preservation
+  of custom instructions/configuration and owner permission removal.
 - Extension capability tests: 3 tests covering scoped auth, pagination,
   missing capability and blocked remote targets.
 - Queued native test: shared extension registration in every Pi harness.
@@ -102,7 +138,10 @@ The broader core suite also exposes two unchanged skill-content assertions:
 `bundled_read_skills_keep_the_live_database_behind_screenpipe` and
 `workflow_maintenance_skill_installs_in_chat_and_restricted_pipes`.
 
-Prompt evaluation covers a repeatable native-chat task, preserving an existing
-workflow and a correct non-automatable/no-change case through deterministic
-checks and manual review. No matched model replay or production outcome study
+Readiness evaluation manually covers verified Codex execution, a chat-only
+request, expired access, a runner change, interactive OTP and a supported
+draft-only scope. UI tests check Codex-first order and delivery of the access
+preflight instructions to all three runners; migration tests check existing
+templates receive the instructions and endpoint grants without losing user
+configuration. No matched model replay or production outcome study
 has been run. Existing task cadence and enabled states are preserved.
