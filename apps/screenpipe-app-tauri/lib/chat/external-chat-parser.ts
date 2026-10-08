@@ -95,6 +95,7 @@ function titleFromText(text: string): string {
     "",
   );
   const compact = withoutAttachmentMarkup
+    .replace(/(?:^|\n)\s*!\[Image #\d+\]\(<[^>]+>\)\s*/g, "\n")
     .replace(/(?:&#x20;|&#32;|&nbsp;)/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -128,7 +129,8 @@ function finishConversation({
   config?: ImportedAgentConfig;
 }): ChatConversation | null {
   const visibleMessages = messages.filter(
-    (message) => message.content.trim() || (message.contentBlocks?.length ?? 0) > 0,
+    (message) => message.content.trim() || (message.images?.length ?? 0) > 0
+      || (message.contentBlocks?.length ?? 0) > 0,
   );
   if (visibleMessages.length === 0 || !visibleMessages.some((message) => message.role === "user")) {
     return null;
@@ -505,6 +507,37 @@ function cleanCodexUserText(text: string): string {
     .trim();
 }
 
+/** Convert only the trailing attachment envelope, leaving quoted/code examples intact. */
+function codexImageText(text: string, images: readonly (string | undefined)[]): string {
+  const suffix = /(?:(?:^|\n)[ \t]*<image\s+name=\[Image #\d+\]\s+path="[^"\r\n]+">(?:\s*<\/image>)?\s*)+$/i.exec(text);
+  if (!suffix) return text;
+  const attachments = suffix[0].replace(
+    /<image\s+name=\[Image #(\d+)\]\s+path="([^"\r\n]+)">(?:\s*<\/image>)?/gi,
+    (tag, number: string, path: string) => {
+      if (images[Number(number) - 1]) return "";
+      // Use the existing local media reader; imported transcripts must never
+      // cause automatic requests to remote image/tracking URLs.
+      const local = /^\/(?!\/)/.test(path) || /^[a-z]:[\\/]/i.test(path);
+      if (!local || !/\.(?:png|jpe?g|gif|webp|avif|bmp)$/i.test(path)) return tag;
+      const normalized = /^[a-z]:[\\/]/i.test(path) ? path.replace(/\\/g, "/") : path;
+      const url = encodeURI(normalized).replace(/[?#<>]/g, encodeURIComponent);
+      return `![Image #${number}](<${url}>)`;
+    },
+  ).trim();
+  return [text.slice(0, suffix.index).trimEnd(), attachments].filter(Boolean).join("\n\n");
+}
+
+function codexImages(content: unknown): (string | undefined)[] {
+  return asArray(content)
+    .map(asRecord)
+    .filter((part) => part?.type === "input_image")
+    .map((part) => {
+      const url = asString(part?.image_url);
+      return url && /^data:image\/(?:png|jpeg|jpg|gif|webp|avif|bmp);base64,[a-z0-9+/]+={0,2}$/i.test(url)
+        ? url : undefined;
+    });
+}
+
 /** Clean saved imports without rediscovering old provider transcripts. */
 export function normalizeImportedCodexConversation(
   conversation: ChatConversation,
@@ -522,11 +555,12 @@ export function normalizeImportedCodexConversation(
     }
     const text = message.content.trim();
     const withoutSetup = stripCodexSetupBlocks(text);
-    if (withoutSetup === text) return [message];
+    const cleaned = withoutSetup === text ? text : cleanCodexUserText(withoutSetup);
+    const content = codexImageText(cleaned, message.images ?? []);
+    if (content === message.content) return [message];
 
     changed = true;
-    const content = cleanCodexUserText(withoutSetup);
-    return content ? [{ ...message, content }] : [];
+    return content || message.images?.length ? [{ ...message, content }] : [];
   });
   if (!changed) return conversation;
 
@@ -626,12 +660,15 @@ function parseCodexTranscriptSnapshot(
       const text = textBlocks(payload.content, allowed).join("\n\n").trim();
       if (role === "user") {
         flushPendingAssistant();
-        const userText = cleanCodexUserText(text);
-        if (!userText) continue;
+        const imageParts = codexImages(payload.content);
+        const images = imageParts.filter((image): image is string => image != null);
+        const userText = codexImageText(cleanCodexUserText(text), imageParts);
+        if (!userText && images.length === 0) continue;
         messages.push({
           id: messageId("codex", sessionId, asString(payload.id), index),
           role: "user",
           content: userText,
+          ...(images.length > 0 ? { images } : {}),
           timestamp,
           provider: "codex",
           importedFrom: "codex",
