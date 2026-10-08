@@ -1019,6 +1019,7 @@
         "tests/dedup_benchmark/simulation.rs",
         "tests/overlap_dedup_test.rs",
         "tests/continuous_recall_test.rs",
+        "tests/continuous_recall_stress_test.rs",
         "tests/speaker_identification.rs",
         "tests/speaker_identity_gate_real_audio_test.rs",
         "tests/speaker_identity_gate_test.rs"

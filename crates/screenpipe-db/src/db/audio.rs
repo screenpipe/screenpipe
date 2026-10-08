@@ -15,6 +15,20 @@ fn duplicate_words(text: &str) -> Vec<String> {
         .collect()
 }
 
+// Segment offsets are relative to the recording's capture timestamp.
+fn speech_interval(
+    timestamp: DateTime<Utc>,
+    start: Option<f64>,
+    end: Option<f64>,
+) -> Option<(f64, f64)> {
+    let (start, end) = (start?, end?);
+    if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
+        return None;
+    }
+    let base = timestamp.timestamp() as f64 + timestamp.timestamp_subsec_nanos() as f64 / 1e9;
+    Some((base + start, base + end))
+}
+
 impl DatabaseManager {
     pub async fn insert_audio_chunk(
         &self,
@@ -370,7 +384,7 @@ impl DatabaseManager {
         // sweep even though we DID process it (the other device kept the
         // text).
         if self
-            .has_duplicate_from_other_device(trimmed, device, timestamp)
+            .has_duplicate_from_other_device(trimmed, device, timestamp, start_time, end_time)
             .await?
         {
             debug!(
@@ -470,7 +484,7 @@ impl DatabaseManager {
             false
         } else {
             match self
-                .has_duplicate_from_other_device(trimmed, device, timestamp)
+                .has_duplicate_from_other_device(trimmed, device, timestamp, start_time, end_time)
                 .await
             {
                 Ok(is_duplicate) => is_duplicate,
@@ -523,13 +537,15 @@ impl DatabaseManager {
         transcription: &str,
         device: &AudioDevice,
         timestamp: Option<DateTime<Utc>>,
+        start_time: Option<f64>,
+        end_time: Option<f64>,
     ) -> Result<bool, sqlx::Error> {
         let captured = timestamp.unwrap_or_else(Utc::now);
         let window = chrono::Duration::seconds(DEDUP_TIME_WINDOW_SECS);
         // Bound by capture time, not processing time, so a deferred recording
         // cannot be discarded because similar speech happens to be live now.
-        let recent: Vec<(String,)> = sqlx::query_as(
-            "SELECT transcription FROM audio_transcriptions
+        let recent: Vec<(String, DateTime<Utc>, Option<f64>, Option<f64>)> = sqlx::query_as(
+            "SELECT transcription, timestamp, start_time, end_time FROM audio_transcriptions
              WHERE timestamp >= ?1 AND timestamp <= ?2
                AND (device != ?3 OR is_input_device != ?4)
              ORDER BY timestamp DESC
@@ -543,9 +559,25 @@ impl DatabaseManager {
         .await?;
 
         let new_words = duplicate_words(transcription);
-        Ok(recent
-            .into_iter()
-            .any(|(existing,)| new_words == duplicate_words(&existing)))
+        Ok(recent.into_iter().any(|(existing, at, start, end)| {
+            // Chunk start times can match while two utterances are separate.
+            // Known segment intervals must overlap before words can be an echo.
+            // Legacy rows without either offset keep the capture-time fallback;
+            // partial or invalid offsets are not evidence for deleting speech.
+            let current = speech_interval(captured, start_time, end_time);
+            let previous = speech_interval(at, start, end);
+            if (current.is_none() && (start_time.is_some() || end_time.is_some()))
+                || (previous.is_none() && (start.is_some() || end.is_some()))
+            {
+                return false;
+            }
+            if let (Some((a, b)), Some((c, d))) = (current, previous) {
+                if a >= d || c >= b {
+                    return false;
+                }
+            }
+            new_words == duplicate_words(&existing)
+        }))
     }
 
     pub async fn update_audio_transcription(

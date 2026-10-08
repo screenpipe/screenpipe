@@ -571,3 +571,301 @@ async fn cross_device_retention_and_echo_eval_matrix() {
         "cross-device eval failures: {failures:?}"
     );
 }
+
+#[tokio::test]
+async fn disjoint_segment_times_survive_both_insert_paths() {
+    for combined in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let db = DatabaseManager::new(
+            dir.path().join("interval.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+        let at = Utc::now();
+        for (i, (start, end)) in [(0.0, 5.0), (15.0, 20.0)].into_iter().enumerate() {
+            let device = AudioDevice {
+                name: "duplex".into(),
+                device_type: if i == 0 {
+                    DeviceType::Input
+                } else {
+                    DeviceType::Output
+                },
+            };
+            let file = format!("interval-{i}.wav");
+            if combined {
+                db.insert_audio_chunk_and_transcription(
+                    &file,
+                    "Please send the complete proposal tomorrow.",
+                    0,
+                    "fixture",
+                    &device,
+                    None,
+                    Some(start),
+                    Some(end),
+                    Some(at),
+                )
+                .await
+                .unwrap();
+            } else {
+                let chunk = db.insert_audio_chunk(&file, Some(at)).await.unwrap();
+                db.insert_audio_transcription(
+                    chunk,
+                    "Please send the complete proposal tomorrow.",
+                    0,
+                    "fixture",
+                    &device,
+                    None,
+                    Some(start),
+                    Some(end),
+                    Some(at),
+                )
+                .await
+                .unwrap();
+            }
+        }
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audio_transcriptions")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            rows, 2,
+            "combined={combined}: disjoint speech is not an echo"
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "manual 480-case timing/device/insertion-path sweep"]
+async fn cross_device_interval_eval_sweep() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = DatabaseManager::new(
+        dir.path().join("sweep.sqlite").to_str().unwrap(),
+        Default::default(),
+    )
+    .await
+    .unwrap();
+    let base = Utc::now() - chrono::Duration::days(7);
+    let mut cases = 0;
+    let mut missed_echoes = 0;
+    let mut lost_utterances = 0;
+    for combined in [false, true] {
+        for direction in 0..3 {
+            for delta in [-30, -5, 0, 5, 30] {
+                for first in [(0.0_f64, 5.0_f64), (5.0, 10.0), (10.0, 30.0), (0.0, 30.0)] {
+                    for second in [(0.0_f64, 5.0_f64), (5.0, 10.0), (10.0, 30.0), (0.0, 30.0)] {
+                        let text = format!("Please preserve timing scenario {cases} completely.");
+                        let at = base + chrono::Duration::seconds(cases * 120);
+                        for (i, (start, end)) in [first, second].into_iter().enumerate() {
+                            let output = (direction == 0 && i == 0) || (direction == 1 && i == 1);
+                            let device = AudioDevice {
+                                name: if direction == 2 {
+                                    format!("microphone-{i}")
+                                } else {
+                                    "duplex".into()
+                                },
+                                device_type: if output {
+                                    DeviceType::Output
+                                } else {
+                                    DeviceType::Input
+                                },
+                            };
+                            let captured =
+                                at + chrono::Duration::seconds(if i == 0 { 0 } else { delta });
+                            let file = format!("{cases}-{i}.wav");
+                            if combined {
+                                db.insert_audio_chunk_and_transcription(
+                                    &file,
+                                    &text,
+                                    0,
+                                    "fixture",
+                                    &device,
+                                    None,
+                                    Some(start),
+                                    Some(end),
+                                    Some(captured),
+                                )
+                                .await
+                                .unwrap();
+                            } else {
+                                let chunk =
+                                    db.insert_audio_chunk(&file, Some(captured)).await.unwrap();
+                                db.insert_audio_transcription(
+                                    chunk,
+                                    &text,
+                                    0,
+                                    "fixture",
+                                    &device,
+                                    None,
+                                    Some(start),
+                                    Some(end),
+                                    Some(captured),
+                                )
+                                .await
+                                .unwrap();
+                            }
+                        }
+                        let actual: i64 = sqlx::query_scalar(
+                            "SELECT COUNT(*) FROM audio_transcriptions WHERE transcription = ?1",
+                        )
+                        .bind(&text)
+                        .fetch_one(&db.pool)
+                        .await
+                        .unwrap();
+                        let overlap =
+                            first.0 < delta as f64 + second.1 && delta as f64 + second.0 < first.1;
+                        let expected = if overlap { 1 } else { 2 };
+                        lost_utterances += (expected - actual).max(0);
+                        missed_echoes += (actual - expected).max(0);
+                        cases += 1;
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("INTERVAL_RECALL_EVAL {{\"cases\":{cases},\"lost_utterances\":{lost_utterances},\"missed_echoes\":{missed_echoes}}}");
+    assert_eq!((lost_utterances, missed_echoes), (0, 0));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "manual race probe; reports duplicate survivors rather than promising exactly-once insertion"]
+async fn concurrent_echo_retention_probe() {
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(
+        DatabaseManager::new(
+            dir.path().join("race.sqlite").to_str().unwrap(),
+            Default::default(),
+        )
+        .await
+        .unwrap(),
+    );
+    let mut survivors = Vec::new();
+    for group in 0..64 {
+        let text = format!("Preserve the entire concurrent statement number {group}.");
+        let captured =
+            Utc::now() - chrono::Duration::days(1) + chrono::Duration::minutes(group * 2);
+        let barrier = Arc::new(tokio::sync::Barrier::new(8));
+        let mut tasks = Vec::new();
+        for i in 0..8 {
+            let (db, barrier, text) = (db.clone(), barrier.clone(), text.clone());
+            tasks.push(tokio::spawn(async move {
+                let device = AudioDevice {
+                    name: format!("device-{i}"),
+                    device_type: DeviceType::Input,
+                };
+                barrier.wait().await;
+                db.insert_audio_chunk_and_transcription(
+                    &format!("race-{group}-{i}.wav"),
+                    &text,
+                    0,
+                    "fixture",
+                    &device,
+                    None,
+                    Some(0.0),
+                    Some(10.0),
+                    Some(captured),
+                )
+                .await
+                .unwrap();
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+        let actual: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM audio_transcriptions WHERE transcription = ?1",
+        )
+        .bind(&text)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert!(
+            (1..=8).contains(&actual),
+            "race must preserve at least one complete copy"
+        );
+        survivors.push(actual);
+    }
+    let duplicated_groups = survivors.iter().filter(|&&n| n > 1).count();
+    let extra_copies: i64 = survivors.iter().map(|n| n - 1).sum();
+    eprintln!("CONCURRENT_RECALL_EVAL {{\"groups\":64,\"submissions\":512,\"lost_groups\":0,\"duplicated_groups\":{duplicated_groups},\"extra_copies\":{extra_copies}}}");
+}
+
+#[tokio::test]
+async fn invalid_or_partial_offsets_cannot_justify_deleting_speech() {
+    let invalid = [
+        (Some(0.0), None),
+        (None, Some(5.0)),
+        (Some(-1.0), Some(5.0)),
+        (Some(5.0), Some(1.0)),
+        (Some(0.0), Some(0.0)),
+        (Some(f64::NEG_INFINITY), Some(5.0)),
+        (Some(0.0), Some(f64::INFINITY)),
+        (Some(f64::NAN), Some(5.0)),
+        (Some(0.0), Some(f64::NAN)),
+    ];
+    for combined in [false, true] {
+        for invalid_first in [false, true] {
+            for offsets in invalid {
+                let dir = tempfile::tempdir().unwrap();
+                let db = DatabaseManager::new(
+                    dir.path().join("invalid.sqlite").to_str().unwrap(),
+                    Default::default(),
+                )
+                .await
+                .unwrap();
+                let at = Utc::now();
+                for i in 0..2 {
+                    let (start, end) = if (i == 0) == invalid_first {
+                        offsets
+                    } else {
+                        (Some(0.0), Some(5.0))
+                    };
+                    let device = AudioDevice {
+                        name: format!("device-{i}"),
+                        device_type: DeviceType::Input,
+                    };
+                    let file = format!("invalid-{i}.wav");
+                    if combined {
+                        db.insert_audio_chunk_and_transcription(
+                            &file,
+                            "Preserve this speech with uncertain timing.",
+                            0,
+                            "fixture",
+                            &device,
+                            None,
+                            start,
+                            end,
+                            Some(at),
+                        )
+                        .await
+                        .unwrap();
+                    } else {
+                        let chunk = db.insert_audio_chunk(&file, Some(at)).await.unwrap();
+                        db.insert_audio_transcription(
+                            chunk,
+                            "Preserve this speech with uncertain timing.",
+                            0,
+                            "fixture",
+                            &device,
+                            None,
+                            start,
+                            end,
+                            Some(at),
+                        )
+                        .await
+                        .unwrap();
+                    }
+                }
+                let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audio_transcriptions")
+                    .fetch_one(&db.pool)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    rows, 2,
+                    "combined={combined}, invalid_first={invalid_first}, offsets={offsets:?}"
+                );
+            }
+        }
+    }
+}
