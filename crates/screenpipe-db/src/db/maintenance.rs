@@ -1385,7 +1385,10 @@ impl DatabaseManager {
     fn planner_diagnostics_root(&self) -> Option<std::path::PathBuf> {
         let options = self.write_pool.connect_options();
         if options.get_filename() == std::path::Path::new(":memory:")
-            || options.get_filename().to_string_lossy().contains("mode=memory")
+            || options
+                .get_filename()
+                .to_string_lossy()
+                .contains("mode=memory")
         {
             return None;
         }
