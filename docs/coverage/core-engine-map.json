@@ -348,6 +348,7 @@
         "src/search_only.rs",
         "src/server.rs",
         "tests/router_contract_test.rs",
+        "tests/storage_compaction_api.rs",
         "tests/tags_test.rs",
         "tests/transcribe_test.rs",
         "tests/websockets_test.rs"
@@ -709,6 +710,7 @@
         "tests/range_export_frame_sources_test.rs",
         "tests/semantic_storage_test.rs",
         "tests/snapshot_compaction_test.rs",
+        "tests/storage_compaction.rs",
         "tests/storage_staging_drain.rs",
         "tests/suggestions_frames_table_test.rs",
         "tests/timeline_frameless_audio_test.rs",

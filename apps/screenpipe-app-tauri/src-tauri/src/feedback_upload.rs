@@ -1395,6 +1395,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn compact_preflight_failure_reaches_support_after_restart_and_rotation() {
+        let root = tempfile::tempdir().unwrap();
+        let mut options = screenpipe_db::storage::MigrationOptions::default();
+        options.budget.disk_reserve_bytes = 0;
+        let db =
+            screenpipe_db::DatabaseManager::new_hybrid(root.path(), Default::default(), options)
+                .await
+                .unwrap();
+        let mut descriptor = screenpipe_db::storage::StorageDescriptor::read(root.path())
+            .unwrap()
+            .unwrap();
+        descriptor.budget.disk_reserve_bytes = u64::MAX;
+        db.execute_raw_sql_write(&format!(
+            "UPDATE storage_metadata SET descriptor='{}'",
+            serde_json::to_string(&descriptor).unwrap().replace('\'', "''"),
+        )).await.unwrap();
+        std::fs::write(
+            root.path().join("storage.json"),
+            serde_json::to_vec(&descriptor).unwrap(),
+        )
+        .unwrap();
+        db.close().await;
+        // Run the real preflight and persist its outcome before collecting it.
+        let error = screenpipe_db::storage::compact(root.path(), Default::default())
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("insufficient compact disk reserve"));
+        assert!(!root.path().join("storage-maintenance.json").exists());
+        // Subsequent recovery attempts must not displace the compaction cause.
+        for kind in ["recovery1", "recovery2", "recovery3", "recovery4"] {
+            screenpipe_db::storage::diagnostics::observe(root.path(), kind, |_, _| {}, async {
+                Ok::<_, String>(())
+            })
+            .await
+            .unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    if screenpipe_db::storage::diagnostics::recent(root.path())
+                        .unwrap()
+                        .iter()
+                        .any(|snapshot| snapshot.kind == kind && snapshot.status == "completed")
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        assert_migration_report_uploaded(
+            root.path(),
+            &[
+                "compact",
+                "failed",
+                "compact_copy_preflight",
+                "insufficient compact disk reserve",
+                "available_bytes",
+                "required_bytes",
+                "reserve_bytes",
+                "source retained",
+                "retry compact",
+            ],
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn migration_retry_block_reaches_support_without_attempt_snapshots() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(
