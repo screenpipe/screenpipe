@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { commands } from "@/lib/utils/tauri";
 import { requestPermissionWithFlow } from "@/lib/utils/permission-flow";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 
 export type InputMonitoringStatus = "granted" | "notgranted" | "checking";
 
@@ -21,7 +22,12 @@ export function useInputMonitoringPermission(options?: {
   const onStatusChange = options?.onStatusChange;
   const pollIntervalMs = options?.pollIntervalMs ?? 3000;
 
-  const [status, setStatus] = useState<InputMonitoringStatus>("checking");
+  // Retained so the row doesn't sit on "checking" each time Settings opens;
+  // the poll below refreshes it straight away.
+  const [status, setStatus] = useRetainedState<InputMonitoringStatus>(
+    "permissions:inputMonitoring",
+    "checking",
+  );
   const [requesting, setRequesting] = useState(false);
   const [resetting, setResetting] = useState(false);
   // True from the moment the user clicks Enable in this session until
@@ -46,7 +52,7 @@ export function useInputMonitoringPermission(options?: {
       onStatusChange?.(false);
       return false;
     }
-  }, [onStatusChange]);
+  }, [onStatusChange, setStatus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,7 +73,7 @@ export function useInputMonitoringPermission(options?: {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [onStatusChange, pollIntervalMs]);
+  }, [onStatusChange, pollIntervalMs, setStatus]);
 
   const enable = useCallback(async () => {
     setRequesting(true);
@@ -86,7 +92,7 @@ export function useInputMonitoringPermission(options?: {
     } finally {
       setRequesting(false);
     }
-  }, [onStatusChange]);
+  }, [onStatusChange, setStatus]);
 
   const resetAndRetry = useCallback(async () => {
     setResetting(true);
@@ -104,7 +110,7 @@ export function useInputMonitoringPermission(options?: {
     } finally {
       setResetting(false);
     }
-  }, [onStatusChange]);
+  }, [onStatusChange, setStatus]);
 
   return {
     status,

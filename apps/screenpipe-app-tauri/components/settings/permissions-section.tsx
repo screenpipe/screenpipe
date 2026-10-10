@@ -16,6 +16,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { commands, type OSPermission, type OSPermissionStatus } from "@/lib/utils/tauri";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 import {
   openPermissionSettingsWithFlow,
   requestPermissionWithFlow,
@@ -158,11 +159,13 @@ function PermissionRow({
 function RequiredPermissions() {
 
   const gt = useGT();
-  const [statuses, setStatuses] = useState<{
+  // Retained so returning to Permissions shows the last check instead of a
+  // spinner on every row; the poll below refreshes it straight away.
+  const [statuses, setStatuses] = useRetainedState<{
     screenRecording: OSPermissionStatus;
     microphone: OSPermissionStatus;
     accessibility: OSPermissionStatus;
-  } | null>(null);
+  } | null>("permissions:required", null);
   const [busyId, setBusyId] = useState<string | null>(null);
   // AXIsProcessTrusted caches mid-session grants after tccutil reset / revoke.
   // After one live probe confirms denied, stop re-probing every poll.
@@ -191,7 +194,7 @@ function RequiredPermissions() {
     } catch {
       // Keep last known statuses on transient check failures.
     }
-  }, []);
+  }, [setStatuses]);
 
   useEffect(() => {
     void refresh();
@@ -348,7 +351,10 @@ function InputMonitoringPermissionRow() {
 function CalendarPermissionRow() {
 
   const gt = useGT();
-  const [status, setStatus] = useState<RowStatus>("checking");
+  const [status, setStatus] = useRetainedState<RowStatus>(
+    "permissions:calendar",
+    "checking",
+  );
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -363,7 +369,7 @@ function CalendarPermissionRow() {
     } catch {
       setStatus("missing");
     }
-  }, []);
+  }, [setStatus]);
 
   useEffect(() => {
     void refresh();

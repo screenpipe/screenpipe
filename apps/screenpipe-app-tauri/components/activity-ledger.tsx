@@ -71,6 +71,7 @@ import {
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useEnterpriseBuildStatus } from "@/lib/hooks/use-is-enterprise-build";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
 import { getAppServerBaseUrl } from "@/lib/notifications/app-server";
 import { cn } from "@/lib/utils";
@@ -1409,18 +1410,36 @@ export function ActivityLedger({
   const [customDateRange, setCustomDateRange] = useState<DateRange | undefined>(
     () => selectedDateRange(customStart, customEnd),
   );
-  const [summary, setSummary] = useState<ActivitySummaryResponse | null>(null);
-  const [meetings, setMeetings] = useState<ActivityReviewMeeting[]>([]);
-  const [ledgerIntervals, setLedgerIntervals] = useState<
+  // The loaded day outlives tab switches, so coming back shows it while the
+  // effects below refresh it instead of flashing the loading skeletons.
+  const [summary, setSummary] =
+    useRetainedState<ActivitySummaryResponse | null>("activity:summary", null);
+  const [meetings, setMeetings] = useRetainedState<ActivityReviewMeeting[]>(
+    "activity:meetings",
+    [],
+  );
+  const [ledgerIntervals, setLedgerIntervals] = useRetainedState<
     ActivityLedgerArtifactInterval[]
-  >([]);
-  const [ledgerArtifactsReady, setLedgerArtifactsReady] = useState(false);
-  const [history, setHistory] = useState<ActivityHistoryDocument | null>(null);
-  const [historyCoverage, setHistoryCoverage] = useState<
+  >("activity:ledgerIntervals", []);
+  const [ledgerArtifactsReady, setLedgerArtifactsReady] = useRetainedState(
+    "activity:ledgerArtifactsReady",
+    false,
+  );
+  const [history, setHistory] =
+    useRetainedState<ActivityHistoryDocument | null>("activity:history", null);
+  const [historyCoverage, setHistoryCoverage] = useRetainedState<
     ActivityHistoryCoverage[]
-  >([]);
+  >("activity:historyCoverage", []);
   const [loading, setLoading] = useState(true);
+  // This visit's encrypted-cache answer. Actions wait for it.
   const [cacheReady, setCacheReady] = useState(false);
+  // Whether the cache has answered for this range on any visit; a failed
+  // read doesn't count. Only display leans on it, so a return visit doesn't
+  // flash the cache skeleton.
+  const [cacheAnswered, setCacheAnswered] = useRetainedState(
+    "activity:cacheAnswered",
+    false,
+  );
   const [historyLoading, setHistoryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState("");
@@ -1446,6 +1465,34 @@ export function ActivityLedger({
   const activityHistoryRestricted =
     !enterpriseBuild.isEnterprise &&
     isFreeOrUnattributedUser(activityUser);
+  // Everything retained above belongs to one range. Picking another range,
+  // reopening a relative one on a new day, or a plan change that limits
+  // history starts over from empty; only a return visit to the same range
+  // keeps it. The loading flags restart with it, so the new range's first
+  // render already shows it loading rather than the old range's answers.
+  const selection = [
+    activityHistoryRestricted ? "limited" : "full",
+    preset,
+    preset === "custom"
+      ? `${customStart}:${customEnd}`
+      : toLocalInputValue(startOfLocalDay(anchor)),
+  ].join(":");
+  const [loadedSelection, setLoadedSelection] = useRetainedState(
+    "activity:selection",
+    selection,
+  );
+  if (loadedSelection !== selection) {
+    setLoadedSelection(selection);
+    setSummary(null);
+    setMeetings([]);
+    setLedgerIntervals([]);
+    setLedgerArtifactsReady(false);
+    setHistory(null);
+    setHistoryCoverage([]);
+    setLoading(true);
+    setCacheReady(false);
+    setCacheAnswered(false);
+  }
   useEffect(() => {
     if (
       activityHistoryRestricted &&
@@ -1557,10 +1604,6 @@ export function ActivityLedger({
     }
     const controller = new AbortController();
     setLoading(true);
-    setSummary(null);
-    setMeetings([]);
-    setLedgerIntervals([]);
-    setLedgerArtifactsReady(false);
     setError(null);
     void localFetch(buildActivityLedgerArtifactsPath(range), {
       signal: controller.signal,
@@ -1654,7 +1697,14 @@ export function ActivityLedger({
         }
       });
     return () => controller.abort();
-  }, [activityHistoryAccessStart, range]);
+  }, [
+    activityHistoryAccessStart,
+    range,
+    setLedgerArtifactsReady,
+    setLedgerIntervals,
+    setMeetings,
+    setSummary,
+  ]);
 
   useEffect(() => {
     historyAbortRef.current?.abort();
@@ -1672,6 +1722,7 @@ export function ActivityLedger({
         const snapshot = result.data;
         setHistory(historyDocumentFromNative(snapshot.entries));
         setHistoryCoverage(snapshot.coverage);
+        setCacheAnswered(true);
       })
       .catch(() => {
         // The tab remains usable in memory if encrypted-store access fails.
@@ -1684,7 +1735,7 @@ export function ActivityLedger({
       // History generation must outlive this page so its result is persisted
       // even when the user navigates elsewhere while Pi is still working.
     };
-  }, [preset, range]);
+  }, [preset, range, setCacheAnswered, setHistory, setHistoryCoverage]);
 
   useTauriEvent("activity-history-updated", () => {
     if (!range) return;
@@ -1808,7 +1859,7 @@ export function ActivityLedger({
         }
       }
     },
-    [preset, range],
+    [preset, range, setHistory, setHistoryCoverage],
   );
 
   const regenerateSelectedRange = useCallback(
@@ -2148,7 +2199,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
           ) : !activitiesEnabled ? (
             loading && !summary ? (
               <ActivityLedgerSkeleton label={ui("Reading your day…")} />
-            ) : !cacheReady ? (
+            ) : !cacheReady && !cacheAnswered ? (
               <ActivityLedgerSkeleton label={ui("Loading generated activities…")} />
             ) : historyLoading ? (
               <ActivityLedgerSkeleton label={ui("Understanding what you worked on…")} />
@@ -2168,6 +2219,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                     size="sm"
                     className="mt-5 h-10 px-5 normal-case tracking-wide"
                     onClick={() => void enableActivities()}
+                    disabled={!cacheReady}
                   >
                     {historyError ? ui("Try again") : ui("Enable activities")}
                   </Button>
@@ -2176,7 +2228,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
             )
           ) : history ? (
             <section aria-label={ui("Activity history")}>
-              {cacheReady && pendingHistoryRange && recentActivityAvailable ? (
+              {cacheAnswered && pendingHistoryRange && recentActivityAvailable ? (
                 <p role="status" className="mb-4 text-sm text-muted-foreground">
                   {ui(
                     "Not yet summarized: {value1}. Refresh history to fill this interval.",
@@ -2275,7 +2327,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
             <ActivityLedgerSkeleton label={ui("Reading your day…")} />
           ) : error ? (
             <p className="text-sm text-muted-foreground">{error}</p>
-          ) : !cacheReady ? (
+          ) : !cacheReady && !cacheAnswered ? (
             <ActivityLedgerSkeleton label={ui("Loading generated activities…")} />
           ) : historyLoading && !history ? (
             <ActivityLedgerSkeleton label={ui("Understanding what you worked on…")} />
@@ -2295,6 +2347,7 @@ Re-query Screenpipe only inside the cited time range and use the cited frames an
                   size="sm"
                   className="mt-5 h-10 px-5 normal-case tracking-wide"
                   onClick={() => regenerateSelectedRange("empty_state")}
+                  disabled={!cacheReady}
                 >
                   {historyError ? ui("Try again") : ui("Generate activities")}
                 </Button>

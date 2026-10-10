@@ -36,6 +36,8 @@ export default [
     // `@next/next/no-img-element` directives in these files resolve instead of
     // erroring with "rule not found" under this standalone config.
     plugins: { "react-x": react, "react-hooks": reactHooks, "@next/next": nextPlugin },
+    // useRetainedState returns useState's pair, so its setters count too.
+    settings: { "react-x": { additionalStateHooks: "useRetainedState" } },
     rules: {
       // setState called directly in an effect body (the render-loop /
       // state-sync smell — buckets A/B/C). Formerly

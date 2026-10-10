@@ -60,6 +60,7 @@ import { addRule, type WindowRules } from "@/lib/settings/capture-filters";
 import { InputMonitoringPanel } from "./input-monitoring-card";
 import { ApplyRestartBar } from "./apply-restart-bar";
 import { useSettings, Settings } from "@/lib/hooks/use-settings";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 import { ScheduleSettings } from "./schedule-settings";
 import { RemoteSupportLogsCard } from "./remote-support-logs-card";
 import { open as openUrl } from "@tauri-apps/plugin-shell";
@@ -93,7 +94,11 @@ function EncryptDataCard({
 }) {
 
   const ui = useGT();
-  const [keychainState, setKeychainState] = useState<string>("loading");
+  // Retained so the card doesn't pop in after the keychain check on each visit.
+  const [keychainState, setKeychainState] = useRetainedState<string>(
+    "privacy:keychainState",
+    "loading",
+  );
   const [toggling, setToggling] = useState(false);
   const { toast } = useToast();
 
@@ -105,7 +110,7 @@ function EncryptDataCard({
         setKeychainState("unavailable");
       }
     });
-  }, []);
+  }, [setKeychainState]);
 
   // Combined "on" state: keychain enabled AND settings encryption on
   const isFullyEnabled = keychainState === "enabled" && encryptStore;

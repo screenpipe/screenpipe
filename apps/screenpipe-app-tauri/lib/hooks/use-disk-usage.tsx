@@ -6,6 +6,7 @@
 import { useState, useEffect, useRef } from "react";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 
 export interface MonitorUsage {
   name: string;
@@ -41,8 +42,20 @@ export interface DiskUsage {
 
 export function useDiskUsage() {
   const { settings, getDataDir } = useSettings();
-  const [diskUsage, setDiskUsage] = useState<DiskUsage | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  // The last numbers outlive leaving Storage, tagged with the data dir they
+  // were measured for. Coming back to the same dir shows them while a quiet
+  // refresh runs; any other dir gets the visible loading state as before.
+  const [measured, setMeasured] = useRetainedState<{
+    dataDir: string;
+    usage: DiskUsage;
+  } | null>("diskUsage", null);
+  const hasCurrentUsage =
+    measured !== null && measured.dataDir === settings.dataDir;
+  // Numbers for another dir must not reach callers (e.g. retention's space
+  // check), so they read as not loaded yet.
+  const diskUsage = hasCurrentUsage ? measured.usage : null;
+  // A visible (not quiet) fetch is running.
+  const [fetching, setFetching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Monotonic request id — if the user rapidly switches data dirs, older
   // in-flight fetches may resolve AFTER newer ones. Committing the older
@@ -50,17 +63,21 @@ export function useDiskUsage() {
   // fetch and ignore any response whose id no longer matches the latest.
   const fetchIdRef = useRef(0);
 
-  const fetchDiskUsage = async (forceRefresh: boolean = false) => {
+  const fetchDiskUsage = async (forceRefresh: boolean = false, quiet = false) => {
     const fetchId = ++fetchIdRef.current;
+    const measuredDataDir = settings.dataDir;
     try {
-      setIsLoading(true);
+      if (!quiet) setFetching(true);
       setError(null);
 
       const dataDir = await getDataDir();
-      // Add a small delay to show loading state for very fast calculations
+      // Add a small delay to show loading state for very fast calculations.
+      // A quiet refresh shows no loading state, so it skips the delay.
       const [res] = await Promise.all([
         commands.getDiskUsage(forceRefresh, dataDir),
-        new Promise((resolve) => setTimeout(resolve, forceRefresh ? 300 : 500)), // Shorter delay on force refresh
+        quiet
+          ? null
+          : new Promise((resolve) => setTimeout(resolve, forceRefresh ? 300 : 500)), // Shorter delay on force refresh
       ]);
 
       if (res.status === "error") throw new Error(res.error);
@@ -68,7 +85,7 @@ export function useDiskUsage() {
 
       // Stale response guard: a newer fetch has been kicked off — discard.
       if (fetchId !== fetchIdRef.current) return;
-      setDiskUsage(result);
+      setMeasured({ dataDir: measuredDataDir, usage: result });
     } catch (err) {
       if (fetchId !== fetchIdRef.current) return; // same guard for errors
       console.error("Failed to fetch disk usage:", err);
@@ -104,10 +121,10 @@ export function useDiskUsage() {
       setError(errorMessage);
     } finally {
       // Only the latest fetch controls the loading indicator; otherwise a
-      // stale finally would flip `isLoading` off while a newer fetch is
+      // stale finally would flip `fetching` off while a newer fetch is
       // still pending.
       if (fetchId === fetchIdRef.current) {
-        setIsLoading(false);
+        setFetching(false);
       }
     }
   };
@@ -117,12 +134,14 @@ export function useDiskUsage() {
   // `fetchDiskUsage(true)` bypasses the backend cache in case it still
   // holds pre-migration data that slipped past the dir-keyed invalidation.
   useEffect(() => {
-    fetchDiskUsage(true);
+    fetchDiskUsage(true, hasCurrentUsage);
   }, [settings.dataDir]);
 
   return {
     diskUsage,
-    isLoading,
+    // Missing numbers read as loading too, including the render where the
+    // data dir changes, before the effect above starts their fetch.
+    isLoading: fetching || (diskUsage === null && error === null),
     error,
     refetch: () => fetchDiskUsage(true), // Force refresh when user clicks refresh
   };

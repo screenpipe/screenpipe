@@ -8,6 +8,8 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { Archive, CheckSquare, Download, FolderOpen, Loader2, MessageSquare, MoreVertical, Pin, Plus, Search, Timer, Trash2, Undo2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePlatform } from "@/lib/hooks/use-platform";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
+import { CHAT_HISTORY_LIST_KEY } from "@/lib/hooks/use-forget-retained-state";
 import { isInjectedTitle } from "@/lib/chat-utils";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -56,6 +58,12 @@ import { useUiLocale as useLocale } from "@/lib/i18n/provider";
 type HistoryTab = "chats" | "pipes" | "archived" | "all";
 
 const HISTORY_PAGE_SIZE = 30;
+
+// Identifies which list is on screen: the tab plus the trimmed search.
+function historyViewKey(tab: HistoryTab, query: string): string {
+  return `${tab}\n${query.trim()}`;
+}
+
 const TABS: ReadonlyArray<{ value: HistoryTab; label: string }> = [
   { value: "chats", label: msg("Chats", {}) },
   { value: "pipes", label: msg("Automations", {}) },
@@ -77,12 +85,33 @@ export function ChatHistoryView({
   const uiMessages = useMessages();
   const ui = useGT();
   const { isMac } = usePlatform();
-  const [tab, setTab] = useState<HistoryTab>("chats");
-  const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
+  // As in Meetings and Discover, the tab, search and list outlive leaving the
+  // view. `shownView` records which tab and search the list was loaded for:
+  // reopening that view refreshes it quietly, and only a different one shows
+  // the spinner.
+  const [tab, setTab] = useRetainedState<HistoryTab>("chatHistory:tab", "chats");
+  const [query, setQuery] = useRetainedState("chatHistory:query", "");
+  const [conversations, setConversations] = useRetainedState<
+    ConversationMeta[]
+  >(CHAT_HISTORY_LIST_KEY, []);
+  const [hasMore, setHasMore] = useRetainedState("chatHistory:hasMore", false);
+  const [shownView, setShownView] = useRetainedState<string | null>(
+    "chatHistory:view",
+    null,
+  );
+  const shownViewRef = React.useRef(shownView);
+  // Latest value mirrored during render (read only from `load`).
+  shownViewRef.current = shownView;
+  // Every mount starts with a reset load: a refresh when its view is already
+  // on screen, a spinner otherwise.
+  const [loading, setLoading] = useState(
+    () => shownView !== historyViewKey(tab, query),
+  );
+  // A reset of the view already on screen keeps the list instead of showing
+  // the spinner. Until it lands, an append would fetch page one again onto
+  // the old rows, so infinite scroll waits for it.
+  const [refreshing, setRefreshing] = useState(() => !loading);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(false);
-  const [conversations, setConversations] = useState<ConversationMeta[]>([]);
   const [deleteIds, setDeleteIds] = useState<string[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const migratedRef = React.useRef(false);
@@ -103,8 +132,10 @@ export function ChatHistoryView({
   const load = useCallback(
     async (mode: "reset" | "append" = "reset") => {
       const token = ++loadTokenRef.current;
+      const view = historyViewKey(tab, query);
       if (mode === "reset") {
-        setLoading(true);
+        if (view !== shownViewRef.current) setLoading(true);
+        else setRefreshing(true);
       } else {
         setLoadingMore(true);
       }
@@ -144,19 +175,25 @@ export function ChatHistoryView({
           metas = metas.filter((m) => m.kind === "pipe-watch" || m.kind === "pipe-run");
         }
         setConversations((prev) => (mode === "reset" ? metas : [...prev, ...metas]));
+        if (mode === "reset") setShownView(view);
         setHasMore(rawCount === HISTORY_PAGE_SIZE);
       } catch {
         if (token !== loadTokenRef.current) return;
-        if (mode === "reset") setConversations([]);
+        if (mode === "reset") {
+          setConversations([]);
+          // Nothing loaded for this view: show the spinner next time.
+          setShownView(null);
+        }
         setHasMore(false);
       } finally {
         if (token === loadTokenRef.current) {
           setLoading(false);
+          setRefreshing(false);
           setLoadingMore(false);
         }
       }
     },
-    [query, tab]
+    [query, tab, setConversations, setHasMore, setShownView]
   );
 
   useEffect(() => {
@@ -175,14 +212,14 @@ export function ChatHistoryView({
       (entries) => {
         const entry = entries[0];
         if (!entry?.isIntersecting) return;
-        if (loading || loadingMore) return;
+        if (loading || refreshing || loadingMore) return;
         void load("append");
       },
       { root: container, rootMargin: "300px 0px" }
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasMore, loading, loadingMore, load]);
+  }, [hasMore, loading, refreshing, loadingMore, load]);
 
   // Selection is intentionally ephemeral: clear on tab switch, search changes, or leaving the view.
   useEffect(() => {

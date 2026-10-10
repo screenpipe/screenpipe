@@ -13,6 +13,7 @@ export const searchIndex: SettingsField[] = [
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/components/ui/use-toast";
 import {
@@ -927,9 +928,27 @@ function MergeBanner({
 export function SpeakersSection() {
 
   const ui = useGT();
-  const [speakers, setSpeakers] = useState<Speaker[]>([]);
-  const [unnamed, setUnnamed] = useState<Speaker[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Retained so returning to Speakers doesn't flash the skeleton while the
+  // lists refresh. `listsLoaded` is set only when both lists arrive, so a
+  // failed load shows the skeleton again next visit instead of passing for
+  // "no speakers".
+  const [speakers, setSpeakers] = useRetainedState<Speaker[]>(
+    "speakers:named",
+    [],
+  );
+  const [unnamed, setUnnamed] = useRetainedState<Speaker[]>(
+    "speakers:unnamed",
+    [],
+  );
+  const [listsLoaded, setListsLoaded] = useRetainedState(
+    "speakers:loaded",
+    false,
+  );
+  const [loading, setLoading] = useState(!listsLoaded);
+  // False until this visit's first fetch settles. The voice-matching lookups
+  // below wait for it: started on the retained lists, they would be cancelled
+  // and sent again when the fresh lists land, and the server runs both rounds.
+  const [listRefreshed, setListRefreshed] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [mergeSuggestions, setMergeSuggestions] = useState<
@@ -954,12 +973,14 @@ export function SpeakersSection() {
         setUnnamed(
           await unnamedRes.json().then((d: any) => (Array.isArray(d) ? d : [])),
         );
+      if (namedRes.ok && unnamedRes.ok) setListsLoaded(true);
     } catch {
       /* server not running */
     } finally {
       setLoading(false);
+      setListRefreshed(true);
     }
-  }, []);
+  }, [setListsLoaded, setSpeakers, setUnnamed]);
 
   useEffect(() => {
     fetchSpeakers();
@@ -967,6 +988,7 @@ export function SpeakersSection() {
 
   // Build clusters from unnamed speakers using similarity
   useEffect(() => {
+    if (!listRefreshed) return;
     if (unnamed.length === 0) {
       setClusters([]);
       return;
@@ -1047,10 +1069,11 @@ export function SpeakersSection() {
 
     buildClusters();
     return () => controller.abort();
-  }, [unnamed]);
+  }, [listRefreshed, unnamed]);
 
   // Fetch merge suggestions (named speakers with unnamed duplicates)
   useEffect(() => {
+    if (!listRefreshed) return;
     if (unnamed.length === 0 && speakers.length === 0) return;
     const controller = new AbortController();
 
@@ -1085,7 +1108,7 @@ export function SpeakersSection() {
 
     fetchSuggestions();
     return () => controller.abort();
-  }, [unnamed, speakers]);
+  }, [listRefreshed, unnamed, speakers]);
 
   const updateSpeaker = async (id: number, name: string) => {
     const res = await localFetch("/speakers/update", {
@@ -1342,13 +1365,17 @@ export function SpeakersSection() {
         </div>
       )}
 
-      {filteredSpeakers.length === 0 && filteredClusters.length === 0 && (
-        <p className="text-sm text-muted-foreground py-8 text-center">
-          {searchQuery
-            ? ui("No speakers match your search")
-            : ui("No speakers detected yet")}
-        </p>
-      )}
+      {/* Unnamed speakers have no groups yet while their lookups run; the
+          banner above already counts them. */}
+      {filteredSpeakers.length === 0 &&
+        filteredClusters.length === 0 &&
+        (searchQuery || unnamed.length === 0) && (
+          <p className="text-sm text-muted-foreground py-8 text-center">
+            {searchQuery
+              ? ui("No speakers match your search")
+              : ui("No speakers detected yet")}
+          </p>
+        )}
     </div>
   );
 }

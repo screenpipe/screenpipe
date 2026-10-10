@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useCallback, useRef, Fragment, type ReactNode } from "react";
 import { useInterval } from "@/lib/hooks/use-interval";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 import { Bell, Check, ChevronRight, ChevronDown, Copy, ExternalLink, MessageSquare, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { notificationUrlTransform, openScreenpipeViewerLink } from "@/components/markdown";
@@ -643,7 +644,11 @@ export function NotificationBell() {
 
   const ui = useGT();
   const [open, setOpen] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(0);
+  // Retained so the dot doesn't pop in on every visit to Automations.
+  const [unreadCount, setUnreadCount] = useRetainedState(
+    "notifications:unreadCount",
+    0,
+  );
 
   // Lightweight unread poll for the closed-state dot; the panel fetches its
   // own full history while open.
@@ -657,7 +662,7 @@ export function NotificationBell() {
     } catch {
       // server not ready yet
     }
-  }, []);
+  }, [setUnreadCount]);
 
   useEffect(() => {
     pollUnread();

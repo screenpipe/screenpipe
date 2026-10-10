@@ -9,6 +9,7 @@ import { Battery, BatteryCharging, BatteryLow, Zap, Leaf, Gauge, MicOff, PauseCi
 import { cn } from "@/lib/utils";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { localFetch } from "@/lib/api";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
 import { commands } from "@/lib/utils/tauri";
@@ -88,7 +89,11 @@ export function BatterySaverSection() {
   const ui = useGT();
   const { settings, updateSettings } = useSettings();
   const { toast } = useToast();
-  const [status, setStatus] = useState<PowerStatus | null>(null);
+  // Retained so the badge and profile row don't pop in on every visit.
+  const [status, setStatus] = useRetainedState<PowerStatus | null>(
+    "battery:status",
+    null,
+  );
   const [updating, setUpdating] = useState(false);
   const [keepAwakeUpdating, setKeepAwakeUpdating] = useState(false);
 
@@ -102,7 +107,7 @@ export function BatterySaverSection() {
     } catch {
       // Server may not be running yet — keep last-known status if any
     }
-  }, []);
+  }, [setStatus]);
 
   useEffect(() => {
     fetchStatus();

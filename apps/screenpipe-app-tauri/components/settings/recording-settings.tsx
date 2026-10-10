@@ -9,6 +9,7 @@ const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:8080";
 import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useEventListener } from "@/lib/hooks/use-event-listener";
 import { useInterval } from "@/lib/hooks/use-interval";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 import { useSettingsIndexDriftCheck, type SettingsField } from "./settings-search";
 import { CaptureFrequencyPreview, AudioCaptureModePreview } from "./setting-previews";
 import {
@@ -1791,25 +1792,32 @@ export function RecordingSettings({ section }: { section: RecordingSettingsSecti
   const { items: urlItems, isLoading: isUrlItemsLoading } =
     useSqlAutocomplete("url");
 
-  const [availableMonitors, setAvailableMonitors] = useState<MonitorDevice[]>(
-    []
-  );
-  const [availableAudioDevices, setAvailableAudioDevices] = useState<
+  // Devices, platform and capability checks are retained so returning to
+  // Recording or Audio doesn't pop tiles and controls in after each check.
+  const [availableMonitors, setAvailableMonitors] = useRetainedState<
+    MonitorDevice[]
+  >("recording:monitors", []);
+  const [availableAudioDevices, setAvailableAudioDevices] = useRetainedState<
     AudioDeviceInfo[]
-  >([]);
+  >("recording:audioDevices", []);
 
-  const [isMacOS, setIsMacOS] = useState(false);
-  const [isWindows, setIsWindows] = useState(false);
+  const [isMacOS, setIsMacOS] = useRetainedState("recording:isMacOS", false);
+  const [isWindows, setIsWindows] = useRetainedState(
+    "recording:isWindows",
+    false,
+  );
 
   // Gate for process-tap-backed experimental audio controls. CoreAudio global
   // system audio is macOS-only; meeting piggyback can use the same availability
   // probe on macOS and Windows.
-  const [processTapAvailable, setProcessTapAvailable] = useState<boolean | null>(null);
+  const [processTapAvailable, setProcessTapAvailable] = useRetainedState<
+    boolean | null
+  >("recording:processTapAvailable", null);
   useEffect(() => {
     commands.checkCoreaudioProcessTapAvailable()
       .then(setProcessTapAvailable)
       .catch(() => setProcessTapAvailable(false));
-  }, []);
+  }, [setProcessTapAvailable]);
 
   type ExcludedApp = {
     bundleId: string;
@@ -1821,7 +1829,10 @@ export function RecordingSettings({ section }: { section: RecordingSettingsSecti
   // the audio engine (file at ~/.screenpipe/audio-exclusions.json); we just
   // read/write it through Tauri commands. The capture engine reloads changes
   // without requiring the UI to pass platform-specific process identifiers.
-  const [audioExclusions, setAudioExclusions] = useState<ExcludedApp[]>([]);
+  const [audioExclusions, setAudioExclusions] = useRetainedState<ExcludedApp[]>(
+    "recording:audioExclusions",
+    [],
+  );
   const [pendingAudioExclusions, setPendingAudioExclusions] = useState<ExcludedApp[] | null>(null);
   const [selectedBundleId, setSelectedBundleId] = useState<string | null>(null);
   const effectiveAudioExclusions = pendingAudioExclusions ?? audioExclusions;
@@ -1842,7 +1853,7 @@ export function RecordingSettings({ section }: { section: RecordingSettingsSecti
         variant: "destructive",
       });
     }
-  }, [toast, uiLanguage]);
+  }, [setAudioExclusions, toast, uiLanguage]);
 
   useEffect(() => {
     if ((!isMacOS && !isWindows) || !processTapAvailable) return;
@@ -1927,7 +1938,8 @@ export function RecordingSettings({ section }: { section: RecordingSettingsSecti
   const [isRefreshingSubscription, setIsRefreshingSubscription] = useState(false);
   const { checkLogin } = useLoginDialog();
   const overlayData = useOverlayData();
-  const [hwCapability, setHwCapability] = useState<HardwareCapability | null>(null);
+  const [hwCapability, setHwCapability] =
+    useRetainedState<HardwareCapability | null>("recording:hwCapability", null);
 
   // OpenAI Compatible model fetching
   const {
@@ -1971,7 +1983,7 @@ export function RecordingSettings({ section }: { section: RecordingSettingsSecti
 
   useEffect(() => {
     commands.getHardwareCapability().then(setHwCapability).catch(() => {});
-  }, []);
+  }, [setHwCapability]);
 
   const audioEngineResolution = useMemo(
     () => getAudioEngineResolution(settings),
@@ -2150,7 +2162,7 @@ export function RecordingSettings({ section }: { section: RecordingSettingsSecti
       }
     };
     checkPlatform();
-  }, []);
+  }, [setIsMacOS, setIsWindows]);
 
   useEffect(() => {
     const previousSnapshot = languageSelectionSnapshotRef.current;

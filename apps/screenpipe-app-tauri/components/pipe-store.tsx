@@ -6,6 +6,7 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useEventListener } from "@/lib/hooks/use-event-listener";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 // PipeMonitorView merged into PipesSection as device dropdown
 import { apiCache } from "@/lib/cache";
 import { localFetch } from "@/lib/api";
@@ -426,6 +427,15 @@ export function PipeStoreView() {
 
 // --- Discover View ---
 
+// A store listing's request path (less the leading slash), which also keys
+// its apiCache entry. The cache holds only successful answers.
+function storeCacheKey(query: string, sort: string): string {
+  const params = new URLSearchParams();
+  if (query) params.set("q", query);
+  if (sort) params.set("sort", sort);
+  return `pipes/store?${params}`;
+}
+
 function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
 
   const uiMessages = useMessages();
@@ -435,12 +445,22 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
   const openFeedback = useFeedbackStore((s) => s.openFeedback);
   const token = settings.user?.token;
 
-  // Browse state
-  const [pipes, setPipes] = useState<StorePipe[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Browse state. The filters outlive tab switches, and the list starts from
+  // the cached answer for them, so coming back shows it at once while
+  // fetchPipes revalidates. A failed load caches nothing and shows the
+  // skeleton again. A visit applies the kept search at once: leaving
+  // mid-debounce must not leave the field filtering nothing.
+  const [searchQuery, setSearchQuery] = useRetainedState("discover:query", "");
+  const [debouncedQuery, setDebouncedQuery] = useState(searchQuery);
+  const [sort, setSort] = useRetainedState("discover:sort", "popular");
+  const [category, setCategory] = useRetainedState("discover:category", "All");
+  const [pipes, setPipes] = useState<StorePipe[]>(
+    () => apiCache.getStale<StorePipe[]>(storeCacheKey(debouncedQuery, sort)) ?? [],
+  );
+  const [loading, setLoading] = useState(
+    () => apiCache.getStale(storeCacheKey(debouncedQuery, sort)) === null,
+  );
   const [loadError, setLoadError] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
 
   // Prefill search from ?q= URL param after mount, then strip it so it doesn't persist
   useEffect(() => {
@@ -452,9 +472,7 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
       params.delete("q");
       window.history.replaceState({}, "", `${window.location.pathname}?${params}`);
     }
-  }, []);
-  const [category, setCategory] = useState("All");
-  const [sort, setSort] = useState("popular");
+  }, [setSearchQuery]);
 
   // Derive unique categories from pipe data
   const dynamicCategories = useMemo(() => {
@@ -508,12 +526,12 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
 
   // First-visit banner — show once, dismiss permanently
   // Initialize false to match server render, set true after mount if not dismissed
-  const [showWelcome, setShowWelcome] = useState(false);
+  const [showWelcome, setShowWelcome] = useRetainedState("discover:welcome", false);
   useEffect(() => {
     if (!localStorage.getItem("screenpipe:pipes-welcome-dismissed")) {
       setShowWelcome(true);
     }
-  }, []);
+  }, [setShowWelcome]);
 
   const dismissWelcome = () => {
     setShowWelcome(false);
@@ -563,22 +581,20 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
 
   // Fetch pipes with stale-while-revalidate caching
   // Category filtering is done client-side so we always have all categories for the pills
+  // Only the latest request's answer is shown: an earlier search's can land last.
+  const latestRequest = useRef(0);
   const fetchPipes = useCallback(async () => {
-    const params = new URLSearchParams();
-    if (debouncedQuery) params.set("q", debouncedQuery);
-    if (sort) params.set("sort", sort);
-    const cacheKey = `pipes/store?${params}`;
+    const request = ++latestRequest.current;
+    const cacheKey = storeCacheKey(debouncedQuery, sort);
     setLoadError(false);
 
     // Show cached data immediately if available
     const cached = apiCache.getStale<any[]>(cacheKey);
     if (cached) {
       setPipes(cached);
+      setLoading(false);
       // If cache is still fresh, skip network request
-      if (apiCache.isFresh(cacheKey)) {
-        setLoading(false);
-        return;
-      }
+      if (apiCache.isFresh(cacheKey)) return;
     } else {
       setLoading(true);
     }
@@ -587,20 +603,21 @@ function DiscoverView({ onInstalled }: { onInstalled?: () => void }) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10_000);
     try {
-      const res = await localFetch(`/pipes/store?${params}`, { signal: controller.signal });
+      const res = await localFetch(`/${cacheKey}`, { signal: controller.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const list = getPipeStoreList(data);
       const normalized = list.map(normalizePipe);
       apiCache.set(cacheKey, normalized, 5 * 60_000); // 5 min TTL
-      setPipes(normalized);
+      if (request === latestRequest.current) setPipes(normalized);
     } catch (err) {
       console.error("failed to fetch pipe store:", err);
+      if (request !== latestRequest.current) return;
       setLoadError(true);
       if (!cached) setPipes([]);
     } finally {
       clearTimeout(timeoutId);
-      setLoading(false);
+      if (request === latestRequest.current) setLoading(false);
     }
   }, [debouncedQuery, sort]);
 

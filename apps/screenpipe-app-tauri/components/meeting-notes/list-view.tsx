@@ -37,6 +37,7 @@ interface ListViewProps {
   starting: boolean;
   loadingMore: boolean;
   hasMore: boolean;
+  canLoadMore: boolean;
   onLoadMore: () => void;
   errorText: string | null;
   onRetry: () => void;
@@ -65,6 +66,7 @@ export function ListView({
   starting,
   loadingMore,
   hasMore,
+  canLoadMore,
   onLoadMore,
   errorText,
   onRetry,
@@ -93,13 +95,26 @@ export function ListView({
       <div className="max-w-3xl mx-auto px-12 py-10">
         <header className="mb-8">
           {meetingActive && activeMeeting ? (
-            <RecordingStrip
-              meeting={activeMeeting}
-              onOpen={() => onSelect(activeMeeting.id)}
-              onStop={onStop}
-              stopping={starting}
-              captureState={captureState}
-            />
+            <div className="space-y-3">
+              <RecordingStrip
+                meeting={activeMeeting}
+                onOpen={() => onSelect(activeMeeting.id)}
+                onStop={onStop}
+                stopping={starting}
+                captureState={captureState}
+              />
+              {/* A search from before the meeting started still filters the
+                  list, so it stays visible and clearable. */}
+              {isSearchActive && (
+                <div className="flex justify-end">
+                  <SearchBar
+                    value={searchInput}
+                    onChange={onSearchInputChange}
+                    searching={searching}
+                  />
+                </div>
+              )}
+            </div>
           ) : (
             !trulyEmpty && (
               <div className="flex items-center justify-end gap-2">
@@ -189,7 +204,7 @@ export function ListView({
                 variant="ghost"
                 size="sm"
                 onClick={onLoadMore}
-                disabled={loadingMore}
+                disabled={loadingMore || !canLoadMore}
                 className="gap-2 normal-case tracking-normal text-muted-foreground hover:text-foreground"
               >
                 {loadingMore ? (

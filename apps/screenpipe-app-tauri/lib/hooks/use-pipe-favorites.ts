@@ -4,6 +4,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { localFetch } from "@/lib/api";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 
 /**
  * Per-machine pipe favorites.
@@ -25,7 +26,12 @@ function readInitialShowOnly(): boolean {
 }
 
 export function usePipeFavorites() {
-  const [favorites, setFavorites] = useState<Set<string>>(new Set());
+  // Retained so starred order and the starred-only filter don't settle after
+  // the list on every visit.
+  const [favorites, setFavorites] = useRetainedState<Set<string>>(
+    "pipes:favorites",
+    () => new Set(),
+  );
   const [showOnly, setShowOnlyState] = useState<boolean>(readInitialShowOnly);
   const [ready, setReady] = useState(false);
 
@@ -47,7 +53,7 @@ export function usePipeFavorites() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [setFavorites]);
 
   const setShowOnly = useCallback((v: boolean) => {
     setShowOnlyState(v);
@@ -83,7 +89,7 @@ export function usePipeFavorites() {
         setFavorites(favorites);
       }
     },
-    [favorites],
+    [favorites, setFavorites],
   );
 
   const isFavorite = useCallback(

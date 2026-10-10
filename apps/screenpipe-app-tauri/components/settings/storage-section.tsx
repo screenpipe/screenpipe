@@ -25,6 +25,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { open } from "@tauri-apps/plugin-dialog";
 import { commands, CacheFile } from "@/lib/utils/tauri";
 import { clearTimelineCache, hasCachedData } from "@/lib/hooks/use-timeline-cache";
+import { forgetRetainedStateEverywhere } from "@/lib/hooks/use-forget-retained-state";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -111,6 +112,8 @@ export function StorageSection() {
       await commands.spawnScreenpipe(null);
       await new Promise((resolve) => setTimeout(resolve, 1000));
       setDataDirChanged(false);
+      // Sections' retained lists came from the old folder.
+      void forgetRetainedStateEverywhere();
       toast({
         title: ui("Restarted"),
         description: ui("Screenpipe restarted with the new data directory"),

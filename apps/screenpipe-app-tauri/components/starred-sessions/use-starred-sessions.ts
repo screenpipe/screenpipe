@@ -4,6 +4,7 @@
 import { emit } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 import { localFetch } from "@/lib/api";
 
 export interface StarredSession {
@@ -45,7 +46,13 @@ export function sessionContext(session: StarredSession) {
 }
 
 export function useStarredSessions() {
-  const [sessions, setSessions] = useState<StarredSession[]>([]);
+  // Retained so the strip's chips don't pop in on every visit to Timeline.
+  // `ready` stays per mount: it gates actions and the cross-window state emit
+  // on a fresh load.
+  const [sessions, setSessions] = useRetainedState<StarredSession[]>(
+    "starredSessions:list",
+    [],
+  );
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +72,7 @@ export function useStarredSessions() {
       setReady(true);
       if (!pending.current) setError(null);
     }
-  }, []);
+  }, [setSessions]);
   useEffect(() => {
     mounted.current = true;
     const load = () => {

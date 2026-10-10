@@ -35,6 +35,7 @@ import {
   openChatConversationInCurrentChatSurface,
 } from "@/lib/chat-utils";
 import { useExperimentalFeaturesEnabled } from "@/lib/experimental-features";
+import { useForgetRetainedStateOnDeletion } from "@/lib/hooks/use-forget-retained-state";
 
 const inter = Inter({ subsets: ["latin"] });
 const workflowHeading = Space_Grotesk({ subsets: ["latin"], variable: "--font-workflow-heading", display: "swap" });
@@ -76,6 +77,12 @@ function RecentChatSwitcherMount() {
       }}
     />
   );
+}
+
+// Every window retains section data, and a deletion in one must reach all.
+function RetainedStateDeletionListener() {
+  useForgetRetainedStateOnDeletion();
+  return null;
 }
 
 function WebviewGestureControls() {
@@ -352,6 +359,7 @@ export default function RootLayout({
           {!isOverlay && <PipeInstallDialog />}
           {!isOverlay && <BrowserPairingDialog />}
           <WebviewGestureControls />
+          <RetainedStateDeletionListener />
           <CloseTabOrWindowShortcut />
           <Suspense fallback={null}>
             <RecentChatSwitcherMount />

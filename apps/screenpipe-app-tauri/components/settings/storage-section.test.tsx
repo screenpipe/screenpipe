@@ -4,9 +4,11 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -17,14 +19,20 @@ const mocks = vi.hoisted(() => ({
   clearTimelineCache: vi.fn().mockResolvedValue(undefined),
   hasCachedData: vi.fn().mockResolvedValue(false),
   toast: vi.fn(),
+  emit: vi.fn(async () => undefined),
+  openDialog: vi.fn(),
 }));
 
 vi.mock("@/lib/utils/tauri", () => ({
   commands: {
     listCacheFiles: mocks.listCacheFiles,
     deleteCacheFiles: mocks.deleteCacheFiles,
+    stopScreenpipe: vi.fn(async () => undefined),
+    spawnScreenpipe: vi.fn(async () => undefined),
+    validateDataDir: vi.fn(async () => ({ status: "ok", data: null })),
   },
 }));
+vi.mock("@tauri-apps/api/event", () => ({ emit: mocks.emit, listen: vi.fn() }));
 
 vi.mock("@/lib/hooks/use-timeline-cache", () => ({
   clearTimelineCache: mocks.clearTimelineCache,
@@ -43,15 +51,19 @@ vi.mock("@/components/ui/use-toast", () => ({
   useToast: () => ({ toast: mocks.toast }),
 }));
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.openDialog }));
 vi.mock("./storage-migration-card", () => ({ StorageMigrationCard: () => null }));
 vi.mock("./disk-usage-section", () => ({ DiskUsageSection: () => null }));
-vi.mock("./apply-restart-bar", () => ({ ApplyRestartBar: () => null }));
+vi.mock("./apply-restart-bar", () => ({
+  ApplyRestartBar: ({ visible, onApply }: { visible: boolean; onApply: () => void }) =>
+    visible ? <button onClick={onApply}>Apply and restart</button> : null,
+}));
 vi.mock("@/components/enterprise-locked-setting", () => ({
   LockedSetting: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 import { StorageSection } from "./storage-section";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 
 describe("StorageSection clear cache", () => {
   afterEach(() => {
@@ -118,5 +130,33 @@ describe("StorageSection clear cache", () => {
       ),
     );
     expect(mocks.toast).not.toHaveBeenCalledWith({ title: "Cache cleared" });
+  });
+});
+
+describe("StorageSection data folder", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("drops what every window kept from the old folder after the restart", async () => {
+    mocks.listCacheFiles.mockResolvedValue([]);
+    const kept = renderHook(() => useRetainedState("test:kept", "empty"));
+    act(() => kept.result.current[1]("old folder's meetings"));
+    kept.unmount();
+
+    mocks.openDialog.mockResolvedValue("/Volumes/External/screenpipe");
+    render(<StorageSection />);
+    fireEvent.click(screen.getByRole("button", { name: "Change" }));
+    const apply = await screen.findByRole("button", { name: "Apply and restart" });
+
+    vi.useFakeTimers();
+    fireEvent.click(apply);
+    await act(() => vi.runAllTimersAsync());
+
+    const next = renderHook(() => useRetainedState("test:kept", "empty"));
+    expect(next.result.current[0]).toBe("empty");
+    expect(mocks.emit).toHaveBeenCalledWith("recorded-data-deleted");
   });
 });

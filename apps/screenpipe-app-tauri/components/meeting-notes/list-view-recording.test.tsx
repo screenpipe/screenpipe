@@ -2,7 +2,7 @@
 // https://screenpipe.com
 
 import React from "react";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ListView } from "./list-view";
 import { computeLiveCaptureState } from "@/lib/utils/live-capture-state";
@@ -21,7 +21,7 @@ const props: React.ComponentProps<typeof ListView> = {
     detection_source: "manual", created_at: "2026-09-26T12:00:00Z",
   },
   onSelect: noop, onDelete: noop, onMerged: noop, onStart: noop, onStop: noop,
-  onStartFromEvent: noop, starting: false, loadingMore: false, hasMore: false,
+  onStartFromEvent: noop, starting: false, loadingMore: false, hasMore: false, canLoadMore: true,
   onLoadMore: noop, errorText: null, onRetry: noop, comingUp: [],
   comingUpStatus: "ready", connectedCalendarSources: [],
   onOpenCalendarConnections: noop, meetingActive: true, searchInput: "",
@@ -58,5 +58,40 @@ describe("meeting recording indicator", () => {
     const { container, rerender } = render(<ListView {...props} captureState={captureState("recording")} />);
     rerender(<ListView {...props} meetingActive={false} />);
     expect(container.querySelector(".meeting-listening-stick")).toBeNull();
+  });
+
+  it("keeps a search that filters the list visible and clearable", () => {
+    const onSearchInputChange = vi.fn();
+    render(
+      <ListView
+        {...props}
+        searchInput="standup"
+        hasSearchQuery
+        onSearchInputChange={onSearchInputChange}
+      />,
+    );
+
+    expect(screen.getByPlaceholderText("Search by title, email, note…")).toHaveValue("standup");
+    fireEvent.click(screen.getByRole("button", { name: "Close search" }));
+    expect(onSearchInputChange).toHaveBeenCalledWith("");
+  });
+
+  it("leaves the header to the recording strip without a search", () => {
+    render(<ListView {...props} />);
+    expect(screen.queryByPlaceholderText("Search by title, email, note…")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Search meetings" })).toBeNull();
+  });
+});
+
+describe("meeting list paging", () => {
+  it("holds \"Show more\" until the list can be paged", () => {
+    const meetings = [props.activeMeeting!];
+    const { rerender } = render(
+      <ListView {...props} meetings={meetings} hasMore canLoadMore={false} />,
+    );
+    expect(screen.getByRole("button", { name: "Show more" })).toBeDisabled();
+
+    rerender(<ListView {...props} meetings={meetings} hasMore canLoadMore />);
+    expect(screen.getByRole("button", { name: "Show more" })).toBeEnabled();
   });
 });

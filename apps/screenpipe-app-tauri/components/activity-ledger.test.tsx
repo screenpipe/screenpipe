@@ -191,6 +191,7 @@ import {
   isActivityCalendarDateDisabled,
   rangeForPreset,
 } from "@/components/activity-ledger";
+import { clearRetainedState } from "@/lib/hooks/use-retained-state";
 import {
   buildActivityReviewAgentPrompt,
   missingRequiredMeetingIds,
@@ -242,6 +243,31 @@ const HISTORY_RESPONSE = JSON.stringify({
           frame_id: 67890,
           app_name: "Slack",
           label: "Connected the support thread to account setup",
+        },
+      ],
+    },
+  ],
+});
+
+// Older than a free plan's 24 hours, inside a paid plan's 7 days.
+const OLDER_HISTORY_RESPONSE = JSON.stringify({
+  entries: [
+    {
+      id: "quarter-planning",
+      kind: "work",
+      meeting_id: null,
+      start_at: "2026-08-13T15:00:00Z",
+      end_at: "2026-08-13T16:00:00Z",
+      title: "Planned the quarter",
+      summary:
+        "You drafted the quarter's priorities and shared them with the team.",
+      evidence: [
+        {
+          kind: "screen",
+          at: "2026-08-13T15:10:00Z",
+          frame_id: 11111,
+          app_name: "Notion",
+          label: "Drafted the quarter's priorities",
         },
       ],
     },
@@ -2514,5 +2540,271 @@ describe("ActivityLedger", () => {
       ),
     );
     expect(mocks.posthogCapture).toHaveBeenCalledWith("activity_chat_clicked");
+  });
+});
+
+describe("ActivityLedger after a tab switch", () => {
+  // The store holds `response`'s entries that fall in the asked range.
+  function storeHistory(response: string) {
+    mocks.loadPersistedActivityHistory.mockImplementation(
+      async (_producer: string, range: { start: Date; end: Date }) => ({
+        entries: parseActivityHistoryResponse(response, range).entries,
+        coverage: [
+          { start: range.start.toISOString(), end: range.end.toISOString() },
+        ],
+      }),
+    );
+  }
+
+  // Collects the text of everything renders take off the page, so a state
+  // shown for a single render is caught even though the next one replaces it.
+  function watchReplacedText(): () => string {
+    const replaced: string[] = [];
+    const collect = (records: MutationRecord[]) => {
+      for (const record of records) {
+        for (const node of record.removedNodes) {
+          replaced.push(node.textContent ?? "");
+        }
+      }
+    };
+    const observer = new MutationObserver(collect);
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => {
+      collect(observer.takeRecords());
+      observer.disconnect();
+      return replaced.join("\n");
+    };
+  }
+
+  it("shows the loaded day again while it refreshes", async () => {
+    // "Last 24 hours" holds the fixture's entries in every time zone.
+    window.localStorage.setItem("screenpipe:activity-history:range", "24h");
+    storeHistory(HISTORY_RESPONSE);
+    render(<ActivityLedger />);
+    await screen.findByText("Fixed a capture reliability regression");
+    // Switching tabs unmounts the page.
+    cleanup();
+
+    mocks.localFetch.mockImplementation(() => new Promise(() => undefined));
+    mocks.getActivityHistory.mockImplementation(
+      () => new Promise(() => undefined),
+    );
+    render(<ActivityLedger />);
+
+    expect(
+      screen.getByText("Fixed a capture reliability regression"),
+    ).toBeVisible();
+    expect(screen.queryByTestId("activity-ledger-skeleton")).toBeNull();
+  });
+
+  it("holds \"Enable activities\" until this visit's cache lookup answers", async () => {
+    mocks.settings.activitiesEnabled = false;
+    render(<ActivityLedger />);
+    await screen.findByRole("button", { name: "Enable activities" });
+    cleanup();
+
+    let resolveCache!: (value: { entries: []; coverage: [] }) => void;
+    mocks.loadPersistedActivityHistory.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCache = resolve;
+        }),
+    );
+    render(<ActivityLedger />);
+
+    // The kept page shows the button at once, but generating spends AI
+    // usage, so it waits for the cache that may already hold this range.
+    const enable = await screen.findByRole("button", {
+      name: "Enable activities",
+    });
+    expect(enable).toBeDisabled();
+    fireEvent.click(enable);
+    expect(mocks.runDailySummaryWithPi).not.toHaveBeenCalled();
+
+    await act(async () => resolveCache({ entries: [], coverage: [] }));
+    expect(
+      screen.getByRole("button", { name: "Enable activities" }),
+    ).toBeEnabled();
+  });
+
+  it("starts a relative range over when it is reopened on a new day", async () => {
+    mocks.settings.activitiesEnabled = false;
+    render(<ActivityLedger />);
+    await screen.findByRole("button", { name: "Enable activities" });
+    cleanup();
+
+    vi.setSystemTime(new Date("2026-08-18T20:00:00Z"));
+    mocks.localFetch.mockImplementation(() => new Promise(() => undefined));
+    render(<ActivityLedger />);
+
+    expect(screen.getByText("Reading your day…")).toBeVisible();
+  });
+
+  it("drops the old day's activities when a range is reopened on a new day", async () => {
+    window.localStorage.setItem("screenpipe:activity-history:range", "24h");
+    storeHistory(HISTORY_RESPONSE);
+    render(<ActivityLedger />);
+    await screen.findByText("Fixed a capture reliability regression");
+    cleanup();
+
+    // The new day's cache read fails, as with a locked keychain.
+    vi.setSystemTime(new Date("2026-08-18T20:00:00Z"));
+    mocks.getActivityHistory.mockResolvedValue({
+      status: "error",
+      error: "keychain locked",
+    });
+    render(<ActivityLedger />);
+
+    expect(
+      await screen.findByRole("button", { name: "Generate activities" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("Fixed a capture reliability regression"),
+    ).toBeNull();
+  });
+
+  it("drops the old day's activities after another window's deletion", async () => {
+    window.localStorage.setItem("screenpipe:activity-history:range", "24h");
+    storeHistory(HISTORY_RESPONSE);
+    render(<ActivityLedger />);
+    await screen.findByText("Fixed a capture reliability regression");
+
+    // The timeline window deletes a range while Activity stays open here,
+    // then a finished background run updates the open page.
+    act(() => clearRetainedState());
+    mocks.getActivityHistory.mockResolvedValueOnce({
+      status: "ok",
+      data: { entries: JSON.parse(HISTORY_RESPONSE).entries, coverage: [] },
+    });
+    await act(async () => {
+      mocks.eventListeners.get("activity-history-updated")?.({
+        event: "activity-history-updated",
+        id: 1,
+        payload: {
+          start: "2026-08-17T16:00:00Z",
+          end: "2026-08-17T20:00:00Z",
+          activityCount: 2,
+          source: "automatic",
+        },
+      });
+    });
+    cleanup();
+
+    vi.setSystemTime(new Date("2026-08-18T20:00:00Z"));
+    mocks.localFetch.mockImplementation(() => new Promise(() => undefined));
+    mocks.getActivityHistory.mockImplementation(
+      () => new Promise(() => undefined),
+    );
+    render(<ActivityLedger />);
+
+    expect(
+      screen.queryByText("Fixed a capture reliability regression"),
+    ).toBeNull();
+  });
+
+  it("drops activities older than a lapsed plan allows", async () => {
+    window.localStorage.setItem("screenpipe:activity-history:range", "7d");
+    storeHistory(OLDER_HISTORY_RESPONSE);
+    render(<ActivityLedger />);
+    await screen.findByText("Planned the quarter");
+    cleanup();
+
+    const paidUser = mocks.settings.user;
+    (mocks.settings as { user: unknown }).user = null;
+    try {
+      mocks.localFetch.mockImplementation(() => new Promise(() => undefined));
+      mocks.getActivityHistory.mockImplementation(
+        () => new Promise(() => undefined),
+      );
+      const replacedText = watchReplacedText();
+      render(<ActivityLedger />);
+
+      expect(replacedText()).not.toContain("Planned the quarter");
+      expect(screen.queryByText("Planned the quarter")).toBeNull();
+    } finally {
+      mocks.settings.user = paidUser;
+    }
+  });
+
+  it("shows an empty range's prompt again, usable once the cache answers", async () => {
+    render(<ActivityLedger />);
+    await screen.findByRole("button", { name: "Generate activities" });
+    cleanup();
+
+    let answer!: (value: unknown) => void;
+    mocks.getActivityHistory.mockImplementation(
+      () => new Promise((resolve) => (answer = resolve)),
+    );
+    mocks.localFetch.mockImplementation(() => new Promise(() => undefined));
+    render(<ActivityLedger />);
+
+    const generate = screen.getByRole("button", { name: "Generate activities" });
+    expect(screen.queryByTestId("activity-ledger-skeleton")).toBeNull();
+    // A generation run costs AI usage, so it waits for this visit's answer.
+    expect(generate).toBeDisabled();
+
+    await act(async () =>
+      answer({ status: "ok", data: { entries: [], coverage: [] } }),
+    );
+    expect(generate).toBeEnabled();
+  });
+
+  it("waits for the cache again when the last visit's read failed", async () => {
+    mocks.getActivityHistory.mockResolvedValue({
+      status: "error",
+      error: "keychain locked",
+    });
+    render(<ActivityLedger />);
+    await screen.findByRole("button", { name: "Generate activities" });
+    cleanup();
+
+    mocks.getActivityHistory.mockImplementation(
+      () => new Promise(() => undefined),
+    );
+    render(<ActivityLedger />);
+
+    // The cache may hold activities now; don't offer to generate them yet.
+    expect(screen.getByText("Loading generated activities…")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Generate activities" }),
+    ).toBeNull();
+  });
+
+  it("never offers to generate while a newly picked range loads", async () => {
+    window.localStorage.setItem("screenpipe:activity-history:range", "24h");
+    storeHistory(HISTORY_RESPONSE);
+    render(<ActivityLedger />);
+    await screen.findByText("Fixed a capture reliability regression");
+
+    mocks.localFetch.mockImplementation(() => new Promise(() => undefined));
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Time range: Last 24 hours" }),
+    );
+    const week = await screen.findByRole("option", { name: "Last 7 days" });
+    const replacedText = watchReplacedText();
+    fireEvent.click(week);
+
+    // The week's entries come from the cache while its summary loads.
+    await screen.findByText("Fixed a capture reliability regression");
+    expect(replacedText()).not.toContain("Generate activities");
+  });
+
+  it("still starts a newly picked range from its loading state", async () => {
+    mocks.settings.activitiesEnabled = false;
+    render(<ActivityLedger />);
+    await screen.findByRole("button", { name: "Enable activities" });
+
+    mocks.localFetch.mockImplementation(() => new Promise(() => undefined));
+    fireEvent.click(
+      screen.getByRole("combobox", { name: "Time range: Today" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("option", { name: "Last 24 hours" }),
+    );
+
+    expect(await screen.findByText("Reading your day…")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Enable activities" }),
+    ).toBeNull();
   });
 });

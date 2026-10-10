@@ -153,7 +153,11 @@ export function AccountSection() {
   const [checkoutBusy, setCheckoutBusy] = useState(false);
   const [dataSyncSaving, setDataSyncSaving] = useState(false);
   const [dataSyncError, setDataSyncError] = useState<string | null>(null);
-  const [devicesLoading, setDevicesLoading] = useState(false);
+  // Starts true when sync is on: the device fetch below hasn't run yet, and an
+  // empty list would otherwise read "Waiting for the first upload" for a frame.
+  const [devicesLoading, setDevicesLoading] = useState(
+    () => settings.dataSyncEnabled === true,
+  );
   const [devicesError, setDevicesError] = useState(false);
   const [devicesRevision, setDevicesRevision] = useState(0);
   const [syncedDevices, setSyncedDevices] = useState<SyncedDevice[]>([]);

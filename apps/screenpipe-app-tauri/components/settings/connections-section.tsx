@@ -18,6 +18,7 @@ import { Download, ExternalLink, Check, Loader2, Copy, Terminal, LogIn, LogOut, 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { commands } from "@/lib/utils/tauri";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 import { useToast } from "@/components/ui/use-toast";
 import { ensureChatGptPreset } from "@/lib/utils/chatgpt-preset";
 import { notifyConnectionsUpdated } from "@/lib/connections-events";
@@ -796,6 +797,9 @@ type ConnectionSort = "suggested" | "alphabetical";
 
 const ALL_CONNECTION_CATEGORIES = "All";
 const SETTINGS_CONNECTION_IDS = new Set(["custom-mcp", "skills", "pi-extensions"]);
+const NO_COMPOSIO_CONNECTIONS = Object.fromEntries(
+  COMPOSIO_TOOLKITS.map((t) => [t, false]),
+) as ComposioStatusMap;
 
 
 // Per-connection quickstart prompts shown when "Try in Chat" is clicked.
@@ -3806,9 +3810,14 @@ export function ConnectionsSection({
     connectionId: string;
     scopeVariant: string;
   } | null>(null);
-  const [integrations, setIntegrations] = useState<IntegrationInfo[]>([]);
-  const [integrationsLoaded, setIntegrationsLoaded] = useState(false);
-  const [detectedConnectionIds, setDetectedConnectionIds] = useState<Set<string>>(() => new Set());
+  // What is connected outlives tab switches, so coming back doesn't show every
+  // tile as unconnected (and regroup them) until the checks below answer.
+  const [integrations, setIntegrations] = useRetainedState<IntegrationInfo[]>("connections:integrations", []);
+  // Only a successful fetch is carried to the next visit; after a failed one
+  // the catalog shows "Loading apps" again rather than an empty list.
+  const [integrationsFetched, setIntegrationsFetched] = useRetainedState("connections:integrationsFetched", false);
+  const [integrationsLoaded, setIntegrationsLoaded] = useState(integrationsFetched);
+  const [detectedConnectionIds, setDetectedConnectionIds] = useRetainedState<Set<string>>("connections:detected", () => new Set());
 
   const os = typeof window !== "undefined" ? platform() : "";
   const claudeTargets = useMemo<ConnectAllToolId[]>(() => {
@@ -3844,33 +3853,45 @@ export function ConnectionsSection({
   }, [focusCategory, focusConnectionId, focusRequestId, focusScopeVariant, onFocusRequestConsumed]);
 
   // Hardcoded connection status
-  const [claudeInstalled, setClaudeInstalled] = useState(false);
-  const [cursorInstalled, setCursorInstalled] = useState(false);
-  const [codexInstalled, setCodexInstalled] = useState(false);
-  const [grokInstalled, setGrokInstalled] = useState(false);
-  const [chatgptConnected, setChatgptConnected] = useState(false);
-  const [browserUrlDetected, setBrowserUrlDetected] = useState(false);
-  const [browserUrlConnected, setBrowserUrlConnected] = useState(false);
-  const [appleCalendarConnected, setAppleCalendarConnected] = useState(false);
-  const [googleCalendarConnected, setGoogleCalendarConnected] = useState(false);
-  const [googleDocsConnected, setGoogleDocsConnected] = useState(false);
-  const [customMcpConnected, setCustomMcpConnected] = useState(false);
-  const [customMcpServerCount, setCustomMcpServerCount] = useState(0);
-  const [customMcpEnabledCount, setCustomMcpEnabledCount] = useState(0);
-  const [krispConnected, setKrispConnected] = useState(false);
-  const [plaudConnected, setPlaudConnected] = useState(false);
+  const [claudeInstalled, setClaudeInstalled] = useRetainedState("connections:claudeInstalled", false);
+  const [cursorInstalled, setCursorInstalled] = useRetainedState("connections:cursorInstalled", false);
+  const [codexInstalled, setCodexInstalled] = useRetainedState("connections:codexInstalled", false);
+  const [grokInstalled, setGrokInstalled] = useRetainedState("connections:grokInstalled", false);
+  const [chatgptConnected, setChatgptConnected] = useRetainedState("connections:chatgptConnected", false);
+  const [browserUrlDetected, setBrowserUrlDetected] = useRetainedState("connections:browserUrlDetected", false);
+  const [browserUrlConnected, setBrowserUrlConnected] = useRetainedState("connections:browserUrlConnected", false);
+  const [appleCalendarConnected, setAppleCalendarConnected] = useRetainedState("connections:appleCalendarConnected", false);
+  const [googleCalendarConnected, setGoogleCalendarConnected] = useRetainedState("connections:googleCalendarConnected", false);
+  const [googleDocsConnected, setGoogleDocsConnected] = useRetainedState("connections:googleDocsConnected", false);
+  const [customMcpConnected, setCustomMcpConnected] = useRetainedState("connections:customMcpConnected", false);
+  const [customMcpServerCount, setCustomMcpServerCount] = useRetainedState("connections:customMcpServerCount", 0);
+  const [customMcpEnabledCount, setCustomMcpEnabledCount] = useRetainedState("connections:customMcpEnabledCount", 0);
+  const [krispConnected, setKrispConnected] = useRetainedState("connections:krispConnected", false);
+  const [plaudConnected, setPlaudConnected] = useRetainedState("connections:plaudConnected", false);
   // Per-provider connection status for the MCP-OAuth tiles (keyed by id).
-  const [mcpProviderConnected, setMcpProviderConnected] = useState<Record<string, boolean>>({});
-  const [excalidrawConnected, setExcalidrawConnected] = useState(false);
-  const [importedSkillsCount, setImportedSkillsCount] = useState(0);
+  const [mcpProviderConnected, setMcpProviderConnected] = useRetainedState<Record<string, boolean>>("connections:mcpProviderConnected", {});
+  const [excalidrawConnected, setExcalidrawConnected] = useRetainedState("connections:excalidrawConnected", false);
+  const [importedSkillsCount, setImportedSkillsCount] = useRetainedState("connections:importedSkillsCount", 0);
   // Composio-backed connections (managed auth through screenpipe.com; see
   // composio-card.tsx): gmail, zoom, google drive/docs/sheets.
   const { settings: composioSettings } = useSettings();
-  const [composioConnected, setComposioConnected] = useState<ComposioStatusMap>(
-    () =>
-      Object.fromEntries(COMPOSIO_TOOLKITS.map((t) => [t, false])) as ComposioStatusMap
-  );
   const composioToken = composioSettings.user?.token;
+  const composioAccount = composioSettings.user?.id ?? null;
+  // Retained with the account it belongs to, and shown only to that signed-in
+  // account, so another account (or a logged-out window) never sees it.
+  const [composioStatus, setComposioStatus] = useRetainedState<{
+    account: string | null;
+    connected: ComposioStatusMap;
+  } | null>("connections:composio", null);
+  const composioConnected =
+    composioToken && composioStatus?.account === composioAccount
+      ? composioStatus.connected
+      : NO_COMPOSIO_CONNECTIONS;
+  const setComposioConnected = useCallback(
+    (connected: ComposioStatusMap) =>
+      setComposioStatus({ account: composioAccount, connected }),
+    [composioAccount, setComposioStatus],
+  );
   useEffect(() => {
     if (!composioToken) return;
     fetch(screenpipeWebUrl("/api/composio/status", "https://screenpipe.com"), {
@@ -3886,20 +3907,20 @@ export function ConnectionsSection({
         );
       })
       .catch(() => {});
-  }, [composioToken]);
+  }, [composioToken, setComposioConnected]);
 
   const loadSkillsCount = useCallback(() => {
     commands
       .listImportedSkills()
       .then((res) => setImportedSkillsCount(res.status === "ok" ? res.data.length : 0))
       .catch(() => setImportedSkillsCount(0));
-  }, []);
+  }, [setImportedSkillsCount]);
 
   useEffect(() => {
     loadSkillsCount();
   }, [loadSkillsCount]);
 
-  const [grokBotConnected, setGrokBotConnected] = useState(false);
+  const [grokBotConnected, setGrokBotConnected] = useRetainedState("connections:grokBotConnected", false);
   const refreshStatus = useCallback(() => {
     isGrokBotConnected().then(setGrokBotConnected).catch(() => setGrokBotConnected(false));
     detectInstalledConnectionIds()
@@ -3928,16 +3949,16 @@ export function ConnectionsSection({
     Promise.all([isCodexMcpInstalled(), areExternalAgentSkillsInstalled("codex")])
       .then(([mcp, skills]) => setCodexInstalled(mcp && skills))
       .catch(() => setCodexInstalled(false));
-    isGrokMcpInstalled().then(setGrokInstalled).catch(() => {});
+    isGrokMcpInstalled().then(setGrokInstalled).catch(() => setGrokInstalled(false));
     commands.chatgptOauthStatus().then(res => {
       setChatgptConnected(res.status === "ok" && res.data.logged_in);
-    }).catch(() => {});
+    }).catch(() => setChatgptConnected(false));
     commands.oauthStatus("google-calendar", null).then(res => {
       setGoogleCalendarConnected(res.status === "ok" && res.data.connected);
-    }).catch(() => {});
+    }).catch(() => setGoogleCalendarConnected(false));
     commands.oauthStatus("google-docs", null).then(res => {
       setGoogleDocsConnected(res.status === "ok" && res.data.connected);
-    }).catch(() => {});
+    }).catch(() => setGoogleDocsConnected(false));
     localFetch("/mcp-servers").then(async r => {
       if (!r.ok) {
         setCustomMcpConnected(false);
@@ -4005,7 +4026,27 @@ export function ConnectionsSection({
         ))
         .catch(() => setAppleCalendarConnected(false));
     }
-  }, []);
+  }, [
+    setAppleCalendarConnected,
+    setBrowserUrlConnected,
+    setBrowserUrlDetected,
+    setChatgptConnected,
+    setClaudeInstalled,
+    setCodexInstalled,
+    setCursorInstalled,
+    setCustomMcpConnected,
+    setCustomMcpEnabledCount,
+    setCustomMcpServerCount,
+    setDetectedConnectionIds,
+    setExcalidrawConnected,
+    setGoogleCalendarConnected,
+    setGoogleDocsConnected,
+    setGrokBotConnected,
+    setGrokInstalled,
+    setKrispConnected,
+    setMcpProviderConnected,
+    setPlaudConnected,
+  ]);
 
   useEffect(() => { refreshStatus(); }, [selected, refreshStatus]);
 
@@ -4015,6 +4056,7 @@ export function ConnectionsSection({
     const cached = apiCache.get<any[]>(cacheKey);
     if (cached) {
       setIntegrations(cached);
+      setIntegrationsFetched(true);
       setIntegrationsLoaded(true);
       return;
     }
@@ -4026,6 +4068,7 @@ export function ConnectionsSection({
         if (data.data) {
           apiCache.set(cacheKey, data.data, 30_000); // 30s TTL
           setIntegrations(data.data);
+          setIntegrationsFetched(true);
           setIntegrationsLoaded(true);
           // Track active connections as user property (IDs only, no credentials).
           // Fires at zero too: gating this on connected.length > 0 made every
@@ -4043,7 +4086,7 @@ export function ConnectionsSection({
       if (i < retries - 1) await new Promise(r => setTimeout(r, 2000));
     }
     setIntegrationsLoaded(true);
-  }, []);
+  }, [setIntegrations, setIntegrationsFetched]);
 
   useEffect(() => { fetchIntegrations(); }, [fetchIntegrations]);
 
@@ -4051,7 +4094,7 @@ export function ConnectionsSection({
     setIntegrations(prev => prev.map(i => i.id === id ? { ...i, connected } : i));
     notifyConnectionsUpdated();
     fetchIntegrations();
-  }, [fetchIntegrations]);
+  }, [fetchIntegrations, setIntegrations]);
 
   // Build unified tile list
   const allTiles: ConnectionTile[] = useMemo(() => {

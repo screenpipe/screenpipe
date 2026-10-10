@@ -9,6 +9,7 @@ import { useState, useRef, useMemo, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "@/components/ui/use-toast";
 import { clearTimelineCache } from "@/lib/hooks/use-timeline-cache";
+import { forgetRetainedStateEverywhere } from "@/lib/hooks/use-forget-retained-state";
 import { clearTextCache } from "@/lib/hooks/use-frame-text-data";
 import posthog from "posthog-js";
 import { PipeAIIcon } from "@/components/pipe-ai-icon";
@@ -207,6 +208,13 @@ export function TimelineTagToolbar({ anchorRect, onAskAI, onRunPipe, templatePip
 			setShowDeleteConfirm(false);
 			clearTextCache();
 			await clearTimelineCache();
+			// The reload resets this window; other windows' retained lists may
+			// still hold the deleted range. Let that message go out first, but a
+			// stuck one must not block the reload.
+			await Promise.race([
+				forgetRetainedStateEverywhere(),
+				new Promise((resolve) => setTimeout(resolve, 1000)),
+			]);
 			window.location.reload();
 		} catch (e) {
 			toast({ title: ui("Deletion failed"), description: String(e), variant: "destructive" });

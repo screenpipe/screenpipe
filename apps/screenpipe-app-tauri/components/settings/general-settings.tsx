@@ -26,6 +26,7 @@ import {
 import { Settings, type UpdateChannel } from "@/lib/hooks/use-settings";
 import { getVersion } from "@tauri-apps/api/app";
 import { commands } from "@/lib/utils/tauri";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 import { useOnboarding } from "@/lib/hooks/use-onboarding";
 import { UpdateBanner } from "@/components/update-banner";
 import type { SettingsField } from "./settings-search";
@@ -73,7 +74,10 @@ export default function GeneralSettings() {
   const { settings, updateSettings } = useSettings();
   const resetOnboarding = useOnboarding((state) => state.resetOnboarding);
   const { toast } = useToast();
-  const [currentVersion, setCurrentVersion] = useState<string | null>(null);
+  const [currentVersion, setCurrentVersion] = useRetainedState<string | null>(
+    "settings:appVersion",
+    null,
+  );
   const [isCheckingForUpdate, setIsCheckingForUpdate] = useState(false);
   const [isResettingOnboarding, setIsResettingOnboarding] = useState(false);
   const userGoal =
@@ -172,7 +176,7 @@ export default function GeneralSettings() {
 
   useEffect(() => {
     getVersion().then(setCurrentVersion).catch(() => {});
-  }, []);
+  }, [setCurrentVersion]);
 
   const handleSettingsChange = (newSettings: Partial<Settings>) => {
     if (settings) {

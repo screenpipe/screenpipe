@@ -36,6 +36,7 @@ import {
 import { TimelineDailySummary } from "@/components/rewind/timeline/daily-summary";
 import { showChatWithPrefill } from "@/lib/chat-utils";
 import { useTimelineStore } from "@/lib/hooks/use-timeline-store";
+import { forgetRetainedStateEverywhere } from "@/lib/hooks/use-forget-retained-state";
 import { clearTimelineCache } from "@/lib/hooks/use-timeline-cache";
 import { clearTextCache } from "@/lib/hooks/use-frame-text-data";
 import { toast } from "@/components/ui/use-toast";
@@ -251,9 +252,12 @@ export function NativeTimelineBridge({
             description: ui("removed {value1} frames, {value2} audio segments", { value1: result.framesDeleted, value2: result.audioTranscriptionsDeleted }),
           });
           // The React timeline shares these caches; a stale entry would
-          // resurrect deleted frames the next time it mounts.
+          // resurrect deleted frames the next time it mounts. Sections'
+          // retained lists in every window (Activity's window titles, for
+          // one) are dropped for the same reason.
           clearTextCache();
           void clearTimelineCache();
+          void forgetRetainedStateEverywhere();
           posthog.capture("timeline_range_deleted", {
             duration_ms:
               new Date(result.end).getTime() - new Date(result.start).getTime(),

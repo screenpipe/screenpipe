@@ -9,6 +9,7 @@ import { useInterval } from "@/lib/hooks/use-interval";
 import { screenpipeWebUrl } from "@/lib/web-url";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -1129,9 +1130,14 @@ export function PipesSection() {
   const [discoverResult, setDiscoverResult] = useState<number | null>(null);
   const discoverResultTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [pipes, setPipes] = useState<PipeStatus[]>([]);
-  const [pipesApiBase, setPipesApiBase] = useState<string | null>(null);
-  const pipesApiBaseRef = useRef<string | null>(null);
+  // The list and the device it came from outlive tab switches, so coming back
+  // shows it at once while the mount's fetch refreshes it.
+  const [pipes, setPipes] = useRetainedState<PipeStatus[]>("pipes:list", []);
+  const [pipesApiBase, setPipesApiBase] = useRetainedState<string | null>(
+    "pipes:apiBase",
+    null,
+  );
+  const pipesApiBaseRef = useRef(pipesApiBase);
   const [expanded, setExpanded] = useState<string | null>(null);
   // Creating takes over the detail pane instead of living as a permanent form
   // under the list — you only see the composer when you ask for it.
@@ -1144,11 +1150,19 @@ export function PipesSection() {
   const [hasMoreExecutions, setHasMoreExecutions] = useState(false);
   const [loadingMoreExecutions, setLoadingMoreExecutions] = useState(false);
   // Per-pipe recent executions (always fetched for all pipes)
-  const [pipeExecutions, setPipeExecutions] = useState<Record<string, PipeExecution[]>>({});
-  const [loading, setLoading] = useState(true);
-  const [settledApiBase, setSettledApiBase] = useState<string | null>(null);
+  const [pipeExecutions, setPipeExecutions] = useRetainedState<
+    Record<string, PipeExecution[]>
+  >("pipes:executions", {});
+  // Seeded from the last successful list. A failed load never sets
+  // `pipesApiBase`, so the next visit shows the skeleton again rather than an
+  // empty list.
+  const [loading, setLoading] = useState(pipesApiBase === null);
+  const [settledApiBase, setSettledApiBase] = useState(pipesApiBase);
+  // The device this visit has loaded the list from; null until it has. The
+  // list and `pipesApiBase` above may be kept from an earlier visit, so they
+  // can't vouch for this one: a load failing now still shows its error.
+  const [loadedApiBase, setLoadedApiBase] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const lastSuccessfulPipesApiBase = useRef<string | null>(null);
   const currentApiBase = useRef("");
   const pipesRequests = useRef(new ApiRequestSequence());
   const pipesPolls = useRef(new ApiPollCoalescer<boolean>());
@@ -1375,9 +1389,9 @@ export function PipesSection() {
       }
       if (!isCurrentRequest()) return false;
       const previousPipesApiBase = pipesApiBaseRef.current;
-      lastSuccessfulPipesApiBase.current = apiBase;
       pipesApiBaseRef.current = apiBase;
       setPipesApiBase(apiBase);
+      setLoadedApiBase(apiBase);
       // Preserve optimistic UI for pipes with in-flight config saves
       const pendingNames = Object.keys(pendingConfigSaves.current);
       if (pendingNames.length > 0 && previousPipesApiBase === apiBase) {
@@ -1422,7 +1436,7 @@ export function PipesSection() {
       }
     }
     });
-  }, [apiBase, isRemote]);
+  }, [apiBase, isRemote, setPipeExecutions, setPipes, setPipesApiBase]);
 
   const fetchConnections = useCallback(async () => {
     try {
@@ -2327,9 +2341,11 @@ export function PipesSection() {
   // view that was already open when the link arrived.
   useEffect(() => {
     const openInstalledPipe = (pipeName: string) => {
-      if (!isSafePipeName(pipeName)) return;
+      // Until this visit's list arrives the link stays pending: the kept list
+      // may name a task deleted since, or lack one added since.
+      if (!isSafePipeName(pipeName) || loadedApiBase === null) return;
       if (!pipes.some((pipe) => pipe.config.name === pipeName)) {
-        if (!loading && pipesApiBase !== null) clearPendingPipeDeepLink();
+        clearPendingPipeDeepLink();
         return;
       }
       clearPendingPipeDeepLink();
@@ -2354,7 +2370,7 @@ export function PipesSection() {
     return () => {
       void unlisten.then((stop) => stop());
     };
-  }, [expanded, loading, pipes, pipesApiBase]);
+  }, [expanded, loadedApiBase, pipes]);
 
   const savePipeContent = useCallback(async (name: string, content: string) => {
     const pipe = pipes.find((candidate) => candidate.config.name === name);
@@ -2398,7 +2414,7 @@ export function PipesSection() {
       delete next[pipeName];
       return next;
     });
-  }, [pipes, promptDrafts, savePipeContent]);
+  }, [pipes, promptDrafts, savePipeContent, setPipes]);
 
   const handlePipeEdit = useCallback((name: string, value: string) => {
     setPromptDrafts((prev) => ({ ...prev, [name]: value }));
@@ -2673,7 +2689,7 @@ export function PipesSection() {
             </Card>
           ))}
         </div>
-      ) : shouldShowPipesLoadError(loadError, apiBase, lastSuccessfulPipesApiBase.current) ? (
+      ) : shouldShowPipesLoadError(loadError, apiBase, loadedApiBase) ? (
         <Card>
           <CardContent className="py-8 text-center">
             <div className="mx-auto max-w-md space-y-4 text-muted-foreground">

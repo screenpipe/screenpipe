@@ -8,6 +8,7 @@ import { formatUiRelativeTime as formatRelativeTime } from "@/lib/i18n/format";
 import React, { useEffect, useState, useCallback } from "react";
 import { useInterval } from "@/lib/hooks/use-interval";
 import { useSettings } from "@/lib/hooks/use-settings";
+import { forgetRetainedStateEverywhere } from "@/lib/hooks/use-forget-retained-state";
 import { RetentionModePreview } from "./setting-previews";
 import {
   Select,
@@ -310,6 +311,8 @@ export function RetentionSettings({
         title: ui("Deleted last {value1} min", { value1: minutes }),
         description: ui("{value1} records, {value2} files removed from disk", { value1: total.toLocaleString(uiLocale), value2: files }),
       });
+      // Sections' retained lists may still show the deleted minutes.
+      void forgetRetainedStateEverywhere();
       fetchStatus();
       onStorageChanged?.();
     } catch (e: any) {
@@ -363,6 +366,8 @@ export function RetentionSettings({
       }
       toast({ title: ui("Cleanup triggered") });
       setTimeout(() => {
+        // Sections' retained lists may still show what the cleanup removed.
+        void forgetRetainedStateEverywhere();
         fetchStatus();
         onStorageChanged?.();
       }, 3000);

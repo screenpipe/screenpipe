@@ -117,6 +117,45 @@ describe("pipe store error state", () => {
     expect(mocks.invalidatePrefix).toHaveBeenCalledWith("pipes/store");
   });
 
+  it("does not pass a failed load off as empty on the next visit", async () => {
+    mocks.localFetch.mockImplementation(async (url: string) => {
+      if (url === "/pipes") return jsonResponse([]);
+      if (url === "/pipes/store/check-updates") return jsonResponse({ data: [] });
+      if (url.startsWith("/pipes/store?")) {
+        return jsonResponse({ error: "registry unavailable" });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    render(<PipeStoreView />);
+    fireEvent.click(screen.getByTestId("tab-discover"));
+    await screen.findByText("Couldn't load scheduled tasks");
+    cleanup();
+
+    mocks.localFetch.mockImplementation(async (url: string) =>
+      url.startsWith("/pipes/store?")
+        ? new Promise<Response>(() => {})
+        : jsonResponse(url === "/pipes" ? [] : { data: [] }),
+    );
+    render(<PipeStoreView />);
+    // Text a render shows and the next one replaces still counts.
+    const replaced: string[] = [];
+    const collect = (records: MutationRecord[]) => {
+      for (const record of records) {
+        for (const node of record.removedNodes) {
+          replaced.push(node.textContent ?? "");
+        }
+      }
+    };
+    const observer = new MutationObserver(collect);
+    observer.observe(document.body, { childList: true, subtree: true });
+    fireEvent.click(screen.getByTestId("tab-discover"));
+    collect(observer.takeRecords());
+    observer.disconnect();
+
+    expect(replaced.join("\n")).not.toContain("No scheduled tasks found");
+    expect(screen.queryByText("No scheduled tasks found")).toBeNull();
+  });
+
   it("keeps Automations scoped to scheduled tasks", async () => {
     mocks.localFetch.mockImplementation(async (url: string) => {
       if (url === "/pipes") {

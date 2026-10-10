@@ -16,6 +16,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { platform } from "@tauri-apps/plugin-os";
 import { Command } from "@tauri-apps/plugin-shell";
 import { commands, type ProviderAutomation } from "@/lib/utils/tauri";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 import { cn } from "@/lib/utils";
 import {
   AlertDialog,
@@ -308,7 +309,10 @@ export function ProviderAutomationsPanel({
 
   const ui = useGT();
   const uiMessages = useMessages();
-  const [tasks, setTasks] = React.useState<ProviderAutomation[]>([]);
+  const [tasks, setTasks] = useRetainedState<ProviderAutomation[]>(
+    "providerAutomations:tasks",
+    [],
+  );
   const [selectedProvider, setSelectedProvider] = React.useState<string | null>(
     null,
   );
@@ -328,7 +332,7 @@ export function ProviderAutomationsPanel({
     } catch {
       // Provider discovery is optional; retain the last good snapshot on failure.
     }
-  }, []);
+  }, [setTasks]);
 
   React.useEffect(() => {
     void load();

@@ -41,6 +41,7 @@ import {
 } from "@/lib/hooks/use-hardcoded-tiles";
 
 import { isGrokBotConnected } from "@/lib/grokbot-connection";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 import { useGT } from "gt-react";
 
 
@@ -151,8 +152,9 @@ function ToolIcon({ id }: { id: ConnectAllToolId }) {
 export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
 
   const ui = useGT();
-  const [detected, setDetected] = useState<ConnectAllToolId[]>([]);
-  const [connected, setConnected] = useState<Partial<Record<ConnectAllToolId, boolean>>>({});
+  // Retained so the row doesn't pop in after the detection scan on every visit.
+  const [detected, setDetected] = useRetainedState<ConnectAllToolId[]>("aiTools:detected", []);
+  const [connected, setConnected] = useRetainedState<Partial<Record<ConnectAllToolId, boolean>>>("aiTools:connected", {});
   const [busy, setBusy] = useState<Partial<Record<ConnectAllToolId, ToolBusy>>>({});
   const [errors, setErrors] = useState<Partial<Record<ConnectAllToolId, FriendlyToolError>>>({});
   const [expanded, setExpanded] = useState(false);
@@ -172,7 +174,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
     } catch {
       /* keep previous state */
     }
-  }, []);
+  }, [setConnected, setDetected]);
 
   useEffect(() => {
     refresh();
@@ -209,7 +211,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
       }
       setBusy((prev) => ({ ...prev, [row.id]: undefined }));
     },
-    []
+    [setConnected]
   );
 
   const removeTool = useCallback(async (row: ToolRow) => {
@@ -232,7 +234,7 @@ export function AiToolsCard({ onChanged }: { onChanged?: () => void }) {
       }));
     }
     setBusy((prev) => ({ ...prev, [row.id]: undefined }));
-  }, []);
+  }, [setConnected]);
 
   const handleConnectAll = useCallback(async () => {
     setExpanded(true);

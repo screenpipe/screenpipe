@@ -18,6 +18,7 @@ import { loadAllConversations } from "@/lib/chat-storage";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { readTextFile, writeTextFile, exists } from "@tauri-apps/plugin-fs";
 import { localFetch } from "@/lib/api";
+import { useRetainedState } from "@/lib/hooks/use-retained-state";
 import { quotaPlanLabel } from "@/lib/chat/quota-errors";
 import { UsageLimitRow } from "@/components/usage/usage-limit-row";
 import {
@@ -284,11 +285,25 @@ export function UsageSection() {
   const uiLocale = useUiLocale();
   const ui = useGT();
   const hostedUsageQuery = useUsageStatusQuery();
-  const [entries, setEntries] = useState<UsageEntry[]>([]);
-  const [totalChats, setTotalChats] = useState(0);
-  const [totalChatMessages, setTotalChatMessages] = useState(0);
-  const [untrackedMessages, setUntrackedMessages] = useState(0);
-  const [loading, setLoading] = useState(true);
+  // Retained so returning to Usage shows the last totals at once instead of
+  // the skeleton while the cache file is read and the scan reruns.
+  // `totalsLoaded` is set only once totals are known, so a failed scan shows
+  // the skeleton again next visit instead of passing for zero usage.
+  const [entries, setEntries] = useRetainedState<UsageEntry[]>("usage:entries", []);
+  const [totalChats, setTotalChats] = useRetainedState("usage:totalChats", 0);
+  const [totalChatMessages, setTotalChatMessages] = useRetainedState(
+    "usage:totalChatMessages",
+    0,
+  );
+  const [untrackedMessages, setUntrackedMessages] = useRetainedState(
+    "usage:untrackedMessages",
+    0,
+  );
+  const [totalsLoaded, setTotalsLoaded] = useRetainedState(
+    "usage:loaded",
+    false,
+  );
+  const [loading, setLoading] = useState(!totalsLoaded);
   const [updating, setUpdating] = useState(false);
   const [timeRange, setTimeRange] = useState<TimeRange>("all");
   const cacheRef = useRef<UsageCache>(EMPTY_CACHE);
@@ -303,6 +318,7 @@ export function UsageSection() {
       setTotalChats(cache.totalChats);
       setTotalChatMessages(cache.totalChatMessages);
       setUntrackedMessages(cache.untrackedMessages);
+      setTotalsLoaded(true);
       setLoading(false);
       setUpdating(true);
     }
@@ -418,6 +434,7 @@ export function UsageSection() {
       setTotalChats(totalChatsCount);
       setTotalChatMessages(chatMsgs);
       setUntrackedMessages(untracked);
+      setTotalsLoaded(true);
 
       // Save cache in background
       saveCache(updatedCache);
@@ -427,7 +444,13 @@ export function UsageSection() {
       setLoading(false);
       setUpdating(false);
     }
-  }, []);
+  }, [
+    setEntries,
+    setTotalChatMessages,
+    setTotalChats,
+    setTotalsLoaded,
+    setUntrackedMessages,
+  ]);
 
   useEffect(() => {
     loadData();

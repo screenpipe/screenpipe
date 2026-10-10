@@ -5,9 +5,13 @@
 import "@testing-library/jest-dom/vitest";
 import { JSDOM } from "jsdom";
 import React from "react";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import { GTProvider, initializeGT } from "gt-react";
 import localeConfig from "./gt.config.json";
+import { clearRetainedState } from "./lib/hooks/use-retained-state";
+
+// Retained section state outlives unmounts by design; each test starts clean.
+afterEach(clearRetainedState);
 
 // Isolated components use the same offline English default as ordinary dev.
 initializeGT({ defaultLocale: localeConfig.defaultLocale, locales: localeConfig.locales, loadTranslations: async () => ({}), runtimeUrl: null, _disableDevHotReload: true });
