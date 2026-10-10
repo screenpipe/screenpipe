@@ -20,7 +20,9 @@ const mocks = vi.hoisted(() => ({
   ownedBrowserHide: vi.fn(),
   ownedBrowserTabHide: vi.fn(),
   ownedBrowserNavigate: vi.fn(),
+  ownedBrowserTabNavigate: vi.fn(),
   ownedBrowserSetBounds: vi.fn(),
+  toast: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -81,7 +83,7 @@ vi.mock("@/lib/utils/tauri", () => ({
     ownedBrowserTabClearBrowsingData: vi.fn().mockResolvedValue(undefined),
     ownedBrowserTabClose: vi.fn().mockResolvedValue(undefined),
     ownedBrowserTabHide: mocks.ownedBrowserTabHide,
-    ownedBrowserTabNavigate: vi.fn().mockResolvedValue(undefined),
+    ownedBrowserTabNavigate: mocks.ownedBrowserTabNavigate,
     ownedBrowserTabSetBounds: vi.fn().mockResolvedValue(undefined),
     confirmBrowserCookieAccessForSession: vi.fn().mockResolvedValue(undefined),
     setBrowserCookieAccessState: mocks.setBrowserCookieAccessState,
@@ -90,6 +92,10 @@ vi.mock("@/lib/utils/tauri", () => ({
 
 vi.mock("@/lib/api", () => ({
   localFetch: vi.fn(),
+}));
+
+vi.mock("@/components/ui/use-toast", () => ({
+  toast: mocks.toast,
 }));
 
 vi.mock("@/components/file-preview-sidebar", () => ({
@@ -101,12 +107,15 @@ vi.mock("@/components/right-panel-tab-strip", () => ({
   RightPanelTabStrip: ({
     tabs,
   }: {
-    tabs: Array<{ id: string; loading?: boolean }>;
+    tabs: Array<{ id: string; title?: string; loading?: boolean }>;
   }) => (
     <div>
       {tabs.map((tab) => (
-        <span key={tab.id} data-testid={`tab-loading-${tab.id}`}>
-          {String(Boolean(tab.loading))}
+        <span key={tab.id}>
+          <span data-testid={`tab-loading-${tab.id}`}>
+            {String(Boolean(tab.loading))}
+          </span>
+          <span data-testid={`tab-title-${tab.id}`}>{tab.title}</span>
         </span>
       ))}
     </div>
@@ -122,6 +131,8 @@ class ResizeObserverMock {
   disconnect() {}
   unobserve() {}
 }
+
+const ok = { status: "ok", data: null };
 
 function emit(event: string, payload: unknown): void {
   mocks.listeners.get(event)?.({ payload });
@@ -144,8 +155,10 @@ describe("BrowserSidebar session access", () => {
     mocks.updateSettings.mockReset().mockResolvedValue(undefined);
     mocks.ownedBrowserHide.mockReset().mockResolvedValue(undefined);
     mocks.ownedBrowserTabHide.mockReset().mockResolvedValue(undefined);
-    mocks.ownedBrowserNavigate.mockReset().mockResolvedValue(undefined);
+    mocks.ownedBrowserNavigate.mockReset().mockResolvedValue(ok);
+    mocks.ownedBrowserTabNavigate.mockReset().mockResolvedValue(ok);
     mocks.ownedBrowserSetBounds.mockReset().mockResolvedValue(undefined);
+    mocks.toast.mockReset();
     vi.stubGlobal("ResizeObserver", ResizeObserverMock);
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
       x: 0,
@@ -319,5 +332,91 @@ describe("BrowserSidebar session access", () => {
     await act(async () => {});
 
     expect(mocks.ownedBrowserNavigate).toHaveBeenCalledTimes(1);
+  });
+
+  const refused = {
+    status: "error",
+    error:
+      "the owned browser cannot load file:///etc/hosts: only web pages outside the app's own origins",
+  };
+
+  async function showExamplePage() {
+    render(<BrowserSidebar conversationId="chat-1" />);
+    // Let the empty restore finish first; it closes the panel when it lands.
+    await act(async () => {});
+    act(() => {
+      emit("owned-browser:navigate", {
+        url: "https://example.com/", owner: "chat-1", navigationId: "nav-1", reveal: true,
+      });
+    });
+  }
+
+  function submitAddress(value: string) {
+    const address = screen.getByLabelText("Browser address");
+    fireEvent.change(address, { target: { value } });
+    fireEvent.submit(address.closest("form")!);
+  }
+
+  it("stops loading and says why when Rust refuses a typed address", async () => {
+    await showExamplePage();
+    mocks.ownedBrowserNavigate.mockResolvedValue(refused);
+
+    submitAddress("file:///etc/hosts");
+
+    await waitFor(() =>
+      expect(mocks.toast).toHaveBeenCalledWith(
+        expect.objectContaining({ description: refused.error, variant: "destructive" }),
+      ),
+    );
+    expect(mocks.ownedBrowserNavigate).toHaveBeenLastCalledWith("file:///etc/hosts", "chat-1", true);
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tab-loading-browser")).toHaveTextContent("false");
+    // The tab still shows the earlier page, so it keeps that page's address.
+    expect(screen.getByTestId("tab-title-browser")).toHaveTextContent("https://example.com/");
+
+    mocks.ownedBrowserNavigate.mockResolvedValue(ok);
+    fireEvent.click(screen.getByRole("button", { name: "Reload page" }));
+    await waitFor(() =>
+      expect(mocks.ownedBrowserNavigate).toHaveBeenLastCalledWith("https://example.com/", "chat-1", true),
+    );
+  });
+
+  it("leaves a newer address loading when an older one is refused late", async () => {
+    await showExamplePage();
+    let refuseOlder: (result: typeof refused) => void = () => {};
+    mocks.ownedBrowserNavigate.mockReturnValueOnce(
+      new Promise((resolve) => { refuseOlder = resolve; }),
+    );
+
+    submitAddress("https://slow.example/");
+    submitAddress("https://example.org/");
+    await act(async () => { refuseOlder(refused); });
+
+    expect(mocks.toast).not.toHaveBeenCalled();
+    expect(screen.getByTestId("tab-loading-browser")).toHaveTextContent("true");
+    expect(screen.getByTestId("tab-title-browser")).toHaveTextContent("https://example.org/");
+  });
+
+  it("stops loading when Rust refuses a restored URL", async () => {
+    mocks.loadConversationFile.mockResolvedValue({
+      browserState: { url: "file:///etc/hosts", updatedAt: 1, collapsed: false },
+    });
+    mocks.ownedBrowserNavigate.mockResolvedValue(refused);
+    render(<BrowserSidebar conversationId="chat-1" />);
+
+    await waitFor(() => expect(mocks.ownedBrowserNavigate).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByTestId("tab-loading-browser")).toHaveTextContent("false"),
+    );
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+
+    // Reloading it is refused again; the spinner must not stay on.
+    fireEvent.click(screen.getByRole("button", { name: "Reload page" }));
+    await waitFor(() =>
+      expect(mocks.toast).toHaveBeenCalledWith(
+        expect.objectContaining({ description: refused.error }),
+      ),
+    );
+    expect(screen.getByTestId("tab-loading-browser")).toHaveTextContent("false");
   });
 });

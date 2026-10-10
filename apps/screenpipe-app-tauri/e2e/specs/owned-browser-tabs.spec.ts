@@ -18,6 +18,7 @@ import { openHomeWindow, t, waitForAppReady } from "../helpers/test-utils.js";
 
 const TAB_ONE = "e2e-browser-tab-one";
 const TAB_TWO = "e2e-browser-tab-two";
+const TAB_ESCAPE = "e2e-browser-tab-escape";
 
 interface BrowserTabSnapshot {
   attached: boolean;
@@ -85,6 +86,10 @@ describe("Owned browser live tabs", function () {
       tabId: TAB_TWO,
       action: "close",
     }).catch(() => {});
+    await invoke("plugin:e2e|owned_browser_tab_control", {
+      tabId: TAB_ESCAPE,
+      action: "close",
+    }).catch(() => {});
   });
 
   (process.platform === "linux" ? it.skip : it)(
@@ -122,6 +127,24 @@ describe("Owned browser live tabs", function () {
         parent: "home",
       });
       expect((await snapshot(TAB_TWO))?.url).toContain("workspace-two");
+    },
+  );
+
+  (process.platform === "linux" ? it.skip : it)(
+    "keeps a page from sending its tab to the app's own pages",
+    async () => {
+      // Windows serves the app's pages from http://tauri.localhost.
+      const appPage =
+        process.platform === "win32"
+          ? "http://tauri.localhost/"
+          : "tauri://localhost/";
+      const page = `data:text/html,<title>escape-attempt</title><script>setTimeout(()=>location.href='${appPage}',100)</script>`;
+
+      await control(TAB_ESCAPE, "navigate", page);
+      await control(TAB_ESCAPE, "show");
+      await waitForUrl(TAB_ESCAPE, "escape-attempt");
+      await browser.pause(t(2_000));
+      expect((await snapshot(TAB_ESCAPE))?.url).toContain("escape-attempt");
     },
   );
 });

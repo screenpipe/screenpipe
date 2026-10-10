@@ -274,6 +274,9 @@ windows = { version = "0.58", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18.1"
+# The owned browser unregisters wry's `ipc` handler with it (needs v2_8).
+# "2" like tauri, so cargo keeps resolving to the version wry pins.
+webkit2gtk = { version = "2", features = ["v2_8"] }
 base64 = "0.22.1"
 freedesktop-desktop-entry = "0.7.0"
 freedesktop-icon-lookup = "0.1.3"

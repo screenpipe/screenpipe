@@ -70,12 +70,6 @@ const NAVIGATE_EVENT: &str = "owned-browser:navigate";
 ///   never from `on_navigation` (subframes can fire that on macOS).
 const STATE_EVENT: &str = "owned-browser:state";
 
-/// Emitted to the frontend exactly once when `spawn_install_when_ready`
-/// attaches the handle to the registry. Lets `BrowserSidebar` retry a
-/// per-conversation `owned_browser_navigate` that lost the install race on
-/// cold start.
-const READY_EVENT: &str = "owned-browser:ready";
-
 /// Emitted when the owned browser is about to copy cookies from the
 /// user's real browser. The sidebar answers through the
 /// `owned_browser_resolve_session_access` command.
@@ -185,6 +179,30 @@ static SESSION_ACCESS_PRIMED_THIS_RUN: AtomicBool = AtomicBool::new(false);
 fn pending_session_access(
 ) -> &'static Mutex<HashMap<String, oneshot::Sender<BrowserSessionDecision>>> {
     SESSION_ACCESS_PENDING.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Ownership of [`SESSION_ACCESS_PROMPT_IN_FLIGHT`] for one prompt. Dropping it
+/// frees the prompt slot and forgets the request on every exit, including when
+/// an HTTP client gives up and its request future is dropped mid-wait.
+struct SessionPromptGuard {
+    request_id: String,
+}
+
+impl Drop for SessionPromptGuard {
+    fn drop(&mut self) {
+        let request_id = std::mem::take(&mut self.request_id);
+        // Remove before freeing the slot: `owned_browser_set_bounds` hides the
+        // browser while any request is pending.
+        if let Ok(mut pending) = pending_session_access().try_lock() {
+            pending.remove(&request_id);
+            SESSION_ACCESS_PROMPT_IN_FLIGHT.store(false, Ordering::SeqCst);
+        } else {
+            tauri::async_runtime::spawn(async move {
+                pending_session_access().lock().await.remove(&request_id);
+                SESSION_ACCESS_PROMPT_IN_FLIGHT.store(false, Ordering::SeqCst);
+            });
+        }
+    }
 }
 
 /// Normalize host keys so `www.example.com` and `example.com` share one decision.
@@ -310,6 +328,11 @@ struct NavigationContext {
 struct OwnedBrowserState {
     inner: Mutex<OwnedBrowserInner>,
     last_title: StdMutex<String>,
+    /// Latest eval result marker, kept apart from `last_title` so a page title
+    /// reported after a marker (unread counts, tickers) doesn't overwrite it
+    /// before the eval reader polls. The engine reports only the last title
+    /// set in one JS task, so a retitle in the same task still hides a marker.
+    last_marker: StdMutex<String>,
     recent_navigations: StdMutex<Vec<NavigationContext>>,
     pending_navigation_id: StdMutex<Option<String>>,
     /// Owner (chat/session id) of the most recent navigation. Set by
@@ -328,6 +351,7 @@ impl OwnedBrowserState {
         Self {
             inner: Mutex::new(OwnedBrowserInner::default()),
             last_title: StdMutex::new(String::new()),
+            last_marker: StdMutex::new(String::new()),
             recent_navigations: StdMutex::new(Vec::new()),
             pending_navigation_id: StdMutex::new(None),
             pending_owner: StdMutex::new(None),
@@ -427,10 +451,38 @@ impl OwnedBrowserState {
         }
     }
 
+    /// Record a `document.title` change. Eval result markers go to their own
+    /// slot; returns whether `title` is a page title to show.
+    fn record_document_title(&self, title: &str) -> bool {
+        if title.starts_with(transport::RESULT_TITLE_PREFIX) {
+            if let Ok(mut last_marker) = self.last_marker.lock() {
+                *last_marker = title.to_string();
+            }
+            return false;
+        }
+        self.record_title(title.to_string());
+        true
+    }
+
     fn latest_title(&self) -> String {
         self.last_title
             .lock()
             .map(|title| title.clone())
+            .unwrap_or_default()
+    }
+
+    fn clear_marker(&self) {
+        if let Ok(mut last_marker) = self.last_marker.lock() {
+            last_marker.clear();
+        }
+    }
+
+    /// Take the latest result marker, leaving the slot empty. Reading and
+    /// clearing in one step keeps a marker that lands right after the read.
+    fn take_marker(&self) -> String {
+        self.last_marker
+            .lock()
+            .map(|mut marker| std::mem::take(&mut *marker))
             .unwrap_or_default()
     }
 
@@ -562,6 +614,72 @@ fn webview_url(webview: &Webview<Wry>) -> Option<String> {
     webview.url().ok().map(|url| url.to_string())
 }
 
+/// Attach an owned-browser child to `window` without the `ipc` message channel
+/// wry gives every webview. Pages here never call Tauri IPC, and wry crashes the
+/// whole app on some messages: on macOS it dereferences null for a string with
+/// no UTF-8 form (`postMessage('\uD800')`), on Windows and Linux it unwraps a
+/// URI built from the page URL. On Windows this also applies
+/// [`is_web_page_url`] to the navigations `on_navigation` misses.
+fn add_child_webview(
+    window: &Window,
+    builder: tauri::webview::WebviewBuilder<Wry>,
+    position: impl Into<Position>,
+    size: impl Into<Size>,
+) -> tauri::Result<Webview<Wry>> {
+    let child = window.add_child(builder, position, size)?;
+    #[cfg(windows)]
+    let origins = app_origins(window.app_handle());
+    child.with_webview(move |platform| {
+        #[cfg(target_os = "macos")]
+        unsafe {
+            let controller = platform.controller().cast::<objc2::runtime::AnyObject>();
+            let name = objc2_foundation::NSString::from_str("ipc");
+            let _: () = objc2::msg_send![controller, removeScriptMessageHandlerForName: &*name];
+        }
+        #[cfg(windows)]
+        unsafe {
+            use webview2_com::{take_pwstr, NavigationStartingEventHandler};
+            if let Ok(webview) = platform.controller().CoreWebView2() {
+                if let Ok(settings) = webview.Settings() {
+                    let _ = settings.SetIsWebMessageEnabled(false);
+                }
+                // `on_navigation` misses two kinds of navigation on Windows:
+                // iframes, which WebKit sends through it, and top-level URLs the
+                // `url` crate can't parse, which Tauri allows without asking. wry
+                // still routes those to the app's protocols (`http://tauri.xn--a/`).
+                let handler = NavigationStartingEventHandler::create(Box::new(move |_, args| {
+                    let Some(args) = args else {
+                        return Ok(());
+                    };
+                    // A URI that can't be read or parsed is not allowed.
+                    let mut uri = windows_core::PWSTR::null();
+                    let allowed = args.Uri(&mut uri).is_ok()
+                        && url::Url::parse(&take_pwstr(uri))
+                            .is_ok_and(|url| is_web_page_url(&url, &origins));
+                    // Only ever cancel. wry's `on_navigation` handler was added
+                    // first, so it already ran and set its own decision.
+                    if allowed {
+                        Ok(())
+                    } else {
+                        args.SetCancel(true)
+                    }
+                }));
+                let mut token = 0;
+                let _ = webview.add_NavigationStarting(&handler, &mut token);
+                let _ = webview.add_FrameNavigationStarting(&handler, &mut token);
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            use webkit2gtk::{UserContentManagerExt, WebViewExt};
+            if let Some(manager) = platform.inner().user_content_manager() {
+                manager.unregister_script_message_handler("ipc");
+            }
+        }
+    })?;
+    Ok(child)
+}
+
 fn child_webview_builder(
     app: &AppHandle,
     label: &str,
@@ -578,10 +696,22 @@ fn child_webview_builder(
     let tab_for_title = tab_id.clone();
     let tab_for_nav = tab_id.clone();
     let tab_for_page_load = tab_id;
+    let origins = app_origins(app);
     let builder = tauri::webview::WebviewBuilder::new(label.to_string(), url)
         .initialization_script(transport::BRIDGE_INIT_SCRIPT)
         .background_throttling(BackgroundThrottlingPolicy::Disabled)
-        .on_navigation(move |_url| {
+        .on_navigation(move |url| {
+            // Pages navigate and redirect without going through normalize_url.
+            if !is_web_page_url(url, &origins) {
+                // Not `warn!`: a page can retry this in a tight loop, and warnings
+                // reach the log file and Sentry.
+                debug!(
+                    "owned-browser blocked navigation to {}://{}",
+                    url.scheme(),
+                    url.host_str().unwrap_or_default()
+                );
+                return false;
+            }
             // Browsers do not put subframe navigations in the omnibox. Wry's
             // `on_navigation` URL can be an iframe target on macOS (wry#1593),
             // so never copy it into the sidebar — only reflect load activity.
@@ -621,8 +751,7 @@ fn child_webview_builder(
             );
         })
         .on_document_title_changed(move |webview, title| {
-            state_for_title.record_title(title.clone());
-            if title.starts_with(transport::RESULT_TITLE_PREFIX) {
+            if !state_for_title.record_document_title(&title) {
                 return;
             }
             let committed_url = webview_url(&webview);
@@ -700,7 +829,6 @@ async fn show_native_for_background_eval(active: &Webview<Wry>, state: &OwnedBro
 }
 
 const EVAL_RESULT_INLINE_MAX_CHARS: usize = 800;
-const EVAL_RESULT_CHUNK_SIZE: usize = 700;
 
 fn build_eval_result_script(code: &str, id: &str) -> String {
     let id_lit = serde_json::to_string(id).unwrap();
@@ -775,7 +903,7 @@ fn build_eval_result_script(code: &str, id: &str) -> String {
         id = id_lit,
         prefix = prefix_lit,
         inline_max = EVAL_RESULT_INLINE_MAX_CHARS,
-        chunk_size = EVAL_RESULT_CHUNK_SIZE,
+        chunk_size = transport::CHUNK_SIZE,
     )
 }
 
@@ -796,7 +924,7 @@ impl TauriOwnedHandle {
         let _guard = self.eval_lock.lock().await;
 
         let target_url = if let Some(target) = url {
-            Some(normalize_url(&target)?)
+            Some(normalize_url(&target, &app_origins(&self.app))?)
         } else {
             None
         };
@@ -864,6 +992,8 @@ impl TauriOwnedHandle {
         let id = Uuid::new_v4().to_string();
         let wrapped = build_eval_result_script(code, &id);
 
+        // Drop any marker a timed-out eval left behind.
+        self.state.clear_marker();
         active
             .eval(wrapped)
             .map_err(|e| format!("webview.eval failed: {e}"))?;
@@ -873,7 +1003,12 @@ impl TauriOwnedHandle {
         // browser's ~1KB title cap, so they're pulled in base64 chunks and
         // reassembled — see [`transport`]. The whole read honours `timeout`.
         let start = Instant::now();
-        let payload = match self.read_eval_payload(&active, start, timeout, &id).await {
+        let fetch_chunk = |i| {
+            active
+                .eval(transport::chunk_fetch_js(i))
+                .map_err(|e| e.to_string())
+        };
+        let payload = match read_eval_payload(&self.state, fetch_chunk, start, timeout, &id).await {
             Ok(payload) => payload,
             Err(e) => {
                 // Restore hidden whenever we revealed the webview *only* to run
@@ -917,107 +1052,104 @@ impl TauriOwnedHandle {
             error: payload.error,
         })
     }
+}
 
-    /// Read one eval's result from the `document.title` transport, honouring the
-    /// overall `timeout` (measured from `start`). An inline result returns
-    /// directly; a chunk header triggers a pull of every base64 chunk, which are
-    /// reassembled into the full payload — so results larger than the browser's
-    /// ~1KB title cap (e.g. a page snapshot) survive intact.
-    async fn read_eval_payload(
-        &self,
-        active: &Webview<Wry>,
-        start: Instant,
-        timeout: Duration,
-        expected_id: &str,
-    ) -> Result<transport::EvalPayload, String> {
-        match self.poll_marker(start, timeout, None, expected_id).await? {
-            transport::Marker::Result(payload) => Ok(payload),
-            transport::Marker::Chunk { seq, .. } => Err(format!(
-                "owned-browser eval: got chunk {seq} before a header"
-            )),
-            transport::Marker::Header { chunks, .. } => {
-                let mut parts: Vec<String> = Vec::with_capacity(chunks);
-                for i in 0..chunks {
-                    self.state.record_title(String::new());
-                    active
-                        .eval(transport::chunk_fetch_js(i))
-                        .map_err(|e| format!("owned-browser fetch chunk {i}: {e}"))?;
-                    match self
-                        .poll_marker(start, timeout, Some(i), expected_id)
-                        .await?
-                    {
-                        transport::Marker::Chunk { seq, b64, .. } if seq == i => parts.push(b64),
-                        other => {
-                            return Err(format!(
-                                "owned-browser eval: expected chunk {i}, got {other:?}"
-                            ))
-                        }
+/// Read one eval's result from the `document.title` transport, honouring the
+/// overall `timeout` (measured from `start`). An inline result returns
+/// directly; a chunk header triggers a pull of every base64 chunk, which are
+/// reassembled into the full payload — so results larger than the browser's
+/// ~1KB title cap (e.g. a page snapshot) survive intact. `fetch_chunk(i)` asks
+/// the page to write chunk `i`.
+async fn read_eval_payload(
+    state: &OwnedBrowserState,
+    mut fetch_chunk: impl FnMut(usize) -> Result<(), String>,
+    start: Instant,
+    timeout: Duration,
+    expected_id: &str,
+) -> Result<transport::EvalPayload, String> {
+    match poll_marker(state, start, timeout, None, expected_id).await? {
+        transport::Marker::Result(payload) => Ok(payload),
+        transport::Marker::Chunk { seq, .. } => Err(format!(
+            "owned-browser eval: got chunk {seq} before a header"
+        )),
+        transport::Marker::Header { chunks, .. } => {
+            transport::check_chunk_count(chunks)?;
+            let mut parts: Vec<String> = Vec::with_capacity(chunks);
+            for i in 0..chunks {
+                fetch_chunk(i).map_err(|e| format!("owned-browser fetch chunk {i}: {e}"))?;
+                match poll_marker(state, start, timeout, Some(i), expected_id).await? {
+                    transport::Marker::Chunk { seq, b64, .. } if seq == i => parts.push(b64),
+                    other => {
+                        return Err(format!(
+                            "owned-browser eval: expected chunk {i}, got {other:?}"
+                        ))
                     }
                 }
-                let json = transport::reassemble_chunks(&parts)?;
-                serde_json::from_str::<transport::EvalPayload>(&json)
-                    .map_err(|e| format!("parse chunked eval result: {e}"))
             }
+            let json = transport::reassemble_chunks(&parts)?;
+            serde_json::from_str::<transport::EvalPayload>(&json)
+                .map_err(|e| format!("parse chunked eval result: {e}"))
         }
     }
+}
 
-    /// Poll the result-transport title (50ms cadence) until a marker appears or
-    /// `timeout` elapses. With `want_seq = Some(i)`, only a chunk marker with
-    /// that seq satisfies the wait — so we don't latch the header or a previous
-    /// chunk's still-current title; `None` accepts the first marker seen.
-    async fn poll_marker(
-        &self,
-        start: Instant,
-        timeout: Duration,
-        want_seq: Option<usize>,
-        expected_id: &str,
-    ) -> Result<transport::Marker, String> {
-        loop {
-            if start.elapsed() >= timeout {
-                return Err(format!(
-                    "owned-browser eval timed out after {}s (last title: {:?})",
-                    timeout.as_secs(),
-                    self.state.latest_title()
-                ));
-            }
-            let title = self.state.latest_title();
-            if let Some(rest) = title.strip_prefix(transport::RESULT_TITLE_PREFIX) {
-                let marker = transport::parse_marker(rest)?;
-                let marker_id = match &marker {
-                    transport::Marker::Result(payload) => payload.id.as_str(),
-                    transport::Marker::Header { id, .. } => id.as_str(),
-                    transport::Marker::Chunk { id, .. } => id.as_str(),
-                };
-                if marker_id != expected_id {
-                    warn!(
-                        "owned-browser eval ignored stale result id (got {}, expected {})",
-                        marker_id, expected_id
-                    );
-                    self.state.record_title(String::new());
-                    continue;
-                }
-                match want_seq {
-                    // Waiting for a specific chunk: accept only that seq; a stale
-                    // header / earlier chunk title means keep polling.
-                    Some(want) => {
-                        if matches!(&marker, transport::Marker::Chunk { seq, .. } if *seq == want) {
-                            return Ok(marker);
-                        }
-                        self.state.record_title(String::new());
-                    }
-                    // First-marker wait (inline result or chunk header).
-                    None => match marker {
-                        transport::Marker::Chunk { seq, .. } => {
-                            return Err(format!(
-                                "owned-browser eval: got chunk {seq} before a header"
-                            ))
-                        }
-                        other => return Ok(other),
-                    },
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+/// Poll the result marker slot (50ms cadence) until a marker for `expected_id`
+/// appears or `timeout` elapses. With `want_seq = Some(i)`, only a chunk
+/// marker with that seq satisfies the wait; `None` accepts the first marker.
+async fn poll_marker(
+    state: &OwnedBrowserState,
+    start: Instant,
+    timeout: Duration,
+    want_seq: Option<usize>,
+    expected_id: &str,
+) -> Result<transport::Marker, String> {
+    loop {
+        if start.elapsed() >= timeout {
+            let waiting_for = match want_seq {
+                Some(seq) => format!("chunk {seq}"),
+                None => "the result".to_string(),
+            };
+            return Err(format!(
+                "owned-browser eval timed out after {}s waiting for {waiting_for} (last title: {:?})",
+                timeout.as_secs(),
+                state.latest_title()
+            ));
         }
+        let title = state.take_marker();
+        if let Some(rest) = title.strip_prefix(transport::RESULT_TITLE_PREFIX) {
+            let marker = transport::parse_marker(rest)?;
+            let marker_id = match &marker {
+                transport::Marker::Result(payload) => payload.id.as_str(),
+                transport::Marker::Header { id, .. } => id.as_str(),
+                transport::Marker::Chunk { id, .. } => id.as_str(),
+            };
+            if marker_id != expected_id {
+                warn!(
+                    "owned-browser eval ignored stale result id (got {}, expected {})",
+                    marker_id, expected_id
+                );
+                continue;
+            }
+            match want_seq {
+                // Waiting for a specific chunk: accept only that seq; a stale
+                // header / earlier chunk title means keep polling.
+                Some(want) => {
+                    if matches!(&marker, transport::Marker::Chunk { seq, .. } if *seq == want) {
+                        return Ok(marker);
+                    }
+                }
+                // First-marker wait (inline result or chunk header).
+                None => match marker {
+                    transport::Marker::Chunk { seq, .. } => {
+                        return Err(format!(
+                            "owned-browser eval: got chunk {seq} before a header"
+                        ))
+                    }
+                    other => return Ok(other),
+                },
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -1061,7 +1193,7 @@ impl OwnedWebviewHandle for TauriOwnedHandle {
     /// own titles. The frontend sidebar listens for `NAVIGATE_EVENT` and
     /// reveals/positions the webview itself.
     async fn navigate(&self, url: &str, owner: Option<&str>) -> Result<(), String> {
-        let parsed: url::Url = normalize_url(url)?;
+        let parsed: url::Url = normalize_url(url, &app_origins(&self.app))?;
 
         // Push the user's real-browser cookies for this host into
         // WKHTTPCookieStore before issuing the navigate, so the request
@@ -1140,14 +1272,6 @@ pub fn spawn_install_when_ready(
                 Ok(handle) => {
                     owned_browser.attach(handle).await;
                     info!("owned-browser ready");
-                    // Notify the frontend so any sidebar that tried to call
-                    // `owned_browser_navigate` before install finished can
-                    // retry. Without this, opening a chat with a saved
-                    // `browserState.url` during the install race silently
-                    // dropped the navigate (Rust returns "not initialized",
-                    // frontend swallows in `.catch(() => {})`) and the
-                    // browser never restored on next app launch.
-                    let _ = app.emit(READY_EVENT, ());
                     return;
                 }
                 Err(e) => {
@@ -1220,13 +1344,13 @@ async fn ensure_child_bounds(
                 state.clone(),
                 None,
             );
-            let child = parent_window
-                .add_child(
-                    builder,
-                    LogicalPosition::new(x, y),
-                    LogicalSize::new(width, height),
-                )
-                .map_err(|e| format!("owned-browser child webview attach failed: {e}"))?;
+            let child = add_child_webview(
+                &parent_window,
+                builder,
+                LogicalPosition::new(x, y),
+                LogicalSize::new(width, height),
+            )
+            .map_err(|e| format!("owned-browser child webview attach failed: {e}"))?;
             let pending_url = inner.pending_url.take();
             inner.child = Some(child.clone());
             inner.child_parent = Some(parent.to_string());
@@ -1288,13 +1412,13 @@ async fn ensure_tab_child_bounds(
                 state.clone(),
                 Some(tab_id.to_string()),
             );
-            let child = parent_window
-                .add_child(
-                    builder,
-                    LogicalPosition::new(x, y),
-                    LogicalSize::new(width, height),
-                )
-                .map_err(|e| format!("browser tab child webview attach failed: {e}"))?;
+            let child = add_child_webview(
+                &parent_window,
+                builder,
+                LogicalPosition::new(x, y),
+                LogicalSize::new(width, height),
+            )
+            .map_err(|e| format!("browser tab child webview attach failed: {e}"))?;
             let pending_url = inner.pending_url.take();
             inner.child = Some(child.clone());
             inner.child_parent = Some(parent.to_string());
@@ -1456,13 +1580,13 @@ async fn ensure_background_child(
         state.clone(),
         None,
     );
-    let child = host
-        .add_child(
-            builder,
-            LogicalPosition::new(0.0, 0.0),
-            LogicalSize::new(BG_HOST_SIZE, BG_HOST_SIZE),
-        )
-        .map_err(|e| format!("owned-browser background child attach failed: {e}"))?;
+    let child = add_child_webview(
+        &host,
+        builder,
+        LogicalPosition::new(0.0, 0.0),
+        LogicalSize::new(BG_HOST_SIZE, BG_HOST_SIZE),
+    )
+    .map_err(|e| format!("owned-browser background child attach failed: {e}"))?;
     child
         .show()
         .map_err(|e| format!("owned-browser background child show failed: {e}"))?;
@@ -1549,13 +1673,82 @@ pub async fn owned_browser_tab_set_bounds(
     Ok(())
 }
 
-/// Normalise a user-supplied URL string into a full `url::Url`.
+/// The app's own origins, which Tauri grants the app's IPC permissions.
+struct AppOrigins {
+    /// The dev server, which Tauri treats as the app's origin in dev builds.
+    dev_server: Option<url::Url>,
+    /// The app's custom protocols run over http hosts, as on Windows. See
+    /// [`is_windows_app_url`].
+    windows: bool,
+}
+
+fn app_origins(app: &AppHandle) -> AppOrigins {
+    AppOrigins {
+        dev_server: if tauri::is_dev() {
+            app.config().build.dev_url.clone()
+        } else {
+            None
+        },
+        windows: cfg!(windows),
+    }
+}
+
+/// Whether the owned browser may load `url`. Tauri grants IPC to the app's own
+/// origins: its custom protocols (`tauri:`, `ipc:`, `asset:`; see
+/// [`is_windows_app_url`] for Windows) and the dev server. A page that reached
+/// one would run with the app's capabilities, so only web URLs outside those
+/// origins pass. Iframes need `about:`, `data:` and `blob:`; a `blob:` URL
+/// carries the origin of the page that created it.
+fn is_web_page_url(url: &url::Url, origins: &AppOrigins) -> bool {
+    match url.scheme() {
+        "http" | "https" => {
+            !(origins.windows && is_windows_app_url(url))
+                && origins
+                    .dev_server
+                    .as_ref()
+                    .is_none_or(|dev| dev.origin() != url.origin())
+        }
+        "about" | "data" => true,
+        "blob" => match url::Url::parse(url.path()) {
+            Ok(creator) => {
+                matches!(creator.scheme(), "http" | "https") && is_web_page_url(&creator, origins)
+            }
+            // Opaque creator such as a sandboxed frame: `blob:null/<id>`.
+            Err(_) => true,
+        },
+        _ => false,
+    }
+}
+
+/// Whether an http(s) URL reaches the app's custom protocols on Windows.
+/// Tauri trusts `<protocol>.localhost` over http and https; every `.localhost`
+/// host is blocked so a protocol added later is covered too. wry serves a
+/// protocol at any URL starting with `http://<protocol>.`, compared as a raw
+/// string, so `http://tauri.example.com/` and `http://tauri.localhost@example.com/`
+/// count. That routing is http-only because the app leaves `useHttpsScheme`
+/// off, so `https://tauri.app` is a normal site.
+fn is_windows_app_url(url: &url::Url) -> bool {
+    url.host_str()
+        .is_some_and(|host| host.ends_with(".localhost"))
+        || url.as_str().strip_prefix("http://").is_some_and(|rest| {
+            // Every protocol Tauri registers for this app: `tauri`, `ipc`, and
+            // `asset` (the `protocol-asset` feature). Add any scheme registered
+            // with `register_uri_scheme_protocol` here too.
+            ["tauri", "ipc", "asset"].iter().any(|protocol| {
+                rest.strip_prefix(protocol)
+                    .is_some_and(|rest| rest.starts_with('.'))
+            })
+        })
+}
+
+/// Normalise a user-supplied URL string into a full `url::Url` the owned
+/// browser may load (see [`is_web_page_url`]).
 ///
 /// Accepts bare hosts (`youtube.com`), `//`-prefixed (`//youtube.com`),
 /// fully-qualified URLs (`https://youtube.com`), and hostless schemes
-/// (`about:blank`, `data:...`, `file:...`).  Anything that looks like it
+/// (`about:blank`, `data:...`).  Anything that looks like it
 /// is missing a scheme gets `https://` prepended before parsing.
-fn normalize_url(raw: &str) -> Result<url::Url, String> {
+fn normalize_url(raw: &str, origins: &AppOrigins) -> Result<url::Url, String> {
     // Hostless schemes that don't use `://`. Keep this conservative so that
     // `localhost:8080` (host:port, not a scheme) still gets `https://` prepended.
     const HOSTLESS_SCHEMES: &[&str] = &[
@@ -1576,44 +1769,88 @@ fn normalize_url(raw: &str) -> Result<url::Url, String> {
     } else {
         format!("https://{raw}")
     };
-    candidate
+    let url = candidate
         .parse::<url::Url>()
-        .map_err(|e| format!("invalid url: {e}"))
+        .map_err(|e| format!("invalid url: {e}"))?;
+    if !is_web_page_url(&url, origins) {
+        return Err(format!(
+            "the owned browser cannot load {url}: only web pages outside the app's own origins"
+        ));
+    }
+    // wry unwraps `NSURL::URLWithString` when it loads a URL. That parser
+    // rejects some URLs `url` accepts: hosts containing `{ } ` "` on every
+    // macOS, and before macOS 14 also raw `{ } | ^` or a stray `%` anywhere.
+    // Refuse those here instead of aborting the app.
+    #[cfg(target_os = "macos")]
+    if objc2::rc::autoreleasepool(|_| {
+        objc2_foundation::NSURL::URLWithString(&objc2_foundation::NSString::from_str(url.as_str()))
+            .is_none()
+    }) {
+        return Err(format!(
+            "macOS cannot load {url}; remove or percent-encode its special characters"
+        ));
+    }
+    Ok(url)
 }
 
 #[cfg(test)]
 mod normalize_url_tests {
     use super::{
-        browser_tab_state, build_eval_result_script, existing_browser_tab_state, normalize_url,
-        session_host_key, session_prompt_in_flight_timeout_error, session_prompt_timeout_error,
-        OwnedBrowserState,
+        browser_session_decision_for_url, browser_tab_state, build_eval_result_script,
+        existing_browser_tab_state, is_web_page_url, normalize_url, pending_session_access,
+        read_eval_payload, session_host_key, session_prompt_in_flight_timeout_error,
+        session_prompt_timeout_error, transport, webkit_same_site, AppOrigins, OwnedBrowserState,
+        SessionPromptGuard, GLOBAL_SESSION_ACCESS_DISABLED, GLOBAL_SESSION_ACCESS_GRANTED,
+        SESSION_ACCESS_PROMPT_IN_FLIGHT,
     };
+    use base64::Engine;
+    use serde_json::json;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    /// A release build on macOS or Linux.
+    const ORIGINS: AppOrigins = AppOrigins {
+        dev_server: None,
+        windows: false,
+    };
+    /// A release build on Windows, where the app's protocols run over http.
+    const WINDOWS: AppOrigins = AppOrigins {
+        dev_server: None,
+        windows: true,
+    };
+
+    fn with_dev_server(url: &str) -> AppOrigins {
+        AppOrigins {
+            dev_server: Some(url::Url::parse(url).unwrap()),
+            windows: false,
+        }
+    }
 
     #[test]
     fn keeps_fully_qualified() {
-        let u = normalize_url("https://youtube.com").unwrap();
+        let u = normalize_url("https://youtube.com", &ORIGINS).unwrap();
         assert_eq!(u.scheme(), "https");
         assert_eq!(u.host_str(), Some("youtube.com"));
     }
 
     #[test]
     fn adds_https_to_bare_host() {
-        let u = normalize_url("youtube.com").unwrap();
+        let u = normalize_url("youtube.com", &ORIGINS).unwrap();
         assert_eq!(u.scheme(), "https");
         assert_eq!(u.host_str(), Some("youtube.com"));
     }
 
     #[test]
     fn adds_https_to_protocol_relative() {
-        let u = normalize_url("//youtube.com").unwrap();
+        let u = normalize_url("//youtube.com", &ORIGINS).unwrap();
         assert_eq!(u.scheme(), "https");
         assert_eq!(u.host_str(), Some("youtube.com"));
     }
 
     #[test]
     fn adds_https_to_host_port() {
-        let u = normalize_url("localhost:8080").unwrap();
+        let u = normalize_url("localhost:8080", &ORIGINS).unwrap();
         assert_eq!(u.scheme(), "https");
         assert_eq!(u.host_str(), Some("localhost"));
         assert_eq!(u.port(), Some(8080));
@@ -1621,15 +1858,123 @@ mod normalize_url_tests {
 
     #[test]
     fn preserves_about_blank() {
-        let u = normalize_url("about:blank").unwrap();
+        let u = normalize_url("about:blank", &ORIGINS).unwrap();
         assert_eq!(u.scheme(), "about");
         assert_eq!(u.path(), "blank");
     }
 
     #[test]
     fn preserves_data_url() {
-        let u = normalize_url("data:text/plain,hello").unwrap();
+        let u = normalize_url("data:text/plain,hello", &ORIGINS).unwrap();
         assert_eq!(u.scheme(), "data");
+    }
+
+    #[test]
+    fn rejects_app_origins_and_local_schemes() {
+        for raw in [
+            "tauri://localhost/viewer?path=~/.zshrc",
+            "asset://localhost/x",
+            "ipc://localhost/x",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+        ] {
+            assert!(normalize_url(raw, &ORIGINS).is_err(), "accepted {raw}");
+        }
+    }
+
+    #[test]
+    fn refuses_schemes_nobody_listed() {
+        // Only web schemes pass, so a scheme added to WebKit or WebView2 later
+        // is refused too.
+        for raw in [
+            "view-source:https://example.com/",
+            "mailto:someone@example.com",
+            "ftp://example.com/",
+            "ws://example.com/",
+            "chrome://settings",
+            "x-custom://anything",
+        ] {
+            let err = normalize_url(raw, &ORIGINS).unwrap_err();
+            assert!(err.contains("only web pages"), "{raw}: {err}");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn refuses_urls_nsurl_cannot_parse() {
+        // `url` accepts this host, but NSURL returns nil for it and wry
+        // unwraps that nil.
+        let err = normalize_url("http://ex{mple.com/", &ORIGINS).unwrap_err();
+        assert!(err.contains("macOS cannot load"), "{err}");
+        assert!(normalize_url("http://example.com/", &ORIGINS).is_ok());
+    }
+
+    #[test]
+    fn rejects_the_dev_server_origin() {
+        let dev = with_dev_server("http://localhost:1420");
+        assert!(normalize_url("http://localhost:1420/viewer", &dev).is_err());
+        assert!(normalize_url("http://localhost:3000/", &dev).is_ok());
+    }
+
+    #[test]
+    fn windows_blocks_tauri_trusted_hosts_and_wry_routed_urls() {
+        for raw in [
+            // Tauri trusts `<protocol>.localhost` over http and https.
+            "http://tauri.localhost/",
+            "https://tauri.localhost/",
+            "http://ipc.localhost/x",
+            "http://asset.localhost/x",
+            "https://future.localhost/",
+            // wry serves any URL starting with `http://<protocol>.`.
+            "http://asset.example.com/",
+            "http://tauri.localhost@example.com/",
+            "blob:http://tauri.localhost/1",
+        ] {
+            let url = url::Url::parse(raw).unwrap();
+            assert!(!is_web_page_url(&url, &WINDOWS), "allowed {raw}");
+            // Elsewhere the protocols have their own schemes; these are web hosts.
+            assert!(is_web_page_url(&url, &ORIGINS), "blocked {raw} off Windows");
+        }
+    }
+
+    #[test]
+    fn windows_allows_sites_that_only_look_like_protocol_hosts() {
+        for raw in [
+            "https://tauri.app/start/",
+            "https://ipc.org/",
+            "https://asset.example.com/",
+            "http://assets.example.com/",
+            "http://localhost:3000/",
+            "http://example.com/tauri.localhost",
+        ] {
+            let url = url::Url::parse(raw).unwrap();
+            assert!(is_web_page_url(&url, &WINDOWS), "blocked {raw}");
+        }
+    }
+
+    #[test]
+    fn allows_iframe_schemes() {
+        for raw in [
+            "about:srcdoc",
+            "data:text/html,x",
+            "blob:https://site.example/1",
+            "blob:null/1",
+        ] {
+            let url = url::Url::parse(raw).unwrap();
+            assert!(is_web_page_url(&url, &ORIGINS), "rejected {raw}");
+        }
+    }
+
+    #[test]
+    fn judges_blob_urls_by_their_creator() {
+        let url = url::Url::parse("blob:tauri://localhost/1").unwrap();
+        assert!(!is_web_page_url(&url, &ORIGINS));
+
+        let url = url::Url::parse("blob:http://localhost:1420/1").unwrap();
+        assert!(!is_web_page_url(
+            &url,
+            &with_dev_server("http://localhost:1420")
+        ));
     }
 
     #[test]
@@ -1674,18 +2019,181 @@ mod normalize_url_tests {
         assert!(in_flight.contains("retry from the owned browser menu"));
     }
 
+    #[tokio::test]
+    #[serial_test::serial(owned_browser_session_prompt)]
+    async fn dropping_a_waiting_session_prompt_frees_the_slot() {
+        GLOBAL_SESSION_ACCESS_DISABLED.store(false, Ordering::SeqCst);
+        GLOBAL_SESSION_ACCESS_GRANTED.store(false, Ordering::SeqCst);
+        SESSION_ACCESS_PROMPT_IN_FLIGHT.store(false, Ordering::SeqCst);
+        let app = tauri::test::mock_app();
+        let state = Arc::new(OwnedBrowserState::new());
+        let url = url::Url::parse("https://mail.example.com/").unwrap();
+
+        let mut request = Box::pin(browser_session_decision_for_url(app.handle(), &url, &state));
+        // The prompt is on screen and the request waits for the user.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut request)
+                .await
+                .is_err()
+        );
+        assert!(SESSION_ACCESS_PROMPT_IN_FLIGHT.load(Ordering::SeqCst));
+        assert_eq!(pending_session_access().lock().await.len(), 1);
+
+        // The HTTP client gives up: its request future is dropped mid-wait.
+        drop(request);
+        assert!(!SESSION_ACCESS_PROMPT_IN_FLIGHT.load(Ordering::SeqCst));
+        assert!(pending_session_access().lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(owned_browser_session_prompt)]
+    async fn prompt_slot_stays_taken_until_a_locked_request_is_forgotten() {
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let mut pending = pending_session_access().lock().await;
+        pending.insert("locked-prompt".into(), tx);
+        SESSION_ACCESS_PROMPT_IN_FLIGHT.store(true, Ordering::SeqCst);
+
+        drop(SessionPromptGuard {
+            request_id: "locked-prompt".into(),
+        });
+        assert!(SESSION_ACCESS_PROMPT_IN_FLIGHT.load(Ordering::SeqCst));
+
+        drop(pending);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while SESSION_ACCESS_PROMPT_IN_FLIGHT.load(Ordering::SeqCst) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(!SESSION_ACCESS_PROMPT_IN_FLIGHT.load(Ordering::SeqCst));
+        assert!(!pending_session_access()
+            .lock()
+            .await
+            .contains_key("locked-prompt"));
+    }
+
     #[test]
-    fn eval_result_script_is_self_contained_and_tags_chunks() {
+    fn imported_cookies_without_same_site_default_to_lax() {
+        assert_eq!(webkit_same_site(-1), "Lax");
+        assert_eq!(webkit_same_site(0), "None");
+        assert_eq!(webkit_same_site(1), "Lax");
+        assert_eq!(webkit_same_site(2), "Strict");
+        assert_eq!(webkit_same_site(7), "Lax");
+    }
+
+    #[test]
+    fn eval_result_script_writes_the_markers_the_reader_parses() {
         let script = build_eval_result_script("return 42;", "eval-id-1");
 
         assert!(script.contains("return 42;"));
         assert!(script.contains("\"eval-id-1\""));
-        assert!(script.contains("window.__SP_OB_CHUNK__"));
-        assert!(script.contains("id: window.__SP_OB_ID__ || \"\""));
+        // This script, not owned_browser_bridge.js, writes every result marker
+        // `transport::parse_marker` reads, which rejects chunks over CHUNK_SIZE.
+        for expected in [
+            format!("const __sp_chunk_size = {};", transport::CHUNK_SIZE),
+            "chunks: n,".to_string(),
+            "window.__SP_OB_CHUNK__ = function (i)".to_string(),
+            "id: window.__SP_OB_ID__ || \"\"".to_string(),
+            "chunk_seq: i,".to_string(),
+            "chunk_b64: chunkBuf.substr(i * size, size)".to_string(),
+        ] {
+            assert!(script.contains(&expected), "missing {expected}");
+        }
     }
 
-    // The `document.title` result-transport logic (inline + chunked) and the
-    // title-restore helper are unit-tested in `owned_browser_transport`.
+    const EVAL_ID: &str = "eval-1";
+
+    fn marker(value: serde_json::Value) -> String {
+        format!("{}{value}", transport::RESULT_TITLE_PREFIX)
+    }
+
+    async fn read(
+        state: &OwnedBrowserState,
+        fetch_chunk: impl FnMut(usize) -> Result<(), String>,
+        timeout_ms: u64,
+    ) -> Result<transport::EvalPayload, String> {
+        let timeout = Duration::from_millis(timeout_ms);
+        read_eval_payload(state, fetch_chunk, Instant::now(), timeout, EVAL_ID).await
+    }
+
+    #[test]
+    fn result_markers_never_become_the_page_title() {
+        let state = OwnedBrowserState::new();
+        let marker = marker(json!({"id": "1", "ok": true}));
+        assert!(!state.record_document_title(&marker));
+        assert!(state.record_document_title("(3) Inbox"));
+        assert_eq!(state.take_marker(), marker);
+        assert_eq!(state.latest_title(), "(3) Inbox");
+        // A read leaves nothing for the next eval to skip as stale.
+        assert_eq!(state.take_marker(), "");
+    }
+
+    #[tokio::test]
+    async fn forged_chunk_count_fails_the_eval_instead_of_aborting() {
+        let state = OwnedBrowserState::new();
+        // The page shares the bridge's JS realm, so it can write a header for
+        // the running eval. Preallocating for it aborted the app.
+        state.record_document_title(&marker(
+            json!({"id": EVAL_ID, "chunks": 100_000_000_000_000_000u64}),
+        ));
+        let err = read(&state, |_| Ok(()), 1_000).await.unwrap_err();
+        assert!(err.contains("return less data"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn oversized_header_from_an_earlier_eval_is_skipped() {
+        let state = Arc::new(OwnedBrowserState::new());
+        state.record_document_title(&marker(
+            json!({"id": "earlier-eval", "chunks": 100_000_000_000_000_000u64}),
+        ));
+        let page = state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            page.record_document_title(&marker(json!({"id": EVAL_ID, "ok": true, "result": 7})));
+        });
+        let payload = read(&state, |_| Ok(()), 2_000).await.unwrap();
+        assert_eq!(payload.result, Some(json!(7)));
+    }
+
+    #[tokio::test]
+    async fn chunked_result_survives_a_page_that_retitles_after_every_marker() {
+        let state = OwnedBrowserState::new();
+        let payload = json!({"id": EVAL_ID, "ok": true, "result": "x → ".repeat(2_000)});
+        let encoded = base64::engine::general_purpose::STANDARD.encode(payload.to_string());
+        let parts: Vec<&str> = encoded
+            .as_bytes()
+            .chunks(transport::CHUNK_SIZE)
+            .map(|chunk| std::str::from_utf8(chunk).unwrap())
+            .collect();
+        assert!(parts.len() > 2);
+
+        state.record_document_title(&marker(json!({"id": EVAL_ID, "chunks": parts.len()})));
+        state.record_document_title("(3) Inbox");
+        let got = read(
+            &state,
+            |i| {
+                state.record_document_title(&marker(
+                    json!({"id": EVAL_ID, "chunk_seq": i, "chunk_b64": parts[i]}),
+                ));
+                state.record_document_title(&format!("({i}) Inbox"));
+                Ok(())
+            },
+            2_000,
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.result, Some(payload["result"].clone()));
+        assert_eq!(state.latest_title(), format!("({}) Inbox", parts.len() - 1));
+    }
+
+    #[tokio::test]
+    async fn a_missing_chunk_times_out_naming_it() {
+        let state = OwnedBrowserState::new();
+        state.record_document_title(&marker(json!({"id": EVAL_ID, "chunks": 2})));
+        let err = read(&state, |_| Ok(()), 300).await.unwrap_err();
+        assert!(err.contains("waiting for chunk 0"), "{err}");
+    }
+
+    // Marker parsing, chunk reassembly and the title-restore helper are
+    // unit-tested in `owned_browser_transport`.
 
     #[test]
     fn redirect_committed_url_keeps_same_navigation_context() {
@@ -1735,7 +2243,7 @@ pub async fn owned_browser_navigate(
     reveal: Option<bool>,
 ) -> Result<(), String> {
     let state = browser_state();
-    let parsed: url::Url = normalize_url(&url)?;
+    let parsed: url::Url = normalize_url(&url, &app_origins(&app))?;
 
     prepare_navigation(
         &app,
@@ -1769,7 +2277,7 @@ pub async fn owned_browser_tab_navigate(
     owner: Option<String>,
 ) -> Result<(), String> {
     let state = browser_tab_state(&tab_id)?;
-    let parsed = normalize_url(&url)?;
+    let parsed = normalize_url(&url, &app_origins(&app))?;
     prepare_tab_navigation(&app, &state, &tab_id, &parsed, owner.as_deref()).await;
     inject_cookies_for_url_for_state(&app, &parsed, &state).await?;
     if let Some(active) = state.active().await {
@@ -2280,8 +2788,8 @@ async fn browser_session_available_for_url(
     true
 }
 
-async fn browser_session_decision_for_url(
-    app: &AppHandle,
+async fn browser_session_decision_for_url<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     url: &url::Url,
     state: &Arc<OwnedBrowserState>,
 ) -> BrowserSessionDecision {
@@ -2384,12 +2892,16 @@ async fn browser_session_decision_for_url(
         }
     }
 
+    let request_id = Uuid::new_v4().to_string();
+    let _prompt = SessionPromptGuard {
+        request_id: request_id.clone(),
+    };
+
     if let Some(active) = state.active().await {
         let _ = active.hide();
         state.set_visible(false).await;
     }
 
-    let request_id = Uuid::new_v4().to_string();
     let (tx, rx) = oneshot::channel();
     pending_session_access()
         .lock()
@@ -2407,8 +2919,6 @@ async fn browser_session_decision_for_url(
     };
 
     if let Err(e) = app.emit(SESSION_ACCESS_REQUEST_EVENT, payload) {
-        pending_session_access().lock().await.remove(&request_id);
-        SESSION_ACCESS_PROMPT_IN_FLIGHT.store(false, Ordering::SeqCst);
         warn!("owned-browser session access: failed to emit request: {e}");
         return BrowserSessionDecision::CancelNavigation(session_prompt_emit_error(&host_key, e));
     }
@@ -2419,7 +2929,6 @@ async fn browser_session_decision_for_url(
             BrowserSessionDecision::CancelNavigation(session_prompt_timeout_error(&host_key))
         }
         Err(_) => {
-            pending_session_access().lock().await.remove(&request_id);
             warn!(
                 host = host_key.as_str(),
                 "owned-browser session access: user prompt timed out"
@@ -2428,7 +2937,6 @@ async fn browser_session_decision_for_url(
         }
     };
 
-    SESSION_ACCESS_PROMPT_IN_FLIGHT.store(false, Ordering::SeqCst);
     match &decision {
         BrowserSessionDecision::UseBrowserSession => {
             // Set the global runtime flag — frontend is responsible for
@@ -2449,6 +2957,18 @@ async fn browser_session_decision_for_url(
         }
     }
     decision
+}
+
+/// WebKit `SameSite` value for Chromium's `same_site` column. Chrome treats -1
+/// (unspecified) as Lax; WebKit would treat a missing attribute as None and
+/// send the cookie on cross-site requests from any page in the owned browser.
+#[cfg(any(target_os = "macos", test))]
+fn webkit_same_site(chromium: i32) -> &'static str {
+    match chromium {
+        0 => "None",
+        2 => "Strict",
+        _ => "Lax",
+    }
 }
 
 /// macOS only: push a batch of cookies (read from the user's real
@@ -2536,17 +3056,8 @@ async fn inject_cookies_macos(
                     let s: id = NSString::alloc(nil).init_str("TRUE");
                     push("Discard", s, &mut keys, &mut vals);
                 }
-                // Chromium same_site mapping. -1 = unspecified, omit.
-                let same_site_str = match c.same_site {
-                    0 => Some("None"),
-                    1 => Some("Lax"),
-                    2 => Some("Strict"),
-                    _ => None,
-                };
-                if let Some(ss) = same_site_str {
-                    let v: id = NSString::alloc(nil).init_str(ss);
-                    push("SameSite", v, &mut keys, &mut vals);
-                }
+                let v: id = NSString::alloc(nil).init_str(webkit_same_site(c.same_site));
+                push("SameSite", v, &mut keys, &mut vals);
                 // NSHTTPCookieVersion = 0 → classic Netscape semantics.
                 let zero: id = NSString::alloc(nil).init_str("0");
                 push("Version", zero, &mut keys, &mut vals);

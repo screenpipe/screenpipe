@@ -11,8 +11,8 @@ and layer declared in the manifest, weighted by confidence and criticality.
 - Manifest: `e2e/coverage-map.json`
 - Specs directory: `e2e/specs`
 - Mapped specs: 144
-- Declared test blocks: 415
-- Weighted coverage points: 335.0
+- Declared test blocks: 416
+- Weighted coverage points: 335.1
 
 Confidence weights: strong=1.0, partial=0.7, conditional=0.4, smoke=0.3.
 Criticality weights: high=1.0, medium=0.7, low=0.4.
@@ -23,8 +23,8 @@ can execute more runtime cases than this number shows.
 
 | Platform | Specs | Declared tests | Weighted points | Layers | Features | Critical score |
 | --- | --- | --- | --- | --- | --- | --- |
-| windows | 110 | 352 | 294.6 | 15 | 125 | 85% |
-| macos | 140 | 377 | 304.8 | 17 | 134 | 88% |
+| windows | 110 | 353 | 294.7 | 15 | 125 | 85% |
+| macos | 140 | 378 | 304.9 | 17 | 134 | 88% |
 | linux | 98 | 310 | 264.0 | 14 | 122 | 80% |
 
 ## Runtime Results
@@ -46,14 +46,14 @@ pass/fail/skip counts.
 | local-api | 30 specs / 122 tests / 102.5 pts | 41 specs / 120 tests / 102.4 pts | 25 specs / 90 tests / 80.7 pts |
 | notifications | 4 specs / 26 tests / 17.3 pts | 3 specs / 5 tests / 3.4 pts | 2 specs / 4 tests / 3.1 pts |
 | onboarding | 9 specs / 39 tests / 34.8 pts | 11 specs / 43 tests / 38.2 pts | 9 specs / 39 tests / 34.8 pts |
-| os-integration | 8 specs / 37 tests / 31.9 pts | 17 specs / 36 tests / 23.8 pts | 3 specs / 20 tests / 15.8 pts |
+| os-integration | 8 specs / 38 tests / 32.0 pts | 17 specs / 37 tests / 23.9 pts | 3 specs / 20 tests / 15.8 pts |
 | performance | 3 specs / 45 tests / 45.0 pts | 5 specs / 36 tests / 31.8 pts | 2 specs / 30 tests / 30.0 pts |
 | pipes | 6 specs / 20 tests / 20.0 pts | 8 specs / 26 tests / 26.0 pts | 6 specs / 20 tests / 20.0 pts |
 | real-ui-e2e | 81 specs / 242 tests / 205.3 pts | 99 specs / 261 tests / 220.8 pts | 75 specs / 218 tests / 191.4 pts |
 | settings | 15 specs / 42 tests / 39.0 pts | 17 specs / 36 tests / 31.7 pts | 14 specs / 33 tests / 30.0 pts |
 | storage-privacy | 11 specs / 47 tests / 38.3 pts | 11 specs / 32 tests / 31.1 pts | 8 specs / 25 tests / 24.1 pts |
 | tauri-command | 26 specs / 73 tests / 59.4 pts | 38 specs / 96 tests / 77.8 pts | 25 specs / 74 tests / 60.3 pts |
-| window-lifecycle | 22 specs / 71 tests / 59.5 pts | 23 specs / 55 tests / 40.9 pts | 16 specs / 44 tests / 34.4 pts |
+| window-lifecycle | 22 specs / 72 tests / 59.6 pts | 23 specs / 56 tests / 41.0 pts | 16 specs / 44 tests / 34.4 pts |
 
 ## Critical Feature Matrix
 
@@ -206,7 +206,7 @@ pass/fail/skip counts.
 | onboarding-redirect.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, window-lifecycle | onboarding, app-launch | high | conditional | real-user-flow | 5 | Opt-in no-onboarding seed verifies onboarding redirect. |
 | onboarding-trust-affordances.spec.ts | windows, macos, linux | onboarding, real-ui-e2e, tauri-command | onboarding, settings-privacy-api-auth, storage-retention | high | strong | real-user-flow | 4 | Pre-grant reassurance in setup: the login slide carries the storage-locality line and the pause affordance on one line (the only slide every platform sees, since permissions auto-advances on non-mac); the mac permissions slide keeps that promise collapsed to a single line below the permission wheel and on expand renders the data dir the running app actually resolved rather than a reconstructed ~/.screenpipe, with an open action pointed at that path; collapsed and expanded states are both asserted to fit inside the fixed-size onboarding window; and the screenshot choice slide states the capture bounds (incognito skipped, per-app exclusions) where screenshot capture is chosen independently of sidebar visibility. The mac assertions share one visit because the slide auto-advances 600ms after all grants land. |
 | owned-browser-tabs.spec.ts | windows, macos | chat-ai, real-ui-e2e | owned-browser, right-panel-tabs, native-child-webviews | high | strong | command | 0 | A surviving app window drives two native child webviews after the home automation context is replaced, then verifies retained per-tab URLs and close cleanup through the E2E harness. |
-| owned-browser.spec.ts | windows, macos | os-integration, window-lifecycle | owned-browser, window-lifecycle | low | smoke | command | 1 | Embedded agent browser hides safely without an attached child. |
+| owned-browser.spec.ts | windows, macos | os-integration, window-lifecycle | owned-browser, window-lifecycle | low | smoke | command | 2 | Embedded agent browser hides safely without an attached child. |
 | permission-recovery.spec.ts | macos | os-integration, real-ui-e2e, window-lifecycle | permission-recovery, window-lifecycle | high | conditional | real-user-flow | 2 | macOS-only recovery window for required TCC permissions. Reads persisted audio policy so audio-disabled seeds require no microphone row; covers Screen Recording restart UI and reuse after hiding. Native capture visibility is not established because E2E bypasses content protection. |
 | pi-extensions.spec.ts | windows, macos, linux | real-ui-e2e, settings | ai-tools, connections, pi-extensions | medium | strong | real-user-flow | 1 | Opens Home -> Connections, opens the first AI tools setting, verifies the common tool toggles are first and directly visible in the modal, checks plain-language built-ins and compatibility labels, filters the package search, and captures a screenshot. Read-only smoke: does not install packages. |
 | pii-redaction-coordination.spec.ts | windows, macos, linux | real-ui-e2e, local-api, performance | app-launch, health, local-api-load | high | strong | api | 1 | Starts the opt-in local ONNX text reconciliation worker in the desktop app, redacts a 24-row SQLite backlog, and probes WebDriver plus health responsiveness while it runs. |

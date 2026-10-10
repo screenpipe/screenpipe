@@ -11387,6 +11387,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "webkit2gtk",
  "webview2-com",
  "whisper-rs",
  "windows 0.58.0",

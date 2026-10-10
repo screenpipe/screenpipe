@@ -63,6 +63,15 @@ describe("Owned browser", function () {
     },
   );
 
+  // Refused before any child attaches, so this is safe on Linux too.
+  it("owned_browser_navigate refuses the app's own pages", async () => {
+    const res = await invoke("owned_browser_navigate", {
+      url: "tauri://localhost/home",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error ?? "").toContain("only web pages");
+  });
+
   it("owned_browser_hide returns Ok without an attached child", async () => {
     const res = await invoke("owned_browser_hide");
     expect(res.ok).toBe(true);

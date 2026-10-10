@@ -61,6 +61,7 @@ import {
 import { ChatPanelHome } from "@/components/chat/chat-panel-home";
 import type { SourceCitation } from "@/lib/source-citations";
 import { Button } from "@/components/ui/button";
+import { toast } from "@/components/ui/use-toast";
 import { FilePreviewSidebar } from "@/components/file-preview-sidebar";
 import {
   BROWSER_RIGHT_PANEL_TAB_ID,
@@ -354,12 +355,18 @@ export function BrowserSidebar({
     return commands.ownedBrowserTabHide(tabId);
   }, []);
 
+  // Numbers each tab's navigations so a late answer can tell whether a newer
+  // navigation has replaced it.
+  const navigationSeqRef = useRef(new Map<string, number>());
   const navigateNativeBrowserTab = useCallback(
-    (tabId: string, url: string, owner: string | null) => {
-      if (tabId === BROWSER_RIGHT_PANEL_TAB_ID) {
-        return commands.ownedBrowserNavigate(url, owner, true);
-      }
-      return commands.ownedBrowserTabNavigate(tabId, url, owner);
+    async (tabId: string, url: string, owner: string | null) => {
+      const seq = (navigationSeqRef.current.get(tabId) ?? 0) + 1;
+      navigationSeqRef.current.set(tabId, seq);
+      const result =
+        tabId === BROWSER_RIGHT_PANEL_TAB_ID
+          ? await commands.ownedBrowserNavigate(url, owner, true)
+          : await commands.ownedBrowserTabNavigate(tabId, url, owner);
+      return { ...result, latest: navigationSeqRef.current.get(tabId) === seq };
     },
     [],
   );
@@ -388,6 +395,32 @@ export function BrowserSidebar({
       });
     },
     [],
+  );
+
+  /** Rust refused a navigation (not a web page, say), so nothing loads. Stop
+   * the spinner, put back the page the tab still `shows`, and say why. */
+  const settleRefusedNavigation = useCallback(
+    (tabId: string, error: string, shows?: LiveBrowserTab) => {
+      updateBrowserTab(
+        tabId,
+        shows
+          ? { url: shows.url, title: shows.title, loading: false }
+          : { loading: false },
+      );
+      if (tabId === activeBrowserTabIdRef.current) {
+        if (shows) {
+          setCurrentUrl(shows.url);
+          setCurrentTitle(shows.title);
+        }
+        setLoading(false);
+      }
+      toast({
+        title: ui("Couldn't open this address"),
+        description: error,
+        variant: "destructive",
+      });
+    },
+    [ui, updateBrowserTab],
   );
 
   const pushBounds = useCallback(async () => {
@@ -913,7 +946,6 @@ export function BrowserSidebar({
         cancelled = true;
       };
     }
-    let unlistenReady: (() => void) | null = null;
     (async () => {
       const conv = await loadConversationFile(conversationId).catch(() => null);
       // An explicit panel action wins over a slower disk restore.
@@ -951,25 +983,15 @@ export function BrowserSidebar({
         setCurrentNavigationId(null);
         setCurrentTitle(null);
         setLoading(!wasCollapsed);
-        // The webview install runs on a background task that retries
-        // until the app's Tauri runtime has booted. On cold start a chat
-        // with a saved `browserState.url` opens fast enough that this
-        // navigate() lands before install finishes — Rust returns
-        // "owned-browser not initialized", we swallow it, and the
-        // browser silently fails to restore. Retry once when Rust emits
-        // `owned-browser:ready` so the saved state survives app quit.
-        const tryNavigate = () =>
-          commands
-            .ownedBrowserNavigate(url, conversationId, false)
-            .catch((e) => {
-              const msg = typeof e === "string" ? e : String(e);
-              return msg.includes("not initialized") ? "retry" : null;
-            });
-        const first = await tryNavigate();
-        if (!cancelled && first === "retry") {
-          unlistenReady = await listen("owned-browser:ready", () => {
-            tryNavigate();
-          });
+        // Before the native child exists Rust keeps the URL for it, so an
+        // error means Rust refused the saved URL. Errors arrive as
+        // `{ status: "error" }`, not as rejections.
+        const result = await commands
+          .ownedBrowserNavigate(url, conversationId, false)
+          .catch(() => null);
+        if (!cancelled && result?.status === "error") {
+          setLoading(false);
+          updateBrowserTab(BROWSER_RIGHT_PANEL_TAB_ID, { loading: false });
         }
         // If collapsed, hide the webview right away — pushBounds wouldn't
         // run because the placeholder isn't mounted.
@@ -991,7 +1013,6 @@ export function BrowserSidebar({
     })();
     return () => {
       cancelled = true;
-      if (unlistenReady) unlistenReady();
     };
   }, [conversationId, hideNativeBrowserTab, updateBrowserTab]);
 
@@ -1102,11 +1123,14 @@ export function BrowserSidebar({
     try {
       setLoading(true);
       updateBrowserTab(activeBrowserTabId, { loading: true });
-      await navigateNativeBrowserTab(
+      const result = await navigateNativeBrowserTab(
         activeBrowserTabId,
         currentUrl,
         currentOwner ?? conversationId ?? null,
       );
+      if (result.status === "error" && result.latest) {
+        settleRefusedNavigation(activeBrowserTabId, result.error);
+      }
     } catch (e) {
       console.error("reload failed", e);
     }
@@ -1116,6 +1140,7 @@ export function BrowserSidebar({
     currentOwner,
     currentUrl,
     navigateNativeBrowserTab,
+    settleRefusedNavigation,
     updateBrowserTab,
   ]);
 
@@ -1431,10 +1456,15 @@ export function BrowserSidebar({
       const url = addressDraft.trim();
       if (!tabId || !url) return;
       const owner = currentOwner ?? conversationId ?? agentSessionId ?? null;
+      const shows = browserTabsRef.current.find((tab) => tab.id === tabId);
       setCurrentTitle(null);
       setLoading(true);
       updateBrowserTab(tabId, { url, title: null, loading: true, owner });
-      void navigateNativeBrowserTab(tabId, url, owner);
+      void navigateNativeBrowserTab(tabId, url, owner).then((result) => {
+        if (result.status === "error" && result.latest) {
+          settleRefusedNavigation(tabId, result.error, shows);
+        }
+      });
     },
     [
       addressDraft,
@@ -1442,6 +1472,7 @@ export function BrowserSidebar({
       conversationId,
       currentOwner,
       navigateNativeBrowserTab,
+      settleRefusedNavigation,
       updateBrowserTab,
     ],
   );

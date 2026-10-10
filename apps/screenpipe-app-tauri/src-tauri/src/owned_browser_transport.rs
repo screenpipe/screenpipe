@@ -19,6 +19,13 @@
 //!   fit one title write. Rust concatenates the base64 pieces and decodes them
 //!   back to the original UTF-8 JSON.
 //!
+//! Every marker is untrusted. The page shares the JS realm with the bridge, so
+//! it can replace the bridge's functions, learn the eval id, and write any
+//! title it likes. The reader checks a header's count with
+//! [`check_chunk_count`] before allocating for it, and [`parse_marker`] rejects
+//! chunks longer than [`CHUNK_SIZE`], so a hostile page can fail an eval but
+//! cannot make Rust allocate without limit.
+//!
 //! The bridge JS that produces these titles lives in
 //! `browser_scripts/owned_browser_bridge.js` (single source, also covered by a
 //! vitest), embedded here via `include_str!`. The pure
@@ -29,6 +36,16 @@ use base64::Engine;
 /// Marker prefix the bridge writes ahead of every result title. Rust strips
 /// this prefix and classifies the trailing JSON via [`parse_marker`].
 pub const RESULT_TITLE_PREFIX: &str = "__SP_OWNED_BROWSER_RESULT__:";
+
+/// Base64 characters per chunk: small enough that a chunk title, with the
+/// prefix and JSON envelope, fits the ~1KB title cap.
+pub const CHUNK_SIZE: usize = 700;
+
+/// Most chunks a header may announce: ~16 MiB of base64, ~12 MiB of JSON. A
+/// memory bound against forged headers, not a size real results reach: the
+/// reader polls one chunk at a time, so the eval timeout ends a real read of
+/// a few hundred KB first.
+pub const MAX_CHUNKS: usize = 16 * 1024 * 1024 / CHUNK_SIZE;
 
 /// Bridge installed as the child webview's `initialization_script` — defines
 /// `window.__SP_RESULT__` / `window.__SP_OB_CHUNK__`. Single source shared with
@@ -55,9 +72,10 @@ pub struct EvalPayload {
 pub enum Marker {
     /// A complete inline result — the small-result fast path.
     Result(EvalPayload),
-    /// Header announcing a chunked large result: `chunks` pieces follow.
+    /// Header announcing a chunked large result: `chunks` pieces follow. The
+    /// count is unchecked; see [`check_chunk_count`].
     Header { id: String, chunks: usize },
-    /// One base64 chunk of a large result.
+    /// One base64 chunk of a large result, at most [`CHUNK_SIZE`] long.
     Chunk { id: String, seq: usize, b64: String },
 }
 
@@ -86,7 +104,10 @@ pub fn parse_marker(json: &str) -> Result<Marker, String> {
             as usize;
         let b64 = b64
             .as_str()
-            .ok_or_else(|| format!("chunk_b64 not a string (raw: {json})"))?
+            .filter(|s| s.len() <= CHUNK_SIZE)
+            .ok_or_else(|| {
+                format!("chunk_b64 not a string of at most {CHUNK_SIZE} chars (raw: {json})")
+            })?
             .to_string();
         let id = obj
             .get("id")
@@ -110,6 +131,19 @@ pub fn parse_marker(json: &str) -> Result<Marker, String> {
     Err(format!("unrecognized result marker (raw: {json})"))
 }
 
+/// Reject a header announcing more than [`MAX_CHUNKS`] chunks before the
+/// reader allocates for them. Callers check only after the header's id matches
+/// their eval, so a leftover header from an earlier eval is skipped as stale
+/// instead of failing the next one.
+pub fn check_chunk_count(chunks: usize) -> Result<(), String> {
+    if chunks > MAX_CHUNKS {
+        return Err(format!(
+            "owned-browser eval result too large ({chunks} chunks, max {MAX_CHUNKS}); return less data"
+        ));
+    }
+    Ok(())
+}
+
 /// Reassemble base64 chunk pieces (in seq order) into the original UTF-8 JSON.
 pub fn reassemble_chunks(parts: &[String]) -> Result<String, String> {
     let joined: String = parts.concat();
@@ -125,11 +159,13 @@ pub fn chunk_fetch_js(seq: usize) -> String {
 }
 
 /// Title to restore after reading a result, preserving any `document.title` the
-/// caller's own eval code set (reported back as the payload's `title`).
+/// caller's own eval code set (reported back as the payload's `title`). A
+/// marker an earlier failed eval left in `document.title` is not a page title.
 pub fn title_after_eval_marker(original_title: &str, payload: &EvalPayload) -> String {
     payload
         .title
         .clone()
+        .filter(|title| !title.starts_with(RESULT_TITLE_PREFIX))
         .unwrap_or_else(|| original_title.to_string())
 }
 
@@ -230,6 +266,45 @@ mod tests {
     }
 
     #[test]
+    fn forged_chunk_count_is_rejected_before_allocation() {
+        // A hostile page announced 1e17 chunks; Rust preallocated for them
+        // and the allocator aborted the whole app.
+        let m = parse_marker(r#"{"id":"abc","chunks":100000000000000000}"#).unwrap();
+        let Marker::Header { chunks, .. } = m else {
+            panic!("expected Header, got {m:?}");
+        };
+        let err = check_chunk_count(chunks).unwrap_err();
+        assert!(err.contains("return less data"), "{err}");
+
+        assert!(check_chunk_count(usize::MAX).is_err());
+        assert!(check_chunk_count(MAX_CHUNKS + 1).is_err());
+        assert!(check_chunk_count(MAX_CHUNKS).is_ok());
+    }
+
+    #[test]
+    fn oversized_header_still_parses_so_a_stale_one_is_skipped_by_id() {
+        let raw = format!(r#"{{"id":"old","chunks":{}}}"#, MAX_CHUNKS + 1);
+        assert_eq!(
+            parse_marker(&raw).unwrap(),
+            Marker::Header {
+                id: "old".into(),
+                chunks: MAX_CHUNKS + 1
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_chunk_longer_than_chunk_size() {
+        let at_limit = "A".repeat(CHUNK_SIZE);
+        let raw = format!(r#"{{"chunk_seq":0,"chunk_b64":"{at_limit}"}}"#);
+        assert!(parse_marker(&raw).is_ok());
+
+        let over = "A".repeat(CHUNK_SIZE + 1);
+        let raw = format!(r#"{{"chunk_seq":0,"chunk_b64":"{over}"}}"#);
+        assert!(parse_marker(&raw).is_err());
+    }
+
+    #[test]
     fn reassembles_single_chunk() {
         let parts = vec![b64("hello world")];
         assert_eq!(reassemble_chunks(&parts).unwrap(), "hello world");
@@ -260,10 +335,10 @@ mod tests {
     fn reassembles_large_payload_roundtrip() {
         let original: String = "x [a] node → ref ".repeat(5000); // ~85KB
         let full = b64(&original);
-        // Split into 700-char pieces the way the bridge does.
+        // Split into CHUNK_SIZE pieces the way the bridge does.
         let parts: Vec<String> = full
             .as_bytes()
-            .chunks(700)
+            .chunks(CHUNK_SIZE)
             .map(|c| String::from_utf8(c.to_vec()).unwrap())
             .collect();
         assert!(parts.len() > 1, "expected multiple chunks");
@@ -295,6 +370,21 @@ mod tests {
             result: None,
             error: None,
             title: None,
+        };
+        assert_eq!(
+            title_after_eval_marker("Example Domain", &p),
+            "Example Domain"
+        );
+    }
+
+    #[test]
+    fn does_not_restore_a_stale_marker_as_the_title() {
+        let p = EvalPayload {
+            id: "2".into(),
+            ok: true,
+            result: None,
+            error: None,
+            title: Some(format!(r#"{RESULT_TITLE_PREFIX}{{"id":"1","chunks":3}}"#)),
         };
         assert_eq!(
             title_after_eval_marker("Example Domain", &p),
