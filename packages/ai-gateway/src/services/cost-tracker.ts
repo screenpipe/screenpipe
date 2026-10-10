@@ -31,6 +31,10 @@ const GPT56_CACHE = { cacheRead: 0.1, cacheWrite: 1.25 };
 const GEMINI25_CACHE = { cacheRead: 0.25 };
 
 const MODEL_PRICING: Record<string, ModelPricing> = {
+  // Workers AI decision models. Credits offset billing, not metered usage.
+  'jev-1.13.0': { input: 0.042, output: 0 },
+  'clef': { input: 0.24, output: 0 },
+  'clef-flash': { input: 0.09, output: 0 },
   // OpenAI API
   // https://developers.openai.com/api/docs/models/gpt-6-astra (Standard, Low).
   'gpt-6-astra': {

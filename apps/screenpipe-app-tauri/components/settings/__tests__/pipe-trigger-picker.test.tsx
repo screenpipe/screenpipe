@@ -30,11 +30,13 @@ function response(body: unknown) {
 
 function renderPicker(
   availableConnections: Array<{ id: string; name: string; icon: string; connected: boolean }> = [],
+  semanticTriggerCount = 0,
 ) {
   const applyOptimistic = vi.fn<(trigger: Trigger | undefined) => void>();
   render(
     <PipeTriggerPicker
       pipeName="follow-up"
+      semanticTriggerCount={semanticTriggerCount}
       trigger={undefined}
       apiBase="http://localhost:3030"
       scheduleConfig={null}
@@ -66,6 +68,36 @@ describe("PipeTriggerPicker app trigger catalog", () => {
   beforeEach(() => {
     fetchMock.mockReset();
     fetchMock.mockResolvedValue(response({}));
+  });
+
+  it("requires cloud consent and saves a semantic condition with a stable id", async () => {
+    const { applyOptimistic } = renderPicker();
+    chooseOption(/^semantic trigger/i);
+    fireEvent.change(screen.getByLabelText("Condition"), {target:{value:"A customer reports an error"}});
+    expect(screen.getAllByRole("button",{name:"Add trigger"}).at(-1)).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox"));
+    clickDetailAdd();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const source=applyOptimistic.mock.calls[0][0]?.sources?.[0];
+    expect(source).toMatchObject({app:"semantic",kind:"condition",filter:{condition:"A customer reports an error"}});
+    expect(source?.filter?.id).toMatch(/^[a-f0-9-]{36}$/);
+  });
+
+  it("disables a fourth semantic trigger across Pipes", () => {
+    renderPicker([],3);chooseOption(/^semantic trigger/i);
+    fireEvent.change(screen.getByLabelText("Condition"), {target:{value:"A meeting is ending"}});
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(screen.getAllByRole("button",{name:"Add trigger"}).at(-1)).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Remove a semantic trigger");
+  });
+
+  it("keeps the condition editable and surfaces account admission errors", async () => {
+    fetchMock.mockResolvedValue({ok:false,json:async()=>({error:"Your account can have up to three semantic triggers."})} as Response);
+    renderPicker();chooseOption(/^semantic trigger/i);
+    fireEvent.change(screen.getByLabelText("Condition"), {target:{value:"A customer is blocked"}});
+    fireEvent.click(screen.getByRole("checkbox"));clickDetailAdd();
+    expect(await screen.findByRole("alert")).toHaveTextContent("up to three");
+    expect(screen.getByLabelText("Condition")).toHaveValue("A customer is blocked");
   });
 
   it("saves multiple spoken phrases without requiring a connection", async () => {

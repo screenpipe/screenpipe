@@ -58,6 +58,7 @@ let mockCloudAgentConfig: MockCloudAgentConfig = {
 };
 let mockPipeAgent = "cloud-agent";
 let mockPipeHistory = false;
+let mockPipeTrigger: unknown = null;
 let mockPipePreset: string | string[] | null = null;
 let mockPipeRunIn: { mode: "existing_chat"; chat_id: string } | null = null;
 
@@ -95,6 +96,7 @@ function mockDailyRecapPipe() {
         mockPipeAgent === "cloud-agent" ? mockCloudAgentConfig : null,
       connections: [],
       history: mockPipeHistory,
+      trigger: mockPipeTrigger,
       run_in: mockPipeRunIn,
     },
     last_run: null,
@@ -435,6 +437,7 @@ export function mockLocalApiResponse(
   }
   if (url.pathname === "/pipes/daily-recap/config" && method === "POST") {
     const body = parseJsonBody(init);
+    if ("trigger" in body) mockPipeTrigger = body.trigger;
     if ("preset" in body) mockPipePreset = body.preset as typeof mockPipePreset;
     if (typeof body.agent === "string") mockPipeAgent = body.agent;
     if (body.cloud_agent && typeof body.cloud_agent === "object") {

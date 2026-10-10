@@ -2803,7 +2803,8 @@ export function PipesSection() {
               const isSelected = expanded === pipe.config.name;
               const triggerCount =
                 (pipe.config.trigger?.events?.length || 0) +
-                (pipe.config.trigger?.custom?.length || 0);
+                (pipe.config.trigger?.custom?.length || 0) +
+                (pipe.config.trigger?.sources?.length || 0);
               const scheduleSummary =
                 triggerCount > 0
                   ? ui("{value1, plural, one {# trigger} other {# triggers}}{value3}", { value1: triggerCount, value3: pipeHasSchedule(pipe.config) ? ` + ${pipeScheduleLabel(pipe.config, uiMessages)}` : "" })
@@ -3428,6 +3429,7 @@ export function PipesSection() {
                         {/* Triggers — Notion-style picker (schedule, events + per-app connection sources) */}
                         <div className="p-4">
                         <PipeTriggerPicker
+                          semanticTriggerCount={pipes.reduce((total, p) => total + (p.config.trigger?.sources?.filter(s => s.app === "semantic").length || 0), 0)}
                           pipeName={pipe.config.name}
                           trigger={pipe.config.trigger}
                           apiBase={apiBase}

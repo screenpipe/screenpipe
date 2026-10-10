@@ -19,6 +19,8 @@ migration="./migrations/0008_hosted_ai_settlement_ledger.sql"
 echo "→ applying required hosted AI settlement migration (${mode#--})…"
 bunx wrangler d1 execute "$database" "$mode" --yes --file="$migration"
 
+bunx wrangler d1 execute "$database" "$mode" --yes --file="./migrations/0009_semantic_triggers.sql"
+
 schema_json="$(bunx wrangler d1 execute "$database" "$mode" --json --command "
 	SELECT
 		(SELECT COUNT(*) FROM pragma_table_info('hosted_ai_settlements')

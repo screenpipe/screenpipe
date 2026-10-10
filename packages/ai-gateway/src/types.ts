@@ -153,6 +153,7 @@ export interface GeminiResponse {
 }
 
 export interface Env {
+	JEV_API_KEY?: string;
 	AI: Ai;
 	/** GPT-5.6 prompt caching: `system` (default/kill switch) or `history`. */
 	GPT56_HISTORY_CACHE_MODE?: string;

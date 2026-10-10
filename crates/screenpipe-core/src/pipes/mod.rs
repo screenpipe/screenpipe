@@ -17,6 +17,7 @@ pub mod favorites;
 pub mod mcp_access;
 pub mod permissions;
 pub mod preset_fallback;
+pub mod semantic_triggers;
 pub mod sync;
 pub(crate) mod trajectory;
 
@@ -5479,6 +5480,47 @@ impl PipeManager {
         Ok(())
     }
 
+    /// Reserve or release this Pipe's account-level semantic trigger slots.
+    async fn register_semantic_change(&self, old: &str, new: &str) -> Result<()> {
+        let (old, _) = parse_frontmatter(old)?;
+        let (new, _) = parse_frontmatter(new)?;
+        let ids = |c: &PipeConfig| {
+            semantic_triggers::sources(c)
+                .iter()
+                .filter_map(|s| s.filter.get("id").cloned())
+                .collect::<Vec<_>>()
+        };
+        let before = ids(&old);
+        let after = ids(&new);
+        if before == after {
+            return Ok(());
+        }
+        let executor = self
+            .executors
+            .get("pi")
+            .ok_or_else(|| anyhow!("Sign in to use semantic triggers."))?;
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(8))
+            .build()?;
+        let removed: Vec<_> = before
+            .into_iter()
+            .filter(|id| !after.contains(id))
+            .collect();
+        let body = if after.is_empty() {
+            serde_json::json!({"op":"release","ids":removed})
+        } else {
+            serde_json::json!({"op":"register","ids":after,"release":removed})
+        };
+        semantic_triggers::cloud(&http, executor.as_ref(), body).await.map_err(|e| {
+            if e.to_string() == "semantic_http_409" {
+                anyhow!("semantic_trigger_limit: your account can have up to three semantic triggers; remove one before adding another")
+            } else {
+                anyhow!("Semantic triggers could not be saved ({}). Check your Screenpipe sign-in and try again.", e)
+            }
+        })?;
+        Ok(())
+    }
+
     /// Update arbitrary config fields (merges into front-matter).
     /// If `raw_content` key is present, write the full file directly.
     pub async fn update_config(
@@ -5526,6 +5568,10 @@ impl PipeManager {
             config.name = name.to_string(); // preserve directory name
             self.ensure_pipe_write_allowed(name, Some(raw))?;
             atomic_write(&pipe_md, raw)?;
+            if let Err(error) = self.register_semantic_change(&content, raw).await {
+                atomic_write(&pipe_md, &content)?;
+                return Err(error);
+            }
 
             if let Some(destination) = load_local_run_destinations(&self.pipes_dir).get(name) {
                 config.run_in = destination.clone();
@@ -5685,6 +5731,10 @@ impl PipeManager {
         let new_content = serialize_pipe(&config, &new_body)?;
         self.ensure_pipe_write_allowed(name, Some(&new_content))?;
         atomic_write(&pipe_md, &new_content)?;
+        if let Err(error) = self.register_semantic_change(&content, &new_content).await {
+            atomic_write(&pipe_md, &content)?;
+            return Err(error);
+        }
 
         // Admission and the source write must succeed before any device-local
         // state changes. A rejected adoption must leave the bundled task intact.
@@ -5744,6 +5794,43 @@ impl PipeManager {
     }
 
     fn ensure_pipe_write_allowed(&self, name: &str, candidate_content: Option<&str>) -> Result<()> {
+        if let Some(content) = candidate_content {
+            let (candidate, _) = parse_frontmatter(content)?;
+            let candidates = semantic_triggers::sources(&candidate);
+            for source in &candidates {
+                semantic_triggers::validate(source)?;
+            }
+            let mut ids = std::collections::HashSet::new();
+            for source in &candidates {
+                if !ids.insert(source.filter["id"].clone()) {
+                    return Err(anyhow!("duplicate_semantic_trigger_id"));
+                }
+            }
+            let mut count = candidates.len();
+            if let Ok(entries) = std::fs::read_dir(&self.pipes_dir) {
+                for entry in entries
+                    .flatten()
+                    .filter(|e| e.file_name().to_string_lossy() != name)
+                {
+                    if let Ok(raw) = std::fs::read_to_string(entry.path().join("pipe.md")) {
+                        if let Ok((config, _)) = parse_frontmatter(&raw) {
+                            for source in semantic_triggers::sources(&config) {
+                                count += 1;
+                                if let Some(id) = source.filter.get("id") {
+                                    if !ids.insert(id.clone()) {
+                                        return Err(anyhow!("duplicate_semantic_trigger_id"));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if count > semantic_triggers::LIMIT {
+                return Err(anyhow!("semantic_trigger_limit: you can have up to three semantic triggers across your Pipes"));
+            }
+        }
+
         let Some(limit) = self.max_non_template_pipes else {
             return Ok(());
         };
@@ -5986,6 +6073,12 @@ impl PipeManager {
                     name
                 ));
             }
+        }
+
+        // Release account slots before deleting the editable local config.
+        if let Ok(content) = std::fs::read_to_string(&pipe_md) {
+            self.register_semantic_change(&content, "---\nschedule: manual\n---\n")
+                .await?;
         }
 
         // Stop if running
@@ -7632,8 +7725,14 @@ impl PipeManager {
                     }
                 }
 
-                // Sleep 30s between checks
+                // Keep the periodic scheduling cadence, but wake immediately for
+                // addressed source events so semantic/voice runs do not wait 30s.
                 tokio::select! {
+                    Some(event) = connection_trigger_rx.next() => {
+                        if let Some(target) = event.data.get("pipe").and_then(|v| v.as_str()).map(str::to_owned) {
+                            carryover.push(PendingEvent::targeted(event.name, event.data, &target));
+                        }
+                    }
                     _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {},
                     _ = rx.changed() => {
                         if *rx.borrow() { break; }
@@ -7645,6 +7744,7 @@ impl PipeManager {
 
         self.scheduler_handle = Some(handle);
         self.spawn_connection_trigger_watcher();
+        self.spawn_semantic_trigger_watcher();
         Ok(())
     }
 
@@ -7758,6 +7858,104 @@ impl PipeManager {
                 "connection-trigger watcher exited (generation {})",
                 generation
             );
+        });
+    }
+
+    fn spawn_semantic_trigger_watcher(&self) {
+        let Some(tx) = self.shutdown_tx.as_ref() else {
+            return;
+        };
+        let Some(executor) = self.executors.get("pi").cloned() else {
+            return;
+        };
+        let mut shutdown = tx.subscribe();
+        let pipes = self.pipes.clone();
+        let dir = self.pipes_dir.clone();
+        let generation_ref = self.scheduler_generation.clone();
+        let generation = generation_ref.load(std::sync::atomic::Ordering::SeqCst);
+        let api_base = format!("http://127.0.0.1:{}", self.api_port);
+        let api_key = self.local_api_key.clone();
+        let run_guard = self.scheduler_run_guard.clone();
+        tokio::spawn(async move {
+            use futures::{FutureExt, StreamExt};
+            let mut events = screenpipe_events::subscribe_to_all_events();
+            let http = match reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(8))
+                .build()
+            {
+                Ok(http) => http,
+                Err(_) => {
+                    warn!("semantic_trigger_failed cause=http_client outcome=watcher_stopped");
+                    return;
+                }
+            };
+            let mut state = match semantic_triggers::State::load(&dir) {
+                Ok(state) => state,
+                Err(_) => {
+                    warn!("semantic_trigger_failed cause=invalid_persisted_state outcome=watcher_stopped");
+                    return;
+                }
+            };
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+                semantic_triggers::INTERVAL_SECS,
+            ));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = shutdown.changed() => break,
+                    _ = interval.tick() => {}
+                }
+                if *shutdown.borrow()
+                    || generation_ref.load(std::sync::atomic::Ordering::SeqCst) != generation
+                {
+                    break;
+                }
+                if run_guard.as_ref().and_then(|guard| guard()).is_some() {
+                    continue;
+                }
+                let snapshot: Vec<_> = pipes
+                    .lock()
+                    .await
+                    .iter()
+                    .map(|(name, (config, _, _))| (name.clone(), config.clone()))
+                    .collect();
+                let mut completions = Vec::new();
+                while let Some(event) = events.next().now_or_never().flatten() {
+                    if event.name.starts_with("pipe_completed:") {
+                        if let Some(pipe) = event.data.get("pipe_name").and_then(|v| v.as_str()) {
+                            completions.push((
+                                pipe.to_string(),
+                                event
+                                    .data
+                                    .get("success")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false),
+                                event
+                                    .data
+                                    .get("source_delivery_id")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_owned),
+                            ));
+                        }
+                    }
+                }
+                let result = tokio::select! {
+                    _ = shutdown.changed() => break,
+                    result = semantic_triggers::tick(&dir,&snapshot,&mut state,&http,&api_base,api_key.as_deref(),executor.as_ref(),&completions) => result,
+                };
+                match result {
+                    Ok(()) => {
+                        state.last_error = None;
+                    }
+                    Err(error) => {
+                        let cause = error.to_string();
+                        if state.last_error.as_ref() != Some(&cause) {
+                            warn!(cause = %cause, outcome="no_decisions", "semantic_trigger_failed");
+                            state.last_error = Some(cause);
+                        }
+                    }
+                }
+            }
         });
     }
 
@@ -9555,13 +9753,35 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn source_events_serialize_context_and_acknowledge_their_own_delivery() {
+        source_context_delivery("audio", "phrase", "phrases: start job").await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn semantic_source_events_wake_scheduler_and_deliver_immutable_context() {
+        source_context_delivery(
+            "semantic",
+            "condition",
+            "id: test-condition\n        condition: Customer reports an error",
+        )
+        .await;
+    }
+
+    async fn source_context_delivery(app: &str, kind: &str, filter: &str) {
         let temp = tempfile::tempdir().unwrap();
         let pipes_dir = temp.path().join("pipes");
-        let name = "source-context-serialization";
+        let name_string = format!("source-context-{app}");
+        let name = name_string.as_str();
         let dir = pipes_dir.join(name);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("pipe.md"), "---\nschedule: manual\nagent: mock\nmodel: test\ntrigger:\n  sources:\n    - app: audio\n      kind: phrase\n      filter:\n        phrases: start job\n---\nSave the matched transcript.\n").unwrap();
-        let src: SourceTrigger = serde_json::from_value(serde_json::json!({"app": "audio", "kind": "phrase", "filter": {"phrases": "start job"}})).unwrap();
+        let content = format!("---\nschedule: manual\nagent: mock\nmodel: test\ntrigger:\n  sources:\n    - app: {app}\n      kind: {kind}\n      filter:\n        {filter}\n---\nSave the matched evidence.\n");
+        std::fs::write(dir.join("pipe.md"), &content).unwrap();
+        let src = parse_frontmatter(&content)
+            .unwrap()
+            .0
+            .trigger
+            .unwrap()
+            .sources
+            .remove(0);
         let key = connection_triggers::subscription_key(name, &src);
         let executor = Arc::new(SourceContextExecutor {
             contexts: std::sync::Mutex::new(Vec::new()),
@@ -9583,20 +9803,20 @@ mod tests {
                 "connection_trigger",
                 screenpipe_events::ConnectionTriggerEvent {
                     pipe: name.into(),
-                    app: "audio".into(),
-                    kind: "phrase".into(),
+                    app: app.into(),
+                    kind: kind.into(),
                     path: None,
                     count: 1,
                     timestamp: Utc::now(),
                     delivery_id: Some(id.into()),
                     subscription_key: Some(key.clone()),
-                    context: Some(serde_json::json!({"app": "audio", "items": [{"preview": id}]})),
+                    context: Some(serde_json::json!({"app": app, "items": [{"preview": id}]})),
                 },
             )
             .unwrap();
         };
         send("first");
-        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        // No 30-second timer advance: source delivery must wake the scheduler.
         for _ in 0..100 {
             if executor.contexts.lock().unwrap().len() == 1 {
                 break;

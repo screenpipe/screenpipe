@@ -12,7 +12,7 @@ import { IntegrationIcon } from "@/components/settings/connections-section";
 import { PipeScheduleBuilder } from "./pipe-schedule-builder";
 import type { ScheduleConfig } from "@/lib/utils/schedule-builder";
 import type { AvailableConnection } from "@/lib/pipe-connections";
-import { Plus, Search, Clock, CalendarClock, Workflow, Loader2, Check, Mic } from "lucide-react";
+import { Plus, Search, Clock, CalendarClock, Workflow, Loader2, Check, Mic, Sparkles } from "lucide-react";
 import { useGT } from "gt-react";
 import { msg, useMessages } from "gt-react";
 import { localizeDefinitions } from "@/lib/i18n/definitions";
@@ -34,6 +34,7 @@ export interface Trigger {
 
 interface PickerProps {
   pipeName: string;
+  semanticTriggerCount?: number;
   trigger?: Trigger;
   apiBase: string;
   scheduleConfig: ScheduleConfig | null;
@@ -69,6 +70,7 @@ type SourceApp =
   | "todoist";
 
 type OptionId =
+  | "semantic"
   | "voice_phrase"
   | "schedule"
   | "meeting_started"
@@ -103,6 +105,7 @@ const OPTIONS: Option[] = [
   // "cron" is implementation vocabulary, not the user's — the picker offers
   // plain cadences and keeps the raw expression as an advanced escape hatch.
   { id: "schedule", group: "recurring", label: msg("On a schedule", {}), sub: msg("hourly, daily, every N minutes", {}) },
+  { id: "semantic", group: "semantic", label: msg("Semantic trigger", {}), sub: msg("when a condition becomes true", {}) },
   { id: "voice_phrase", group: "voice", label: msg("Spoken phrase", {}), sub: msg("when you say a word or phrase", {}) },
   { id: "meeting_started", group: "meetings", label: msg("Meeting starts", {}), sub: msg("a call is detected", {}) },
   { id: "meeting_ended", group: "meetings", label: msg("Meeting ends", {}), sub: msg("a call wraps up", {}) },
@@ -122,10 +125,11 @@ const OPTIONS: Option[] = [
   { id: "obsidian", group: "obsidian", label: msg("New note", {}), sub: msg("in a vault folder", {}), app: "obsidian" },
   { id: "pipe", group: "pipes", label: msg("After a scheduled task finishes", {}), sub: msg("chain off another scheduled task", {}) },
 ];
-const GROUP_ORDER = ["recurring", "voice", "meetings", "email", "calendar", "slack", "notion", "github", "linear", "todoist", "obsidian", "pipes"];
+const GROUP_ORDER = ["recurring", "semantic", "voice", "meetings", "email", "calendar", "slack", "notion", "github", "linear", "todoist", "obsidian", "pipes"];
 
 function optionIcon(o: Option) {
   if (o.app) return <IntegrationIcon icon={o.icon || o.app} className="w-4 h-4 flex items-center justify-center" fallbackClassName="h-4 w-4 text-muted-foreground" />;
+  if (o.id === "semantic") return <Sparkles className="h-4 w-4 text-muted-foreground" />;
   if (o.id === "voice_phrase") return <Mic className="h-4 w-4 text-muted-foreground" />;
   if (o.id === "schedule") return <Clock className="h-4 w-4 text-muted-foreground" />;
   if (o.id === "pipe") return <Workflow className="h-4 w-4 text-muted-foreground" />;
@@ -141,6 +145,7 @@ function eventLabel(e: string): string {
   return e.replace(/_/g, " ");
 }
 function sourceLabel(s: TriggerSource): string {
+  if (s.app === "semantic") return `When ${s.filter?.condition || "a condition becomes true"}`;
   if (s.app === "audio") return `When ${s.filter?.device === "all" ? "audio contains" : "you say"} ${(s.filter?.phrases || "").split("\n").filter(Boolean).map((p) => `“${p}”`).join(" or ")}`;
   const acct = s.instance ? ` (${s.instance})` : "";
   if (s.app === "slack") return `slack${acct} · ${s.filter?.channel_name || s.filter?.channel || "a channel"}`;
@@ -169,22 +174,35 @@ export function PipeTriggerPicker(props: PickerProps) {
   const ui = useGT();
   const { pipeName, trigger, fetchPipes, applyOptimistic } = props;
   const [open, setOpen] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const events = trigger?.events ?? [];
   const custom = trigger?.custom ?? [];
   const sources = trigger?.sources ?? [];
 
-  function persistTrigger(next: Trigger) {
+  async function persistTrigger(next: Trigger) {
+    setSaveError(null);
     const isEmpty = !(next.events?.length || next.custom?.length || next.sources?.length);
     const cleaned = isEmpty ? undefined : next;
     applyOptimistic(cleaned);
-    localFetch(`/pipes/${pipeName}/config`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ trigger: cleaned ?? null }),
-    })
-      .then(() => fetchPipes())
-      .catch(() => fetchPipes());
+    try {
+      const response = await localFetch(`/pipes/${pipeName}/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trigger: cleaned ?? null }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || "Could not save trigger. Try again.");
+      }
+      fetchPipes();
+      return true;
+    } catch (error) {
+      applyOptimistic(trigger);
+      setSaveError(error instanceof Error ? error.message : "Could not save trigger. Try again.");
+      fetchPipes();
+      return false;
+    }
   }
 
   const remove = (kind: "events" | "custom" | "sources", i: number) =>
@@ -199,6 +217,7 @@ export function PipeTriggerPicker(props: PickerProps) {
         <div className="text-sm font-medium normal-case">When to run</div>
         <div className="text-[11px] text-muted-foreground">On a schedule, after a meeting, on a new message…</div>
       </div>
+      {!open && saveError && <p role="alert" className="text-xs text-destructive mb-2">{saveError}</p>}
       <div className="space-y-1.5">
         {events.map((e, i) => (
           <div key={`e${i}`} className="flex items-center gap-1.5 group/item">
@@ -228,12 +247,12 @@ export function PipeTriggerPicker(props: PickerProps) {
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-3xl p-0 overflow-hidden gap-0 rounded-lg">
+          {saveError && <p role="alert" className="text-xs text-destructive px-5 pt-3">{saveError}</p>}
           <TriggerModal
             {...props}
             onClose={() => setOpen(false)}
-            onAddSource={(src) => {
-              persistTrigger({ ...trigger, sources: [...sources, src] });
-              setOpen(false);
+            onAddSource={async (src) => {
+              if (await persistTrigger({ ...trigger, sources: [...sources, src] })) setOpen(false);
             }}
             onAddEvent={(e) => {
               if (!events.includes(e)) persistTrigger({ ...trigger, events: [...events, e] });
@@ -249,6 +268,7 @@ export function PipeTriggerPicker(props: PickerProps) {
 // ── modal (two panes) ────────────────────────────────────────────────────────
 
 function TriggerModal({
+  semanticTriggerCount = 0,
   apiBase,
   scheduleConfig,
   scheduleString,
@@ -333,6 +353,7 @@ function TriggerModal({
         <Detail
           key={active.id}
           option={active}
+          semanticTriggerCount={semanticTriggerCount}
           apiBase={apiBase}
           scheduleConfig={scheduleConfig}
           scheduleString={scheduleString}
@@ -352,6 +373,7 @@ function TriggerModal({
 // ── detail pane ──────────────────────────────────────────────────────────────
 
 function Detail({
+  semanticTriggerCount,
   option,
   apiBase,
   scheduleConfig,
@@ -365,6 +387,7 @@ function Detail({
   onSaveSchedule,
 }: {
   option: Option;
+  semanticTriggerCount: number;
   apiBase: string;
   scheduleConfig: ScheduleConfig | null;
   scheduleString: string;
@@ -398,6 +421,7 @@ function Detail({
             onAdd={() => onAddEvent(option.id)}
           />
         )}
+        {option.id === "semantic" && <SemanticDetail used={semanticTriggerCount} onAdd={onAddSource} />}
         {option.id === "voice_phrase" && <VoicePhraseDetail onAdd={onAddSource} />}
         {option.id === "pipe" && <PipeDetail pipes={otherPipes} onAdd={(name) => onAddEvent(`pipe_completed:${name}`)} />}
         {option.app && (
@@ -417,6 +441,7 @@ function Detail({
 
 function detailTitle(id: OptionId): string {
   switch (id) {
+    case "semantic": return "Semantic trigger";
     case "voice_phrase": return "When a phrase is spoken";
     case "schedule": return "On a schedule";
     case "meeting_started": return "When a meeting starts";
@@ -454,6 +479,31 @@ function SimpleDetail({ text, onAdd }: { text: string; onAdd: () => void }) {
       <PrimaryAdd onClick={onAdd} />
     </div>
   );
+}
+
+function SemanticDetail({ used, onAdd }: { used: number; onAdd: (s: TriggerSource) => void }) {
+  const [condition, setCondition] = useState("");
+  const [id] = useState(() => crypto.randomUUID());
+  const [consent, setConsent] = useState(false);
+  const [saving, setSaving] = useState(false);
+  return <div>
+    <p className="text-xs text-muted-foreground mb-3">Run this Pipe when a condition becomes true in your recent screen activity.</p>
+    <label htmlFor="semantic-condition" className={LABEL}>Condition</label>
+    <textarea id="semantic-condition" value={condition} onChange={e => setCondition(e.target.value)} maxLength={1000}
+      placeholder="A customer reports that they are blocked by an error"
+      className={`${INPUT.replace("h-9", "h-24")} py-2 mt-1`} />
+    <p className="text-xs text-muted-foreground mt-2">Up to 3 semantic triggers per account ({used} on this device).</p>
+    {used >= 3 && <p role="status" className="text-xs mt-2">Remove a semantic trigger before adding another.</p>}
+    <label className="flex items-start gap-2 text-xs mt-4">
+      <input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} className="mt-0.5" />
+      <span>Send recent captured screen text to Jev for cloud detection every few seconds. Runs once when the condition becomes true.</span>
+    </label>
+    <PrimaryAdd label={saving ? "Saving…" : "Add trigger"} disabled={saving || used >= 3 || !consent || !condition.trim()} onClick={async () => {
+      setSaving(true);
+      try { await onAdd({app:"semantic", kind:"condition", filter:{id,condition:condition.trim()}}); }
+      finally {setSaving(false);}
+    }} />
+  </div>;
 }
 
 function VoicePhraseDetail({ onAdd }: { onAdd: (s: TriggerSource) => void }) {
