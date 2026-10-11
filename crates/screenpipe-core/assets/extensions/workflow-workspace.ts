@@ -43,9 +43,10 @@ export default function (pi: ExtensionAPI) {
       type: "object", properties: {
         action: {type: "string", enum: actions, description: 'One action name only. To read a draft use {"action":"context","draft_id":"exact-id"}; draft_id is a separate property, never part of action.'},
         expected_revision: {type:"integer", description:"Required for every write except start. Copy revision from the latest context or remaining state."},
-        catalog_revision: {type:"integer", description:"Required for publish and Review finish. Copy catalogRevision from the latest context or remaining state."},
+        catalog_revision: {type:"integer", description:"Required for publish, Review finish and reject with duplicate_of. Copy catalogRevision from the latest context or remaining state."},
         draft_id: {type:"string", description:"For context, read this draft in full; for writes, the owned draft to change."},
         workflow_id: {type:"string", description:"With context, read one existing catalog workflow in full."},
+        duplicate_of: {type:"string", description:"Only with reject: exact id of an existing saved workflow you read and compared. Explain in note why this draft adds no supported procedure or evidence. This can resolve a redundant draft despite a publication retry hold; never use a temporary source failure as the reason or discard useful enrichment."},
         assignee: {type:"string", enum: tasks},
         payload: {type:"object", description:"For propose or handoff: research notes are valid, including a candidate title, source addresses, observed actions and unanswered questions. You do not need a finished procedure to hand off reconnaissance. Handoff replaces the draft payload. Only publish requires ONE complete workflow object matching outputContract, not an outer catalog object, including description and stages with procedure/evidence; omit payload to publish the stored draft. note never changes the payload."},
         note: {type:"string", description:"Evidence decision, specific question for the next agent, or what was actually checked. Required for writes."},
@@ -57,7 +58,7 @@ export default function (pi: ExtensionAPI) {
         if (input.action !== "context" && input.action !== "start" && (!Number.isSafeInteger(input.expected_revision) || input.expected_revision < 0)) {
           throw new Error("expected_revision is required for this write. Copy revision from the latest context or remaining state and include it in the call. No changes were saved.");
         }
-        if ((input.action === "publish" || (input.action === "finish" && task === "workflow-review")) && (!Number.isSafeInteger(input.catalog_revision) || input.catalog_revision < 0)) {
+        if ((input.action === "publish" || input.duplicate_of !== undefined || (input.action === "finish" && task === "workflow-review")) && (!Number.isSafeInteger(input.catalog_revision) || input.catalog_revision < 0)) {
           throw new Error("catalog_revision is required for publication or Review finish. Copy catalogRevision from the latest context or remaining state and include it in the call. No changes were saved.");
         }
         const permissions = JSON.parse(readFileSync(join(process.cwd(), ".screenpipe-permissions.json"),"utf8"));

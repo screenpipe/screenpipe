@@ -237,3 +237,23 @@ test("resumed context exposes unfinished checkpoints", async () => {
   const result = await tool.execute("id",{action:"context"},new AbortController().signal);
   expect(JSON.parse(result.content[0].text).cycle.checkpoints["workflow-discover"].note).toBe("Read interval A; B failed");
 });
+
+test("duplicate rejection requires catalog revision and sends the reviewed saved identity", async () => {
+  expect(tool.parameters.properties.duplicate_of.description).toContain("existing saved workflow");
+  const input = {action:"reject",expected_revision:1,draft_id:"draft-a",duplicate_of:"wf-existing",note:"Read saved procedure; no new supported detail."};
+  await expect(tool.execute("id",input,new AbortController().signal)).rejects.toThrow("catalog_revision");
+  expect(requests).toHaveLength(0);
+  await tool.execute("id",{...input,catalog_revision:4},new AbortController().signal);
+  expect(requests[0]).toMatchObject({...input,catalog_revision:4,task:"workflow-review"});
+});
+
+test("checkpoint receipt reports partial progress even when the operation succeeded", async () => {
+  server.reload({fetch:(req:Request)=>Response.json(req.method === "POST"
+    ? {saved:true,revision:2,outcome:"research_checkpoint_saved",cycleComplete:false}
+    : {workspace:{revision:2,cycle:{status:"running"},drafts:{}},catalogRevision:1,canFinish:false})});
+  const result=JSON.parse((await tool.execute("id",{action:"checkpoint",expected_revision:1,note:"Read first interval; next interval pending."},new AbortController().signal)).content[0].text);
+  expect(result.saved).toBe(true);
+  expect(result.outcome).toBe("research_checkpoint_saved");
+  expect(result.cycleComplete).toBe(false);
+  expect(result.remaining.canFinish).toBe(false);
+});

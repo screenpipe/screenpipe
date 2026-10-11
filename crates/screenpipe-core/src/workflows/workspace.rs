@@ -80,6 +80,9 @@ pub struct Change {
     pub assignee: Option<String>,
     #[serde(default)]
     pub payload: Option<Value>,
+    /// Review can discard a redundant draft after reading this saved workflow.
+    #[serde(default)]
+    pub duplicate_of: Option<String>,
     #[serde(default)]
     pub note: String,
 }
@@ -137,6 +140,17 @@ pub fn start(ws: &mut Value, catalog: &Value) {
 }
 
 pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, String> {
+    apply_with_catalog(ws, task, change, &json!({}))
+}
+
+/// The caller supplies the current catalog under its writer lock. A duplicate
+/// decision references a durable workflow, never another unpublished draft.
+pub fn apply_with_catalog(
+    ws: &mut Value,
+    task: &str,
+    change: &Change,
+    catalog: &Value,
+) -> Result<Value, String> {
     if !is_task(task) {
         return Err("Unknown workflow agent.".into());
     }
@@ -150,6 +164,24 @@ pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, Strin
     }
     if change.note.trim().is_empty() {
         return Err("Include the evidence decision or remaining question in note.".into());
+    }
+    if let Some(id) = &change.duplicate_of {
+        if change.action != "reject" || task != TASKS[2] {
+            return Err(
+                "Only Review can use duplicate_of when rejecting a redundant draft.".into(),
+            );
+        }
+        if id.trim().is_empty()
+            || !catalog["analysis"]["workflows"]
+                .as_array()
+                .is_some_and(|workflows| {
+                    workflows
+                        .iter()
+                        .any(|workflow| workflow["id"].as_str() == Some(id.as_str()))
+                })
+        {
+            return Err("duplicate_of must identify an existing saved workflow. Read that workflow and compare its procedure before rejecting a duplicate.".into());
+        }
     }
     let rev = revision(ws) + 1;
     let mut id = change.draft_id.clone();
@@ -227,11 +259,25 @@ pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, Strin
             {
                 return Err("Review must own this open draft to reject it.".into());
             }
-            if ws["drafts"][key]["publicationRetry"]["retryable"] == true {
-                return Err("Publication is waiting for source verification. Keep this draft open and retry publication when the recorder recovers, or hand it off for investigation. A temporary save failure is not evidence against the workflow. Read current context before retrying.".into());
+            if ws["drafts"][key]["publicationRetry"]["retryable"] == true
+                && change.duplicate_of.is_none()
+            {
+                return Err("Publication is waiting for source verification. A temporary save failure is not evidence against the workflow. Keep this draft open and retry when the recorder recovers. If independently reviewed as redundant, read the saved workflow and reject with duplicate_of and a note explaining the comparison; otherwise preserve the draft. Read current context before retrying.".into());
             }
             ws["drafts"][key]["status"] = json!("rejected");
             ws["drafts"][key]["decision"] = json!(change.note);
+            if let Some(id) = &change.duplicate_of {
+                ws["drafts"][key]["duplicateOf"] = json!(id);
+                // Retain the earlier failure in history, but it is no longer
+                // pending publication. No catalog entry or source is changed.
+                if let Some(failure) = ws["drafts"][key]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("publicationRetry")
+                {
+                    ws["drafts"][key]["previousPublicationRetry"] = failure;
+                }
+            }
         }
         "finish" => {
             if assigned(ws, task) {
@@ -254,12 +300,17 @@ pub fn apply(ws: &mut Value, task: &str, change: &Change) -> Result<Value, Strin
         return Err("Workspace is full. Finish the current drafts before proposing more.".into());
     }
     ws["revision"] = json!(rev);
-    ws["receipts"][task] =
-        json!({"revision":rev,"cycle":ws["cycle"]["id"],"savedAt":Utc::now().to_rfc3339()});
+    let outcome = match change.action.as_str() {
+        "checkpoint" => "research_checkpoint_saved",
+        "finish" => "role_finished",
+        "reject" => "draft_rejected",
+        _ => "draft_saved",
+    };
+    ws["receipts"][task] = json!({"revision":rev,"cycle":ws["cycle"]["id"],"savedAt":Utc::now().to_rfc3339(),"outcome":outcome});
     if change.action != "checkpoint" {
         ws["receipts"][task]["note"] = json!(change.note);
     }
-    Ok(json!({"revision":rev,"draft_id":id,"saved":true}))
+    Ok(json!({"revision":rev,"draft_id":id,"saved":true,"outcome":outcome,"cycleComplete":false}))
 }
 
 /// Checked before source verification and again under the catalog writer.
@@ -305,6 +356,34 @@ pub fn publication_payload(
         );
     }
     Ok(payload.clone())
+}
+
+/// Reject only an exact new-copy payload. Similar titles, partial overlap and
+/// genuinely new evidence still require agent review, not an automatic merge.
+pub fn exact_duplicate<'a>(catalog: &'a Value, payload: &Value) -> Option<&'a str> {
+    if !payload["id"].is_null()
+        || payload["title"]
+            .as_str()
+            .is_none_or(|title| title.trim().is_empty())
+        || payload["description"]
+            .as_str()
+            .is_none_or(|description| description.trim().is_empty())
+        || payload["stages"].as_array().is_none_or(Vec::is_empty)
+    {
+        return None;
+    }
+    let fields = payload.as_object()?;
+    catalog["analysis"]["workflows"]
+        .as_array()?
+        .iter()
+        .find_map(|saved| {
+            fields
+                .iter()
+                .all(|(key, value)| key == "id" || saved.get(key) == Some(value))
+                .then(|| saved["id"].as_str())
+                .flatten()
+                .filter(|id| !id.is_empty())
+        })
 }
 
 /// Preserve in-flight publication and infrastructure failures without advancing the
@@ -400,6 +479,26 @@ pub fn validate_publication(raw: &Value, normalized: &Value) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exact_duplicate_guard_preserves_enrichment_and_never_merges_similar_jobs() {
+        let payload = json!({"id":null,"title":"Review invoices","description":"Check the invoice",
+            "stages":[{"name":"Review","evidence":[{"quote":"Reviewed invoice"}]}]});
+        let mut saved = payload.clone();
+        saved["id"] = json!("wf-existing");
+        saved["lastReviewedAt"] = json!("2026-10-01");
+        let catalog = json!({"analysis":{"workflows":[saved]}});
+        assert_eq!(exact_duplicate(&catalog, &payload), Some("wf-existing"));
+        let mut update = payload.clone();
+        update["id"] = json!("wf-existing");
+        assert_eq!(exact_duplicate(&catalog, &update), None);
+        let mut enrichment = payload.clone();
+        enrichment["stages"][0]["evidence"][0]["quote"] = json!("New receipt confirmed");
+        assert_eq!(exact_duplicate(&catalog, &enrichment), None);
+        assert_eq!(
+            exact_duplicate(&catalog, &json!({"title":"Review invoices"})),
+            None
+        );
+    }
     #[test]
     fn checkpoint_survives_restart_without_completing_coverage() {
         let mut ws = empty();
@@ -519,6 +618,7 @@ mod tests {
             action: action.into(),
             expected_revision: revision(ws),
             draft_id: id,
+            duplicate_of: None,
             assignee: assignee.map(str::to_owned),
             payload: Some(
                 json!({"title":"Research invoice reconciliation","note":"literal quote with \"quotes\" and ]}"}),
@@ -607,6 +707,84 @@ mod tests {
         assert_eq!(restored["cycle"], before["cycle"]);
         assert!(ready(&restored, TASKS[2]));
         assert!(revision(&restored) > revision(&before));
+    }
+
+    #[test]
+    fn reviewed_duplicate_can_resolve_a_retry_hold_without_publishing_or_losing_history() {
+        let catalog = json!({"revision":7,"checkedThrough":"2026-10-01T00:00:00Z",
+            "analysis":{"workflows":[{"id":"wf-existing","title":"Review invoices"}]}});
+        let mut ws = empty();
+        start(&mut ws, &catalog);
+        let proposal = change("propose", &ws, None, Some(TASKS[2]));
+        let id = apply(&mut ws, TASKS[0], &proposal).unwrap()["draft_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let version = ws["drafts"][&id]["version"].as_u64().unwrap();
+        assert!(set_publication_retry(&mut ws, version, &id, true));
+        ws["cycle"]["finished"][TASKS[0]] = json!(true);
+        ws["cycle"]["finished"][TASKS[3]] = json!(true);
+        let mut ws: Value = serde_json::from_str(&ws.to_string()).unwrap();
+        let payload = ws["drafts"][&id]["payload"].clone();
+        let history = ws["drafts"][&id]["history"].clone();
+        let mut rejection = change("reject", &ws, Some(id.clone()), None);
+        rejection.duplicate_of = Some("wf-existing".into());
+        rejection.note =
+            "Read wf-existing: same invoice review procedure; this draft adds no supported detail."
+                .into();
+        let before = ws.clone();
+        // A reference cannot bypass ownership, stale state or Stop.
+        assert!(apply_with_catalog(&mut ws, TASKS[1], &rejection, &catalog).is_err());
+        rejection.expected_revision -= 1;
+        assert!(apply_with_catalog(&mut ws, TASKS[2], &rejection, &catalog).is_err());
+        assert_eq!(ws, before);
+        pause(&mut ws);
+        rejection.expected_revision = revision(&ws);
+        let paused = ws.clone();
+        assert!(apply_with_catalog(&mut ws, TASKS[2], &rejection, &catalog).is_err());
+        assert_eq!(ws, paused);
+        start(&mut ws, &catalog);
+        rejection.expected_revision = revision(&ws);
+        let receipt = apply_with_catalog(&mut ws, TASKS[2], &rejection, &catalog).unwrap();
+        assert_eq!(receipt["outcome"], "draft_rejected");
+        assert_eq!(receipt["cycleComplete"], false);
+        assert_eq!(ws["drafts"][&id]["duplicateOf"], "wf-existing");
+        assert_eq!(ws["drafts"][&id]["payload"], payload);
+        assert_eq!(ws["drafts"][&id]["history"], history);
+        assert_eq!(
+            ws["drafts"][&id]["previousPublicationRetry"]["retryable"],
+            true
+        );
+        assert!(ws["drafts"][&id]["publicationRetry"].is_null());
+        assert_eq!(ws["cycle"]["status"], "running");
+        assert!(can_finish(&ws)); // Review still must atomically finish coverage.
+        assert!(!set_publication_retry(&mut ws, version, &id, true));
+    }
+
+    #[test]
+    fn unknown_or_unpublished_duplicate_reference_preserves_pending_work() {
+        let mut ws = empty();
+        start(&mut ws, &json!({}));
+        let proposal = change("propose", &ws, None, Some(TASKS[2]));
+        let id = apply(&mut ws, TASKS[0], &proposal).unwrap()["draft_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        ws["drafts"][&id]["publicationRetry"] = json!({"retryable":true});
+        let before = ws.clone();
+        for duplicate in ["", "missing", id.as_str()] {
+            let mut rejection = change("reject", &ws, Some(id.clone()), None);
+            rejection.duplicate_of = Some(duplicate.into());
+            assert!(apply_with_catalog(
+                &mut ws,
+                TASKS[2],
+                &rejection,
+                &json!({"analysis":{"workflows":[]}})
+            )
+            .is_err());
+            assert_eq!(ws, before);
+        }
+        assert!(!can_finish(&ws));
     }
 
     #[test]
