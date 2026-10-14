@@ -129,8 +129,7 @@ describe("live transcription survives a recording restart", function () {
     expect(await activeMeetingId()).toBe(meetingId);
 
     // The exact sequence `overlay_health::restart_recording` runs for the
-    // overlay's RESTART button, and that "Apply & Restart", audio shortcuts,
-    // and updates all share.
+    // overlay's RESTART button, and that "Apply & Restart" and updates share.
     await invokeOrThrow("stop_screenpipe");
     await invokeOrThrow("spawn_screenpipe", { overrideArgs: null });
     await waitForLocalApi(cfg, t(90_000));

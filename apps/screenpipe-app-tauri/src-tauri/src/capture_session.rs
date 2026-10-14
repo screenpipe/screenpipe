@@ -47,7 +47,8 @@ pub struct CaptureSession {
     schedule_task: Option<tokio::task::JoinHandle<()>>,
     ui_recorder_handle: Option<screenpipe_engine::UiRecorderHandle>,
     audio_manager: Arc<screenpipe_audio::audio_manager::AudioManager>,
-    audio_disabled: bool,
+    /// The delayed audio start, `None` when audio is disabled.
+    audio_start: Option<tokio::task::JoinHandle<()>>,
     /// Cleared on stop so `/vision/device/*` stops pointing at a shut-down manager.
     vision_manager_handle: Option<
         Arc<arc_swap::ArcSwap<Option<Arc<screenpipe_engine::vision_manager::VisionManager>>>>,
@@ -227,7 +228,7 @@ impl CaptureSession {
         }
 
         // --- Audio recording ---
-        if !config.disable_audio {
+        let audio_start = (!config.disable_audio).then(|| {
             let audio_manager_clone = server.audio_manager.clone();
             let drm_pause = config.pause_on_drm_content;
             tokio::spawn(async move {
@@ -240,8 +241,8 @@ impl CaptureSession {
                         warn!("failed to stop SCK audio after late DRM detection: {:?}", e);
                     }
                 }
-            });
-        }
+            })
+        });
 
         // --- UI event recording ---
         // Gate on accessibility permission before calling start_ui_recording.
@@ -335,7 +336,7 @@ impl CaptureSession {
             schedule_task,
             ui_recorder_handle,
             audio_manager: server.audio_manager.clone(),
-            audio_disabled: config.disable_audio,
+            audio_start,
             vision_manager_handle,
         })
     }
@@ -350,6 +351,18 @@ impl CaptureSession {
             self.disk_pressure_data_dir.clone(),
             self.shutdown_tx.subscribe(),
         );
+    }
+
+    /// Whether this session records audio, counting the delayed start as on.
+    /// A session that started with audio can still not record it, because
+    /// `/audio/stop` stops the audio manager without changing settings.
+    pub(crate) async fn records_audio(&self) -> bool {
+        let Some(audio_start) = &self.audio_start else {
+            return false;
+        };
+        !audio_start.is_finished()
+            || self.audio_manager.status().await
+                == screenpipe_audio::audio_manager::AudioManagerStatus::Running
     }
 
     /// Stop all capture pipelines. The server stays alive.
@@ -385,7 +398,7 @@ impl CaptureSession {
         }
 
         // Stop audio recording (but don't shutdown — keep the Arc valid for queries)
-        if !self.audio_disabled {
+        if self.audio_start.is_some() {
             if let Err(e) = self.audio_manager.stop().await {
                 warn!("Error stopping audio manager: {:?}", e);
                 failures.push(format!("audio_stop: {e}"));
@@ -502,6 +515,12 @@ fn log_capture_transcription_config(config: &RecordingConfig, options: &AudioMan
     }
 }
 
+/// Whether a session started with `config` runs the meeting detector, and with
+/// it the meeting watcher, the only thing that ends an auto-detected meeting.
+pub(crate) fn detects_meetings(config: &RecordingConfig) -> bool {
+    !config.disable_audio && !config.disable_meeting_detector
+}
+
 async fn reconfigure_audio_manager(
     server: &ServerCore,
     config: &RecordingConfig,
@@ -538,14 +557,14 @@ async fn reconfigure_audio_manager(
         .transcription_mode(config.transcription_mode.clone())
         .openai_compatible_config(openai_compatible_config);
 
-    let meeting_detector = if config.disable_audio {
+    let meeting_detector = if detects_meetings(config) {
+        Some(Arc::new(MeetingDetector::new()))
+    } else if config.disable_audio {
         info!("meeting detector disabled because audio capture is disabled");
         None
-    } else if config.disable_meeting_detector {
+    } else {
         info!("meeting detector disabled by settings");
         None
-    } else {
-        Some(Arc::new(MeetingDetector::new()))
     };
 
     if let Some(ref detector) = meeting_detector {

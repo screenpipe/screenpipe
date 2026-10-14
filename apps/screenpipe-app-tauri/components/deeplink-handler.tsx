@@ -650,26 +650,6 @@ export function DeeplinkHandler() {
         });
       }),
 
-      listen("shortcut-start-audio", async () => {
-        await commands.stopScreenpipe();
-        await commands.spawnScreenpipe(null);
-
-        toast({
-          title: ui("Audio recording started"),
-          description: ui("Audio capture has been enabled"),
-        });
-      }),
-
-      listen("shortcut-stop-audio", async () => {
-        await commands.stopScreenpipe();
-        await commands.spawnScreenpipe(null);
-
-        toast({
-          title: ui("Audio recording stopped"),
-          description: ui("Audio capture has been disabled"),
-        });
-      }),
-
       listen("cli-login", async (event) => {
         console.log("received cli-login event:", event);
         await reloadStore();

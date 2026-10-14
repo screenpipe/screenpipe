@@ -263,9 +263,18 @@ pub fn suppressed_now(
 /// otherwise.
 pub const DEFAULT_REPEAT_COOLDOWN_MS: i64 = 90_000;
 
+/// A reply to something the user just did, such as an audio shortcut press.
+/// Every press gets its reply, so these never count as repeats: "audio off",
+/// "audio on", "audio off" is three replies, not an echo.
+pub const USER_ACTION_NOTIFICATION_TYPE: &str = "user_action";
+
 /// Per-type overrides, for types whose producers are condition-driven and
 /// whose conditions persist for minutes at a time.
-const REPEAT_COOLDOWNS_MS: &[(&str, i64)] = &[("system", 600_000), ("meeting", 300_000)];
+const REPEAT_COOLDOWNS_MS: &[(&str, i64)] = &[
+    ("system", 600_000),
+    ("meeting", 300_000),
+    (USER_ACTION_NOTIFICATION_TYPE, 0),
+];
 
 /// Most entries we keep. Bounds memory when a pipe emits unique titles
 /// forever; the ledger is a cache, and evicting only costs one extra alert.
@@ -775,6 +784,7 @@ mod tests {
     fn cooldown_is_per_type_with_a_default() {
         assert_eq!(repeat_cooldown_ms(Some("system")), 600_000);
         assert_eq!(repeat_cooldown_ms(Some("meeting")), 300_000);
+        assert_eq!(repeat_cooldown_ms(Some(USER_ACTION_NOTIFICATION_TYPE)), 0);
         assert_eq!(repeat_cooldown_ms(Some("pipe")), DEFAULT_REPEAT_COOLDOWN_MS);
         assert_eq!(repeat_cooldown_ms(None), DEFAULT_REPEAT_COOLDOWN_MS);
     }

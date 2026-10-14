@@ -16,6 +16,7 @@ use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 use tracing::{error, info};
 
 use crate::commands::{hide_main_window, show_main_window};
+use crate::notifications::store::NotificationPriority;
 use crate::store::{get_store, OnboardingStore, SettingsStore};
 use crate::window::ShowRewindWindow;
 
@@ -72,6 +73,200 @@ fn track_shortcut_used(app: &AppHandle, shortcut_name: &'static str) {
                 .await;
         });
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum AudioSettingChange {
+    Saved,
+    AlreadySet,
+    ManagedByPolicy,
+}
+
+/// Save `disableAudio` inside the `settings` object, where the engine and the
+/// Settings page read it. These shortcuts used to write a top-level key that
+/// nothing reads, so "stop audio" kept recording audio.
+fn save_disable_audio<R: tauri::Runtime>(
+    store: &tauri_plugin_store::Store<R>,
+    disable_audio: bool,
+    enforce_policy: bool,
+    save: impl FnOnce() -> Result<(), String>,
+) -> Result<AudioSettingChange, String> {
+    let current = store
+        .get("settings")
+        .filter(serde_json::Value::is_object)
+        .ok_or("settings unavailable")?;
+    let mut next = current.clone();
+    next["disableAudio"] = serde_json::json!(disable_audio);
+    // Enterprise policy or a hand-edited settings file can turn audio off with
+    // this mode; Settings doesn't offer it. The engine honors it over
+    // `disableAudio`, so turning audio on has to clear it too. `always` is what
+    // an unset mode means, and it records right away, as the confirmation says.
+    if !disable_audio
+        && next["audioCaptureMode"]
+            .as_str()
+            .is_some_and(|mode| mode.eq_ignore_ascii_case("disabled"))
+    {
+        next["audioCaptureMode"] = serde_json::json!("always");
+    }
+    let managed = &current["enterpriseManagedSettings"];
+    if enforce_policy
+        && ["disableAudio", "audioCaptureMode"]
+            .iter()
+            .any(|key| managed.get(key).is_some() && next[key] != current[key])
+    {
+        return Ok(AudioSettingChange::ManagedByPolicy);
+    }
+    if next == current {
+        return Ok(AudioSettingChange::AlreadySet);
+    }
+    store.set("settings", next);
+    if let Err(error) = save() {
+        store.set("settings", current);
+        return Err(error);
+    }
+    Ok(AudioSettingChange::Saved)
+}
+
+/// Whether a press has to restart the engine to take effect. A saved change
+/// always does. Otherwise the running session (`None` while paused) can still
+/// disagree with the setting: Settings saves its Audio Recording switch at once
+/// but applies it only on "Apply & Restart", and `/audio/stop` stops audio
+/// without changing the setting.
+fn restart_needed(
+    change: &AudioSettingChange,
+    enabled: bool,
+    session_records_audio: Option<bool>,
+) -> bool {
+    *change == AudioSettingChange::Saved
+        || session_records_audio.is_some_and(|records| records != enabled)
+}
+
+static AUDIO_SHORTCUT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// What one audio shortcut press did.
+#[derive(Debug, PartialEq, Eq)]
+enum AudioShortcutResult {
+    Applied,
+    ManagedByPolicy,
+    SaveFailed,
+    RestartFailed(String),
+}
+
+/// Title, body, and priority for a press. A confirmation only matters while it
+/// is on screen, so it stays out of the inbox; a failure stays so the user can
+/// act on it.
+fn audio_shortcut_notice(
+    enabled: bool,
+    paused: bool,
+    result: &AudioShortcutResult,
+) -> (String, String, NotificationPriority) {
+    use crate::localization::{ui_format, ui_text};
+
+    match result {
+        AudioShortcutResult::Applied if enabled && paused => (
+            ui_text("Audio recording on"),
+            ui_text("Audio will be recorded when recording resumes."),
+            NotificationPriority::Low,
+        ),
+        AudioShortcutResult::Applied if enabled => (
+            ui_text("Audio recording on"),
+            ui_text("Microphone and system audio are recorded per your audio settings."),
+            NotificationPriority::Low,
+        ),
+        AudioShortcutResult::Applied => (
+            ui_text("Audio recording off"),
+            ui_text("Microphone and system audio are not recorded."),
+            NotificationPriority::Low,
+        ),
+        AudioShortcutResult::ManagedByPolicy => (
+            ui_text("Audio recording unchanged"),
+            ui_text("Audio recording is managed by your organization."),
+            NotificationPriority::Low,
+        ),
+        AudioShortcutResult::SaveFailed => (
+            ui_text("Audio recording unchanged"),
+            ui_text("The setting could not be saved. Try again in Settings."),
+            NotificationPriority::High,
+        ),
+        AudioShortcutResult::RestartFailed(error) => (
+            ui_text("Audio change not applied"),
+            ui_format(
+                "Screenpipe saved the setting but could not restart recording: {error}",
+                &[("error", error.clone())],
+            ),
+            NotificationPriority::High,
+        ),
+    }
+}
+
+/// Turn audio recording on or off from a global shortcut. This runs natively,
+/// so it works while every window is closed, and it restarts the engine without
+/// changing capture intent, so a paused recording stays paused.
+fn set_audio_recording(app: &AppHandle, enabled: bool) {
+    let app = app.clone();
+    let disable_audio = !enabled;
+    // Shortcut handlers run on the main thread; saving syncs store.bin to disk.
+    tauri::async_runtime::spawn(async move {
+        // One press at a time, so saves and restarts never interleave.
+        let _press = AUDIO_SHORTCUT_LOCK.lock().await;
+        let change = get_store(&app, None)
+            .map_err(|error| error.to_string())
+            .and_then(|store| {
+                save_disable_audio(
+                    store.as_ref(),
+                    disable_audio,
+                    cfg!(feature = "enterprise-build"),
+                    || {
+                        crate::store::save_store_with_permission_repair(&app, store.as_ref())?;
+                        crate::store::reencrypt_store_file(&app);
+                        Ok(())
+                    },
+                )
+            });
+        let result = match change {
+            Ok(AudioSettingChange::ManagedByPolicy) => AudioShortcutResult::ManagedByPolicy,
+            Err(error) => {
+                error!("audio shortcut: failed to save the audio setting: {error}");
+                AudioShortcutResult::SaveFailed
+            }
+            Ok(change) => {
+                let session_records_audio = match app
+                    .state::<crate::recording::RecordingState>()
+                    .capture
+                    .lock()
+                    .await
+                    .as_ref()
+                {
+                    Some(session) => Some(session.records_audio().await),
+                    None => None,
+                };
+                if !restart_needed(&change, enabled, session_records_audio) {
+                    AudioShortcutResult::Applied
+                } else if let Err(error) =
+                    crate::recording::restart_keeping_capture_intent(&app).await
+                {
+                    error!("audio shortcut: failed to restart recording: {error}");
+                    AudioShortcutResult::RestartFailed(error)
+                } else {
+                    AudioShortcutResult::Applied
+                }
+            }
+        };
+        // Only after the restart, so a failed one is never reported as done.
+        let paused = !app
+            .state::<crate::recording::RecordingState>()
+            .capture_intended();
+        let (title, body, priority) = audio_shortcut_notice(enabled, paused, &result);
+        // Confirmations dismiss quickly, like other ambient status.
+        let auto_dismiss_ms = (priority == NotificationPriority::Low).then_some(6_000);
+        crate::notifications::client::send_typed_with_priority(
+            title,
+            body,
+            crate::notifications::gate::USER_ACTION_NOTIFICATION_TYPE,
+            auto_dismiss_ms,
+            priority,
+        );
+    });
 }
 
 #[derive(Debug, Default)]
@@ -392,12 +587,8 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         config.is_disabled("start_audio"),
         |app| {
             track_shortcut_used(app, "start_audio");
-            if let Ok(store) = get_store(app, None) {
-                store.set("disableAudio", false);
-                let _ = store.save();
-            }
-            let _ = app.emit("shortcut-start-audio", ());
             info!("start audio shortcut triggered");
+            set_audio_recording(app, true);
         },
     )
     .await?;
@@ -408,12 +599,8 @@ async fn apply_shortcuts(app: &AppHandle, config: &ShortcutConfig) -> Result<(),
         config.is_disabled("stop_audio"),
         |app| {
             track_shortcut_used(app, "stop_audio");
-            if let Ok(store) = get_store(app, None) {
-                store.set("disableAudio", true);
-                let _ = store.save();
-            }
-            let _ = app.emit("shortcut-stop-audio", ());
             info!("stop audio shortcut triggered");
+            set_audio_recording(app, false);
         },
     )
     .await?;
@@ -592,7 +779,17 @@ pub fn parse_shortcut(shortcut_str: &str) -> Result<Shortcut, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::search_transition_succeeded;
+    use super::{
+        audio_shortcut_notice, restart_needed, save_disable_audio, search_transition_succeeded,
+        AudioSettingChange, AudioShortcutResult,
+    };
+    use crate::notifications::store::NotificationPriority;
+    use crate::store::SettingsStore;
+    use serde_json::{json, Value};
+    use std::path::Path;
+    use std::sync::Arc;
+    use tauri::test::MockRuntime;
+    use tauri_plugin_store::Store;
 
     #[test]
     fn search_shortcut_outcome_requires_visible_focused_search() {
@@ -600,5 +797,211 @@ mod tests {
         assert!(!search_transition_succeeded(true, false));
         assert!(!search_transition_succeeded(false, true));
         assert!(!search_transition_succeeded(false, false));
+    }
+
+    fn store_with_settings(
+        path: &Path,
+        settings: Value,
+    ) -> (tauri::App<MockRuntime>, Arc<Store<MockRuntime>>) {
+        let app = tauri::test::mock_builder()
+            .plugin(tauri_plugin_store::Builder::default().build())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let store = tauri_plugin_store::StoreBuilder::new(app.handle(), path)
+            .disable_auto_save()
+            .build()
+            .unwrap();
+        store.set("settings", settings);
+        (app, store)
+    }
+
+    /// Read the saved file the way the engine does on its next start.
+    fn engine_disable_audio(path: &Path) -> bool {
+        let saved: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert!(saved.get("disableAudio").is_none(), "top-level key written");
+        serde_json::from_value::<SettingsStore>(saved["settings"].clone())
+            .unwrap()
+            .to_recording_config(path.with_file_name("data"))
+            .disable_audio
+    }
+
+    #[test]
+    fn audio_shortcuts_save_the_setting_the_engine_reads() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("store.bin");
+        let (_app, store) = store_with_settings(&path, json!(SettingsStore::default()));
+        let save = || store.save().map_err(|e| e.to_string());
+
+        assert_eq!(
+            save_disable_audio(store.as_ref(), true, false, save),
+            Ok(AudioSettingChange::Saved)
+        );
+        assert!(engine_disable_audio(&path));
+
+        // A repeat press must not save again or restart the engine.
+        assert_eq!(
+            save_disable_audio(store.as_ref(), true, false, || panic!("saved again")),
+            Ok(AudioSettingChange::AlreadySet)
+        );
+
+        assert_eq!(
+            save_disable_audio(store.as_ref(), false, false, save),
+            Ok(AudioSettingChange::Saved)
+        );
+        assert!(!engine_disable_audio(&path));
+    }
+
+    #[test]
+    fn audio_shortcuts_cannot_override_an_enterprise_audio_policy() {
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = json!(SettingsStore::default());
+        settings["disableAudio"] = json!(true);
+        settings["enterpriseManagedSettings"] = json!({ "disableAudio": true });
+        let (_app, store) = store_with_settings(&root.path().join("store.bin"), settings);
+
+        assert_eq!(
+            save_disable_audio(store.as_ref(), false, true, || panic!("policy overridden")),
+            Ok(AudioSettingChange::ManagedByPolicy)
+        );
+        assert_eq!(store.get("settings").unwrap()["disableAudio"], true);
+        // Agreeing with the policy changes nothing, so it is not refused.
+        assert_eq!(
+            save_disable_audio(store.as_ref(), true, true, || panic!("saved again")),
+            Ok(AudioSettingChange::AlreadySet)
+        );
+
+        // Consumer builds ignore a policy left behind by an old enterprise install.
+        assert_eq!(
+            save_disable_audio(store.as_ref(), false, false, || Ok(())),
+            Ok(AudioSettingChange::Saved)
+        );
+        assert_eq!(store.get("settings").unwrap()["disableAudio"], false);
+    }
+
+    #[test]
+    fn a_failed_audio_setting_save_leaves_the_setting_unchanged() {
+        let root = tempfile::tempdir().unwrap();
+        let initial = json!(SettingsStore::default());
+        let (_app, store) = store_with_settings(&root.path().join("store.bin"), initial.clone());
+
+        assert_eq!(
+            save_disable_audio(store.as_ref(), true, false, || Err("disk full".into())),
+            Err("disk full".into())
+        );
+        assert_eq!(store.get("settings").unwrap(), initial);
+    }
+
+    #[test]
+    fn starting_audio_clears_a_disabled_capture_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("store.bin");
+        let mut settings = json!(SettingsStore::default());
+        settings["disableAudio"] = json!(false);
+        settings["audioCaptureMode"] = json!("disabled");
+        let (_app, store) = store_with_settings(&path, settings);
+        store.save().unwrap();
+        assert!(
+            engine_disable_audio(&path),
+            "the engine starts with audio off"
+        );
+
+        assert_eq!(
+            save_disable_audio(store.as_ref(), false, false, || store
+                .save()
+                .map_err(|e| e.to_string())),
+            Ok(AudioSettingChange::Saved)
+        );
+        assert!(!engine_disable_audio(&path));
+        assert_eq!(store.get("settings").unwrap()["audioCaptureMode"], "always");
+    }
+
+    #[test]
+    fn audio_shortcuts_cannot_clear_a_capture_mode_locked_by_policy() {
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = json!(SettingsStore::default());
+        settings["disableAudio"] = json!(false);
+        settings["audioCaptureMode"] = json!("disabled");
+        settings["enterpriseManagedSettings"] = json!({ "audioCaptureMode": "disabled" });
+        let (_app, store) = store_with_settings(&root.path().join("store.bin"), settings.clone());
+
+        assert_eq!(
+            save_disable_audio(store.as_ref(), false, true, || panic!("policy overridden")),
+            Ok(AudioSettingChange::ManagedByPolicy)
+        );
+        assert_eq!(store.get("settings").unwrap(), settings);
+    }
+
+    #[test]
+    fn audio_shortcut_notices_never_report_a_failed_restart_as_done() {
+        let (title, body, priority) = audio_shortcut_notice(
+            true,
+            false,
+            &AudioShortcutResult::RestartFailed("port busy".into()),
+        );
+        assert_eq!(title, "Audio change not applied");
+        assert_eq!(
+            body,
+            "Screenpipe saved the setting but could not restart recording: port busy"
+        );
+        assert_eq!(priority, NotificationPriority::High);
+
+        // Confirmations only matter on screen; failures stay in the inbox.
+        let on = audio_shortcut_notice(true, false, &AudioShortcutResult::Applied);
+        assert_eq!(
+            (on.0.as_str(), on.2),
+            ("Audio recording on", NotificationPriority::Low)
+        );
+        let off = audio_shortcut_notice(false, false, &AudioShortcutResult::Applied);
+        assert_eq!(
+            (off.0.as_str(), off.2),
+            ("Audio recording off", NotificationPriority::Low)
+        );
+        assert_eq!(
+            audio_shortcut_notice(false, false, &AudioShortcutResult::ManagedByPolicy).2,
+            NotificationPriority::Low
+        );
+        assert_eq!(
+            audio_shortcut_notice(false, false, &AudioShortcutResult::SaveFailed).2,
+            NotificationPriority::High
+        );
+
+        // Nothing records while paused, so "on" must not claim it does.
+        assert_eq!(
+            audio_shortcut_notice(true, true, &AudioShortcutResult::Applied).1,
+            "Audio will be recorded when recording resumes."
+        );
+    }
+
+    /// Off, on, off within a few minutes is three answers to three presses.
+    /// As `system` alerts, the third was muted as a repeat of the first.
+    #[test]
+    fn audio_shortcut_confirmations_are_never_muted_as_repeats() {
+        use crate::notifications::gate::{repeat_suppressed_now, USER_ACTION_NOTIFICATION_TYPE};
+
+        for enabled in [false, true, false, true] {
+            let (title, body, _) =
+                audio_shortcut_notice(enabled, false, &AudioShortcutResult::Applied);
+            assert!(
+                !repeat_suppressed_now(Some(USER_ACTION_NOTIFICATION_TYPE), None, &title, &body),
+                "{title} was muted"
+            );
+        }
+    }
+
+    #[test]
+    fn audio_shortcuts_restart_only_when_the_running_session_disagrees() {
+        use AudioSettingChange::{AlreadySet, Saved};
+
+        assert!(restart_needed(&Saved, true, None));
+        assert!(restart_needed(&Saved, false, Some(true)));
+        // Paused: nothing runs, and the next start reads the saved setting.
+        assert!(!restart_needed(&AlreadySet, true, None));
+        // A repeat press while the session already agrees.
+        assert!(!restart_needed(&AlreadySet, true, Some(true)));
+        assert!(!restart_needed(&AlreadySet, false, Some(false)));
+        // Settings saved its switch, but "Apply & Restart" never ran.
+        assert!(restart_needed(&AlreadySet, false, Some(true)));
+        // `/audio/stop` stopped audio without changing the setting.
+        assert!(restart_needed(&AlreadySet, true, Some(false)));
     }
 }

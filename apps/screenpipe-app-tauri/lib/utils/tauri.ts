@@ -2997,7 +2997,7 @@ async stopCapture() : Promise<Result<null, string>> {
 },
 /**
  * Stop capture AND server so the next spawn_screenpipe does a full restart.
- * Called by "Apply & Restart", audio shortcuts, updates, and rollbacks.
+ * Called by "Apply & Restart", updates, and rollbacks.
  * The tray toggle uses stop_capture / start_capture to keep the server alive.
  */
 async stopScreenpipe() : Promise<Result<null, string>> {

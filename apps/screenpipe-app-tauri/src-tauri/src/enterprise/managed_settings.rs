@@ -292,10 +292,7 @@ pub(crate) async fn apply(app: &tauri::AppHandle) -> Result<(), String> {
     }
     let _lifecycle = state.server_lifecycle.lock().await;
     let result = async {
-        if state.capture_intended() || state.server.lock().await.is_some() {
-            crate::recording::stop_screenpipe_inner(&state).await?;
-            crate::recording::spawn_screenpipe_inner(&state, app.clone()).await?;
-        }
+        crate::recording::restart_keeping_capture_intent_locked(&state, app).await?;
         let store = crate::store::get_store(app, None).map_err(|error| error.to_string())?;
         let mut current = store.get("settings").ok_or("settings unavailable")?;
         let before = current.clone();
