@@ -88,6 +88,10 @@ const AUTOMATE_MY_WORK_LEGACY_PROMPT_HASHES: &[&str] = &[
 ];
 const BUNDLED_BUILTIN_PIPES: &[(&str, &str)] = &[
     (
+        "workflow-share",
+        include_str!("../../assets/pipes/workflow-share/pipe.md"),
+    ),
+    (
         "workflow-discover",
         include_str!("../../assets/pipes/workflow-discover/pipe.md"),
     ),

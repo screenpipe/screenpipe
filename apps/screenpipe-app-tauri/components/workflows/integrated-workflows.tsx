@@ -19,13 +19,14 @@ import { ComposerDictationControl } from "@/components/chat/standalone/composer-
 import { usePlatform } from "@/lib/hooks/use-platform";
 import { useWorkflowsRolloutEnabled } from "@/lib/workflows/rollout";
 import { WorkflowTasksPrompt } from "./workflow-tasks-prompt";
-import { fixtureWorkflowTasks } from "@/lib/dev/workflow-tasks-fixture";
+import { fixtureWorkflowTasks, fixtureTeamSharing } from "@/lib/dev/workflow-tasks-fixture";
 import { CloudWorkflows } from "./cloud-workflows";
 import { fixtureCloudWorkflows } from "@/lib/dev/cloud-workflows-fixture";
 import { useSettings } from "@/lib/hooks/use-settings";
 import { useEnterpriseBuildStatus } from "@/lib/hooks/use-is-enterprise-build";
 import { WorkflowModelSelector } from "./workflow-model-selector";
 import { WorkflowAccess } from "./workflow-access";
+import { WorkflowTeamSharing } from "./workflow-team-sharing";
 
 function WorkflowDictation(props: WorkflowComposerAccessoryProps) {
   const { isMac } = usePlatform();
@@ -42,6 +43,7 @@ const platform = process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock"
   : desktopWorkflowsPlatform;
 export function DeviceWorkflows({ active, fullscreen = false, onModeChange, recordingStatus, navigationFooter, sourceControl }: { sourceControl?: React.ReactNode; active: boolean; fullscreen?: boolean; onModeChange: (mode: ProductMode) => void; recordingStatus: React.ReactNode; navigationFooter?: WorkflowsAppProps["navigationFooter"] }) {
   const enabled = useWorkflowsRolloutEnabled();
+  const { settings } = useSettings();
   const [readyWorkflowIds, setReadyWorkflowIds] = useState<string[]>([]);
   useTauriEvent<string[]>("workflow-review-ready", event => {
     if (Array.isArray(event.payload)) setReadyWorkflowIds(event.payload.filter(id => typeof id === "string").slice(0, 100));
@@ -90,7 +92,7 @@ export function DeviceWorkflows({ active, fullscreen = false, onModeChange, reco
       />}
 
       <WorkflowsApp modelControl={<WorkflowModelSelector preference={platform.modelPreference} />} readyWorkflowIds={readyWorkflowIds} reviewRequest={reviewRequest} onReviewRequestHandled={handleReview} onAnalysisUnavailable={() => setAccessRequested(true)} analysisUnavailableReason={analysisUnavailableReason} composerAccessory={composerAccessory} fullscreen={fullscreen} onShareWorkflow={openShare} workflowAgentActions={workflowAgentActions} platform={platform} active={active} storageKey={null}
-        toolbarAccessory={platform.managesAnalysis ? <WorkflowAccess requested={accessRequested} onRequestChange={setAccessRequested} active={active} onAccessChange={setAnalysisUnavailableReason} /> : process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock" ? <WorkflowTasksPrompt active={active} tasks={fixtureWorkflowTasks} /> : undefined}
+        toolbarAccessory={platform.managesAnalysis ? <><WorkflowAccess requested={accessRequested} onRequestChange={setAccessRequested} active={active} onAccessChange={setAnalysisUnavailableReason} /><WorkflowTeamSharing active={active} accountId={settings.user?.id ?? undefined} /></> : process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock" ? <><WorkflowTasksPrompt active={active} tasks={fixtureWorkflowTasks} /><WorkflowTeamSharing active={active} api={fixtureTeamSharing} /></> : undefined}
         recordingStatus={recordingStatus} navigationFooter={navigationFooter}
         sourceControl={sourceControl} navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />} />
     </TooltipProvider>

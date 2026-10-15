@@ -988,6 +988,14 @@ impl SCServer {
                 "/vision/device/status",
                 crate::routes::vision::vision_device_status,
             )
+            .get(
+                "/workflows/team-sharing",
+                crate::routes::workflow_team_sharing::context,
+            )
+            .post(
+                "/workflows/team-sharing",
+                crate::routes::workflow_team_sharing::change,
+            )
             .get("/elements", search_elements)
             .get("/frames/:frame_id/elements", get_frame_elements)
             .post(

@@ -1287,6 +1287,10 @@ impl PiExecutor {
             dir.join("workflow-workspace.ts"),
             include_str!("../../assets/extensions/workflow-workspace.ts"),
         )?;
+        std::fs::write(
+            dir.join("workflow-team-share.ts"),
+            include_str!("../../assets/extensions/workflow-team-share.ts"),
+        )?;
         Ok(())
     }
 

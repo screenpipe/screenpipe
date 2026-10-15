@@ -28,3 +28,8 @@ export const fixtureWorkflowTasks = {
     localStorage.setItem(key, JSON.stringify([false, false, false, false]));
   },
 };
+
+export const fixtureTeamSharing = {
+  async load() { return { enabled: localStorage.getItem("screenpipe-web-team-sharing") === "true", account_id: "fixture", license_id: "fixture-team" }; },
+  async set(enabled: boolean) { localStorage.setItem("screenpipe-web-team-sharing", String(enabled)); },
+};

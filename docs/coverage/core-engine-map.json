@@ -1061,7 +1061,8 @@
         "tests/audio_pipeline_benchmark/quality_regression.rs",
         "tests/audio_pipeline_benchmark/smart_mode_benchmark.rs",
         "tests/audio_pipeline_benchmark/vad_benchmark.rs",
-        "tests/vad_frame_continuity_test.rs"
+        "tests/vad_frame_continuity_test.rs",
+        "tests/vad_min_speech_ratio_gate_test.rs"
       ],
       "platforms": [
         "windows",
@@ -1416,6 +1417,7 @@
       "files": [
         "src/pipe_permissions_middleware.rs",
         "src/routes/workflow_catalog.rs",
+        "src/routes/workflow_team_sharing.rs",
         "src/routes/workflow_edits.rs",
         "src/routes/workflow_pipeline.rs",
         "src/routes/workflows.rs",

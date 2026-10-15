@@ -153,7 +153,7 @@ pub async fn pipe_backpressure_layer(
     let is_workflow_mutation = req.method() == Method::POST
         && matches!(
             req.uri().path(),
-            "/workflows/workspace" | "/workflows/catalog"
+            "/workflows/workspace" | "/workflows/catalog" | "/workflows/team-sharing"
         );
     // Source verification already has a 120s budget in workflow_catalog::commit.
     // Match the workspace client's 150s request budget, including screenshots
@@ -258,7 +258,11 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn publication_can_verify_several_sources_without_holding_a_query_permit() {
-        for path in ["/workflows/workspace", "/workflows/catalog"] {
+        for path in [
+            "/workflows/workspace",
+            "/workflows/catalog",
+            "/workflows/team-sharing",
+        ] {
             // With just one available slot, taking a permit for the outer
             // publication would reject every nested source query immediately.
             let permits = Arc::new(Semaphore::new(1));
@@ -375,7 +379,11 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn publication_has_a_bounded_deadline_without_reserving_database_capacity() {
-        for path in ["/workflows/workspace", "/workflows/catalog"] {
+        for path in [
+            "/workflows/workspace",
+            "/workflows/catalog",
+            "/workflows/team-sharing",
+        ] {
             let permits = Arc::new(Semaphore::new(1));
             let app = pipe_router(
                 Router::new().route(

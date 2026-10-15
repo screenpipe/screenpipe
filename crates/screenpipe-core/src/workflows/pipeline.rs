@@ -36,7 +36,8 @@ pub fn stage(name: &str) -> Option<usize> {
 }
 pub fn task_at(path: &Path) -> Option<&str> {
     path.file_name().and_then(|n| n.to_str()).filter(|n| {
-        (stage(n).is_some() || super::workspace::is_task(n)) && path.join("pipe.md").is_file()
+        (stage(n).is_some() || super::workspace::is_task(n) || *n == "workflow-share")
+            && path.join("pipe.md").is_file()
     })
 }
 
@@ -130,7 +131,9 @@ async fn read_input(path: &Path, task: &str) -> anyhow::Result<Value> {
     {
         anyhow::bail!("Workflow requires its local recorder");
     }
-    let endpoint = if super::workspace::is_task(task) {
+    let endpoint = if task == "workflow-share" {
+        "team-sharing"
+    } else if super::workspace::is_task(task) {
         "workspace"
     } else {
         "pipeline"
@@ -159,7 +162,7 @@ pub async fn save_state(path: &Path) -> anyhow::Result<Option<SaveState>> {
         return Ok(None);
     };
     let value = read_input(path, task).await?;
-    let (revision, applied) = if super::workspace::is_task(task) {
+    let (revision, applied) = if super::workspace::is_task(task) || task == "workflow-share" {
         (value["receiptRevision"].as_u64().unwrap_or(0), 0)
     } else if task == TASKS[4] {
         (

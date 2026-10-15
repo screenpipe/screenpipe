@@ -49,3 +49,5 @@ pub mod workflow_pipeline;
 pub(crate) mod workflow_workspace;
 
 pub mod starred;
+
+pub mod workflow_team_sharing;
