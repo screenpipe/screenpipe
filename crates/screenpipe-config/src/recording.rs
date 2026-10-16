@@ -1304,6 +1304,13 @@ mod tests {
     }
 
     #[test]
+    fn native_macos_aec_selection_preserves_native_echo_cancellation() {
+        let settings: RecordingSettings =
+            serde_json::from_str(r#"{"aecMode":"macos","macosInputVpioEnabled":true}"#).unwrap();
+        assert_eq!(settings.effective_aec_flags(), (false, false, true));
+    }
+
+    #[test]
     fn explicit_screenpipe_aec_mode_enables_software_aec() {
         let settings: RecordingSettings = serde_json::from_str(
             r#"{

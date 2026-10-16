@@ -169,6 +169,7 @@ samplerate = { workspace = true }
 libsamplerate-sys = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
 cidre = { git = "https://github.com/yury/cidre.git", rev = "8481f3f0dc7dd39bb5be80d9424bfac0cad3801a" }
 once_cell = { workspace = true }
 objc = { workspace = true }

@@ -15,8 +15,8 @@
 //!
 //! The mic side has exactly one event (`audio_capture_health_mic_capture_failed`),
 //! covering the meeting-piggyback mic follow: the meeting app's mic could not
-//! be opened at all (no action button — capture already fell back to the
-//! default mic). There are deliberately NO mic-silence events: the piggyback
+//! be opened at all. The event does not prove a default-mic fallback.
+//! There are deliberately NO mic-silence events: the piggyback
 //! never acts on silence (a silent meeting mic is the user's own in-meeting
 //! feedback loop — they fix it in the app and the piggyback follows).
 //!
@@ -106,18 +106,14 @@ fn show_speaker_silent_notification(app: AppHandle, data: Value) {
 
 /// Show the in-app notification panel telling the user screenpipe couldn't
 /// open the meeting app's microphone (per-process capture failed to start),
-/// but recording continues on the default mic. No action button — there's
-/// nothing to restart; the device is unavailable, not stalled.
+/// without claiming a default-mic fallback the event has not verified.
 fn show_mic_capture_failed_notification(app: AppHandle, data: Value) {
     let reason = data
         .get("reason")
         .and_then(|v| v.as_str())
         .unwrap_or("the device may be in exclusive use");
 
-    let body = format!(
-        "{} — recording continues on your default microphone.",
-        reason
-    );
+    let body = mic_capture_failed_body(reason);
 
     let payload = serde_json::json!({
         "id": "audio_capture_health_mic_capture_failed",
@@ -133,4 +129,24 @@ fn show_mic_capture_failed_notification(app: AppHandle, data: Value) {
             warn!("failed to show mic-capture-failed notification: {}", e);
         }
     });
+}
+
+fn mic_capture_failed_body(reason: &str) -> String {
+    format!("{}. Your voice may be missing from the recording. If this persists, quit and reopen screenpipe.", reason.trim_end_matches('.'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mic_failure_does_not_claim_unverified_fallback() {
+        let body = mic_capture_failed_body(
+            "audio device MacBook Pro Microphone (input) teardown timed out",
+        );
+        assert!(body.contains("Your voice may be missing"));
+        assert!(body.contains("quit and reopen screenpipe"));
+        assert!(!body.contains("recording continues"));
+        assert!(body.contains("teardown timed out."));
+    }
 }

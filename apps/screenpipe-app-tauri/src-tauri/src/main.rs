@@ -475,6 +475,11 @@ macro_rules! define_specta_builder {
 
 #[tokio::main]
 async fn main() {
+    #[cfg(target_os = "macos")]
+    if let Some(code) = screenpipe_audio::core::vpio_process::run_hidden_mode().await {
+        std::process::exit(code);
+    }
+
     // Invoked by the scoped video tool, before any application side effects.
     let arguments: Vec<String> = std::env::args().collect();
     if arguments.get(1).is_some_and(|arg| arg == "--render-workflow-video") {

@@ -32,6 +32,9 @@ pub struct DeviceManager {
     operations: DashMap<AudioDevice, Arc<Mutex<()>>>,
     streams: Arc<DashMap<AudioDevice, Arc<AudioStream>>>,
     states: Arc<DashMap<AudioDevice, Arc<AtomicBool>>>,
+    /// Retained native workers whose stop failed. These must remain visible to
+    /// health even after the recording task has been removed.
+    teardown_failures: DashMap<AudioDevice, ()>,
     /// When true, System Audio (output) uses the CoreAudio Process Tap path
     /// on macOS 14.4+ instead of ScreenCaptureKit. Propagated to
     /// AudioStream::from_device at device-start time. Has no effect on
@@ -60,6 +63,7 @@ impl DeviceManager {
             operations: DashMap::new(),
             streams,
             states,
+            teardown_failures: DashMap::new(),
             use_coreaudio_tap: AtomicBool::new(use_coreaudio_tap),
             windows_input_aec: AtomicBool::new(windows_input_aec),
             macos_input_vpio: AtomicBool::new(macos_input_vpio),
@@ -296,12 +300,23 @@ impl DeviceManager {
         // Never hold a DashMap guard across native teardown. Retain the stream
         // on timeout so a later start cannot orphan a still-running worker.
         if let Some(stream) = self.stream(device) {
-            stream.stop().await?;
+            if let Err(error) = stream.stop().await {
+                self.teardown_failures.insert(device.clone(), ());
+                return Err(error);
+            }
         }
 
+        self.teardown_failures.remove(device);
         self.streams.remove(device);
 
         Ok(())
+    }
+
+    pub fn teardown_failed_devices(&self) -> Vec<AudioDevice> {
+        self.teardown_failures
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     }
 
     pub fn is_running_mut(&self, device: &AudioDevice) -> Option<Arc<AtomicBool>> {
@@ -314,6 +329,28 @@ mod tests {
     use super::*;
     use crate::core::device::DeviceType;
     use crate::core::stream::AudioStream;
+
+    #[cfg(not(all(target_os = "linux", feature = "pulseaudio")))]
+    #[tokio::test]
+    async fn teardown_failure_survives_lost_recording_handle_until_native_cleanup() {
+        let dm = DeviceManager::new(false, false, false).await.unwrap();
+        let device = mic();
+        let (stream, release) =
+            AudioStream::with_blocked_teardown_for_test(Arc::new(device.clone()));
+        dm.streams.insert(device.clone(), Arc::new(stream));
+        dm.states
+            .insert(device.clone(), Arc::new(AtomicBool::new(false)));
+        assert!(dm.stop_device(&device).await.is_err());
+        assert_eq!(dm.teardown_failed_devices(), vec![device.clone()]);
+        assert!(
+            dm.stream(&device).is_some(),
+            "timeout must retain the native worker"
+        );
+        release.send(()).unwrap();
+        dm.stop_device(&device).await.unwrap();
+        assert!(dm.teardown_failed_devices().is_empty());
+        assert!(dm.stream(&device).is_none());
+    }
 
     #[tokio::test]
     async fn published_stream_is_not_reopened_before_recording_handle_registration() {

@@ -934,6 +934,7 @@
         "src/core/process_tap/counters.rs",
         "src/core/source_buffer.rs",
         "src/core/stream.rs",
+        "src/core/vpio_process.rs",
         "src/device/device_manager.rs",
         "src/idle_detector.rs",
         "src/lib.rs",

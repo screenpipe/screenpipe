@@ -11418,6 +11418,7 @@ dependencies = [
  "hound",
  "knf-rs",
  "lazy_static",
+ "libc",
  "libpulse-binding",
  "libpulse-simple-binding",
  "libsamplerate-sys",

@@ -1911,6 +1911,24 @@ impl AudioManager {
             .collect::<Vec<AudioDevice>>()
     }
 
+    /// Failed native teardown is persistent evidence, unlike the short-lived
+    /// stream-timeout metric. Only report devices still selected for capture;
+    /// stopped, user-paused and piggyback-suspended devices are not missing audio.
+    pub async fn capture_failure_devices(&self) -> Vec<AudioDevice> {
+        let mut selected = self.enabled_devices().await;
+        selected.extend(self.session_devices());
+        let disabled = self.user_disabled_devices().await;
+        let suspended = self.suspended_devices();
+        self.device_manager
+            .teardown_failed_devices()
+            .into_iter()
+            .filter(|device| {
+                let name = device.to_string();
+                selected.contains(&name) && !disabled.contains(&name) && !suspended.contains(&name)
+            })
+            .collect()
+    }
+
     /// True when `device` has a live, non-disconnected stream. Thin wrapper over
     /// the device monitor's [`super::is_device_actively_streaming`] so callers
     /// that only hold an `AudioManager` (the piggyback sweep) can distinguish a

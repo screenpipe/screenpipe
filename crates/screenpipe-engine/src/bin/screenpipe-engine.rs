@@ -295,6 +295,11 @@ fn restart_after_database_fault() -> anyhow::Result<()> {
 #[tokio::main]
 #[tracing::instrument]
 async fn main() -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    if let Some(code) = screenpipe_audio::core::vpio_process::run_hidden_mode().await {
+        std::process::exit(code);
+    }
+
     // ACP re-enters the same signed binary in private subprocess modes. Handle
     // those before clap sees the private arguments or the recorder initializes.
     if let Some(exit_code) = screenpipe_core::agents::acp::run_hidden_mode_without_observer().await

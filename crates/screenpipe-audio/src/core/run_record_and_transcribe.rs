@@ -226,12 +226,13 @@ pub async fn run_record_and_transcribe(
         let mut collected_audio = Vec::new();
         let mut segment_start_time = now_epoch_secs();
         let mut last_diagnostics_time = Instant::now();
-        let mut _last_non_zero_at: Option<Instant> = None;
-        let mut _sck_watchdog = crate::core::sck_output_watchdog::SckOutputWatchdog::default();
+        let mut mic_deadline = tokio::time::Instant::now()
+            + Duration::from_secs(STREAM_STARTUP_GRACE_SECS + AUDIO_RECEIVE_TIMEOUT_SECS);
+        let mut stream_error = None;
 
         let mut was_paused_for_lock = false;
 
-        while is_running.load(Ordering::Relaxed)
+        'capture: while is_running.load(Ordering::Relaxed)
             && !audio_stream.is_disconnected.load(Ordering::Relaxed)
         {
             // Skip recording while the screen is locked
@@ -273,15 +274,28 @@ pub async fn run_record_and_transcribe(
                 }
             }
 
-            while collected_audio.len() < max_samples && is_running.load(Ordering::Relaxed) {
+            while collected_audio.len() < max_samples
+                && is_running.load(Ordering::Relaxed)
+                && !audio_stream.is_disconnected.load(Ordering::Relaxed)
+            {
+                if audio_stream.capture_failed.load(Ordering::Acquire) && receiver.is_empty() {
+                    stream_error = Some(anyhow!("native audio capture worker exited"));
+                    break 'capture;
+                }
                 tokio::select! {
                     // Receive mic chunk
                     mic_res = receiver.recv() => {
                         match mic_res {
                             Ok(chunk) => {
+                                if !chunk.is_empty() {
+                                    // Silence is valid delivery. Only actual
+                                    // mic samples extend this deadline, never
+                                    // speaker traffic or the 50ms AEC tick.
+                                    mic_deadline = tokio::time::Instant::now()
+                                        + Duration::from_secs(AUDIO_RECEIVE_TIMEOUT_SECS);
+                                }
                                 metrics.update_audio_levels(&device_name, &chunk);
                                 if !chunk.is_empty() && chunk.iter().any(|&x| x.abs() >= SILENT_BUFFER_PEAK_THRESHOLD) {
-                                    _last_non_zero_at = Some(Instant::now());
                                     update_device_capture_time(&device_name);
                                 }
 
@@ -305,7 +319,8 @@ pub async fn run_record_and_transcribe(
                             }
                             Err(e) => {
                                 error!("AEC: Error receiving mic data: {}", e);
-                                return Err(anyhow!("Mic stream error: {}", e));
+                                stream_error = Some(anyhow!("Mic stream error: {}", e));
+                                break 'capture;
                             }
                         }
                     }
@@ -334,7 +349,17 @@ pub async fn run_record_and_transcribe(
                         }
                         speaker_sample_counter += chunk_len as u64;
                     }
-                    // Timeout to prevent hanging when silent
+                    _ = tokio::time::sleep_until(mic_deadline) => {
+                        if is_running.load(Ordering::Relaxed) {
+                            stream_error = Some(anyhow!(StreamDeath::ReceiveTimeout {
+                                secs: AUDIO_RECEIVE_TIMEOUT_SECS,
+                            }));
+                        }
+                        // Preserve captured samples via the final flush before
+                        // handing the typed failure to the recovery monitor.
+                        break 'capture;
+                    }
+                    // Drain AEC while waiting for additional callbacks.
                     _ = tokio::time::sleep(Duration::from_millis(50)) => {}
                 }
 
@@ -413,6 +438,19 @@ pub async fn run_record_and_transcribe(
             warn!("AEC: Final mic flush failed for {}: {}", device_name, e);
         }
 
+        if let Some(error) = stream_error {
+            if matches!(
+                error.downcast_ref::<StreamDeath>(),
+                Some(StreamDeath::ReceiveTimeout { .. })
+            ) {
+                // Publishing disconnected earlier lets the monitor abort this
+                // task while its captured tail is still waiting to be queued.
+                let _ = fail_stream_dead(&audio_stream, &device_name, &metrics);
+            } else if audio_stream.capture_failed.load(Ordering::Acquire) {
+                audio_stream.is_disconnected.store(true, Ordering::Relaxed);
+            }
+            return Err(error);
+        }
         if audio_stream.is_disconnected.load(Ordering::Relaxed) {
             info!("AEC: Stopped recording for {} (disconnected)", device_name);
             Err(anyhow::anyhow!("device {} disconnected", device_name))
@@ -451,10 +489,11 @@ pub async fn run_record_and_transcribe(
         let mut last_non_zero_at = last_non_zero_seed_after_restart(&device_name, Instant::now());
         let mut sck_watchdog = crate::core::sck_output_watchdog::SckOutputWatchdog::default();
         let mut segment_count: u64 = 0;
+        let mut stream_error = None;
 
         let mut was_paused_for_lock = false;
 
-        while is_running.load(Ordering::Relaxed)
+        'capture: while is_running.load(Ordering::Relaxed)
             && !audio_stream.is_disconnected.load(Ordering::Relaxed)
         {
             if screenpipe_config::should_pause_audio_for_lock() {
@@ -498,7 +537,10 @@ pub async fn run_record_and_transcribe(
                     // stream is being torn down either way, so break out and
                     // let the flushes below persist what we have.
                     Err(_) if !is_running.load(Ordering::Relaxed) => break,
-                    Err(e) => return Err(e),
+                    Err(e) => {
+                        stream_error = Some(e);
+                        break 'capture;
+                    }
                 };
                 match received {
                     Some(chunk) => {
@@ -560,6 +602,17 @@ pub async fn run_record_and_transcribe(
             warn!("final flush failed for {}: {}", device_name, e);
         }
 
+        if let Some(error) = stream_error {
+            if audio_stream.capture_failed.load(Ordering::Acquire)
+                || error.downcast_ref::<StreamDeath>().is_some()
+            {
+                // The supervisor owns native cleanup. Only now, once
+                // queued audio is safe, may the monitor replace this recorder.
+                audio_stream.is_disconnected.store(true, Ordering::Relaxed);
+            }
+            return Err(error);
+        }
+
         if audio_stream.is_disconnected.load(Ordering::Relaxed) {
             info!("stopped recording for {} (disconnected)", device_name);
             Err(anyhow::anyhow!("device {} disconnected", device_name))
@@ -579,6 +632,11 @@ async fn recv_audio_chunk(
     last_non_zero_at: &mut Option<Instant>,
     sck_watchdog: &mut crate::core::sck_output_watchdog::SckOutputWatchdog,
 ) -> Result<Option<Vec<f32>>> {
+    // Consume packets already queued before the terminal wake-up. A native
+    // worker failure must not expose disconnection until the caller flushes.
+    if audio_stream.capture_failed.load(Ordering::Acquire) && receiver.is_empty() {
+        return Err(anyhow!("native audio capture worker exited"));
+    }
     let recv_result = tokio::time::timeout(
         Duration::from_secs(AUDIO_RECEIVE_TIMEOUT_SECS),
         receiver.recv(),
@@ -618,7 +676,6 @@ async fn recv_audio_chunk(
                         device_name, INPUT_SILENT_BUFFER_TIMEOUT_SECS
                     );
                     metrics.record_stream_timeout(device_name);
-                    audio_stream.is_disconnected.store(true, Ordering::Relaxed);
                     return Err(anyhow!(StreamDeath::ZeroFill {
                         device: device_name.to_string(),
                         secs: INPUT_SILENT_BUFFER_TIMEOUT_SECS,
@@ -672,7 +729,8 @@ async fn recv_audio_chunk(
                     sck_watchdog,
                 )
             } else {
-                fail_stream_dead(audio_stream, device_name, metrics)
+                // The recorder publishes disconnection after flushing its tail.
+                stream_dead_error(device_name, metrics)
             }
         }
     }
@@ -706,12 +764,19 @@ fn fail_stream_dead(
     device_name: &str,
     metrics: &Arc<AudioPipelineMetrics>,
 ) -> Result<Option<Vec<f32>>> {
+    audio_stream.is_disconnected.store(true, Ordering::Relaxed);
+    stream_dead_error(device_name, metrics)
+}
+
+fn stream_dead_error(
+    device_name: &str,
+    metrics: &Arc<AudioPipelineMetrics>,
+) -> Result<Option<Vec<f32>>> {
     warn!(
         "no audio received from {} for {}s - stream dead, triggering reconnect",
         device_name, AUDIO_RECEIVE_TIMEOUT_SECS
     );
     metrics.record_stream_timeout(device_name);
-    audio_stream.is_disconnected.store(true, Ordering::Relaxed);
     // Typed cause so the VPIO runtime-fallback policy can recognize this death
     // by `downcast_ref` rather than message text. Display is unchanged.
     Err(anyhow!(StreamDeath::ReceiveTimeout {
@@ -884,6 +949,161 @@ async fn flush_audio(
 mod tests {
     use super::*;
     use crate::core::device::AudioDevice;
+
+    #[tokio::test]
+    async fn native_worker_failure_flushes_audio_before_publishing_disconnection() {
+        let device = Arc::new(AudioDevice::new(
+            "native worker test".into(),
+            DeviceType::Input,
+        ));
+        let (stream, sender) = AudioStream::from_sender_for_test(device, 16_000, 1);
+        let stream = Arc::new(stream);
+        let (tx, rx) = flume::bounded(0);
+        let task = tokio::spawn(run_record_and_transcribe(
+            stream.clone(),
+            Duration::from_secs(30),
+            Arc::new(tx),
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(AudioPipelineMetrics::new()),
+            None,
+            None,
+            false,
+        ));
+        while sender.receiver_count() == 0 {
+            tokio::task::yield_now().await;
+        }
+        sender.send(vec![0.25; 3_200]).unwrap();
+        stream.capture_failed.store(true, Ordering::Release);
+        sender.send(Vec::new()).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!task.is_finished());
+        assert!(
+            !stream.is_disconnected(),
+            "monitor must wait for the buffered tail"
+        );
+        let segment = tokio::time::timeout(Duration::from_secs(1), rx.recv_async()).await;
+        if segment.is_err() {
+            task.abort();
+        }
+        let segment = segment
+            .expect("native worker failure must flush captured audio")
+            .unwrap();
+        assert_eq!(segment.data.len(), 3_200);
+        let error = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("native audio capture worker exited"));
+        assert!(stream.is_disconnected());
+        assert!(rx.is_empty());
+    }
+
+    #[tokio::test]
+    async fn aec_mic_callback_stall_requests_recovery_and_flushes_captured_audio() {
+        let device = Arc::new(AudioDevice::new(
+            "AEC stalled input".into(),
+            DeviceType::Input,
+        ));
+        let (stream, sender) = AudioStream::from_sender_for_test(device, 16_000, 1);
+        let stream = Arc::new(stream);
+        let (segments_tx, segments_rx) = flume::bounded(0);
+        let metrics = Arc::new(AudioPipelineMetrics::new());
+        let mut task = tokio::spawn(run_record_and_transcribe(
+            stream.clone(),
+            Duration::from_secs(30),
+            Arc::new(segments_tx),
+            Arc::new(AtomicBool::new(true)),
+            metrics.clone(),
+            None,
+            None,
+            true,
+        ));
+        while sender.receiver_count() == 0 {
+            tokio::task::yield_now().await;
+        }
+        sender.send(vec![0.25; 3_200]).unwrap();
+        // Keep the sender alive but stop callbacks, exactly like a native
+        // worker stuck in CoreAudio. A timer tick is not a microphone sample.
+        tokio::time::sleep(Duration::from_secs(AUDIO_RECEIVE_TIMEOUT_SECS + 1)).await;
+        assert!(
+            !task.is_finished(),
+            "flush must wait for the persistence queue"
+        );
+        assert!(
+            !stream.is_disconnected(),
+            "recovery must not abort a pending final flush"
+        );
+        let segment = tokio::time::timeout(Duration::from_secs(1), segments_rx.recv_async())
+            .await
+            .expect("AEC must flush after mic callbacks stop")
+            .unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(AUDIO_RECEIVE_TIMEOUT_SECS + 2),
+            &mut task,
+        )
+        .await;
+        if result.is_err() {
+            task.abort();
+        }
+        let error = result
+            .expect("AEC must not wait forever after mic callbacks stop")
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<StreamDeath>(),
+            Some(&StreamDeath::ReceiveTimeout {
+                secs: AUDIO_RECEIVE_TIMEOUT_SECS
+            })
+        );
+        assert!(stream.is_disconnected());
+        assert!(
+            segments_rx.is_empty(),
+            "captured audio must be emitted exactly once"
+        );
+        assert!(!segment.data.is_empty());
+    }
+
+    #[tokio::test]
+    async fn aec_silent_callbacks_keep_recording_past_receive_timeout() {
+        let device = Arc::new(AudioDevice::new(
+            "AEC silent input".into(),
+            DeviceType::Input,
+        ));
+        let (stream, sender) = AudioStream::from_sender_for_test(device, 16_000, 1);
+        let stream = Arc::new(stream);
+        let (segments_tx, segments_rx) = flume::bounded(8);
+        let running = Arc::new(AtomicBool::new(true));
+        let task = tokio::spawn(run_record_and_transcribe(
+            stream.clone(),
+            Duration::from_secs(30),
+            Arc::new(segments_tx),
+            running.clone(),
+            Arc::new(AudioPipelineMetrics::new()),
+            None,
+            None,
+            true,
+        ));
+        while sender.receiver_count() == 0 {
+            tokio::task::yield_now().await;
+        }
+        for _ in 0..(AUDIO_RECEIVE_TIMEOUT_SECS + 1) * 10 {
+            sender.send(vec![0.0; 1_600]).unwrap();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(!task.is_finished(), "silence is not missing callbacks");
+        }
+        running.store(false, Ordering::Relaxed);
+        sender.send(Vec::new()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(!stream.is_disconnected());
+        assert!(!segments_rx.try_recv().unwrap().data.is_empty());
+    }
 
     async fn run_stopped_recorder(
         samples: Vec<f32>,

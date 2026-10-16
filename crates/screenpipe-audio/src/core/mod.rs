@@ -15,6 +15,8 @@ pub use run_record_and_transcribe::StreamDeath;
 pub mod sck_output_watchdog;
 pub mod source_buffer;
 pub mod stream;
+#[cfg(target_os = "macos")]
+pub mod vpio_process;
 use crate::AudioInput;
 use anyhow::Result;
 use dashmap::DashMap;
