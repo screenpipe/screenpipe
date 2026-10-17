@@ -166,6 +166,39 @@ impl MeetingsOnlyAudioGate {
     }
 }
 
+/// Throttle for `AudioManager::refresh_model_capabilities`.
+///
+/// One instance is shared by the active monitor pass and the meetings-only
+/// idle pass. The idle pass returns early, so without its own check a model
+/// that finishes downloading while no meeting is running stays inactive until
+/// the next meeting starts.
+#[derive(Debug)]
+struct ModelRefreshThrottle {
+    cooldown: Duration,
+    last_refresh: Option<Instant>,
+}
+
+impl ModelRefreshThrottle {
+    fn new(cooldown: Duration) -> Self {
+        Self {
+            cooldown,
+            last_refresh: None,
+        }
+    }
+
+    /// Returns `true` and starts a new cooldown when a refresh is due. The
+    /// first call is always due.
+    fn take_due(&mut self, now: Instant) -> bool {
+        let due = self
+            .last_refresh
+            .is_none_or(|last| now.saturating_duration_since(last) >= self.cooldown);
+        if due {
+            self.last_refresh = Some(now);
+        }
+        due
+    }
+}
+
 /// Exponential backoff for device recovery.
 ///
 /// Transient errors (e.g., ScreenCaptureKit not yet initialized) use a short
@@ -709,10 +742,7 @@ pub async fn start_device_monitor(
         let mut central_restart_times: Vec<Instant> = Vec::new();
         let central_restart_exhausted = std::sync::atomic::AtomicBool::new(false);
         let mut model_restart_pending = false;
-        let model_refresh_cooldown = Duration::from_secs(30);
-        let mut last_model_refresh = Instant::now()
-            .checked_sub(model_refresh_cooldown)
-            .unwrap_or(Instant::now());
+        let mut model_refresh = ModelRefreshThrottle::new(Duration::from_secs(30));
 
         // "Follow the audio" output capture + in-meeting speaker watchdog
         // state. Only does anything on Windows — see `windows_output_follow.rs`
@@ -880,6 +910,44 @@ pub async fn start_device_monitor(
                             "meetings-only idle cleanup released {} late stream(s); {} remain",
                             release.released, release.remaining
                         );
+                    }
+
+                    // A model can finish downloading while no meeting is
+                    // running. Activate it now, while no stream is open, so the
+                    // next meeting starts with a loaded engine instead of a
+                    // disabled one.
+                    if model_refresh.take_due(Instant::now())
+                        && audio_manager.refresh_model_capabilities().await
+                    {
+                        if central_restart_exhausted.load(std::sync::atomic::Ordering::Relaxed) {
+                            info!("model capabilities changed while waiting for a meeting; handler restart deferred due to cooldown");
+                            model_restart_pending = true;
+                        } else {
+                            info!("model capabilities changed while waiting for a meeting; restarting central handlers");
+                            let result = audio_manager.restart_central_handlers().await;
+                            if result.recording_restarted || result.transcription_restarted {
+                                let now = Instant::now();
+                                central_restart_times.push(now);
+                                let window = Duration::from_secs(300);
+                                central_restart_times.retain(|t| now.duration_since(*t) < window);
+                                if central_restart_times.len() >= 3 {
+                                    error!(
+                                        "central handlers restarted {} times in 5 min (including meetings-only idle model refresh) — stopping recovery to avoid restart storm",
+                                        central_restart_times.len()
+                                    );
+                                    central_restart_exhausted
+                                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                                } else {
+                                    model_restart_pending = false;
+                                }
+                            } else {
+                                warn!(
+                                    "model capability restart requested but no handlers restarted; keeping request pending"
+                                );
+                                model_restart_pending = true;
+                            }
+                        }
+                        let _ = audio_manager.reconcile_missing_speakers(24, 50).await;
                     }
 
                     tokio::select! {
@@ -1658,8 +1726,7 @@ pub async fn start_device_monitor(
                     }
                 }
 
-                if last_model_refresh.elapsed() >= model_refresh_cooldown {
-                    last_model_refresh = Instant::now();
+                if model_refresh.take_due(Instant::now()) {
                     let model_capabilities_changed =
                         audio_manager.refresh_model_capabilities().await;
                     if model_capabilities_changed {
@@ -2560,6 +2627,34 @@ mod tests {
                 previously_locked = locked;
             }
         }
+    }
+
+    #[test]
+    fn model_refresh_throttle_is_due_first_then_once_per_cooldown() {
+        let cooldown = Duration::from_secs(30);
+        let mut throttle = ModelRefreshThrottle::new(cooldown);
+        let start = Instant::now();
+
+        assert!(throttle.take_due(start));
+        assert!(!throttle.take_due(start));
+        assert!(!throttle.take_due(start + cooldown - Duration::from_millis(1)));
+        assert!(throttle.take_due(start + cooldown));
+        assert!(!throttle.take_due(start + cooldown + Duration::from_secs(1)));
+    }
+
+    /// The meetings-only idle pass wakes about once per second and never
+    /// reaches the active pass. Its refresh check must still fire once per
+    /// cooldown, or a model downloaded while idle waits for the next meeting.
+    #[test]
+    fn model_refresh_throttle_fires_during_a_long_idle_wait() {
+        let mut throttle = ModelRefreshThrottle::new(Duration::from_secs(30));
+        let start = Instant::now();
+
+        let refreshes = (0..=600u64)
+            .filter(|second| throttle.take_due(start + Duration::from_secs(*second)))
+            .count();
+
+        assert_eq!(refreshes, 21);
     }
 
     #[test]
