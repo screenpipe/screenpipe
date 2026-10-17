@@ -221,7 +221,9 @@ impl TinfoilRedactor {
             repo,
             bearer,
             timeout: cfg.timeout.unwrap_or(DEFAULT_TIMEOUT),
-            labels: cfg.labels,
+            // Dollar amounts are handled by the local text regex pre-pass.
+            // The deployed enclave taxonomy has no such model category.
+            labels: super::model_labels(cfg.labels),
             client: RwLock::new(None),
             has_auth,
         }
@@ -441,6 +443,18 @@ mod tests {
             timeout: None,
             labels: vec![],
         }
+    }
+
+    #[test]
+    fn dollar_amount_is_not_forwarded_to_enclave() {
+        let mut config = cfg("never.invalid");
+        config.labels = vec!["secret".into(), " Dollar_Amount ".into(), "person".into()];
+        let redactor = TinfoilRedactor::new(config);
+        assert_eq!(redactor.labels, ["secret", "person"]);
+        let mut config = cfg("never.invalid");
+        config.labels = vec!["dollar_amount".into()];
+        assert_eq!(TinfoilRedactor::new(config).labels, ["secret"]);
+        assert!(TinfoilRedactor::new(cfg("never.invalid")).labels.is_empty());
     }
 
     #[tokio::test]

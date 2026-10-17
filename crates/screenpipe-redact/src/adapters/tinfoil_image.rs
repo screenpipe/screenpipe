@@ -181,7 +181,9 @@ impl TinfoilImageRedactor {
             bearer,
             timeout: cfg.timeout.unwrap_or(DEFAULT_TIMEOUT),
             threshold,
-            labels: cfg.labels,
+            // Dollar amounts are handled by the local text regex pre-pass.
+            // The deployed enclave taxonomy has no such model category.
+            labels: super::model_labels(cfg.labels),
             client: RwLock::new(None),
             has_auth,
         }
@@ -354,6 +356,18 @@ fn parse_label(s: &str) -> Option<SpanLabel> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dollar_amount_is_not_forwarded_to_enclave() {
+        let mut config = cfg();
+        config.labels = vec!["secret".into(), " Dollar_Amount ".into(), "person".into()];
+        let redactor = TinfoilImageRedactor::new(config);
+        assert_eq!(redactor.labels, ["secret", "person"]);
+        let mut config = cfg();
+        config.labels = vec!["dollar_amount".into()];
+        assert_eq!(TinfoilImageRedactor::new(config).labels, ["secret"]);
+        assert!(TinfoilImageRedactor::new(cfg()).labels.is_empty());
+    }
 
     #[test]
     fn version_is_stable() {

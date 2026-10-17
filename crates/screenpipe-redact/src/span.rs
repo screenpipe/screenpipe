@@ -43,6 +43,8 @@ pub enum SpanLabel {
     /// AND a separate `Sensitive` span. Emitted by the v45 phase 3
     /// model; older adapters always return zero of these.
     Sensitive,
+    /// Explicit dollar / USD amounts in text. Regex-only, opt-in; no image coverage.
+    DollarAmount,
 }
 
 impl SpanLabel {
@@ -63,6 +65,7 @@ impl SpanLabel {
             Self::Date => "[DATE]",
             Self::Secret => "[SECRET]",
             Self::Sensitive => "[SENSITIVE]",
+            Self::DollarAmount => "[DOLLAR_AMOUNT]",
         }
     }
 
@@ -86,6 +89,7 @@ impl SpanLabel {
             "date" => Self::Date,
             "secret" => Self::Secret,
             "sensitive" => Self::Sensitive,
+            "dollar_amount" => Self::DollarAmount,
             _ => return None,
         })
     }

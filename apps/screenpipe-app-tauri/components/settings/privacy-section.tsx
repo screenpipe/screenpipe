@@ -24,7 +24,7 @@ export const searchIndex: SettingsField[] = [
     keywords: ["private", "browser", "enhanced", "automation"],
   },
   { label: msg("Help improve Workflows", {}), keywords: ["sharing", "training", "consent", "delete shared chats"] },
-  { label: msg("PII masking", {}), keywords: ["mask", "redact", "columns", "url", "fields"] },
+  { label: msg("PII masking", {}), keywords: ["mask", "redact", "columns", "url", "fields", "dollar", "amount", "currency", "USD"] },
   {
     label: msg("Remote support logs", {}),
     keywords: ["support", "diagnostic", "troubleshooting", "remote", "logs"],
@@ -610,6 +610,7 @@ export function PrivacySection() {
     label: string;
     desc: string;
     always?: boolean;
+    textOnly?: boolean;
   }[] = [
     { value: "secret", label: ui("Passwords & keys"), desc: "passwords, API keys, tokens", always: true },
     { value: "id", label: ui("ID numbers"), desc: "SSNs, credit cards, account & license numbers" },
@@ -620,6 +621,7 @@ export function PrivacySection() {
     { value: "url", label: ui("Links with tokens"), desc: "links carrying tokens or session IDs" },
     { value: "date", label: ui("Dates"), desc: "dates of birth, timestamps" },
     { value: "sensitive", label: ui("Health & financial details"), desc: "health, financial, identity context" },
+    { value: "dollar_amount", label: ui("Dollar amounts in text"), desc: "explicit $ or USD amounts; leaves screenshots and unmarked numbers unchanged", textOnly: true },
   ];
 
   const piiRedactionLabels = useMemo<string[]>(() => {
@@ -1532,14 +1534,14 @@ export function PrivacySection() {
                       key={opt.value}
                       className={cn(
                         "flex items-start gap-2 text-xs",
-                        opt.always ? "cursor-default" : "cursor-pointer",
+                        opt.always || (opt.textOnly && !textRedactionOn) ? "cursor-default" : "cursor-pointer",
                       )}
                     >
                       <input
                         type="checkbox"
                         className="mt-0.5"
                         checked={checked}
-                        disabled={opt.always}
+                        disabled={opt.always || (opt.textOnly && !textRedactionOn)}
                         onChange={(e) =>
                           handlePiiLabelToggle(opt.value, e.target.checked)
                         }
@@ -1563,6 +1565,11 @@ export function PrivacySection() {
                 {textRedactionOn && (
                   <RedactionExamplePreview labels={piiRedactionLabels} />
                 )}
+                <p className="text-[11px] text-muted-foreground">
+                  Dollar masking requires Text above. It applies to new text
+                  processed by the background worker; previously processed
+                  history is not changed.
+                </p>
                 <p className="text-[11px] text-muted-foreground pt-0.5">
                   Unselected types stay visible so your timeline remains
                   searchable. Secrets are always removed in both modes.

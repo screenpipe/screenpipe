@@ -570,7 +570,8 @@ pub struct RecordArgs {
     /// Which PII classes the AI redaction workers rewrite when enabled.
     /// Comma-separated canonical labels: secret, person, email, phone,
     /// address, sensitive, url, company, repo, handle, channel, id,
-    /// date. Also accepts fine-grained structured-ID sub-types handled by
+    /// date, dollar_amount (explicit $ / USD amounts, text only).
+    /// Also accepts fine-grained structured-ID sub-types handled by
     /// the deterministic detector: us_ssn, credit_card, iban, spain_dni,
     /// brazil_cpf, india_aadhaar, canada_sin, imei (enable one without
     /// turning on the whole `id` class). `secret` is always included

@@ -32,7 +32,7 @@ use crate::{
 /// Bumped whenever we add or change a pattern in [`PATTERNS`]. Invalidates
 /// in-memory pipeline cache entries; the database worker does not replay rows
 /// that were already redacted.
-pub const REGEX_REDACTOR_VERSION: u32 = 5;
+pub const REGEX_REDACTOR_VERSION: u32 = 6;
 
 struct Pattern {
     re: Regex,
@@ -125,6 +125,22 @@ static PATTERNS: Lazy<Vec<Pattern>> = Lazy::new(|| {
         (
             r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
             SpanLabel::Secret,
+        ),
+        // Explicit dollar amounts only. Horizontal whitespace cannot bridge
+        // unrelated lines/cells. Bounds are validated below so malformed
+        // grouping or identifier suffixes never cause partial redaction.
+        (
+            r"(?ix)
+            (?:[+−-][\t\x20\x{00a0}]*|\([\t\x20\x{00a0}]*)?
+            (?:
+                (?:\$|\bUSD\b)[\t\x20\x{00a0}]*[+−-]?[\t\x20\x{00a0}]*
+                (?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?
+                |
+                (?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?
+                [\t\x20\x{00a0}]+USD\b
+            )
+            (?:[\t\x20\x{00a0}]*\))?",
+            SpanLabel::DollarAmount,
         ),
         // ---- Contact info ----
         (
@@ -1689,6 +1705,17 @@ static ENGINE: Lazy<Engine> = Lazy::new(|| {
 /// Single-text path — synchronous. Public for use inside the
 /// [`crate::pipeline::Pipeline`] without going through the async trait.
 pub fn redact_one(text: &str) -> RedactionOutput {
+    detect(text, None)
+}
+
+/// Filter ineligible patterns before overlap suppression. Otherwise an
+/// unselected category can consume a selected match (e.g. an amount whose
+/// digits also resemble an ID), leaving it visible after policy filtering.
+pub fn redact_one_with_policy(text: &str, policy: &crate::TextRedactionPolicy) -> RedactionOutput {
+    detect(text, Some(policy))
+}
+
+fn detect(text: &str, policy: Option<&crate::TextRedactionPolicy>) -> RedactionOutput {
     let lower = text.to_lowercase();
 
     // No-context patterns that the small DFA flagged...
@@ -1731,8 +1758,16 @@ pub fn redact_one(text: &str) -> RedactionOutput {
 
     for idx in cand {
         let pat = &PATTERNS[idx];
+        if policy.is_some_and(|policy| !policy.allows(pat.label, pat.subtype)) {
+            continue;
+        }
         for m in pat.re.find_iter(text) {
             let matched = &text[m.start()..m.end()];
+            if pat.label == SpanLabel::DollarAmount
+                && !dollar_amount_boundaries(text, m.start(), m.end())
+            {
+                continue;
+            }
 
             // Structural validator (checksum) — drop shapes that don't
             // check out (a 16-digit DB ID that fails Luhn, a random
@@ -1777,6 +1812,27 @@ pub fn redact_one(text: &str) -> RedactionOutput {
         redacted,
         spans,
     }
+}
+
+/// Do not take a numeric substring of an identifier, malformed number or
+/// unsupported locale format. Punctuation followed by prose is a delimiter.
+fn dollar_amount_boundaries(text: &str, start: usize, end: usize) -> bool {
+    let before = text[..start].chars().next_back();
+    let after = text[end..].chars().next();
+    if before.is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '$' | '.' | ','))
+        || after.is_some_and(|c| c.is_alphanumeric() || c == '_')
+    {
+        return false;
+    }
+    if matches!(after, Some('.' | ','))
+        && text[end..]
+            .chars()
+            .nth(1)
+            .is_some_and(|c| c.is_ascii_digit())
+    {
+        return false;
+    }
+    true
 }
 
 /// Whole-word (boundary-anchored) substring test. `needle` must be
@@ -1850,6 +1906,81 @@ mod tests {
 
     fn run(text: &str) -> RedactionOutput {
         redact_one(text)
+    }
+
+    #[test]
+    fn explicit_dollar_formats_and_boundaries() {
+        let policy = crate::TextRedactionPolicy::from_labels(&["dollar_amount".into()]);
+        for amount in [
+            "$1",
+            "$1,250.00",
+            "$1250",
+            "USD 1,250.75",
+            "usd 500",
+            "-$500",
+            "$-500.25",
+            "+$500",
+            "−$500",
+            "($500)",
+            "(USD 500.00)",
+            "1,250.00 USD",
+            "(1,250 USD)",
+            "$0.000125",
+            "$ 50",
+            "$\u{a0}50",
+        ] {
+            let input = format!("Total: {amount}; next.");
+            let out = redact_one_with_policy(&input, &policy);
+            assert_eq!(out.redacted, "Total: [DOLLAR_AMOUNT]; next.", "{input}");
+            assert_eq!(out.spans.len(), 1, "{input}");
+            assert_eq!(out.spans[0].text, amount);
+        }
+        for input in [
+            "Total 1,250.00",
+            "12%",
+            "2026-10-14",
+            "Order 125000",
+            "$HOME",
+            "USDT 500",
+            "USD_RATE 500",
+            "foo$500bar",
+            "USD 500abc",
+            "foo500 USD",
+            "$1,23",
+            "$1.234,56",
+            "1.234,56 USD",
+            "$500.12.34",
+            "$500_00",
+            "$\n500",
+            "500\nUSD",
+            "$1.2M",
+            "EUR 500",
+        ] {
+            assert_eq!(
+                redact_one_with_policy(input, &policy).redacted,
+                input,
+                "{input}"
+            );
+        }
+        let adjacent = "Paid $500, received $250. Total USD 750.";
+        assert_eq!(
+            redact_one_with_policy(adjacent, &policy).redacted,
+            "Paid [DOLLAR_AMOUNT], received [DOLLAR_AMOUNT]. Total [DOLLAR_AMOUNT]."
+        );
+    }
+
+    #[test]
+    fn selected_dollar_amount_does_not_steal_other_selected_pii() {
+        let text = "Charge $4111111111111111; password=$123456; alice@example.com";
+        let dollars = crate::TextRedactionPolicy::from_labels(&["dollar_amount".into()]);
+        let out = redact_one_with_policy(text, &dollars);
+        assert_eq!(
+            out.redacted,
+            "Charge [DOLLAR_AMOUNT]; [SECRET]; alice@example.com"
+        );
+        let ids = crate::TextRedactionPolicy::from_labels(&["id".into()]);
+        let out = redact_one_with_policy(text, &ids);
+        assert_eq!(out.redacted, "Charge $[ID]; [SECRET]; alice@example.com");
     }
 
     #[test]

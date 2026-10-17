@@ -303,7 +303,7 @@ impl Pipeline {
                 continue;
             }
 
-            let regex_out = regex_adapter::redact_one(text);
+            let regex_out = regex_adapter::redact_one_with_policy(text, &self.cfg.policy);
             let current = apply_policy(regex_out, &self.cfg.policy, self.pseudonyms.as_deref());
             let want_ai = current.input.chars().count() >= self.cfg.ai_min_chars
                 && current.spans.len() < self.cfg.ai_skip_if_regex_spans;
@@ -535,7 +535,7 @@ impl Redactor for Pipeline {
             return Ok((*hit).clone());
         }
         let mut current = apply_policy(
-            regex_adapter::redact_one(text),
+            regex_adapter::redact_one_with_policy(text, &self.cfg.policy),
             &self.cfg.policy,
             self.pseudonyms.as_deref(),
         );
@@ -609,7 +609,7 @@ impl Redactor for Pipeline {
                 continue;
             }
 
-            let regex_out = regex_adapter::redact_one(text);
+            let regex_out = regex_adapter::redact_one_with_policy(text, &self.cfg.policy);
             // Apply policy to the regex pass: drop non-allowed labels +
             // re-render `redacted` from `input` so the AI fallback sees
             // a string with only allowed-class placeholders (currently:
@@ -893,6 +893,49 @@ mod tests {
                     spans: vec![],
                 })
                 .collect())
+        }
+    }
+
+    #[tokio::test]
+    async fn dollar_amounts_are_opt_in_and_leave_unmarked_numbers() {
+        let text = "Invoice $12,450.75; credit (USD 500.00); quantity 1250; rate 12%.";
+        let default = Pipeline::regex_only()
+            .redact_batch(&[text.into()])
+            .await
+            .unwrap();
+        assert_eq!(default[0].redacted, text);
+        let pipeline = Pipeline::regex_only_with_policy(TextRedactionPolicy::from_labels(&[
+            "dollar_amount".into(),
+        ]));
+        let out = pipeline.redact_batch(&[text.into()]).await.unwrap();
+        assert_eq!(
+            out[0].redacted,
+            "Invoice [DOLLAR_AMOUNT]; credit [DOLLAR_AMOUNT]; quantity 1250; rate 12%."
+        );
+    }
+
+    #[tokio::test]
+    async fn dollar_amounts_survive_serial_and_batched_ai_processing() {
+        let text = "Invoice total: $12,450.75. Keep the workflow description.";
+        for ai in [
+            Arc::new(UppercaseAi::new()) as Arc<dyn Redactor>,
+            Arc::new(BatchingAi::new()) as Arc<dyn Redactor>,
+        ] {
+            let pipeline = Pipeline::regex_then_ai(
+                ai,
+                PipelineConfig {
+                    policy: TextRedactionPolicy::from_labels(&["dollar_amount".into()]),
+                    ..Default::default()
+                },
+            );
+            let out = pipeline.redact_batch(&[text.into()]).await.unwrap();
+            assert_eq!(
+                out[0].redacted,
+                "INVOICE TOTAL: [DOLLAR_AMOUNT]. KEEP THE WORKFLOW DESCRIPTION."
+            );
+            assert_eq!(out[0].spans[0].text, "$12,450.75");
+            let strict = pipeline.redact_complete(text).await.unwrap();
+            assert_eq!(strict.redacted, out[0].redacted);
         }
     }
 

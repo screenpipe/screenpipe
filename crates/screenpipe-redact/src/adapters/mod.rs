@@ -51,3 +51,14 @@ pub mod opf;
 
 pub mod rfdetr;
 pub mod rfdetr_mlx;
+
+/// Strip local-only categories without turning an explicit narrow request into
+/// the enclave's empty-list (all categories) default.
+fn model_labels(mut labels: Vec<String>) -> Vec<String> {
+    let previous_len = labels.len();
+    labels.retain(|label| !label.trim().eq_ignore_ascii_case("dollar_amount"));
+    if labels.is_empty() && previous_len != 0 {
+        labels.push("secret".into());
+    }
+    labels
+}
