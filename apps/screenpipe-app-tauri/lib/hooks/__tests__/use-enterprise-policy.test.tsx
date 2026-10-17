@@ -223,8 +223,8 @@ describe("enterprise policy runtime manual activation", () => {
     mocks.isEnterprise.value = true;
     Object.keys(mocks.settings).forEach((k) => delete mocks.settings[k]);
     Object.assign(mocks.settings, { deviceId: "device-1" });
-    mocks.localFetch.mockResolvedValue(
-      new Response(JSON.stringify({ frame_status: "ok", audio_status: "ok", hostname: "pc-1" }))
+    mocks.localFetch.mockImplementation(async () =>
+      new Response(JSON.stringify({ frame_status: "ok", audio_status: "ok", hostname: "pc-1", schedule_paused: true, drm_content_paused: false, vision_reason: "no_displays_expected", capture_status: { status: "screen_locked", reason: "private reason" } }))
     );
     mocks.gatherPipeStatuses.mockResolvedValue([]);
     mocks.commands.getEnterpriseLicenseKey.mockResolvedValue(null);
@@ -654,6 +654,8 @@ describe("enterprise policy runtime manual activation", () => {
     expect(keyHeartbeatCall?.[1]?.headers["X-License-Key"]).toBe(KEY);
     expect(keyHeartbeatCall?.[1]?.headers.Authorization).toBeUndefined();
     const heartbeatBody = JSON.parse(String(keyHeartbeatCall?.[1]?.body));
+    expect(heartbeatBody.recording_status).toEqual({ frame_status: "ok", audio_status: "ok", schedule_paused: true,
+      drm_content_paused: false, vision_reason: "no_displays_expected", audio_reason: "screen_locked", activity: "unknown" });
     expect(heartbeatBody).toMatchObject({
       machine_id_hash: "sp_machine_v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       os_user_id_hash: "sp_os_user_v1_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
