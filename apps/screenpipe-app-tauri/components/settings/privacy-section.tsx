@@ -1202,7 +1202,7 @@ export function PrivacySection() {
             </div>
             <Switch
               id="pauseOnDrmContent"
-              checked={Boolean(settings.pauseOnDrmContent ?? false)}
+              checked={Boolean(settings.pauseOnDrmContent ?? true)}
               onCheckedChange={handleDrmPauseToggle}
             />
           </div>

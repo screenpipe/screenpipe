@@ -630,8 +630,8 @@ pub struct RecordingSettings {
     /// (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware
     /// Horizon) is focused. These apps blank their windows while screen
     /// recording is active.
-    /// Off by default; engine-only pause (no full app shutdown).
-    #[serde(rename = "pauseOnDrmContent", default)]
+    /// On by default; engine-only pause (no full app shutdown).
+    #[serde(rename = "pauseOnDrmContent", default = "default_pause_on_drm_content")]
     pub pause_on_drm_content: bool,
 
     /// Skip persisting clipboard rows/content in the UI recorder. Defaults to
@@ -992,7 +992,7 @@ impl Default for RecordingSettings {
             included_urls: vec![],
             ignore_incognito_windows: true,
             enhanced_incognito_detection: false,
-            pause_on_drm_content: false,
+            pause_on_drm_content: default_pause_on_drm_content(),
             disable_clipboard_capture: default_disable_input_capture(),
             disable_keyboard_capture: default_disable_input_capture(),
             disable_click_capture: false,
@@ -1053,6 +1053,12 @@ fn default_audio_capture_mode() -> String {
 /// changing capture backends without that migration.
 fn default_experimental_coreaudio_system_audio() -> bool {
     false
+}
+
+/// DRM and remote-desktop apps blank their windows while recording, so the
+/// pause is on by default.
+pub fn default_pause_on_drm_content() -> bool {
+    true
 }
 
 /// Meeting capture is automatic; the backend checks platform support.
@@ -1301,6 +1307,16 @@ mod tests {
 
         assert_eq!(settings.aec_mode, AecMode::Off);
         assert_eq!(settings.effective_aec_flags(), (false, false, false));
+    }
+
+    #[test]
+    fn pause_on_drm_content_defaults_on() {
+        assert!(RecordingSettings::default().pause_on_drm_content);
+        let missing_key: RecordingSettings = serde_json::from_str("{}").unwrap();
+        assert!(missing_key.pause_on_drm_content);
+        let explicit_off: RecordingSettings =
+            serde_json::from_str(r#"{"pauseOnDrmContent": false}"#).unwrap();
+        assert!(!explicit_off.pause_on_drm_content);
     }
 
     #[test]

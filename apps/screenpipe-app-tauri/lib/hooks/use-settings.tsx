@@ -858,7 +858,7 @@ let DEFAULT_SETTINGS: Settings = {
 			sidebarNavLayout: { ...DEFAULT_SIDEBAR_NAV_LAYOUT },
 			ignoreIncognitoWindows: true,
 			enhancedIncognitoDetection: false,
-			pauseOnDrmContent: false,
+			pauseOnDrmContent: true,
 			disableClipboardCapture: true,
 			disableKeyboardCapture: true,
 			disableClickCapture: false,

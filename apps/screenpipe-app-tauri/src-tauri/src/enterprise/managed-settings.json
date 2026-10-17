@@ -41,7 +41,7 @@
   {"policyKey": "includedUrls", "deviceKey": "includedUrls", "apply": "engine", "kind": "domain-rule-array", "defaultValue": []},
   {"policyKey": "ignoreIncognitoWindows", "deviceKey": "ignoreIncognitoWindows", "apply": "engine", "kind": "boolean", "defaultValue": true},
   {"policyKey": "enhancedIncognitoDetection", "deviceKey": "enhancedIncognitoDetection", "apply": "engine", "kind": "boolean", "defaultValue": false},
-  {"policyKey": "pauseOnDrmContent", "deviceKey": "pauseOnDrmContent", "apply": "engine", "kind": "boolean", "defaultValue": false},
+  {"policyKey": "pauseOnDrmContent", "deviceKey": "pauseOnDrmContent", "apply": "engine", "kind": "boolean", "defaultValue": true},
   {"policyKey": "usePiiRemoval", "deviceKey": "usePiiRemoval", "apply": "engine", "kind": "boolean", "defaultValue": true},
   {"policyKey": "asyncPiiRedaction", "deviceKey": "asyncPiiRedaction", "apply": "engine", "kind": "boolean", "defaultValue": true},
   {"policyKey": "asyncImagePiiRedaction", "deviceKey": "asyncImagePiiRedaction", "apply": "engine", "kind": "boolean", "defaultValue": true},

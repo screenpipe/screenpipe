@@ -4113,7 +4113,7 @@ enhancedIncognitoDetection?: boolean;
  * (Netflix, Disney+, etc.) or a remote-desktop client (Omnissa/VMware
  * Horizon) is focused. These apps blank their windows while screen
  * recording is active.
- * Off by default; engine-only pause (no full app shutdown).
+ * On by default; engine-only pause (no full app shutdown).
  */
 pauseOnDrmContent?: boolean;
 /**
