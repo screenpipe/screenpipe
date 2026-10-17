@@ -449,7 +449,8 @@ impl UiRecorder {
                 let app_p = current_app.clone();
                 let window_p = current_window.clone();
                 threads.push(thread::spawn(move || {
-                    run_clipboard_poller(stop_p, tx_p, config_p, start_time, app_p, window_p);
+                    let seen = Arc::new(Mutex::new(get_clipboard_change_count()));
+                    run_clipboard_poller(stop_p, tx_p, config_p, start_time, app_p, window_p, seen);
                 }));
             }
         }
@@ -537,6 +538,48 @@ pub fn request_input_monitoring() -> bool {
 // reads — we replace that with periodic change_count polling when the tap
 // is unavailable.
 
+/// Both producers must agree whether this pasteboard generation was emitted.
+fn claim_clipboard_generation(last: &Mutex<Option<i64>>, generation: Option<i64>) -> bool {
+    let Some(generation) = generation else {
+        return false;
+    };
+    let mut last = last.lock();
+    if last.is_some_and(|seen| generation <= seen) {
+        return false;
+    }
+    *last = Some(generation);
+    true
+}
+
+#[cfg(test)]
+mod clipboard_generation_regression {
+    use super::*;
+    #[test]
+    fn keyboard_and_poll_of_one_copy_emit_once_but_menu_copy_is_preserved() {
+        let seen = Mutex::new(Some(40));
+        assert!(claim_clipboard_generation(&seen, Some(41)));
+        assert!(!claim_clipboard_generation(&seen, Some(41)));
+        assert!(claim_clipboard_generation(&seen, Some(42)));
+        assert!(!claim_clipboard_generation(&seen, None));
+    }
+    #[test]
+    fn racing_producers_claim_each_generation_once() {
+        for generation in 1..=100 {
+            let seen = Arc::new(Mutex::new(Some(generation - 1)));
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let worker_seen = seen.clone();
+            let worker_barrier = barrier.clone();
+            let worker = std::thread::spawn(move || {
+                worker_barrier.wait();
+                claim_clipboard_generation(&worker_seen, Some(generation))
+            });
+            barrier.wait();
+            let poll = claim_clipboard_generation(&seen, Some(generation));
+            assert_eq!(usize::from(poll) + usize::from(worker.join().unwrap()), 1);
+        }
+    }
+}
+
 /// Spawn the clipboard-capture worker thread and return its request sender.
 ///
 /// One worker handles all clipboard reads regardless of the source
@@ -547,6 +590,7 @@ pub fn request_input_monitoring() -> bool {
 fn spawn_clipboard_worker_thread(
     current_app: Arc<ArcSwap<Option<String>>>,
     current_window: Arc<ArcSwap<Option<String>>>,
+    seen: Arc<Mutex<Option<i64>>>,
 ) -> Sender<ClipboardRequest> {
     let (clipboard_tx, clipboard_rx) = bounded::<ClipboardRequest>(4);
     thread::Builder::new()
@@ -555,6 +599,11 @@ fn spawn_clipboard_worker_thread(
             while let Ok(req) = clipboard_rx.recv() {
                 if req.delay_ms > 0 {
                     std::thread::sleep(std::time::Duration::from_millis(req.delay_ms));
+                }
+                if req.operation != 'v'
+                    && !claim_clipboard_generation(&seen, get_clipboard_change_count())
+                {
+                    continue;
                 }
                 let content = if req.capture_content {
                     let _pool = cidre::objc::AutoreleasePoolPage::push();
@@ -641,6 +690,7 @@ fn run_clipboard_poller(
     start: Instant,
     current_app: Arc<ArcSwap<Option<String>>>,
     current_window: Arc<ArcSwap<Option<String>>>,
+    seen: Arc<Mutex<Option<i64>>>,
 ) {
     // Seed with the current pasteboard generation so we don't fire an event for
     // pre-existing content copied before launching the recorder.
@@ -678,6 +728,9 @@ fn run_clipboard_poller(
         }
 
         last_seen = Some(current);
+        if !claim_clipboard_generation(&seen, Some(current)) {
+            continue;
+        }
         debug!("clipboard change-count poller detected a pasteboard mutation");
         let content = if config.capture_clipboard_content {
             let _pool = cidre::objc::AutoreleasePoolPage::push();
@@ -804,6 +857,11 @@ struct TapState {
 
 struct TextBuffer {
     chars: String,
+    pending: std::collections::VecDeque<UiEvent>,
+    app_name: Option<String>,
+    window_title: Option<String>,
+    relative_ms: u64,
+    timestamp: chrono::DateTime<Utc>,
     last_time: Option<Instant>,
     timeout_ms: u64,
 }
@@ -812,6 +870,11 @@ impl TextBuffer {
     fn new(timeout_ms: u64) -> Self {
         Self {
             chars: String::new(),
+            pending: std::collections::VecDeque::new(),
+            app_name: None,
+            window_title: None,
+            relative_ms: 0,
+            timestamp: Utc::now(),
             last_time: None,
             timeout_ms,
         }
@@ -834,6 +897,39 @@ impl TextBuffer {
         let s = std::mem::take(&mut self.chars);
         self.last_time = None;
         Some(s)
+    }
+
+    /// Keep attribution at input time. A focus/window transition splits the
+    /// burst, so delayed flushing cannot relabel earlier keystrokes.
+    fn push_attributed(
+        &mut self,
+        c: char,
+        app: Option<String>,
+        window: Option<String>,
+        relative_ms: u64,
+    ) -> Option<UiEvent> {
+        let previous =
+            if !self.chars.is_empty() && (self.app_name != app || self.window_title != window) {
+                self.flush_event()
+            } else {
+                None
+            };
+        if self.chars.is_empty() {
+            self.app_name = app;
+            self.window_title = window;
+            self.relative_ms = relative_ms;
+            self.timestamp = Utc::now();
+        }
+        self.push(c);
+        previous
+    }
+
+    fn flush_event(&mut self) -> Option<UiEvent> {
+        let text = self.flush()?;
+        let mut event = UiEvent::text(self.timestamp, self.relative_ms, text);
+        event.app_name = self.app_name.take();
+        event.window_title = self.window_title.take();
+        Some(event)
     }
 
     fn should_flush(&self) -> bool {
@@ -940,6 +1036,34 @@ impl Drop for InstalledTap {
     }
 }
 
+fn flush_text_event(state: &TapState, force: bool) -> Option<UiEvent> {
+    let event = {
+        let mut buf = state.text_buf.lock();
+        if let Some(event) = buf.pending.pop_front() {
+            Some(event)
+        } else if force || buf.should_flush() {
+            buf.flush_event()
+        } else {
+            None
+        }
+    };
+    event.map(|event| redact_text_event(event, &state.config))
+}
+
+fn redact_text_event(mut event: UiEvent, config: &UiCaptureConfig) -> UiEvent {
+    if config.apply_pii_removal {
+        if let EventData::Text {
+            content,
+            char_count,
+        } = &mut event.data
+        {
+            *content = remove_pii(content);
+            *char_count = Some(content.chars().count());
+        }
+    }
+    event
+}
+
 fn run_event_tap(
     tx: Sender<UiEvent>,
     stop: Arc<AtomicBool>,
@@ -989,7 +1113,12 @@ fn run_event_tap(
 
     // Single worker thread for clipboard capture — avoids spawning a thread per
     // Cmd+C/X and avoids blocking the event tap callback on Cmd+V.
-    let clipboard_tx = spawn_clipboard_worker_thread(current_app.clone(), current_window.clone());
+    let clipboard_seen = Arc::new(Mutex::new(get_clipboard_change_count()));
+    let clipboard_tx = spawn_clipboard_worker_thread(
+        current_app.clone(),
+        current_window.clone(),
+        clipboard_seen.clone(),
+    );
     if config.capture_clipboard {
         let poller_stop = stop.clone();
         let poller_tx = tx.clone();
@@ -1006,6 +1135,7 @@ fn run_event_tap(
                     start,
                     poller_app,
                     poller_window,
+                    clipboard_seen,
                 );
             })
             .ok();
@@ -1066,24 +1196,7 @@ fn run_event_tap(
         // during an expensive regex blocks the event-tap callback on every
         // KEY_DOWN, which can push the callback past the kernel's tap-timeout
         // (~1 s) and trigger a burst-replay of queued events (phantom keystrokes).
-        let drained = {
-            let mut buf = state.text_buf.lock();
-            if buf.should_flush() {
-                buf.flush()
-            } else {
-                None
-            }
-        };
-        if let Some(s) = drained {
-            let text = if state.config.apply_pii_removal {
-                remove_pii(&s)
-            } else {
-                s
-            };
-            let mut event =
-                UiEvent::text(Utc::now(), state.start.elapsed().as_millis() as u64, text);
-            event.app_name = (**state.current_app.load()).clone();
-            event.window_title = (**state.current_window.load()).clone();
+        if let Some(event) = flush_text_event(state, false) {
             let _ = state.tx.try_send(event);
         }
 
@@ -1124,16 +1237,7 @@ fn run_event_tap(
     drop(installed);
 
     // Final flush — same lock discipline: release before PII removal.
-    let drained = { state.text_buf.lock().flush() };
-    if let Some(s) = drained {
-        let text = if state.config.apply_pii_removal {
-            remove_pii(&s)
-        } else {
-            s
-        };
-        let mut event = UiEvent::text(Utc::now(), state.start.elapsed().as_millis() as u64, text);
-        event.app_name = (**state.current_app.load()).clone();
-        event.window_title = (**state.current_window.load()).clone();
+    while let Some(event) = flush_text_event(state, true) {
         let _ = state.tx.try_send(event);
     }
 
@@ -1399,7 +1503,17 @@ extern "C" fn tap_callback(
                 // still reaches the focused app normally (LISTEN_ONLY tap).
                 if let Some(c) = keycode_to_char(keycode, mods) {
                     if let Some(mut buf) = state.text_buf.try_lock() {
-                        buf.push(c);
+                        if let Some(previous) = buf.push_attributed(c, app_name, window_title, t) {
+                            // Redaction runs outside the tap callback on the normal
+                            // flush path. Keep transition backlog bounded like tx.
+                            if buf.pending.len() < state.config.max_buffer_size.max(1) {
+                                buf.pending.push_back(previous);
+                            } else {
+                                debug!("text transition queue full; dropping oldest burst");
+                                buf.pending.pop_front();
+                                buf.pending.push_back(previous);
+                            }
+                        }
                     }
                 } else if state.config.capture_keystrokes {
                     // Unknown key, record as key event
@@ -3570,5 +3684,66 @@ mod tests {
             Some("AB"),
             "post-stop threads wrote into text_buf despite stop flag"
         );
+    }
+}
+
+#[cfg(test)]
+mod text_attribution_regression {
+    use super::*;
+    #[test]
+    fn typing_stays_with_original_app_after_focus_changes_before_flush() {
+        let mut buf = TextBuffer::new(500);
+        for c in "abcdefghij".chars() {
+            buf.push_attributed(c, Some("TextEdit".into()), Some("Untitled".into()), 10);
+        }
+        let event = buf.flush_event().unwrap();
+        assert_eq!(event.app_name.as_deref(), Some("TextEdit"));
+        assert_eq!(event.window_title.as_deref(), Some("Untitled"));
+        assert_eq!(event.relative_ms, 10);
+    }
+}
+
+#[cfg(test)]
+mod text_burst_eval {
+    use super::*;
+    #[test]
+    fn split_bursts_preserve_context_backspace_and_repeated_flush() {
+        for count in 1..=100 {
+            let mut buf = TextBuffer::new(500);
+            for _ in 0..count {
+                assert!(buf
+                    .push_attributed('a', Some("TextEdit".into()), Some("A".into()), 10)
+                    .is_none());
+            }
+            let first = buf
+                .push_attributed('b', Some("Chrome".into()), Some("B".into()), 20)
+                .unwrap();
+            assert_eq!(first.app_name.as_deref(), Some("TextEdit"));
+            assert_eq!(first.relative_ms, 10);
+            assert!(
+                matches!(&first.data, EventData::Text { content, .. } if content == &"a".repeat(count))
+            );
+            buf.push_attributed('x', Some("Chrome".into()), Some("B".into()), 21);
+            buf.push_attributed('\x08', Some("Chrome".into()), Some("B".into()), 22);
+            let second = buf.flush_event().unwrap();
+            assert_eq!(second.app_name.as_deref(), Some("Chrome"));
+            assert_eq!(second.relative_ms, 20);
+            assert!(matches!(&second.data, EventData::Text { content, .. } if content == "b"));
+            assert!(buf.flush_event().is_none());
+        }
+    }
+    #[test]
+    fn window_and_unknown_context_transitions_split_without_inheriting_identity() {
+        let mut buf = TextBuffer::new(500);
+        buf.push_attributed('a', Some("TextEdit".into()), Some("A".into()), 1);
+        let first = buf
+            .push_attributed('b', Some("TextEdit".into()), Some("B".into()), 2)
+            .unwrap();
+        assert_eq!(first.window_title.as_deref(), Some("A"));
+        let second = buf.push_attributed('c', None, None, 3).unwrap();
+        assert_eq!(second.window_title.as_deref(), Some("B"));
+        let unknown = buf.flush_event().unwrap();
+        assert!(unknown.app_name.is_none());
+        assert!(unknown.window_title.is_none());
     }
 }
