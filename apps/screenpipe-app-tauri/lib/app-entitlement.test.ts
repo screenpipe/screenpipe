@@ -339,6 +339,18 @@ describe("app entitlement", () => {
     ).toBe(false);
   });
 
+  it("coerces server credits into the persisted { amount } shape", () => {
+    const base = { id: "u", app_entitled: true, subscription_plan: "standard" };
+    expect(normalizeAppUser({ ...base, credits: 999999 }, "t").credits).toEqual({
+      amount: 999999,
+    });
+    expect(normalizeAppUser({ ...base, credits: { amount: 5 } }, "t").credits).toEqual({
+      amount: 5,
+    });
+    expect(normalizeAppUser({ ...base, credits: "lots" }, "t").credits).toBeNull();
+    expect(normalizeAppUser(base, "t").credits).toBeNull();
+  });
+
   it("stamps server-verified users with checked_at when the API omits it", () => {
     const normalized = normalizeAppUser(
       {

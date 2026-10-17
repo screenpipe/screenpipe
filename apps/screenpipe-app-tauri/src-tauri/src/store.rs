@@ -1796,6 +1796,11 @@ pub struct User {
     pub token: Option<String>,
     pub clerk_id: Option<String>,
     pub api_key: Option<String>,
+    /// Lenient: older builds persisted the raw `/api/user` response, which can
+    /// carry `credits` as a bare number (e.g. `999999`). A strict struct here
+    /// made the whole store.bin fail to deserialize and forced snapshot
+    /// recovery / defaults, so accept both shapes and drop anything else.
+    #[serde(default, deserialize_with = "deserialize_lenient_credits")]
     pub credits: Option<Credits>,
     pub stripe_connected: Option<bool>,
     pub stripe_account_status: Option<String>,
@@ -1965,6 +1970,32 @@ impl Default for Credits {
     fn default() -> Self {
         Self { amount: 0 }
     }
+}
+
+/// Accepts `credits` as `null`, `{ "amount": n }`, or a bare number. Any other
+/// shape is dropped to `None` instead of failing the entire settings file —
+/// `credits` is display-only and must never gate loading the user's settings.
+fn deserialize_lenient_credits<'de, D>(deserializer: D) -> Result<Option<Credits>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    let amount_from = |n: &serde_json::Number| -> Option<i32> {
+        if let Some(i) = n.as_i64() {
+            Some(i.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+        } else if let Some(u) = n.as_u64() {
+            Some(u.min(i32::MAX as u64) as i32)
+        } else {
+            n.as_f64()
+                .filter(|f| f.is_finite())
+                .map(|f| f.clamp(i32::MIN as f64, i32::MAX as f64) as i32)
+        }
+    };
+    Ok(match value {
+        Some(Value::Number(n)) => amount_from(&n).map(|amount| Credits { amount }),
+        Some(obj @ Value::Object(_)) => serde_json::from_value::<Credits>(obj).ok(),
+        _ => None,
+    })
 }
 
 #[derive(Serialize, Deserialize, Type, Clone)]
@@ -5632,6 +5663,30 @@ mod tests {
         assert_eq!(presets[0]["provider"].as_str(), Some("screenpipe-cloud"));
         assert_eq!(presets[1]["provider"].as_str(), Some("native-ollama"));
         assert_eq!(presets[2]["provider"].as_str(), Some("custom"));
+    }
+
+    #[test]
+    fn user_credits_accepts_legacy_shapes_without_failing_settings() {
+        let cases = [
+            (json!(999999), Some(999999)),
+            (json!({ "amount": 5 }), Some(5)),
+            (json!(null), None),
+            (json!("unlimited"), None),
+            (json!(1e12), Some(i32::MAX)),
+        ];
+        for (credits, expected) in cases {
+            let data = json!({
+                "user": { "email": "a@b.c", "credits": credits.clone() },
+            });
+            let settings: SettingsStore = serde_json::from_value(data)
+                .unwrap_or_else(|e| panic!("credits {credits} broke settings: {e}"));
+            assert_eq!(settings.user.credits.map(|c| c.amount), expected, "credits {credits}");
+            assert_eq!(settings.user.email.as_deref(), Some("a@b.c"));
+        }
+
+        let missing: SettingsStore =
+            serde_json::from_value(json!({ "user": { "email": "a@b.c" } })).unwrap();
+        assert!(missing.user.credits.is_none());
     }
 
     #[test]

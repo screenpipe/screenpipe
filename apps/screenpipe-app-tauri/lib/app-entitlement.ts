@@ -654,6 +654,24 @@ export function getBusinessCapacityUpgrade(
   }
 }
 
+// The native settings store types `user.credits` as `{ amount }`. The server
+// can return a bare number (e.g. 999999); persisting it verbatim made store.bin
+// fail to deserialize on the next launch. Coerce to the persisted shape.
+function normalizeCredits(raw: unknown): { amount: number } | null {
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return { amount: raw };
+  }
+  if (
+    raw &&
+    typeof raw === "object" &&
+    typeof (raw as { amount?: unknown }).amount === "number" &&
+    Number.isFinite((raw as { amount: number }).amount)
+  ) {
+    return { amount: (raw as { amount: number }).amount };
+  }
+  return null;
+}
+
 export function normalizeAppUser(rawUser: any, token: string): AppUser {
   const checkedAt = new Date().toISOString();
   const rawEntitlement = asEntitlement(rawUser?.entitlement);
@@ -722,6 +740,7 @@ export function normalizeAppUser(rawUser: any, token: string): AppUser {
 
   return {
     ...rawUser,
+    credits: normalizeCredits(rawUser?.credits),
     token,
     app_entitled: appEntitled,
     subscription_plan: subscriptionPlan,
