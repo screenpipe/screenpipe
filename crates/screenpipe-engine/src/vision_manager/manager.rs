@@ -183,6 +183,11 @@ pub struct VisionManager {
 }
 
 impl VisionManager {
+    /// Report unresolved attribution separately from capture-loop liveness.
+    pub fn focus_resolution_degraded(&self) -> bool {
+        self.focus_controller.resolution_degraded()
+    }
+
     /// Create a new VisionManager
     pub fn new(
         config: VisionManagerConfig,

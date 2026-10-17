@@ -217,6 +217,19 @@ impl FocusAwareController {
         self.hosts_focus_for_identity(&MonitorIdentity::from_monitor(monitor))
     }
 
+    /// A long-lived unresolved tracker must be visible to health consumers.
+    /// Keep capture fail-closed: never attach global AX to an arbitrary display.
+    pub fn resolution_degraded(&self) -> bool {
+        let stale = self
+            .last_event_time
+            .lock()
+            .ok()
+            .is_some_and(|time| time.elapsed() >= STALE_FOCUS_CUTOFF);
+        // A quiet event stream is normal. The platform's independent poll
+        // remains authoritative; only unresolved focus after grace is a fault.
+        stale && self.tracker.current().is_none()
+    }
+
     fn hosts_focus_for_identity(&self, identity: &MonitorIdentity) -> bool {
         let focus_is_fresh = self
             .last_event_time
@@ -447,6 +460,24 @@ mod tests {
             self.tx.subscribe()
         }
         fn stop(&self) {}
+    }
+
+    #[tokio::test]
+    async fn unresolved_focus_is_visible_after_grace_and_recovers() {
+        let identity = MonitorIdentity::runtime_id(1);
+        let tracker = Arc::new(StaticFocusTracker::resolving(identity.clone()));
+        let ctrl = FocusAwareController::new(tracker.clone());
+        *tracker.current.lock().unwrap() = None;
+        ctrl.set_unknown_for_test();
+        assert!(!ctrl.resolution_degraded());
+        ctrl.backdate_last_event_for_test(Instant::now() - Duration::from_secs(60));
+        assert!(!ctrl.hosts_focus(1));
+        assert!(!ctrl.hosts_focus(2));
+        assert!(ctrl.resolution_degraded());
+        *tracker.current.lock().unwrap() = Some(identity);
+        assert!(!ctrl.resolution_degraded());
+        assert!(ctrl.hosts_focus(1));
+        assert!(!ctrl.hosts_focus(2));
     }
 
     #[tokio::test]
