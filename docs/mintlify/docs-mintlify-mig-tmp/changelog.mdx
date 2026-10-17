@@ -11,25 +11,28 @@ icon: "newspaper"
 
 ## October 2026 release update
 
-These highlights cover published app releases through [v2.7.104, October 9, 2026](https://github.com/screenpipe/screenpipe/releases/tag/app-v2.7.104). Feature availability can differ by platform and rollout. For changes after that release, see the source repository; a merged PR is not an app update.
+These highlights cover published app releases through [v2.7.109, October 14, 2026](https://github.com/screenpipe/screenpipe/releases/tag/app-v2.7.109), including [v2.7.107, October 14, 2026](https://github.com/screenpipe/screenpipe/releases/tag/app-v2.7.107) and [v2.7.104, October 9, 2026](https://github.com/screenpipe/screenpipe/releases/tag/app-v2.7.104). Feature availability can differ by platform and rollout. For changes after that release, see the source repository; a merged PR is not an app update.
 
 ### New features
 
 - **Gemini API setup:** choose Gemini in the AI provider settings with a Google AI Studio API key. [Compare AI access paths](/local-or-cloud-ai).
+- **More AI app connections (v2.7.109):** connect Antigravity, Cline in the default VS Code profile, and Kiro IDE from **Settings → Connections → AI apps**. Perplexity on Mac has a guided manual setup. OpenCode detection and MCP setup are also fixed. [MCP setup](/mcp-server).
 
 ### Updates
 
 - **Meeting summaries:** edit saved summaries inline, and use descriptive titles generated from the meeting topic. The live transcript overlay is scrollable. [Meeting intelligence](/meeting-intelligence).
 - **Workflow providers and sources:** saved AI presets are available in Workflows, and local Claude Code, Codex, and Hermes chats can contribute evidence subject to source exclusions. [Workflow discovery](/workflow-discovery).
-- **Starred sessions:** start a session with one click and adjust its duration. [Recording controls](/recording-controls).
-- **Capture and storage:** improved macOS text capture, background database-statistics refresh, and recoverable index compaction help with capture overhead and growing histories. [Storage and retention](/storage-and-retention).
+- **Starred sessions:** start a session with one click and adjust its duration. In v2.7.107, an active starred session shows its remaining minutes on the overlay button. The shortcut opens compact controls that close after five idle seconds, and the timeline lists three recent sessions with a paginated, date-filtered history. [Recording controls](/recording-controls).
+- **Capture and storage:** improved macOS text capture, background database-statistics refresh, and recoverable index compaction help with capture overhead and growing histories. In v2.7.107, you can also compact compressed databases from Settings. [Storage and retention](/storage-and-retention).
 - **MCP source evidence:** the separately published [MCP v0.20.3](https://github.com/screenpipe/screenpipe/releases/tag/mcp-v0.20.3) preserves source IDs and links in search results. [MCP setup](/mcp-server).
 
 ### Bug fixes
 
 - **Meeting transcripts and calendar detection:** separate audio segments and continuous speech are preserved; personal reference reminders and shared or hidden Google calendars no longer trigger meetings as though they were your calls. [Meeting recovery](/meeting-recovery).
+- **Meeting capture and transcripts (v2.7.107, v2.7.109):** Google Meet calls are tracked more reliably, microphone and meeting-audio speaker labels stay separate in transcript text, and short speech inside long audio chunks is transcribed. On Windows, the live transcript keeps your reading position. A manual meeting no longer starts while recording is stopped. Resuming a paused microphone during a smart-recording meeting works, and a microphone you chose takes priority over the meeting app's microphone when it is available and system-default following is off. [Meeting recovery](/meeting-recovery).
+- **Startup, updates, and tray (v2.7.107, v2.7.109):** macOS version switches and replacements of a running copy recover cleanly, and the app recovers when its local control port is slow to start. Stale schedule pauses clear, Claude setup no longer prompts repeatedly, and the Windows tray icon follows the taskbar theme.
 - **Reopening after Quit:** a normal app launch resumes recording, including reopening after an update. Launching at login retains the background behavior for a previously quit app.
-- **Enterprise capture:** uploads continue during recording, original redacted screenshots are uploaded, and a Windows Enterprise launch takes priority over a running consumer app. [Device coverage](/enterprise-device-coverage).
+- **Enterprise capture:** uploads continue during recording, original redacted screenshots are uploaded, and a Windows Enterprise launch takes priority over a running consumer app. In v2.7.107 and v2.7.109, the consumer app does not start while Enterprise runs on Windows, exports no longer wait on payload reads, and device heartbeats report when a user quits the app. [Device coverage](/enterprise-device-coverage).
 - **Chat and privacy:** imported Codex images and matching agent presets are restored; remote images require an explicit action, and external pages cannot invoke desktop capabilities. [Privacy data flow](/privacy-data-flow).
 - **Account access:** desktop payment prompts respect eligible participant grants. If an account still asks for payment after access was granted, follow the [account checks](/faq#billing-license-and-account).
 
