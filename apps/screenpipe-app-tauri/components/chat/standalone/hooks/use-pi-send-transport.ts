@@ -212,10 +212,15 @@ export async function checkLivePiSession(
  */
 export type PendingSend = {
   sessionId: string;
+  /** The user row exactly as it will be saved. The list renders it in place
+   *  and keeps the same element when the saved copy replaces it. */
+  message: Message;
+  /** The reply placeholder's id, so the turn status and its clock carry over. */
+  replyId: string;
+  /** What the user typed and pasted, returned to the composer if the send
+   *  aborts. */
   text: string;
-  /** The friendly label a Home card sends, so the optimistic bubble matches
-   *  the durable row's `displayContent` and nothing changes on the swap. */
-  displayLabel?: string;
+  pastedImages: string[];
 };
 
 export function usePiSendTransport(options: PiSendTransportOptions) {
@@ -424,10 +429,53 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     // box — the send read as ignored, and the interstitial that covered the gap
     // claimed "your message is saved" with nothing visible to back it up.
     // `pendingSend` renders a real user bubble until the durable row replaces
-    // it, and the recovery effect at the end of this hook puts the text back if
-    // the send aborts.
-    setPendingSend({ sessionId: attemptSessionId, text: userMessage, displayLabel });
+    // it, and the recovery effect at the end of this hook puts the text and
+    // pasted images back if the send aborts.
+    //
+    // A share is one user turn with two representations: the readable prompt
+    // Pi echoes to the transcript, and the model text carrying the reviewed
+    // snapshot. Build both before persisting the optimistic turn. Previously
+    // the snapshot was injected later, so the durable user bubble held only
+    // the prompt while ACP echoed a raw envelope as a second user message.
+    const displayUserMessage = userMessage;
+    if (prefillContext) {
+      userMessage = attachContextToUserMessage({
+        message: displayUserMessage,
+        context: prefillContext,
+        source: prefillSource,
+      });
+    }
+    const outgoingImages = imageDataUrls ?? pastedImages;
+    const composerImages = imageDataUrls == null ? pastedImages : [];
+    // The pending bubble is the row the preflight later saves, unchanged, so it
+    // shows the images and document cards from the first frame. A bubble
+    // without its attachments offered the raw `<attached file: …>` text behind
+    // "Show full prompt". Ids are random because two sends in one millisecond
+    // got the same clock-based ids, and the list rendered one reply twice.
+    const consumedAttachments = consumePendingAttachments();
+    const sentAt = Date.now();
+    const newUserMessage: Message = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: userMessage,
+      ...(displayLabel ? { displayContent: displayLabel } : {}),
+      ...(outgoingImages.length > 0 ? { images: [...outgoingImages] } : {}),
+      ...(consumedAttachments ? { attachments: consumedAttachments } : {}),
+      ...(sendOptions?.entrySource ? { entrySource: sendOptions.entrySource } : {}),
+      ...(sendOptions?.entryCard ? { entryCard: sendOptions.entryCard } : {}),
+      timestamp: sentAt,
+    };
+    const assistantMessageId = crypto.randomUUID();
+    setPendingSend({
+      sessionId: attemptSessionId,
+      message: newUserMessage,
+      replyId: assistantMessageId,
+      text: displayUserMessage,
+      pastedImages: composerImages,
+    });
     setInput("");
+    // The images now show in the bubble, so the composer lets go of them too.
+    if (composerImages.length > 0) setPastedImages([]);
 
     // A selector change may still be in flight when the user submits. Wait for
     // it here as the authoritative boundary. Rejections
@@ -667,42 +715,13 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     }
     if (isAttemptForeground()) forceQueueModeRef.current = true;
 
-    const outgoingImages = imageDataUrls ?? pastedImages;
-    const shouldClearPastedImages = imageDataUrls == null && pastedImages.length > 0;
-
-    // A share is one user turn with two representations: the readable prompt
-    // Pi echoes to the transcript, and the model text carrying the reviewed
-    // snapshot. Build both before persisting the optimistic turn. Previously
-    // the snapshot was injected later, so the durable user bubble held only
-    // the prompt while ACP echoed a raw envelope as a second user message.
-    const displayUserMessage = userMessage;
-    if (prefillContext) {
-      userMessage = attachContextToUserMessage({
-        message: displayUserMessage,
-        context: prefillContext,
-        source: prefillSource,
-      });
-    }
-
-    const consumedAttachments = consumePendingAttachments();
-    const newUserMessage: Message = {
-      id: Date.now().toString(),
-      role: "user",
-      content: userMessage,
-      ...(displayLabel ? { displayContent: displayLabel } : {}),
-      ...(outgoingImages.length > 0 ? { images: [...outgoingImages] } : {}),
-      ...(consumedAttachments ? { attachments: consumedAttachments } : {}),
-      ...(sendOptions?.entrySource ? { entrySource: sendOptions.entrySource } : {}),
-      ...(sendOptions?.entryCard ? { entryCard: sendOptions.entryCard } : {}),
-      timestamp: Date.now(),
-    };
-
-    const assistantMessageId = (Date.now() + 1).toString();
     const assistantPlaceholder: Message = {
       id: assistantMessageId,
       role: "assistant",
       content: "Processing...",
-      timestamp: Date.now(),
+      // The turn started at Send. A remounted turn status reads its clock from
+      // this row, and the wait before the reply row existed counts too.
+      timestamp: sentAt + 1,
       model: attemptPreset?.model,
       provider: attemptPreset?.provider,
     };
@@ -738,11 +757,18 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
     if (isAttemptForeground()) {
       setMessages((prev) => [...prev, newUserMessage, assistantPlaceholder]);
     }
-    // The durable row is in the transcript now, so the optimistic one retires
-    // in the same commit. Two bubbles must never paint at once.
-    setPendingSend(null);
+    // The durable row is in the transcript now, so the optimistic one retires.
+    // Two bubbles must never paint at once. In a store-backed chat React may
+    // render the store's copy first; the list then drops the pending row itself.
+    // A second send started during this preflight owns the slot by now, so its
+    // bubble stays until its own row lands.
+    setPendingSend((current) => (current?.message.id === newUserMessage.id ? null : current));
     if (isAttemptForeground()) {
+      // Stop during the preflight does not cancel it, but the recovery effect
+      // has already put the text and images back. They went out with this
+      // send, so clear them again or the next send repeats them.
       setInput("");
+      if (composerImages.length > 0) setPastedImages([]);
       setIsLoading(true);
       setIsStreaming(true);
     }
@@ -835,7 +861,6 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
         const piImage = piImageFromDataUrl(img);
         if (piImage) piImages.push(piImage);
       }
-      if (shouldClearPastedImages && isAttemptForeground()) setPastedImages([]);
 
       // Always attach the bounded frontend snapshot used to recover issue
       // #3636. Rust knows the exact Pi subprocess state: a cold/new process
@@ -1180,8 +1205,8 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
   // sign-in, Pi failing to start, an interrupted turn. There are a dozen such
   // paths and none of them should silently eat the user's text, so recovery is
   // centralised here instead of patched into each one: when the turn goes quiet
-  // with an optimistic bubble still up, retire it and put the text back in the
-  // composer so the message is never lost.
+  // with an optimistic bubble still up, retire it and put the text and pasted
+  // images back in the composer so the message is never lost.
   useEffect(() => {
     if (!pendingSend) return;
     // A pending send belongs to its original chat. Opening a new chat hides it
@@ -1196,10 +1221,13 @@ export function usePiSendTransport(options: PiSendTransportOptions) {
       // Only restore into an empty composer: if the user already started typing
       // something else during the attempt, that is the more recent intent.
       setInput((current) => (current.trim().length > 0 ? current : stillPending.text));
+      if (stillPending.pastedImages.length > 0) {
+        setPastedImages((current) => (current.length > 0 ? current : stillPending.pastedImages));
+      }
       inputRef.current?.focus();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [pendingSend, isLoading, isStreaming, setInput, inputRef, piSessionIdRef]);
+  }, [pendingSend, isLoading, isStreaming, setInput, setPastedImages, inputRef, piSessionIdRef]);
 
   // Keep ref in sync so useEffect callbacks can call sendMessage
   sendMessageRef.current = sendMessage;

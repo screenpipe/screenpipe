@@ -19,6 +19,7 @@ import {
 import { qualifiedValue } from "@/lib/analytics/qualified-value";
 import { MessageContent } from "@/components/chat/standalone/message-content";
 import { TurnStatus } from "@/components/chat/standalone/turn-status";
+import type { PendingSend } from "@/components/chat/standalone/hooks/use-pi-send-transport";
 import type { TurnSignals } from "@/lib/chat/turn-phase";
 import type { TurnLivenessStatus } from "@/lib/chat/turn-liveness";
 import {
@@ -76,6 +77,8 @@ function formatMessageFullTime(timestamp: number): string | null {
 
 export interface ChatMessageListProps {
   messages: Message[];
+  /** The send whose durable rows have not landed yet. It owns the live turn. */
+  pendingSend?: Pick<PendingSend, "message" | "replyId"> | null;
   isLoading: boolean;
   isStreaming: boolean;
   activeAcpAgentId?: string | null;
@@ -121,6 +124,7 @@ export interface ChatMessageListProps {
 
 export function ChatMessageList({
   messages,
+  pendingSend: dispatchedSend,
   isLoading,
   isStreaming,
   activeAcpAgentId,
@@ -207,6 +211,17 @@ export function ChatMessageList({
     if (message.role !== "assistant") return true;
     return hasRenderableAssistantBody(message) || isSteeredAssistantMessage(message);
   });
+  // Store-backed chats (pipe watches, imported Codex/Claude chats) get the
+  // durable row from a store update, separate from the one that clears the
+  // pending send, and React may render the store's first. The durable row wins
+  // as soon as it exists, so the shared key never renders twice.
+  const pendingSend = dispatchedSend &&
+    !messages.some((message) => message.id === dispatchedSend.message.id)
+    ? dispatchedSend
+    : null;
+  // The pending send is the row that replaces it: same key, same content.
+  // React keeps that element through the swap, so nothing moves.
+  if (pendingSend) visibleMessages.push(pendingSend.message);
   // The transport-owned message id is the authoritative owner of the live
   // turn. The visible-message fallback only covers hydration before that id
   // reaches this surface; it must never promote an older completed answer.
@@ -216,9 +231,11 @@ export function ChatMessageList({
   const lastAssistantId = [...messages]
     .reverse()
     .find((candidate) => candidate.role === "assistant" && !isPendingAgentActionMessage(candidate))?.id;
-  const activeAssistantMessageId =
-    activeSourceFooterMessageId ??
-    (lastVisibleAssistantId === lastAssistantId ? lastVisibleAssistantId : undefined);
+  // A pending send's reply does not exist yet, so no answer is live.
+  const activeAssistantMessageId = pendingSend
+    ? undefined
+    : activeSourceFooterMessageId ??
+      (lastVisibleAssistantId === lastAssistantId ? lastVisibleAssistantId : undefined);
   const activeAssistantIndex = activeAssistantMessageId
     ? messages.findIndex((candidate) => candidate.id === activeAssistantMessageId)
     : -1;
@@ -289,6 +306,7 @@ export function ChatMessageList({
               !expandedSteerWorkIds.has(item.hideIntentLabelWhenCollapsedBy);
             const intentLabel = shouldSuppressIntentLabel ? null : getMessageIntentLabel(message);
             const isSteerUserMessage = message.role === "user" && message.intent === "steer";
+            const isPendingSend = message.id === pendingSend?.message.id;
             const canEditMessage = message.role === "user" && !isSteerUserMessage && !isLoading;
             const canShowMessageActions = !item.showActionsWhenExpandedBy ||
               expandedSteerWorkIds.has(item.showActionsWhenExpandedBy);
@@ -338,17 +356,20 @@ export function ChatMessageList({
                 // Keep restored/disk-hydrated messages paint-safe. Under heavy
                 // WebKit pressure an entry animation may never advance its
                 // first frame; starting at opacity 0 then leaves a complete
-                // transcript present in the DOM but visually blank.
-                initial={{ y: 10 }}
+                // transcript present in the DOM but visually blank. A sent
+                // message appears in place, in the frame the user pressed Send.
+                initial={isPendingSend ? false : { y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
+                // A pending row only exits when its send failed. The text is
+                // already back in the composer, so the bubble leaves at once.
+                exit={isPendingSend ? undefined : { opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
                 className={cn(
                   "relative flex min-w-0 transition-[background-color,box-shadow] duration-150",
                   message.role === "user" ? "justify-end" : "justify-start",
                   message.id === highlightedMessageId && "bg-muted/30 ring-1 ring-foreground/30"
                 )}
-                data-testid={`chat-message-${message.role}`}
+                data-testid={isPendingSend ? "chat-pending-user-message" : `chat-message-${message.role}`}
                 data-message-id={message.id}
               >
                 <div
@@ -663,7 +684,11 @@ export function ChatMessageList({
       </AnimatePresence>
       <AnimatePresence>
         {turnActive && (() => {
-          const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+          // A pending send owns the turn until its reply row exists. The
+          // previous answer is history, not this turn's progress.
+          const lastAssistant = pendingSend
+            ? undefined
+            : [...messages].reverse().find((m) => m.role === "assistant");
           const blocks = lastAssistant?.contentBlocks;
           // A pending permission/sign-in card already states the turn is blocked
           // on the user ("needs your approval"); a generic status row below it
@@ -707,8 +732,8 @@ export function ChatMessageList({
             >
               <TurnStatus
                 signals={signals}
-                turnKey={lastAssistant?.id ?? "pending-turn"}
-                startedAt={lastAssistant?.timestamp ?? null}
+                turnKey={pendingSend?.replyId ?? lastAssistant?.id ?? "pending-turn"}
+                startedAt={pendingSend?.message.timestamp ?? lastAssistant?.timestamp ?? null}
               />
             </motion.div>
           );

@@ -42,9 +42,19 @@ vi.mock("@/components/chat/summary-cards", () => ({
 vi.mock("@/components/chat/standalone/chat-message-list", async () => {
   const ReactModule = await import("react");
   return {
-    ChatMessageList: ({ messages }: { messages: Message[] }) => {
+    ChatMessageList: ({
+      messages,
+      pendingSend,
+    }: {
+      messages: Message[];
+      pendingSend?: { message: Message } | null;
+    }) => {
       ReactModule.useEffect(() => () => messageListUnmounted(), []);
-      return <div data-testid="message-list">{messages.length}</div>;
+      return (
+        <div data-testid="message-list" data-pending-send={pendingSend?.message.content}>
+          {messages.length}
+        </div>
+      );
     },
   };
 });
@@ -201,7 +211,7 @@ describe("ChatMainPane", () => {
     expect(screen.queryByTestId("first-run-banner")).not.toBeInTheDocument();
   });
 
-  it("renders a pending follow-up after durable chat history", () => {
+  it("hands a pending send to the message list instead of rendering it outside", () => {
     const existingMessage: Message = {
       id: "existing-message",
       role: "user",
@@ -212,17 +222,22 @@ describe("ChatMainPane", () => {
     render(
       <ChatMainPane
         {...paneProps("chat", [existingMessage])}
-        pendingSend={{ text: "follow-up message" }}
+        pendingSend={{
+          message: {
+            id: "follow-up",
+            role: "user",
+            content: "follow-up message",
+            timestamp: Date.now(),
+          },
+          replyId: "follow-up-reply",
+        }}
       />,
     );
 
-    const messageList = screen.getByTestId("message-list");
-    const pendingBubble = screen.getByTestId("chat-pending-user-message");
-    expect(messageList).toHaveTextContent("1");
-    expect(pendingBubble).toHaveTextContent("follow-up message");
-    expect(
-      messageList.compareDocumentPosition(pendingBubble) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).not.toBe(0);
+    // The list places it between history and the turn status. A bubble
+    // rendered after the list landed below the status row.
+    expect(screen.getByTestId("message-list"))
+      .toHaveAttribute("data-pending-send", "follow-up message");
+    expect(screen.queryByTestId("chat-pending-user-message")).not.toBeInTheDocument();
   });
 });

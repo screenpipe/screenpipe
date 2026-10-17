@@ -119,17 +119,18 @@ export function resolveTurnPhase(
 /**
  * Where the elapsed clock starts: the earliest plausible of the two readings.
  *
- * Two sources exist and each is right in a different situation. The local
- * clock starts when the row first paints, which for the sending window is the
- * moment of the send — the true start of the turn. The turn's own timestamp
- * comes from the durable assistant row, which is stamped only after the
- * preflight, so it can be many seconds later than the send.
+ * Two sources exist and each is right in a different situation. The turn's
+ * own timestamp is the Send time for a chat send: the pending send carries it,
+ * and so does the reply row that replaces it. Other paths stamp the reply row
+ * when they create it, after the turn began. The local clock starts when the
+ * status first paints, which in the window that started the turn is close to
+ * the real start.
  *
- * Preferring the metadata blindly makes the counter jump backwards the moment
- * the durable row lands. Preferring the local clock blindly restarts it at
- * zero on any remount — a conversation switch, or a second window hydrating
- * the same turn. Taking the earliest satisfies both: a remount inherits the
- * real start, and a late durable row cannot rewind the clock.
+ * Preferring the metadata blindly lets a row stamped late rewind the counter.
+ * Preferring the local clock blindly restarts it at zero on any remount — a
+ * conversation switch, or a second window hydrating the same turn. Taking the
+ * earliest satisfies both: a remount inherits the real start, and a late row
+ * cannot rewind the clock.
  *
  * A timestamp in the future, or one absurdly far in the past, is clock skew or
  * a bad row rather than a real turn start, so it is discarded instead of

@@ -69,7 +69,7 @@ interface ChatMainPaneProps {
    * A dispatched send whose durable row has not landed yet. Rendered as the
    * user's bubble so the transcript is never empty during the preflight.
    */
-  pendingSend?: { text: string; displayLabel?: string } | null;
+  pendingSend?: ChatMessageListProps["pendingSend"];
 }
 
 export function ChatMainPane({
@@ -296,24 +296,8 @@ export function ChatMainPane({
             <ChatMessageList
               key={conversationId ?? "blank-chat"}
               {...messageListProps}
+              pendingSend={pendingSend}
             />
-            {/* The message the user just sent, shown from the send frame until
-                the durable row replaces it. Same geometry as a real user row so
-                nothing moves when the swap happens. */}
-            {pendingSend && (
-              <div
-                data-testid="chat-pending-user-message"
-                className="relative flex min-w-0 justify-end"
-              >
-                <div className="group/message flex min-w-0 max-w-[82%] flex-col items-end">
-                  <div className="relative max-w-full overflow-hidden rounded-lg bg-muted/60 px-4 py-3 text-sm text-foreground">
-                    <p className="whitespace-pre-wrap break-words">
-                      {pendingSend.displayLabel ?? pendingSend.text}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
 
             <div ref={messagesEndRef} />
           </div>
