@@ -377,6 +377,7 @@ describe("guide editor", () => {
     );
     await screen.findByRole("textbox", { name: "SOP title" });
     document.getElementById("guide-completion")!.scrollIntoView = scroll;
+    fireEvent.click(screen.getByRole("button", { name: "Contents" }));
     const event = new MouseEvent("click", { bubbles: true, cancelable: true });
     screen
       .getByRole("link", { name: "Check your result" })
@@ -472,7 +473,7 @@ describe("SOP assistant and web editor", () => {
     expect(openWeb).not.toHaveBeenCalled();
     expect(screen.queryByText("Create a short video")).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("Continue to web editor"));
-    await waitFor(() => expect(openWeb).toHaveBeenCalledWith(guideWithBlockIds(guide)));
+    await waitFor(() => expect(openWeb).toHaveBeenCalledWith(guideWithBlockIds(guide), workflow));
   });
   it("edits with the existing harness adapter and cancels an in-flight edit", async () => {
     let signal: AbortSignal | undefined;

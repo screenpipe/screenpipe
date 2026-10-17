@@ -124,7 +124,7 @@ export type WorkflowsPlatform = {
       signal: AbortSignal,
       progress: (message: string) => void,
     ) => Promise<WorkflowGuide>;
-    openWeb?: (guide: WorkflowGuide) => Promise<void>;
+    openWeb?: (guide: WorkflowGuide, workflow: WorkflowMap) => Promise<void>;
     export: (html: string, title: string) => Promise<boolean>;
   };
   generateWorkflowSkill?: (

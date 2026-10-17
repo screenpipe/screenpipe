@@ -5,11 +5,12 @@ import { useSourceScreenshot } from "./use-source-screenshot";
 import type { WorkflowsPlatform } from "./platform";
 import styles from "./workflow-guide.module.css";
 
-export function SourceSopScreenshot({ stage, load, title, alt }: {
+export function SourceSopScreenshot({ stage, load, title, alt, onRemove }: {
   stage: Parameters<typeof useSourceScreenshot>[0];
   load: NonNullable<WorkflowsPlatform["guides"]>["loadSourceScreenshot"];
   title: string;
   alt?: string;
+  onRemove?: () => void;
 }) {
   const source = useSourceScreenshot(stage, false, load);
   return <figure ref={source.ref}>
@@ -17,5 +18,6 @@ export function SourceSopScreenshot({ stage, load, title, alt }: {
       : <p className={styles.muted} role="status">{source.status === "loading" ? "Loading screenshot…" : "No captured screenshot available for this step."}
         {source.canRetry && source.status !== "loading" && <button onClick={source.retry}>Try again</button>}
       </p>}
+    {source.image && onRemove && <button onClick={onRemove}>Remove screenshot</button>}
   </figure>;
 }

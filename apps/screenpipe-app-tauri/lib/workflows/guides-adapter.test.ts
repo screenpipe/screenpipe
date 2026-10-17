@@ -9,11 +9,13 @@ const mocks = vi.hoisted(() => ({
   save: vi.fn(),
   dialog: vi.fn(),
   write: vi.fn(),
+  screenshot: vi.fn(),
 }));
 vi.mock("@/lib/utils/tauri", () => ({
   commands: { getCloudToken: mocks.token },
 }));
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: mocks.open }));
+vi.mock("./original-screenshot", () => ({ loadOriginalWorkflowScreenshot: mocks.screenshot }));
 vi.mock("./agent-runner", () => ({ runWorkflowAgent: mocks.run }));
 vi.mock("./assistant", () => ({
   assistantProviderConfig: { provider: "screenpipe-cloud", model: "auto" },
@@ -81,39 +83,46 @@ it("does not write when the native export dialog is cancelled", async () => {
   expect(mocks.write).toHaveBeenCalledWith("/selected/guide.html", "html");
 });
 
-it("uploads only reviewed SOP text with existing authentication", async () => {
+it("uploads included screenshots with the SOP and existing authentication", async () => {
   mocks.token.mockResolvedValue("test-token");
   const id = "12345678-1234-1234-1234-123456789abc";
-  const fetcher = vi
-    .fn()
-    .mockResolvedValue(new Response(JSON.stringify({ id }), { status: 201 }));
+  mocks.screenshot.mockResolvedValue(new Blob(["image"], { type: "image/png" }));
+  const imageUrl = `/api/sops/images/${"a".repeat(64)}/${"b".repeat(64)}`;
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(Response.json({ url: imageUrl }))
+    .mockResolvedValueOnce(Response.json({ id }, { status: 201 }));
   vi.stubGlobal("fetch", fetcher);
   try {
-    await desktopGuides.openWeb!(guide as any);
-    const request = fetcher.mock.calls[0][1];
+    await desktopGuides.openWeb!(guide as any, workflow);
+    const request = fetcher.mock.calls[1][1];
+    expect(fetcher.mock.calls[0][1].body).toBeInstanceOf(Blob);
     expect(request.headers.Authorization).toBe("Bearer test-token");
     const payload = JSON.parse(request.body);
     expect(Object.keys(payload).sort()).toEqual([
       "content",
+      "previousContent",
       "title",
       "workflowKey",
     ]);
     expect(payload.content).toContain("Read sources");
+    expect(payload.content).toContain(imageUrl);
+    expect(payload.previousContent).not.toContain(imageUrl);
     expect(mocks.open).toHaveBeenCalledWith(
-      `https://screenpipe.com/sops/${id}`,
+      `https://screenpipe.com/s/${id}`,
     );
   } finally {
     vi.unstubAllGlobals();
   }
 });
 it("keeps the local draft when hosting is unavailable", async () => {
+  mocks.screenshot.mockResolvedValue(new Blob(["image"], { type: "image/png" }));
   mocks.token.mockResolvedValue("test-token");
   vi.stubGlobal(
     "fetch",
     vi.fn().mockResolvedValue(new Response("", { status: 503 })),
   );
   try {
-    await expect(desktopGuides.openWeb!(guide as any)).rejects.toThrow(
+    await expect(desktopGuides.openWeb!(guide as any, workflow)).rejects.toThrow(
       "saved on this device",
     );
     expect(mocks.open).not.toHaveBeenCalled();
@@ -134,4 +143,21 @@ it("preserves separate video edits when the written SOP is edited", async () => 
   const edited = await desktopGuides.edit!({ ...guide, video } as any, workflow, "Rename the SOP", new AbortController().signal, () => {});
   expect(edited.title).toBe("New SOP title");
   expect(edited.video).toEqual(video);
+});
+
+it("never loads or uploads explicitly removed images", async () => {
+  const fetcher = vi.fn().mockResolvedValue(Response.json({ id: "12345678-1234-1234-1234-123456789abc" }));
+  vi.stubGlobal("fetch", fetcher);
+  await desktopGuides.openWeb!({ ...guide, steps: guide.steps.map(step => ({ ...step, imageExcluded: true })) } as any, workflow);
+  expect(mocks.screenshot).not.toHaveBeenCalled();
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(fetcher.mock.calls[0][0]).toBe("https://screenpipe.com/api/sops");
+});
+it("does not create/open a text-only page after an image upload fails", async () => {
+  mocks.screenshot.mockResolvedValue(new Blob(["image"], { type: "image/png" }));
+  const fetcher = vi.fn().mockResolvedValue(new Response("", { status: 503 }));
+  vi.stubGlobal("fetch", fetcher);
+  await expect(desktopGuides.openWeb!(guide as any, workflow)).rejects.toThrow("image could not be uploaded");
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(mocks.open).not.toHaveBeenCalled();
 });

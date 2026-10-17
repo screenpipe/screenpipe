@@ -1,6 +1,6 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
-import { orderedBlockIds, parseDocumentLayout, type AddedDocumentBlock, type DocumentLayout } from "./document-blocks";
+import { orderedBlockIds, parseDocumentLayout, safeBlockMediaUrl, type AddedDocumentBlock, type DocumentLayout } from "./document-blocks";
 import { parseVideoDraft, type VideoDraft } from "./video-tool";
 import { stageScreenshots } from "./screenshots";
 import type { WorkflowMap } from "./model";
@@ -240,8 +240,8 @@ export function guideHtml(
   return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: https:; media-src https:; style-src 'unsafe-inline'"><title>${escape(guide.title)}</title><style>body{font:16px/1.65 system-ui;color:#20221d;background:#fafaf7;max-width:820px;margin:60px auto;padding:0 28px}h1{font-size:38px;line-height:1.15}h2{font-size:22px}section,article{margin:30px 0}article{border-top:1px solid #ddd;padding-top:20px}img,video{max-width:100%;border:1px solid #ddd;border-radius:8px}p{white-space:pre-wrap}small{color:#666}@media print{body{margin:0}article{break-inside:avoid}}</style><body><small>SCREENPIPE · STANDARD OPERATING PROCEDURE · DRAFT FOR REVIEW</small><h1>${escape(guide.title)}</h1>${content}<footer><small>Based on workflow revision ${guide.sourceRevision}. Review before use.</small></footer></body></html>`;
 }
 
-/** Text-only SOP for the hosted editor. Never serializes raw evidence or image data. */
-export function guideMarkdown(guide: WorkflowGuide): string {
+/** Text projection unless the sharing adapter supplies uploaded screenshot URLs. */
+export function guideMarkdown(guide: WorkflowGuide, images?: Record<string, string>): string {
   const section = (title: string, values: string[]) =>
     values.filter(Boolean).length
       ? `\n## ${title}\n\n${values
@@ -254,13 +254,13 @@ export function guideMarkdown(guide: WorkflowGuide): string {
     ["prerequisites", section("Before you start", guide.prerequisites)],
     ...guide.steps.flatMap((step, index): Array<[string,string]> => {
       const id = `step/${step.blockId ?? `step-${index}`}`;
-      return [[`${id}/title`, `\n## ${index + 1}. ${step.title}\n`], [`${id}/text`, step.instruction], [`${id}/image`, ""], [`${id}/result`, step.expectedResult ? `**Expected result:** ${step.expectedResult}` : ""]];
+      return [[`${id}/title`, `\n## ${index + 1}. ${step.title}\n`], [`${id}/text`, step.instruction], [`${id}/image`, images?.[id] && guideStepIncludesImage(step) ? `![${step.title.replace(/[\[\]\\]/g, "")}](<${images[id]}>)` : ""], [`${id}/result`, step.expectedResult ? `**Expected result:** ${step.expectedResult}` : ""]];
     }),
     ["exceptions", section("Exceptions", guide.exceptions)],
     ["completion", section("Check your result", guide.completion)],
     ["questions", section("Still to confirm", guide.questions)],
   ];
-  return `# ${guide.title}\n\n` + renderDocumentEntries(entries, guide.documentLayout, block => block.type === "divider" ? "---" : block.type === "heading" ? `## ${block.text}` : block.text, "\n\n");
+  return `# ${guide.title}\n\n` + renderDocumentEntries(entries, guide.documentLayout, block => block.type === "divider" ? "---" : block.type === "heading" ? `## ${block.text}` : images && block.type === "image" && block.url && safeBlockMediaUrl(block.url) ? `![${block.text.replace(/[\[\]\\]/g, "")}](<${block.url}>)` : block.text, "\n\n");
 
 }
 

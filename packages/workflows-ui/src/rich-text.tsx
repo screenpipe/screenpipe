@@ -30,6 +30,7 @@ export function WorkflowRichText({
   maxLength = 4000,
   className = "",
   fullDocument = false,
+  imageUrl,
 }: {
   value: string;
   onChange?: (value: string) => void;
@@ -38,11 +39,12 @@ export function WorkflowRichText({
   maxLength?: number;
   className?: string;
   fullDocument?: boolean;
+  imageUrl?: (src: string) => string | null;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>();
-  const current = useRef({ value, onChange, maxLength });
-  current.current = { value, onChange, maxLength };
+  const current = useRef({ value, onChange, maxLength, imageUrl });
+  current.current = { value, onChange, maxLength, imageUrl };
   const emitted = useRef(value);
   const [expanded, setExpanded] = useState(false);
   const [long, setLong] = useState(false);
@@ -59,6 +61,31 @@ export function WorkflowRichText({
         plugins: editable ? procedureMarkdownPlugins() : [],
       }),
       editable: () => editable,
+      nodeViews: imageUrl ? {
+        image(node, editor, getPos) {
+          const dom = document.createElement("span");
+          dom.className = styles.image;
+          dom.contentEditable = "false";
+          const url = current.current.imageUrl?.(node.attrs.src);
+          if (!url) { dom.textContent = node.attrs.alt || "Image reference"; return { dom }; }
+          const img = document.createElement("img");
+          img.src = url; img.alt = node.attrs.alt || "SOP screenshot";
+          img.loading = "lazy"; img.referrerPolicy = "no-referrer";
+          dom.append(img);
+          if (editable) {
+            const remove = document.createElement("button");
+            remove.type = "button"; remove.textContent = "Remove image";
+            remove.setAttribute("aria-label", `Remove image: ${img.alt}`);
+            remove.addEventListener("click", event => {
+              event.preventDefault();
+              const position = getPos();
+              if (typeof position === "number") editor.dispatch(editor.state.tr.delete(position, position + node.nodeSize));
+            });
+            dom.append(remove);
+          }
+          return { dom, stopEvent: event => (event.target as HTMLElement).closest("button") !== null };
+        },
+      } : undefined,
       attributes: (state) => ({
         "data-empty": String(state.doc.content.size === 2),
         ...(editable
@@ -141,7 +168,7 @@ export function WorkflowRichText({
       editor.destroy();
       view.current = undefined;
     };
-  }, [editable, id, label, placeholder, fullDocument]);
+  }, [editable, id, label, placeholder, fullDocument, imageUrl]);
 
   useEffect(() => {
     if (!view.current || value === emitted.current) return;

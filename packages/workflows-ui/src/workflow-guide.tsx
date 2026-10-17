@@ -78,7 +78,8 @@ export function WorkflowGuide({
   const [saved, setSaved] = useState("");
   const [announcement, setAnnouncement] = useState("");
   const root = useRef<HTMLDivElement>(null);
-  const [images, setImages] = useState(false);
+  const [images, setImages] = useState(true);
+  const [outlineOpen, setOutlineOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [openingWeb, setOpeningWeb] = useState(false);
   const webDialog = useRef<HTMLDialogElement>(null);
@@ -267,7 +268,8 @@ export function WorkflowGuide({
           )}
           {draft && (
             <>
-              <DocumentActions document={{ kind: "sop", title: draft.title, markdown: guideMarkdown(draft) }} onShare={onShareDocument} download={downloadDocument} />
+              <button className={styles.actionButton} aria-expanded={outlineOpen} onClick={() => setOutlineOpen(!outlineOpen)}>Contents</button>
+              <DocumentActions document={{ kind: "sop", title: draft.title, markdown: guideMarkdown(draft) }} onShare={platform.openWeb ? () => { setWebError(""); webDialog.current?.showModal(); } : onShareDocument} download={downloadDocument} />
               {platform.video && <GuideVideoPanel container={videoContainer} onOpenChange={setVideoOpen} ref={videoHandle} guide={draft} workflow={workflow} platform={platform.video} loadScreenshot={platform.loadScreenshot} loadSourceScreenshot={platform.loadSourceScreenshot} save={persist} onVideoMode={setVideoMode} onLayoutChange={videoLayout => update({ ...latest.current!, videoLayout })} assistantBusy={videoBusy} onCreate={platform.video.edit ? () => {
                 if (videoRequested.current) return;
                 videoRequested.current = true;
@@ -297,7 +299,7 @@ export function WorkflowGuide({
                 aria-label={ui("Export SOP")}
                 title={ui("Export SOP")}
                 onClick={() => {
-                  setImages(false);
+                  setImages(true);
                   setExportError("");
                   dialog.current?.showModal();
                 }}
@@ -358,9 +360,9 @@ export function WorkflowGuide({
           </button>
         </div>
         <p>
-          Save this SOP’s text to your Screenpipe account to edit and share it.
-          Recordings and screenshots stay on this device. Existing web edits are
-          preserved.
+          Save this SOP and its included images to your Screenpipe account.
+          Remove any image from the SOP before continuing if you don’t want to share it.
+          Your draft stays private until you publish it on the web. Existing web edits are preserved.
         </p>
         {webError && <p role="alert">{webError}</p>}
         <div className={styles.dialogActions}>
@@ -378,7 +380,7 @@ export function WorkflowGuide({
               setOpeningWeb(true);
               setWebError("");
               try {
-                await platform.openWeb?.(draft);
+                await platform.openWeb?.(draft, workflow);
                 webDialog.current?.close();
               } catch (e) {
                 setWebError(
@@ -404,8 +406,8 @@ export function WorkflowGuide({
           {error && <button onClick={() => void openGuide()}>Try again</button>}
         </SopDocument>
       ) : (
-        <div className={styles.layout} hidden={videoOpen}>
-          <aside className={styles.outline}>
+        <div className={`${styles.layout} ${outlineOpen ? styles.withOutline : ""}`} hidden={videoOpen}>
+          <aside className={styles.outline} hidden={!outlineOpen}>
             <p className={styles.eyebrow}>In this guide</p>
             <a onClick={jump} href="#guide-prerequisites">
               Before you start
@@ -591,7 +593,7 @@ export function WorkflowGuide({
                           }}
                         />
                       ) : !image && !stale && guideStepIncludesImage(step) && !step.imageReview && sourceStage !== null && workflow.stages[sourceStage] ? (
-                        <SourceSopScreenshot stage={workflow.stages[sourceStage!]} load={platform.loadSourceScreenshot} title={step.title} />
+                        <SourceSopScreenshot onRemove={() => changeStep(i, { includeImage: false, imageExcluded: true })} stage={workflow.stages[sourceStage!]} load={platform.loadSourceScreenshot} title={step.title} />
                       ) : !image ? (
                         <p className={styles.muted}>
                           {stale
@@ -678,7 +680,7 @@ export function WorkflowGuide({
             disabled={Boolean(stale)}
             onChange={(e) => setImages(e.target.checked)}
           />
-          Include screenshots I have reviewed
+          Include images
         </label>
         <small>
           Screenshots can contain customer information. Only the selected guide

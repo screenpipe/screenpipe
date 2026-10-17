@@ -92,3 +92,7 @@
 @media print { .toolbar { display: none; } }
 
 .root .toolbar button svg { flex-shrink: 0; }
+
+.image { display: inline-flex; flex-direction: column; gap: 8px; max-width: 100%; margin: 16px 0; }
+.image img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line, #deded5); border-radius: 8px; }
+.image button { align-self: flex-start; font: inherit; font-size: 12px; }
