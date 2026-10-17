@@ -58,6 +58,8 @@ function searchableWorkflowText(workflow: WorkflowMap) {
     workflow.description,
     workflow.trigger,
     workflow.outcome,
+    ...(workflow.people ?? []),
+    ...(workflow.variables ?? []).flatMap(v=>[v.name,v.description,...v.examples.map(e=>e.value)]),
     ...workflow.apps,
     ...workflow.handoffs,
     ...workflow.variations,

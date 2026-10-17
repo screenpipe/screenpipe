@@ -94,7 +94,18 @@ export type WorkflowScreenshot = {
 
 export type WorkflowImageLayout = { order: number[]; hidden: number[]; beforeText: boolean };
 
+export type WorkflowVariable = {
+  id: string; kind: "input" | "output"; name: string; description: string;
+  examples: { stepId: string; field: string; value: string }[];
+};
+export type WorkflowVersion = { revision: number; at: string; snapshot: Omit<WorkflowMap, "versions"> };
 export type WorkflowStage = {
+  id?: string;
+  requiredAccess?: string;
+  exceptions?: string;
+  escalation?: string;
+  responseTemplate?: string;
+  linkedWorkflowId?: string;
   imageLayout?: WorkflowImageLayout;
   timing?: WorkflowTiming | null;
   userEdited?: boolean;
@@ -111,6 +122,7 @@ export type WorkflowStage = {
   screenshot?: WorkflowScreenshot | null;
   screenshots?: WorkflowScreenshot[];
   procedure?: Array<{
+    id?: string;
     userEdited?: boolean;
     kind: "action" | "input" | "output" | "decision" | "check";
     text: string;
@@ -161,6 +173,11 @@ export type WorkflowTiming = {
 };
 
 export type WorkflowMap = {
+  variables?: WorkflowVariable[];
+  archived?: boolean;
+  reviewStatus?: "needs-review" | "needs-edits" | "reviewed";
+  reviewNote?: string;
+  versions?: WorkflowVersion[];
   id?: string;
   revision?: number;
   userCorrection?: string | null;

@@ -78,7 +78,7 @@ describe("cloud workflow editor", () => {
     expect(await screen.findByText(message)).toBeVisible();
     expect(screen.getByRole('region', { name: 'Workflow document' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Check order' })).toBeVisible();
-    expect(screen.getByText('Matched')).toBeVisible();
+    expect(await screen.findByText('Matched')).toBeVisible();
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Open chat' })).not.toBeInTheDocument();
     expect(request.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);

@@ -10,6 +10,9 @@ import {
   Plus,
   Trash2,
   Undo2,
+  Braces,
+  History,
+  Info,
 } from "lucide-react";
 import type { WorkflowMap, WorkflowStage } from "./model";
 import {
@@ -23,6 +26,9 @@ import {
 import { WorkflowRichText } from "./rich-text";
 import { InlineText } from "./inline-text";
 import { TimingDisclosure } from "./timing-disclosure";
+import { WorkflowVariablePanel, type VariableQuote } from "./workflow-variable-panel";
+import { WorkflowVersionPanel } from "./workflow-version-panel";
+import { executionFields, variableId } from "./workflow-variables";
 import styles from "./workflow-editor.module.css";
 
 function Text(props: Parameters<typeof InlineText>[0] & { title?: boolean }) {
@@ -49,6 +55,8 @@ function rebase(draft: EditorDraft, sent: EditorDraft, saved: WorkflowMap): Edit
 }
 
 export type WorkflowEditorOptions = {
+  relatedWorkflows?: WorkflowMap[];
+  openRelated?: (id: string) => void;
   stepsOnly?: boolean;
   /** Canonical cloud steps have one expected-result field. */
   singleCheck?: boolean;
@@ -57,7 +65,7 @@ export type WorkflowEditorOptions = {
   sessionRecovery?: boolean;
   saveDisabled?: boolean;
 };
-export function WorkflowEditor({ workflow, save, actions, renderSource, stepsOnly = false, singleCheck = false, initialDraft, onDraftChange, sessionRecovery = true, saveDisabled = false }: WorkflowEditorOptions & {
+export function WorkflowEditor({ workflow, save, actions, renderSource, relatedWorkflows = [], openRelated, stepsOnly = false, singleCheck = false, initialDraft, onDraftChange, sessionRecovery = true, saveDisabled = false }: WorkflowEditorOptions & {
   workflow: WorkflowMap;
   save: (draft: WorkflowEdit) => Promise<WorkflowMap>;
   actions?: ReactNode;
@@ -74,6 +82,17 @@ export function WorkflowEditor({ workflow, save, actions, renderSource, stepsOnl
     return initial;
   });
   const unchangedStages = draft.stages.length === workflow.stages.length && draft.stages.every((stage, index) => stage.sourceIndex === index && isUnchangedStage(stage, workflow.stages[index]));
+  const [panel, setPanel] = useState<"variables" | "history" | "details" | null>(null);
+  useEffect(()=>{
+    if(stepsOnly) return;
+    const open=(event:Event)=>{const value=(event as CustomEvent).detail;if(["variables","history","details"].includes(value))setPanel(value);};
+    window.addEventListener("workflows:document-panel",open);
+    return ()=>window.removeEventListener("workflows:document-panel",open);
+  },[stepsOnly]);
+  const [selectedVariable, setSelectedVariable] = useState("");
+  const [quote, setQuote] = useState<VariableQuote>();
+  const [executionOpen, setExecutionOpen] = useState<string | null>(null);
+  const showVariable = (id: string) => { setSelectedVariable(id); setPanel("variables"); };
   const [history, setHistory] = useState<EditorDraft[]>([]);
   const [saving, setSaving] = useState(false);
   const [savedOnce, setSavedOnce] = useState(false);
@@ -173,7 +192,7 @@ export function WorkflowEditor({ workflow, save, actions, renderSource, stepsOnl
   function addStage(index: number) {
     if (draft.stages.length >= 100) return;
     const stages = [...draft.stages];
-    stages.splice(index, 0, { key: crypto.randomUUID(), sourceIndex: null, name: "", description: "", procedure: [] });
+    stages.splice(index, 0, { key: crypto.randomUUID(), id: crypto.randomUUID(), sourceIndex: null, name: "", description: "", procedure: [] });
     change({ ...draft, stages });
     closeStepMenu(false);
     focusField(`Step ${index + 1} title`);
@@ -182,7 +201,7 @@ export function WorkflowEditor({ workflow, save, actions, renderSource, stepsOnl
     const stage = draft.stages[index];
     if (stage.procedure.length >= 100 || (singleCheck && stage.procedure.length)) return;
     stageChange(index, { ...stage, procedure: [...stage.procedure,
-      { key: crypto.randomUUID(), sourceIndex: null, kind: singleCheck ? "check" : "action", text: "" }],
+      { key: crypto.randomUUID(), id: crypto.randomUUID(), sourceIndex: null, kind: singleCheck ? "check" : "action", text: "" }],
     });
     closeStepMenu(false);
     focusField(`Block ${stage.procedure.length + 1} in step ${index + 1}`);
@@ -262,12 +281,27 @@ export function WorkflowEditor({ workflow, save, actions, renderSource, stepsOnl
   return (
     <section
       ref={editorRoot}
-      className={styles.editor}
+      className={`${styles.editor} ${panel ? styles.withPanel : ""}`}
+      onMouseUp={event => {
+        const selection = window.getSelection(); const value = selection?.toString().trim();
+        if (!value || value.length > 1000 || !event.currentTarget.contains(selection?.anchorNode ?? null) || !event.currentTarget.contains(selection?.focusNode ?? null)) return;
+        const element = selection?.anchorNode?.parentElement; const fieldElement = element?.closest<HTMLElement>("[data-variable-field]");
+        if (!fieldElement?.contains(selection?.focusNode ?? null)) return;
+        const stepId = fieldElement.closest<HTMLElement>("[data-step-id]")?.dataset.stepId;
+        if (stepId && fieldElement.dataset.variableField) { setQuote({stepId,field:fieldElement.dataset.variableField,value}); setPanel("variables"); }
+      }}
+      onClickCapture={event => { const id = variableId((event.target as HTMLElement).closest("a")?.getAttribute("href") ?? ""); if (id) { event.preventDefault(); event.stopPropagation(); showVariable(id); } }}
+      onKeyDownCapture={event => { const id = variableId((event.target as HTMLElement).closest("a")?.getAttribute("href") ?? ""); if (id && ["Enter"," "].includes(event.key)) {event.preventDefault();event.stopPropagation();showVariable(id);} }}
       aria-label="Workflow document"
       onKeyDown={(e) => {
         if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
           e.preventDefault();
           void submit();
+        }
+        if (!stepsOnly && !e.metaKey && !e.ctrlKey && !e.altKey && !(e.target as HTMLElement).closest("input,textarea,select,[contenteditable=true]")) {
+          if (e.key.toLowerCase() === "v") setPanel(value => value === "variables" ? null : "variables");
+          if (e.key.toLowerCase() === "h") setPanel(value => value === "history" ? null : "history");
+          if (e.key === "Escape") setPanel(null);
         }
         // Keep host navigation shortcuts out of editable blocks.
         e.stopPropagation();
@@ -277,6 +311,9 @@ export function WorkflowEditor({ workflow, save, actions, renderSource, stepsOnl
         <div><span role="status" aria-label="Save status">{error ? "Not saved" : saving ? "Saving…" : dirty ? valid ? "Saving…" : "Finish the empty block to save" : savedOnce ? "Saved" : ""}</span></div>
         <div>
           {actions}
+          {!stepsOnly && <><button type="button" aria-expanded={panel === "variables"} title="Variables (V)" onClick={()=>setPanel(panel === "variables" ? null : "variables")}><Braces size={16}/>Variables</button>
+          <button type="button" aria-expanded={panel === "history"} title="History (H)" onClick={()=>setPanel(panel === "history" ? null : "history")}><History size={16}/>History</button>
+          <button type="button" aria-expanded={panel === "details"} onClick={()=>setPanel(panel === "details" ? null : "details")}><Info size={16}/>Details</button></>}
           <button type="button" title="Undo last edit" aria-label="Undo last edit" disabled={!history.length} onClick={() => {
             update(history[history.length - 1]);
             setHistory(h => h.slice(0, -1));
@@ -301,6 +338,7 @@ export function WorkflowEditor({ workflow, save, actions, renderSource, stepsOnl
           </button>
         </p>
       )}
+      <div className={styles.documentLayout}>
       <fieldset>
         <div className={styles.intro}>
           <div className={styles.titleRow}>
@@ -321,6 +359,7 @@ export function WorkflowEditor({ workflow, save, actions, renderSource, stepsOnl
             {insertion(index)}
             <article
               className={`${styles.step} ${dragOver === index ? styles.drop : ""}`}
+              data-step-id={stage.id ?? `step-${index}`}
               aria-label={`Step ${index + 1}`}
               onDragOver={(e) => {
                 if (
@@ -391,6 +430,7 @@ export function WorkflowEditor({ workflow, save, actions, renderSource, stepsOnl
                 {stepMenu === stage.key && <div className={styles.stepMenu} role="dialog" aria-label={`Actions for step ${index + 1}`}>
                   <button type="button" disabled={draft.stages.length >= 100} onClick={() => addStage(index + 1)}><Plus size={15} />Add step below</button>
                   {(!singleCheck || !stage.procedure.length) && <button type="button" disabled={stage.procedure.length >= 100} onClick={() => addDetail(index)}><Plus size={15} />{singleCheck ? "Add expected result" : "Add block"}</button>}
+                  {!stepsOnly && <button type="button" onClick={()=>{setExecutionOpen(stage.key);closeStepMenu(false);}}>Execution details and links</button>}
                   <button type="button" aria-label={`Move step ${index + 1} up`} disabled={index === 0} onClick={() => { closeStepMenu(); moveStage(index, index - 1); }}><ArrowUp size={15} />Move up</button>
                   <button type="button" aria-label={`Move step ${index + 1} down`} disabled={index === draft.stages.length - 1} onClick={() => { closeStepMenu(); moveStage(index, index + 1); }}><ArrowDown size={15} />Move down</button>
                   <button type="button" aria-label={`Delete step ${index + 1}`} disabled={draft.stages.length === 1} onClick={() => {
@@ -416,7 +456,7 @@ export function WorkflowEditor({ workflow, save, actions, renderSource, stepsOnl
                 </div>
               </div>
               <div style={{ display: "flex", flexDirection: "column" }}>
-              <Text
+              <div data-variable-field="description"><Text
                 rich
                 label={`Step ${index + 1} description`}
                 value={stage.description}
@@ -424,10 +464,12 @@ export function WorkflowEditor({ workflow, save, actions, renderSource, stepsOnl
                   stageChange(index, { ...stage, description })
                 }
               />
+              </div>
               <div className={styles.blocks}>
                 {stage.procedure.map((detail, detailIndex) => (
                   <div
                     className={`${styles.block} ${blockDragOver === `${index}:${detailIndex}` ? styles.blockDrop : ""}`}
+                    data-variable-field={`block/${detail.id ?? `block-${detailIndex}`}`}
                     key={detail.key}
                     onDragOver={(e) => {
                       if (
@@ -555,6 +597,12 @@ export function WorkflowEditor({ workflow, save, actions, renderSource, stepsOnl
                 disabled={stage.procedure.length >= 100} onClick={() => addDetail(index)}>
                 <Plus size={14} aria-hidden="true" />{singleCheck ? "Add expected result" : "Add detail"}
               </button>}
+              {!stepsOnly && <details className={styles.execution} open={executionOpen === stage.key || undefined} onToggle={event=>{if (event.currentTarget.open) setExecutionOpen(stage.key); else if (executionOpen===stage.key) setExecutionOpen(null);}}>
+                <summary>Execution details{stage.linkedWorkflowId ? " · Linked workflow" : ""}</summary>
+                {Object.entries(executionFields).map(([field,label])=><div key={field} data-variable-field={field}><label>{label}</label><WorkflowRichText label={`${label} for step ${index+1}`} value={stage[field as keyof typeof executionFields] ?? ""} onChange={value=>stageChange(index,{...stage,[field]:value})}/></div>)}
+                <label>Linked workflow<select value={stage.linkedWorkflowId ?? ""} onChange={e=>stageChange(index,{...stage,linkedWorkflowId:e.target.value})}><option value="">None</option>{relatedWorkflows.filter(w=>w.id && w.id!==workflow.id).map(w=><option key={w.id} value={w.id}>{w.title}{w.archived ? " (archived)" : ""}</option>)}</select></label>
+              </details>}
+              {stage.linkedWorkflowId && <button type="button" disabled={dirty || saving || !relatedWorkflows.some(w=>w.id===stage.linkedWorkflowId)} onClick={()=>openRelated?.(stage.linkedWorkflowId!)}>Open linked workflow: {relatedWorkflows.find(w=>w.id===stage.linkedWorkflowId)?.title ?? "Unavailable"}</button>}
               {stage.sourceIndex !== null && workflow.stages[stage.sourceIndex] && <div className={styles.source} style={stage.imageLayout?.beforeText ? { order: -1 } : undefined}>{renderSource?.({ ...workflow.stages[stage.sourceIndex], imageLayout: stage.imageLayout }, layout => stageChange(index, { ...stage, imageLayout: layout }))}</div>}
               </div>
             </article>
@@ -575,6 +623,27 @@ export function WorkflowEditor({ workflow, save, actions, renderSource, stepsOnl
           {stepsOnly ? <span className={styles.readOnlyText}>{workflow.outcome}</span> : <Text label="Workflow outcome" value={draft.outcome} onChange={outcome => change({ ...draft, outcome })} />}
         </label>
       </fieldset>
+      {panel === "variables" && <WorkflowVariablePanel document={draft} change={change} selected={selectedVariable} select={setSelectedVariable} quote={quote} clearQuote={()=>setQuote(undefined)} source={id=>{const element = editorRoot.current?.querySelector<HTMLElement>(`[data-step-id="${id}"]`);element?.scrollIntoView({block:"center"}); element?.querySelector<HTMLElement>("textarea,[contenteditable=true]")?.focus();}} />}
+      {panel === "history" && <WorkflowVersionPanel workflow={workflow} disabled={dirty || saving || saveDisabled} restore={async revision=>{
+        if (busy.current) return;
+        busy.current = true; setSaving(true); setError("");
+        const sent = current.current;
+        try {
+          const saved = await save({...workflowEdit(workflow),restoreRevision:revision});
+          if (!mounted.current) return;
+          const next = keyedDraft(workflowEdit(saved)); baseline.current = next; setInitial(next);
+          if (current.current === sent) { update(next); setHistory([]); }
+          else setError("The version was restored. Your newer typing is kept in this draft; reload or review it before saving.");
+          setSavedOnce(true);
+        } catch(e) { if(mounted.current) setError(e instanceof Error ? e.message : "Could not restore this version."); }
+        finally { busy.current = false; if(mounted.current) setSaving(false); }
+      }} />}
+      {panel === "details" && <aside className={styles.panel} aria-label="Workflow details"><h2>Workflow details</h2><p>{workflow.apps.join(" · ")}</p><p>{workflow.people?.join(" · ")}</p><p>{workflow.quality.reasons.join(" · ")}</p>
+        <label>Review status<select value={draft.reviewStatus ?? "needs-review"} onChange={e=>change({...draft,reviewStatus:e.target.value as WorkflowMap["reviewStatus"]})}><option value="needs-review">Needs review</option><option value="needs-edits">Needs edits</option><option value="reviewed">Reviewed</option></select></label>
+        <label>Review note<textarea maxLength={8000} value={draft.reviewNote ?? ""} onChange={e=>change({...draft,reviewNote:e.target.value})}/></label><small>Reviewing the instructions does not verify execution or time savings.</small>
+        <button type="button" onClick={()=>change({...draft,archived:!draft.archived})}>{draft.archived ? "Unarchive workflow" : "Archive workflow"}</button><p>{draft.archived ? "Archived. Still available in the Archived filter." : "Archiving keeps this workflow and its sources."}</p>
+      </aside>}
+      </div>
       {renderSource && <p className={styles.note}>
         Captured sources are preserved as references. Edited instructions are
         not verified observations.
@@ -595,7 +664,11 @@ export function WorkflowDocument({ workflow, actions, sourceLabel, renderSource 
   sourceLabel?: string;
   renderSource?: (stage: WorkflowStage, onImageLayoutChange?: (layout: NonNullable<WorkflowStage["imageLayout"]>) => void) => ReactNode;
 }) {
-  return <section className={styles.editor} aria-label="Workflow document">
+  const [selected, select] = useState("");
+  return <section className={styles.editor} aria-label="Workflow document" onClickCapture={event=>{
+    const link=(event.target as Element).closest("a"); const id=variableId(link?.getAttribute("href") ?? "");
+    if(id) {event.preventDefault();select(id);}
+  }}>
     <header className={styles.toolbar}>
       <div><span>{sourceLabel}</span></div>
       <div>{actions}</div>
@@ -637,11 +710,13 @@ export function WorkflowDocument({ workflow, actions, sourceLabel, renderSource 
             </div>;
           })}
         </div>
+        {Object.entries(executionFields).map(([field,label])=>stage[field as keyof typeof executionFields] ? <div key={field}><h3>{label}</h3><WorkflowRichText label={`${label} for step ${index+1}`} value={stage[field as keyof typeof executionFields]!}/></div> : null)}
         {!!stage.apps.length && <p className={styles.stepApps}>{stage.apps.join(" · ")}</p>}
         {renderSource && <div className={styles.source} style={stage.imageLayout?.beforeText ? { order: -1 } : undefined}>{renderSource(stage)}</div>}
         </div>
       </article>)}
     </div>
     <div className={styles.endpoint}>Ends with<span className={styles.readOnlyText}>{workflow.outcome}</span></div>
+    {!!workflow.variables?.length && <WorkflowVariablePanel document={workflowEdit(workflow)} selected={selected} select={select} clearQuote={()=>{}} source={()=>{}}/>}
   </section>;
 }

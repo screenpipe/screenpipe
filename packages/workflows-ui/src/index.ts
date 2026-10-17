@@ -35,3 +35,5 @@ export { applyVideoEdit, parseVideoEdit, parseVideoDraft, type VideoDraft, type 
 export * from "./cloud-workflow";
 export { CloudWorkflowChat, projectCloudTurn } from "./cloud-workflow-chat";
 export { CloudWorkflowEditor } from "./cloud-workflow-editor";
+
+export { workflowAuthoredContext } from "./workflow-variables";

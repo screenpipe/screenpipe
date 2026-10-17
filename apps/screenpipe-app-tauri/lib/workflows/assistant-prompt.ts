@@ -32,7 +32,7 @@ Earlier conversation (partial when long; historical attachments are not the curr
 ${JSON.stringify(history.filter((m) => m.text && m.status !== "error").slice(-12).map((m) => ({ role: m.role, text: m.text.slice(0, 8000), page: m.context?.title })))}
 
 Current page evidence:
-${context ? JSON.stringify(context).slice(0, 42000) : "None — the user did not attach this page."}
+${context ? JSON.stringify(context, (key,value) => key === "versions" ? undefined : value).slice(0, 42000) : "None — the user did not attach this page."}
 
 User question:
 ${question}`;

@@ -25,10 +25,15 @@ describe("connected share artifacts", () => {
     workflow.stages[0].screenshot = { dataUrl: "PRIVATE_SCREENSHOT" } as any;
     workflow.stages[0].procedure = [{ kind: "action", text: "Review the draft", quote: "PRIVATE_SOURCE_QUOTE", timestamp: "private-time", app: "Docs" }];
     workflow.openQuestions = ["Who approves the result?"];
+    workflow.variables = [{id:"customer",kind:"input",name:"Customer",description:"Customer name",examples:[{stepId:"step-0",field:"description",value:"Acme"}]}];
+    workflow.stages[0].requiredAccess = "Reporting access";
+    workflow.versions = [{revision:0,at:"",snapshot:{...workflow,title:"PRIVATE_OLD_TITLE"}}];
     const artifact = createWorkflowShareArtifact(workflow);
     const markdown = renderConnectedShareArtifact(artifact, artifact.sections.map(section => section.id));
     expect(artifact.surface).toBe("workflow");
     expect(markdown).toContain("Review the draft");
+    expect(markdown).toContain("Acme");
+    expect(markdown).toContain("Reporting access");
     expect(markdown).toContain("Who approves the result?");
     expect(markdown).toContain("Needs review");
     expect(markdown).not.toMatch(/PRIVATE_|data:image|private-time|recording.mp4/);

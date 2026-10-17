@@ -2,7 +2,7 @@
 // https://screenpipe.com
 
 import { saveSkillDraftToDisk } from "./disk-storage";
-import { guideKey } from "@screenpipe/workflows-ui";
+import { guideKey, workflowAuthoredContext } from "@screenpipe/workflows-ui";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
@@ -125,9 +125,10 @@ export const generateWorkflowSkill = async (
 
   try {
     const draft = await invoke<WorkflowSkillDraft>("generate_workflow_skill", {
-      workflow,
+      workflow: { ...workflow, versions: undefined },
       profile: workProfile ?? null,
     });
+    draft.instructions += workflowAuthoredContext(workflow);
     onProgress?.({
       phase: "checking",
       message: "Ready for your review",

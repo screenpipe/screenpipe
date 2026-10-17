@@ -820,3 +820,6 @@
   .sourceTopbar { height: auto; min-height: 59px; flex-wrap: wrap; padding-top: 12px; padding-bottom: 12px; }
   .sourceTopbar .search { flex: 1 1 220px; min-width: 220px; width: auto; margin-right: 0; }
 }
+
+.catalogFilters { display:flex;flex-wrap:wrap;gap:16px;margin:0 0 20px;color:var(--muted);font-size:12px; }
+.catalogFilters select { background:var(--panel);color:var(--ink);border:1px solid var(--line);padding:6px;font:inherit; }

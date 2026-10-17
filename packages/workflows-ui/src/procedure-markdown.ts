@@ -70,6 +70,7 @@ export const procedureMarkdownSchema = new Schema({
               title: mark.attrs.title,
               target: "_blank",
               rel: "noopener noreferrer",
+              tabindex: 0,
             },
             0,
           ]

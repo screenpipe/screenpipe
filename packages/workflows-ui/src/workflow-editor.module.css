@@ -153,3 +153,25 @@
 @container workflow-editor (max-width: 560px) {
   .editor .addDetail { margin-left: 21px; }
 }
+
+/* Match the website's document + optional Variables rail. */
+.withPanel { max-width: 1120px; }
+.documentLayout { display: grid; grid-template-columns: minmax(0,1fr); gap: 28px; }
+.withPanel .documentLayout { grid-template-columns: minmax(0,1fr) 290px; }
+.panel { position:sticky;top:20px;align-self:start;max-height:calc(100vh - 120px);overflow:auto;border-left: 1px solid var(--line); padding-left: 20px; min-width:0; overflow-wrap:anywhere; }
+.panel h2 { font-size:16px; margin:0 0 12px; }
+.panel h3 { font-size:13px; margin:18px 0 8px; }
+.panel p, .panel small { font-size:12px; color:var(--muted); line-height:1.6; }
+.panel header { display:flex;justify-content:space-between;align-items:center; }
+.panel label, .execution label { display:block; font-size:12px; margin:12px 0; }
+.panel input, .panel textarea, .panel select, .execution select { box-sizing:border-box;display:block;width:100%;min-height:36px;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:6px;font:inherit; }
+.panel textarea { min-height:70px; }
+.panel blockquote { margin:10px 0; padding-left:10px; border-left:2px solid var(--line);white-space:pre-wrap; font-size:12px; }
+.panel pre { white-space:pre-wrap;word-break:break-word;font-size:11px;max-height:220px;overflow:auto;background:var(--soft);padding:8px; }
+.variable { border-top:1px solid var(--line);padding:8px 0; }
+.variable > button { font-weight:600; }
+.execution { margin:12px 0 12px 24px; font-size:12px; }
+.execution > summary { cursor:pointer; color:var(--muted); }
+@container workflow-editor (max-width: 850px) { .withPanel .documentLayout { grid-template-columns:minmax(0,1fr); } .panel { position:static;max-height:none;grid-row:1; border-left:0;border-bottom:1px solid var(--line);padding:0 0 20px; } }
+
+.editor a[href^="#workflow-io-"] { color:var(--ink); background:var(--soft); border-bottom:1px dashed var(--muted);border-radius:3px;padding:1px 3px;text-decoration:none; }

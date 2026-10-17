@@ -25,10 +25,32 @@ pub struct EditRequest {
     pub trigger: String,
     pub outcome: String,
     pub stages: Vec<StageEdit>,
+    #[serde(default)]
+    pub variables: Option<Vec<WorkflowVariable>>,
+    #[serde(default)]
+    pub archived: Option<bool>,
+    #[serde(default, rename = "reviewStatus")]
+    pub review_status: Option<String>,
+    #[serde(default, rename = "reviewNote")]
+    pub review_note: Option<String>,
+    #[serde(default, rename = "restoreRevision")]
+    pub restore_revision: Option<u64>,
 }
 #[derive(Deserialize, OaSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StageEdit {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub required_access: Option<String>,
+    #[serde(default)]
+    pub exceptions: Option<String>,
+    #[serde(default)]
+    pub escalation: Option<String>,
+    #[serde(default)]
+    pub response_template: Option<String>,
+    #[serde(default)]
+    pub linked_workflow_id: Option<String>,
     pub image_layout: Option<ImageLayout>,
     pub source_index: Option<usize>,
     pub name: String,
@@ -59,9 +81,81 @@ fn without_image_layout(value: &Value) -> Value {
 #[derive(Deserialize, OaSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ProcedureEdit {
+    #[serde(default)]
+    pub id: Option<String>,
     pub source_index: Option<usize>,
     pub kind: String,
     pub text: String,
+}
+#[derive(Deserialize, Serialize, OaSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkflowVariable {
+    pub id: String,
+    pub kind: String,
+    pub name: String,
+    pub description: String,
+    pub examples: Vec<VariableExample>,
+}
+#[derive(Deserialize, Serialize, OaSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct VariableExample {
+    pub step_id: String,
+    pub field: String,
+    pub value: String,
+}
+fn identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 80
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+fn validate_variables(items: &[WorkflowVariable]) -> bool {
+    let mut ids = HashSet::new();
+    let mut names = HashSet::new();
+    items.len() <= 40
+        && items.iter().all(|v| {
+            identifier(&v.id)
+                && ids.insert(&v.id)
+                && ["input", "output"].contains(&v.kind.as_str())
+                && !v.name.trim().is_empty()
+                && v.name.chars().count() <= 100
+                && names.insert(v.name.trim().to_lowercase())
+                && v.description.chars().count() <= 1000
+                && v.examples.len() <= 20
+                && v.examples.iter().all(|e| {
+                    identifier(&e.step_id)
+                        && !e.field.is_empty()
+                        && e.field.len() <= 100
+                        && !e.value.trim().is_empty()
+                        && e.value.chars().count() <= 1000
+                })
+        })
+}
+/// Catalog-owned, bounded snapshots. Never accept history/evidence supplied by a client.
+fn keep_version(previous: &Value, next: &mut Value) -> Result<(), ApiError> {
+    let mut snapshot = previous.clone();
+    snapshot
+        .as_object_mut()
+        .ok_or_else(invalid)?
+        .remove("versions");
+    screenpipe_core::workflows::discard_screenshot_pixels(&mut snapshot);
+    let mut versions = previous["versions"].as_array().cloned().unwrap_or_default();
+    versions.push(
+        json!({"revision":previous["revision"].as_u64().unwrap_or(0),
+        "at":previous["userEditedAt"].as_str().unwrap_or(""),"snapshot":snapshot}),
+    );
+    while versions.len() > 10
+        || (versions.len() > 1
+            && serde_json::to_vec(&versions).map_or(usize::MAX, |v| v.len()) > 2 * 1024 * 1024)
+    {
+        versions.remove(0);
+    }
+    if serde_json::to_vec(&versions).map_or(usize::MAX, |v| v.len()) > 2 * 1024 * 1024 {
+        return Err(error(StatusCode::BAD_REQUEST, "This workflow is too large to preserve a version safely. Your saved workflow is unchanged."));
+    }
+    next["versions"] = json!(versions);
+    Ok(())
 }
 fn invalid() -> ApiError {
     error(StatusCode::BAD_REQUEST, "Enter a title and at least one named step. Text must be under 8,000 characters and blocks must have valid source references.")
@@ -70,10 +164,65 @@ fn text_ok(text: &str, required: bool) -> bool {
     text.len() <= 8000 && (!required || !text.trim().is_empty())
 }
 
+fn without_ids(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .filter(|(key, _)| key.as_str() != "id")
+                .map(|(key, value)| (key.clone(), without_ids(value)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(without_ids).collect()),
+        _ => value.clone(),
+    }
+}
 /// Reapply only owner-authored fields, never metadata supplied by an agent.
 pub(super) fn preserve_edits(previous: &Value, next: &mut Value) {
+    for key in [
+        "variables",
+        "archived",
+        "reviewStatus",
+        "reviewNote",
+        "versions",
+    ] {
+        if previous.get(key).is_some() {
+            next[key] = previous[key].clone();
+        } else if let Some(object) = next.as_object_mut() {
+            object.remove(key);
+        }
+    }
     next["userEdits"] = previous["userEdits"].clone();
     next["userEditedAt"] = previous["userEditedAt"].clone();
+    if let Some(stages) = next["stages"].as_array_mut() {
+        for stage in stages {
+            let matches: Vec<_> = previous["stages"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|old| old["name"] == stage["name"])
+                .collect();
+            if matches.len() == 1 {
+                let old = matches[0];
+                if old.get("id").is_some() {
+                    stage["id"] = old["id"].clone();
+                }
+                if let Some(blocks) = stage.get_mut("procedure").and_then(Value::as_array_mut) {
+                    for block in blocks {
+                        let found: Vec<_> = old["procedure"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter(|p| p["kind"] == block["kind"] && p["text"] == block["text"])
+                            .collect();
+                        if found.len() == 1 && found[0].get("id").is_some() {
+                            block["id"] = found[0]["id"].clone();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if let Some(edits) = previous["userEdits"].as_object() {
         for key in ["title", "description", "trigger", "outcome", "bottlenecks"] {
             if edits.get(key) == Some(&Value::Bool(true)) {
@@ -136,6 +285,49 @@ fn apply_edit(previous: &Value, body: &EditRequest) -> Result<Value, ApiError> {
     if body.expected_revision != previous["revision"].as_u64().unwrap_or(0) {
         return Err(error(StatusCode::CONFLICT, "This workflow changed while you were editing. Your draft is kept. Reopen the latest workflow before applying your edits."));
     }
+    if let Some(revision) = body.restore_revision {
+        let saved = previous["versions"]
+            .as_array()
+            .and_then(|v| v.iter().find(|v| v["revision"].as_u64() == Some(revision)))
+            .ok_or_else(|| {
+                error(
+                    StatusCode::NOT_FOUND,
+                    "That saved version is no longer available.",
+                )
+            })?;
+        let mut next = saved["snapshot"].clone();
+        if !next.is_object() {
+            return Err(invalid());
+        }
+        next["id"] = previous["id"].clone();
+        next["revision"] = json!(body.expected_revision + 1);
+        next["userEditedAt"] = json!(chrono::Utc::now().to_rfc3339());
+        next["userEdits"] = json!({"title":true,"description":true,"trigger":true,"outcome":true,"stages":true,"bottlenecks":true});
+        if let Some(stages) = next.get_mut("stages").and_then(Value::as_array_mut) {
+            for stage in stages {
+                stage["userEdited"] = json!(true);
+            }
+        }
+        // Preserve the historical references, but do not treat a restore as new execution.
+        invalidate_step_claims(&mut next);
+        keep_version(previous, &mut next)?;
+        return Ok(next);
+    }
+    if body
+        .variables
+        .as_ref()
+        .is_some_and(|v| !validate_variables(v))
+        || body
+            .review_status
+            .as_ref()
+            .is_some_and(|v| !["needs-review", "needs-edits", "reviewed"].contains(&v.as_str()))
+        || body
+            .review_note
+            .as_ref()
+            .is_some_and(|v| !text_ok(v, false))
+    {
+        return Err(invalid());
+    }
     if !text_ok(&body.title, true)
         || [&body.description, &body.trigger, &body.outcome]
             .iter()
@@ -149,6 +341,7 @@ fn apply_edit(previous: &Value, body: &EditRequest) -> Result<Value, ApiError> {
     let mut used = HashSet::new();
     let mut stages = Vec::new();
     let mut names = std::collections::HashMap::new();
+    let mut step_ids = HashSet::new();
     for stage in &body.stages {
         if !text_ok(&stage.name, true)
             || !text_ok(&stage.description, false)
@@ -168,6 +361,33 @@ fn apply_edit(previous: &Value, body: &EditRequest) -> Result<Value, ApiError> {
             }
         };
         let mut next = prior.clone();
+        if let Some(id) = &stage.id {
+            if !identifier(id) || !step_ids.insert(id) {
+                return Err(invalid());
+            }
+            if prior["id"].as_str().is_some_and(|old| old != id) {
+                return Err(invalid());
+            }
+            next["id"] = json!(id);
+        }
+        for (key, value) in [
+            ("requiredAccess", &stage.required_access),
+            ("exceptions", &stage.exceptions),
+            ("escalation", &stage.escalation),
+            ("responseTemplate", &stage.response_template),
+            ("linkedWorkflowId", &stage.linked_workflow_id),
+        ] {
+            if let Some(value) = value {
+                if !text_ok(value, false)
+                    || (key == "linkedWorkflowId"
+                        && !value.is_empty()
+                        && (!value.starts_with("wf-") || value.len() > 200))
+                {
+                    return Err(invalid());
+                }
+                next[key] = json!(value.trim());
+            }
+        }
         next["name"] = json!(stage.name.trim());
         next["description"] = json!(stage.description.trim());
         if let Some(name) = prior["name"].as_str() {
@@ -175,6 +395,7 @@ fn apply_edit(previous: &Value, body: &EditRequest) -> Result<Value, ApiError> {
         }
         let mut used_details = HashSet::new();
         let mut details = Vec::new();
+        let mut block_ids = HashSet::new();
         for detail in &stage.procedure {
             if !["action", "input", "output", "decision", "check"].contains(&detail.kind.as_str())
                 || !text_ok(&detail.text, true)
@@ -190,6 +411,15 @@ fn apply_edit(previous: &Value, body: &EditRequest) -> Result<Value, ApiError> {
                 Some(_) => return Err(invalid()),
                 None => json!({"quote":"","timestamp":"","app":""}),
             };
+            if let Some(id) = &detail.id {
+                if !identifier(id)
+                    || !block_ids.insert(id)
+                    || source["id"].as_str().is_some_and(|old| old != id)
+                {
+                    return Err(invalid());
+                }
+                source["id"] = json!(id);
+            }
             if source["kind"] != detail.kind || source["text"] != detail.text.trim() {
                 source["userEdited"] = json!(true);
             }
@@ -201,7 +431,7 @@ fn apply_edit(previous: &Value, body: &EditRequest) -> Result<Value, ApiError> {
         if !details.is_empty() || prior.get("procedure").is_some() {
             next["procedure"] = json!(details);
         }
-        if next != prior {
+        if without_ids(&next) != without_ids(&prior) {
             next["timing"] = Value::Null;
             next["userEdited"] = json!(true);
         }
@@ -227,13 +457,16 @@ fn apply_edit(previous: &Value, body: &EditRequest) -> Result<Value, ApiError> {
             next[key] = value;
         }
     }
-    if stages != *original {
-        let presentation_only = stages.iter().map(without_image_layout).collect::<Vec<_>>()
-            == original
+    next["stages"] = json!(stages);
+    if without_ids(&next["stages"]) != without_ids(&json!(original)) {
+        let presentation_only = without_ids(&json!(stages
+            .iter()
+            .map(without_image_layout)
+            .collect::<Vec<_>>()))
+            == without_ids(&json!(original
                 .iter()
                 .map(without_image_layout)
-                .collect::<Vec<_>>();
-        next["stages"] = json!(stages);
+                .collect::<Vec<_>>()));
         edits.insert("stages".into(), json!(true));
         if !presentation_only {
             // Rename surviving step associations and remove associations to deleted steps.
@@ -252,12 +485,29 @@ fn apply_edit(previous: &Value, body: &EditRequest) -> Result<Value, ApiError> {
             invalidate_step_claims(&mut next);
         }
     }
+    for (key, value) in [
+        ("variables", body.variables.as_ref().map(|v| json!(v))),
+        ("archived", body.archived.map(|v| json!(v))),
+        (
+            "reviewStatus",
+            body.review_status.as_ref().map(|v| json!(v)),
+        ),
+        (
+            "reviewNote",
+            body.review_note.as_ref().map(|v| json!(v.trim())),
+        ),
+    ] {
+        if let Some(value) = value {
+            next[key] = value;
+        }
+    }
     if next == *previous {
         return Ok(next);
     }
     next["userEdits"] = json!(edits);
     next["userEditedAt"] = json!(chrono::Utc::now().to_rfc3339());
     next["revision"] = json!(body.expected_revision + 1);
+    keep_version(previous, &mut next)?;
     Ok(next)
 }
 #[oasgen]
@@ -294,6 +544,78 @@ pub(crate) async fn edit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn variables_versions_archive_and_restore_keep_original_sources() {
+        let previous = original();
+        let raw = json!({"id":"wf-test","expected_revision":3,"title":"Prepare a report","description":"Description","trigger":"Request","outcome":"Report","stages":[{"sourceIndex":0,"id":"step-0","name":"Read","description":"Review named source","requiredAccess":"Read access","procedure":[]}],
+          "variables":[{"id":"source","kind":"input","name":"Source","description":"Document to review","examples":[{"stepId":"step-0","field":"description","value":"original document"}]}],"archived":true,"reviewStatus":"needs-edits","reviewNote":"Check the last step"});
+        let body: EditRequest = serde_json::from_value(raw).unwrap();
+        let saved = apply_edit(&previous, &body).unwrap();
+        assert_eq!(saved["variables"][0]["name"], "Source");
+        assert_eq!(
+            saved["stages"][0]["evidence"],
+            previous["stages"][0]["evidence"]
+        );
+        assert_eq!(saved["versions"][0]["revision"], 3);
+        let mut refreshed = previous.clone();
+        preserve_edits(&saved, &mut refreshed);
+        assert_eq!(refreshed["variables"], saved["variables"]);
+        assert_eq!(refreshed["archived"], true);
+        let mut restore = body;
+        restore.expected_revision = 4;
+        restore.restore_revision = Some(3);
+        let restored = apply_edit(&saved, &restore).unwrap();
+        assert_eq!(restored["revision"], 5);
+        assert_eq!(
+            restored["stages"][0]["description"],
+            previous["stages"][0]["description"]
+        );
+        assert_eq!(
+            restored["stages"][0]["evidence"],
+            previous["stages"][0]["evidence"]
+        );
+        assert_eq!(restored["stages"][0]["userEdited"], true);
+        assert_eq!(restored["versions"].as_array().unwrap().len(), 2);
+        assert!(restored["versions"][0]["snapshot"]
+            .get("versions")
+            .is_none());
+        assert!(apply_edit(&restored, &restore).is_err());
+    }
+    #[test]
+    fn rejects_duplicate_variables_and_preserves_timing_for_identity_only_edits() {
+        let previous = original();
+        let mut body = request();
+        body.stages[0].id = Some("step-0".into());
+        let saved = apply_edit(&previous, &body).unwrap();
+        assert_eq!(
+            saved["stages"][0]["timing"],
+            previous["stages"][0]["timing"]
+        );
+        let item = json!({"id":"x","kind":"input","name":"Source","description":"","examples":[]});
+        body.variables = Some(serde_json::from_value(json!([item, item])).unwrap());
+        assert!(apply_edit(&previous, &body).is_err());
+    }
+    #[test]
+    fn history_is_bounded_and_discovery_cannot_invent_owner_metadata() {
+        let mut saved = original();
+        for n in 0..12 {
+            let mut body = request();
+            body.expected_revision = saved["revision"].as_u64().unwrap();
+            body.title = format!("Revision {n}");
+            saved = apply_edit(&saved, &body).unwrap();
+        }
+        assert_eq!(saved["versions"].as_array().unwrap().len(), 10);
+        assert!(saved["versions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|v| v["snapshot"].get("versions").is_none()));
+        let mut forged = json!({"archived":true,"versions":[{"revision":999}],"variables":[{"name":"Invented"}],"stages":[]});
+        preserve_edits(&original(), &mut forged);
+        assert!(forged.get("archived").is_none());
+        assert!(forged.get("versions").is_none());
+        assert!(forged.get("variables").is_none());
+    }
     fn original() -> Value {
         json!({"id":"wf-test","revision":3,"title":"Prepare a report","description":"Description","trigger":"Request","outcome":"Report","timing":{"averageMinutes":5},"stages":[
             {"name":"Read","description":"Review sources","evidence":[{"detail":"Original source"}],"screenshot":{"dataUrl":"fixture-image"},"screenshots":[{"frameId":1,"dataUrl":"fixture-one"},{"frameId":2,"dataUrl":"fixture-two"}],"procedure":[{"kind":"action","text":"Read notes","quote":"Original quotation","app":"Notes","timestamp":"2026-09-01T10:00:00Z"}]},
@@ -403,6 +725,12 @@ mod tests {
         assert_eq!(saved["revision"], 4);
         body.stages.remove(1);
         body.stages.push(StageEdit {
+            id: None,
+            required_access: None,
+            exceptions: None,
+            escalation: None,
+            response_template: None,
+            linked_workflow_id: None,
             image_layout: None,
             source_index: None,
             name: "Deliver".into(),
