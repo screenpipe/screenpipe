@@ -427,6 +427,38 @@ describe("stdio startup handshake", { timeout: INIT_DEADLINE_MS + 2_000 }, () =>
     expect(frame?.inputSchema?.properties?.frame_id?.minimum).toBe(1);
   }, INIT_DEADLINE_MS * 2);
 
+  // The desktop app's agent runtime runs SCREENPIPE_MCP_READ_TOOLS without an
+  // approval card. An unlisted read tool interrupts chats with a card; a listed
+  // tool that writes (create-pipe installs a scheduled agent with a shell) runs
+  // without asking.
+  it("matches the read-only tools the desktop agent runtime runs without asking", async () => {
+    const [personalTools, teamTools] = await Promise.all([
+      listToolsHandshake(),
+      listToolsHandshake({
+        SCREENPIPE_ENTERPRISE_TOKEN: "sk_ent_smoke_test",
+        SCREENPIPE_TEAM_API_URL: "http://127.0.0.1:59998/api/enterprise/v1",
+      }),
+    ]);
+    const readOnly = new Set(
+      [...personalTools, ...teamTools]
+        .filter((tool) => tool.annotations?.readOnlyHint === true)
+        .map((tool) => tool.name as string),
+    );
+    const runtime = fs.readFileSync(
+      path.join(PKG_ROOT, "../../crates/screenpipe-core/src/agents/acp/runtime.rs"),
+      "utf8",
+    );
+    const list = runtime.match(/const SCREENPIPE_MCP_READ_TOOLS: &\[&str\] = &\[([^\]]*)\];/)?.[1];
+    expect(list, "SCREENPIPE_MCP_READ_TOOLS in runtime.rs").toBeDefined();
+    // A commented-out entry isn't listed.
+    const entries = list!.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    const autoApproved = [...entries.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+    expect(
+      autoApproved.sort(),
+      "runtime.rs SCREENPIPE_MCP_READ_TOOLS: list a tool only after checking its handler only reads",
+    ).toEqual([...readOnly].sort());
+  }, INIT_DEADLINE_MS * 2);
+
   it("advertises local-calendar literals for every normalized time field", async () => {
     const tools = await listToolsHandshake();
     const fieldsByTool = new Map<string, string[]>([

@@ -17,10 +17,13 @@ on:
     branches: [main]
     paths:
       - "packages/screenpipe-mcp/**"
+      # Holds the read-only tool list stdio-startup.test.ts checks.
+      - "crates/screenpipe-core/src/agents/acp/runtime.rs"
       - ".github/workflows/test-mcp.yml"
   pull_request:
     paths:
       - "packages/screenpipe-mcp/**"
+      - "crates/screenpipe-core/src/agents/acp/runtime.rs"
       - ".github/workflows/test-mcp.yml"
 
 concurrency:
