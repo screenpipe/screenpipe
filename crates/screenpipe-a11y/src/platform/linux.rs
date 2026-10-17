@@ -18,6 +18,12 @@
 //!
 //! Uses compositor IPC (Hyprland/Sway on Wayland) or `xdotool` (X11) to track the active window.
 //!
+//! ## Clicked element
+//!
+//! Clicks carry the clicked element's role, name and ancestors, resolved from
+//! AT-SPI2 focus events (see `linux_focus`). They are emitted
+//! `CLICK_SETTLE` after the button press, once the focus change has arrived.
+//!
 //! ## Clipboard
 //!
 //! Uses `xclip` (X11) or `wl-paste` (Wayland) to read clipboard content.
@@ -25,6 +31,7 @@
 use crate::activity_feed::{ActivityFeed, ActivityKind};
 use crate::config::UiCaptureConfig;
 use crate::events::{EventData, Modifiers, UiEvent};
+use crate::platform::linux_focus::{self, FocusHistory, CLICK_SETTLE};
 use anyhow::Result;
 use chrono::Utc;
 use crossbeam_channel::{bounded, Receiver, Sender};
@@ -394,6 +401,21 @@ fn run_evdev_monitor(
     let text_buf = Arc::new(Mutex::new(TextBuffer::new(config.text_timeout_ms)));
     let last_mouse = Arc::new(Mutex::new((0i32, 0i32)));
 
+    // Clicked-element enrichment: clicks go through a resolver thread that
+    // waits for the focus change they cause, then attaches the element.
+    let (click_tx, resolver_thread) = if config.capture_clicks && config.capture_context {
+        let (click_tx, click_rx) = bounded::<(UiEvent, Instant)>(256);
+        let history = linux_focus::focus_history();
+        let tx_resolver = tx.clone();
+        let stop_resolver = stop.clone();
+        let handle = thread::spawn(move || {
+            run_click_resolver(click_rx, tx_resolver, stop_resolver, history);
+        });
+        (Some(click_tx), Some(handle))
+    } else {
+        (None, None)
+    };
+
     // Spawn a thread per device group for simplicity
     let stop_kb = stop.clone();
     let tx_kb = tx.clone();
@@ -435,6 +457,7 @@ fn run_evdev_monitor(
             window_mouse,
             feed_mouse,
             last_mouse,
+            click_tx,
         );
     });
 
@@ -471,7 +494,41 @@ fn run_evdev_monitor(
 
     let _ = kb_thread.join();
     let _ = mouse_thread.join();
+    if let Some(handle) = resolver_thread {
+        let _ = handle.join();
+    }
     debug!("evdev monitor stopped");
+}
+
+/// Emit each click once `CLICK_SETTLE` has passed, with the element it landed
+/// on. Stops when the mouse thread drops its sender or `stop` is set.
+fn run_click_resolver(
+    clicks: Receiver<(UiEvent, Instant)>,
+    tx: Sender<UiEvent>,
+    stop: Arc<AtomicBool>,
+    history: Arc<Mutex<FocusHistory>>,
+) {
+    loop {
+        let (mut event, clicked_at) = match clicks.recv_timeout(Duration::from_millis(100)) {
+            Ok(click) => click,
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                continue;
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+        };
+        let ready_at = clicked_at + CLICK_SETTLE;
+        let now = Instant::now();
+        if ready_at > now {
+            thread::sleep(ready_at - now);
+        }
+        event.element = history
+            .lock()
+            .element_for_click(clicked_at, event.app_name.as_deref());
+        let _ = tx.try_send(event);
+    }
 }
 
 /// Monitor keyboard evdev devices.
@@ -756,6 +813,7 @@ fn monitor_mice(
     current_window: Arc<Mutex<Option<String>>>,
     activity_feed: Option<ActivityFeed>,
     last_mouse: Arc<Mutex<(i32, i32)>>,
+    click_tx: Option<Sender<(UiEvent, Instant)>>,
 ) {
     // Set devices to non-blocking
     for device in &mut devices {
@@ -812,7 +870,18 @@ fn monitor_mice(
                             let mut ui_event = UiEvent::click(Utc::now(), t, x, y, button, 1, 0);
                             ui_event.app_name = app_name;
                             ui_event.window_title = window_title;
-                            let _ = tx.try_send(ui_event);
+                            match &click_tx {
+                                Some(click_tx) => {
+                                    // Resolver backlogged: emit the click
+                                    // without its element rather than drop it.
+                                    if let Err(e) = click_tx.try_send((ui_event, Instant::now())) {
+                                        let _ = tx.try_send(e.into_inner().0);
+                                    }
+                                }
+                                None => {
+                                    let _ = tx.try_send(ui_event);
+                                }
+                            }
                         }
                         evdev::EventType::RELATIVE => {
                             // Mouse movement
@@ -1562,6 +1631,55 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn click_resolver_attaches_the_element_focused_by_the_click() {
+        use crate::events::ElementContext;
+        use crate::platform::linux_focus::FocusRecord;
+
+        let history = Arc::new(Mutex::new(FocusHistory::default()));
+        let (click_tx, click_rx) = bounded(4);
+        let (tx, rx) = bounded(4);
+        let stop = Arc::new(AtomicBool::new(false));
+        let resolver = {
+            let history = history.clone();
+            let stop = stop.clone();
+            thread::spawn(move || run_click_resolver(click_rx, tx, stop, history))
+        };
+
+        let mut click = UiEvent::click(Utc::now(), 0, 10, 20, 0, 1, 0);
+        click.app_name = Some("gedit".to_string());
+        let clicked_at = Instant::now();
+        click_tx.send((click, clicked_at)).unwrap();
+        // The focus change caused by the click arrives a little later.
+        history.lock().push(FocusRecord {
+            at: clicked_at + Duration::from_millis(20),
+            key: ":1.42/org/a11y/atspi/accessible/7".to_string(),
+            app: Some("gedit".to_string()),
+            element: Some(ElementContext {
+                role: "push button".to_string(),
+                name: Some("Save".to_string()),
+                value: None,
+                description: None,
+                automation_id: None,
+                bounds: None,
+                ancestors: None,
+            }),
+        });
+
+        let emitted = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(clicked_at.elapsed() >= CLICK_SETTLE);
+        let element = emitted.element.expect("clicked element");
+        assert_eq!(element.role, "push button");
+        assert_eq!(element.name.as_deref(), Some("Save"));
+        assert!(matches!(
+            emitted.data,
+            EventData::Click { x: 10, y: 20, .. }
+        ));
+
+        drop(click_tx);
+        resolver.join().unwrap();
+    }
 
     #[test]
     fn test_evdev_key_to_char() {
