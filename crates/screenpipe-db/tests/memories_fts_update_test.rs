@@ -6,7 +6,7 @@
 
 use screenpipe_db::DatabaseManager;
 
-const FIX_MIGRATION: i64 = 20261017210000;
+const FIX_MIGRATION: i64 = 20261022000000;
 
 /// The triggers shipped by 20260310000000_create_memories.sql.
 const LEGACY_TRIGGERS: &str = "
