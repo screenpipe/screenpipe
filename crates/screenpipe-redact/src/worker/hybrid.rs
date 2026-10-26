@@ -53,11 +53,19 @@ impl Worker {
             required_surfaces: required,
         })
         .await?;
-        let ids:Vec<i64>=sqlx::query_scalar("SELECT p.frame_id FROM frame_payloads p CROSS JOIN storage_metadata m WHERE (p.completed_surfaces & m.required_surfaces)!=m.required_surfaces AND (p.retry_at IS NULL OR p.retry_at<=strftime('%s','now')) ORDER BY p.frame_id DESC LIMIT ?")
+        let order = if self.background_oldest(super::TargetTable::FullText).await {
+            "ASC"
+        } else {
+            "DESC"
+        };
+        let ids:Vec<i64>=sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT p.frame_id FROM frame_payloads p CROSS JOIN storage_metadata m WHERE (p.completed_surfaces & m.required_surfaces)!=m.required_surfaces AND (p.retry_at IS NULL OR p.retry_at<=strftime('%s','now')) ORDER BY p.frame_id {order} LIMIT ?")))
             .bind(limit).fetch_all(&db.pool).await?;
         let mut count = 0;
         for id in ids {
-            let token = db.storage_read_token().await?;
+            // Ordinary captures and archival do not revoke an older payload.
+            // Its read pins its own files; deletion/privacy still revoke this token,
+            // and replacement below compares both generation and policy.
+            let token = db.storage_export_token().await?;
             let Some(mut payload) = db.frame_payloads(&[id], Projection::All).await?.remove(&id)
             else {
                 continue;

@@ -12,10 +12,11 @@
 //! / migration backfill workers in shape — pause / resume / status,
 //! idle-aware scheduling knobs, retry-with-backoff on transient errors.
 //!
-//! Deliberately newest-first. Users search recent activity; redacting
-//! oldest-first means the most-likely-to-be-queried rows have stale
-//! redactions until the worker catches up.
+//! Alternate recent and historical batches independently per surface so
+//! recent activity stays responsive without starving history during capture.
 
+#[cfg(test)]
+mod backlog_tests;
 mod columns;
 mod hybrid;
 mod release;
@@ -131,6 +132,7 @@ pub struct WorkerStatus {
 pub struct Worker {
     release_db: Option<Arc<screenpipe_db::DatabaseManager>>,
     release_scheduler: Arc<Mutex<release::ReleaseScheduler>>,
+    background_order: Arc<Mutex<HashMap<TargetTable, bool>>>,
     frame_storage: Option<Arc<screenpipe_db::DatabaseManager>>,
     pool: SqlitePool,
     writer: SqliteWritePool,
@@ -157,6 +159,7 @@ impl Worker {
             frame_storage: None,
             release_db: None,
             release_scheduler: Arc::new(Mutex::new(Default::default())),
+            background_order: Arc::new(Mutex::new(HashMap::new())),
             pool,
             writer,
             redactor,
@@ -165,6 +168,14 @@ impl Worker {
             paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             database_error_hook: None,
         }
+    }
+
+    async fn background_oldest(&self, table: TargetTable) -> bool {
+        let mut order = self.background_order.lock().await;
+        let next = order.entry(table).or_default();
+        let oldest = *next;
+        *next = !*next;
+        oldest
     }
 
     /// Route typed SQLx failures to the database owner. Non-database errors
@@ -563,7 +574,12 @@ impl Worker {
             return Ok(0);
         }
         let fields = cols.a11y_json_fields();
-        let rows = tables::fetch_unredacted_elements(&self.pool, batch_size).await?;
+        let rows = tables::fetch_unredacted_elements(
+            &self.pool,
+            batch_size,
+            self.background_oldest(TargetTable::Elements).await,
+        )
+        .await?;
         if rows.is_empty() {
             return Ok(0);
         }
@@ -704,7 +720,13 @@ impl Worker {
         if active.is_empty() {
             return Ok(0);
         }
-        let rows = tables::fetch_unredacted_ui_events(&self.pool, &active, batch_size).await?;
+        let rows = tables::fetch_unredacted_ui_events(
+            &self.pool,
+            &active,
+            batch_size,
+            self.background_oldest(TargetTable::UiEvents).await,
+        )
+        .await?;
         if rows.is_empty() {
             return Ok(0);
         }
@@ -811,7 +833,12 @@ impl Worker {
     /// yield a value map (the span-less enclave). Returns the number of
     /// column writes performed.
     async fn process_frames_fulltext(&self, batch_size: u32) -> Result<u32, anyhow::Error> {
-        let rows = tables::fetch_unredacted_frames_fulltext(&self.pool, batch_size).await?;
+        let rows = tables::fetch_unredacted_frames_fulltext(
+            &self.pool,
+            batch_size,
+            self.background_oldest(TargetTable::FullText).await,
+        )
+        .await?;
         if rows.is_empty() {
             return Ok(0);
         }
@@ -1148,7 +1175,13 @@ impl Worker {
         table: TargetTable,
         batch_size: u32,
     ) -> Result<u32, anyhow::Error> {
-        let rows = tables::fetch_unredacted(&self.pool, table, batch_size).await?;
+        let rows = tables::fetch_unredacted(
+            &self.pool,
+            table,
+            batch_size,
+            self.background_oldest(table).await,
+        )
+        .await?;
         if rows.is_empty() {
             return Ok(0);
         }

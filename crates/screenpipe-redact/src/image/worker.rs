@@ -291,7 +291,12 @@ impl ImageWorker {
                 return self.process_release_image(db).await;
             }
         }
-        let row = sqlx::query(
+        let order = if self.release_oldest.fetch_xor(true, Ordering::SeqCst) {
+            "ASC"
+        } else {
+            "DESC"
+        };
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
             r#"
             SELECT f.id, f.name,
                    CASE
@@ -309,10 +314,10 @@ impl ImageWorker {
              WHERE f.name IS NOT NULL
                AND f.image_redacted_at IS NULL
                AND ( strftime('%s','now') - CAST(strftime('%s', f.timestamp) AS INTEGER) ) >= ?1
-             ORDER BY f.id DESC
+             ORDER BY f.id {order}
              LIMIT 1
             "#,
-        )
+        )))
         .bind(self.cfg.min_age_seconds)
         .bind(self.cfg.max_a11y_age_seconds)
         .fetch_optional(&self.pool)
@@ -532,6 +537,35 @@ mod tests {
         .await
         .unwrap();
         pool
+    }
+
+    #[tokio::test]
+    async fn background_image_history_progresses_while_new_frames_arrive() {
+        let pool = setup().await;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("image.png");
+        white_test_image(&path);
+        sqlx::query("INSERT INTO frames(id,timestamp,name) VALUES(1,'2020-01-01',?)")
+            .bind(path.to_str().unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+        let worker = ImageWorker::new(pool.clone(), Arc::new(StubRedactor), Default::default());
+        for id in 2..=5 {
+            sqlx::query("INSERT INTO frames(id,timestamp,name) VALUES(?,'2020-01-02',?)")
+                .bind(id)
+                .bind(path.to_str().unwrap())
+                .execute(&pool)
+                .await
+                .unwrap();
+            assert!(worker.process_one().await.unwrap().is_some());
+        }
+        let done: bool =
+            sqlx::query_scalar("SELECT image_redacted_at IS NOT NULL FROM frames WHERE id=1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(done, "new images starved historical background processing");
     }
 
     #[tokio::test]

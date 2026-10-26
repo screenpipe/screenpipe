@@ -50,7 +50,7 @@
 
 use sqlx::{Row, SqlitePool};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetTable {
     /// Speech-to-text (`audio_transcriptions.transcription`).
@@ -241,7 +241,9 @@ pub async fn fetch_unredacted(
     pool: &SqlitePool,
     table: TargetTable,
     limit: u32,
+    oldest: bool,
 ) -> Result<Vec<UnredactedRow>, sqlx::Error> {
+    let order = if oldest { "ASC" } else { "DESC" };
     debug_assert!(
         table != TargetTable::UiEvents,
         "UiEvents is multi-column; call fetch_unredacted_ui_events"
@@ -256,7 +258,7 @@ pub async fn fetch_unredacted(
          WHERE {src} IS NOT NULL AND {src} != '' \
            AND {redacted_at} IS NULL\
            {extra} \
-         ORDER BY {pk} DESC \
+         ORDER BY {pk} {order} \
          LIMIT ?",
         pk = table.pk_col(),
         src = table.source_col(),
@@ -329,13 +331,16 @@ pub struct FrameTextRow {
 }
 
 /// Fetch up to `limit` frames whose `full_text` needs redaction
-/// (newest-first), carrying the sibling derived copies + their watermarks
+/// (alternating order chosen by the worker), carrying the sibling derived copies + their watermarks
 /// so the caller can scrub them all from one detection pass.
 pub async fn fetch_unredacted_frames_fulltext(
     pool: &SqlitePool,
     limit: u32,
+    oldest: bool,
 ) -> Result<Vec<FrameTextRow>, sqlx::Error> {
-    let q = "SELECT id, full_text, accessibility_text, accessibility_redacted_at, \
+    let order = if oldest { "ASC" } else { "DESC" };
+    let q = format!(
+        "SELECT id, full_text, accessibility_text, accessibility_redacted_at, \
                     accessibility_tree_json, accessibility_tree_redacted_at, \
                     window_name, window_name_redacted_at, \
                     browser_url, browser_url_redacted_at, \
@@ -343,9 +348,13 @@ pub async fn fetch_unredacted_frames_fulltext(
              FROM frames \
              WHERE full_text IS NOT NULL AND full_text != '' \
                AND full_text_redacted_at IS NULL \
-             ORDER BY id DESC \
-             LIMIT ?";
-    let rows = sqlx::query(q).bind(limit as i64).fetch_all(pool).await?;
+             ORDER BY id {order} \
+             LIMIT ?"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(q))
+        .bind(limit as i64)
+        .fetch_all(pool)
+        .await?;
     let out = rows
         .into_iter()
         .map(|r| FrameTextRow {
@@ -490,17 +499,20 @@ pub struct ElementRow {
 /// Fetch up to `limit` `elements` rows that still need redaction
 /// (`redacted_at IS NULL`) and carry at least one non-empty free-text
 /// surface — `text` OR a `properties` JSON that may hold redactable fields.
-/// Newest-first. Container nodes with neither are never fetched (nothing to
+/// Caller-selected order. Container nodes with neither are never fetched (nothing to
 /// scrub, and they'd just churn the watermark).
 pub async fn fetch_unredacted_elements(
     pool: &SqlitePool,
     limit: u32,
+    oldest: bool,
 ) -> Result<Vec<ElementRow>, sqlx::Error> {
+    let order = if oldest { "ASC" } else { "DESC" };
     // `properties` is JSON; cheap LIKE pre-filters to rows that actually
     // carry one of the redactable string fields, so structural-only nodes
     // (is_enabled/role_description-less) never reach the model or even the
     // fetch. The `redacted_at IS NULL` index predicate runs first.
-    let q = "SELECT id, text, properties \
+    let q = format!(
+        "SELECT id, text, properties \
              FROM elements \
              WHERE redacted_at IS NULL \
                AND ( (text IS NOT NULL AND text != '') \
@@ -510,9 +522,13 @@ pub async fn fetch_unredacted_elements(
                      OR properties LIKE '%\"help_text\"%' \
                      OR properties LIKE '%\"role_description\"%' \
                      OR properties LIKE '%\"url\"%' )) ) \
-             ORDER BY id DESC \
-             LIMIT ?";
-    let rows = sqlx::query(q).bind(limit as i64).fetch_all(pool).await?;
+             ORDER BY id {order} \
+             LIMIT ?"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(q))
+        .bind(limit as i64)
+        .fetch_all(pool)
+        .await?;
     let out = rows
         .into_iter()
         .map(|r| ElementRow {
@@ -647,7 +663,7 @@ pub struct UiEventTextRow {
 /// Fetch up to `limit` `ui_events` rows that still need redaction
 /// (`redacted_at IS NULL`) and carry at least one non-empty cell among the
 /// caller-supplied `cols` (the configured free-text columns, a subset of
-/// [`UI_EVENT_TEXT_COLS`]). Newest-first. NOT filtered by `event_type`:
+/// [`UI_EVENT_TEXT_COLS`]). Caller-selected order. NOT filtered by `event_type`:
 /// clicks and focus events carry element PII (`element_value` of a focused
 /// form field) and must be redacted too. The returned `cols` are parallel
 /// to the `cols` argument, in the same order.
@@ -655,7 +671,9 @@ pub async fn fetch_unredacted_ui_events(
     pool: &SqlitePool,
     cols: &[&str],
     limit: u32,
+    oldest: bool,
 ) -> Result<Vec<UiEventTextRow>, sqlx::Error> {
+    let order = if oldest { "ASC" } else { "DESC" };
     if cols.is_empty() {
         return Err(sqlx::Error::Protocol(
             "caller must pass at least one ui_events text column".to_string(),
@@ -677,7 +695,7 @@ pub async fn fetch_unredacted_ui_events(
         "SELECT id, {select_cols} \
          FROM ui_events \
          WHERE redacted_at IS NULL AND ({any_nonempty}) \
-         ORDER BY id DESC \
+         ORDER BY id {order} \
          LIMIT ?"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(q))
@@ -840,7 +858,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = fetch_unredacted(&pool, TargetTable::FullText, 10)
+        let rows = fetch_unredacted(&pool, TargetTable::FullText, 10, false)
             .await
             .unwrap();
         assert_eq!(rows.len(), 1);
@@ -854,7 +872,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let rows = fetch_unredacted(&pool, TargetTable::FullText, 10)
+        let rows = fetch_unredacted(&pool, TargetTable::FullText, 10, false)
             .await
             .unwrap();
         assert!(rows.is_empty());
@@ -997,7 +1015,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let rows = fetch_unredacted(&pool, TargetTable::FullText, 10)
+        let rows = fetch_unredacted(&pool, TargetTable::FullText, 10, false)
             .await
             .unwrap();
         let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
@@ -1056,7 +1074,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = fetch_unredacted_ui_events(&pool, UI_EVENT_TEXT_COLS, 10)
+        let rows = fetch_unredacted_ui_events(&pool, UI_EVENT_TEXT_COLS, 10, false)
             .await
             .unwrap();
         // The click (1), keyboard (2), clipboard (3), and the name/desc row
@@ -1101,7 +1119,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let rows = fetch_unredacted_ui_events(&pool, UI_EVENT_TEXT_COLS, 10)
+        let rows = fetch_unredacted_ui_events(&pool, UI_EVENT_TEXT_COLS, 10, false)
             .await
             .unwrap();
         assert!(rows.is_empty());
@@ -1166,7 +1184,7 @@ mod tests {
             .await
             .unwrap();
 
-        let pending = fetch_unredacted_ui_events(&pool, UI_EVENT_TEXT_COLS, 10)
+        let pending = fetch_unredacted_ui_events(&pool, UI_EVENT_TEXT_COLS, 10, false)
             .await
             .unwrap();
         assert!(pending.is_empty(), "clean row must be marked done");
@@ -1181,7 +1199,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let rows = fetch_unredacted(&pool, TargetTable::Accessibility, 10)
+        let rows = fetch_unredacted(&pool, TargetTable::Accessibility, 10, false)
             .await
             .unwrap();
         assert_eq!(rows.len(), 1);
@@ -1205,7 +1223,7 @@ mod tests {
             .await
             .unwrap();
 
-        let rows = fetch_unredacted(&pool, TargetTable::Elements, 10)
+        let rows = fetch_unredacted(&pool, TargetTable::Elements, 10, false)
             .await
             .unwrap();
         assert_eq!(rows.len(), 1);
@@ -1261,7 +1279,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let rows = fetch_unredacted(&pool, TargetTable::FullText, 10)
+        let rows = fetch_unredacted(&pool, TargetTable::FullText, 10, false)
             .await
             .unwrap();
         assert_eq!(rows.len(), 1);
@@ -1310,14 +1328,14 @@ mod tests {
 
         // accessibility_text is still raw and still pending — its
         // watermark must be untouched, so the worker still picks it up.
-        let pending_a11y = fetch_unredacted(&pool, TargetTable::Accessibility, 10)
+        let pending_a11y = fetch_unredacted(&pool, TargetTable::Accessibility, 10, false)
             .await
             .unwrap();
         assert_eq!(pending_a11y.len(), 1, "accessibility row must stay pending");
         assert_eq!(pending_a11y[0].text, "a11y bob@example.com");
 
         // full_text is done and must not be re-fetched.
-        let pending_full = fetch_unredacted(&pool, TargetTable::FullText, 10)
+        let pending_full = fetch_unredacted(&pool, TargetTable::FullText, 10, false)
             .await
             .unwrap();
         assert!(pending_full.is_empty(), "full_text must be marked done");
@@ -1338,7 +1356,9 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = fetch_unredacted_frames_fulltext(&pool, 10).await.unwrap();
+        let rows = fetch_unredacted_frames_fulltext(&pool, 10, false)
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 1);
         let r = &rows[0];
         assert_eq!(
@@ -1462,7 +1482,7 @@ mod tests {
             .await
             .unwrap();
 
-        let rows = fetch_unredacted_elements(&pool, 10).await.unwrap();
+        let rows = fetch_unredacted_elements(&pool, 10, false).await.unwrap();
         let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
         assert_eq!(ids, vec![2, 1], "only text(1) + value(2), newest-first");
     }
@@ -1508,7 +1528,7 @@ mod tests {
             .await
             .unwrap();
         write_redacted_element(&pool, 1, None, None).await.unwrap();
-        let pending = fetch_unredacted_elements(&pool, 10).await.unwrap();
+        let pending = fetch_unredacted_elements(&pool, 10, false).await.unwrap();
         assert!(pending.is_empty(), "clean row must be marked done");
     }
 }
