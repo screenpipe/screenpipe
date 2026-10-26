@@ -245,11 +245,7 @@ pub fn compute(state: &OverlayState) -> Layout {
             .filter(|n| n.is_meeting_card)
             .map(|_| (BASE_MEETING_CARD_W * s, BASE_MEETING_CARD_H * s))
             .unwrap_or((BASE_NOTIFICATION_W * s, BASE_NOTIFICATION_H * s));
-        blocks.push((
-            Block::Notification,
-            notification_w,
-            notification_h,
-        ));
+        blocks.push((Block::Notification, notification_w, notification_h));
     }
 
     let content_w = blocks.iter().map(|b| b.1).fold(0.0f32, f32::max);

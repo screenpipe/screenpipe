@@ -84,7 +84,10 @@ fn notification_body_lines(text: &str, max_chars: usize, max_lines: usize) -> Ve
         lines.push(line);
     }
     if lines.len() == max_lines {
-        let consumed: usize = lines.iter().map(|part| part.split_whitespace().count()).sum();
+        let consumed: usize = lines
+            .iter()
+            .map(|part| part.split_whitespace().count())
+            .sum();
         if consumed < text.split_whitespace().count() {
             if let Some(last) = lines.last_mut() {
                 let marked = format!("{last}…");
@@ -907,11 +910,13 @@ impl Renderer {
             ICON_CLOSE,
             11.0 * s,
             dismiss,
-            white(if state.hovered_control == Some(Control::NotificationDismiss) {
-                0.9
-            } else {
-                0.55
-            }),
+            white(
+                if state.hovered_control == Some(Control::NotificationDismiss) {
+                    0.9
+                } else {
+                    0.55
+                },
+            ),
         );
         self.stroke_round(rt, r, 8.0 * s, 1.0, white(0.42));
     }
