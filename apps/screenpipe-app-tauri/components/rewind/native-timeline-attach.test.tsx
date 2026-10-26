@@ -80,6 +80,8 @@ import { NativeTimeline, NativeTimelineBridge } from "./native-timeline";
 import { StorageMigrationGate } from "../storage-migration-gate";
 
 class ResizeObserverMock {
+  static notify: () => void = () => {};
+  constructor(callback: () => void) { ResizeObserverMock.notify = callback; }
   observe() {}
   disconnect() {}
   unobserve() {}
@@ -149,6 +151,36 @@ describe("native timeline startup API config", () => {
         }),
       );
     });
+  });
+
+  it("detaches when switching workspaces hides the timeline and reattaches on return", async () => {
+    const { rerender } = render(
+      <div style={{ display: "block" }}><NativeTimeline fallback={<div>react fallback</div>} /></div>,
+    );
+    await act(async () => { resolveApiReady?.(); });
+    await waitFor(() => expect(mocks.emit).toHaveBeenCalledWith("native-timeline-attach", expect.anything()));
+    mocks.emit.mockClear();
+
+    const rect = vi.mocked(HTMLElement.prototype.getBoundingClientRect);
+    const visibleRect = rect();
+    rect.mockReturnValue({ ...visibleRect, width: 0, height: 0 });
+    rerender(<div style={{ display: "none" }}><NativeTimeline fallback={<div>react fallback</div>} /></div>);
+    act(() => ResizeObserverMock.notify());
+    await waitFor(() => expect(mocks.emit).toHaveBeenCalledWith("native-timeline-detach", { windowLabel: "home" }));
+    expect(mocks.emit).not.toHaveBeenCalledWith("native-timeline-attach", expect.anything());
+    // Workflows keeps mutating the DOM while this hidden timeline stays mounted.
+    vi.useFakeTimers();
+    try {
+      act(() => ResizeObserverMock.notify());
+      await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+      expect(mocks.emit).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+    mocks.emit.mockClear();
+
+    rect.mockReturnValue(visibleRect);
+    rerender(<div style={{ display: "block" }}><NativeTimeline fallback={<div>react fallback</div>} /></div>);
+    act(() => ResizeObserverMock.notify());
+    await waitFor(() => expect(mocks.emit).toHaveBeenCalledWith("native-timeline-attach", expect.anything()));
   });
 
   it("does not keep pulling the playhead back after a starred timestamp is accepted", async () => {

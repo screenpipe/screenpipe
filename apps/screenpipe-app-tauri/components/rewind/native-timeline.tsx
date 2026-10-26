@@ -495,12 +495,20 @@ export function NativeTimeline({
     if (!host) return;
 
     const detachPayload = { windowLabel: getCurrentWindow().label };
+    let hostHidden = false;
 
     // Rounded, because a fractional rect leaves a seam between the child
     // window and the webview underneath it.
     const place = (underlay = false) => {
       const box = host.getBoundingClientRect();
-      if (box.width < 1 || box.height < 1) return;
+      if (box.width < 1 || box.height < 1) {
+        // Workspace switching keeps this component mounted under display:none.
+        // Its native child must yield too, or it covers the new workspace.
+        if (!hostHidden) void emit("native-timeline-detach", detachPayload);
+        hostHidden = true;
+        return;
+      }
+      hostHidden = false;
       void emit("native-timeline-attach", {
         // Which window is asking. Two surfaces show a timeline — the main
         // window's section and the overlay — and each needs its own.
