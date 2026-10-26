@@ -312,6 +312,7 @@ const SERVER_RESTART_SETTINGS = new Set<keyof SettingsStore>([
   "audioCaptureMode",
   "encryptStore",
   "asyncPiiRedaction",
+  "requirePiiCompletion",
   "asyncImagePiiRedaction",
   "piiBackend",
   "useChineseMirror",

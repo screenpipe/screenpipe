@@ -1121,8 +1121,8 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
             config.pii_redaction_columns,
             config.pii_redaction_pseudonyms
         ),
-        text: config.async_pii_redaction,
-        images: config.async_image_pii_redaction,
+        text: config.require_pii_completion && config.async_pii_redaction,
+        images: config.require_pii_completion && config.async_image_pii_redaction,
     })
     .await?;
     let database_failure = Arc::new(tokio::sync::Notify::new());

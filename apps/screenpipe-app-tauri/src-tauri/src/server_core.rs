@@ -522,8 +522,8 @@ impl ServerCore {
                 config.pii_redaction_columns,
                 config.pii_redaction_pseudonyms
             ),
-            text: config.async_pii_redaction,
-            images: config.async_image_pii_redaction,
+            text: config.require_pii_completion && config.async_pii_redaction,
+            images: config.require_pii_completion && config.async_image_pii_redaction,
         })
         .await
         .map_err(|e| format!("Cannot configure privacy release policy: {e}"))?;

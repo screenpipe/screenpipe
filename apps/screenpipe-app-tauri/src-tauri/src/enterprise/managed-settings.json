@@ -43,6 +43,7 @@
   {"policyKey": "enhancedIncognitoDetection", "deviceKey": "enhancedIncognitoDetection", "apply": "engine", "kind": "boolean", "defaultValue": false},
   {"policyKey": "pauseOnDrmContent", "deviceKey": "pauseOnDrmContent", "apply": "engine", "kind": "boolean", "defaultValue": false},
   {"policyKey": "usePiiRemoval", "deviceKey": "usePiiRemoval", "apply": "engine", "kind": "boolean", "defaultValue": true},
+  {"policyKey": "requirePiiCompletion", "deviceKey": "requirePiiCompletion", "apply": "engine", "kind": "boolean", "defaultValue": false},
   {"policyKey": "asyncPiiRedaction", "deviceKey": "asyncPiiRedaction", "apply": "engine", "kind": "boolean", "defaultValue": true},
   {"policyKey": "asyncImagePiiRedaction", "deviceKey": "asyncImagePiiRedaction", "apply": "engine", "kind": "boolean", "defaultValue": true},
   {"policyKey": "redactAgentSessionSecrets", "deviceKey": "redactAgentSessionSecrets", "apply": "engine", "kind": "boolean", "defaultValue": false},

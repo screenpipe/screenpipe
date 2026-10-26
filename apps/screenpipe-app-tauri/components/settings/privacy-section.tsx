@@ -24,6 +24,7 @@ export const searchIndex: SettingsField[] = [
     keywords: ["private", "browser", "enhanced", "automation"],
   },
   { label: msg("Help improve Workflows", {}), keywords: ["sharing", "training", "consent", "delete shared chats"] },
+  { label: msg("Wait for AI privacy checks", {}), keywords: ["backlog", "queue", "completion", "background", "redaction"] },
   { label: msg("PII masking", {}), keywords: ["mask", "redact", "columns", "url", "fields", "dollar", "amount", "currency", "USD"] },
   {
     label: msg("Remote support logs", {}),
@@ -1397,7 +1398,29 @@ export function PrivacySection() {
                 }
               />
             </div>
-            {piiMode === "smart" && <PrivacyProcessingStatus />}
+            {piiMode === "smart" && (
+              <div className="mt-3 border-t border-border pt-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-1">
+                    <label htmlFor="requirePiiCompletion" className="text-xs font-medium text-foreground">
+                      {ui("Wait for AI privacy checks")}
+                    </label>
+                    <p className="max-w-xl text-xs text-muted-foreground">
+                      {settings.requirePiiCompletion
+                        ? ui("Recordings stay unavailable to search, workflows and sync until AI checks finish. Existing history is checked too, which can create a backlog.")
+                        : ui("AI redaction runs in the background. Recordings can be read and synced before AI checks finish.")}
+                    </p>
+                  </div>
+                  <ManagedSwitch
+                    settingKey="requirePiiCompletion"
+                    id="requirePiiCompletion"
+                    checked={settings.requirePiiCompletion ?? false}
+                    onCheckedChange={(checked) => handleSettingsChange({ requirePiiCompletion: checked }, true)}
+                  />
+                </div>
+                {settings.requirePiiCompletion && <PrivacyProcessingStatus />}
+              </div>
+            )}
             {piiMode !== "off" && (
               <div className="mt-3 ml-6 space-y-3 border-l-2 border-border pl-3">
                 <div className="space-y-2">

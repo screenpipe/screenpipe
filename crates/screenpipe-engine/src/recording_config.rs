@@ -54,6 +54,8 @@ pub struct RecordingConfig {
     /// overwrites the source columns with the redacted text. Off by
     /// default.
     pub async_pii_redaction: bool,
+    /// Gate reads and sync on AI completion. False keeps background redaction.
+    pub require_pii_completion: bool,
     /// Secrets-only scrub of coding-agent (pi) session logs at rest: a
     /// background worker strips credentials from `pi/sessions/*.jsonl`
     /// (idle files only). On-device regex, no model. Off by default;
@@ -309,6 +311,7 @@ impl RecordingConfig {
             disable_timeline: settings.timeline_cache_disabled(),
             use_pii_removal: settings.use_pii_removal,
             async_pii_redaction: settings.async_pii_redaction,
+            require_pii_completion: settings.require_pii_completion,
             redact_agent_session_secrets: settings.redact_agent_session_secrets,
             async_image_pii_redaction: settings.async_image_pii_redaction,
             pii_backend: settings.pii_backend.clone(),

@@ -4163,6 +4163,12 @@ usePiiRemoval: boolean;
  */
 asyncPiiRedaction?: boolean;
 /**
+ * Wait for AI privacy completion before making recordings available.
+ * Off by default: redaction runs in the background and records may be
+ * read or synced before AI processing finishes.
+ */
+requirePiiCompletion?: boolean;
+/**
  * Strip secrets from coding-agent (pi) session logs at rest. The
  * agent persists full sessions — bash output, file reads, tool
  * results — unredacted, so any credential it touches lands in

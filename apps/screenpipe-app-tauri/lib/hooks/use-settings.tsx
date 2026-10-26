@@ -914,6 +914,7 @@ export function createDefaultSettingsObject(isEnterprise = false): Settings {
 		disableClipboardCapture: !isEnterprise,
 		disableKeyboardCapture: !isEnterprise,
 		asyncPiiRedaction: isEnterprise,
+		requirePiiCompletion: false,
 		asyncImagePiiRedaction: isEnterprise,
 		piiBackend: isEnterprise ? "tinfoil" : "local",
 	});
@@ -1139,7 +1140,7 @@ function createSettingsStore() {
 		await hydrateCloudToken(settings);
 
 		let needsUpdate = normalizeSettingsArrays(settings);
-		for (const key of ["disableClipboardCapture", "disableKeyboardCapture", "asyncPiiRedaction", "asyncImagePiiRedaction"] as const) {
+		for (const key of ["disableClipboardCapture", "disableKeyboardCapture", "asyncPiiRedaction", "asyncImagePiiRedaction", "requirePiiCompletion"] as const) {
 			if (settings[key] === undefined) {
 				settings[key] = defaults[key];
 				needsUpdate = true;

@@ -541,6 +541,10 @@ pub struct RecordArgs {
     #[arg(long, default_value_t = false)]
     pub async_pii_redaction: bool,
 
+    /// Wait for AI privacy processing before reads and sync. Off by default.
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    pub require_pii_completion: bool,
+
     /// Strip secrets from coding-agent (pi) session logs at rest. A
     /// background worker runs a secrets-only regex scrub over idle
     /// `pi/sessions/*.jsonl` files (never one a live run is still
@@ -928,6 +932,7 @@ pub struct RecordArgSources {
     pub language: bool,
     pub use_pii_removal: bool,
     pub async_pii_redaction: bool,
+    pub require_pii_completion: bool,
     pub redact_agent_session_secrets: bool,
     pub async_image_pii_redaction: bool,
     pub pii_backend: bool,
@@ -996,6 +1001,7 @@ impl RecordArgSources {
             language: from_command_line(record, "language"),
             use_pii_removal: from_command_line(record, "use_pii_removal"),
             async_pii_redaction: from_command_line(record, "async_pii_redaction"),
+            require_pii_completion: from_command_line(record, "require_pii_completion"),
             redact_agent_session_secrets: from_command_line(record, "redact_agent_session_secrets"),
             async_image_pii_redaction: from_command_line(record, "async_image_pii_redaction"),
             pii_backend: from_command_line(record, "pii_backend"),
@@ -1056,6 +1062,7 @@ impl RecordArgSources {
             || self.language
             || self.use_pii_removal
             || self.async_pii_redaction
+            || self.require_pii_completion
             || self.redact_agent_session_secrets
             || self.async_image_pii_redaction
             || self.pii_backend
@@ -1238,6 +1245,7 @@ impl RecordArgs {
             disable_timeline: false,
             use_pii_removal: self.use_pii_removal,
             async_pii_redaction: self.async_pii_redaction,
+            require_pii_completion: self.require_pii_completion,
             redact_agent_session_secrets: self.redact_agent_session_secrets,
             async_image_pii_redaction: self.async_image_pii_redaction,
             pii_backend: self.pii_backend.clone(),
@@ -1522,6 +1530,9 @@ impl RecordArgs {
         }
         if sources.use_pii_removal {
             settings.use_pii_removal = self.use_pii_removal;
+        }
+        if sources.require_pii_completion {
+            settings.require_pii_completion = self.require_pii_completion;
         }
         if sources.async_pii_redaction {
             settings.async_pii_redaction = self.async_pii_redaction;
