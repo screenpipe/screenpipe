@@ -155,3 +155,165 @@ async fn straddling_chunk_is_still_skipped() {
         1
     );
 }
+
+/// Regression test for screenpipe/screenpipe#7770:
+/// Silent audio chunks (`transcription_status = 'silent'`) and deduplicated
+/// chunks (`transcription_status = 'transcribed'` with no transcription row)
+/// must be evicted by `evict_media_for_retention`, while `pending` and
+/// `failed` chunks without transcription rows must not be evicted before a
+/// retry. Also verifies `get_oldest_timestamp()` finds silent audio chunks on
+/// audio-only machines when `frames` and `audio_transcriptions` are empty.
+#[tokio::test]
+async fn retention_evicts_silent_audio_chunks_and_skips_pending_or_failed() {
+    let db = DatabaseManager::new("sqlite::memory:", Default::default())
+        .await
+        .unwrap();
+
+    let base = Utc::now() - Duration::days(30);
+    let silent_ts = (base + Duration::minutes(10)).to_rfc3339();
+    let dedup_ts = (base + Duration::minutes(20)).to_rfc3339();
+    let pending_ts = (base + Duration::minutes(30)).to_rfc3339();
+    let failed_ts = (base + Duration::minutes(40)).to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO audio_chunks (id, file_path, timestamp, transcription_status) VALUES
+         (1, '/data/silent.mp4', ?1, 'silent'),
+         (2, '/data/dedup.mp4', ?2, 'transcribed'),
+         (3, '/data/pending.mp4', ?3, 'pending'),
+         (4, '/data/failed.mp4', ?4, 'failed')",
+    )
+    .bind(&silent_ts)
+    .bind(&dedup_ts)
+    .bind(&pending_ts)
+    .bind(&failed_ts)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    // Audio-only machine with 0 frames and 0 audio_transcriptions must still
+    // discover the earliest un-evicted audio_chunks timestamp.
+    let oldest = db.get_oldest_timestamp().await.unwrap();
+    assert_eq!(
+        oldest.map(|t| t.to_rfc3339()),
+        Some((base + Duration::minutes(10)).to_rfc3339()),
+        "get_oldest_timestamp must include un-evicted silent audio_chunks"
+    );
+
+    let start = base;
+    let end = base + Duration::hours(1);
+
+    // Manual range eviction (`evict_media_in_range`) keeps its strict
+    // transcription-backed semantics unchanged, while retention eviction
+    // (`evict_media_for_retention`) evicts silent and deduplicated chunks.
+    let result = db.evict_media_for_retention(start, end).await.unwrap();
+    assert_eq!(result.audio_chunks_evicted, 2);
+    assert_eq!(
+        result.audio_files,
+        vec![
+            "/data/silent.mp4".to_string(),
+            "/data/dedup.mp4".to_string()
+        ]
+    );
+    assert_eq!(
+        count(
+            &db,
+            "SELECT COUNT(*) FROM audio_chunks WHERE id IN (1, 2) AND evicted_at IS NOT NULL AND file_path = ''"
+        )
+        .await,
+        2,
+        "silent and deduplicated chunks must be marked evicted"
+    );
+    assert_eq!(
+        count(
+            &db,
+            "SELECT COUNT(*) FROM audio_chunks WHERE id IN (3, 4) AND evicted_at IS NULL AND file_path != ''"
+        )
+        .await,
+        2,
+        "pending and failed chunks must not be evicted before retry"
+    );
+}
+
+/// Regression test for screenpipe/screenpipe#7770:
+/// A 10–20 minute compacted video chunk that crosses an hour boundary must be
+/// evicted as soon as the retention walk reaches the batch containing its
+/// newest frame, while a chunk whose newest frame is still past the cutoff is
+/// kept.
+#[tokio::test]
+async fn retention_evicts_compacted_video_chunk_crossing_hour_boundary() {
+    let db = DatabaseManager::new("sqlite::memory:", Default::default())
+        .await
+        .unwrap();
+
+    let h0 = Utc::now() - Duration::days(30);
+    let h1 = h0 + Duration::hours(1);
+    let h2 = h0 + Duration::hours(2); // retention cutoff
+
+    // Chunk 1 spans 20 minutes across the h1 hour boundary ([h1 - 10m, h1 + 10m]),
+    // with all frames older than the cutoff h2.
+    let c1_f1 = (h1 - Duration::minutes(10)).to_rfc3339();
+    let c1_f2 = (h1 + Duration::minutes(10)).to_rfc3339();
+
+    // Chunk 2 spans across the cutoff h2 ([h2 - 5m, h2 + 5m]) and must NOT be
+    // evicted yet because its newest frame is newer than h2.
+    let c2_f1 = (h2 - Duration::minutes(5)).to_rfc3339();
+    let c2_f2 = (h2 + Duration::minutes(5)).to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO video_chunks (id, file_path) VALUES
+         (1, '/data/compacted_cross_hour.mp4'),
+         (2, '/data/compacted_cross_cutoff.mp4')",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO frames (id, video_chunk_id, offset_index, timestamp) VALUES
+         (1, 1, 0, ?1),
+         (2, 1, 1, ?2),
+         (3, 2, 0, ?3),
+         (4, 2, 1, ?4)",
+    )
+    .bind(&c1_f1)
+    .bind(&c1_f2)
+    .bind(&c2_f1)
+    .bind(&c2_f2)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    // Batch 1: [h0, h1]. Chunk 1 still has a frame at h1 + 10m (> h1), so it
+    // is not evicted during the first hourly slice.
+    let batch1 = db.evict_media_for_retention(h0, h1).await.unwrap();
+    assert_eq!(batch1.video_chunks_evicted, 0);
+    assert!(batch1.video_files.is_empty());
+
+    // Batch 2: [h1, h2]. Chunk 1's newest frame (h1 + 10m) is now <= h2, so
+    // it MUST be evicted even though its earlier frame (h1 - 10m) was in Batch 1.
+    // Chunk 2's newest frame (h2 + 5m) is > h2, so Chunk 2 must remain on disk.
+    let batch2 = db.evict_media_for_retention(h1, h2).await.unwrap();
+    assert_eq!(batch2.video_chunks_evicted, 1);
+    assert_eq!(
+        batch2.video_files,
+        vec!["/data/compacted_cross_hour.mp4".to_string()]
+    );
+    assert_eq!(
+        count(
+            &db,
+            "SELECT COUNT(*) FROM video_chunks WHERE id = 1 AND evicted_at IS NOT NULL AND file_path = ''"
+        )
+        .await,
+        1,
+        "chunk crossing the hour boundary must be marked evicted in the second batch"
+    );
+    assert_eq!(
+        count(
+            &db,
+            "SELECT COUNT(*) FROM video_chunks WHERE id = 2 AND evicted_at IS NULL AND file_path != ''"
+        )
+        .await,
+        1,
+        "chunk straddling the retention cutoff itself must remain un-evicted"
+    );
+}

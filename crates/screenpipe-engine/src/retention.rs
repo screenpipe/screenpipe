@@ -547,48 +547,50 @@ async fn do_local_cleanup(
                     }
                 }
             }
-            RetentionMode::Media => match db.evict_media_in_range(batch_start, batch_end).await {
-                Ok(result) => {
-                    let batch_total = result.video_chunks_evicted
-                        + result.audio_chunks_evicted
-                        + result.snapshots_evicted;
+            RetentionMode::Media => {
+                match db.evict_media_for_retention(batch_start, batch_end).await {
+                    Ok(result) => {
+                        let batch_total = result.video_chunks_evicted
+                            + result.audio_chunks_evicted
+                            + result.snapshots_evicted;
 
-                    if batch_total > 0 {
-                        any_deleted = true;
-                        info!(
-                            "retention: batch evicted video_chunks={} audio_chunks={} snapshots={} \
-                             (files: video={} audio={} snapshots={})",
-                            result.video_chunks_evicted,
-                            result.audio_chunks_evicted,
-                            result.snapshots_evicted,
-                            result.video_files.len(),
-                            result.audio_files.len(),
-                            result.snapshot_files.len(),
+                        if batch_total > 0 {
+                            any_deleted = true;
+                            info!(
+                                "retention: batch evicted video_chunks={} audio_chunks={} snapshots={} \
+                                 (files: video={} audio={} snapshots={})",
+                                result.video_chunks_evicted,
+                                result.audio_chunks_evicted,
+                                result.snapshots_evicted,
+                                result.video_files.len(),
+                                result.audio_files.len(),
+                                result.snapshot_files.len(),
+                            );
+                        }
+
+                        total += batch_total;
+
+                        for path in result
+                            .video_files
+                            .iter()
+                            .chain(result.audio_files.iter())
+                            .chain(result.snapshot_files.iter())
+                        {
+                            remove_evicted_file(path).await;
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "retention: batch evict failed for range {} to {}: {}",
+                            batch_start, batch_end, e
                         );
-                    }
-
-                    total += batch_total;
-
-                    for path in result
-                        .video_files
-                        .iter()
-                        .chain(result.audio_files.iter())
-                        .chain(result.snapshot_files.iter())
-                    {
-                        remove_evicted_file(path).await;
+                        batch_failed = true;
                     }
                 }
-                Err(e) => {
-                    warn!(
-                        "retention: batch evict failed for range {} to {}: {}",
-                        batch_start, batch_end, e
-                    );
-                    batch_failed = true;
-                }
-            },
+            }
             RetentionMode::Lean => {
                 // 1. Reclaim media files on disk (same as Media mode).
-                match db.evict_media_in_range(batch_start, batch_end).await {
+                match db.evict_media_for_retention(batch_start, batch_end).await {
                     Ok(result) => {
                         let evicted = result.video_chunks_evicted
                             + result.audio_chunks_evicted

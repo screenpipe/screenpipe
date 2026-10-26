@@ -711,6 +711,152 @@ impl DatabaseManager {
         })
     }
 
+    /// Retention-specific media eviction for a `[start, end]` cleanup slice.
+    ///
+    /// Unlike `evict_media_in_range` (which is used by `POST /data/evict-media`
+    /// and `estimate_evictable_bytes` and requires every frame/transcription of
+    /// a chunk to fall strictly within `[start, end]`), local retention walks
+    /// contiguous slices chronologically up to `cutoff`. Any frame or
+    /// transcription with `timestamp < start` has already aged past the
+    /// retention cutoff in an earlier slice:
+    ///
+    /// 1. **Compacted video chunks**: A 10–20 minute compacted chunk that
+    ///    straddles `start` (with earlier frames `< start` and tail frames in
+    ///    `[start, end]`) is eligible for eviction as soon as its newest frame
+    ///    is `<= end` (`NOT EXISTS (SELECT 1 FROM frames f WHERE
+    ///    f.video_chunk_id = video_chunks.id AND f.timestamp > ?2)`).
+    /// 2. **Silent / deduplicated audio chunks**: Chunks marked with a final
+    ///    status (`transcription_status IN ('silent', 'transcribed')`) that
+    ///    produced no `audio_transcriptions` rows are matched directly by
+    ///    `audio_chunks.timestamp BETWEEN ?1 AND ?2`, while `'pending'` and
+    ///    `'failed'` chunks without transcriptions are left untouched so
+    ///    reconciliation can still retry them.
+    pub async fn evict_media_for_retention(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<EvictMediaResult, sqlx::Error> {
+        let mut tx = self.begin_immediate_with_retry().await?;
+
+        let start_str = start.to_rfc3339();
+        let end_str = end.to_rfc3339();
+
+        let video_files: Vec<String> = sqlx::query_scalar(
+            r#"SELECT file_path FROM video_chunks
+               WHERE evicted_at IS NULL
+               AND file_path != ''
+               AND file_path NOT LIKE 'cloud://%'
+               AND id IN (SELECT DISTINCT video_chunk_id FROM frames
+                          WHERE timestamp BETWEEN ?1 AND ?2 AND video_chunk_id IS NOT NULL)
+               AND NOT EXISTS (SELECT 1 FROM frames f
+                               WHERE f.video_chunk_id = video_chunks.id AND f.timestamp > ?2)"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .fetch_all(&mut **tx.conn())
+        .await?;
+
+        let audio_files: Vec<String> = sqlx::query_scalar(
+            r#"SELECT file_path FROM audio_chunks
+               WHERE evicted_at IS NULL
+               AND file_path != ''
+               AND file_path NOT LIKE 'cloud://%'
+               AND (
+                   id IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions
+                          WHERE timestamp BETWEEN ?1 AND ?2 AND audio_chunk_id IS NOT NULL)
+                   OR (transcription_status IN ('silent', 'transcribed')
+                       AND timestamp BETWEEN ?1 AND ?2)
+               )
+               AND NOT EXISTS (SELECT 1 FROM audio_transcriptions t
+                               WHERE t.audio_chunk_id = audio_chunks.id AND t.timestamp > ?2)"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .fetch_all(&mut **tx.conn())
+        .await?;
+
+        let snapshot_files: Vec<String> = sqlx::query_scalar(
+            r#"SELECT snapshot_path FROM frames
+               WHERE timestamp BETWEEN ?1 AND ?2
+               AND snapshot_path IS NOT NULL"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .fetch_all(&mut **tx.conn())
+        .await?;
+
+        let video_evict = sqlx::query(
+            r#"UPDATE video_chunks
+               SET file_path = '', evicted_at = CURRENT_TIMESTAMP
+               WHERE evicted_at IS NULL
+               AND file_path != ''
+               AND file_path NOT LIKE 'cloud://%'
+               AND id IN (SELECT DISTINCT video_chunk_id FROM frames
+                          WHERE timestamp BETWEEN ?1 AND ?2 AND video_chunk_id IS NOT NULL)
+               AND NOT EXISTS (SELECT 1 FROM frames f
+                               WHERE f.video_chunk_id = video_chunks.id AND f.timestamp > ?2)"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .execute(&mut **tx.conn())
+        .await?;
+
+        let audio_evict = sqlx::query(
+            r#"UPDATE audio_chunks
+               SET file_path = '', evicted_at = CURRENT_TIMESTAMP
+               WHERE evicted_at IS NULL
+               AND file_path != ''
+               AND file_path NOT LIKE 'cloud://%'
+               AND (
+                   id IN (SELECT DISTINCT audio_chunk_id FROM audio_transcriptions
+                          WHERE timestamp BETWEEN ?1 AND ?2 AND audio_chunk_id IS NOT NULL)
+                   OR (transcription_status IN ('silent', 'transcribed')
+                       AND timestamp BETWEEN ?1 AND ?2)
+               )
+               AND NOT EXISTS (SELECT 1 FROM audio_transcriptions t
+                               WHERE t.audio_chunk_id = audio_chunks.id AND t.timestamp > ?2)"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .execute(&mut **tx.conn())
+        .await?;
+
+        let snapshot_evict = sqlx::query(
+            r#"UPDATE frames
+               SET snapshot_path = NULL
+               WHERE timestamp BETWEEN ?1 AND ?2
+               AND snapshot_path IS NOT NULL"#,
+        )
+        .bind(&start_str)
+        .bind(&end_str)
+        .execute(&mut **tx.conn())
+        .await?;
+
+        tx.commit().await.map_err(|e| {
+            error!(
+                "failed to commit evict_media_for_retention transaction: {}",
+                e
+            );
+            e
+        })?;
+
+        debug!(
+            "evict_media_for_retention committed: video_chunks={}, audio_chunks={}, snapshots={}",
+            video_evict.rows_affected(),
+            audio_evict.rows_affected(),
+            snapshot_evict.rows_affected(),
+        );
+
+        Ok(EvictMediaResult {
+            video_chunks_evicted: video_evict.rows_affected(),
+            audio_chunks_evicted: audio_evict.rows_affected(),
+            snapshots_evicted: snapshot_evict.rows_affected(),
+            video_files,
+            audio_files,
+            snapshot_files,
+        })
+    }
+
     /// Lean retention: strip the heavy *text* a frame carries while keeping the
     /// frame row, its searchable `full_text`, transcripts, and memories alive.
     ///
@@ -1266,14 +1412,19 @@ impl DatabaseManager {
         .transpose()
     }
 
-    /// Returns the oldest timestamp across frames and audio_transcriptions.
-    /// Used by retention to avoid scanning from epoch.
+    /// Returns the oldest timestamp across frames, audio_transcriptions, and
+    /// un-evicted audio_chunks. Used by retention to avoid scanning from epoch,
+    /// including on audio-only machines where oldest chunks are silent and have
+    /// no rows in `audio_transcriptions`.
     pub async fn get_oldest_timestamp(&self) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
         let oldest: Option<String> = sqlx::query_scalar(
             r#"SELECT MIN(ts) FROM (
                 SELECT MIN(timestamp) AS ts FROM frames
                 UNION ALL
                 SELECT MIN(timestamp) AS ts FROM audio_transcriptions
+                UNION ALL
+                SELECT MIN(timestamp) AS ts FROM audio_chunks
+                WHERE evicted_at IS NULL AND file_path != ''
             )"#,
         )
         .fetch_one(&self.pool)
