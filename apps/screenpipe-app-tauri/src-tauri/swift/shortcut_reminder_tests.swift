@@ -557,14 +557,14 @@ private func testMeetingJoinNotification() {
         expect(false, "valid join notification was rejected")
         return
     }
-    expect(meeting.isMeetingJoin, "localized join action needs the larger card")
+    expect(meeting.isMeetingCard, "localized join action needs the larger card")
     expect(meeting.autoDismissMs == 30000, "join timeout must be preserved")
     let action = try! JSONSerialization.jsonObject(with: Data(meeting.actions[0].payload.utf8)) as! [String: Any]
     expect(action["type"] as? String == "meeting_join", "join action type changed")
     expect(action["url"] as? String == "https://meet.google.com/example", "join URL changed")
     let ordinary = OverlayNotification.parse(json.replacingOccurrences(of: "meeting_join", with: "deeplink"))!
     let withoutHD = OverlayNotification.parse(json.replacingOccurrences(of: "/capture/hd/start", with: "/unrelated"))!
-    expect(!ordinary.isMeetingJoin, "non-join alert must remain compact")
+    expect(!ordinary.isMeetingCard, "non-meeting alert must remain compact")
     for scale: CGFloat in [1, 1.5, 2] {
         let size = meeting.size(scale: scale)
         expect(size.width == 460 * scale, "join card width must stay 460 logical points at scale \(scale)")

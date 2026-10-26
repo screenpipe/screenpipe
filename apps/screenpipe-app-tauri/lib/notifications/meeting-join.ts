@@ -28,3 +28,20 @@ export function meetingJoinChoices(actions: NotificationAction[]) {
     hd: capture ? { ...join, id: capture.id || "join-hd", screen_detail: capture.body } : null,
   };
 }
+
+export function meetingOpenNoteChoices(actions: NotificationAction[]) {
+  const openNote = actions.find((action) =>
+    (action.id === "open-live-notes" || action.action === "open-live-notes") &&
+    action.type === "deeplink" && action.url?.startsWith("screenpipe://meeting")
+  );
+  if (!openNote) return null;
+
+  const hd = actions.find((action) => action.type === "api" &&
+    action.url === "/capture/hd/start" && action.method === "POST" &&
+    action.body && typeof action.body === "object" && !Array.isArray(action.body));
+  return { openNote, hd: hd ?? null };
+}
+
+export function isMeetingNotificationCard(actions: NotificationAction[]) {
+  return meetingJoinChoices(actions) !== null || meetingOpenNoteChoices(actions) !== null;
+}

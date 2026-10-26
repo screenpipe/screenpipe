@@ -63,6 +63,8 @@ pub const BASE_NOTIFICATION_W: f32 = 340.0;
 /// leaves a ~3pt gutter instead of the ~8pt of dead air a 44pt row used to
 /// have. Keeps the toast in the same density family as the 30pt dock.
 pub const BASE_NOTIFICATION_H: f32 = 34.0;
+pub const BASE_MEETING_CARD_W: f32 = 460.0;
+pub const BASE_MEETING_CARD_H: f32 = 124.0;
 pub const RESTING_OPACITY: f32 = 0.50;
 
 /// Room around the content for the drop shadow. Layered windows composite the
@@ -237,10 +239,16 @@ pub fn compute(state: &OverlayState) -> Layout {
         ));
     }
     if state.notification.is_some() {
+        let (notification_w, notification_h) = state
+            .notification
+            .as_ref()
+            .filter(|n| n.is_meeting_card)
+            .map(|_| (BASE_MEETING_CARD_W * s, BASE_MEETING_CARD_H * s))
+            .unwrap_or((BASE_NOTIFICATION_W * s, BASE_NOTIFICATION_H * s));
         blocks.push((
             Block::Notification,
-            BASE_NOTIFICATION_W * s,
-            BASE_NOTIFICATION_H * s,
+            notification_w,
+            notification_h,
         ));
     }
 
@@ -396,6 +404,40 @@ pub fn notification_action_rects(state: &OverlayState, r: Rect, s: f32) -> Vec<(
     let Some(n) = state.notification.as_ref() else {
         return Vec::new();
     };
+    if n.is_meeting_card {
+        let pad = 14.0 * s;
+        let button_height = 36.0 * s;
+        let max_group_width = (r.w - pad * 2.0).max(0.0);
+        let ordered = n.ordered_actions();
+        let mut widths: Vec<f32> = ordered
+            .iter()
+            .take(crate::notification::MAX_ACTIONS)
+            .map(|a| (a.label.chars().count() as f32 * 7.8 + 24.0) * s)
+            .collect();
+        let total: f32 = widths.iter().sum();
+        if total > max_group_width && total > 0.0 {
+            let factor = max_group_width / total;
+            for width in &mut widths {
+                *width *= factor;
+            }
+        }
+        let mut x = r.right() - pad - widths.iter().sum::<f32>();
+        let y = r.bottom() - pad - button_height;
+        return widths
+            .into_iter()
+            .enumerate()
+            .map(|(i, width)| {
+                let control = if i == 0 {
+                    Control::NotificationAction0
+                } else {
+                    Control::NotificationAction1
+                };
+                let rect = Rect::new(x, y, width, button_height);
+                x += width;
+                (control, rect)
+            })
+            .collect();
+    }
     let pad = 10.0 * s;
     let dismiss_w = 14.0 * s;
     let btn_h = 22.0 * s;

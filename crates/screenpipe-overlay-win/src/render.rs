@@ -56,6 +56,45 @@ fn fits(width: f32, font_size: f32) -> usize {
     (width / (font_size * MONO_ADVANCE)).floor().max(0.0) as usize
 }
 
+fn notification_body_lines(text: &str, max_chars: usize, max_lines: usize) -> Vec<String> {
+    if max_chars == 0 || max_lines == 0 {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let candidate = if line.is_empty() {
+            word.to_owned()
+        } else {
+            format!("{line} {word}")
+        };
+        if candidate.chars().count() <= max_chars {
+            line = candidate;
+        } else {
+            if !line.is_empty() {
+                lines.push(line);
+                if lines.len() == max_lines {
+                    break;
+                }
+            }
+            line = ellipsize(word, max_chars);
+        }
+    }
+    if lines.len() < max_lines && !line.is_empty() {
+        lines.push(line);
+    }
+    if lines.len() == max_lines {
+        let consumed: usize = lines.iter().map(|part| part.split_whitespace().count()).sum();
+        if consumed < text.split_whitespace().count() {
+            if let Some(last) = lines.last_mut() {
+                let marked = format!("{last}…");
+                *last = ellipsize(&marked, max_chars);
+            }
+        }
+    }
+    lines
+}
+
 /// App icon shown on the resting chip, same mark as the tray and the dock.
 const APP_ICON_PNG: &[u8] =
     include_bytes!("../../../apps/screenpipe-app-tauri/src-tauri/icons/32x32.png");
@@ -685,6 +724,10 @@ impl Renderer {
         let Some(n) = state.notification.as_ref() else {
             return;
         };
+        if n.is_meeting_card {
+            self.draw_meeting_notification(rt, state, r, s);
+            return;
+        }
         self.shadow(rt, r, 2.0 * s, 0.8);
         self.fill(rt, r, black(0.94));
 
@@ -772,6 +815,105 @@ impl Renderer {
 
         let brush = self.brush(rt, white(0.42));
         unsafe { rt.DrawRectangle(&d2d_rect(r.inset(0.5, 0.5)), &brush, 1.0, None) };
+    }
+
+    fn draw_meeting_notification(
+        &self,
+        rt: &ID2D1RenderTarget,
+        state: &OverlayState,
+        r: Rect,
+        s: f32,
+    ) {
+        let Some(n) = state.notification.as_ref() else {
+            return;
+        };
+        self.shadow(rt, r, 8.0 * s, 0.8);
+        self.fill_round(rt, r, 8.0 * s, black(1.0));
+
+        let pad = 14.0 * s;
+        let title_x = r.x + pad + 30.0 * s;
+        let title_right = r.right() - pad - 30.0 * s;
+        let title_width = (title_right - title_x).max(20.0 * s);
+        self.icon(
+            rt,
+            ICON_VIDEO,
+            18.0 * s,
+            Rect::new(r.x + pad, r.y + pad, 24.0 * s, 24.0 * s),
+            white(0.75),
+        );
+        self.mono_text(
+            rt,
+            &ellipsize(&n.title, fits(title_width, 14.0 * s)),
+            14.0 * s,
+            DWRITE_FONT_WEIGHT_SEMI_BOLD,
+            Align::Leading,
+            Rect::new(title_x, r.y + pad, title_width, 18.0 * s),
+            white(0.95),
+        );
+        if !n.body.is_empty() {
+            let body_width = (title_right - title_x).max(20.0 * s);
+            let lines = notification_body_lines(&n.body, fits(body_width, 12.0 * s), 2);
+            for (index, line) in lines.iter().enumerate() {
+                self.mono_text(
+                    rt,
+                    line,
+                    12.0 * s,
+                    DWRITE_FONT_WEIGHT_NORMAL,
+                    Align::Leading,
+                    Rect::new(
+                        title_x,
+                        r.y + pad + (20.0 + index as f32 * 15.0) * s,
+                        body_width,
+                        15.0 * s,
+                    ),
+                    white(0.60),
+                );
+            }
+        }
+
+        let actions = notification_action_rects(state, r, s);
+        if let (Some((_, first)), Some((_, last))) = (actions.first(), actions.last()) {
+            let bar = Rect::new(first.x, first.y, last.right() - first.x, first.h);
+            self.fill_round(rt, bar, 6.0 * s, white(0.92));
+            let ordered = n.ordered_actions();
+            for ((control, rect), action) in actions.iter().zip(ordered.iter()) {
+                if state.hovered_control == Some(*control) {
+                    self.fill_round(rt, *rect, 5.0 * s, black(0.08));
+                }
+                let text_pad = 8.0 * s;
+                self.mono_text(
+                    rt,
+                    &ellipsize(&action.label, fits(rect.w - text_pad * 2.0, 13.0 * s)),
+                    13.0 * s,
+                    DWRITE_FONT_WEIGHT_NORMAL,
+                    Align::Center,
+                    *rect,
+                    black(1.0),
+                );
+            }
+            for pair in actions.windows(2) {
+                let x = pair[0].1.right();
+                self.fill(
+                    rt,
+                    Rect::new(x, bar.y + 8.0 * s, 1.0, bar.h - 16.0 * s),
+                    black(0.15),
+                );
+            }
+        }
+
+        let dismiss = Rect::new(r.right() - pad - 24.0 * s, r.y + pad, 24.0 * s, 24.0 * s);
+        self.icon(
+            rt,
+            ICON_CLOSE,
+            11.0 * s,
+            dismiss,
+            white(if state.hovered_control == Some(Control::NotificationDismiss) {
+                0.9
+            } else {
+                0.55
+            }),
+        );
+        self.stroke_round(rt, r, 8.0 * s, 1.0, white(0.42));
     }
 
     // MARK: live meeting transcript

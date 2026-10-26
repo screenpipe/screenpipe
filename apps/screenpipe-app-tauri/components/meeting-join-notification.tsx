@@ -7,7 +7,11 @@ import { useRef, useState } from "react";
 import { Video, X } from "lucide-react";
 import { useGT } from "gt-react";
 import type { NotificationAction } from "@/lib/notifications/actions";
-import { meetingJoinChoices, meetingProvider } from "@/lib/notifications/meeting-join";
+import {
+  meetingJoinChoices,
+  meetingOpenNoteChoices,
+  meetingProvider,
+} from "@/lib/notifications/meeting-join";
 
 const MEETING_JOIN_CARD_WIDTH = 460;
 const MEETING_JOIN_CARD_HEIGHT = 124;
@@ -23,15 +27,24 @@ interface Props {
   onMouseLeave?: () => void;
 }
 
-/** Shared Windows/Linux join card; mirrors the native macOS split control. */
+/** Shared meeting card for join reminders and detected-meeting open-note alerts. */
 export function MeetingJoinNotification(props: Props) {
   const ui = useGT();
   const scale = props.scale ?? 1;
   const busy = useRef(false);
   const [pending, setPending] = useState(false);
-  const choices = meetingJoinChoices(props.actions);
-  if (!choices) return null;
-  const provider = meetingProvider(choices.join.url!);
+  const joinChoices = meetingJoinChoices(props.actions);
+  const openNoteChoices = joinChoices ? null : meetingOpenNoteChoices(props.actions);
+  if (!joinChoices && !openNoteChoices) return null;
+  const actionChoices = joinChoices
+    ? [
+        { action: joinChoices.join, label: joinChoices.join.label || ui("join and take notes"), provider: meetingProvider(joinChoices.join.url!) },
+        ...(joinChoices.hd ? [{ action: joinChoices.hd, label: ui("join + HD"), provider: null }] : []),
+      ]
+    : [
+        { action: openNoteChoices!.openNote, label: openNoteChoices!.openNote.label || ui("open note"), provider: null },
+        ...(openNoteChoices!.hd ? [{ action: openNoteChoices!.hd, label: openNoteChoices!.hd.label || ui("open note + HD"), provider: null }] : []),
+      ];
   const join = async (action: NotificationAction) => {
     if (busy.current) return;
     busy.current = true;
@@ -45,16 +58,15 @@ export function MeetingJoinNotification(props: Props) {
     cursor: pending ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 7,
     whiteSpace: "nowrap" as const,
   };
-  const joinButtonStyle = {
+  const actionButtonStyle = (index: number) => ({
     ...buttonStyle,
     minWidth: 0,
-    flex: choices.hd ? "1 1 0" : "0 1 auto",
-  };
-  const hdButtonStyle = { ...buttonStyle, flex: "0 0 auto" };
+    flex: index === 0 && actionChoices.length > 1 ? "1 1 0" : "0 1 auto",
+  });
   return (
     <div style={{ width: MEETING_JOIN_CARD_WIDTH, height: MEETING_JOIN_CARD_HEIGHT,
       transform: `scale(${scale})`, transformOrigin: "top left" }}>
-    <section aria-label={ui("Meeting starting")} aria-busy={pending}
+    <section aria-label={ui(joinChoices ? "Meeting starting" : "Meeting detected")} aria-busy={pending}
       onMouseEnter={props.onMouseEnter} onMouseLeave={props.onMouseLeave}
       style={{ boxSizing: "border-box", width: MEETING_JOIN_CARD_WIDTH, height: MEETING_JOIN_CARD_HEIGHT,
         background: "#000", color: "#f2f2f2", border: "1px solid #6b6b6b", borderRadius: 8,
@@ -82,18 +94,15 @@ export function MeetingJoinNotification(props: Props) {
           style={{ background: "transparent", border: 0, color: "#999", padding: 4, cursor: "pointer", borderRadius: 5 }}><X size={16} /></button>
       </div>
       <div className="meeting-join-controls" style={{ alignSelf: "flex-end", marginTop: "auto", display: "flex", alignItems: "center", borderRadius: 6, background: "#ebebeb", maxWidth: "100%", minWidth: 0 }}>
-        <button type="button" className="meeting-join-action" disabled={pending} onClick={() => void join(choices.join)} style={joinButtonStyle}>
-          {provider ? <img src={`/images/meeting-providers/${provider}.png`} width={18} height={18} alt="" /> : <Video size={18} fill="currentColor" aria-hidden="true" />}
-          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{choices.join.label || ui("join and take notes")}</span>
-        </button>
-        {choices.hd && <>
-          <span aria-hidden="true" style={{ width: 1, height: 20, flexShrink: 0, background: "#00000026" }} />
-          <button type="button" className="meeting-join-action" disabled={pending} onClick={() => void join(choices.hd!)} style={hdButtonStyle}
-            aria-label={ui("Join and take notes with HD screen recording")}
-            title={ui("Join and take notes with HD screen recording: more frequent screenshots for smoother replay. Uses more storage.")}>
-            {ui("join + HD")}
+        {actionChoices.map(({ action, label, provider }, index) => <div key={action.id || action.action || index} style={{ display: "contents" }}>
+          {index > 0 && <span aria-hidden="true" style={{ width: 1, height: 20, flexShrink: 0, background: "#00000026" }} />}
+          <button type="button" className="meeting-join-action" disabled={pending} onClick={() => void join(action)} style={actionButtonStyle(index)}
+            aria-label={joinChoices && index === 1 ? ui("Join and take notes with HD screen recording") : undefined}
+            title={joinChoices && index === 1 ? ui("Join and take notes with HD screen recording: more frequent screenshots for smoother replay. Uses more storage.") : label}>
+            {index === 0 && (provider ? <img src={`/images/meeting-providers/${provider}.png`} width={18} height={18} alt="" /> : <Video size={18} fill="currentColor" aria-hidden="true" />)}
+            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
           </button>
-        </>}
+        </div>)}
       </div>
     </section>
     </div>

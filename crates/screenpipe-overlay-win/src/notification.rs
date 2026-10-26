@@ -41,6 +41,9 @@ pub struct Notification {
     pub title: String,
     pub body: String,
     pub actions: Vec<NotificationAction>,
+    /// Meeting alerts use the shared 460×124 card rather than the compact row.
+    #[serde(default)]
+    pub is_meeting_card: bool,
     /// Dismiss itself after this many ms. `None` means it waits for the user.
     pub auto_dismiss_ms: Option<u32>,
 }
@@ -100,6 +103,26 @@ pub fn parse(json: &str) -> Result<Notification, Refusal> {
         .cloned()
         .unwrap_or_default();
 
+    let is_meeting_card = raw_actions.iter().any(|action| {
+        let kind = action.get("type").and_then(|v| v.as_str());
+        if kind == Some("meeting_join") {
+            return action
+                .get("url")
+                .and_then(|v| v.as_str())
+                .is_some_and(|url| !url.is_empty());
+        }
+        let action_id = action
+            .get("id")
+            .or_else(|| action.get("action"))
+            .and_then(|v| v.as_str());
+        kind == Some("deeplink")
+            && action_id == Some("open-live-notes")
+            && action
+                .get("url")
+                .and_then(|v| v.as_str())
+                .is_some_and(|url| url.starts_with("screenpipe://meeting"))
+    });
+
     let mut actions = Vec::with_capacity(raw_actions.len());
     for raw in &raw_actions {
         let Some(action) = raw.as_object() else {
@@ -153,6 +176,7 @@ pub fn parse(json: &str) -> Result<Notification, Refusal> {
             .unwrap_or_default()
             .to_string(),
         actions,
+        is_meeting_card,
         auto_dismiss_ms,
     })
 }

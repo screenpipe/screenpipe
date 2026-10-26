@@ -220,15 +220,15 @@ struct OverlayNotification: Equatable {
     let body: String
     let actions: [OverlayNotificationAction]
     let autoDismissMs: Int?
-    let isMeetingJoin: Bool
+    let isMeetingCard: Bool
 
-    static let meetingJoinWidth: CGFloat = 460
-    static let meetingJoinHeight: CGFloat = 124
+    static let meetingCardWidth: CGFloat = 460
+    static let meetingCardHeight: CGFloat = 124
 
     func size(scale: CGFloat) -> NSSize {
         NSSize(
-            width: (isMeetingJoin ? Self.meetingJoinWidth : kBaseNotificationW) * scale,
-            height: (isMeetingJoin ? Self.meetingJoinHeight : kBaseNotificationH) * scale
+            width: (isMeetingCard ? Self.meetingCardWidth : kBaseNotificationW) * scale,
+            height: (isMeetingCard ? Self.meetingCardHeight : kBaseNotificationH) * scale
         )
     }
 
@@ -239,7 +239,7 @@ struct OverlayNotification: Equatable {
     /// Meeting choices share one light surface. The optional screen-detail
     /// variant replaces the standalone capture action while preserving eligibility.
     var displayActions: [OverlayNotificationAction] {
-        guard isMeetingJoin, let detailAction = screenDetailAction,
+        guard actions.contains(where: { $0.isMeetingJoin }), let detailAction = screenDetailAction,
               let join = actions.first(where: { $0.isMeetingJoin })
         else { return actions }
         let combined = joining(join, captureScreenDetail: true)
@@ -326,7 +326,13 @@ struct OverlayNotification: Equatable {
             body: (root["body"] as? String) ?? "",
             actions: actions,
             autoDismissMs: autoDismiss,
-            isMeetingJoin: rawActions.contains { $0["type"] as? String == "meeting_join" }
+            isMeetingCard: rawActions.contains { action in
+                if action["type"] as? String == "meeting_join" { return true }
+                let actionID = (action["id"] as? String) ?? (action["action"] as? String)
+                return actionID == "open-live-notes"
+                    && action["type"] as? String == "deeplink"
+                    && (action["url"] as? String)?.hasPrefix("screenpipe://meeting") == true
+            }
         )
     }
 }
@@ -1677,7 +1683,7 @@ private struct DockStatusCell<Content: View>: View {
 @available(macOS 13.0, *)
 private struct OverlayNotificationView: View {
     @ObservedObject private var uiLocalization = UILocalization.shared
-    @State private var hoveredJoinButton: String?
+    @State private var hoveredMeetingAction: String?
     @State private var hoveringDismiss = false
     let notification: OverlayNotification
     let scale: CGFloat
@@ -1694,8 +1700,8 @@ private struct OverlayNotificationView: View {
 
     var body: some View {
         Group {
-            if notification.isMeetingJoin {
-                meetingJoinContent
+            if notification.isMeetingCard {
+                meetingCardContent
             } else {
                 compactContent
             }
@@ -1706,7 +1712,7 @@ private struct OverlayNotificationView: View {
         .overlay(RoundedRectangle(cornerRadius: s(8)).stroke(Color.white.opacity(0.42), lineWidth: 1))
     }
 
-    private var meetingJoinContent: some View {
+    private var meetingCardContent: some View {
         VStack(alignment: .leading, spacing: s(8)) {
             HStack(alignment: .top, spacing: s(10)) {
                 Image(systemName: "video.fill")
@@ -1732,23 +1738,28 @@ private struct OverlayNotificationView: View {
             }
             HStack(spacing: s(8)) {
                 Spacer(minLength: 0)
-                meetingJoinActions
+                meetingCardActions
             }
         }
         .padding(s(14))
     }
 
-    /// Two immediate actions share one light surface. HD remains one click,
-    /// and its label explicitly includes joining rather than a recording toggle.
+    /// Action choices share a light surface and keep each notification's label
+    /// and dispatch payload intact.
     @ViewBuilder
-    private var meetingJoinActions: some View {
-        if let join = notification.actions.first(where: { $0.isMeetingJoin }) {
-            let detailID = notification.screenDetailAction?.id
-            let detail = detailID.flatMap { id in notification.displayActions.first(where: { $0.id == id }) }
-            HStack(spacing: 0) {
-                Button(action: { onAction(join) }) {
+    private var meetingCardActions: some View {
+        let displayActions = orderedActions
+        HStack(spacing: 0) {
+            ForEach(Array(displayActions.enumerated()), id: \.element.id) { index, action in
+                if index > 0 {
+                    Rectangle()
+                        .fill(Color.black.opacity(0.15))
+                        .frame(width: 1, height: s(20))
+                        .accessibilityHidden(true)
+                }
+                Button(action: { onAction(action) }) {
                     HStack(spacing: s(7)) {
-                        if let provider = join.meetingProvider {
+                        if index == 0, let provider = action.meetingProvider {
                             if let image = provider.image {
                                 Image(nsImage: image)
                                     .resizable()
@@ -1762,47 +1773,32 @@ private struct OverlayNotificationView: View {
                                     .frame(width: s(18), height: s(18))
                                     .accessibilityHidden(true)
                             }
-                        } else {
+                        } else if index == 0 {
                             Image(systemName: "video.fill")
                                 .font(.system(size: 18 * scale))
                                 .frame(width: s(18), height: s(18))
                                 .accessibilityHidden(true)
                         }
-                        Text(join.label)
+                        Text(action.label)
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
                     .padding(.horizontal, s(12))
                     .frame(height: s(36))
-                    .background(hoveredJoinButton == "join" ? Color.black.opacity(0.08) : Color.clear)
+                    .background(hoveredMeetingAction == action.id ? Color.black.opacity(0.08) : Color.clear)
                     .contentShape(Rectangle())
                 }
-                .onHover { hovered in hoveredJoinButton = hovered ? "join" : nil }
-                if let detail {
-                    Rectangle()
-                        .fill(Color.black.opacity(0.15))
-                        .frame(width: 1, height: s(20))
-                        .accessibilityHidden(true)
-                    Button(action: { onAction(detail) }) {
-                        Text(uiText("join + HD"))
-                            .padding(.horizontal, s(12))
-                            .frame(height: s(36))
-                            .background(hoveredJoinButton == "hd" ? Color.black.opacity(0.08) : Color.clear)
-                            .contentShape(Rectangle())
-                    }
-                    .onHover { hovered in hoveredJoinButton = hovered ? "hd" : nil }
-                    .help(uiText("Join and take notes with HD screen recording: more frequent screenshots for smoother replay. Uses more storage."))
-                    .accessibilityLabel(uiText("Join and take notes with HD screen recording"))
-                }
+                .onHover { hovered in hoveredMeetingAction = hovered ? action.id : nil }
+                .help(action.isMeetingJoin && notification.screenDetailAction?.id == action.id
+                    ? uiText("Join and take notes with HD screen recording: more frequent screenshots for smoother replay. Uses more storage.")
+                    : action.label)
             }
-            .font(Brand.swiftUIMonoFont(size: 13 * scale, weight: .medium))
-            .foregroundColor(.black)
-            .buttonStyle(.plain)
-            .background(Color.white.opacity(0.92))
-            .clipShape(RoundedRectangle(cornerRadius: s(6)))
-        } else {
-            actionButtons
         }
+        .font(Brand.swiftUIMonoFont(size: 13 * scale, weight: .medium))
+        .foregroundColor(.black)
+        .buttonStyle(.plain)
+        .background(Color.white.opacity(0.92))
+        .clipShape(RoundedRectangle(cornerRadius: s(6)))
     }
 
     private var compactContent: some View {
@@ -1853,12 +1849,12 @@ private struct OverlayNotificationView: View {
                         }
                     }
                     Text(action.label)
-                        .font(Brand.swiftUIMonoFont(size: (notification.isMeetingJoin ? 12 : 9) * scale, weight: .medium))
+                        .font(Brand.swiftUIMonoFont(size: (notification.isMeetingCard ? 12 : 9) * scale, weight: .medium))
                         .lineLimit(1)
                 }
                     .foregroundColor(action.primary ? .black : .white.opacity(0.88))
-                    .padding(.horizontal, s(notification.isMeetingJoin ? 10 : 8))
-                    .frame(height: s(notification.isMeetingJoin ? 34 : 22))
+                    .padding(.horizontal, s(notification.isMeetingCard ? 10 : 8))
+                    .frame(height: s(notification.isMeetingCard ? 34 : 22))
                     .background(
                         action.primary
                             ? Color.white.opacity(0.92)
@@ -1868,7 +1864,7 @@ private struct OverlayNotificationView: View {
                     .contentShape(RoundedRectangle(cornerRadius: s(6)))
             }
             .buttonStyle(.plain)
-            .help(notification.isMeetingJoin && action.id == notification.screenDetailAction?.id
+            .help(notification.isMeetingCard && action.id == notification.screenDetailAction?.id
                 ? uiText("Join and take notes with more frequent screen capture for smoother replay. Uses more storage.")
                 : action.label)
             .fixedSize()
@@ -1878,10 +1874,10 @@ private struct OverlayNotificationView: View {
     private var dismissButton: some View {
         Button(action: onDismiss) {
             Image(systemName: "xmark")
-                .font(.system(size: (notification.isMeetingJoin ? 11 : 8) * scale, weight: .semibold))
+                .font(.system(size: (notification.isMeetingCard ? 11 : 8) * scale, weight: .semibold))
                 .foregroundColor(.white.opacity(0.55))
-                .frame(width: s(notification.isMeetingJoin ? 24 : 14), height: s(notification.isMeetingJoin ? 24 : 22))
-                .background(hoveringDismiss && notification.isMeetingJoin ? Color.white.opacity(0.10) : Color.clear)
+                .frame(width: s(notification.isMeetingCard ? 24 : 14), height: s(notification.isMeetingCard ? 24 : 22))
+                .background(hoveringDismiss && notification.isMeetingCard ? Color.white.opacity(0.10) : Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: s(5)))
                 .contentShape(Rectangle())
         }

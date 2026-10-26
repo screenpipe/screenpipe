@@ -38,6 +38,7 @@ import { NotificationActionButton } from "@/components/notification-action-butto
 import { isNotificationFeedbackEligible } from "@/lib/ai-feedback";
 import { NotificationFeedback } from "@/components/notification-feedback";
 import { MeetingJoinNotification } from "@/components/meeting-join-notification";
+import { isMeetingNotificationCard } from "@/lib/notifications/meeting-join";
 import { showNotificationPanel } from "@/lib/hooks/use-notification-panel";
 import { useGT } from "gt-react";
 
@@ -458,7 +459,7 @@ export default function NotificationPanelPage() {
     return null;
   }
 
-  if (payload.actions.some((action) => action.type === "meeting_join" && action.url)) {
+  if (isMeetingNotificationCard(payload.actions)) {
     return <MeetingJoinNotification key={payload.id} {...payload}
       scale={payload.overlayScale ?? 1}
       onAction={handleAction} onDismiss={() => void hide("explicit")}

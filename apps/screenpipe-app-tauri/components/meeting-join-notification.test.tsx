@@ -11,6 +11,10 @@ const actions: NotificationAction[] = [
   { id: "join", type: "meeting_join", label: "join and take notes", url: "https://meet.google.com/example", deeplinkUrl: "screenpipe://meeting/42", primary: true },
   { id: "hd", type: "api", url: "/capture/hd/start", method: "POST", body: { boundTo: "prewarm_pending" }, label: "+ HD" },
 ];
+const openNoteActions: NotificationAction[] = [
+  { id: "open-live-notes", action: "open-live-notes", type: "deeplink", label: "open note", url: "screenpipe://meeting/42", primary: true },
+  { id: "record-hd", action: "record-hd", type: "api", label: "open note + HD", url: "/capture/hd/start", method: "POST", body: { meetingId: 42 }, deeplinkUrl: "screenpipe://meeting/42" },
+];
 const props = { title: "meeting starting in 1 min", body: "Weekly team sync", actions, onDismiss: vi.fn() };
 
 describe("shared desktop join card", () => {
@@ -66,6 +70,19 @@ describe("shared desktop join card", () => {
     expect(joinButton.style.flexGrow).toBe("1");
     expect(joinButton.querySelector("span")).toHaveStyle({ overflow: "hidden", textOverflow: "ellipsis" });
     expect(screen.getByRole("button", { name: "Join and take notes with HD screen recording" })).toBeInTheDocument();
+  });
+  it("uses the same scaled card for detected meetings and preserves open-note actions", async () => {
+    const onAction = vi.fn().mockResolvedValue(undefined);
+    const { container, rerender } = render(<MeetingJoinNotification {...props}
+      title="meeting detected" actions={openNoteActions} scale={1.5} onAction={onAction} />);
+    expect(screen.getByRole("region", { name: "Meeting detected" })).toHaveStyle({ width: "460px", height: "124px" });
+    expect((container.firstElementChild as HTMLDivElement).style.transform).toBe("scale(1.5)");
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "open note + HD" })));
+    expect(onAction).toHaveBeenCalledWith(openNoteActions[1]);
+    rerender(<MeetingJoinNotification {...props} title="meeting detected"
+      actions={[openNoteActions[0]]} onAction={onAction} />);
+    expect(screen.getByRole("button", { name: "open note" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "open note + HD" })).toBeNull();
   });
   it.each([
     ["https://meet.google.com/example", "googleMeet"], ["https://us02web.zoom.us/j/1", "zoom"],

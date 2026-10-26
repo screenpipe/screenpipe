@@ -4074,9 +4074,9 @@ pub(crate) fn notification_belongs_to_overlay(notification_type: Option<&str>) -
     matches!(notification_type, Some("meeting"))
 }
 
-/// The webview fallback uses the same logical bounds as the native SwiftUI card.
-const MEETING_JOIN_NOTIFICATION_WIDTH: f64 = 460.0;
-const MEETING_JOIN_NOTIFICATION_HEIGHT: f64 = 124.0;
+/// Join and open-note cards share the same logical bounds on every surface.
+const MEETING_CARD_WIDTH: f64 = 460.0;
+const MEETING_CARD_HEIGHT: f64 = 124.0;
 
 fn shortcut_overlay_scale(size: &str) -> f64 {
     match size {
@@ -4086,14 +4086,19 @@ fn shortcut_overlay_scale(size: &str) -> f64 {
     }
 }
 
-fn meeting_join_notification_size(scale: f64) -> (f64, f64) {
+fn meeting_notification_card_size(scale: f64) -> (f64, f64) {
     (
-        MEETING_JOIN_NOTIFICATION_WIDTH * scale,
-        MEETING_JOIN_NOTIFICATION_HEIGHT * scale,
+        MEETING_CARD_WIDTH * scale,
+        MEETING_CARD_HEIGHT * scale,
     )
 }
 
-fn meeting_join_notification_payload(payload: &str, scale: f64) -> String {
+#[cfg(test)]
+fn meeting_join_notification_size(scale: f64) -> (f64, f64) {
+    meeting_notification_card_size(scale)
+}
+
+fn meeting_notification_card_payload(payload: &str, scale: f64) -> String {
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(payload) else {
         return payload.to_owned();
     };
@@ -4103,6 +4108,12 @@ fn meeting_join_notification_payload(payload: &str, scale: f64) -> String {
     serde_json::to_string(&value).unwrap_or_else(|_| payload.to_owned())
 }
 
+#[cfg(test)]
+fn meeting_join_notification_payload(payload: &str, scale: f64) -> String {
+    meeting_notification_card_payload(payload, scale)
+}
+
+#[cfg(any(test, target_os = "windows"))]
 fn notification_is_meeting_join(payload: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(payload)
         .ok()
@@ -4118,9 +4129,38 @@ fn notification_is_meeting_join(payload: &str) -> bool {
         })
 }
 
+fn notification_is_meeting_card(payload: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+        return false;
+    };
+    let Some(actions) = value.get("actions").and_then(|v| v.as_array()) else {
+        return false;
+    };
+    let has_join = actions.iter().any(|action| {
+        action.get("type").and_then(|v| v.as_str()) == Some("meeting_join")
+            && action
+                .get("url")
+                .and_then(|v| v.as_str())
+                .is_some_and(|url| !url.is_empty())
+    });
+    let has_open_note = actions.iter().any(|action| {
+        let id = action
+            .get("id")
+            .or_else(|| action.get("action"))
+            .and_then(|v| v.as_str());
+        action.get("type").and_then(|v| v.as_str()) == Some("deeplink")
+            && id == Some("open-live-notes")
+            && action
+                .get("url")
+                .and_then(|v| v.as_str())
+                .is_some_and(|url| url.starts_with("screenpipe://meeting"))
+    });
+    has_join || has_open_note
+}
+
 #[cfg(test)]
 mod meeting_join_notification_tests {
-    use super::notification_is_meeting_join;
+    use super::{notification_is_meeting_card, notification_is_meeting_join};
 
     #[test]
     fn meeting_join_panel_uses_shared_logical_bounds() {
@@ -4152,6 +4192,12 @@ mod meeting_join_notification_tests {
         assert!(!notification_is_meeting_join("invalid"));
         assert!(!notification_is_meeting_join(
             r#"{"actions":[{"type":"meeting_join","url":""}]}"#
+        ));
+        assert!(notification_is_meeting_card(
+            r#"{"actions":[{"id":"open-live-notes","action":"open-live-notes","type":"deeplink","url":"screenpipe://meeting/42"}]}"#
+        ));
+        assert!(!notification_is_meeting_card(
+            r#"{"actions":[{"id":"open-live-notes","type":"deeplink","url":"screenpipe://activity"}]}"#
         ));
     }
 }
@@ -4257,6 +4303,8 @@ pub(crate) async fn deliver_notification_panel(
     // The pill speaks up for its own alerts wherever it is native. Windows has
     // no native standalone panel, so only the overlay branch applies and
     // anything the pill refuses falls through to the webview panel below.
+    let meeting_card = notification_is_meeting_card(&payload);
+    #[cfg(target_os = "windows")]
     let meeting_join = notification_is_meeting_join(&payload);
     #[cfg(target_os = "windows")]
     {
@@ -4291,7 +4339,7 @@ pub(crate) async fn deliver_notification_panel(
             return Ok(NotificationDelivery::ShownOnOverlay);
         }
 
-        if !meeting_join && native_notification::is_available() {
+        if !meeting_card && native_notification::is_available() {
             info!("Using native SwiftUI notification panel");
             if native_notification::show(&payload) {
                 // Emit event so the main window can save notification history + PostHog analytics
@@ -4303,7 +4351,7 @@ pub(crate) async fn deliver_notification_panel(
         }
     }
 
-    let overlay_scale = if meeting_join {
+    let overlay_scale = if meeting_card {
         let size = crate::store::SettingsStore::get(&app_handle)
             .unwrap_or_default()
             .unwrap_or_default()
@@ -4312,13 +4360,13 @@ pub(crate) async fn deliver_notification_panel(
     } else {
         1.0
     };
-    let (window_width, window_height) = if meeting_join {
-        meeting_join_notification_size(overlay_scale)
+    let (window_width, window_height) = if meeting_card {
+        meeting_notification_card_size(overlay_scale)
     } else {
         (340.0, 380.0)
     };
-    let panel_payload = if meeting_join {
-        meeting_join_notification_payload(&payload, overlay_scale)
+    let panel_payload = if meeting_card {
+        meeting_notification_card_payload(&payload, overlay_scale)
     } else {
         payload.clone()
     };
