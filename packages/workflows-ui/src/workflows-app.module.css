@@ -822,6 +822,7 @@
 }
 
 .catalogFilters { display:flex;flex-wrap:wrap;gap:16px;margin:0 0 20px;color:var(--muted);font-size:12px; }
+.catalogFilterHelp { flex: 1 0 100%; max-width: 900px; margin: 0 0 -4px; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .catalogFilters select { background:var(--panel);color:var(--ink);border:1px solid var(--line);padding:6px;font:inherit; }
 
 .workflowContext { max-width: 1180px; margin: 20px auto 0; }

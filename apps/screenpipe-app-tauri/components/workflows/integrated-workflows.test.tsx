@@ -143,7 +143,7 @@ it("keeps catalog search and refresh alongside local document filters", async ()
   window.history.replaceState(null, "", "/home?mode=workflows");
   render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
   await screen.findByRole("heading", { name: "Research synthesis" });
-  expect(screen.getByRole("combobox", { name: "Workflow status" })).toBeVisible();
+  expect(screen.getByRole("combobox", { name: "Workflow review status" })).toBeVisible();
   expect(screen.getByRole("combobox", { name: "Workflow app" })).toBeVisible();
   expect(screen.getByRole("button", { name: "Update now" })).toHaveAttribute("title", "Update now");
   const search = screen.getByPlaceholderText("Search workflows");

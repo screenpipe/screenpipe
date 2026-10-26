@@ -493,11 +493,12 @@ export function WorkflowsView({ documentFilters = false, refreshControl, emptySt
         </div>
         {refreshControl ? <div className={styles.quietHeaderActions}>{refreshControl}</div> : <WorkflowRunProgress activityState={activityState} quiet disabledReason={analysisUnavailableReason} job={job} active={analyzing} subscribe={subscribe} stop={stop} analyze={analyze} updatedAt={updatedAt} checkedThrough={checkedThrough} changes={changes} />}
       </div>
-      {documentFilters && <div className={styles.catalogFilters}>
-        <label>Status <select aria-label="Workflow status" value={status} onChange={e=>setStatus(e.target.value)}>{[["active","Active"],["needs-review","Needs review"],["needs-edits","Needs edits"],["reviewed","Reviewed"],["archived","Archived"]].map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
-        <label>App <select aria-label="Workflow app" value={app} onChange={e=>setApp(e.target.value)}><option value="all">All apps</option>{[...new Set(workflows.flatMap(w=>w.apps))].sort().map(a=><option key={a}>{a}</option>)}</select></label>
-        <label>Person <select aria-label="Workflow person" value={person} onChange={e=>setPerson(e.target.value)}><option value="all">Everyone</option>{[...new Set(workflows.flatMap(w=>w.people ?? []))].sort().map(p=><option key={p}>{p}</option>)}</select></label>
-        <label>Sort <select aria-label="Workflow sort" value={sort} onChange={e=>setSort(e.target.value)}><option value="confidence">Highest confidence</option><option value="title">Title</option></select></label>
+      {documentFilters && <div className={styles.catalogFilters} role="group" aria-label={ui("Workflow filters")}>
+        <p className={styles.catalogFilterHelp}>{ui("These filters only narrow this personal list; Enterprise workspace management happens separately in the web dashboard. Filter by review status, app, or associated person, then sort by model confidence or title. “Not archived” can include workflows needing review or edits.")}</p>
+        <label>{ui("Review status")} <select aria-label={ui("Workflow review status")} value={status} onChange={e=>setStatus(e.target.value)}>{[["active",ui("Not archived")],["needs-review",ui("Needs review")],["needs-edits",ui("Needs edits")],["reviewed",ui("Reviewed")],["archived",ui("Archived")]].map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
+        <label>{ui("App")} <select aria-label={ui("Workflow app")} value={app} onChange={e=>setApp(e.target.value)}><option value="all">{ui("All apps")}</option>{[...new Set(workflows.flatMap(w=>w.apps))].sort().map(a=><option key={a}>{a}</option>)}</select></label>
+        <label>{ui("Person")} <select aria-label={ui("Workflow person")} value={person} onChange={e=>setPerson(e.target.value)}><option value="all">{ui("All people")}</option>{[...new Set(workflows.flatMap(w=>w.people ?? []))].sort().map(p=><option key={p}>{p}</option>)}</select></label>
+        <label>{ui("Sort")} <select aria-label={ui("Workflow sort")} value={sort} onChange={e=>setSort(e.target.value)}><option value="confidence">{ui("Model confidence (highest first)")}</option><option value="title">{ui("Title (A–Z)")}</option></select></label>
       </div>}
       {error && <p role="alert" className={styles.depthNotice}>{error}</p>}
       {!knownWorkflowCount ? (emptyState ?? <EmptyWorkMap analyzing={analyzing} analyze={analyze} />) : !workflows.length ? <section className={styles.emptyState}><Clock3 size={23} /><h2>No known workflows were active in this period</h2><p>Your {knownWorkflowCount} known workflows are still in the catalog. Choose “All known” to see them.</p></section> : <>
@@ -520,7 +521,7 @@ export function WorkflowsView({ documentFilters = false, refreshControl, emptySt
               </div>
             </article>
           );
-        })}</div> : <section className={styles.emptyState}><Search size={23} /><h2>{documentFilters ? "No workflows match these filters" : "No workflows match your search"}</h2><p>{documentFilters ? "Try another search or clear the filters to see active workflows." : "Try another search or clear it to see all your workflows."}</p><button className={styles.primaryButton} onClick={() => {setQuery("");setStatus("active");setApp("all");setPerson("all");}}>{documentFilters ? "Clear filters" : "Clear search"}</button></section>}
+        })}</div> : <section className={styles.emptyState}><Search size={23} /><h2>{documentFilters ? ui("No workflows match these filters") : ui("No workflows match your search")}</h2><p>{documentFilters ? ui("Try another search or clear the filters to see non-archived workflows.") : ui("Try another search or clear it to see all your workflows.")}</p><button className={styles.primaryButton} onClick={() => {setQuery("");setStatus("active");setApp("all");setPerson("all");}}>{documentFilters ? ui("Clear filters") : ui("Clear search")}</button></section>}
       </>}
     </>
   );
