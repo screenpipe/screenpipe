@@ -75,3 +75,6 @@
 @media(max-width:639px) { .canvas { height:420px; } .canvas.compact { height:360px; } }
 @media(prefers-reduced-motion:reduce) { .node { transition:none; } }
 @media(forced-colors:active) { .timing, .swatch { border:1px solid CanvasText; } }
+
+.appIcons { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.appOverflow { display:inline-flex; height:28px; min-width:28px; align-items:center; justify-content:center; border-radius:6px; background:var(--collection-soft,var(--soft)); padding:0 6px; font-size:12px; color:var(--collection-muted,var(--muted)); }

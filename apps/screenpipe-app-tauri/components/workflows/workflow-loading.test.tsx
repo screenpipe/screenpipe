@@ -188,7 +188,7 @@ it("keeps update activity when opening a map and through missing or failed statu
   platform.subscribeAnalysisActivity = vi.fn(async (_id, callback) => { publish = callback; return off; });
   await mount(platform);
   act(() => publish([{ id: "a", label: "Searched recordings", status: "complete" }]));
-  fireEvent.click(screen.getAllByRole("button", { name: "Open map" })[0]);
+  fireEvent.click(screen.getByRole("button", { name: /Customer feedback triage/ }));
   act(() => publish([{ id: "b", label: "Read saved workflows", status: "complete" }]));
   fireEvent.click(screen.getByRole("button", { name: "Workflows", exact: true }));
   fireEvent.click(screen.getByRole("button", { name: /Show agent activity/ }));
@@ -206,6 +206,6 @@ it.each(["overview", "time", "bottlenecks", "evidence", "privacy"])("routes obso
   window.history.replaceState(null, "", `/home?mode=workflows&view=${view}`);
   const platform = createFixtureWorkflowsPlatform();
   await mount(platform, true);
-  expect(screen.getByRole("heading", { name: "Your workflows" })).toBeVisible();
+  expect(screen.getByRole("heading", { name: "Workflows", level: 1 })).toBeVisible();
   expect(screen.getByRole("button", { name: "Context", exact: true })).toBeVisible();
 });

@@ -126,6 +126,21 @@ function appIdentity(name: string): { app: string; browser?: string } {
   return { app: value };
 }
 
+/** Filters share the icon resolver's aliases, without merging different apps. */
+export function workflowAppFilterKey(name: string): string {
+  const key = iconKey(appIdentity(name).app);
+  return Object.hasOwn(equivalentApps, key) ? equivalentApps[key] : key;
+}
+
+export function workflowAppFilterLabel(name: string): string {
+  const app = appIdentity(name).app;
+  const key = workflowAppFilterKey(name);
+  const special: Record<string, string> = { gmail: "Gmail", chatgpt: "ChatGPT", openai: "OpenAI", github: "GitHub", gitlab: "GitLab", docusign: "DocuSign", powerpoint: "PowerPoint" };
+  if (Object.hasOwn(special, key)) return special[key];
+  if (localAsset(key)) return key.replace(/\b\w/g, char => char.toUpperCase());
+  return websiteUrl(app)?.hostname.replace(/^www\./, "") ?? app;
+}
+
 function AppHint({ label, children }: { label: string; children: ReactElement }) {
   return <span title={label}>{children}</span>;
 }
@@ -156,3 +171,11 @@ export function WorkflowAppIcon({ name, compact = false, decorative = false }: {
 
 
 export { WorkflowAppIcon as WorkflowMapAppIcon };
+
+export function WorkflowAppIcons({ apps }: { apps: string[] }) {
+  const names = [...new Map(apps.filter(name => name.trim()).map(name => [workflowAppFilterKey(name), name])).values()];
+  return <span className={styles.appIcons} data-testid="workflow-app-icons">
+    {names.slice(0, 3).map(name => <WorkflowAppIcon key={name} name={name} decorative />)}
+    {names.length > 3 && <span className={styles.appOverflow} title={names.slice(3).join(", ")}>+{names.length - 3}</span>}
+  </span>;
+}

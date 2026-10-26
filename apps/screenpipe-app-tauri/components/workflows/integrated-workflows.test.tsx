@@ -90,7 +90,7 @@ it("opens the existing sharing review from the selected workflow in the main app
   render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
   // Wait for saved data instead of interacting with a transient empty screen.
   const card = (await screen.findByRole("heading", { name: "Research synthesis" })).closest("article")!;
-  fireEvent.click(within(card).getByRole("button", { name: "Open map" }));
+  fireEvent.click(within(card).getByRole("button"));
   expect(screen.queryByRole("dialog", { name: "Sharing review" })).not.toBeInTheDocument();
   const agent = screen.getByRole("button", { name: "Open in agent" });
   expect(agent.parentElement).toContainElement(screen.getByRole("button", { name: "Share", exact: true }));
@@ -143,10 +143,10 @@ it("keeps catalog search and refresh alongside local document filters", async ()
   window.history.replaceState(null, "", "/home?mode=workflows");
   render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
   await screen.findByRole("heading", { name: "Research synthesis" });
-  expect(screen.getByRole("combobox", { name: "Workflow review status" })).toBeVisible();
-  expect(screen.getByRole("combobox", { name: "Workflow app" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Filter workflows" })).toBeVisible();
+  expect(screen.getByRole("group", { name: "Workflow collection view" })).toBeVisible();
   expect(screen.getByRole("button", { name: "Update now" })).toHaveAttribute("title", "Update now");
-  const search = screen.getByPlaceholderText("Search workflows");
+  const search = screen.getByPlaceholderText("Search workflows…");
   fireEvent.change(search, { target: { value: "no-such-workflow-xyz" } });
   expect(screen.getByText("No workflows match these filters")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
@@ -180,6 +180,6 @@ it("recovers a removed workflow into the catalog without claiming it opened", as
   window.history.replaceState(null, "", "/home?mode=workflows");
   render(<IntegratedWorkflows active onModeChange={vi.fn()} recordingStatus={null} />);
   expect(await screen.findByText("This workflow is no longer available. Your other workflows are shown below.")).toBeVisible();
-  expect(screen.getByRole("heading", { name: "Your workflows" })).toBeVisible();
+  expect(screen.getByRole("heading", { name: "Workflows", level: 1 })).toBeVisible();
   expect(posthog.capture).toHaveBeenCalledWith("workflow_notification_open_failed", expect.objectContaining({ reason: "workflow_unavailable" }));
 });

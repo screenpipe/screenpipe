@@ -113,7 +113,7 @@ it("aborts requests and discards late results after unmount", async () => {
 
 it("uses the local navigation shell, collapse control and command palette", async () => {
   render(<CloudWorkflows {...props} api={api()} />);
-  await screen.findByRole('heading', { name: 'Your workflows' });
+  await screen.findByRole('heading', { name: 'Workflows', level: 1 });
   expect(screen.getByRole('navigation', { name: 'Primary navigation' })).toHaveTextContent('Home');
   fireEvent.click(screen.getByRole('button', { name: 'Collapse left sidebar' }));
   expect(screen.getByRole('button', { name: 'Open left sidebar' })).toHaveAttribute('aria-expanded', 'false');

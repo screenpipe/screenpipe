@@ -26,7 +26,7 @@ it.skipIf(!catalogPath)("opens every workflow in a saved catalog", async () => {
     if (guide && platform.guides) platform.guides.load = async () => guide;
     render(<WorkflowsApp platform={platform} embedded />);
     const card = (await screen.findByRole("heading", { name: workflow.title })).closest("article")!;
-    fireEvent.click(within(card).getByRole("button", { name: "Open map" }));
+    fireEvent.click(within(card).getByRole("button"));
     expect(await screen.findByRole("button", { name: "More workflow actions" })).toBeVisible();
     expect(screen.getByRole("textbox", { name: "Workflow title" })).toHaveValue(workflow.title);
     if (guide) {

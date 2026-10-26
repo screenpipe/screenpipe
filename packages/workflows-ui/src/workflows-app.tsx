@@ -89,6 +89,9 @@ import {
   type WorkflowSkillProgress,
 } from "./model";
 import type { WorkflowAnalysisJob, WorkflowsAppProps, WorkflowsPlatform } from "./platform";
+import { WorkflowCard, WorkflowListRow, WorkflowCollectionToolbar, WorkflowSearch, type WorkflowCollectionView } from "./workflow-collection";
+import { workflowAppFilterKey, workflowAppFilterLabel } from "./workflow-map-app-icon";
+import collection from "./workflow-collection.module.css";
 import { ContextComposer } from "./context-composer";
 import { useContextProfile } from "./use-context-profile";
 import { type ContextField } from "./context-tool";
@@ -415,7 +418,7 @@ export function AppShell({
             </ol></nav>
             <button type="button" className={styles.panelToggle} aria-label="Search workflows" onClick={openCommandPalette}><Search size={16} /></button>
           </> : <>
-          <div className={styles.search}><Search size={15} /><input data-workflows-search value={query} onChange={(event) => setQuery(event.target.value)} onFocus={() => navigate("workflows")} placeholder={ui("Search workflows")} aria-label={ui("Search workflows")} />{query ? <button type="button" onClick={() => setQuery("")} aria-label={ui("Clear search")}><X size={12} /></button> : <button type="button" className={styles.commandTrigger} onMouseDown={(event) => event.preventDefault()} onClick={openCommandPalette} aria-label={ui("Open command palette")}><CommandIcon size={12} /><kbd>⌘ K</kbd></button>}</div>
+          {view !== "workflows" && <div className={styles.search}><Search size={15} /><input data-workflows-search value={query} onChange={(event) => setQuery(event.target.value)} onFocus={() => navigate("workflows")} placeholder={ui("Search workflows")} aria-label={ui("Search workflows")} />{query ? <button type="button" onClick={() => setQuery("")} aria-label={ui("Clear search")}><X size={12} /></button> : <button type="button" className={styles.commandTrigger} onMouseDown={(event) => event.preventDefault()} onClick={openCommandPalette} aria-label={ui("Open command palette")}><CommandIcon size={12} /><kbd>⌘ K</kbd></button>}</div>}
           {sourceControl && <div className={styles.sourceControl}>{sourceControl}</div>}
           </>}
           {scopes.length > 1 && <label className={styles.scopeControl}>
@@ -472,58 +475,85 @@ function ErrorNotice({ message, retry }: { message: string; retry: () => void })
   return <div className={styles.errorNotice}><AlertTriangle size={16} /><div><strong>Couldn’t finish the work map</strong><p>{message}</p></div><button onClick={retry}><RefreshCw size={12} />Try again</button></div>;
 }
 
-export function WorkflowsView({ documentFilters = false, refreshControl, emptyState, reviewIds, workflows, knownWorkflowCount, query, setQuery, openWorkflow, analyze, analyzing, error, stop, updatedAt, checkedThrough, changes, job, subscribe, activityState, analysisUnavailableReason }: { documentFilters?: boolean; refreshControl?: React.ReactNode; emptyState?: React.ReactNode; reviewIds?: ReadonlySet<string>; activityState: WorkflowActivityState; analysisUnavailableReason?: string; workflows: WorkflowMap[]; knownWorkflowCount: number; query: string; setQuery: (query: string) => void; openWorkflow: (index: number) => void; analyze: () => void; analyzing: boolean; error: string; stop?: () => void; updatedAt?: string; checkedThrough?: string; changes?: { created: number; updated: number }; job?: WorkflowAnalysisJob | null; subscribe?: WorkflowsPlatform["subscribeAnalysisActivity"] }) {
+export function WorkflowsView({ refreshControl, emptyState, reviewIds, workflows, knownWorkflowCount, query, setQuery, openWorkflow, analyze, analyzing, error, stop, updatedAt, checkedThrough, changes, job, subscribe, activityState, analysisUnavailableReason }: { documentFilters?: boolean; refreshControl?: React.ReactNode; emptyState?: React.ReactNode; reviewIds?: ReadonlySet<string>; activityState: WorkflowActivityState; analysisUnavailableReason?: string; workflows: WorkflowMap[]; knownWorkflowCount: number; query: string; setQuery: (query: string) => void; openWorkflow: (index: number) => void; analyze: () => void; analyzing: boolean; error: string; stop?: () => void; updatedAt?: string; checkedThrough?: string; changes?: { created: number; updated: number }; job?: WorkflowAnalysisJob | null; subscribe?: WorkflowsPlatform["subscribeAnalysisActivity"] }) {
   const ui = useGT();
-  const [status,setStatus] = useState("active");
-  const [app,setApp] = useState("all");
-  const [person,setPerson] = useState("all");
-  const [sort,setSort] = useState("confidence");
-  const visible = useMemo(() => !documentFilters ? filterWorkflows(workflows, {...defaultWorkflowFilters,query}) : filterWorkflows(workflows, { ...defaultWorkflowFilters, query, app }).filter(w=>person === "all" || w.people?.includes(person)).filter(w=>status === "archived" ? w.archived : !w.archived && (status === "active" || (w.reviewStatus ?? "needs-review") === status))
-    .sort((a,b)=>sort === "title" ? a.title.localeCompare(b.title) : b.confidence-a.confidence), [documentFilters,query, workflows,status,app,person,sort]);
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
+  const [selectedApps, setSelectedApps] = useState<string[]>([]);
+  const [selectedPeople, setSelectedPeople] = useState<string[]>([]);
+  const [showArchived, setShowArchived] = useState(false);
+  const [sort, setSort] = useState("task-confidence");
+  const [view, setView] = useState<WorkflowCollectionView>("cards");
+  const statusFor = (workflow: WorkflowMap) => workflow.reviewStatus === "reviewed" ? "approved" : workflow.reviewStatus === "needs-edits" ? "needs_edits" : "unreviewed";
+  const statusLabels: Record<string, string> = { approved: "Approved", needs_edits: "Needs edits", unreviewed: "Unreviewed" };
+  const hasFilters = Boolean(query || showArchived || selectedApps.length || selectedPeople.length || selectedStatuses.length);
+  const resetFilters = () => { setQuery(""); setSelectedApps([]); setSelectedPeople([]); setSelectedStatuses([]); setShowArchived(false); };
+  const toggleFilter = (kind: "apps" | "people" | "status", key: string, clearQuery: boolean) => {
+    const update = kind === "apps" ? setSelectedApps : kind === "people" ? setSelectedPeople : setSelectedStatuses;
+    update(values => values.includes(key) ? values.filter(value => value !== key) : [...values, key]);
+    if (clearQuery) setQuery("");
+  };
+  const suggestions = (values: (workflow: WorkflowMap) => string[], label: (key: string) => string = key => key) => {
+    const counts = new Map<string, number>();
+    workflows.filter(workflow => Boolean(workflow.archived) === showArchived).forEach(workflow => new Set(values(workflow)).forEach(key => counts.set(key, (counts.get(key) ?? 0) + 1)));
+    return [...counts].map(([key, count]) => ({ key, label: label(key), count })).sort((a, b) => a.label.localeCompare(b.label));
+  };
+  const appLabels = new Map(workflows.flatMap(workflow => workflow.apps.map(app => [workflowAppFilterKey(app), workflowAppFilterLabel(app)] as const)));
+  const visible = useMemo(() => filterWorkflows(workflows, { ...defaultWorkflowFilters, query })
+    .filter(workflow => Boolean(workflow.archived) === showArchived)
+    .filter(workflow => !selectedApps.length || workflow.apps.some(app => selectedApps.includes(workflowAppFilterKey(app))))
+    .filter(workflow => !selectedPeople.length || workflow.people?.some(person => selectedPeople.includes(person)))
+    .filter(workflow => !selectedStatuses.length || selectedStatuses.includes(statusFor(workflow)))
+    .sort((a, b) => {
+      const tie = a.title.localeCompare(b.title);
+      if (sort === "name") return tie;
+      if (sort === "steps") return b.stages.length - a.stages.length || tie;
+      if (sort === "activity") return (b.durationSource === "measured-meeting" ? b.activeMinutes : -1) - (a.durationSource === "measured-meeting" ? a.activeMinutes : -1) || tie;
+      return b.confidence - a.confidence || tie;
+    }), [query, workflows, selectedStatuses, selectedApps, selectedPeople, showArchived, sort]);
 
   return (
-    <>
+    <section data-workflows-theme="light" aria-label="Workflow list">
       <div className={`${styles.catalogHeader} ${styles.quietCatalogHeader}`}>
         <div className={styles.catalogHeading}>
-          <h1>Your workflows</h1>
-          <div className={styles.catalogCount}>
-            <span>{query ? ui("{visible} of {total} shown", { visible: visible.length, total: workflows.length }) : ui("{count, plural, one {# workflow} other {# workflows}}", { count: visible.length })}</span>
-            {query && <button className={styles.clearButton} onClick={() => setQuery("")}>{ui("Clear search")}</button>}
-          </div>
+          <h1>Workflows</h1>
+
         </div>
         {refreshControl ? <div className={styles.quietHeaderActions}>{refreshControl}</div> : <WorkflowRunProgress activityState={activityState} quiet disabledReason={analysisUnavailableReason} job={job} active={analyzing} subscribe={subscribe} stop={stop} analyze={analyze} updatedAt={updatedAt} checkedThrough={checkedThrough} changes={changes} />}
       </div>
-      {documentFilters && <div className={styles.catalogFilters} role="group" aria-label={ui("Workflow filters")}>
-        <p className={styles.catalogFilterHelp}>{ui("These filters only narrow this personal list; Enterprise workspace management happens separately in the web dashboard. Filter by review status, app, or associated person, then sort by model confidence or title. “Not archived” can include workflows needing review or edits.")}</p>
-        <label>{ui("Review status")} <select aria-label={ui("Workflow review status")} value={status} onChange={e=>setStatus(e.target.value)}>{[["active",ui("Not archived")],["needs-review",ui("Needs review")],["needs-edits",ui("Needs edits")],["reviewed",ui("Reviewed")],["archived",ui("Archived")]].map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
-        <label>{ui("App")} <select aria-label={ui("Workflow app")} value={app} onChange={e=>setApp(e.target.value)}><option value="all">{ui("All apps")}</option>{[...new Set(workflows.flatMap(w=>w.apps))].sort().map(a=><option key={a}>{a}</option>)}</select></label>
-        <label>{ui("Person")} <select aria-label={ui("Workflow person")} value={person} onChange={e=>setPerson(e.target.value)}><option value="all">{ui("All people")}</option>{[...new Set(workflows.flatMap(w=>w.people ?? []))].sort().map(p=><option key={p}>{p}</option>)}</select></label>
-        <label>{ui("Sort")} <select aria-label={ui("Workflow sort")} value={sort} onChange={e=>setSort(e.target.value)}><option value="confidence">{ui("Model confidence (highest first)")}</option><option value="title">{ui("Title (A–Z)")}</option></select></label>
-      </div>}
+      <WorkflowCollectionToolbar count={visible.length} reset={hasFilters ? resetFilters : undefined} order={sort} onOrderChange={setSort} view={view} onViewChange={setView}
+        sortDescription={sort === "task-confidence" ? "Model confidence in the observed workflow, not automation readiness" : undefined}
+        sortOptions={[
+          { value: "task-confidence", label: "Task confidence" },
+          { value: "confidence", label: "Automation confidence (not available)", disabled: true },
+          { value: "savings", label: "Estimated savings (none linked)", disabled: true },
+          { value: "steps", label: "With steps first" },
+          { value: "activity", label: "Most active time", disabled: !workflows.some(w => w.durationSource === "measured-meeting") },
+          { value: "name", label: "Name" },
+        ]}
+        search={<WorkflowSearch query={query} onQueryChange={setQuery}
+          apps={suggestions(w => w.apps.map(workflowAppFilterKey), key => appLabels.get(key) ?? key)}
+          people={suggestions(w => w.people ?? [])} statuses={suggestions(w => [statusFor(w)], key => statusLabels[key])}
+          selectedPeople={selectedPeople} selectedApps={selectedApps} selectedStatuses={selectedStatuses}
+          onToggle={toggleFilter} showArchived={showArchived} onArchivedChange={setShowArchived} />} />
+      {hasFilters && <p className={`${collection.theme} ${collection.results}`} aria-live="polite">Showing {visible.length} of {workflows.length} workflows</p>}
       {error && <p role="alert" className={styles.depthNotice}>{error}</p>}
       {!knownWorkflowCount ? (emptyState ?? <EmptyWorkMap analyzing={analyzing} analyze={analyze} />) : !workflows.length ? <section className={styles.emptyState}><Clock3 size={23} /><h2>No known workflows were active in this period</h2><p>Your {knownWorkflowCount} known workflows are still in the catalog. Choose “All known” to see them.</p></section> : <>
-        {visible.length ? <div className={styles.workflowGrid}>{visible.map((workflow) => {
+        {visible.length ? <div className={`${collection.theme} ${view === "cards" ? collection.grid : collection.list}`} data-testid="workflow-collection" data-view={view}>{visible.map(workflow => {
           const originalIndex = workflows.indexOf(workflow);
-          const timing = workflowTiming(workflow.timing);
-          return (
-            <article key={workflow.id || workflow.title} className={styles.workflowCard}>
-              <h2>{workflow.title}</h2>
-              <p className={styles.cardDescription}>{workflow.description}</p>
-              <div className={styles.cardFooter}>
-                <div className={styles.cardSummary}>
-                  {workflow.id && reviewIds?.has(workflow.id) && <><span className={styles.readyToReview}>{ui("Ready to review")}</span><span aria-hidden="true">·</span></>}
-                  {workflow.stages.length} steps
-                </div>
-                <div className={styles.cardActions}>
-                  {timing && <TimingDisclosure label={`Timing for ${workflow.title}`} value={timing} />}
-                  <button type="button" className={styles.cardOpen} onClick={() => openWorkflow(originalIndex)}><span className={styles.cardOpenLabel}>{ui("Open map")}</span><ChevronRight size={14} /></button>
-                </div>
-              </div>
-            </article>
-          );
-        })}</div> : <section className={styles.emptyState}><Search size={23} /><h2>{documentFilters ? ui("No workflows match these filters") : ui("No workflows match your search")}</h2><p>{documentFilters ? ui("Try another search or clear the filters to see non-archived workflows.") : ui("Try another search or clear it to see all your workflows.")}</p><button className={styles.primaryButton} onClick={() => {setQuery("");setStatus("active");setApp("all");setPerson("all");}}>{documentFilters ? ui("Clear filters") : ui("Clear search")}</button></section>}
+          const status = statusFor(workflow);
+          const review = <span className={collection.review}>{status === "unreviewed" ? <>Review now<ArrowRight size={14} aria-hidden="true" /></> : statusLabels[status]}</span>;
+          const details = <>{workflow.stages.length ? `${workflow.stages.length} steps` : "No steps yet"}{!!workflow.people?.length && <><span aria-hidden="true">·</span><span title={`Inferred people: ${workflow.people.join(", ")}`}><Users size={14} aria-label={`${workflow.people.length} people`} /></span></>}</>;
+          const linkedSteps = workflow.stages.filter(stage => stage.evidence.length || stage.screenshot || stage.screenshots?.length).length;
+          const metrics = <span className={collection.metrics}>
+            <span title="Estimated opportunity savings, not measured time saved"><span className={collection.metricLabel}>Est. saved / month</span><span className={collection.metricValue}>Not estimated</span></span>
+            <span title="Steps with source links"><span className={collection.metricLabel}>Evidence-backed steps</span><span className={collection.metricValue}>{linkedSteps}/{workflow.stages.length} steps</span></span>
+          </span>;
+          if (view === "cards") return <WorkflowCard key={workflow.id || workflow.title} title={workflow.title} details={details} metrics={metrics} apps={workflow.apps} review={review} onClick={() => openWorkflow(originalIndex)} />;
+          return <WorkflowListRow key={workflow.id || workflow.title} title={workflow.title} details={details} apps={workflow.apps} review={review} onClick={() => openWorkflow(originalIndex)} />;
+        })}</div> : <section className={styles.emptyState}><Search size={23} /><h2>{ui("No workflows match these filters")}</h2><p>{ui("Reset filters to return to the complete observed set.")}</p><button className={styles.primaryButton} onClick={resetFilters}>{ui("Clear filters")}</button></section>}
+
       </>}
-    </>
+    </section>
   );
 }
 

@@ -61,7 +61,7 @@ describe("workflow elapsed timing", () => {
     expect(screen.queryByRole("button", { name: "Workflow timing" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
-  it("shows average, single and unknown cards without the removed evidence diagnostics", async () => {
+  it("keeps catalog metrics separate from measured timing in the workflow", async () => {
     window.history.replaceState(null, "", "/home?mode=workflows");
     const openLink = vi.fn().mockResolvedValue(undefined);
     const platform = createFixtureWorkflowsPlatform();
@@ -69,24 +69,11 @@ describe("workflow elapsed timing", () => {
     await act(async () => { render(<WorkflowsApp platform={platform} initialAnalysis={fixtureWorkflowAnalysis} storageKey={null} />); });
     const card = screen.getByRole("heading", { name: "Research synthesis" }).closest("article")!;
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
-    const clock = within(card).getByRole("button", { name: "Timing for Research synthesis" });
-    fireEvent.mouseEnter(clock);
-    expect(screen.getByRole("tooltip")).toHaveTextContent("24m on average");
-    expect(screen.getByRole("tooltip")).toHaveTextContent("3 observed runs · 18m to 30m");
-    fireEvent.keyDown(clock, { key: "Escape" });
-    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
-    expect(within(card).getByText(workflow.description)).toBeVisible();
-    expect(card.querySelector("details")).toBeNull();
-    expect(within(card).getAllByRole("button")).toHaveLength(2);
-    const single = screen.getByRole("heading", { name: "Partner meeting preparation" }).closest("article")!;
-    const singleClock = within(single).getByRole("button", { name: "Timing for Partner meeting preparation" });
-    fireEvent.focus(singleClock);
-    expect(screen.getByRole("tooltip")).toHaveTextContent("12m for one run");
-    expect(screen.getByRole("tooltip")).not.toHaveTextContent("on average");
-    fireEvent.blur(singleClock);
-    const unknown = screen.getByRole("heading", { name: "Website release check" }).closest("article")!;
-    expect(within(unknown).queryByText(/\/ run/)).not.toBeInTheDocument();
-    fireEvent.click(within(card).getByRole("button", { name: "Open map" }));
+    expect(within(card).getByText("Evidence-backed steps")).toBeVisible();
+    expect(within(card).getByText("Not estimated")).toBeVisible();
+    expect(within(card).queryByRole("button", { name: "Timing for Research synthesis" })).not.toBeInTheDocument();
+    expect(within(card).getAllByRole("button")).toHaveLength(1);
+    fireEvent.click(within(card).getByRole("button"));
     expect(screen.queryByText("Correct this workflow")).not.toBeInTheDocument();
     expect(screen.queryByText("Evidence and limitations")).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Questions and feedback" })).toBeVisible();
