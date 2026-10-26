@@ -68,7 +68,8 @@ export function artifactKey(scope, version, target, filename) {
 		filename.includes("/") ||
 		filename.includes("\\") ||
 		filename.includes("\0") ||
-		!ARTIFACT_SUFFIXES.some((suffix) => filename.endsWith(suffix))
+		(filename !== "screenpipe-attribution.json" &&
+			!ARTIFACT_SUFFIXES.some((suffix) => filename.endsWith(suffix)))
 	) {
 		throw new Error("invalid artifact filename");
 	}

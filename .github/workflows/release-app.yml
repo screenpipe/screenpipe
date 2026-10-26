@@ -1618,6 +1618,34 @@ jobs:
             "$GITHUB_WORKSPACE/apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/macos" \
             "$GITHUB_WORKSPACE/apps/screenpipe-app-tauri"
 
+      - name: Prepare attribution carrier from finalized release
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | head -1)
+          BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${TARGET}/release/bundle"
+          PYTHON=python3
+          INPUT=--artifact
+          case "$TARGET" in
+            aarch64-apple-darwin) PLATFORM=macos-arm; INPUT=--app; ARTIFACTS=("${BUNDLE_DIR}"/macos/*.app) ;;
+            x86_64-apple-darwin) PLATFORM=macos-intel; INPUT=--app; ARTIFACTS=("${BUNDLE_DIR}"/macos/*.app) ;;
+            x86_64-pc-windows-msvc) PLATFORM=windows; PYTHON=python; ARTIFACTS=("${BUNDLE_DIR}"/nsis/*.exe) ;;
+            aarch64-pc-windows-msvc) PLATFORM=windows-arm; PYTHON=python; ARTIFACTS=("${BUNDLE_DIR}"/nsis/*.exe) ;;
+            x86_64-unknown-linux-gnu) PLATFORM=linux; ARTIFACTS=("${BUNDLE_DIR}"/appimage/*.AppImage) ;;
+            *) echo "unsupported attribution target: $TARGET" >&2; exit 1 ;;
+          esac
+          if [[ ${#ARTIFACTS[@]} -ne 1 ]]; then
+            echo "expected exactly one finalized artifact for $TARGET" >&2
+            exit 1
+          fi
+          OUTPUT=$(mktemp -d "${RUNNER_TEMP}/screenpipe-attribution.XXXXXX")
+          "$PYTHON" scripts/package-attribution-carrier.py "$INPUT" "${ARTIFACTS[0]}" \
+            --platform "$PLATFORM" --release "$VERSION" --output "$OUTPUT"
+          echo "ATTRIBUTION_ARTIFACT_DIR=$OUTPUT" >> "$GITHUB_ENV"
+
       - name: Upload macOS dry-run artifacts
         if: matrix.os_type == 'macos' && github.event.inputs.dry_run == 'true'
         uses: actions/upload-artifact@v4
@@ -1627,6 +1655,7 @@ jobs:
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
+            ${{ env.ATTRIBUTION_ARTIFACT_DIR }}/screenpipe-attribution.*
           if-no-files-found: error
           compression-level: 0
 
@@ -1638,6 +1667,7 @@ jobs:
           path: |
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.sig
+            ${{ env.ATTRIBUTION_ARTIFACT_DIR }}/screenpipe-attribution.*
           if-no-files-found: error
           compression-level: 0
 
@@ -1654,7 +1684,8 @@ jobs:
           .github/scripts/upload-release-artifacts.sh consumer "$VERSION" "$TARGET" \
             "${BUNDLE_DIR}"/dmg/*.dmg \
             "${BUNDLE_DIR}"/macos/*.tar.gz \
-            "${BUNDLE_DIR}"/macos/*.sig
+            "${BUNDLE_DIR}"/macos/*.sig \
+            "${ATTRIBUTION_ARTIFACT_DIR:?}"/screenpipe-attribution.*
 
       - name: Upload to Cloudflare R2 (Windows)
         if: matrix.os_type == 'windows' && github.event.inputs.dry_run != 'true'
@@ -1669,7 +1700,8 @@ jobs:
           .github/scripts/upload-release-artifacts.sh consumer "$VERSION" "$TARGET" \
             "${BUNDLE_DIR}"/nsis/*.exe \
             "${BUNDLE_DIR}"/nsis/*.nsis.zip \
-            "${BUNDLE_DIR}"/nsis/*.sig
+            "${BUNDLE_DIR}"/nsis/*.sig \
+            "${ATTRIBUTION_ARTIFACT_DIR:?}"/screenpipe-attribution.*
 
       - name: Upload to Cloudflare R2 (Linux)
         if: matrix.os_type == 'linux' && github.event.inputs.dry_run != 'true'
@@ -1685,7 +1717,8 @@ jobs:
             "${BUNDLE_DIR}"/appimage/*.AppImage \
             "${BUNDLE_DIR}"/appimage/*.tar.gz \
             "${BUNDLE_DIR}"/appimage/*.sig \
-            "${BUNDLE_DIR}"/deb/*.deb
+            "${BUNDLE_DIR}"/deb/*.deb \
+            "${ATTRIBUTION_ARTIFACT_DIR:?}"/screenpipe-attribution.*
 
       # Sentry uploads run AFTER R2 so they don't delay release artifacts
       - name: Upload debug symbols to Sentry (Windows)

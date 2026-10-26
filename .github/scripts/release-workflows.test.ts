@@ -2,7 +2,9 @@
 // https://screenpipe.com
 
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dispatchEnterprise, reportEnterprise } from "./enterprise-release.cjs";
@@ -15,6 +17,81 @@ const installAction = "install-windows-frontend-dependencies";
 const sha = "01afe5afda5fa75f3e4d733ef9a934b975347f48";
 const context = { repo: { owner: "screenpipe", repo: "screenpipe" }, runId: 123, ref: "refs/heads/main" };
 const platformJobs = ["resolve-release", "localization", "release-enterprise-windows", "release-enterprise-linux", "release-enterprise-macos"];
+
+test("attribution packaging follows signing and precedes every consumer upload, including dry runs", () => {
+  const steps = app.jobs["publish-tauri"].steps;
+  const prepare = steps.findIndex((step: any) => step.name === "Prepare attribution carrier from finalized release");
+  expect(prepare).toBeGreaterThan(steps.findIndex((step: any) => step.name === "Validate app ticket and finalize updater tarball (macOS)"));
+  expect(steps[prepare].if).toBeUndefined();
+  expect(steps[prepare]["continue-on-error"]).toBeUndefined();
+  for (const [index, step] of steps.entries()) {
+    if (step.env?.RELEASE_UPLOAD_TOKEN) {
+      expect(index).toBeGreaterThan(prepare);
+      expect(step.run).toContain('${ATTRIBUTION_ARTIFACT_DIR:?}');
+      expect(step.if).toContain("dry_run != 'true'");
+    }
+    if (step.name?.match(/^Upload (macOS|Windows) dry-run artifacts$/)) {
+      expect(step.with.path).toContain("${{ env.ATTRIBUTION_ARTIFACT_DIR }}/screenpipe-attribution.*");
+    }
+  }
+});
+
+for (const [target, platform, folder, filename, input, extension, os] of [
+  ["aarch64-apple-darwin", "macos-arm", "macos", "screenpipe.app", "--app", "zip", "macOS"],
+  ["x86_64-apple-darwin", "macos-intel", "macos", "screenpipe.app", "--app", "zip", "macOS"],
+  ["x86_64-pc-windows-msvc", "windows", "nsis", "screenpipe_2.7.116_x64-setup.exe", "--artifact", "exe", "Windows"],
+  ["aarch64-pc-windows-msvc", "windows-arm", "nsis", "screenpipe_2.7.116_arm64-setup.exe", "--artifact", "exe", "Windows"],
+  ["x86_64-unknown-linux-gnu", "linux", "appimage", "screenpipe_2.7.116_amd64.AppImage", "--artifact", "AppImage", "Linux"],
+]) {
+  test(`release shell selects and uploads carrier plus manifest together: ${target}`, () => {
+    const fixture = mkdtempSync(join(tmpdir(), "attribution release "));
+    try {
+      const base = "apps/screenpipe-app-tauri/src-tauri";
+      const artifact = `${base}/target/${target}/release/bundle/${folder}/${filename}`;
+      mkdirSync(join(fixture, artifact, ".."), { recursive: true });
+      writeFileSync(join(fixture, artifact), "signed-artifact-fixture");
+      writeFileSync(join(fixture, base, "Cargo.toml"), 'version = "2.7.116"\n');
+      mkdirSync(join(fixture, "bin"));
+      mkdirSync(join(fixture, ".github/scripts"), { recursive: true });
+      // Replace external signing/packaging and transport only; execute the real
+      // workflow shell and verify its complete argument boundary on every target.
+      const packager = `#!/usr/bin/env bun
+import {writeFileSync} from 'node:fs';
+const args=process.argv.slice(2), out=args[args.indexOf('--output')+1];
+writeFileSync(process.env.PACKAGE_LOG,JSON.stringify(args));
+writeFileSync(out+'/screenpipe-attribution.${extension}','carrier');
+writeFileSync(out+'/screenpipe-attribution.json','{}');
+`;
+      for (const name of ["python", "python3"]) {
+        writeFileSync(join(fixture, "bin", name), packager);
+        chmodSync(join(fixture, "bin", name), 0o755);
+      }
+      const uploader = join(fixture, ".github/scripts/upload-release-artifacts.sh");
+      writeFileSync(uploader, '#!/usr/bin/env bash\nprintf "%s\\0" "$@" > "$UPLOAD_LOG"\n');
+      chmodSync(uploader, 0o755);
+      const env = { ...process.env, PATH: `${join(fixture, "bin")}:${process.env.PATH}`, TARGET: target,
+        RUNNER_TEMP: fixture, GITHUB_ENV: join(fixture, "env"), PACKAGE_LOG: join(fixture, "pack.json"), UPLOAD_LOG: join(fixture, "upload.json") };
+      const steps = app.jobs["publish-tauri"].steps;
+      const prepare = steps.find((s: any) => s.name === "Prepare attribution carrier from finalized release");
+      expect(prepare).toBeDefined();
+      const prepared = spawnSync("bash", ["-e", "-c", prepare.run], { cwd: fixture, env, encoding: "utf8" });
+      expect({ status: prepared.status, stderr: prepared.stderr }).toEqual({ status: 0, stderr: "" });
+      const output = readFileSync(env.GITHUB_ENV, "utf8").trim().replace("ATTRIBUTION_ARTIFACT_DIR=", "");
+      expect(JSON.parse(readFileSync(env.PACKAGE_LOG, "utf8"))).toEqual([
+        "scripts/package-attribution-carrier.py", input, artifact, "--platform", platform, "--release", "2.7.116", "--output", output,
+      ]);
+      const upload = steps.find((s: any) => s.name === `Upload to Cloudflare R2 (${os})`);
+      const uploaded = spawnSync("bash", ["-e", "-c", upload.run.replaceAll("${{ matrix.target }}", target)], {
+        cwd: fixture, env: { ...env, ATTRIBUTION_ARTIFACT_DIR: output }, encoding: "utf8",
+      });
+      expect({ status: uploaded.status, stderr: uploaded.stderr }).toEqual({ status: 0, stderr: "" });
+      const args = readFileSync(env.UPLOAD_LOG, "utf8").split("\0").slice(0, -1);
+      expect(args.slice(0, 3)).toEqual(["consumer", "2.7.116", target]);
+      expect(args).toContain(join(output, `screenpipe-attribution.${extension}`));
+      expect(args).toContain(join(output, "screenpipe-attribution.json"));
+    } finally { rmSync(fixture, { recursive: true, force: true }); }
+  });
+}
 
 function api(dispatchFails = false) {
   const calls: { method: string; args: any }[] = [];

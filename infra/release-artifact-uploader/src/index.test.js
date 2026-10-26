@@ -37,6 +37,17 @@ describe("release artifact capability boundary", () => {
 		).toThrow("unsupported artifact scope");
 	});
 
+	test("admits the attribution manifest without granting arbitrary JSON uploads", () => {
+		for (const target of ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]) {
+			expect(artifactKey("consumer", "2.7.116", target, "screenpipe-attribution.json"))
+				.toBe(`releases/2.7.116/${target}/screenpipe-attribution.json`);
+		}
+		for (const filename of ["latest.json", "published.json", "other.json", "../screenpipe-attribution.json", "nested/screenpipe-attribution.json"]) {
+			expect(() => artifactKey("consumer", "2.7.116", "aarch64-apple-darwin", filename))
+				.toThrow("invalid artifact filename");
+		}
+	});
+
 	test("health response explicitly reports no publication access", async () => {
 		const response = await handleRequest(new Request("https://example.com/healthz"), {});
 		expect(response.status).toBe(200);
