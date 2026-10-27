@@ -317,3 +317,56 @@ async fn retention_evicts_compacted_video_chunk_crossing_hour_boundary() {
         "chunk straddling the retention cutoff itself must remain un-evicted"
     );
 }
+
+/// Explicit boundary test for screenpipe/screenpipe#7770:
+/// Because `audio_chunks` records only the chunk start `timestamp` (with no
+/// duration or `audio_transcriptions` row for silent chunks), a ~30s silent
+/// chunk starting just before `cutoff` (`cutoff - 10s`) is matched by
+/// `timestamp BETWEEN ?1 AND ?2` and evicted in the slice ending at `cutoff`,
+/// whereas a silent chunk starting after `cutoff` (`cutoff + 1s`) is kept.
+#[tokio::test]
+async fn retention_silent_audio_chunk_at_cutoff_boundary() {
+    let db = DatabaseManager::new("sqlite::memory:", Default::default())
+        .await
+        .unwrap();
+
+    let start = Utc::now() - Duration::days(15);
+    let cutoff = start + Duration::hours(1);
+
+    let just_before_cutoff = (cutoff - Duration::seconds(10)).to_rfc3339();
+    let just_after_cutoff = (cutoff + Duration::seconds(1)).to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO audio_chunks (id, file_path, timestamp, transcription_status) VALUES
+         (1, '/data/silent_before_cutoff.mp4', ?1, 'silent'),
+         (2, '/data/silent_after_cutoff.mp4', ?2, 'silent')",
+    )
+    .bind(&just_before_cutoff)
+    .bind(&just_after_cutoff)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    let res = db.evict_media_for_retention(start, cutoff).await.unwrap();
+    assert_eq!(res.audio_chunks_evicted, 1);
+    assert_eq!(
+        res.audio_files,
+        vec!["/data/silent_before_cutoff.mp4".to_string()]
+    );
+    assert_eq!(
+        count(
+            &db,
+            "SELECT COUNT(*) FROM audio_chunks WHERE id = 1 AND evicted_at IS NOT NULL AND file_path = ''"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        count(
+            &db,
+            "SELECT COUNT(*) FROM audio_chunks WHERE id = 2 AND evicted_at IS NULL AND file_path != ''"
+        )
+        .await,
+        1
+    );
+}
