@@ -16,10 +16,12 @@ where
     Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
-/// Older desktop builds persisted a single selected monitor as a string, while
-/// current builds persist an array. Accept both shapes so an upgrade preserves
-/// the user's selection instead of rejecting the entire settings store.
-fn deserialize_monitor_ids<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+/// Older desktop builds persisted a single selection (monitor, audio device)
+/// as a string, while current builds persist an array. Accept both shapes so an
+/// upgrade preserves the user's selection instead of rejecting the entire
+/// settings store. An empty/blank string maps to an empty selection. Any other
+/// shape (number, object, ...) is still rejected.
+fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -32,6 +34,7 @@ where
 
     Ok(match StringOrVec::deserialize(deserializer)? {
         StringOrVec::Vec(ids) => ids,
+        StringOrVec::String(id) if id.trim().is_empty() => Vec::new(),
         StringOrVec::String(id) => vec![id],
     })
 }
@@ -316,7 +319,8 @@ pub struct RecordingSettings {
     pub meeting_live_transcription_provider: String,
 
     /// Audio device names/IDs to capture from.
-    #[serde(rename = "audioDevices")]
+    /// Legacy stores may hold a single device as a plain string.
+    #[serde(rename = "audioDevices", deserialize_with = "deserialize_string_or_vec")]
     pub audio_devices: Vec<String>,
 
     /// Automatically follow the system default audio devices.
@@ -447,7 +451,7 @@ pub struct RecordingSettings {
     pub disable_timeline: bool,
 
     /// Specific monitor IDs to capture.
-    #[serde(rename = "monitorIds", deserialize_with = "deserialize_monitor_ids")]
+    #[serde(rename = "monitorIds", deserialize_with = "deserialize_string_or_vec")]
     pub monitor_ids: Vec<String>,
 
     /// Capture from all connected monitors.
@@ -1389,6 +1393,39 @@ mod tests {
             settings.monitor_ids,
             vec![r"\\.\DISPLAY1_3840x2160_0,0".to_string()]
         );
+    }
+
+    #[test]
+    fn legacy_scalar_audio_device_deserializes_as_single_selection() {
+        let mut json = serde_json::to_value(RecordingSettings::default()).unwrap();
+        json["audioDevices"] = serde_json::json!("Microphone (AT2020USB+) (input)");
+
+        let settings: RecordingSettings = serde_json::from_value(json).unwrap();
+
+        assert_eq!(
+            settings.audio_devices,
+            vec!["Microphone (AT2020USB+) (input)".to_string()]
+        );
+    }
+
+    #[test]
+    fn audio_device_array_and_blank_string_deserialize() {
+        let mut json = serde_json::to_value(RecordingSettings::default()).unwrap();
+        json["audioDevices"] = serde_json::json!(["a (input)", "b (output)"]);
+        let settings: RecordingSettings = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(settings.audio_devices, vec!["a (input)", "b (output)"]);
+
+        json["audioDevices"] = serde_json::json!("  ");
+        let settings: RecordingSettings = serde_json::from_value(json).unwrap();
+        assert!(settings.audio_devices.is_empty());
+    }
+
+    #[test]
+    fn malformed_audio_device_shape_still_fails_deserialization() {
+        let mut json = serde_json::to_value(RecordingSettings::default()).unwrap();
+        json["audioDevices"] = serde_json::json!(42);
+
+        assert!(serde_json::from_value::<RecordingSettings>(json).is_err());
     }
 
     #[test]
