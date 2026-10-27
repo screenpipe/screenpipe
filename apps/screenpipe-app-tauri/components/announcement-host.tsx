@@ -6,6 +6,7 @@
 
 import { X } from "lucide-react";
 import { createPortal } from "react-dom";
+import { AnnouncementSidebarCard } from "@/components/announcement-sidebar-card";
 import { AnnouncementBody } from "@/components/announcement-body";
 import { AnnouncementBubble } from "@/components/announcement-bubble";
 import {
@@ -275,6 +276,18 @@ export function AnnouncementSidebarPrompt({
   }, [slot, onShown]);
   if (!slot) return null;
 
+  if (announcement.sidebarStyle === "card") {
+    return createPortal(
+      <AnnouncementSidebarCard
+        key={announcement.id}
+        announcement={announcement}
+        onOpen={onOpen}
+        onDismiss={onDismiss}
+      />,
+      slot,
+    );
+  }
+
   return createPortal(
     <div
       data-testid="announcement-sidebar"
@@ -501,13 +514,21 @@ function AnnouncementHostInner() {
           onDismiss={dismiss}
           onOpen={() => {
             reportOpened();
-            setOpenedSidebarId(announcement.id);
+            if (announcement.sidebarStyle === "card" && announcement.cta) {
+              activateCta();
+            } else {
+              setOpenedSidebarId(announcement.id);
+            }
           }}
         />
         {sidebarOpen && (
           <AnnouncementModal
             announcement={announcement}
-            onDismiss={dismiss}
+            onDismiss={
+              announcement.sidebarStyle === "card"
+                ? () => setOpenedSidebarId(null)
+                : dismiss
+            }
             onCta={activateCta}
             onSubmit={submitSurvey}
           />

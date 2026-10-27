@@ -253,3 +253,49 @@ SCREENPIPE_DEV_USE_PROD_DATA=1 bun run dev:tauri
 
 Release builds are never redirected, and the E2E harness keeps its own
 isolation (`e2e/helpers/app-launcher.ts`) unchanged.
+
+## Persistent sidebar announcements
+
+The existing PostHog `app-announcement` payload supports an opt-in card in the
+Home sidebar above the team/settings footer:
+
+```json
+{
+  "id": "workflows-sidebar-v1",
+  "surface": "sidebar",
+  "sidebarStyle": "card",
+  "kind": "news",
+  "title": "Turn your work into workflows",
+  "body": "Explore workflows built from your daily work.",
+  "image": {
+    "url": "https://docs.screenpi.pe/public/app-screenshots/home-home.png",
+    "alt": "Screenpipe workspace preview"
+  },
+  "cta": {
+    "label": "Explore workflows",
+    "route": "/home?mode=workflows"
+  }
+}
+```
+
+Cards have a separate dismiss button and ignore `autoDismissMs` and
+`dismissible: false`. Opening their CTA does not dismiss them. Without a CTA,
+clicking opens the existing details dialog; closing that dialog keeps the card.
+Explicit dismissal persists locally by announcement ID across app restarts.
+Reusing an ID preserves dismissal, while a new ID starts a new announcement.
+The flag must remain available and unexpired for the card to appear. Collapsing
+the sidebar hides it without dismissing it.
+
+The optional image uses the existing first-party HTTPS URL allowlist, requires
+alt text (up to 240 characters), sends no referrer, and falls back to a text card
+on invalid metadata or load failure. Markdown body media remains disabled.
+Omitting `sidebarStyle` preserves the compact sidebar row. Surveys always use
+that row and retain their existing submit/dismiss behavior. Other announcement
+surfaces are unchanged.
+
+Use `screenpipe-announcement-preview` in localStorage for browser-mock previews;
+this QA override intentionally ignores saved dismissal on reload. Remote
+per-ID persistence is covered by the hook tests. Target a compatible released
+client before configuring this payload in production: older clients show the
+compact sidebar row and keep their earlier CTA dismissal behavior. This source
+change alone does not activate or publish an announcement.

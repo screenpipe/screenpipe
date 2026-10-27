@@ -471,3 +471,25 @@ describe("dismissal persistence", () => {
     expect(selectAnnouncement(VALID, loadDismissedIds(), NOW)).toBeNull();
   });
 });
+
+
+describe("persistent sidebar card payload", () => {
+  const card = { ...VALID, surface: "sidebar", sidebarStyle: "card", dismissible: false };
+  it("opts in without changing existing sidebar prompts", () => {
+    expect(parseAnnouncement(card)).toMatchObject({ surface: "sidebar", sidebarStyle: "card", dismissible: true });
+    expect(parseAnnouncement({ ...VALID, surface: "sidebar" })?.sidebarStyle).toBeUndefined();
+    expect(parseAnnouncement({ ...card, surface: "modal" })?.sidebarStyle).toBeUndefined();
+  });
+  it("accepts bounded image metadata on the existing HTTPS allowlist", () => {
+    expect(parseAnnouncement({ ...card, image: { url: "https://screenpipe.com/card.png", alt: "Workflow preview" } })?.image).toEqual({ url: "https://screenpipe.com/card.png", alt: "Workflow preview" });
+    for (const url of ["https://example.com/card.png", "javascript:alert(1)", "http://screenpipe.com/a.png", "data:image/svg+xml,test"]) {
+      expect(parseAnnouncement({ ...card, image: { url, alt: "Preview" } })?.image).toBeUndefined();
+    }
+    expect(parseAnnouncement({ ...card, image: { url: "https://screenpipe.com/a.png", alt: "a".repeat(241) } })?.image).toBeUndefined();
+  });
+  it("keeps surveys on the compact opt-in prompt", () => {
+    const parsed = parseAnnouncement({ ...card, cta: undefined, survey: { questions: [{ id: "source", type: "single-choice", prompt: "Where?", choices: [{ id: "a", label: "A" }, { id: "b", label: "B" }] }] } });
+    expect(parsed?.survey).toBeDefined();
+    expect(parsed?.sidebarStyle).toBeUndefined();
+  });
+});

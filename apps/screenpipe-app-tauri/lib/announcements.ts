@@ -110,6 +110,11 @@ export interface Announcement {
    *  "bottom-right" for card, "bottom" for bubble). undefined for
    *  modal/sidebar. */
   position?: AnnouncementPosition;
+  /** Opt-in persistent promotional card for surface=sidebar. Omit for the
+   *  existing compact prompt. Surveys always retain the compact prompt. */
+  sidebarStyle?: "card";
+  /** Optional first-party HTTPS image for the sidebar card. */
+  image?: { url: string; alt: string };
   /** Stable value of a `data-announcement-anchor` attribute in the app. This
    *  is required for `bubble` and ignored for every other surface. Remote
    *  payloads cannot supply arbitrary CSS selectors. */
@@ -436,6 +441,17 @@ export function parseAnnouncement(
     // a modal, a bubble is contextual and can contain enough copy to scroll, so
     // remote configuration cannot remove its close affordance.
     announcement.dismissible = true;
+  }
+
+  if (surface === "sidebar" && r.sidebarStyle === "card" && !r.survey) {
+    announcement.sidebarStyle = "card";
+    announcement.dismissible = true;
+    if (r.image && typeof r.image === "object") {
+      const image = r.image as Record<string, unknown>;
+      const url = safeAnnouncementExternalUrl(image.url);
+      const alt = boundedString(image.alt, 240);
+      if (url && alt) announcement.image = { url, alt };
+    }
   }
 
   const cta = normalizeCta(r.cta, source);

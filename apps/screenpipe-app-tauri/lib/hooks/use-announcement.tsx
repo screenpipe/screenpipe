@@ -55,7 +55,7 @@ interface UseAnnouncementResult {
   announcement: Announcement | null;
   /** dismiss the current announcement — persists "seen" so it never returns. */
   dismiss: () => void;
-  /** act on the cta (navigate / open url) then dismiss. */
+  /** Act on the CTA; persistent sidebar cards remain until dismissed. */
   activateCta: () => void;
   /** report only after a surface is actually mounted. */
   reportShown: () => void;
@@ -246,6 +246,9 @@ export function useAnnouncement(): UseAnnouncementResult {
         .then((m) => m.open(cta.url!))
         .catch((err) => console.error("failed to open announcement url:", err));
     }
+
+    // Persistent sidebar cards stay available until explicitly dismissed.
+    if (announcement.sidebarStyle === "card") return;
 
     // acting on the cta also marks it seen.
     setDismissedIds(markDismissed(announcement.id));

@@ -1674,8 +1674,8 @@ function HomeContent() {
 
                 <UpdateBanner variant="sidebar" className="mb-2" />
 
-                {/* Remote surveys use this quiet, non-blocking slot when their
-                    signed payload selects surface=sidebar. */}
+                {/* Remote announcements and surveys use this non-blocking slot
+                    when their payload selects surface=sidebar. */}
                 <div id="announcement-sidebar-slot" />
               </div>
 

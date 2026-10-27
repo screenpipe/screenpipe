@@ -115,6 +115,30 @@ describe("useAnnouncement", () => {
     vi.unstubAllEnvs();
   });
 
+  it("keeps sidebar cards after CTA and remount, then persists explicit dismissal", async () => {
+    flagPayload.current = { ...FLAG, surface: "sidebar", sidebarStyle: "card", cta: { label: "Explore", route: "/home?mode=workflows" } };
+    const first = renderHook(() => useAnnouncement());
+    await flushAnnouncementEffects();
+    act(() => first.result.current.activateCta());
+    expect(pushMock).toHaveBeenCalledWith("/home?mode=workflows");
+    expect(first.result.current.announcement?.id).toBe(FLAG.id);
+    first.unmount();
+    const second = renderHook(() => useAnnouncement());
+    await flushAnnouncementEffects();
+    expect(second.result.current.announcement?.id).toBe(FLAG.id);
+    act(() => second.result.current.dismiss());
+    expect(second.result.current.announcement).toBeNull();
+    second.unmount();
+    const third = renderHook(() => useAnnouncement());
+    await flushAnnouncementEffects();
+    expect(third.result.current.announcement).toBeNull();
+    third.unmount();
+    flagPayload.current = { ...FLAG, id: "next-campaign", surface: "sidebar", sidebarStyle: "card" };
+    const next = renderHook(() => useAnnouncement());
+    await flushAnnouncementEffects();
+    expect(next.result.current.announcement?.id).toBe("next-campaign");
+  });
+
   it("surfaces the PostHog flag announcement and reports it shown once", async () => {
     flagPayload.current = FLAG;
     const { result } = renderHook(() => useAnnouncement());
