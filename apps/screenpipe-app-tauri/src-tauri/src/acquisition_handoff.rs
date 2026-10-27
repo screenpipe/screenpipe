@@ -1,8 +1,9 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-//! Download possession -> authenticated account. Best effort, off the
-//! recording/startup path. The server owns authorization and attribution rules.
+//! Install-page deep link -> saved grant -> authenticated account. Best effort,
+//! off the recording/startup path. The server owns authorization and
+//! attribution rules; the installer itself carries nothing.
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -62,21 +63,6 @@ impl Pending {
     fn crossed_account(&self, current: Option<&str>) -> bool {
         self.account.as_deref().is_some_and(|pinned| Some(pinned) != current)
     }
-}
-
-#[cfg(target_os = "macos")]
-fn carrier() -> Option<String> {
-    use std::{ffi::CString, os::unix::ffi::OsStrExt};
-    let executable = std::env::current_exe().ok()?;
-    let bundle = executable.ancestors().find(|p| p.extension().is_some_and(|e| e == "app"))?;
-    let path = CString::new(bundle.as_os_str().as_bytes()).ok()?;
-    let name = CString::new("com.apple.application-instance").ok()?;
-    let mut bytes = [0u8; 36];
-    // Exact-size read; absent, truncated or oversized attributes are ignored.
-    let size = unsafe { libc::getxattr(path.as_ptr(), name.as_ptr(), bytes.as_mut_ptr().cast(), bytes.len(), 0, 0) };
-    if size != 36 { return None; }
-    let grant = String::from_utf8(bytes.to_vec()).ok()?.to_ascii_lowercase();
-    uuid4(&grant).then_some(grant)
 }
 
 fn storage_account(profile: &std::path::Path, origin: &str) -> String {
@@ -153,42 +139,8 @@ async fn persist(pending: &Pending) -> Result<(), ()> {
     save(pending).await
 }
 
-/// Download filenames carry only a random capability, never a user/source ID.
-fn grant_from_filename(name: &str, extension: &str) -> Option<String> {
-    let grant = name.strip_prefix("screenpipe-")?.strip_suffix(extension)?;
-    uuid4(grant).then(|| grant.to_owned())
-}
-
-#[cfg(target_os = "windows")]
-fn carrier() -> Option<String> {
-    carrier_from(std::env::current_exe().ok()?.parent()?)
-}
-
-#[cfg(target_os = "windows")]
-fn carrier_from(directory: &std::path::Path) -> Option<String> {
-    // The installer writes this once. Keep the read bounded so an untrusted or
-    // corrupt install directory cannot turn startup into an unbounded read.
-    let path = directory.join("acquisition-grant");
-    let metadata = std::fs::metadata(&path).ok()?;
-    if metadata.len() != 36 { return None; }
-    use std::io::Read;
-    let mut bytes = Vec::with_capacity(37);
-    std::fs::File::open(path).ok()?.take(37).read_to_end(&mut bytes).ok()?;
-    if bytes.len() != 36 { return None; }
-    let grant = String::from_utf8(bytes).ok()?;
-    uuid4(&grant).then_some(grant)
-}
-
-#[cfg(target_os = "linux")]
-fn carrier() -> Option<String> {
-    // AppImages execute from a temporary mount; APPIMAGE is the original file.
-    let path = std::path::PathBuf::from(std::env::var_os("APPIMAGE")?);
-    grant_from_filename(path.file_name()?.to_str()?, ".AppImage")
-}
-
-/// `screenpipe://attribution?grant=<uuid4>`: the install page hands the same
-/// opaque grant the download carrier would have carried, after the ordinary
-/// installer is already running. No installer bytes, filenames or manifests.
+/// `screenpipe://attribution?grant=<uuid4>`: the install page hands an opaque
+/// grant to the already-installed app. No installer bytes, filenames or manifests.
 pub(crate) fn grant_from_deep_link(url: &str) -> Option<String> {
     if !crate::deep_link::is_for_current_build(url) { return None; }
     let parsed = url.parse::<tauri::Url>().ok()?;
@@ -216,8 +168,8 @@ async fn accept(grant: String) -> Result<bool, ()> {
     Ok(true)
 }
 
-/// Deep links arrive from the OS on every platform; the worker then runs the
-/// same claim/bind path as the installer carrier.
+/// Deep links arrive from the OS on every platform; the worker then claims the
+/// grant and binds it to the verified account.
 pub fn accept_deep_link(app: &AppHandle, url: &str) {
     let Some(grant) = grant_from_deep_link(url) else { return; };
     let app = app.clone();
@@ -322,10 +274,9 @@ fn spawn_worker(app: AppHandle) {
 
 async fn run(app: AppHandle) -> Result<(), ()> {
     if RETIREMENT.disabled(&tombstone()) { return Ok(()); }
-    let mut p = match load_saved().await? {
-        Some(p) => p,
-        None => match carrier() { Some(grant) => Pending::new(grant), None => return Ok(()) },
-    };
+    // Grants arrive only through the `screenpipe://attribution` deep link
+    // and are persisted by `accept` before this worker runs.
+    let Some(mut p) = load_saved().await? else { return Ok(()); };
     if p.retired { return Ok(()); }
     // Persist proof BEFORE first claim, including when its HTTP response is lost.
     persist(&p).await?;
@@ -413,38 +364,6 @@ async fn send(client: &reqwest::Client, origin: &reqwest::Url, action: &str, p: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn portable_filenames_reject_placeholders_and_ambiguous_names() {
-        let grant = "12345678-1234-4234-8234-123456789012";
-        for extension in [".exe", ".AppImage"] {
-            assert_eq!(grant_from_filename(&format!("screenpipe-{grant}{extension}"), extension), Some(grant.into()));
-            for name in [format!("screenpipe-{PLACEHOLDER}{extension}"), format!("screenpipe-{grant}.txt{extension}"), format!("../screenpipe-{grant}{extension}"), format!("screenpipe-{grant}{extension}.exe")] {
-                assert!(grant_from_filename(&name, extension).is_none());
-            }
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn installed_windows_carrier_is_exact_and_bounded() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("acquisition-grant");
-        let grant = "12345678-1234-4234-8234-123456789012";
-        std::fs::write(&path, grant).unwrap();
-        assert_eq!(carrier_from(dir.path()), Some(grant.into()));
-        for invalid in [
-            PLACEHOLDER,
-            "12345678-1234-4234-7234-123456789012",
-            "12345678-1234-4234-C234-123456789012",
-            "12345678-1234-4234-8234-12345678901X",
-        ] {
-            std::fs::write(&path, invalid).unwrap();
-            assert!(carrier_from(dir.path()).is_none());
-        }
-        std::fs::write(&path, format!("{grant}\n")).unwrap();
-        assert!(carrier_from(dir.path()).is_none());
-    }
-
     #[tokio::test]
     async fn credential_store_preserves_proof_and_retirement_across_restart() {
         let dir = tempfile::tempdir().unwrap();

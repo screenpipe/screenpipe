@@ -9,88 +9,6 @@
 !include "x64.nsh"
 !include "LogicLib.nsh"
 
-; Save a filename-carried acquisition grant once. This is deliberately a pure
-; NSIS parser: attribution is optional and never launches a shell or blocks an
-; install. Expected filename: screenpipe-<lowercase canonical UUID v4>.exe.
-!macro _SP_SaveAcquisitionGrant
-  Push $0
-  Push $1
-  Push $2
-  Push $3
-  ${IfNot} ${FileExists} "$INSTDIR\acquisition-grant"
-    StrLen $0 $EXEFILE
-    ${If} $0 == 51
-      StrCpy $1 $EXEFILE 11 0
-      StrCpy $2 $EXEFILE 4 47
-      ${If} $1 == "screenpipe-"
-      ${AndIf} $2 == ".exe"
-        StrCpy $1 $EXEFILE 36 11
-        ${If} $1 != "00000000-0000-4000-8000-000000000000"
-          StrCpy $2 $1 1 14
-          ${If} $2 == "4"
-            StrCpy $2 $1 1 19
-            ${If} $2 == "8"
-            ${OrIf} $2 == "9"
-            ${OrIf} $2 == "a"
-            ${OrIf} $2 == "b"
-              StrCpy $0 0
-              StrCpy $3 1
-              ${Do}
-                StrCpy $2 $1 1 $0
-                ${If} $0 == 8
-                ${OrIf} $0 == 13
-                ${OrIf} $0 == 18
-                ${OrIf} $0 == 23
-                  ${If} $2 != "-"
-                    StrCpy $3 0
-                    ${ExitDo}
-                  ${EndIf}
-                ${Else}
-                  ${If} $2 != "0"
-                  ${AndIf} $2 != "1"
-                  ${AndIf} $2 != "2"
-                  ${AndIf} $2 != "3"
-                  ${AndIf} $2 != "4"
-                  ${AndIf} $2 != "5"
-                  ${AndIf} $2 != "6"
-                  ${AndIf} $2 != "7"
-                  ${AndIf} $2 != "8"
-                  ${AndIf} $2 != "9"
-                  ${AndIf} $2 != "a"
-                  ${AndIf} $2 != "b"
-                  ${AndIf} $2 != "c"
-                  ${AndIf} $2 != "d"
-                  ${AndIf} $2 != "e"
-                  ${AndIf} $2 != "f"
-                    StrCpy $3 0
-                    ${ExitDo}
-                  ${EndIf}
-                ${EndIf}
-                IntOp $0 $0 + 1
-                ${If} $0 >= 36
-                  ${ExitDo}
-                ${EndIf}
-              ${Loop}
-              ${If} $3 == 1
-                ClearErrors
-                FileOpen $0 "$INSTDIR\acquisition-grant" w
-                ${IfNot} ${Errors}
-                  FileWrite $0 $1
-                  FileClose $0
-                ${EndIf}
-              ${EndIf}
-            ${EndIf}
-          ${EndIf}
-        ${EndIf}
-      ${EndIf}
-    ${EndIf}
-  ${EndIf}
-  Pop $3
-  Pop $2
-  Pop $1
-  Pop $0
-!macroend
-
 ; Stop the service through SCM without executing an installed helper. This is
 ; required when an administrator removed a hostile ProgramData namespace: old
 ; helpers logged from prepare-upgrade and could recreate that namespace with
@@ -344,8 +262,6 @@
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
-  !insertmacro _SP_SaveAcquisitionGrant
-
   ; Binaries moved aside above. The orphan holding them has usually exited by
   ; now; whatever is left gets swept by the app on its next boot.
   Delete "$INSTDIR\*.sp-old*"
