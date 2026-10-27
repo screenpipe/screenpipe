@@ -1761,7 +1761,7 @@ function HomeContent() {
           </div>
 
           {workflowsAvailable && (workflowsActive || workflowsVisited) && <div className={cn("flex-1 min-w-0 h-full", !workflowsActive && "hidden")}><IntegratedWorkflows active={workflowsActive} fullscreen={isFullscreen} onModeChange={changeMode} recordingStatus={<RecordingStatus {...recordingStatusProps} />}
-            navigationFooter={({ openKeyboardShortcuts }) => <SidebarFooter teamToken={settings.user?.token} teamEntry={teamEntry} onTeam={openTeam} onSettings={() => openSettings()}
+            navigationFooter={({ openKeyboardShortcuts }) => <SidebarFooter isTranslucent={isTranslucent} teamToken={settings.user?.token} teamEntry={teamEntry} onTeam={openTeam} onSettings={() => openSettings()}
               onHelp={() => { void setActiveSection("help"); }} onKeyboardShortcuts={openKeyboardShortcuts}
               hideHelp={isSectionHidden("help")} trialActivationLocked={trialActivationLocked} />} /></div>}
           <WorkflowsHelpDialog open={workflowsActive && (activeSection === "help" || activeSection === "feedback") && !isSectionHidden("help")}

@@ -277,6 +277,7 @@ export function AppShell({
   embedded,
   active,
   navigationBrand,
+  desktopAppearance = false,
   sourceControl,
   composerAccessory,
   navigationFooter,
@@ -303,6 +304,7 @@ export function AppShell({
   setScope: (scopeId: string) => void;
   embedded: boolean;
   active: boolean;
+  desktopAppearance?: boolean;
   navigationBrand?: React.ReactNode;
   sourceControl?: React.ReactNode;
   composerAccessory?: WorkflowsAppProps["composerAccessory"];
@@ -338,7 +340,7 @@ export function AppShell({
     compact.addEventListener("change", onResize);
     return () => compact.removeEventListener("change", onResize);
   }, []);
-  const navigationWidth = useNavigationWidth(!navigationCollapsed && !embedded, assistantDocked);
+  const navigationWidth = useNavigationWidth(!navigationCollapsed && !embedded, assistantDocked, desktopAppearance ? "screenpipe:sidebar-width" : undefined);
   const shortcuts = useSidebarShortcuts();
   const toggleNavigation = useCallback(() => {
     setNavigationCollapsed((current) => {
@@ -386,7 +388,7 @@ export function AppShell({
   </button>;
 
   return (
-    <PageAssistantContext.Provider value={setPageAssistant}><div data-native-window={nativeMacWindow} data-fullscreen={fullscreen} className={`ph-no-capture ph-mask ${styles.app} ${embedded ? styles.appEmbedded : ""} ${assistantDocked ? styles.appDocked : ""} ${navigationCollapsed ? styles.navigationCollapsed : ""}`} style={{ "--assistant-width": assistantWidth + "px", "--navigation-width": navigationWidth.width + "px" } as React.CSSProperties}>
+    <PageAssistantContext.Provider value={setPageAssistant}><div data-desktop-appearance={desktopAppearance || undefined} data-native-window={nativeMacWindow} data-fullscreen={fullscreen} className={`ph-no-capture ph-mask ${styles.app} ${embedded ? styles.appEmbedded : ""} ${assistantDocked ? styles.appDocked : ""} ${navigationCollapsed ? styles.navigationCollapsed : ""}`} style={{ "--assistant-width": assistantWidth + "px", "--navigation-width": navigationWidth.width + "px" } as React.CSSProperties}>
       {nativeMacWindow && navigationToggle}
       <aside id="workflows-navigation" className={styles.sidebar} hidden={navigationCollapsed} aria-label={ui("Navigation sidebar")}>
         {navigationBrand ? <div className={styles.integratedBrand}>{navigationBrand}</div> : <div className={styles.brand} data-tauri-drag-region onMouseDown={(event) => handleWindowDrag(event, startWindowDrag)}>
@@ -939,7 +941,7 @@ function ProfileView({
   </div>;
 }
 
-export function WorkflowsApp({ modelControl, readyWorkflowIds, reviewRequest, onReviewRequestHandled, platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, fullscreen = false, navigationBrand, sourceControl, composerAccessory, recordingStatus, statusNotice, toolbarAccessory, analysisUnavailableReason, onAnalysisUnavailable, navigationFooter, onShareWorkflow, onShareDocument, workflowAgentActions }: WorkflowsAppProps) {
+export function WorkflowsApp({ modelControl, readyWorkflowIds, reviewRequest, onReviewRequestHandled, platform, initialAnalysis = null, storageKey = "screenpipe-workflows:last-analysis-v2", initialScopeId, embedded = false, active = true, fullscreen = false, desktopAppearance = false, navigationBrand, sourceControl, composerAccessory, recordingStatus, statusNotice, toolbarAccessory, analysisUnavailableReason, onAnalysisUnavailable, navigationFooter, onShareWorkflow, onShareDocument, workflowAgentActions }: WorkflowsAppProps) {
   const uiLanguage = useLocale();
   const ui = useGT();
   const shortcuts = useSidebarShortcuts();
@@ -1351,7 +1353,7 @@ export function WorkflowsApp({ modelControl, readyWorkflowIds, reviewRequest, on
   }
 
   return <>
-    <AppShell workflowTitle={activeWorkflow?.title} workflowParents={workflowTrail.map((id, i) => ({ title: workflows.find(w => w.id === id)?.title || "Previous workflow", select: () => { const index = workflows.findIndex(w => w.id === id); if (index >= 0) { setSelectedWorkflow(index); setWorkflowTrail(workflowTrail.slice(0, i)); navigate("workflow"); } } }))} sourceControl={sourceControl} hasLibrary={Boolean(platform.guides?.list || platform.library)} toolbarAccessory={toolbarAccessory} modelControl={modelControl ?? (platform.modelPreference ? <WorkflowModelControl preference={platform.modelPreference} /> : undefined)} composerAccessory={composerAccessory} active={active} fullscreen={fullscreen} navigationFooter={navigationFooter} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={query} setQuery={setQuery} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: ui("Context"), profile: workProfile } : { key: "workflows", title: ui("Your workflows"), catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{statusNotice}
+    <AppShell desktopAppearance={desktopAppearance} workflowTitle={activeWorkflow?.title} workflowParents={workflowTrail.map((id, i) => ({ title: workflows.find(w => w.id === id)?.title || "Previous workflow", select: () => { const index = workflows.findIndex(w => w.id === id); if (index >= 0) { setSelectedWorkflow(index); setWorkflowTrail(workflowTrail.slice(0, i)); navigate("workflow"); } } }))} sourceControl={sourceControl} hasLibrary={Boolean(platform.guides?.list || platform.library)} toolbarAccessory={toolbarAccessory} modelControl={modelControl ?? (platform.modelPreference ? <WorkflowModelControl preference={platform.modelPreference} /> : undefined)} composerAccessory={composerAccessory} active={active} fullscreen={fullscreen} navigationFooter={navigationFooter} navigationBrand={navigationBrand} recordingStatus={recordingStatus} view={view} navigate={navigate} runtime={runtime} workflowCount={knownWorkflows.length} query={query} setQuery={setQuery} activeScope={activeScope} scopes={scopes} setScope={selectScope} embedded={embedded} startWindowDrag={platform.startWindowDrag} openCommandPalette={() => setCommandPaletteOpen(true)} assistant={platform.assistant ? { platform: platform.assistant, context: view === "workflow" && activeWorkflow ? { key: `workflow:${activeWorkflow.title}`, title: activeWorkflow.title, workflow: activeWorkflow } : view === "profile" ? { key: "profile", title: ui("Context"), profile: workProfile } : { key: "workflows", title: ui("Your workflows"), catalog: workflows.map(({ title, description }) => ({ title, description })) } } : undefined}>{statusNotice}
       {/* Keep drafts, imports and the active fill alive when navigating away.
           A different scope must tear down the old request before accepting fields. */}
       <div key={`${activeScope?.kind ?? "personal"}:${activeScope?.id ?? ""}`} hidden={view !== "profile"}>

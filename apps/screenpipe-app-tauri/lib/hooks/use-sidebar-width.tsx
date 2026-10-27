@@ -16,10 +16,12 @@ function clamp(n: number): number {
 
 function readStored(): number {
   if (typeof window === "undefined") return SIDEBAR_DEFAULT_WIDTH;
-  const raw = window.localStorage.getItem(STORAGE_KEY);
-  if (!raw) return SIDEBAR_DEFAULT_WIDTH;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) ? clamp(parsed) : SIDEBAR_DEFAULT_WIDTH;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return SIDEBAR_DEFAULT_WIDTH;
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? clamp(parsed) : SIDEBAR_DEFAULT_WIDTH;
+  } catch { return SIDEBAR_DEFAULT_WIDTH; }
 }
 
 /**
@@ -41,6 +43,17 @@ export function useSidebarWidth() {
   useEffect(() => {
     setWidth(readStored());
     setHydrated(true);
+    const sync = (event: Event) => {
+      if (event instanceof StorageEvent && event.key !== STORAGE_KEY) return;
+      const next = event instanceof CustomEvent ? event.detail : readStored();
+      if (typeof next === "number" && Number.isFinite(next)) setWidth(clamp(next));
+    };
+    window.addEventListener(`${STORAGE_KEY}:change`, sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener(`${STORAGE_KEY}:change`, sync);
+      window.removeEventListener("storage", sync);
+    };
   }, []);
 
   // Persist when the user releases the handle, not on every move.
@@ -50,6 +63,7 @@ export function useSidebarWidth() {
     } catch {
       // localStorage can throw in private modes; resize still works for the session.
     }
+    window.dispatchEvent(new CustomEvent(`${STORAGE_KEY}:change`, { detail: value }));
   }, []);
 
   const beginResize = useCallback(

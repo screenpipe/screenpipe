@@ -847,3 +847,69 @@
 @media(max-width:680px) { .detailMain { padding:24px 18px 55px; } .workflowBreadcrumb .sourceCrumb { display:none; } .detailTopbar { flex-wrap:nowrap; } }
 
 .quietCatalogHeader h1 { font: 600 24px/32px Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: -.025em; }
+
+/* Desktop Memory and Workflows share one navigation scale. Standalone and
+   embedded web workspaces retain their own layout. */
+.app[data-desktop-appearance="true"] {
+  font-family: inherit;
+  font-size: var(--text-sm);
+  letter-spacing: normal;
+  background: transparent;
+}
+.app[data-desktop-appearance="true"] :is(h1, h2, h3) { font-family: inherit; }
+.app[data-desktop-appearance="true"] .sidebar {
+  padding: 40px 8px 8px 4px;
+  background: hsl(var(--sidebar-background));
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--border));
+}
+.app[data-desktop-appearance="true"][data-fullscreen="true"] .sidebar { padding-top: 36px; }
+.app[data-desktop-appearance="true"] .integratedBrand { padding: 0 4px 12px; }
+.app[data-desktop-appearance="true"] .nav { gap: 2px; }
+.app[data-desktop-appearance="true"] .nav button {
+  position: relative;
+  height: auto;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: var(--text-xs);
+  line-height: 16px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+}
+.app[data-desktop-appearance="true"] .nav button:hover { background: hsl(var(--card) / .5); color: hsl(var(--foreground)); }
+.app[data-desktop-appearance="true"] .nav .navActive {
+  border-color: hsl(var(--border));
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+}
+.app[data-desktop-appearance="true"] .nav .navActive::before {
+  content: "";
+  position: absolute;
+  inset: 4px auto 4px 0;
+  width: 2px;
+  background: hsl(var(--foreground));
+}
+.app[data-desktop-appearance="true"] .nav button > span { color: inherit; font-size: var(--text-xs); }
+.app[data-desktop-appearance="true"] :is(.catalogHeader h1, .contextHeader h1, .heading h1) {
+  font-size: var(--text-2xl);
+  line-height: 1.33;
+  font-weight: 600;
+  letter-spacing: -.025em;
+}
+.app[data-desktop-appearance="true"] .workflowCard h2 { font-size: var(--text-base); }
+.app[data-desktop-appearance="true"] :is(.cardDescription, .contextHeader p) { font-size: var(--text-sm); }
+.app[data-desktop-appearance="true"] :is(.cardSummary, .cardOpen, .refreshControls, .workflowReviewState, .secondaryButton, .search, .sourceControl, .runToggle, .workflowBreadcrumb, .documentBreadcrumb) { font-size: var(--text-xs); }
+
+.app[data-desktop-appearance="true"] .workspace { background: var(--paper); }
+:global(.macos-vibrancy) .app[data-desktop-appearance="true"] .sidebar { background: rgba(255, 255, 255, .08); border-color: transparent; }
+:global(.dark.macos-vibrancy) .app[data-desktop-appearance="true"] .sidebar { background: rgba(255, 255, 255, .06); }
+:global(.macos-vibrancy) .app[data-desktop-appearance="true"] .nav button { color: hsl(var(--foreground) / .65); }
+:global(.macos-vibrancy) .app[data-desktop-appearance="true"] .nav .navActive {
+  background: hsl(var(--foreground) / .06);
+  border-color: hsl(var(--foreground) / .1);
+  color: hsl(var(--foreground));
+  font-weight: 600;
+}

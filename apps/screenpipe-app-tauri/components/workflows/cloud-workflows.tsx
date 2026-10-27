@@ -129,7 +129,7 @@ export function CloudWorkflows({ active, token, onModeChange, recordingStatus, n
         <DialogFooter className="gap-2"><Button variant="outline" disabled={processingBusy} onClick={() => void chooseProcessing(false)}>Keep local processing</Button><Button disabled={processingBusy} onClick={() => void chooseProcessing(true)}>{processingBusy ? "Saving…" : "Turn off local processing"}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
-    <WorkflowsShell workflowTitle={selected?.title} hasLibrary={false} view={view} navigate={navigate} runtime={null} workflowCount={workflows.length}
+    <WorkflowsShell desktopAppearance workflowTitle={selected?.title} hasLibrary={false} view={view} navigate={navigate} runtime={null} workflowCount={workflows.length}
       query={query} setQuery={setQuery}
       activeScope={null} scopes={[]} setScope={() => {}} embedded={false} active={active} fullscreen={fullscreen}
       startWindowDrag={process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock" ? undefined : () => getCurrentWindow().startDragging().catch(() => {})}

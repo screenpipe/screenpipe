@@ -21,7 +21,7 @@ export function ProductSwitcher({ mode, onChange, compact = false }: {
     <div
       role="group"
       aria-label={ui("Switch workspace")}
-      className="grid w-full grid-cols-2 gap-1 rounded-md bg-[color-mix(in_srgb,currentColor_5%,transparent)] p-1"
+      className="grid w-full grid-cols-2 gap-1 rounded-md bg-[color-mix(in_srgb,currentColor_5%,transparent)] text-foreground p-1"
     >
       {([
         ["screenpipe", ui("Memory")],
@@ -34,9 +34,9 @@ export function ProductSwitcher({ mode, onChange, compact = false }: {
           onClick={() => { if (mode !== value) onChange(value); }}
           className={cn(
             "min-w-0 rounded-sm px-3 py-1.5 font-medium leading-5 text-inherit transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-current",
-            compact ? "text-xs" : "text-[13px]",
+            compact ? "text-xs" : "text-[calc(var(--font-size-base)*0.8125)]",
             mode === value
-              ? "bg-[var(--panel,color-mix(in_srgb,currentColor_10%,transparent))]"
+              ? "bg-[color-mix(in_srgb,currentColor_10%,transparent)]"
               : "opacity-50 hover:bg-[color-mix(in_srgb,currentColor_4%,transparent)] hover:opacity-100",
           )}
         >

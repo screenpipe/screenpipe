@@ -90,7 +90,7 @@ export function DeviceWorkflows({ active, fullscreen = false, onModeChange, reco
         onConnectionClose={closeConnections}
       />}
 
-      <WorkflowsApp modelControl={<WorkflowModelSelector preference={platform.modelPreference} />} readyWorkflowIds={readyWorkflowIds} reviewRequest={reviewRequest} onReviewRequestHandled={handleReview} onAnalysisUnavailable={() => setAccessRequested(true)} analysisUnavailableReason={analysisUnavailableReason} composerAccessory={composerAccessory} fullscreen={fullscreen} onShareWorkflow={openShare} onShareDocument={shareDocument} workflowAgentActions={workflowAgentActions} platform={platform} active={active} storageKey={null}
+      <WorkflowsApp desktopAppearance modelControl={<WorkflowModelSelector preference={platform.modelPreference} />} readyWorkflowIds={readyWorkflowIds} reviewRequest={reviewRequest} onReviewRequestHandled={handleReview} onAnalysisUnavailable={() => setAccessRequested(true)} analysisUnavailableReason={analysisUnavailableReason} composerAccessory={composerAccessory} fullscreen={fullscreen} onShareWorkflow={openShare} onShareDocument={shareDocument} workflowAgentActions={workflowAgentActions} platform={platform} active={active} storageKey={null}
         toolbarAccessory={platform.managesAnalysis ? <WorkflowAccess requested={accessRequested} onRequestChange={setAccessRequested} active={active} onAccessChange={setAnalysisUnavailableReason} /> : process.env.NEXT_PUBLIC_SCREENPIPE_WEB_DEV === "mock" ? <WorkflowTasksPrompt active={active} tasks={fixtureWorkflowTasks} /> : undefined}
         recordingStatus={recordingStatus} navigationFooter={navigationFooter}
         sourceControl={sourceControl} navigationBrand={<ProductSwitcher mode="workflows" onChange={onModeChange} />} />

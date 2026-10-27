@@ -115,3 +115,12 @@
 .rowSavings { text-align:right; }
 .mobileRowFooter { grid-column:span 2; display:flex; align-items:center; justify-content:space-between; gap:12px; }
 @media(min-width:1024px) { .row { grid-template-columns:minmax(0,1fr) 100px 120px 110px; } .rowReview { display:block; } .mobileRowFooter { display:none; } }
+
+/* Match the host's font family and accessibility text size in the desktop app. */
+:global([data-desktop-appearance="true"]) .theme { font-family: inherit; font-size: var(--text-sm); }
+:global([data-desktop-appearance="true"]) :is(.input, .option, .archiveButton, .noSuggestions, .metricValue) { font-size: var(--text-sm); }
+:global([data-desktop-appearance="true"]) :is(.filterButton, .category, .groupLabel, .count, .assignment, .chip, .sort, .sort select, .subtitle, .details, .metricLabel, .review, .results) { font-size: var(--text-xs); }
+:global([data-desktop-appearance="true"]) .title { font-size: var(--text-base); }
+:global([data-desktop-appearance="true"]) .row .title { font-size: var(--text-sm); }
+:global([data-desktop-appearance="true"]) :is(.metricLabel, .metricValue) { white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
+:global([data-desktop-appearance="true"]) .metrics > * { min-width: 0; }

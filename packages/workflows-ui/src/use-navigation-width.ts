@@ -9,7 +9,7 @@ const MIN = 192;
 const MAX = 448;
 
 /** Match the chat sidebar's width range and persist only completed gestures. */
-export function useNavigationWidth(enabled: boolean, docked: boolean) {
+export function useNavigationWidth(enabled: boolean, docked: boolean, storageKey = KEY) {
   const [preferred, setPreferred] = useState(DEFAULT);
   const [viewport, setViewport] = useState(1440);
   const [resizing, setResizing] = useState(false);
@@ -27,18 +27,26 @@ export function useNavigationWidth(enabled: boolean, docked: boolean) {
     Math.round(Math.max(MIN, Math.min(maximum, value)));
   const width = clamp(preferred);
   useEffect(() => {
-    try {
-      const stored = Number(window.localStorage.getItem(KEY));
-      if (Number.isFinite(stored) && stored >= MIN)
-        setPreferred(Math.min(MAX, stored));
-    } catch {
-      /* Resizing also works without storage access. */
-    }
+    const sync = (event?: Event) => {
+      if (event instanceof StorageEvent && event.key !== storageKey) return;
+      try {
+        const stored = event instanceof CustomEvent ? event.detail : Number(window.localStorage.getItem(storageKey));
+        if (typeof stored === "number" && Number.isFinite(stored) && stored >= MIN)
+          setPreferred(Math.min(MAX, stored));
+      } catch { /* Resizing also works without storage access. */ }
+    };
+    sync();
+    window.addEventListener(`${storageKey}:change`, sync);
+    window.addEventListener("storage", sync);
     const resize = () => setViewport(window.innerWidth);
     resize();
     window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
-  }, []);
+    return () => {
+      window.removeEventListener("resize", resize);
+      window.removeEventListener(`${storageKey}:change`, sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, [storageKey]);
   useEffect(() => {
     if (!enabled) {
       if (drag.current) setPreferred(drag.current.previous);
@@ -59,10 +67,11 @@ export function useNavigationWidth(enabled: boolean, docked: boolean) {
   function persist(value: number) {
     setPreferred(value);
     try {
-      window.localStorage.setItem(KEY, String(value));
+      window.localStorage.setItem(storageKey, String(value));
     } catch {
       /* Session width still applies. */
     }
+    window.dispatchEvent(new CustomEvent(`${storageKey}:change`, { detail: value }));
   }
   function cancel() {
     if (!drag.current) return;

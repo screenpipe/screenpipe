@@ -165,6 +165,8 @@ export type WorkflowsAppProps = {
   active?: boolean;
   /** Native fullscreen state supplied by the host window. */
   fullscreen?: boolean;
+  /** Use the desktop app's sidebar preference, typography and navigation chrome. */
+  desktopAppearance?: boolean;
   navigationFooter?: (actions: {
     openKeyboardShortcuts: () => void;
   }) => import("react").ReactNode;
