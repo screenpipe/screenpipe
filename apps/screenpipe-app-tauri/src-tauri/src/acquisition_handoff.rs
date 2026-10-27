@@ -12,6 +12,8 @@ use tauri::{AppHandle, Listener};
 static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 static RETIREMENT: Retirement = Retirement::new();
 static STORAGE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static WORKER_ACTIVE: AtomicBool = AtomicBool::new(false);
+static DEEP_LINK_ACCEPTED: AtomicBool = AtomicBool::new(false);
 
 const SERVICE: &str = if cfg!(feature = "enterprise-build") {
     "com.screenpipe.enterprise.acquisition.v1"
@@ -184,6 +186,50 @@ fn carrier() -> Option<String> {
     grant_from_filename(path.file_name()?.to_str()?, ".AppImage")
 }
 
+/// `screenpipe://attribution?grant=<uuid4>`: the install page hands the same
+/// opaque grant the download carrier would have carried, after the ordinary
+/// installer is already running. No installer bytes, filenames or manifests.
+pub(crate) fn grant_from_deep_link(url: &str) -> Option<String> {
+    if !crate::deep_link::is_for_current_build(url) { return None; }
+    let parsed = url.parse::<tauri::Url>().ok()?;
+    let route = parsed.host_str().filter(|h| !h.is_empty())
+        .or_else(|| parsed.path_segments().and_then(|mut s| s.next()))?;
+    if route != "attribution" { return None; }
+    let mut grants = parsed.query_pairs().filter(|(k, _)| k == "grant").map(|(_, v)| v.into_owned());
+    let grant = grants.next()?.to_ascii_lowercase();
+    // Exactly one grant; a second value is an ambiguous handoff, not a choice.
+    if grants.next().is_some() { return None; }
+    uuid4(&grant).then_some(grant)
+}
+
+/// First grant wins. Saved proof is never replaced: the API already pinned a
+/// request/verifier to it, and a retired profile accepts nothing further.
+fn adopts_deep_link(saved: Option<&Pending>, retired: bool) -> bool {
+    !retired && saved.is_none()
+}
+
+async fn accept(grant: String) -> Result<bool, ()> {
+    let _guard = STORAGE.lock().await;
+    let saved = load_saved().await?;
+    if !adopts_deep_link(saved.as_ref(), RETIREMENT.disabled(&tombstone())) { return Ok(false); }
+    save(&Pending::new(grant)).await?;
+    Ok(true)
+}
+
+/// Deep links arrive from the OS on every platform; the worker then runs the
+/// same claim/bind path as the installer carrier.
+pub fn accept_deep_link(app: &AppHandle, url: &str) {
+    let Some(grant) = grant_from_deep_link(url) else { return; };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match accept(grant).await {
+            Ok(true) => { DEEP_LINK_ACCEPTED.store(true, Ordering::SeqCst); spawn_worker(app); }
+            Ok(false) => {}
+            Err(()) => tracing::debug!("acquisition deep link not stored; storage unavailable"),
+        }
+    });
+}
+
 // Retirement never waits for the optional credential store. A late credential
 // write cannot remove this separate marker or revive the process-local latch.
 struct Retirement {
@@ -252,15 +298,25 @@ fn watch_settings<R: tauri::Runtime>(
 
 pub fn spawn(app: AppHandle) {
     watch_settings(&app, crate::config::app_data_dir().join("store.bin"), retire);
+    spawn_worker(app);
+}
+
+fn spawn_worker(app: AppHandle) {
+    // One worker per process. A deep link accepted while it runs only wakes it;
+    // one accepted as it exits restarts it below.
+    if WORKER_ACTIVE.swap(true, Ordering::SeqCst) { wake(); return; }
+    DEEP_LINK_ACCEPTED.store(false, Ordering::SeqCst);
     tauri::async_runtime::spawn(async move {
         // Keychain/settings can be temporarily unavailable during startup.
         for _ in 0..240 {
-            if run(app.clone()).await.is_ok() { return; }
+            if run(app.clone()).await.is_ok() { break; }
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(30)) => {},
                 _ = WAKE.notified() => {},
             }
         }
+        WORKER_ACTIVE.store(false, Ordering::SeqCst);
+        if DEEP_LINK_ACCEPTED.swap(false, Ordering::SeqCst) { spawn_worker(app); }
     });
 }
 
@@ -406,6 +462,36 @@ mod tests {
         saved.retired = true;
         store.set(&account, &serde_json::to_vec(&saved).unwrap()).await.unwrap();
         assert!(decode_pending(&store.get(&account).await.unwrap().unwrap()).unwrap().retired);
+    }
+
+    #[test]
+    fn deep_link_carries_exactly_one_valid_grant_for_this_build() {
+        let grant = "12345678-1234-4234-8234-123456789012";
+        let s = crate::deep_link::scheme();
+        let other = if s == "screenpipe" { "screenpipe-enterprise" } else { "screenpipe" };
+        assert_eq!(grant_from_deep_link(&format!("{s}://attribution?grant={grant}")), Some(grant.into()));
+        assert_eq!(grant_from_deep_link(&format!("{s}://attribution/?v=1&grant={}", grant.to_ascii_uppercase())), Some(grant.into()));
+        for url in [
+            format!("{s}://attribution?grant={PLACEHOLDER}"),
+            format!("{s}://attribution?grant={grant}&grant={grant}"),
+            format!("{s}://auth?grant={grant}"),
+            format!("{s}://home?grant={grant}"),
+            format!("https://screenpipe.com/attribution?grant={grant}"),
+            format!("{other}://attribution?grant={grant}"),
+            format!("{s}://attribution?grant=not-a-grant"),
+            format!("{s}://attribution"),
+            "not a url".to_string(),
+        ] {
+            assert!(grant_from_deep_link(&url).is_none(), "{url}");
+        }
+    }
+
+    #[test]
+    fn deep_link_never_replaces_saved_proof_or_revives_a_retired_profile() {
+        let saved = Pending::new(uuid::Uuid::new_v4().to_string());
+        assert!(adopts_deep_link(None, false));
+        assert!(!adopts_deep_link(Some(&saved), false));
+        assert!(!adopts_deep_link(None, true));
     }
 
     #[test]
