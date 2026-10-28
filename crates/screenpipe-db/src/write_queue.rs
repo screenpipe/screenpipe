@@ -1847,6 +1847,14 @@ async fn execute_single_write(
             }
 
             crate::redaction_status::record(&mut **conn, "frames", id, &redaction.fields()).await?;
+            if let (Some(raw), Some(clean), Some(step)) = (
+                redaction.ocr_source(),
+                ocr_text_json.as_deref(),
+                redaction.get(crate::CaptureField::TextJson),
+            ) {
+                crate::redaction_status::record_inline_ocr(&mut **conn, id, raw, clean, step)
+                    .await?;
+            }
 
             // OCR text/metadata now lives on the frame itself: full_text feeds
             // frames_fts (search) and text_json holds the per-word bounds. The
@@ -1909,6 +1917,7 @@ async fn execute_single_write(
                 }
             }
             if complete {
+                crate::redaction_status::materialize_inline_ocr(&mut **conn, *frame_id).await?;
                 sqlx::query("INSERT OR IGNORE INTO redaction_records(kind,record_id) SELECT 'elements',id FROM elements WHERE frame_id=?").bind(frame_id).execute(&mut **conn).await?;
                 sqlx::query("DELETE FROM redaction_records WHERE kind='frame_elements_pending' AND record_id=?").bind(frame_id).execute(&mut **conn).await?;
             }

@@ -754,6 +754,14 @@ async fn paired_capture_inner(
     {
         redaction.observe(screenpipe_db::CaptureField::FullText, evidence);
     }
+    if redaction
+        .get(screenpipe_db::CaptureField::TextJson)
+        .is_some_and(|e| e.complete)
+    {
+        // Transfer ownership of the existing source; no extra capture allocation.
+        // The writer persists only per-leaf outcomes, never this raw JSON.
+        redaction.set_ocr_source(ocr_text_json);
+    }
     // Insert snapshot frame + OCR text positions in a single transaction.
     let ocr_engine_name = if cfg!(target_os = "macos") {
         "AppleNative"

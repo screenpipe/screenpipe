@@ -461,3 +461,128 @@ async fn measure_inline_capture_evidence_writer_cost() {
     eprintln!("capture writer fixture: 128 writes each; without field observations={:.3} ms/write, with two observations={:.3} ms/write; fixed capture evidence={} bytes", times[0].as_secs_f64()*1000.0/128.0,times[1].as_secs_f64()*1000.0/128.0,std::mem::size_of::<CaptureRedactions>());
     db.close().await;
 }
+
+#[tokio::test]
+async fn inline_ocr_element_fields_keep_exact_outcomes_without_repeating_detection() {
+    let root = tempfile::tempdir().unwrap();
+    let db = database(&root.path().join("db.sqlite")).await;
+    let raw = serde_json::json!([
+        {"text":"person@example.com","level":"0","page_num":"0","block_num":"0","par_num":"0","line_num":"0","word_num":"0","left":"0","top":"0","width":"10","height":"10","conf":"90"},
+        {"text":"ordinary text","level":"0","page_num":"0","block_num":"0","par_num":"0","line_num":"0","word_num":"0","left":"10","top":"0","width":"10","height":"10","conf":"90"}
+    ]).to_string();
+    let (clean, step) =
+        screenpipe_core::pii_removal::remove_pii_json_with_evidence(&raw, &["text"]).unwrap();
+    let mut audit = CaptureRedactions::new();
+    audit.insert(CaptureField::TextJson, step);
+    audit.set_ocr_source(raw);
+    assert!(!format!("{audit:?}").contains("person@example.com"));
+    let id = db
+        .insert_snapshot_frame_with_redaction(
+            "display",
+            chrono::Utc::now(),
+            "",
+            None,
+            None,
+            None,
+            None,
+            true,
+            None,
+            None,
+            Some("ocr"),
+            None,
+            None,
+            None,
+            Some(("[EMAIL] ordinary text", &clean, "fixture")),
+            None,
+            audit,
+        )
+        .await
+        .unwrap();
+    // The existing supplementary write runs after the durable source commit.
+    // Wait on observable completion, not an assumed wall-clock delay.
+    let status = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let status = db.frame_redaction_status(id).await.unwrap();
+            if status["elements"]["materialization_pending"] == false {
+                break status;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let fields = &status["elements"]["records"];
+    assert_eq!(fields.as_array().unwrap().len(), 2);
+    assert_eq!(fields[0]["fields"]["text"]["method"], "inline_regex");
+    assert_eq!(fields[0]["fields"]["text"]["result"], "replaced");
+    assert_eq!(fields[1]["fields"]["text"]["result"], "no_match");
+    assert_eq!(fields[1]["fields"]["text"]["pseudonymized"], false);
+    assert!(fields[0]["fields"]["text"]["processed_at"]
+        .as_i64()
+        .is_some());
+    assert!(!status.to_string().contains("person@example.com"));
+    db.close().await;
+    drop(db);
+    let reopened = database(&root.path().join("db.sqlite")).await;
+    assert_eq!(
+        reopened.frame_redaction_status(id).await.unwrap()["elements"]["records"][0]["fields"]
+            ["text"]["result"],
+        "replaced"
+    );
+    reopened.close().await;
+}
+
+#[tokio::test]
+async fn inline_ocr_evidence_chunks_at_sqlite_bind_boundary_without_losing_elements() {
+    let root = tempfile::tempdir().unwrap();
+    let db = database(&root.path().join("db.sqlite")).await;
+    // Three metadata binds per element, at the documented legacy 999-bind
+    // SQLite boundary. Exercise below, exactly at, and above one SQL batch.
+    for count in [332usize, 333, 334] {
+        let raw=serde_json::Value::Array((0..count).map(|_| serde_json::json!({"text":"person@example.com","level":"0","page_num":"0","block_num":"0","par_num":"0","line_num":"0","word_num":"0","left":"0","top":"0","width":"1","height":"1","conf":"90"})).collect()).to_string();
+        let (clean, step) =
+            screenpipe_core::pii_removal::remove_pii_json_with_evidence(&raw, &["text"]).unwrap();
+        let mut audit = CaptureRedactions::new();
+        audit.insert(CaptureField::TextJson, step);
+        audit.set_ocr_source(raw);
+        let id = db
+            .insert_snapshot_frame_with_redaction(
+                "display",
+                chrono::Utc::now(),
+                "",
+                None,
+                None,
+                None,
+                None,
+                true,
+                None,
+                None,
+                Some("ocr"),
+                None,
+                None,
+                None,
+                Some(("[EMAIL]", &clean, "fixture")),
+                None,
+                audit,
+            )
+            .await
+            .unwrap();
+        let status = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let status = db.frame_redaction_status(id).await.unwrap();
+                if status["elements"]["materialization_pending"] == false {
+                    break status;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let elements = status["elements"]["records"].as_array().unwrap();
+        assert_eq!(elements.len(), count);
+        assert!(elements
+            .iter()
+            .all(|e| e["fields"]["text"]["result"] == "replaced"));
+    }
+    db.close().await;
+}

@@ -911,7 +911,7 @@ fn monitor_mice(
 
                                 if config.capture_mouse_move {
                                     let event = UiEvent {
-                                        redaction,
+                                        redaction: Default::default(),
                                         id: None,
                                         timestamp: Utc::now(),
                                         relative_ms: t,

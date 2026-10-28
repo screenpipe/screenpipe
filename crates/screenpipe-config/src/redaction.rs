@@ -42,36 +42,54 @@ impl CaptureField {
         }
     }
 }
-#[derive(Debug, Clone, Default)]
-pub struct CaptureRedactions([Option<RedactionEvidence>; CaptureField::ALL.len()]);
+#[derive(Clone, Default)]
+pub struct CaptureRedactions {
+    slots: [Option<RedactionEvidence>; CaptureField::ALL.len()],
+    // Move the already allocated source into the writer only long enough to
+    // derive exact leaf outcomes. Never serialize or log this raw value.
+    ocr_source: Option<String>,
+}
+impl std::fmt::Debug for CaptureRedactions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CaptureRedactions")
+            .field("slots", &self.slots)
+            .finish_non_exhaustive()
+    }
+}
 impl CaptureRedactions {
     pub fn new() -> Self {
         Self::default()
     }
     pub fn insert(&mut self, field: CaptureField, evidence: RedactionEvidence) {
-        self.0[field as usize] = Some(evidence);
+        self.slots[field as usize] = Some(evidence);
     }
     pub fn get(&self, field: CaptureField) -> Option<&RedactionEvidence> {
-        self.0[field as usize].as_ref()
+        self.slots[field as usize].as_ref()
     }
     pub fn observe(&mut self, field: CaptureField, evidence: RedactionEvidence) {
-        if let Some(previous) = self.0[field as usize].as_mut() {
+        if let Some(previous) = self.slots[field as usize].as_mut() {
             previous.merge(&evidence);
         } else {
             self.insert(field, evidence);
         }
     }
     pub fn extend(&mut self, other: Self) {
-        for (field, value) in CaptureField::ALL.into_iter().zip(other.0) {
+        for (field, value) in CaptureField::ALL.into_iter().zip(other.slots) {
             if let Some(evidence) = value {
                 self.observe(field, evidence);
             }
         }
     }
+    pub fn set_ocr_source(&mut self, source: String) {
+        self.ocr_source = Some(source);
+    }
+    pub fn ocr_source(&self) -> Option<&str> {
+        self.ocr_source.as_deref()
+    }
     pub fn fields(&self) -> FieldRedactions {
         CaptureField::ALL
             .into_iter()
-            .zip(&self.0)
+            .zip(&self.slots)
             .filter_map(|(field, value)| value.clone().map(|e| (field.name().into(), e)))
             .collect()
     }

@@ -219,6 +219,11 @@ pub(crate) async fn install(
             if kind == "frames" {
                 retry.push_str("UPDATE frames SET full_text_redacted_at=NULL WHERE id=NEW.id;");
             }
+            if kind == "frames" && *field == "text_json" {
+                retry.push_str(
+                    "DELETE FROM redaction_evidence WHERE kind='inline_ocr' AND record_id=NEW.id;",
+                );
+            }
             let sql = format!("CREATE TRIGGER IF NOT EXISTS audit_{kind}_{field}_update AFTER UPDATE OF \"{field}\" ON {table} WHEN NEW.\"{field}\" IS NOT OLD.\"{field}\"{guard} BEGIN DELETE FROM redaction_evidence WHERE kind='{kind}' AND record_id=NEW.id AND field='{audit_field}'; {retry} END;");
             sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
                 .execute(&mut *conn)
@@ -230,10 +235,10 @@ pub(crate) async fn install(
         } else {
             ""
         };
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE TRIGGER IF NOT EXISTS audit_{kind}_delete AFTER DELETE ON {table}{delete_guard} BEGIN DELETE FROM redaction_evidence WHERE kind='{kind}' AND record_id=OLD.id; DELETE FROM redaction_records WHERE kind='{kind}' AND record_id=OLD.id; END;"))).execute(&mut *conn).await?;
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE TRIGGER IF NOT EXISTS audit_{kind}_delete AFTER DELETE ON {table}{delete_guard} BEGIN DELETE FROM redaction_evidence WHERE (kind='{kind}' OR ('{kind}'='frames' AND kind='inline_ocr')) AND record_id=OLD.id; DELETE FROM redaction_records WHERE kind='{kind}' AND record_id=OLD.id; END;"))).execute(&mut *conn).await?;
     }
     if hybrid {
-        sqlx::raw_sql("CREATE TRIGGER IF NOT EXISTS audit_frame_generation AFTER UPDATE OF generation ON frame_payloads WHEN NEW.generation!=OLD.generation BEGIN DELETE FROM redaction_evidence WHERE kind='frames' AND record_id=NEW.frame_id; END;").execute(&mut *conn).await?;
+        sqlx::raw_sql("CREATE TRIGGER IF NOT EXISTS audit_frame_generation AFTER UPDATE OF generation ON frame_payloads WHEN NEW.generation!=OLD.generation BEGIN DELETE FROM redaction_evidence WHERE kind IN ('frames','inline_ocr') AND record_id=NEW.frame_id; END;").execute(&mut *conn).await?;
     }
     Ok(())
 }
@@ -624,6 +629,13 @@ async fn element_status(
             .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
         step["processed"] = json!(true);
         if let Some(record) = records.get_mut(&id) {
+            let mut steps = record["fields"][&field]["steps"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            steps.push(step.clone());
+            step["pseudonymized"] = json!(steps.iter().any(|s| s["pseudonymized"] == true));
+            step["steps"] = json!(steps);
             record["fields"][&field] = step;
         }
     }
@@ -728,4 +740,121 @@ pub fn support_snapshot(root: &std::path::Path) -> Value {
         }
     }
     Value::Object(snapshot)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct InlineOcrEvidence {
+    step: crate::RedactionEvidence,
+    changed: Vec<bool>,
+}
+
+/// Derive leaf outcomes from the actual inline call's input/output. Only safe
+/// metadata reaches SQLite. The raw source is dropped with the capture write.
+pub(crate) async fn record_inline_ocr(
+    conn: &mut sqlx::SqliteConnection,
+    frame_id: i64,
+    raw: &str,
+    clean: &str,
+    step: &crate::RedactionEvidence,
+) -> Result<(), sqlx::Error> {
+    let (Ok(Value::Array(raw)), Ok(Value::Array(clean))) =
+        (serde_json::from_str(raw), serde_json::from_str(clean))
+    else {
+        return Ok(());
+    };
+    if raw.len() != clean.len() {
+        return Ok(());
+    }
+    let mut changed = Vec::new();
+    for (raw, clean) in raw.iter().zip(&clean) {
+        let level = clean
+            .get("level")
+            .and_then(Value::as_str)
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0);
+        let Some(text) = clean
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+        else {
+            continue;
+        };
+        // OCR materialization stores text only for native blocks and Tesseract
+        // words. Hierarchy-only nodes have NULL text and need no text evidence.
+        if level != 0 && level != 5 {
+            continue;
+        }
+        let Some(original) = raw.get("text").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        changed.push(original != text);
+    }
+    let value = serde_json::to_string(&InlineOcrEvidence {
+        step: step.clone(),
+        changed,
+    })
+    .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+    sqlx::query("INSERT OR REPLACE INTO redaction_evidence(kind,record_id,field,method,evidence,policy) SELECT 'inline_ocr',record_id,'text',method,?,policy FROM redaction_evidence WHERE kind='frames' AND record_id=? AND field='text_json' AND method='\"inline_regex\"'")
+        .bind(value).bind(frame_id).execute(conn).await?;
+    Ok(())
+}
+
+/// Transfer source-call evidence to the exact materialized fields. This runs
+/// in the existing deferred writer transaction, without repeating detection.
+pub(crate) async fn materialize_inline_ocr(
+    conn: &mut sqlx::SqliteConnection,
+    frame_id: i64,
+) -> Result<(), sqlx::Error> {
+    let source:Option<(String,Option<String>)>=sqlx::query_as("SELECT evidence,policy FROM redaction_evidence WHERE kind='inline_ocr' AND record_id=? AND field='text'").bind(frame_id).fetch_optional(&mut *conn).await?;
+    let Some((source, policy)) = source else {
+        return Ok(());
+    };
+    let source: InlineOcrEvidence =
+        serde_json::from_str(&source).map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+    let ids:Vec<i64>=sqlx::query_scalar("SELECT id FROM elements WHERE frame_id=? AND source='ocr' AND text IS NOT NULL ORDER BY sort_order,id").bind(frame_id).fetch_all(&mut *conn).await?;
+    if ids.len() != source.changed.len() {
+        tracing::warn!(
+            frame_id,
+            elements = ids.len(),
+            observations = source.changed.len(),
+            "inline OCR evidence pending: materialization differs from source"
+        );
+        return Ok(());
+    }
+    let rows: Vec<(i64, String)> = ids
+        .into_iter()
+        .zip(source.changed)
+        .map(|(id, changed)| {
+            let mut step = source.step.clone();
+            step.result = if changed {
+                crate::RedactionResult::Replaced
+            } else {
+                crate::RedactionResult::NoMatch
+            };
+            step.pseudonymized &= changed;
+            Ok((
+                id,
+                serde_json::to_string(&step).map_err(|e| sqlx::Error::Protocol(e.to_string()))?,
+            ))
+        })
+        .collect::<Result<_, sqlx::Error>>()?;
+    // SQLite versions supported by the existing OCR writer can have the legacy
+    // 999-variable boundary. Three binds per observation; chunk, never truncate.
+    for batch in rows.chunks(999 / 3) {
+        let mut query=sqlx::QueryBuilder::<Sqlite>::new("INSERT OR REPLACE INTO redaction_evidence(kind,record_id,field,method,evidence,policy) ");
+        query.push_values(batch, |mut row, (id, evidence)| {
+            row.push("'elements'")
+                .push_bind(id)
+                .push("'text'")
+                .push("'\"inline_regex\"'")
+                .push_bind(evidence)
+                .push_bind(&policy);
+        });
+        query.build().execute(&mut *conn).await?;
+    }
+    sqlx::query("DELETE FROM redaction_evidence WHERE kind='inline_ocr' AND record_id=?")
+        .bind(frame_id)
+        .execute(conn)
+        .await?;
+    Ok(())
 }

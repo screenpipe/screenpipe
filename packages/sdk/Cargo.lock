@@ -6972,6 +6972,7 @@ dependencies = [
  "rand 0.9.4",
  "regex",
  "reqwest",
+ "screenpipe-config",
  "screenpipe-cpu-features",
  "screenpipe-events",
  "screenpipe-fs",
