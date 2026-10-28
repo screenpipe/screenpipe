@@ -970,6 +970,18 @@ impl DatabaseManager {
         collect_all_files: bool,
         layout_start: DateTime<Utc>,
     ) -> Result<DeleteTimeRangeResult, sqlx::Error> {
+        // Only automated retention/archive batches wait for admitted history
+        // pages. Do so before taking the recording writer or the storage gate.
+        // Explicit user deletion/privacy changes retain immediate revocation.
+        let _history = if let Some(storage) = &self.storage {
+            Some(tokio::select! {
+                biased;
+                _ = storage.closing.cancelled() => return Err(sqlx::Error::PoolClosed),
+                history = storage.history.write() => history,
+            })
+        } else {
+            None
+        };
         let mut tx = self.begin_immediate_with_retry().await?;
 
         let start_str = start.to_rfc3339();
