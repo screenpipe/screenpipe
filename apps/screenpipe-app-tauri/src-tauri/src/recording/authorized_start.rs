@@ -7,6 +7,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
 
+/// A fresh policy response may need to restore a recorder under an unchanged grant.
+pub(super) fn resume_required(
+    newly_authorized: bool,
+    recording_intended: bool,
+    server_available: bool,
+    recovery_pending: bool,
+) -> bool {
+    newly_authorized || (recording_intended && !server_available && !recovery_pending)
+}
+
 /// Recheck authorization and intent after any in-flight recorder teardown.
 pub(super) async fn attempt<F: Future<Output = Result<(), String>>>(
     lifecycle: &Mutex<()>,
@@ -42,6 +52,10 @@ impl Recovery {
 
     pub(crate) fn is_current(&self, generation: u64) -> bool {
         self.generation() == generation
+    }
+
+    pub(super) fn is_pending(&self) -> bool {
+        self.owner.try_lock().is_err()
     }
 
     /// Complete or exhaust this request without consuming a newer request.
@@ -108,6 +122,112 @@ mod tests {
     use std::sync::Arc;
 
     const SHORT_RETRY: [Duration; 2] = [Duration::from_millis(5), Duration::from_millis(10)];
+
+    #[test]
+    fn unchanged_policy_preserves_a_healthy_recorder_and_user_pause() {
+        assert!(!resume_required(false, true, true, false));
+        assert!(!resume_required(false, false, false, false));
+        // A genuinely new grant retains the existing initial-start behavior.
+        assert!(resume_required(true, true, false, false));
+    }
+
+    #[tokio::test]
+    async fn unchanged_policy_does_not_requeue_an_active_recovery() {
+        let recovery = Arc::new(Recovery::default());
+        let attempted = Arc::new(Notify::new());
+        let task = tokio::spawn({
+            let recovery = recovery.clone();
+            let attempted = attempted.clone();
+            async move {
+                recovery
+                    .run(
+                        0,
+                        || true,
+                        || async {
+                            attempted.notify_one();
+                            Err("storage temporarily unavailable".into())
+                        },
+                        &[Duration::from_secs(3600)],
+                    )
+                    .await
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), attempted.notified())
+            .await
+            .unwrap();
+        assert!(recovery.is_pending());
+        assert!(!resume_required(false, true, false, recovery.is_pending()));
+        recovery.cancel();
+        tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(!recovery.is_pending());
+    }
+
+    #[tokio::test]
+    async fn unchanged_grant_restores_durable_recording_after_server_loss() {
+        use screenpipe_db::DatabaseManager;
+
+        let root = tempfile::tempdir().unwrap();
+        let database_path = root.path().join("db.sqlite");
+        let recovery = Recovery::default();
+        let intent = AtomicBool::new(true);
+        let attempts = AtomicUsize::new(0);
+        // The first authorization already completed successfully. Losing the
+        // server later must not require a second grant or an open Home window.
+        let db = DatabaseManager::new(database_path.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        db.execute_raw_sql_write(
+            "INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-01-01T12:00:00Z','before interruption')",
+        )
+        .await
+        .unwrap();
+        db.close().await;
+        recovery
+            .run(0, || true, || async { Ok(()) }, &SHORT_RETRY)
+            .await
+            .unwrap();
+
+        assert!(
+            resume_required(false, true, false, recovery.is_pending()),
+            "an unchanged authorized policy must restore the missing recording server"
+        );
+        recovery
+            .run(
+                recovery.generation(),
+                || intent.load(Ordering::SeqCst),
+                || async {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    let db = DatabaseManager::new(database_path.to_str().unwrap(), Default::default())
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    db.execute_raw_sql_write(
+                        "INSERT INTO frames(id,timestamp,full_text) VALUES(2,'2026-01-01T12:01:00Z','after recovery')",
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                    db.close().await;
+                    Ok(())
+                },
+                &SHORT_RETRY,
+            )
+            .await
+            .unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        let db = DatabaseManager::new(database_path.to_str().unwrap(), Default::default())
+            .await
+            .unwrap();
+        let frames = db
+            .frame_payloads(&[1, 2], screenpipe_db::storage::Projection::All)
+            .await
+            .unwrap();
+        assert_eq!(frames[&1].full_text.as_deref(), Some("before interruption"));
+        assert_eq!(frames[&2].full_text.as_deref(), Some("after recovery"));
+        db.close().await;
+    }
 
     #[tokio::test]
     async fn dropped_webview_and_failed_first_start_recover_without_resubmission() {
