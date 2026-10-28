@@ -206,6 +206,16 @@ pub(crate) async fn install(
             .filter(|f| columns.iter().any(|c| c == **f))
         {
             let kind = surface.kind;
+            // Compaction relocates the same image, so its observed processing
+            // remains valid. Other image edits retain their invalidation hooks.
+            let source_guard = if kind == "image" && *field == "snapshot_path" {
+                format!(
+                    " AND NOT ({})",
+                    crate::storage::read_schema::SNAPSHOT_MEDIA_RELOCATION
+                )
+            } else {
+                String::new()
+            };
             let audit_field = if kind == "image" { "image" } else { field };
             let watermark = match (kind, *field) {
                 ("frames", "full_text") => Some("full_text_redacted_at"),
@@ -229,7 +239,7 @@ pub(crate) async fn install(
                     "DELETE FROM redaction_evidence WHERE kind='inline_ocr' AND record_id=NEW.id;",
                 );
             }
-            let sql = format!("CREATE TRIGGER IF NOT EXISTS audit_{kind}_{field}_update AFTER UPDATE OF \"{field}\" ON {table} WHEN NEW.\"{field}\" IS NOT OLD.\"{field}\"{guard} BEGIN DELETE FROM redaction_evidence WHERE kind='{kind}' AND record_id=NEW.id AND field='{audit_field}'; {retry} END;");
+            let sql = format!("CREATE TRIGGER IF NOT EXISTS audit_{kind}_{field}_update AFTER UPDATE OF \"{field}\" ON {table} WHEN NEW.\"{field}\" IS NOT OLD.\"{field}\"{guard}{source_guard} BEGIN DELETE FROM redaction_evidence WHERE kind='{kind}' AND record_id=NEW.id AND field='{audit_field}'; {retry} END;");
             sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
                 .execute(&mut *conn)
                 .await?;

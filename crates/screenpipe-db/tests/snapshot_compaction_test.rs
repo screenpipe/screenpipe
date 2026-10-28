@@ -209,8 +209,19 @@ async fn compaction_preserves_certified_image_receipts_and_exports_across_restar
         };
         db.configure_release(&policy).await.unwrap();
         let frame = snapshot(&db, "sanitized-original.jpg").await;
-        let job = db.release_pending("image", 1).await.unwrap().remove(0);
+        let mut job = db.release_pending("image", 1).await.unwrap().remove(0);
+        job.redaction.insert(
+            "image".into(),
+            screenpipe_db::RedactionEvidence::new(
+                screenpipe_db::RedactionMethod::AsyncModel,
+                false,
+                true,
+            ),
+        );
         assert!(db.publish_image_release(&job).await.unwrap());
+        let before_image =
+            db.frame_redaction_status(frame).await.unwrap()["fields"]["image"].clone();
+        assert_eq!(before_image["method"], "async_model");
         // Installed #7634 databases use this exact trigger contract. Narrowing
         // its false positive must not invalidate previously certified content.
         let maintenance = if hybrid {
@@ -252,6 +263,10 @@ async fn compaction_preserves_certified_image_receipts_and_exports_across_restar
             .release_ready("image", &captured.to_string())
             .await
             .unwrap());
+        assert_eq!(
+            db.frame_redaction_status(frame).await.unwrap()["fields"]["image"],
+            before_image
+        );
         let in_flight = db.release_pending("image", 1).await.unwrap().remove(0);
         assert_eq!(in_flight.id, captured.to_string());
         db.compact_snapshots_queued(chunk, vec![(captured, 1)])
@@ -270,6 +285,10 @@ async fn compaction_preserves_certified_image_receipts_and_exports_across_restar
         );
         db.configure_release(&policy).await.unwrap();
         assert!(db.release_ready("image", &frame.to_string()).await.unwrap());
+        assert_eq!(
+            db.frame_redaction_status(frame).await.unwrap()["fields"]["image"],
+            before_image
+        );
         let protected = db.protected_reads().await.unwrap();
         assert_eq!(
             protected.get_frame(frame).await.unwrap(),
