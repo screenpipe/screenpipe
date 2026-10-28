@@ -470,8 +470,22 @@ async fn inline_ocr_element_fields_keep_exact_outcomes_without_repeating_detecti
         {"text":"person@example.com","level":"0","page_num":"0","block_num":"0","par_num":"0","line_num":"0","word_num":"0","left":"0","top":"0","width":"10","height":"10","conf":"90"},
         {"text":"ordinary text","level":"0","page_num":"0","block_num":"0","par_num":"0","line_num":"0","word_num":"0","left":"10","top":"0","width":"10","height":"10","conf":"90"}
     ]).to_string();
-    let (clean, step) =
-        screenpipe_core::pii_removal::remove_pii_json_with_evidence(&raw, &["text"]).unwrap();
+    let key = root.path().join("team.key");
+    std::fs::write(&key, [7u8; 32]).unwrap();
+    let pseudonyms = Arc::new(Pseudonymizer::from_shared_key_file(&key).unwrap());
+    let renderer = PiiPseudonymizer(Box::new(move |kind, value| {
+        pseudonyms.inline_token(kind, value)
+    }));
+    let mut clean: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    for block in clean.as_array_mut().unwrap() {
+        block["text"] = serde_json::Value::String(remove_pii_with_renderer(
+            block["text"].as_str().unwrap(),
+            Some(&renderer),
+        ));
+    }
+    let clean = clean.to_string();
+    let step =
+        screenpipe_db::RedactionEvidence::new(RedactionMethod::InlineRegex, true, clean != raw);
     let mut audit = CaptureRedactions::new();
     audit.insert(CaptureField::TextJson, step);
     audit.set_ocr_source(raw);
@@ -515,6 +529,7 @@ async fn inline_ocr_element_fields_keep_exact_outcomes_without_repeating_detecti
     assert_eq!(fields.as_array().unwrap().len(), 2);
     assert_eq!(fields[0]["fields"]["text"]["method"], "inline_regex");
     assert_eq!(fields[0]["fields"]["text"]["result"], "replaced");
+    assert_eq!(fields[0]["fields"]["text"]["pseudonymized"], true);
     assert_eq!(fields[1]["fields"]["text"]["result"], "no_match");
     assert_eq!(fields[1]["fields"]["text"]["pseudonymized"], false);
     assert!(fields[0]["fields"]["text"]["processed_at"]
@@ -583,6 +598,72 @@ async fn inline_ocr_evidence_chunks_at_sqlite_bind_boundary_without_losing_eleme
         assert!(elements
             .iter()
             .all(|e| e["fields"]["text"]["result"] == "replaced"));
+    }
+    db.close().await;
+}
+
+#[tokio::test]
+#[ignore = "explicit inline OCR writer cost measurement"]
+async fn measure_inline_ocr_evidence_writer_cost() {
+    let root = tempfile::tempdir().unwrap();
+    let db = database(&root.path().join("db.sqlite")).await;
+    for count in [2usize, 334] {
+        let raw=serde_json::Value::Array((0..count).map(|_|serde_json::json!({"text":"person@example.com","level":"0","page_num":"0","block_num":"0","par_num":"0","line_num":"0","word_num":"0","left":"0","top":"0","width":"1","height":"1","conf":"90"})).collect()).to_string();
+        let (clean, step) =
+            screenpipe_core::pii_removal::remove_pii_json_with_evidence(&raw, &["text"]).unwrap();
+        for audited in [false, true] {
+            let mut capture = std::time::Duration::ZERO;
+            let mut deferred = std::time::Duration::ZERO;
+            for _ in 0..16 {
+                let mut audit = CaptureRedactions::new();
+                audit.insert(CaptureField::TextJson, step.clone());
+                if audited {
+                    audit.set_ocr_source(raw.clone());
+                }
+                let started = std::time::Instant::now();
+                let id = db
+                    .insert_snapshot_frame_with_redaction(
+                        "display",
+                        chrono::Utc::now(),
+                        "",
+                        None,
+                        None,
+                        None,
+                        None,
+                        true,
+                        None,
+                        None,
+                        Some("ocr"),
+                        None,
+                        None,
+                        None,
+                        Some(("[EMAIL]", &clean, "fixture")),
+                        None,
+                        audit,
+                    )
+                    .await
+                    .unwrap();
+                let captured = started.elapsed();
+                capture += captured;
+                tokio::time::timeout(std::time::Duration::from_secs(10),async {
+                    loop {
+                        let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM redaction_records WHERE kind='frame_elements_pending' AND record_id=?)").bind(id).fetch_one(&db.pool).await.unwrap();
+                        if !pending {break;}
+                        tokio::task::yield_now().await;
+                    }
+                }).await.unwrap();
+                deferred += started.elapsed() - captured;
+                assert_eq!(
+                    sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM elements WHERE frame_id=?")
+                        .bind(id)
+                        .fetch_one(&db.pool)
+                        .await
+                        .unwrap(),
+                    count as i64
+                );
+            }
+            eprintln!("OCR writer fixture: {count} leaves, per-leaf audit={audited}, 16 frames; source commit={:.3} ms/frame, deferred completion={:.3} ms/frame",capture.as_secs_f64()*1000.0/16.0,deferred.as_secs_f64()*1000.0/16.0);
+        }
     }
     db.close().await;
 }

@@ -62,8 +62,11 @@ Each field exposes:
 Inline evidence is saved with the source write. Background evidence is saved
 atomically with its transformed value after checking source and policy identity.
 Source edits invalidate the evidence; archival preserves it. Deferred elements
-remain explicitly pending until materialized. Element metadata links to the
-source structured field for inline processing and records its own asynchronous
+remain explicitly pending until materialized. OCR elements retain exact per-leaf inline outcomes from the original
+processing call, including no-match leaves alongside pseudonymized leaves. The
+writer derives that metadata from the already allocated input/output and saves
+only outcomes; it does not persist raw source or run detection again. Element
+metadata also links to its source structured field and records asynchronous
 processing. Structured redaction preserves keys and geometry.
 
 Existing `receipts.frames` and `receipts.image` remain separate current-policy
