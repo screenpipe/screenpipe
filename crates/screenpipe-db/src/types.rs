@@ -941,6 +941,7 @@ impl From<UiEventRow> for UiEventRecord {
 /// Parameters for inserting a UI event
 #[derive(Debug, Clone)]
 pub struct InsertUiEvent {
+    pub redaction: crate::CaptureRedactions,
     pub timestamp: DateTime<Utc>,
     pub session_id: Option<String>,
     pub relative_ms: i64,

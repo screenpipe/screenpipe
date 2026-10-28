@@ -496,20 +496,22 @@ pub(crate) async fn add_transcription_to_db(
     transcription: &AudioTranscription,
     device_name: &str,
 ) -> Result<(), anyhow::Error> {
-    use screenpipe_core::pii_removal::remove_pii;
-
     let db = &state.db;
 
     // Apply PII removal if enabled
+    let mut redaction = screenpipe_db::CaptureRedactions::new();
     let sanitized_transcription = if state.use_pii_removal {
-        remove_pii(&transcription.transcription)
+        let (text, evidence) =
+            screenpipe_core::pii_removal::remove_pii_with_evidence(&transcription.transcription);
+        redaction.insert(screenpipe_db::CaptureField::Transcription, evidence);
+        text
     } else {
         transcription.transcription.clone()
     };
 
     let dummy_audio_chunk_id = db.insert_audio_chunk("", None).await?;
 
-    db.insert_audio_transcription(
+    db.insert_audio_transcription_with_redaction(
         dummy_audio_chunk_id, // No associated audio chunk
         &sanitized_transcription,
         -1,
@@ -522,6 +524,7 @@ pub(crate) async fn add_transcription_to_db(
         None,
         None,
         None,
+        redaction,
     )
     .await?;
 

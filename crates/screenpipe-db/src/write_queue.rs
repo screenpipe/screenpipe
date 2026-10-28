@@ -586,6 +586,7 @@ pub(crate) enum WriteOp {
         timestamp: Option<DateTime<Utc>>,
     },
     InsertAudioTranscription {
+        redaction: crate::CaptureRedactions,
         audio_chunk_id: i64,
         transcription: String,
         offset_index: i64,
@@ -598,6 +599,7 @@ pub(crate) enum WriteOp {
         timestamp: Option<DateTime<Utc>>,
     },
     InsertAudioChunkAndTranscription {
+        redaction: crate::CaptureRedactions,
         file_path: String,
         transcription: String,
         offset_index: i64,
@@ -614,6 +616,7 @@ pub(crate) enum WriteOp {
         is_duplicate: bool,
     },
     InsertSnapshotFrameWithOcr {
+        redaction: crate::CaptureRedactions,
         device_name: String,
         timestamp: DateTime<Utc>,
         snapshot_path: String,
@@ -834,6 +837,7 @@ pub(crate) struct FrameBatchWindow {
 
 #[derive(Debug, Clone)]
 pub(crate) struct UiEventWrite {
+    pub redaction: crate::CaptureRedactions,
     pub timestamp: String,
     pub session_id: Option<String>,
     pub relative_ms: i64,
@@ -1561,6 +1565,7 @@ async fn execute_single_write(
         }
 
         WriteOp::InsertAudioTranscription {
+            redaction,
             audio_chunk_id,
             transcription,
             offset_index,
@@ -1613,11 +1618,26 @@ async fn execute_single_write(
             if result.rows_affected() == 0 {
                 Ok(WriteResult::Id(0))
             } else {
+                {
+                    let ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM audio_transcriptions WHERE audio_chunk_id=? AND transcription=?")
+                    .bind(audio_chunk_id).bind(transcription).fetch_all(&mut **conn).await?;
+                    for id in ids {
+                        crate::redaction_status::track_capture(&mut **conn, "audio", id).await?;
+                        crate::redaction_status::record(
+                            &mut **conn,
+                            "audio",
+                            id,
+                            &redaction.fields(),
+                        )
+                        .await?;
+                    }
+                }
                 Ok(WriteResult::Id(result.last_insert_rowid()))
             }
         }
 
         WriteOp::InsertAudioChunkAndTranscription {
+            redaction,
             file_path,
             transcription,
             offset_index,
@@ -1738,10 +1758,20 @@ async fn execute_single_write(
             .execute(&mut **conn)
             .await?;
 
+            {
+                let ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM audio_transcriptions WHERE audio_chunk_id=? AND transcription=?")
+                    .bind(audio_chunk_id).bind(transcription).fetch_all(&mut **conn).await?;
+                for id in ids {
+                    crate::redaction_status::track_capture(&mut **conn, "audio", id).await?;
+                    crate::redaction_status::record(&mut **conn, "audio", id, &redaction.fields())
+                        .await?;
+                }
+            }
             Ok(WriteResult::Id(audio_chunk_id))
         }
 
         WriteOp::InsertSnapshotFrameWithOcr {
+            redaction,
             device_name,
             timestamp,
             snapshot_path,
@@ -1805,6 +1835,27 @@ async fn execute_single_write(
             .await?
             .last_insert_rowid();
 
+            crate::redaction_status::track_capture(&mut **conn, "frames", id).await?;
+            if elements_ref_frame_id.is_none()
+                && (ocr_text_json.as_ref().is_some_and(|s| !s.is_empty())
+                    || accessibility_tree_json
+                        .as_ref()
+                        .is_some_and(|s| !s.is_empty()))
+            {
+                crate::redaction_status::track_capture(&mut **conn, "frame_elements_pending", id)
+                    .await?;
+            }
+
+            crate::redaction_status::record(&mut **conn, "frames", id, &redaction.fields()).await?;
+            if let (Some(raw), Some(clean), Some(step)) = (
+                redaction.ocr_source(),
+                ocr_text_json.as_deref(),
+                redaction.get(crate::CaptureField::TextJson),
+            ) {
+                crate::redaction_status::record_inline_ocr(&mut **conn, id, raw, clean, step)
+                    .await?;
+            }
+
             // OCR text/metadata now lives on the frame itself: full_text feeds
             // frames_fts (search) and text_json holds the per-word bounds. The
             // ocr_text table was retired in 2026-06. Element rows are still
@@ -1849,19 +1900,26 @@ async fn execute_single_write(
             } else {
                 (ocr_text_json, accessibility_tree_json)
             };
+            let mut complete = true;
             if let Some(ref text_json) = ocr_text_json {
                 if !text_json.is_empty() {
-                    crate::db::DatabaseManager::insert_ocr_elements(conn, *frame_id, text_json)
-                        .await;
+                    complete &=
+                        crate::db::DatabaseManager::insert_ocr_elements(conn, *frame_id, text_json)
+                            .await;
                 }
             }
             if let Some(ref tree_json) = accessibility_tree_json {
                 if !tree_json.is_empty() {
-                    crate::db::DatabaseManager::insert_accessibility_elements(
+                    complete &= crate::db::DatabaseManager::insert_accessibility_elements(
                         conn, *frame_id, tree_json,
                     )
                     .await;
                 }
+            }
+            if complete {
+                crate::redaction_status::materialize_inline_ocr(&mut **conn, *frame_id).await?;
+                sqlx::query("INSERT OR IGNORE INTO redaction_records(kind,record_id) SELECT 'elements',id FROM elements WHERE frame_id=?").bind(frame_id).execute(&mut **conn).await?;
+                sqlx::query("DELETE FROM redaction_records WHERE kind='frame_elements_pending' AND record_id=?").bind(frame_id).execute(&mut **conn).await?;
             }
             Ok(WriteResult::Unit)
         }
@@ -2443,7 +2501,10 @@ async fn insert_ui_event_row(
     .execute(&mut **conn)
     .await?;
 
-    Ok(result.last_insert_rowid())
+    let id = result.last_insert_rowid();
+    crate::redaction_status::track_capture(&mut **conn, "input", id).await?;
+    crate::redaction_status::record(&mut **conn, "input", id, &event.redaction.fields()).await?;
+    Ok(id)
 }
 
 /// Fail every caller in `batch` with `error`.
@@ -3090,6 +3151,14 @@ mod tests {
             .await
             .unwrap();
 
+        // The real manager migrates this schema before starting the drain.
+        sqlx::raw_sql(include_str!(
+            "migrations/20261028180000_redaction_evidence.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS audio_chunks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3544,6 +3613,7 @@ mod tests {
         // Then insert transcription referencing the chunk
         let tx_result = queue
             .submit(WriteOp::InsertAudioTranscription {
+                redaction: Default::default(),
                 audio_chunk_id: chunk_id,
                 transcription: "hello world".to_string(),
                 offset_index: 0,
@@ -3578,6 +3648,7 @@ mod tests {
 
         let result = queue
             .submit(WriteOp::InsertAudioChunkAndTranscription {
+                redaction: Default::default(),
                 file_path: "/tmp/combined.wav".to_string(),
                 transcription: "test transcription".to_string(),
                 offset_index: 0,
@@ -3631,6 +3702,7 @@ mod tests {
 
         let result = queue
             .submit(WriteOp::InsertAudioChunkAndTranscription {
+                redaction: Default::default(),
                 file_path: "/tmp/dup.wav".to_string(),
                 transcription: "hello".to_string(),
                 offset_index: 0,
@@ -3693,6 +3765,7 @@ mod tests {
 
         let result = queue
             .submit(WriteOp::InsertSnapshotFrameWithOcr {
+                redaction: Default::default(),
                 device_name: "monitor1".to_string(),
                 timestamp: Utc::now(),
                 snapshot_path: "/tmp/frame.jpg".to_string(),
@@ -3823,6 +3896,7 @@ mod tests {
 
         let result = queue
             .submit(WriteOp::InsertAudioChunkAndTranscription {
+                redaction: Default::default(),
                 file_path: "/tmp/empty.wav".to_string(),
                 transcription: "   ".to_string(), // whitespace only
                 offset_index: 0,

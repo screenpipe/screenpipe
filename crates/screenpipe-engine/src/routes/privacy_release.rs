@@ -127,6 +127,7 @@ mod tests {
             Ok(texts
                 .iter()
                 .map(|text| RedactionOutput {
+                    evidence: None,
                     input: text.clone(),
                     redacted: text.replace("SYNTHETIC_SECRET", "[PRIVATE]"),
                     spans: vec![],
@@ -154,6 +155,137 @@ mod tests {
                 score: 1.0,
             }])
         }
+    }
+
+    #[tokio::test]
+    async fn worktrace_search_filters_before_count_and_page_and_returns_actual_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            DatabaseManager::new(
+                root.path().join("db.sqlite").to_str().unwrap(),
+                Default::default(),
+            )
+            .await
+            .unwrap(),
+        );
+        db.configure_release(&ReleasePolicy {
+            identity: "worktrace-http:v1".into(),
+            text: false,
+            images: false,
+        })
+        .await
+        .unwrap();
+        db.execute_raw_sql_write("INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-10-28T10:00:00Z','raw@example.com'),(2,'2026-10-28T11:00:00Z','other@example.com')").await.unwrap();
+        let (clean, evidence) =
+            screenpipe_core::pii_removal::remove_pii_with_evidence("raw@example.com");
+        assert!(db
+            .apply_field_redactions(
+                "frames",
+                1,
+                &std::collections::BTreeMap::from([(
+                    "full_text".into(),
+                    Some("raw@example.com".into())
+                )]),
+                &std::collections::BTreeMap::from([("full_text".into(), Some(clean))]),
+                &screenpipe_db::FieldRedactions::from([("full_text".into(), evidence)]),
+                "worktrace-http:v1"
+            )
+            .await
+            .unwrap());
+        let audio = Arc::new(
+            screenpipe_audio::audio_manager::AudioManagerBuilder::new()
+                .is_disabled(true)
+                .output_path(root.path().join("audio"))
+                .build(db.clone())
+                .await
+                .unwrap(),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut server = crate::SCServer::new(
+            db.clone(),
+            address,
+            root.path().to_path_buf(),
+            true,
+            true,
+            audio,
+            false,
+            "balanced".into(),
+        );
+        server.timeline_disabled = true;
+        server.advertise_mdns = false;
+        let router = server.try_create_router().await.unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let serving = tokio::spawn(crate::SCServer::serve_router_with_listener_graceful(
+            address,
+            listener,
+            router,
+            async {
+                let _ = stopped.await;
+            },
+        ));
+        let client = reqwest::Client::new();
+        let base = format!("http://{address}/search?content_type=ocr&limit=1");
+        let ordinary: serde_json::Value = client
+            .get(&base)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(ordinary["pagination"]["total"], 2);
+        let filtered: serde_json::Value = client
+            .get(format!("{base}&fully_redacted_only=true"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            filtered["pagination"]["total"], 1,
+            "filter must precede SQL count and LIMIT"
+        );
+        assert_eq!(filtered["data"].as_array().unwrap().len(), 1);
+        assert_eq!(filtered["data"][0]["redaction"]["fully_redacted"], true);
+        assert_eq!(
+            filtered["data"][0]["redaction"]["fields"]["full_text"]["method"],
+            "inline_regex"
+        );
+        assert!(!filtered.to_string().contains("other@example.com"));
+        let next: serde_json::Value = client
+            .get(format!("{base}&fully_redacted_only=true&offset=1"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(next["data"].as_array().unwrap().is_empty());
+        let ordinary_again: serde_json::Value = client
+            .get(&base)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            ordinary_again["pagination"]["total"], 2,
+            "request-local filter must not alter default reads or cache"
+        );
+        let _ = stop.send(());
+        serving.await.unwrap().unwrap();
+        db.close().await;
     }
 
     async fn run_http_case(hybrid: bool) {

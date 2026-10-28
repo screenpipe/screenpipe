@@ -717,6 +717,7 @@ impl Redactor for SlowBatchRedactor {
         Ok(texts
             .iter()
             .map(|text| RedactionOutput {
+                evidence: None,
                 input: text.clone(),
                 redacted: text.clone(),
                 spans: Vec::new(),
@@ -754,6 +755,7 @@ impl Redactor for TableTimingRedactor {
         Ok(texts
             .iter()
             .map(|text| RedactionOutput {
+                evidence: None,
                 input: text.clone(),
                 redacted: text.clone(),
                 spans: Vec::new(),

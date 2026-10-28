@@ -296,6 +296,7 @@ impl Drop for ImmediateTx {
 }
 
 pub struct DatabaseManager {
+    pub(crate) redaction_read_pool: Arc<tokio::sync::OnceCell<SqlitePool>>,
     pub(crate) release_read_pools: Arc<tokio::sync::Mutex<Vec<SqlitePool>>>,
     pub(crate) release_owner: Option<Arc<DatabaseManager>>,
     pub(crate) storage: Option<Arc<crate::storage::HybridStorage>>,
@@ -470,6 +471,7 @@ mod memories;
 mod planner_stats_tests;
 pub mod privacy_exports;
 pub mod privacy_release;
+pub mod redaction_status;
 mod starred;
 pub use starred::StarredSession;
 mod outputs;

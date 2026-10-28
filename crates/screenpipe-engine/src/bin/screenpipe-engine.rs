@@ -1112,6 +1112,7 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
             }
         }
     };
+    let pseudonymizer = screenpipe_engine::recording_config::configure_inline_pseudonyms(&config)?;
     db.configure_release(&screenpipe_db::privacy_release::ReleasePolicy {
         identity: format!(
             "pii-release-v1:{}:{}:{:?}:{:?}:{}",
@@ -1489,7 +1490,7 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
     if std::env::var("SCREENPIPE_ANALYTICS_ID").is_err() {
         eprintln!();
         eprintln!("  tip: get the desktop app for chat, timeline, and search UI");
-        eprintln!("       → https://screenpi.pe/onboarding");
+        eprintln!("       → https://screenpipe.com/onboarding");
         eprintln!();
     }
 
@@ -2194,7 +2195,7 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
             },
             pipeline::{Pipeline, PipelineConfig},
             worker::{RedactColumns, Worker, WorkerConfig, ALL_TARGET_TABLES},
-            Pseudonymizer, Redactor, TextRedactionPolicy,
+            Redactor, TextRedactionPolicy,
         };
         use std::sync::Arc;
 
@@ -2222,26 +2223,7 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
         let writer = db.coordinated_writer();
         let labels = config.pii_redaction_labels.clone();
         let database_error_hook = redact_database_error_hook.clone();
-        // Consistent-pseudonym tokens (issue #4206), opt-in. Loads (or
-        // creates on first run) the per-install key under the data dir;
-        // on any IO error we log and fall back to static `[LABEL]` tags
-        // rather than block the worker.
-        let pseudonymizer = if config.pii_redaction_pseudonyms {
-            match Pseudonymizer::load_or_create(&config.data_dir) {
-                Ok(p) => {
-                    info!("text-PII redaction: consistent pseudonyms ON (issue #4206)");
-                    Some(Arc::new(p))
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "couldn't load pseudonym key ({e}); rendering static [LABEL] tags instead"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        let pseudonymizer = pseudonymizer.clone();
         tokio::spawn(async move {
             // Per-label allow-list from the `piiRedactionLabels` setting
             // (default ["secret"]). Local adapters filter client-side via
@@ -2322,7 +2304,7 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
                                      unavailable ({e}), and no TINFOIL_* env vars set. Worker \
                                      will run regex-only."
                                 );
-                                Pipeline::regex_only_with_policy(policy.clone())
+                                Pipeline::regex_fallback_with_policy(policy.clone(), "local PII models unavailable; see model-load error in startup logs")
                             }
                         }
                     }

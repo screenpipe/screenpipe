@@ -50,6 +50,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+screenpipe-core = { path = "../screenpipe-core" }
 libc = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tempfile = { workspace = true }

@@ -91,6 +91,7 @@ fn pressure_text(i: usize) -> String {
 
 fn ui_event(i: usize, timestamp: chrono::DateTime<Utc>, frame_id: Option<i64>) -> InsertUiEvent {
     InsertUiEvent {
+        redaction: Default::default(),
         timestamp,
         session_id: Some("memory-pressure".to_string()),
         relative_ms: i as i64,

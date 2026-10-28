@@ -368,6 +368,7 @@ mod tests {
             Ok(texts
                 .iter()
                 .map(|text| RedactionOutput {
+                    evidence: None,
                     input: text.clone(),
                     redacted: format!("<{text}>"),
                     spans: Vec::new(),
@@ -580,6 +581,7 @@ mod workflow_contribution_tests {
             Ok(texts
                 .iter()
                 .map(|text| RedactionOutput {
+                    evidence: None,
                     input: text.clone(),
                     redacted: self.0.into(),
                     spans: vec![],

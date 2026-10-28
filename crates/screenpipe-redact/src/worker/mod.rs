@@ -15,6 +15,7 @@
 //! Alternate recent and historical batches independently per surface so
 //! recent activity stays responsive without starving history during capture.
 
+pub(crate) mod audit;
 #[cfg(test)]
 mod backlog_tests;
 mod columns;
@@ -533,6 +534,9 @@ impl Worker {
                 TargetTable::Accessibility => return Ok(0),
                 _ => {}
             }
+        }
+        if self.release_db.is_some() {
+            return self.process_audited(table, batch_size).await;
         }
         let cols = self.cfg.columns;
         match table {

@@ -17,6 +17,8 @@ pub struct ReleasePolicy {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReleaseJob {
+    #[serde(default)]
+    pub redaction: crate::FieldRedactions,
     pub kind: String,
     pub id: String,
     pub revision: i64,
@@ -191,7 +193,16 @@ impl DatabaseManager {
                 .execute(&mut **tx.conn())
                 .await?;
         }
+        let has_completed_at: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('_privacy_release') WHERE name='completed_at')"
+        ).fetch_one(&mut **tx.conn()).await?;
+        if !has_completed_at {
+            sqlx::query("ALTER TABLE _privacy_release ADD COLUMN completed_at INTEGER")
+                .execute(&mut **tx.conn())
+                .await?;
+        }
         super::privacy_exports::install(&mut **tx.conn()).await?;
+        super::redaction_status::install(&mut **tx.conn(), self.storage.is_some()).await?;
         sqlx::query("DELETE FROM _privacy_export_scan WHERE EXISTS(SELECT 1 FROM _privacy_policy WHERE identity!=? OR text_required!=? OR image_required!=?)")
             .bind(&policy.identity).bind(policy.text).bind(policy.images).execute(&mut **tx.conn()).await?;
         sqlx::query("UPDATE _privacy_export_sources SET pending=1,delivered_version=NULL WHERE EXISTS(SELECT 1 FROM _privacy_policy WHERE identity!=? OR text_required!=? OR image_required!=?)")
@@ -522,6 +533,7 @@ impl DatabaseManager {
                     .map(|c| Ok((c.to_string(), row.try_get(*c)?)))
                     .collect::<Result<_, sqlx::Error>>()?;
                 Ok(ReleaseJob {
+                    redaction: Default::default(),
                     kind: kind.into(),
                     id: row.try_get("source_id")?,
                     revision: row.try_get("revision")?,
@@ -692,6 +704,8 @@ impl DatabaseManager {
                     values["window_name"].as_deref(),
                     values["browser_url"].as_deref(),
                     Some((job, values)),
+                    None,
+                    None,
                 )
                 .await;
         }
@@ -897,9 +911,10 @@ impl DatabaseManager {
         Ok(self.protected_read_adapter(pool))
     }
 
-    fn protected_read_adapter(self: &Arc<Self>, pool: SqlitePool) -> Arc<Self> {
+    pub(super) fn protected_read_adapter(self: &Arc<Self>, pool: SqlitePool) -> Arc<Self> {
         Arc::new(Self {
             release_owner: Some(Arc::clone(self)),
+            redaction_read_pool: Arc::clone(&self.redaction_read_pool),
             release_read_pools: Arc::clone(&self.release_read_pools),
             storage: self.storage.clone(),
             upload_source_id: tokio::sync::OnceCell::new(),
@@ -970,8 +985,22 @@ pub(crate) async fn certify(
     conn: &mut sqlx::SqliteConnection,
     job: &ReleaseJob,
 ) -> Result<(), sqlx::Error> {
+    super::redaction_status::record(
+        conn,
+        &job.kind,
+        job.id
+            .parse()
+            .map_err(|_| err("invalid evidence record id"))?,
+        &job.redaction,
+    )
+    .await?;
     sqlx::query("INSERT INTO _privacy_release(kind,id,revision,policy) VALUES(?,?,0,(SELECT receipt_key FROM _privacy_policy WHERE identity=?)) ON CONFLICT(kind,id) DO UPDATE SET policy=excluded.policy,attempts=0,retry_at=NULL")
         .bind(&job.kind).bind(&job.id).bind(&job.policy).execute(&mut *conn).await?;
+    sqlx::query("UPDATE _privacy_release SET completed_at=unixepoch() WHERE kind=? AND id=?")
+        .bind(&job.kind)
+        .bind(&job.id)
+        .execute(&mut *conn)
+        .await?;
     sqlx::query("UPDATE _privacy_policy SET epoch=epoch+1 WHERE id=1")
         .execute(&mut *conn)
         .await?;
@@ -988,6 +1017,22 @@ pub(crate) async fn certify(
 impl DatabaseManager {
     pub async fn defer_release(&self, job: &ReleaseJob) -> Result<(), sqlx::Error> {
         let mut tx = self.begin_immediate_with_retry().await?;
+        let pending: crate::FieldRedactions = job
+            .redaction
+            .iter()
+            .filter(|(_, e)| e.result == crate::RedactionResult::Skipped)
+            .map(|(k, e)| (k.clone(), e.clone()))
+            .collect();
+        let current: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM _privacy_release WHERE kind=? AND id=? AND revision=? AND policy IS NULL)").bind(&job.kind).bind(&job.id).bind(job.revision).fetch_one(&mut **tx.conn()).await?;
+        if current {
+            super::redaction_status::record(
+                &mut **tx.conn(),
+                &job.kind,
+                job.id.parse().map_err(|_| err("invalid evidence id"))?,
+                &pending,
+            )
+            .await?;
+        }
         sqlx::query("UPDATE _privacy_release SET attempts=attempts+1,retry_at=unixepoch()+MIN(3600,30*(attempts+1)) WHERE kind=? AND id=? AND revision=? AND policy IS NULL AND (SELECT identity FROM _privacy_policy WHERE id=1)=?")
             .bind(&job.kind).bind(&job.id).bind(job.revision).bind(&job.policy)
             .execute(&mut **tx.conn()).await?;

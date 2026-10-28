@@ -1356,6 +1356,7 @@ mod tests {
 
     fn synth_event(data: EventData) -> UiEvent {
         UiEvent {
+            redaction: Default::default(),
             id: None,
             timestamp: Utc::now(),
             relative_ms: 0,

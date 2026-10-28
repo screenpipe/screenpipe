@@ -83,9 +83,10 @@ pub struct RecordingConfig {
     pub pii_redaction_columns: Vec<String>,
     /// Render redacted PII as consistent pseudonym tokens
     /// (`[PERSON_1a2b3c4d5e6f]`) instead of static `[PERSON]` tags.
-    /// Mirrors the `piiRedactionPseudonyms` setting; consumed when
-    /// building the text worker pipeline (issue #4206). Newly-redacted
-    /// rows only; ignored for the Tinfoil backend. Off by default.
+    /// Mirrors `piiRedactionPseudonyms`. Shared by inline removal and the
+    /// text worker. SCREENPIPE_PSEUDONYM_KEY_FILE selects a provisioned team
+    /// key. Newly redacted content only; span-less Tinfoil model output is
+    /// excluded. Off by default.
     pub pii_redaction_pseudonyms: bool,
     /// Filter music-dominant audio before transcription using spectral analysis
     pub filter_music: bool,
@@ -978,4 +979,23 @@ mod tests {
     fn unparseable_language_means_multilingual() {
         assert_eq!(single_language_code(&langs(&["klingon"])), None);
     }
+}
+
+/// Share the same key with inline capture and the asynchronous worker. Resolve
+/// it before recording starts; an invalid requested key must not silently
+/// destroy correlation by falling back to static placeholders.
+pub fn configure_inline_pseudonyms(
+    config: &RecordingConfig,
+) -> std::io::Result<Option<Arc<screenpipe_redact::Pseudonymizer>>> {
+    let pseudonyms = config
+        .pii_redaction_pseudonyms
+        .then(|| screenpipe_redact::Pseudonymizer::load_or_create(&config.data_dir).map(Arc::new))
+        .transpose()?;
+    let renderer = pseudonyms.clone().map(|pseudonyms| {
+        Arc::new(screenpipe_core::pii_removal::PiiPseudonymizer(Box::new(
+            move |kind, value| pseudonyms.inline_token(kind, value),
+        )))
+    });
+    screenpipe_core::pii_removal::set_pii_pseudonymizer(renderer);
+    Ok(pseudonyms)
 }

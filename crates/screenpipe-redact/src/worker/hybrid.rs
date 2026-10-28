@@ -2,29 +2,9 @@
 // https://screenpipe.com
 
 use super::Worker;
-use crate::{RedactError, RedactionOutput, Redactor};
 use screenpipe_db::storage::{PrivacyPolicy, Projection, StorageMode};
 use sqlx::Row;
 use std::sync::Arc;
-
-struct CompleteRedactor<'a>(&'a dyn Redactor);
-
-#[async_trait::async_trait]
-impl Redactor for CompleteRedactor<'_> {
-    fn name(&self) -> &str {
-        self.0.name()
-    }
-    fn version(&self) -> u32 {
-        self.0.version()
-    }
-    async fn redact_batch(&self, texts: &[String]) -> Result<Vec<RedactionOutput>, RedactError> {
-        let mut results = Vec::with_capacity(texts.len());
-        for text in texts {
-            results.push(self.0.redact_complete(text).await?);
-        }
-        Ok(results)
-    }
-}
 
 impl Worker {
     pub fn with_frame_storage(mut self, db: Arc<screenpipe_db::DatabaseManager>) -> Self {
@@ -39,7 +19,6 @@ impl Worker {
         let Some(db) = &self.frame_storage else {
             return Ok(0);
         };
-        let complete = CompleteRedactor(self.redactor.as_ref());
         let columns = self.cfg.columns;
         let required = 1
             | 8
@@ -70,62 +49,63 @@ impl Worker {
             else {
                 continue;
             };
-            let row = sqlx::query("SELECT window_name,browser_url FROM frames WHERE id=?")
-                .bind(id)
-                .fetch_one(&db.pool)
-                .await?;
+            let row = sqlx::query(
+                "SELECT window_name,browser_url,app_name,document_path FROM frames WHERE id=?",
+            )
+            .bind(id)
+            .fetch_one(&db.pool)
+            .await?;
             let mut window: Option<String> = row.try_get("window_name")?;
             let mut url: Option<String> = row.try_get("browser_url")?;
+            let mut app: Option<String> = row.try_get("app_name")?;
+            let mut document: Option<String> = row.try_get("document_path")?;
+            let original_metadata = std::collections::BTreeMap::from([
+                ("window_name".into(), window.clone()),
+                ("browser_url".into(), url.clone()),
+                ("app_name".into(), app.clone()),
+                ("document_path".into(), document.clone()),
+            ]);
             {
                 let _admission = token.admit(&db.pool).await?;
             }
             drop(token);
+            let mut evidence = screenpipe_db::FieldRedactions::new();
+            let mut processing_field = None;
             let detection = async {
-                if let Some(text) = payload.full_text.as_mut().filter(|s| !s.is_empty()) {
-                    *text = complete.redact(text).await?.redacted;
-                }
-                if columns.accessibility_text {
-                    if let Some(text) = payload
-                        .accessibility_text
-                        .as_mut()
-                        .filter(|s| !s.is_empty())
-                    {
-                        *text = complete.redact(text).await?.redacted;
-                    }
-                }
-                if columns.accessibility_tree {
-                    if let Some(json) = payload
-                        .accessibility_tree_json
-                        .as_mut()
-                        .filter(|s| !s.is_empty())
-                    {
-                        if let Some(clean) =
-                            crate::tree_json::redact_tree_json_with_redactor_fields(
-                                json,
-                                &complete,
-                                &columns.a11y_json_fields(),
-                            )
-                            .await?
-                        {
-                            *json = clean;
+                for (field, enabled, value) in [
+                    ("full_text", true, &mut payload.full_text),
+                    (
+                        "accessibility_text",
+                        columns.accessibility_text,
+                        &mut payload.accessibility_text,
+                    ),
+                    (
+                        "accessibility_tree_json",
+                        columns.accessibility_tree,
+                        &mut payload.accessibility_tree_json,
+                    ),
+                    ("text_json", true, &mut payload.text_json),
+                    ("app_name", true, &mut app),
+                    ("document_path", true, &mut document),
+                    ("window_name", columns.window_name, &mut window),
+                    ("browser_url", columns.browser_url, &mut url),
+                ] {
+                    if enabled {
+                        processing_field = Some(field);
+                        if let Some(text) = value.as_mut().filter(|s| !s.is_empty()) {
+                            let (clean, step) = self.audited_field(field, text, true).await?;
+                            *text = clean;
+                            evidence.insert(field.into(), step);
+                        } else {
+                            evidence.insert(
+                                field.into(),
+                                screenpipe_db::RedactionEvidence::new(
+                                    screenpipe_db::RedactionMethod::AsyncRegex,
+                                    false,
+                                    false,
+                                ),
+                            );
                         }
-                    }
-                }
-                if let Some(json) = payload.text_json.as_mut().filter(|s| !s.is_empty()) {
-                    if let Some(clean) =
-                        crate::ocr_json::redact_ocr_text_json_with_redactor(json, &complete).await?
-                    {
-                        *json = clean;
-                    }
-                }
-                if columns.window_name {
-                    if let Some(text) = window.as_mut().filter(|s| !s.is_empty()) {
-                        *text = complete.redact(text).await?.redacted;
-                    }
-                }
-                if columns.browser_url {
-                    if let Some(text) = url.as_mut().filter(|s| !s.is_empty()) {
-                        *text = complete.redact(text).await?.redacted;
                     }
                 }
                 Ok::<_, anyhow::Error>(())
@@ -133,25 +113,66 @@ impl Worker {
             .await;
             match detection {
                 Ok(()) => {
+                    let metadata = std::collections::BTreeMap::from([
+                        ("window_name".into(), window.clone()),
+                        ("browser_url".into(), url.clone()),
+                        ("app_name".into(), app.clone()),
+                        ("document_path".into(), document.clone()),
+                    ]);
+                    let degraded = evidence
+                        .values()
+                        .any(|e| e.method == screenpipe_db::RedactionMethod::AsyncRegexFallback);
+                    if let Some((field, step)) = evidence.iter().find(|(_, e)| {
+                        e.method == screenpipe_db::RedactionMethod::AsyncRegexFallback
+                    }) {
+                        db.persist_redaction_failure("frames", id, Some(field), step, true)
+                            .await;
+                    }
+                    if degraded {
+                        self.status.lock().await.last_error=Some(format!("PII model processing pending: frame={id}; regex fallback retained for retry"));
+                    }
                     if db
-                        .replace_frame_payload(
+                        .replace_frame_payload_with_redaction(
                             &payload,
                             &identity,
-                            required,
+                            if degraded { 0 } else { required },
                             window.as_deref(),
                             url.as_deref(),
+                            &evidence,
+                            &original_metadata,
+                            &metadata,
                         )
                         .await?
                     {
-                        count += 1;
+                        if !degraded {
+                            count += 1;
+                        }
                     }
                 }
                 Err(error) => {
                     // The receipt contains an error class, never captured text
                     // or detector output. Retry stays scoped to this generation.
-                    let writer = self.writer.lock().await?;
-                    sqlx::query("UPDATE frame_payloads SET attempts=attempts+1,retry_at=strftime('%s','now')+MIN(3600,30*(attempts+1)),last_error='configured surface processing failed' WHERE frame_id=? AND generation=?")
-                        .bind(id).bind(payload.generation).execute(writer.pool()).await?;
+                    let mut failed = screenpipe_db::RedactionEvidence::new(
+                        if self.redactor.provides_model_detection() {
+                            screenpipe_db::RedactionMethod::AsyncModel
+                        } else {
+                            screenpipe_db::RedactionMethod::AsyncRegex
+                        },
+                        false,
+                        false,
+                    );
+                    failed.complete = false;
+                    failed.result = screenpipe_db::RedactionResult::Skipped;
+                    failed.cause = Some(super::audit::processing_failure_cause(&error));
+                    let failed_fields = processing_field
+                        .map(|field| {
+                            screenpipe_db::FieldRedactions::from([(field.into(), failed.clone())])
+                        })
+                        .unwrap_or_default();
+                    db.defer_frame_redaction(id, payload.generation, &identity, &failed_fields)
+                        .await?;
+                    db.persist_redaction_failure("frames", id, processing_field, &failed, true)
+                        .await;
                     let mut status = self.status.lock().await;
                     status.last_error =
                         Some("frame surface processing failed; retry scheduled".into());

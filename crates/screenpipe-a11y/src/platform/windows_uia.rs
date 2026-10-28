@@ -1418,6 +1418,7 @@ impl UiaContext {
         let bounds = self.get_cached_bounds(element);
 
         ElementContext {
+            redaction: Default::default(),
             role,
             name,
             value,
