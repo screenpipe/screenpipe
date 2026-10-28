@@ -2015,6 +2015,24 @@ fn resolve_auth(
                 .map(|k| ResolvedAuth::Header("Authorization".into(), format!("Token {}", k)))
                 .unwrap_or(ResolvedAuth::None)
         }
+        ProxyAuth::OAuth1Token {
+            consumer_key,
+            token_key,
+        } => {
+            let credential = |key| {
+                creds
+                    .and_then(|c| c.get(key))
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+            };
+            match (credential(*consumer_key), credential(*token_key)) {
+                (Some(key), Some(token)) => ResolvedAuth::Header(
+                    "Authorization".into(),
+                    screenpipe_connect::connections::oauth1_token_header(key, token),
+                ),
+                _ => ResolvedAuth::None,
+            }
+        }
         ProxyAuth::Header {
             name,
             credential_key,
@@ -4898,6 +4916,64 @@ mod tests {
     }
 
     // -- resolve_auth -------------------------------------------------------
+
+    #[test]
+    fn test_trello_proxy_auth_uses_both_credentials_in_header() {
+        use screenpipe_connect::connections::{trello::Trello, Integration};
+        let config = Trello
+            .proxy_config()
+            .expect("Trello must support proxy reads");
+        assert_eq!(config.base_url, "https://api.trello.com");
+        let creds = json!({"api_key": "test-key", "api_token": "test-token"});
+        match resolve_auth(&config.auth, creds.as_object(), None, None) {
+            ResolvedAuth::Header(name, value) => {
+                assert_eq!(name, "Authorization");
+                assert_eq!(
+                    value,
+                    "OAuth oauth_consumer_key=\"test-key\", oauth_token=\"test-token\""
+                );
+            }
+            _ => panic!("expected Trello OAuth header"),
+        }
+    }
+
+    #[test]
+    fn test_trello_proxy_auth_rejects_missing_empty_or_invalid_credentials() {
+        use screenpipe_connect::connections::{trello::Trello, Integration};
+        let config = Trello.proxy_config().unwrap();
+        assert!(matches!(
+            resolve_auth(&config.auth, None, None, None),
+            ResolvedAuth::None
+        ));
+        for creds in [
+            json!({}),
+            json!({"api_key": "key"}),
+            json!({"api_token": "token"}),
+            json!({"api_key": "", "api_token": "token"}),
+            json!({"api_key": "key", "api_token": ""}),
+            json!({"api_key": null, "api_token": "token"}),
+            json!({"api_key": "key", "api_token": 42}),
+        ] {
+            assert!(matches!(
+                resolve_auth(&config.auth, creds.as_object(), None, None),
+                ResolvedAuth::None
+            ));
+        }
+    }
+
+    #[test]
+    fn test_trello_proxy_auth_encodes_header_values() {
+        use screenpipe_connect::connections::{trello::Trello, Integration};
+        let config = Trello.proxy_config().unwrap();
+        let creds = json!({"api_key": "key\"\\\r\n", "api_token": "a b+/%~._-"});
+        match resolve_auth(&config.auth, creds.as_object(), None, None) {
+            ResolvedAuth::Header(_, value) => assert_eq!(
+                value,
+                "OAuth oauth_consumer_key=\"key%22%5C%0D%0A\", oauth_token=\"a%20b%2B%2F%25~._-\""
+            ),
+            _ => panic!("expected encoded Trello OAuth header"),
+        }
+    }
 
     #[test]
     fn test_resolve_auth_bearer_from_creds() {

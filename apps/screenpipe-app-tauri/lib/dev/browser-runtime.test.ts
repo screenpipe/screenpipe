@@ -11,6 +11,16 @@ import { mockLocalApiResponse, createMockHealth } from "./browser-engine-mock";
 import { createBrowserIpcMock } from "./browser-tauri-mock";
 
 describe("browser development runtime", () => {
+  it("reveals Home chat through the native navigation event", () => {
+    const onEvent = vi.fn();
+    const invoke = createBrowserIpcMock({ mode: "mock", apiPort: 3030, onEvent });
+    invoke("show_window", { window: { Home: { page: "home" } } });
+    expect(onEvent).toHaveBeenCalledWith("navigate", { url: "/home?section=home" });
+    onEvent.mockClear();
+    invoke("show_window", { window: { Home: { page: null } } });
+    expect(onEvent).not.toHaveBeenCalled();
+  });
+
   it("supplies startup authentication only for the fictional mock environment", () => {
     const mock = createBrowserIpcMock({ mode: "mock", apiPort: 3030 });
     const live = createBrowserIpcMock({ mode: "live", apiPort: 3030 });

@@ -199,7 +199,6 @@ async fn handle_focus(
     }
 
     if let Some(url) = payload.deep_link_url {
-        crate::acquisition_handoff::accept_deep_link(&state.app_handle, &url);
         let _ = state.app_handle.emit("deep-link-received", url);
     }
 

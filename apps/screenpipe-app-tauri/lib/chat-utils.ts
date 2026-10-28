@@ -295,15 +295,13 @@ export async function showChatWithPrefill(data: ChatPrefillData): Promise<void> 
   const targetWindow = data.useHomeChat ? "home" : "chat";
   const currentWindowLabel = getCurrentWindow().label;
 
-  // If we're already in the Home window but on another route (e.g. /settings),
-  // route locally and pass prefill through sessionStorage so the embedded chat
-  // can consume it after /home mounts.
+  // A different route (e.g. /settings) needs a fresh Home mount. On /home,
+  // Chat stays mounted across sections: showWindow navigates via the existing
+  // "navigate" event, then the readiness handshake delivers the draft without
+  // reloading the webview or discarding in-memory state.
   if (data.useHomeChat && currentWindowLabel === "home") {
     const url = new URL(window.location.href);
-    const isHomeRoute = url.pathname === "/home";
-    const isHomeSection = url.searchParams.get("section") === "home";
-    const isChatMode = url.searchParams.get("mode") !== "workflows";
-    if (!isHomeRoute || !isHomeSection || !isChatMode) {
+    if (url.pathname !== "/home") {
       sessionStorage.setItem(
         PENDING_CHAT_PREFILL_KEY,
         JSON.stringify({ ...data, targetWindow }),
@@ -314,8 +312,7 @@ export async function showChatWithPrefill(data: ChatPrefillData): Promise<void> 
   }
 
   if (data.useHomeChat) {
-    // Home chat only mounts when section=home; focusing a non-home section can
-    // drop prefill events because no chat listener exists yet.
+    // Reveal Home chat, including when the Workflows workspace is active.
     await commands.showWindow({ Home: { page: "home" } });
   } else {
     // Use show_window_activated, not show_window: this path is reached from

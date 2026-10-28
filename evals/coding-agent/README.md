@@ -2113,3 +2113,20 @@ Run `bun test evals/coding-agent/retention-grader-adapter.test.js` for ten adapt
 controls. These use a Cargo dispatch shim and do not establish native behavior;
 the existing historical `--verify` contrast and current-source Cargo execution
 remain separate evidence. Fixtures still appear only at grading.
+
+The app-zero-weight-over-quota case executes trackUsage against synthetic SQLite-backed D1 transport. It preserves paid quota and anonymous IP refusal while verifying zero-weight requests above the daily cap. Run `bun test evals/coding-agent/calibrate-zero-weight-quota.test.js` for correct, broken, bypass and equivalent-fix controls. It does not establish HTTP admission, live credit settlement, D1 concurrency or model improvement.
+
+### Custom-header transcription diagnostics
+
+`app-transcription-diagnostic-custom-headers` runs the actual exported diagnostics
+hook against deterministic React state/callback and synthetic transport ports.
+It checks custom headers without a bearer key, Authorization overrides, existing
+bearer/public requests, auth refusal without transcription, and transcription
+refusal. Historical multipart requests retain configured model and WAV payload.
+The parent fails three header assertions; the reference and current hook pass
+seven controls. Run `bun test evals/coding-agent/calibrate-transcription-custom-headers.test.js`
+for eight broken/correct/bypass/preserved/equivalent calibration controls. Hidden
+fixtures appear only at grading; no dependency links or installation are needed.
+This does not execute React lifecycle, browser CORS, native HTTP/audio, live
+providers, or model trials. Current source uses native transport; that command is
+a synthetic port in the grader.

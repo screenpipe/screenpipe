@@ -173,7 +173,6 @@ const NOOP_COMMANDS = new Set([
   "set_browser_cookie_access_state",
   "set_cloud_token",
   "set_native_theme",
-  "show_window",
   "show_window_activated",
   "spawn_screenpipe",
   "stop_screenpipe",
@@ -1052,6 +1051,13 @@ export function createBrowserIpcMock(options: BrowserIpcMockOptions) {
           updatedAt: new Date().toISOString(),
         };
         return liveViewCanvas;
+      }
+      case "show_window": {
+        const target = input.window as { Home?: { page?: string | null } } | undefined;
+        if (target?.Home?.page != null) {
+          options.onEvent?.("navigate", { url: `/home?section=${target.Home.page}` });
+        }
+        return null;
       }
       case "get_enterprise_host_identity":
         return { machine_id_hash: null, os_user_id_hash: null };

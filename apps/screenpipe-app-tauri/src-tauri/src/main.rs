@@ -1241,25 +1241,6 @@ async fn main() {
             // reason parameter) is still the current Apple event.
             let from_autostart = launched_from_autostart();
 
-            // Website-to-app attribution arrives as `screenpipe://attribution`.
-            // The plugin delivers macOS open-URL events and single-instance
-            // forwards; launch arguments are read once below. Accepting the
-            // same URL twice is harmless: the first saved grant wins.
-            {
-                use tauri_plugin_deep_link::DeepLinkExt;
-                let handle = app.handle().clone();
-                app.deep_link().on_open_url(move |event| {
-                    for url in event.urls() {
-                        acquisition_handoff::accept_deep_link(&handle, url.as_str());
-                    }
-                });
-                if let Ok(Some(urls)) = app.deep_link().get_current() {
-                    for url in urls {
-                        acquisition_handoff::accept_deep_link(app.handle(), url.as_str());
-                    }
-                }
-            }
-
             #[cfg(windows)]
             {
                 use tauri_plugin_deep_link::DeepLinkExt;

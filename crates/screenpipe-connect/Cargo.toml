@@ -1,3 +1,6 @@
+# screenpipe — AI that knows everything you've seen, said, or heard
+# https://screenpipe.com
+
 [package]
 name = "screenpipe-connect"
 version = { workspace = true }
@@ -17,6 +20,7 @@ screenpipe-fs = { path = "../screenpipe-fs" }
 specta = { workspace = true, optional = true }
 image = { workspace = true }
 reqwest = { workspace = true }
+percent-encoding = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
