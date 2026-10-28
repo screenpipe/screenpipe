@@ -1,9 +1,8 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
-//! Install-page deep link -> saved grant -> authenticated account. Best effort,
-//! off the recording/startup path. The server owns authorization and
-//! attribution rules; the installer itself carries nothing.
+//! Download possession -> authenticated account. Best effort, off the
+//! recording/startup path. The server owns authorization and attribution rules.
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,8 +12,6 @@ use tauri::{AppHandle, Listener};
 static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 static RETIREMENT: Retirement = Retirement::new();
 static STORAGE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-static WORKER_ACTIVE: AtomicBool = AtomicBool::new(false);
-static DEEP_LINK_ACCEPTED: AtomicBool = AtomicBool::new(false);
 
 const SERVICE: &str = if cfg!(feature = "enterprise-build") {
     "com.screenpipe.enterprise.acquisition.v1"
@@ -63,6 +60,21 @@ impl Pending {
     fn crossed_account(&self, current: Option<&str>) -> bool {
         self.account.as_deref().is_some_and(|pinned| Some(pinned) != current)
     }
+}
+
+#[cfg(target_os = "macos")]
+fn carrier() -> Option<String> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let executable = std::env::current_exe().ok()?;
+    let bundle = executable.ancestors().find(|p| p.extension().is_some_and(|e| e == "app"))?;
+    let path = CString::new(bundle.as_os_str().as_bytes()).ok()?;
+    let name = CString::new("com.apple.application-instance").ok()?;
+    let mut bytes = [0u8; 36];
+    // Exact-size read; absent, truncated or oversized attributes are ignored.
+    let size = unsafe { libc::getxattr(path.as_ptr(), name.as_ptr(), bytes.as_mut_ptr().cast(), bytes.len(), 0, 0) };
+    if size != 36 { return None; }
+    let grant = String::from_utf8(bytes.to_vec()).ok()?.to_ascii_lowercase();
+    uuid4(&grant).then_some(grant)
 }
 
 fn storage_account(profile: &std::path::Path, origin: &str) -> String {
@@ -139,47 +151,37 @@ async fn persist(pending: &Pending) -> Result<(), ()> {
     save(pending).await
 }
 
-/// `screenpipe://attribution?grant=<uuid4>`: the install page hands an opaque
-/// grant to the already-installed app. No installer bytes, filenames or manifests.
-pub(crate) fn grant_from_deep_link(url: &str) -> Option<String> {
-    if !crate::deep_link::is_for_current_build(url) { return None; }
-    let parsed = url.parse::<tauri::Url>().ok()?;
-    let route = parsed.host_str().filter(|h| !h.is_empty())
-        .or_else(|| parsed.path_segments().and_then(|mut s| s.next()))?;
-    if route != "attribution" { return None; }
-    let mut grants = parsed.query_pairs().filter(|(k, _)| k == "grant").map(|(_, v)| v.into_owned());
-    let grant = grants.next()?.to_ascii_lowercase();
-    // Exactly one grant; a second value is an ambiguous handoff, not a choice.
-    if grants.next().is_some() { return None; }
+/// Download filenames carry only a random capability, never a user/source ID.
+fn grant_from_filename(name: &str, extension: &str) -> Option<String> {
+    let grant = name.strip_prefix("screenpipe-")?.strip_suffix(extension)?;
+    uuid4(grant).then(|| grant.to_owned())
+}
+
+#[cfg(target_os = "windows")]
+fn carrier() -> Option<String> {
+    carrier_from(std::env::current_exe().ok()?.parent()?)
+}
+
+#[cfg(target_os = "windows")]
+fn carrier_from(directory: &std::path::Path) -> Option<String> {
+    // The installer writes this once. Keep the read bounded so an untrusted or
+    // corrupt install directory cannot turn startup into an unbounded read.
+    let path = directory.join("acquisition-grant");
+    let metadata = std::fs::metadata(&path).ok()?;
+    if metadata.len() != 36 { return None; }
+    use std::io::Read;
+    let mut bytes = Vec::with_capacity(37);
+    std::fs::File::open(path).ok()?.take(37).read_to_end(&mut bytes).ok()?;
+    if bytes.len() != 36 { return None; }
+    let grant = String::from_utf8(bytes).ok()?;
     uuid4(&grant).then_some(grant)
 }
 
-/// First grant wins. Saved proof is never replaced: the API already pinned a
-/// request/verifier to it, and a retired profile accepts nothing further.
-fn adopts_deep_link(saved: Option<&Pending>, retired: bool) -> bool {
-    !retired && saved.is_none()
-}
-
-async fn accept(grant: String) -> Result<bool, ()> {
-    let _guard = STORAGE.lock().await;
-    let saved = load_saved().await?;
-    if !adopts_deep_link(saved.as_ref(), RETIREMENT.disabled(&tombstone())) { return Ok(false); }
-    save(&Pending::new(grant)).await?;
-    Ok(true)
-}
-
-/// Deep links arrive from the OS on every platform; the worker then claims the
-/// grant and binds it to the verified account.
-pub fn accept_deep_link(app: &AppHandle, url: &str) {
-    let Some(grant) = grant_from_deep_link(url) else { return; };
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        match accept(grant).await {
-            Ok(true) => { DEEP_LINK_ACCEPTED.store(true, Ordering::SeqCst); spawn_worker(app); }
-            Ok(false) => {}
-            Err(()) => tracing::debug!("acquisition deep link not stored; storage unavailable"),
-        }
-    });
+#[cfg(target_os = "linux")]
+fn carrier() -> Option<String> {
+    // AppImages execute from a temporary mount; APPIMAGE is the original file.
+    let path = std::path::PathBuf::from(std::env::var_os("APPIMAGE")?);
+    grant_from_filename(path.file_name()?.to_str()?, ".AppImage")
 }
 
 // Retirement never waits for the optional credential store. A late credential
@@ -250,33 +252,24 @@ fn watch_settings<R: tauri::Runtime>(
 
 pub fn spawn(app: AppHandle) {
     watch_settings(&app, crate::config::app_data_dir().join("store.bin"), retire);
-    spawn_worker(app);
-}
-
-fn spawn_worker(app: AppHandle) {
-    // One worker per process. A deep link accepted while it runs only wakes it;
-    // one accepted as it exits restarts it below.
-    if WORKER_ACTIVE.swap(true, Ordering::SeqCst) { wake(); return; }
-    DEEP_LINK_ACCEPTED.store(false, Ordering::SeqCst);
     tauri::async_runtime::spawn(async move {
         // Keychain/settings can be temporarily unavailable during startup.
         for _ in 0..240 {
-            if run(app.clone()).await.is_ok() { break; }
+            if run(app.clone()).await.is_ok() { return; }
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(30)) => {},
                 _ = WAKE.notified() => {},
             }
         }
-        WORKER_ACTIVE.store(false, Ordering::SeqCst);
-        if DEEP_LINK_ACCEPTED.swap(false, Ordering::SeqCst) { spawn_worker(app); }
     });
 }
 
 async fn run(app: AppHandle) -> Result<(), ()> {
     if RETIREMENT.disabled(&tombstone()) { return Ok(()); }
-    // Grants arrive only through the `screenpipe://attribution` deep link
-    // and are persisted by `accept` before this worker runs.
-    let Some(mut p) = load_saved().await? else { return Ok(()); };
+    let mut p = match load_saved().await? {
+        Some(p) => p,
+        None => match carrier() { Some(grant) => Pending::new(grant), None => return Ok(()) },
+    };
     if p.retired { return Ok(()); }
     // Persist proof BEFORE first claim, including when its HTTP response is lost.
     persist(&p).await?;
@@ -364,6 +357,38 @@ async fn send(client: &reqwest::Client, origin: &reqwest::Url, action: &str, p: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn portable_filenames_reject_placeholders_and_ambiguous_names() {
+        let grant = "12345678-1234-4234-8234-123456789012";
+        for extension in [".exe", ".AppImage"] {
+            assert_eq!(grant_from_filename(&format!("screenpipe-{grant}{extension}"), extension), Some(grant.into()));
+            for name in [format!("screenpipe-{PLACEHOLDER}{extension}"), format!("screenpipe-{grant}.txt{extension}"), format!("../screenpipe-{grant}{extension}"), format!("screenpipe-{grant}{extension}.exe")] {
+                assert!(grant_from_filename(&name, extension).is_none());
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn installed_windows_carrier_is_exact_and_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("acquisition-grant");
+        let grant = "12345678-1234-4234-8234-123456789012";
+        std::fs::write(&path, grant).unwrap();
+        assert_eq!(carrier_from(dir.path()), Some(grant.into()));
+        for invalid in [
+            PLACEHOLDER,
+            "12345678-1234-4234-7234-123456789012",
+            "12345678-1234-4234-C234-123456789012",
+            "12345678-1234-4234-8234-12345678901X",
+        ] {
+            std::fs::write(&path, invalid).unwrap();
+            assert!(carrier_from(dir.path()).is_none());
+        }
+        std::fs::write(&path, format!("{grant}\n")).unwrap();
+        assert!(carrier_from(dir.path()).is_none());
+    }
+
     #[tokio::test]
     async fn credential_store_preserves_proof_and_retirement_across_restart() {
         let dir = tempfile::tempdir().unwrap();
@@ -381,36 +406,6 @@ mod tests {
         saved.retired = true;
         store.set(&account, &serde_json::to_vec(&saved).unwrap()).await.unwrap();
         assert!(decode_pending(&store.get(&account).await.unwrap().unwrap()).unwrap().retired);
-    }
-
-    #[test]
-    fn deep_link_carries_exactly_one_valid_grant_for_this_build() {
-        let grant = "12345678-1234-4234-8234-123456789012";
-        let s = crate::deep_link::scheme();
-        let other = if s == "screenpipe" { "screenpipe-enterprise" } else { "screenpipe" };
-        assert_eq!(grant_from_deep_link(&format!("{s}://attribution?grant={grant}")), Some(grant.into()));
-        assert_eq!(grant_from_deep_link(&format!("{s}://attribution/?v=1&grant={}", grant.to_ascii_uppercase())), Some(grant.into()));
-        for url in [
-            format!("{s}://attribution?grant={PLACEHOLDER}"),
-            format!("{s}://attribution?grant={grant}&grant={grant}"),
-            format!("{s}://auth?grant={grant}"),
-            format!("{s}://home?grant={grant}"),
-            format!("https://screenpipe.com/attribution?grant={grant}"),
-            format!("{other}://attribution?grant={grant}"),
-            format!("{s}://attribution?grant=not-a-grant"),
-            format!("{s}://attribution"),
-            "not a url".to_string(),
-        ] {
-            assert!(grant_from_deep_link(&url).is_none(), "{url}");
-        }
-    }
-
-    #[test]
-    fn deep_link_never_replaces_saved_proof_or_revives_a_retired_profile() {
-        let saved = Pending::new(uuid::Uuid::new_v4().to_string());
-        assert!(adopts_deep_link(None, false));
-        assert!(!adopts_deep_link(Some(&saved), false));
-        assert!(!adopts_deep_link(None, true));
     }
 
     #[test]
