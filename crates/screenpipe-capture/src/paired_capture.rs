@@ -19,6 +19,7 @@ use regex::Regex;
 use screenpipe_a11y::tree::{
     create_tree_walker, TreeSnapshot, TreeWalkerConfig, TreeWalkerPlatform,
 };
+#[cfg(test)]
 use screenpipe_core::pii_removal::remove_pii;
 use screenpipe_db::DatabaseManager;
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
@@ -706,22 +707,53 @@ async fn paired_capture_inner(
     // Apply PII removal to text before DB insertion (if enabled).
     // This sanitizes emails, API keys, credit cards, SSNs, etc. from OCR/accessibility text
     // so pipes (like obsidian-sync) never see raw PII in search results.
+    let mut redaction = screenpipe_db::CaptureRedactions::new();
     let sanitized_text = if ctx.use_pii_removal {
-        final_text.map(remove_pii)
+        final_text.map(|text| {
+            let (text, evidence) = screenpipe_core::pii_removal::remove_pii_with_evidence(text);
+            redaction.insert(screenpipe_db::CaptureField::AccessibilityText, evidence);
+            text
+        })
     } else {
         final_text.map(|t| t.to_string())
     };
     let sanitized_ocr_text = if ctx.use_pii_removal && !ocr_text.is_empty() {
-        remove_pii(&ocr_text)
+        let (text, evidence) = screenpipe_core::pii_removal::remove_pii_with_evidence(&ocr_text);
+        redaction.insert(screenpipe_db::CaptureField::FullText, evidence);
+        text
     } else {
         ocr_text.clone()
     };
     let sanitized_ocr_json = if ctx.use_pii_removal && !ocr_text.is_empty() {
-        sanitize_ocr_text_json(&ocr_text_json)
+        match screenpipe_core::pii_removal::remove_pii_json_with_evidence(&ocr_text_json, &["text"])
+        {
+            Ok((json, evidence)) => {
+                redaction.insert(screenpipe_db::CaptureField::TextJson, evidence);
+                json
+            }
+            Err(_) => {
+                let mut evidence = screenpipe_db::RedactionEvidence::new(
+                    screenpipe_db::RedactionMethod::InlineRegex,
+                    false,
+                    false,
+                );
+                evidence.complete = false;
+                evidence.result = screenpipe_db::RedactionResult::Skipped;
+                evidence.cause = Some("invalid OCR structure; capture retained".into());
+                redaction.insert(screenpipe_db::CaptureField::TextJson, evidence);
+                ocr_text_json.clone()
+            }
+        }
     } else {
         ocr_text_json.clone()
     };
 
+    if let Some(evidence) = redaction
+        .get(screenpipe_db::CaptureField::AccessibilityText)
+        .cloned()
+    {
+        redaction.observe(screenpipe_db::CaptureField::FullText, evidence);
+    }
     // Insert snapshot frame + OCR text positions in a single transaction.
     let ocr_engine_name = if cfg!(target_os = "macos") {
         "AppleNative"
@@ -742,7 +774,7 @@ async fn paired_capture_inner(
 
     let frame_id = ctx
         .db
-        .insert_snapshot_frame_with_ocr(
+        .insert_snapshot_frame_with_redaction(
             ctx.device_name,
             ctx.captured_at,
             &snapshot_path_str,
@@ -761,6 +793,7 @@ async fn paired_capture_inner(
             (!defer_text_extraction && ctx.monitor_hosts_focus && ctx.ax_screenshot_coherent)
                 .then_some(ctx.elements_ref_frame_id)
                 .flatten(),
+            redaction,
         )
         .await?;
 
@@ -1119,6 +1152,7 @@ fn a11y_content_is_thin(
 /// Sanitize PII from OCR text_json (a JSON string of bounding-box entries).
 /// Parses the JSON array, applies `remove_pii` to each "text" field,
 /// and serializes back. Returns the original string on parse failure.
+#[cfg(test)]
 fn sanitize_ocr_text_json(text_json: &str) -> String {
     let Ok(entries) =
         serde_json::from_str::<Vec<std::collections::HashMap<String, String>>>(text_json)

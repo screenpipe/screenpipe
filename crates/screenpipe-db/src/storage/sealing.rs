@@ -128,6 +128,32 @@ impl DatabaseManager {
             window_name,
             browser_url,
             None,
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub async fn replace_frame_payload_with_redaction(
+        &self,
+        payload: &FramePayload,
+        policy: &str,
+        completed_surfaces: u8,
+        window_name: Option<&str>,
+        browser_url: Option<&str>,
+        redaction: &crate::FieldRedactions,
+        original_metadata: &std::collections::BTreeMap<String, Option<String>>,
+        metadata: &std::collections::BTreeMap<String, Option<String>>,
+    ) -> Result<bool, sqlx::Error> {
+        self.replace_frame_payload_with_release(
+            payload,
+            policy,
+            completed_surfaces,
+            window_name,
+            browser_url,
+            None,
+            Some(redaction),
+            Some((original_metadata, metadata)),
         )
         .await
     }
@@ -143,11 +169,38 @@ impl DatabaseManager {
             &crate::privacy_release::ReleaseJob,
             &std::collections::BTreeMap<String, Option<String>>,
         )>,
+        redaction: Option<&crate::FieldRedactions>,
+        metadata: Option<(
+            &std::collections::BTreeMap<String, Option<String>>,
+            &std::collections::BTreeMap<String, Option<String>>,
+        )>,
     ) -> Result<bool, sqlx::Error> {
         let Some(storage) = &self.storage else {
             return Err(storage_error("replacement requires hybrid storage"));
         };
         let mut tx = self.begin_immediate_with_retry().await?;
+        let previous_evidence = if release.is_some() || redaction.is_some() {
+            crate::redaction_status::snapshot_evidence(&mut **tx.conn(), "frames", payload.id)
+                .await?
+        } else {
+            Vec::new()
+        };
+        if let Some((original, _)) = metadata {
+            let current = sqlx::query(
+                "SELECT app_name,document_path,window_name,browser_url FROM frames WHERE id=?",
+            )
+            .bind(payload.id)
+            .fetch_optional(&mut **tx.conn())
+            .await?;
+            let Some(current) = current else {
+                return Ok(false);
+            };
+            for (field, value) in original {
+                if current.try_get::<Option<String>, _>(field.as_str())? != *value {
+                    return Ok(false);
+                }
+            }
+        }
         if let Some((job, _)) = release {
             let current:(String,i64,bool)=sqlx::query_as("SELECT identity,COALESCE((SELECT revision FROM _privacy_release WHERE kind=? AND id=? AND policy IS NULL),-1),text_required FROM _privacy_policy WHERE id=1").bind(&job.kind).bind(&job.id).fetch_one(&mut **tx.conn()).await?;
             if current != (job.policy.clone(), job.revision, true) {
@@ -191,6 +244,14 @@ impl DatabaseManager {
             .bind(window_name).bind(browser_url).bind(&payload.full_text).bind(&payload.accessibility_text)
             .bind(&payload.full_text).bind(&payload.accessibility_text).bind(&payload.accessibility_tree_json).bind(&payload.text_json).bind(payload.id)
             .execute(&mut **tx.conn()).await?;
+        if let Some((_, values)) = metadata {
+            sqlx::query("UPDATE frames SET app_name=?,document_path=? WHERE id=?")
+                .bind(&values["app_name"])
+                .bind(&values["document_path"])
+                .bind(payload.id)
+                .execute(&mut **tx.conn())
+                .await?;
+        }
         if let Some((_, values)) = release {
             sqlx::query("UPDATE frames SET app_name=?,document_path=? WHERE id=?")
                 .bind(&values["app_name"])
@@ -216,8 +277,19 @@ impl DatabaseManager {
         sqlx::query("UPDATE storage_metadata SET maintenance=0")
             .execute(&mut **tx.conn())
             .await?;
+        crate::redaction_status::restore_evidence(
+            &mut **tx.conn(),
+            "frames",
+            payload.id,
+            previous_evidence,
+        )
+        .await?;
         if let Some((job, _)) = release {
             crate::privacy_release::certify(&mut **tx.conn(), job).await?;
+        }
+        if let Some(evidence) = redaction {
+            crate::redaction_status::record(&mut **tx.conn(), "frames", payload.id, evidence)
+                .await?;
         }
         tx.commit().await?;
         Ok(true)

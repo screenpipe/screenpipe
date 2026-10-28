@@ -332,7 +332,8 @@ impl ImageWorker {
         if !path.exists() {
             debug!(frame = id, path = %path.display(), "frame jpg missing — marking redacted to skip");
             // Still mark redacted so we don't re-pick this row every poll.
-            self.mark_redacted(id).await?;
+            self.mark_redacted(id, &name, image_evidence(None, Some("image file missing")))
+                .await?;
             return Ok(Some(FrameRedactionOutcome::default()));
         }
 
@@ -358,29 +359,81 @@ impl ImageWorker {
                 path = %path.display(),
                 "frames.name is not a still-image path (likely mp4 chunk) — marking redacted to skip"
             );
-            self.mark_redacted(id).await?;
+            self.mark_redacted(
+                id,
+                &name,
+                image_evidence(None, Some("media is not a supported still image")),
+            )
+            .await?;
             return Ok(Some(FrameRedactionOutcome::default()));
         }
 
-        // RF-DETR always runs. Accessibility is an additive semantic/spatial
-        // signal, never a gate that skips image inference.
-        let mut regions = self.redactor.detect(path).await?;
-        if let Some(tree) = accessibility_tree_json.as_deref() {
-            let (image_width, image_height) = image::image_dimensions(path).map_err(|e| {
-                anyhow::anyhow!("read image dimensions for {}: {e}", path.display())
-            })?;
+        let processing = async {
+            // RF-DETR always runs. Accessibility is an additive semantic/spatial
+            // signal, never a gate that skips image inference.
+            let mut regions = self.redactor.detect(path).await?;
+            if let Some(tree) = accessibility_tree_json.as_deref() {
+                let (image_width, image_height) = image::image_dimensions(path).map_err(|e| {
+                    anyhow::anyhow!("read image dimensions for {}: {e}", path.display())
+                })?;
 
-            // Parse once and add only deterministic high-confidence fields.
-            // Generic inputs remain RF-DETR-confirmed. If text redaction ran
-            // first, values it marked `[SECRET]` are also force-masked here.
-            let context = crate::a11y_context::A11yContext::parse(tree).unwrap_or_default();
-            let a11y_regions = context.forced_image_regions(image_width, image_height);
-            crate::a11y_context::merge_image_regions(&mut regions, a11y_regions);
+                // Parse once and add only deterministic high-confidence fields.
+                // Generic inputs remain RF-DETR-confirmed. If text redaction ran
+                // first, values it marked `[SECRET]` are also force-masked here.
+                let context = crate::a11y_context::A11yContext::parse(tree).unwrap_or_default();
+                let a11y_regions = context.forced_image_regions(image_width, image_height);
+                crate::a11y_context::merge_image_regions(&mut regions, a11y_regions);
+            }
+            let outcome =
+                redact_frame(path, &regions, &self.cfg.policy).map_err(anyhow::Error::from)?;
+
+            Ok::<_, anyhow::Error>(outcome)
         }
-        let outcome =
-            redact_frame(path, &regions, &self.cfg.policy).map_err(anyhow::Error::from)?;
-
-        self.mark_redacted(id).await?;
+        .await;
+        let outcome = match processing {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let evidence = image_evidence(
+                    None,
+                    Some(&crate::worker::audit::processing_failure_cause(&error)),
+                );
+                let writer = self.writer.lock().await?;
+                let mut tx = writer.pool().begin().await?;
+                let current: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM frames WHERE id=? AND name IS ?)",
+                )
+                .bind(id)
+                .bind(&name)
+                .fetch_one(&mut *tx)
+                .await?;
+                if current {
+                    screenpipe_db::redaction_status::record(
+                        &mut tx,
+                        "image",
+                        id,
+                        &std::collections::BTreeMap::from([("image".into(), evidence.clone())]),
+                    )
+                    .await?;
+                }
+                tx.commit().await?;
+                drop(writer);
+                if let Some(db) = &self.release_db {
+                    db.persist_redaction_failure("image", id, Some("image"), &evidence, true)
+                        .await;
+                }
+                return Err(error);
+            }
+        };
+        if !self
+            .mark_redacted(
+                id,
+                &name,
+                image_evidence(Some(outcome.regions_redacted), None),
+            )
+            .await?
+        {
+            return Ok(None);
+        }
 
         let mut s = self.status.lock().await;
         s.frames_redacted_total += 1;
@@ -395,7 +448,7 @@ impl ImageWorker {
         &self,
         db: &Arc<screenpipe_db::DatabaseManager>,
     ) -> Result<Option<FrameRedactionOutcome>, anyhow::Error> {
-        for job in db
+        for mut job in db
             .release_pending_ordered(
                 "image",
                 16,
@@ -431,7 +484,8 @@ impl ImageWorker {
                 db.defer_release(&job).await?;
                 continue;
             };
-            let path = std::path::Path::new(path);
+            let image_path = std::path::PathBuf::from(path);
+            let path = image_path.as_path();
             if !matches!(
                 path.extension()
                     .and_then(|e| e.to_str())
@@ -440,6 +494,18 @@ impl ImageWorker {
                 Some("jpg" | "jpeg" | "png" | "webp" | "bmp")
             ) || !path.is_file()
             {
+                job.redaction.insert(
+                    "image".into(),
+                    image_evidence(None, Some("image file missing or unsupported media")),
+                );
+                db.persist_redaction_failure(
+                    "image",
+                    id,
+                    Some("image"),
+                    &job.redaction["image"],
+                    true,
+                )
+                .await;
                 db.defer_release(&job).await?;
                 continue;
             }
@@ -465,6 +531,10 @@ impl ImageWorker {
                     anyhow::bail!("image changed during privacy processing");
                 }
                 let outcome = redact_frame(path, &regions, &self.cfg.policy)?;
+                job.redaction.insert(
+                    "image".into(),
+                    image_evidence(Some(outcome.regions_redacted), None),
+                );
                 if !db.publish_image_release(&job).await? {
                     return Ok::<_, anyhow::Error>(None);
                 }
@@ -479,6 +549,13 @@ impl ImageWorker {
             match process {
                 Ok(outcome) => return Ok(outcome),
                 Err(error) => {
+                    let evidence = image_evidence(
+                        None,
+                        Some(&crate::worker::audit::processing_failure_cause(&error)),
+                    );
+                    job.redaction.insert("image".into(), evidence.clone());
+                    db.persist_redaction_failure("image", id, Some("image"), &evidence, true)
+                        .await;
                     db.defer_release(&job).await?;
                     return Err(error);
                 }
@@ -487,20 +564,60 @@ impl ImageWorker {
         Ok(None)
     }
 
-    async fn mark_redacted(&self, frame_id: i64) -> Result<(), sqlx::Error> {
+    async fn mark_redacted(
+        &self,
+        frame_id: i64,
+        expected_name: &str,
+        evidence: screenpipe_db::RedactionEvidence,
+    ) -> Result<bool, sqlx::Error> {
+        let diagnostic = evidence.clone();
         let writer = self.writer.lock().await?;
-        sqlx::query(
+        let mut tx = writer.pool().begin().await?;
+        let updated = sqlx::query(
             r#"
             UPDATE frames
                SET image_redacted_at = strftime('%s','now')
-             WHERE id = ?1
+             WHERE id = ?1 AND name IS ?2
             "#,
         )
         .bind(frame_id)
-        .execute(writer.pool())
-        .await
-        .map(|_| ())
+        .bind(expected_name)
+        .execute(&mut *tx)
+        .await?;
+        if updated.rows_affected() == 0 {
+            return Ok(false);
+        }
+        screenpipe_db::redaction_status::record(
+            &mut tx,
+            "image",
+            frame_id,
+            &std::collections::BTreeMap::from([("image".into(), evidence)]),
+        )
+        .await?;
+        tx.commit().await?;
+        drop(writer);
+        if diagnostic.result == screenpipe_db::RedactionResult::Skipped {
+            if let Some(db) = &self.release_db {
+                db.persist_redaction_failure("image", frame_id, Some("image"), &diagnostic, false)
+                    .await;
+            }
+        }
+        Ok(true)
     }
+}
+
+fn image_evidence(regions: Option<usize>, cause: Option<&str>) -> screenpipe_db::RedactionEvidence {
+    let mut evidence = screenpipe_db::RedactionEvidence::new(
+        screenpipe_db::RedactionMethod::AsyncModel,
+        false,
+        regions.is_some_and(|n| n > 0),
+    );
+    if let Some(cause) = cause {
+        evidence.complete = false;
+        evidence.result = screenpipe_db::RedactionResult::Skipped;
+        evidence.cause = Some(cause.into());
+    }
+    evidence
 }
 
 #[cfg(test)]
@@ -533,6 +650,12 @@ mod tests {
             );
             "#,
         )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../screenpipe-db/src/migrations/20261028180000_redaction_evidence.sql"
+        ))
         .execute(&pool)
         .await
         .unwrap();

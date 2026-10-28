@@ -1510,6 +1510,7 @@ mod event_batch_tests {
 
     pub(super) fn evt() -> InsertUiEvent {
         InsertUiEvent {
+            redaction: Default::default(),
             timestamp: Utc::now(),
             session_id: None,
             relative_ms: 0,
@@ -1881,6 +1882,7 @@ mod capture_trigger_kind_tests {
 
     fn evt(kind: UiEventType) -> InsertUiEvent {
         InsertUiEvent {
+            redaction: Default::default(),
             timestamp: Utc::now(),
             session_id: None,
             relative_ms: 0,

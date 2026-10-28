@@ -436,6 +436,7 @@ mod runtime {
         fn infer(&self, text: &str) -> Result<RedactionOutput, RedactError> {
             if text.is_empty() {
                 return Ok(RedactionOutput {
+                    evidence: None,
                     input: String::new(),
                     redacted: String::new(),
                     spans: Vec::new(),
@@ -467,6 +468,7 @@ mod runtime {
             let redacted = render_redacted(text, &spans);
 
             Ok(RedactionOutput {
+                evidence: None,
                 input: text.to_string(),
                 redacted,
                 spans,
@@ -485,6 +487,7 @@ mod runtime {
             for (output_index, text) in texts.iter().enumerate() {
                 if text.is_empty() {
                     outputs[output_index] = Some(RedactionOutput {
+                        evidence: None,
                         input: String::new(),
                         redacted: String::new(),
                         spans: Vec::new(),
@@ -525,6 +528,7 @@ mod runtime {
                             bio_decode(text, &label_ids, &entry.offsets, &self.id2label);
                         merge_spans(&mut spans, text);
                         outputs[entry.output_index] = Some(RedactionOutput {
+                            evidence: None,
                             input: text.clone(),
                             redacted: render_redacted(text, &spans),
                             spans,
@@ -778,6 +782,7 @@ mod runtime {
             }
             merge_spans(&mut self.spans, &self.text);
             Ok(Some(RedactionOutput {
+                evidence: None,
                 redacted: render_redacted(&self.text, &self.spans),
                 input: std::mem::take(&mut self.text),
                 spans: std::mem::take(&mut self.spans),

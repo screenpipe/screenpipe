@@ -461,6 +461,7 @@ impl screenpipe_redact::Redactor for CountingDetector {
         Ok(texts
             .iter()
             .map(|text| screenpipe_redact::RedactionOutput {
+                evidence: None,
                 input: text.clone(),
                 redacted: "[PRIVATE]".into(),
                 spans: vec![],
@@ -1993,6 +1994,7 @@ async fn model_windows_yield_without_releasing_partial_text_and_restart_recovers
             self.remaining -= 1;
             Ok(
                 (self.remaining == 0).then(|| screenpipe_redact::RedactionOutput {
+                    evidence: None,
                     input: self.text.clone(),
                     redacted: self.text.replace("PRIVATE", "safe"),
                     spans: vec![],
@@ -2573,9 +2575,16 @@ async fn redaction_status_distinguishes_watermarks_from_current_receipts() {
     assert!(db.publish_release(&job, &job.values).await.unwrap());
     let complete = db.frame_redaction_status(91).await.unwrap();
     assert_eq!(complete["receipts"]["frames"]["complete"], true);
-    assert!(complete["receipts"]["frames"]["completed_at"].as_i64().unwrap() > 123);
+    assert!(
+        complete["receipts"]["frames"]["completed_at"]
+            .as_i64()
+            .unwrap()
+            > 123
+    );
     assert_eq!(complete["receipts"]["image"]["complete"], false);
-    db.execute_raw_sql_write("UPDATE frames SET full_text='new source' WHERE id=91").await.unwrap();
+    db.execute_raw_sql_write("UPDATE frames SET full_text='new source' WHERE id=91")
+        .await
+        .unwrap();
     let stale = db.frame_redaction_status(91).await.unwrap();
     assert_eq!(stale["receipts"]["frames"]["complete"], false);
     assert!(stale["receipts"]["frames"]["completed_at"].is_null());
@@ -2586,7 +2595,12 @@ async fn redaction_status_distinguishes_watermarks_from_current_receipts() {
 #[tokio::test]
 async fn redaction_status_before_policy_configuration_does_not_invent_history() {
     let root = tempfile::tempdir().unwrap();
-    let db = DatabaseManager::new(root.path().join("db.sqlite").to_str().unwrap(), Default::default()).await.unwrap();
+    let db = DatabaseManager::new(
+        root.path().join("db.sqlite").to_str().unwrap(),
+        Default::default(),
+    )
+    .await
+    .unwrap();
     db.execute_raw_sql_write("INSERT INTO frames(id,timestamp,full_text) VALUES(17,'2026-10-27T10:00:00Z','legacy content')").await.unwrap();
     let status = db.frame_redaction_status(17).await.unwrap();
     assert_eq!(status["receipts"], serde_json::json!({}));

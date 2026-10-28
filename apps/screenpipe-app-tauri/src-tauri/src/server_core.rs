@@ -513,8 +513,9 @@ impl ServerCore {
             }
         };
         info!("Database initialized at {}", db_path);
-        let pseudonymizer = screenpipe_engine::recording_config::configure_inline_pseudonyms(config)
-            .map_err(|e| format!("could not configure pseudonyms: {e}"))?;
+        let pseudonymizer =
+            screenpipe_engine::recording_config::configure_inline_pseudonyms(config)
+                .map_err(|e| format!("could not configure pseudonyms: {e}"))?;
         db.configure_release(&screenpipe_db::privacy_release::ReleasePolicy {
             identity: format!(
                 "pii-release-v1:{}:{}:{:?}:{:?}:{}",
@@ -1375,7 +1376,7 @@ impl ServerCore {
                                          to 'tinfoil' in Settings → Privacy → AI PII removal \
                                          to use the cloud enclave instead."
                                     );
-                                    Pipeline::regex_only_with_policy(policy.clone())
+                                    Pipeline::regex_fallback_with_policy(policy.clone(), "local PII models unavailable; see model-load error in startup logs")
                                 }
                             }
                         }

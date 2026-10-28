@@ -66,7 +66,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// only ~256 distinct values — that would merge distinct entities and
 /// defeat the whole point of pseudonyms. 32 bits is still reachable for
 /// a heavy corpus (~77k for a 50% chance), so we use 48.)
-const TOKEN_BYTES: usize = 6;
+const TOKEN_BYTES: usize = screenpipe_db::PSEUDONYM_TOKEN_BYTES;
 
 /// Length of the per-install key, in bytes (HMAC-SHA256 key).
 const KEY_LEN: usize = 32;
@@ -163,15 +163,21 @@ impl Pseudonymizer {
     /// Inline detection uses a finer taxonomy than the model. Map common
     /// identifiers to the same domain so their tokens agree across both paths.
     pub fn inline_token(&self, kind: &str, value: &str) -> String {
+        if is_pseudonym(value) {
+            return value.to_owned();
+        }
         let (label, subtype) = match kind {
             "EMAIL" => (SpanLabel::Email, None),
             "PHONE" => (SpanLabel::Phone, None),
             "SSN" => (SpanLabel::Id, Some("us_ssn")),
             "IBAN" => (SpanLabel::Id, Some("iban")),
             "CREDIT_CARD" => (SpanLabel::Id, Some("credit_card")),
-            "IP_ADDRESS" => (SpanLabel::Id, Some("ipv4")),
+            "IP_ADDRESS" => (SpanLabel::Url, None),
             _ => (SpanLabel::Secret, None),
         };
+        if label == SpanLabel::Secret && is_pseudonym(secret_value(value)) {
+            return secret_value(value).to_owned();
+        }
         self.token(label, subtype, value)
     }
 
@@ -198,6 +204,7 @@ impl Pseudonymizer {
             match label {
                 SpanLabel::Email => value.trim().to_ascii_lowercase(),
                 SpanLabel::Phone => value.chars().filter(|c| c.is_ascii_digit()).collect(),
+                SpanLabel::Secret => normalize(secret_value(value)),
                 SpanLabel::Id if matches!(subtype, Some("iban" | "credit_card" | "us_ssn")) => {
                     value
                         .chars()
@@ -216,6 +223,38 @@ impl Pseudonymizer {
         let suffix = hex::encode(&tag[..TOKEN_BYTES]);
         format!("[{prefix}_{suffix}]")
     }
+}
+
+/// The wire format emitted by `token`. Only complete tokens are exempt from
+/// another detection pass; malformed or token-shaped raw values still redact.
+pub(crate) use screenpipe_db::is_pseudonym;
+
+pub(crate) fn token_ranges(text: &str) -> Vec<(usize, usize)> {
+    static TOKENS: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+        regex::Regex::new(&format!(r"\[[A-Z_]+_[0-9a-f]{{{}}}\]", TOKEN_BYTES * 2)).unwrap()
+    });
+    TOKENS
+        .find_iter(text)
+        .filter(|m| is_pseudonym(m.as_str()))
+        .map(|m| (m.start(), m.end()))
+        .collect()
+}
+
+/// Detectors can include credential context in a secret span. Shared-key
+/// correlation hashes the value, just as inline password capture does.
+pub(crate) fn secret_value(value: &str) -> &str {
+    static CONTEXT: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+        regex::Regex::new(r#"(?ix)^(?:(?:master\s+)?(?:password|passcode|passphrase|pin|secret\s*key|unlock\s*code|security\s*code)|api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|client[_-]?secret|passwd|pwd|secret|[A-Z][A-Z0-9_]*(?:SECRET|TOKEN|KEY|PASSWORD|CREDENTIAL)[A-Z0-9_]*)["']?\s*[:=]\s*(.*)$"#).unwrap()
+    });
+    let value = CONTEXT
+        .captures(value)
+        .and_then(|c| c.get(1))
+        .map_or(value, |m| m.as_str());
+    value
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .or_else(|| value.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+        .unwrap_or(value)
 }
 
 /// Human-readable, taxonomy-aligned prefix for a label — the static

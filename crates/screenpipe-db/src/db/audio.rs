@@ -364,6 +364,35 @@ impl DatabaseManager {
         end_time: Option<f64>,
         timestamp: Option<DateTime<Utc>>,
     ) -> Result<i64, sqlx::Error> {
+        self.insert_audio_transcription_with_redaction(
+            audio_chunk_id,
+            transcription,
+            offset_index,
+            transcription_engine,
+            device,
+            speaker_id,
+            start_time,
+            end_time,
+            timestamp,
+            Default::default(),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_audio_transcription_with_redaction(
+        &self,
+        audio_chunk_id: i64,
+        transcription: &str,
+        offset_index: i64,
+        transcription_engine: &str,
+        device: &AudioDevice,
+        speaker_id: Option<i64>,
+        start_time: Option<f64>,
+        end_time: Option<f64>,
+        timestamp: Option<DateTime<Utc>>,
+        redaction: crate::CaptureRedactions,
+    ) -> Result<i64, sqlx::Error> {
         use crate::write_queue::{WriteOp, WriteResult};
 
         // Empty STT result for an existing chunk → mark Silent so the
@@ -401,6 +430,7 @@ impl DatabaseManager {
         let result = self
             .write_queue
             .submit(WriteOp::InsertAudioTranscription {
+                redaction,
                 audio_chunk_id,
                 transcription: trimmed.to_string(),
                 offset_index,
@@ -435,6 +465,35 @@ impl DatabaseManager {
         start_time: Option<f64>,
         end_time: Option<f64>,
         timestamp: Option<DateTime<Utc>>,
+    ) -> Result<i64, sqlx::Error> {
+        self.insert_audio_chunk_and_transcription_with_redaction(
+            file_path,
+            transcription,
+            offset_index,
+            transcription_engine,
+            device,
+            speaker_id,
+            start_time,
+            end_time,
+            timestamp,
+            Default::default(),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_audio_chunk_and_transcription_with_redaction(
+        &self,
+        file_path: &str,
+        transcription: &str,
+        offset_index: i64,
+        transcription_engine: &str,
+        device: &AudioDevice,
+        speaker_id: Option<i64>,
+        start_time: Option<f64>,
+        end_time: Option<f64>,
+        timestamp: Option<DateTime<Utc>>,
+        redaction: crate::CaptureRedactions,
     ) -> Result<i64, sqlx::Error> {
         use crate::write_queue::{WriteOp, WriteResult};
 
@@ -508,6 +567,7 @@ impl DatabaseManager {
         let result = self
             .write_queue
             .submit(WriteOp::InsertAudioChunkAndTranscription {
+                redaction,
                 file_path: file_path.to_string(),
                 transcription: transcription.to_string(),
                 offset_index,
@@ -585,6 +645,21 @@ impl DatabaseManager {
         audio_chunk_id: i64,
         transcription: &str,
     ) -> Result<i64, sqlx::Error> {
+        self.update_audio_transcription_with_redaction(
+            audio_chunk_id,
+            transcription,
+            Default::default(),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_audio_transcription_with_redaction(
+        &self,
+        audio_chunk_id: i64,
+        transcription: &str,
+        redaction: crate::CaptureRedactions,
+    ) -> Result<i64, sqlx::Error> {
         // Never overwrite a transcription with empty text (overlap cleanup can produce "")
         let trimmed = transcription.trim();
         if trimmed.is_empty() {
@@ -605,6 +680,21 @@ impl DatabaseManager {
 
         match result {
             Ok(r) => {
+                let ids: Vec<i64> = sqlx::query_scalar(
+                    "SELECT id FROM audio_transcriptions WHERE audio_chunk_id=?",
+                )
+                .bind(audio_chunk_id)
+                .fetch_all(&mut **tx.conn())
+                .await?;
+                for id in ids {
+                    crate::redaction_status::record(
+                        &mut **tx.conn(),
+                        "audio",
+                        id,
+                        &redaction.fields(),
+                    )
+                    .await?;
+                }
                 tx.commit().await?;
                 Ok(r.rows_affected() as i64)
             }

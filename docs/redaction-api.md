@@ -1,7 +1,7 @@
-# Shared pseudonyms and frame redaction status
+# Shared pseudonyms and field redaction evidence
 
-<!-- doc-covers: crates/screenpipe-redact/src/pseudonym.rs, crates/screenpipe-core/src/pii_removal.rs, crates/screenpipe-db/src/db/redaction_status.rs, crates/screenpipe-engine/src/routes/search.rs, crates/screenpipe-engine/src/routes/frames.rs -->
-<!-- doc-verified: a7f07fbd2 -->
+<!-- doc-covers: crates/screenpipe-config/src/redaction.rs, crates/screenpipe-redact/src/worker/audit.rs, crates/screenpipe-redact/src/pseudonym.rs, crates/screenpipe-core/src/pii_removal.rs, crates/screenpipe-db/src/db/redaction_status.rs, crates/screenpipe-engine/src/routes/search.rs, crates/screenpipe-engine/src/routes/frames.rs -->
+<!-- doc-verified: c972e015b64ccd271ee855a1ed69ef458d63a0ba -->
 
 ## Shared pseudonyms
 
@@ -31,38 +31,77 @@ remain unchanged. Pseudonyms stay opt-in. Existing static redactions cannot be
 reconstructed, and changing keys or opting into normalization changes future
 tokens. Secure key provisioning is the embedding application's responsibility.
 
-## Read stored frame processing evidence
+## Read processing evidence
 
-`GET /frames/:id/metadata` includes a `redaction` object alongside the frame ID
-and capture timestamp. `GET /search?include_redaction=true` adds the same object
-to screen (`OCR`) result rows. Search status is opt-in and bypasses the response
-cache. The status describes the current stored frame, not an atomic certification
-of the search response, and does not cover elements, input events, or audio.
+`GET /frames/:id/metadata` includes a `redaction` object. Add
+`include_redaction=true` to `/search` for evidence on screen (`OCR`),
+accessibility (`UI`), input-event, and audio results. Evidence is read in the
+same request snapshot as search results; these requests bypass the response
+cache. Frame metadata includes image and associated-element evidence, including
+the source frame when elements were deduplicated.
 
-`fields` exposes existing processing timestamps for `full_text`,
-`accessibility_text`, `accessibility_tree_json`, `window_name`, `browser_url`,
-`text_json`, and `image`. Timestamps are Unix seconds. A timestamp means a worker
-visited that field. It does not establish detector success or that PII was found.
-`processed: null` means the historical evidence cannot distinguish unprocessed
-content from inline processing without a recorded timestamp. `method`, `result`,
-and `pseudonymized` remain null when no per-field provenance was stored.
+Each field exposes:
 
-`receipts.frames` and `receipts.image` expose separate current-policy completion
-states and source revisions. New completion times are saved atomically with the
-existing release receipt. Old receipts have unknown completion times. Editing
-source content or changing policy invalidates completion, including its reported
-time. Neither legacy timestamps nor the presence of a placeholder grants release
-permission. A text receipt does not certify an image or associated elements.
+- `processed`: whether an operation was recorded. New captures explicitly track
+  fields with no operation as `false` and `result: "skipped"`. Historical fields
+  without evidence remain `null`; legacy timestamps are exposed without inventing
+  a method or outcome.
+- `processed_at`: Unix seconds when the operation ran, rather than capture time.
+- `method`: `inline_regex`, `async_regex`, `async_model`, or
+  `async_regex_fallback`, recorded by the path that actually ran.
+- `pseudonymized`: whether a stored replacement used pseudonyms. An existing
+  pseudonym remains attributed when a later pass finds no additional matches.
+- `result`: `replaced`, `no_match`, or `skipped`.
+- `complete`: whether the whole selected field was covered successfully. A
+  model failure with regex fallback, a parsing failure, or excluded structured
+  leaves keeps this false. `cause` explains partial or failed processing without
+  including captured text or detector response bodies.
+- `steps`: the latest persisted observation for each method on this version of
+  the field. This is processing evidence, not an unlimited operation history.
 
-Use the existing `--require-pii-completion` mode and release/export APIs when
-consuming only content certified under the configured policy. These status
-fields are diagnostic evidence, not a replacement for that enforcement.
+Inline evidence is saved with the source write. Background evidence is saved
+atomically with its transformed value after checking source and policy identity.
+Source edits invalidate the evidence; archival preserves it. Deferred elements
+remain explicitly pending until materialized. Element metadata links to the
+source structured field for inline processing and records its own asynchronous
+processing. Structured redaction preserves keys and geometry.
 
-## Remaining audit work
+Existing `receipts.frames` and `receipts.image` remain separate current-policy
+release authority, including source revision and completion time. Historical
+receipt times can be unknown. Legacy timestamps, current settings, and
+placeholder-shaped strings never grant completion. Audio bookkeeping receipts
+do not establish that a transcription was redacted; audio reports actual inline
+processing, without adding AI audio processing.
 
-This change exposes existing evidence and records new receipt completion times.
-It does not yet persist detailed per-field inline/async method, fallback,
-pseudonymization, detection/no-match/skipped outcomes, or provide a per-request
-fully-redacted-only search filter. Those require provenance to travel with every
-capture and worker write, including hybrid storage and structured copies. The API
-returns unknown values rather than attributing historical work from current flags.
+## Search only fully processed records
+
+Use `/search?fully_redacted_only=true`. This also returns redaction metadata.
+Filtering happens in SQL before pagination and counts and applies only to that
+request. Ordinary reads and the configured required-privacy policy are unchanged.
+
+`fully_redacted` requires successful current-policy evidence for every present
+stored field, or a valid processing receipt. Frames additionally require their
+image and associated elements, including pending materialization. Fields left
+out of the configured redaction columns, skipped work, and degraded fallback
+cannot establish completion. Sealed hybrid payloads require explicit evidence;
+cleared SQLite staging columns never count as empty content. Audio requires
+actual transcription evidence even when it has an administrative receipt.
+
+The flag means processing completed under the configured detector/category
+policy; it does not assert that a detector can recognize every possible secret.
+Use `--require-pii-completion` and release/export APIs where model-backed release
+enforcement is required.
+
+## Failures and authorized support diagnostics
+
+Failed or degraded processing retains durable pending work. A temporary model
+failure does not cache a successful outcome, so the same source can recover on a
+later pass. Existing cloud backoff remains in force. Recording continues through
+the existing writer while reconciliation is pending.
+
+The normal authorized support report includes a dated last text/image failure
+observation with record ID, field, actual method, result, retryability, and a
+sanitized technical cause. These observations survive process restart and log
+rotation. The collector reads only these diagnostic metadata files; it does not
+read captured content or key files. A historical failure observation is evidence
+of that attempt, not a claim that a device is currently failing or recovered.

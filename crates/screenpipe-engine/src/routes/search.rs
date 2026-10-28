@@ -239,6 +239,9 @@ pub(crate) struct SearchQuery {
     /// Missing historical method/outcome data remains unknown.
     #[serde(default, deserialize_with = "deserialize_flexible_bool")]
     include_redaction: bool,
+    /// Require successful current-policy processing before pagination.
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
+    fully_redacted_only: bool,
 }
 
 #[derive(OaSchema, Deserialize)]
@@ -948,6 +951,7 @@ pub(crate) fn compute_search_cache_key(query: &SearchQuery) -> u64 {
     // (and vice-versa).
     query.include_related.hash(&mut hasher);
     query.include_redaction.hash(&mut hasher);
+    query.fully_redacted_only.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -1095,6 +1099,18 @@ pub(crate) async fn search(
     let format = parse_format(&query.format)?;
     let fields = parse_fields(&query.fields);
     let cacheable_render = is_passthrough(format, &fields);
+    let db = if query.fully_redacted_only {
+        state.db.fully_redacted_reads().await.map_err(|e| {
+            error!("Failed to prepare redacted-only search: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                JsonResponse(json!({"error":"could not prepare redacted-only search"})),
+            )
+        })?
+    } else {
+        Arc::clone(&state.db)
+    };
+    let db = &db;
 
     let pipe_data_restricted = pipe_perms
         .as_ref()
@@ -1138,8 +1154,7 @@ pub(crate) async fn search(
     }
 
     if let Some(id) = &query.starred_session_id {
-        let session = state
-            .db
+        let session = db
             .get_starred_session(id)
             .await
             .map_err(|_| {
@@ -1183,7 +1198,7 @@ pub(crate) async fn search(
                 &query,
                 format,
                 &fields,
-                state.db.protected_reads_enabled(),
+                db.protected_reads_enabled(),
             ));
         }
     }
@@ -1194,7 +1209,7 @@ pub(crate) async fn search(
             &query,
             format,
             &fields,
-            state.db.protected_reads_enabled(),
+            db.protected_reads_enabled(),
         ));
     }
 
@@ -1217,14 +1232,13 @@ pub(crate) async fn search(
     );
 
     // Check cache first (only for queries without frame extraction)
-    let storage_read = state.db.storage_read_token().await.map_err(|e| {
+    let storage_read = db.storage_read_token().await.map_err(|e| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
             JsonResponse(json!({"error":e.to_string()})),
         )
     })?;
-    let release_epoch = state
-        .db
+    let release_epoch = db
         .release_epoch()
         .await
         .map_err(|_| {
@@ -1245,6 +1259,7 @@ pub(crate) async fn search(
     if !history_restricted
         && !query.include_frames
         && !query.include_redaction
+        && !query.fully_redacted_only
         && cacheable_render
         && !pipe_data_restricted
     {
@@ -1256,7 +1271,7 @@ pub(crate) async fn search(
         {
             debug!("search cache hit for key {}", cache_key);
             capture_direct_api_search_value(&api_client, cached.result_count);
-            let _admission = storage_read.admit(&state.db.pool).await.map_err(|e| {
+            let _admission = storage_read.admit(&db.pool).await.map_err(|e| {
                 (
                     StatusCode::CONFLICT,
                     JsonResponse(json!({"error":e.to_string()})),
@@ -1310,9 +1325,9 @@ pub(crate) async fn search(
             let results = if page_limit == 0 {
                 Vec::new()
             } else {
-                state.db.search_semantic_context(&parsed_query).await?
+                db.search_semantic_context(&parsed_query).await?
             };
-            let total = state.db.count_semantic_context(&parsed_query).await?;
+            let total = db.count_semantic_context(&parsed_query).await?;
             return Ok::<_, sqlx::Error>((SearchPage::Parsed(results), total));
         }
 
@@ -1323,35 +1338,32 @@ pub(crate) async fn search(
         let results = if page_limit == 0 {
             Vec::new()
         } else {
-            state
-                .db
-                .search_with_tags_ordered_lightweight(
-                    query_str,
-                    content_type.clone(),
-                    page_limit,
-                    page_offset,
-                    range_start,
-                    range_end,
-                    query.app_name.as_deref(),
-                    query.window_name.as_deref(),
-                    query.min_length,
-                    query.max_length,
-                    query.speaker_ids.clone(),
-                    query.frame_name.as_deref(),
-                    query.browser_url.as_deref(),
-                    query.focused,
-                    query.speaker_name.as_deref(),
-                    query.device_name.as_deref(),
-                    query.machine_id.as_deref(),
-                    query.on_screen,
-                    query.input_context_only,
-                    tags,
-                    query.order,
-                )
-                .await?
+            db.search_with_tags_ordered_lightweight(
+                query_str,
+                content_type.clone(),
+                page_limit,
+                page_offset,
+                range_start,
+                range_end,
+                query.app_name.as_deref(),
+                query.window_name.as_deref(),
+                query.min_length,
+                query.max_length,
+                query.speaker_ids.clone(),
+                query.frame_name.as_deref(),
+                query.browser_url.as_deref(),
+                query.focused,
+                query.speaker_name.as_deref(),
+                query.device_name.as_deref(),
+                query.machine_id.as_deref(),
+                query.on_screen,
+                query.input_context_only,
+                tags,
+                query.order,
+            )
+            .await?
         };
-        let total = state
-            .db
+        let total = db
             .count_search_results_with_tags_filtered(
                 query_str,
                 content_type,
@@ -1397,8 +1409,7 @@ pub(crate) async fn search(
         let upper = query.end_time.unwrap_or_else(Utc::now);
         // Session stamps use millisecond precision. Bounds are intersected again
         // below to preserve a caller's higher-precision start/end filters.
-        let mut ranges = state
-            .db
+        let mut ranges = db
             .starred_search_ranges(
                 &super::starred::stamp(lower),
                 &super::starred::stamp(
@@ -1486,7 +1497,7 @@ pub(crate) async fn search(
     let related = if query.include_related && !tags.is_empty() {
         match timeout(
             Duration::from_secs(RELATED_TAGS_TIMEOUT_SECS),
-            state.db.related_tags(tags, RELATED_TAGS_LIMIT),
+            db.related_tags(tags, RELATED_TAGS_LIMIT),
         )
         .await
         {
@@ -1754,7 +1765,7 @@ pub(crate) async fn search(
     // are resolved above and still fail rather than broadening the search.
     let starred = match tokio::time::timeout(
         std::time::Duration::from_millis(250),
-        state.db.starred_timestamps(&timestamps),
+        db.starred_timestamps(&timestamps),
     )
     .await
     {
@@ -1769,30 +1780,39 @@ pub(crate) async fn search(
         }
     };
     let starred_metadata_available = starred.is_some();
-    let mut redaction_status = std::collections::HashMap::new();
-    if query.include_redaction {
-        for item in &content_items {
-            if let ContentItem::OCR(content) = item {
-                if !redaction_status.contains_key(&content.frame_id) {
-                    let status = state.db.frame_redaction_status(content.frame_id).await.map_err(|e| {
-                        error!("Failed to read search redaction status: {e}");
-                        (StatusCode::INTERNAL_SERVER_ERROR, JsonResponse(json!({"error":"Failed to read redaction status"})))
-                    })?;
-                    redaction_status.insert(content.frame_id, status);
-                }
+    let mut redaction_status = Vec::with_capacity(content_items.len());
+    for item in &content_items {
+        let status = if query.include_redaction || query.fully_redacted_only {
+            match item {
+                ContentItem::OCR(c) => Some(db.frame_redaction_status(c.frame_id).await),
+                ContentItem::UI(c) => Some(db.frame_redaction_status(c.id).await),
+                ContentItem::Input(c) => Some(db.record_redaction_status("input", c.id).await),
+                ContentItem::Audio(c) => Some(
+                    db.audio_redaction_status(c.chunk_id, c.offset_index, c.timestamp)
+                        .await,
+                ),
+                _ => None,
             }
-        }
+            .transpose()
+            .map_err(|e| {
+                error!("Failed to read search redaction status: {e}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    JsonResponse(json!({"error":"Failed to read redaction status"})),
+                )
+            })?
+        } else {
+            None
+        };
+        redaction_status.push(status);
     }
     let response = SearchResponse {
-        privacy: search_privacy(state.db.protected_reads_enabled()),
+        privacy: search_privacy(db.protected_reads_enabled()),
         data: content_items
             .into_iter()
             .enumerate()
             .map(|(index, item)| StarredSearchHit {
-                redaction: match &item {
-                    ContentItem::OCR(content) => redaction_status.get(&content.frame_id).cloned(),
-                    _ => None,
-                },
+                redaction: redaction_status.get(index).cloned().flatten(),
                 item,
                 starred: starred
                     .as_ref()
@@ -1815,6 +1835,7 @@ pub(crate) async fn search(
         && starred_metadata_available
         && !query.include_frames
         && !query.include_redaction
+        && !query.fully_redacted_only
         && cacheable_render
         && !pipe_data_restricted
     {
@@ -1830,7 +1851,7 @@ pub(crate) async fn search(
     } else {
         render_search(format, &fields, &response)
     };
-    let _admission = storage_read.admit(&state.db.pool).await.map_err(|e| {
+    let _admission = storage_read.admit(&db.pool).await.map_err(|e| {
         (
             StatusCode::CONFLICT,
             JsonResponse(json!({"error":e.to_string()})),
@@ -2060,18 +2081,28 @@ mod tests {
             format: None,
             fields: None,
             include_redaction: false,
+            fully_redacted_only: false,
         }
     }
 
     #[test]
     fn redaction_metadata_is_opt_in_and_has_a_distinct_cache_key() {
         let parse = |uri: &str| {
-            Query::<SearchQuery>::try_from_uri(&uri.parse().unwrap()).unwrap().0
+            Query::<SearchQuery>::try_from_uri(&uri.parse().unwrap())
+                .unwrap()
+                .0
         };
         let plain = parse("/search?content_type=ocr");
         let with_status = parse("/search?content_type=ocr&include_redaction=true");
         assert!(!plain.include_redaction);
         assert!(with_status.include_redaction);
+        let complete = parse("/search?fully_redacted_only=true");
+        assert!(complete.fully_redacted_only);
+        assert!(!plain.fully_redacted_only);
+        assert_ne!(
+            compute_search_cache_key(&plain),
+            compute_search_cache_key(&complete)
+        );
         assert_ne!(
             compute_search_cache_key(&plain),
             compute_search_cache_key(&with_status)
@@ -2631,6 +2662,7 @@ mod tests {
             format: None,
             fields: None,
             include_redaction: false,
+            fully_redacted_only: false,
         };
 
         let query2 = SearchQuery {
@@ -2669,6 +2701,7 @@ mod tests {
             format: None,
             fields: None,
             include_redaction: false,
+            fully_redacted_only: false,
         };
 
         let key1 = compute_search_cache_key(&query1);
@@ -2715,6 +2748,7 @@ mod tests {
             format: None,
             fields: None,
             include_redaction: false,
+            fully_redacted_only: false,
         };
 
         let query2 = SearchQuery {
@@ -2753,6 +2787,7 @@ mod tests {
             format: None,
             fields: None,
             include_redaction: false,
+            fully_redacted_only: false,
         };
 
         let key1 = compute_search_cache_key(&query1);
@@ -2806,6 +2841,7 @@ mod tests {
             format: None,
             fields: None,
             include_redaction: false,
+            fully_redacted_only: false,
         };
         let none = compute_search_cache_key(&mk(None));
         let yes = compute_search_cache_key(&mk(Some(true)));
@@ -2855,6 +2891,7 @@ mod tests {
             format: None,
             fields: None,
             include_redaction: false,
+            fully_redacted_only: false,
         };
         assert_ne!(
             compute_search_cache_key(&mk(false)),
@@ -3016,7 +3053,23 @@ pub(crate) async fn storage_snapshot_middleware(
     if !read {
         return next.run(request).await;
     }
-    match state.db.read_snapshot(next.run(request)).await {
+    let db = if path == "/search"
+        && Query::<SearchQuery>::try_from_uri(request.uri()).is_ok_and(|q| q.0.fully_redacted_only)
+    {
+        match state.db.fully_redacted_reads().await {
+            Ok(db) => db,
+            Err(error) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    axum::Json(json!({"error":error.to_string()})),
+                )
+                    .into_response()
+            }
+        }
+    } else {
+        Arc::clone(&state.db)
+    };
+    match db.read_snapshot(next.run(request)).await {
         Ok(response) => response,
         Err(error) => (
             StatusCode::SERVICE_UNAVAILABLE,

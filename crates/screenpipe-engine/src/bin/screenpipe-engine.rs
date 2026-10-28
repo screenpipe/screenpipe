@@ -1490,7 +1490,7 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
     if std::env::var("SCREENPIPE_ANALYTICS_ID").is_err() {
         eprintln!();
         eprintln!("  tip: get the desktop app for chat, timeline, and search UI");
-        eprintln!("       → https://screenpi.pe/onboarding");
+        eprintln!("       → https://screenpipe.com/onboarding");
         eprintln!();
     }
 
@@ -2304,7 +2304,7 @@ async fn run(cli: Cli, record_arg_sources: RecordArgSources) -> anyhow::Result<(
                                      unavailable ({e}), and no TINFOIL_* env vars set. Worker \
                                      will run regex-only."
                                 );
-                                Pipeline::regex_only_with_policy(policy.clone())
+                                Pipeline::regex_fallback_with_policy(policy.clone(), "local PII models unavailable; see model-load error in startup logs")
                             }
                         }
                     }

@@ -1,3 +1,6 @@
+// screenpipe — AI that knows everything you've seen, said, or heard
+// https://screenpipe.com
+
 //! UI Event types optimized for storage and AI consumption
 //!
 //! Events are stored as simple structs that serialize to compact JSON.
@@ -9,6 +12,8 @@ use serde::{Deserialize, Serialize};
 /// A UI event with full context
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiEvent {
+    #[serde(skip)]
+    pub redaction: screenpipe_config::redaction::CaptureRedactions,
     /// Unique event ID (assigned by database)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<i64>,
@@ -126,6 +131,8 @@ pub enum EventData {
 /// Element context from accessibility API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElementContext {
+    #[serde(skip)]
+    pub redaction: screenpipe_config::redaction::CaptureRedactions,
     /// Accessibility role (e.g., "AXButton", "AXTextField")
     pub role: String,
 
@@ -574,6 +581,29 @@ impl Modifiers {
 }
 
 impl UiEvent {
+    pub fn text_with_pii(
+        timestamp: DateTime<Utc>,
+        relative_ms: u64,
+        content: String,
+        apply: bool,
+    ) -> Self {
+        let mut event = Self::text(timestamp, relative_ms, content);
+        if apply {
+            if let EventData::Text {
+                content,
+                char_count,
+            } = &mut event.data
+            {
+                *content = screenpipe_core::pii_removal::redact_field(
+                    content,
+                    &mut event.redaction,
+                    screenpipe_config::redaction::CaptureField::TextContent,
+                );
+                *char_count = Some(content.chars().count());
+            }
+        }
+        event
+    }
     /// Create a new click event
     pub fn click(
         timestamp: DateTime<Utc>,
@@ -585,6 +615,7 @@ impl UiEvent {
         modifiers: u8,
     ) -> Self {
         Self {
+            redaction: Default::default(),
             id: None,
             timestamp,
             relative_ms,
@@ -607,6 +638,7 @@ impl UiEvent {
     pub fn text(timestamp: DateTime<Utc>, relative_ms: u64, content: String) -> Self {
         let char_count = Some(content.chars().count());
         Self {
+            redaction: Default::default(),
             id: None,
             timestamp,
             relative_ms,
@@ -625,6 +657,7 @@ impl UiEvent {
     /// Create an app switch event
     pub fn app_switch(timestamp: DateTime<Utc>, relative_ms: u64, name: String, pid: i32) -> Self {
         Self {
+            redaction: Default::default(),
             id: None,
             timestamp,
             relative_ms,
@@ -907,6 +940,13 @@ impl UiEvent {
         };
 
         InsertUiEvent {
+            redaction: {
+                let mut evidence = self.redaction.clone();
+                if let Some(element) = &self.element {
+                    evidence.extend(element.redaction.clone());
+                }
+                evidence
+            },
             timestamp: self.timestamp,
             session_id,
             relative_ms: self.relative_ms as i64,
@@ -994,6 +1034,7 @@ mod tests {
     fn to_db_insert_carries_element_ancestors() {
         let mut event = UiEvent::click(Utc::now(), 100, 500, 300, 0, 1, 0);
         event.element = Some(ElementContext {
+            redaction: Default::default(),
             role: "AXButton".into(),
             name: Some("Continue".into()),
             value: None,
@@ -1012,8 +1053,28 @@ mod tests {
 
     #[test]
     #[cfg(feature = "db")]
+    fn actual_inline_evidence_survives_event_transport_without_becoming_wire_input() {
+        use screenpipe_config::redaction::{CaptureField, RedactionMethod, RedactionResult};
+        let event = UiEvent::text_with_pii(Utc::now(), 5, "person@example.com".into(), true);
+        let insert = event.to_db_insert(None);
+        assert_eq!(insert.text_content.as_deref(), Some("[EMAIL]"));
+        let step = insert.redaction.get(CaptureField::TextContent).unwrap();
+        assert_eq!(step.method, RedactionMethod::InlineRegex);
+        assert_eq!(step.result, RedactionResult::Replaced);
+        assert!(!serde_json::to_string(&event).unwrap().contains("redaction"));
+        let raw = UiEvent::text_with_pii(Utc::now(), 5, "person@example.com".into(), false);
+        assert!(raw
+            .to_db_insert(None)
+            .redaction
+            .get(CaptureField::TextContent)
+            .is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "db")]
     fn to_db_insert_maps_scroll_deltas() {
         let event = UiEvent {
+            redaction: Default::default(),
             id: None,
             timestamp: Utc::now(),
             relative_ms: 5,

@@ -1360,13 +1360,17 @@ pub async fn get_frame_metadata(
     require_frame_history_access(&state, frame_id).await?;
     match state.db.get_frame_timestamp(frame_id).await {
         Ok(Some(timestamp)) => {
-            let redaction = state.db.frame_redaction_status(frame_id).await.map_err(|e| {
-                error!("Failed to read frame redaction status: {e}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    JsonResponse(json!({"error":"Failed to read redaction status"})),
-                )
-            })?;
+            let redaction = state
+                .db
+                .frame_redaction_status(frame_id)
+                .await
+                .map_err(|e| {
+                    error!("Failed to read frame redaction status: {e}");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        JsonResponse(json!({"error":"Failed to read redaction status"})),
+                    )
+                })?;
             Ok(JsonResponse(FrameMetadataResponse {
                 frame_id,
                 timestamp,

@@ -373,6 +373,7 @@ pub(crate) async fn collect_migration_diagnostics_from_root(root: std::path::Pat
             json!({
                 "attempts": attempts,
                 "completion": completion,
+                "redaction": screenpipe_db::redaction_status::support_snapshot(&root),
                 // Expose the observed native prerequisites, not a second copy
                 // of the automatic-migration arbitration or desired policy.
                 "automatic_migration_prerequisites": {

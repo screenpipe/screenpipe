@@ -103,6 +103,13 @@ impl Progress {
         let Some(out) = field.session.as_mut().unwrap().step().await? else {
             return Ok(());
         };
+        if let Some(step) = &out.evidence {
+            self.job
+                .redaction
+                .entry(field.column.clone())
+                .and_modify(|e| e.merge(step))
+                .or_insert_with(|| step.clone());
+        }
         if let Some(pointer) = &field.pointer {
             let target = self
                 .json
@@ -220,6 +227,21 @@ impl Worker {
                 }
             }
             if let Some(error) = failed {
+                if let Some(field) = progress.fields.front() {
+                    let mut evidence = screenpipe_db::RedactionEvidence::new(
+                        screenpipe_db::RedactionMethod::AsyncModel,
+                        false,
+                        false,
+                    );
+                    evidence.complete = false;
+                    evidence.result = screenpipe_db::RedactionResult::Skipped;
+                    evidence.cause =
+                        Some("required detector failed; source retained for retry".into());
+                    progress
+                        .job
+                        .redaction
+                        .insert(field.column.clone(), evidence);
+                }
                 db.defer_release(&progress.job).await?;
                 self.release_failed(&progress.job, &error).await;
                 scheduler.progress[index] = None;
@@ -253,6 +275,24 @@ impl Worker {
             _ => error.to_string(),
         };
         let message = format!("Required PII processing pending; retry scheduled: kind={}, id={}, revision={}: {cause}", job.kind, job.id, job.revision);
+        if let Some(db) = &self.release_db {
+            let mut evidence = screenpipe_db::RedactionEvidence::new(
+                screenpipe_db::RedactionMethod::AsyncModel,
+                false,
+                false,
+            );
+            evidence.complete = false;
+            evidence.result = screenpipe_db::RedactionResult::Skipped;
+            evidence.cause = Some(crate::pipeline::fallback_cause(error));
+            db.persist_redaction_failure(
+                &job.kind,
+                job.id.parse().unwrap_or_default(),
+                None,
+                &evidence,
+                true,
+            )
+            .await;
+        }
         tracing::warn!("{message}");
         self.status.lock().await.last_error = Some(message);
     }

@@ -253,16 +253,16 @@ impl DatabaseManager {
         tx: &mut sqlx::pool::PoolConnection<Sqlite>,
         frame_id: i64,
         text_json: &str,
-    ) {
+    ) -> bool {
         let blocks: Vec<OcrTextBlock> = match serde_json::from_str(text_json) {
             Ok(b) => b,
             Err(e) => {
-                debug!("elements: skipping OCR parse for frame {}: {}", frame_id, e);
-                return;
+                warn!("elements: skipping OCR parse for frame {}: {}", frame_id, e);
+                return false;
             }
         };
         if blocks.is_empty() {
-            return;
+            return true;
         }
 
         // 12 params per row × 80 rows = 960 params, well below SQLite's
@@ -312,11 +312,11 @@ impl DatabaseManager {
                 sort_order += 1;
                 if buf.len() >= BULK_CHUNK {
                     if let Err(e) = flush_level0_bulk(tx, frame_id, &buf).await {
-                        debug!(
+                        warn!(
                             "elements: OCR bulk insert failed for frame {}: {}",
                             frame_id, e
                         );
-                        return;
+                        return false;
                     }
                     buf.clear();
                 }
@@ -327,11 +327,11 @@ impl DatabaseManager {
             // first so sort_order interleaves correctly.
             if !buf.is_empty() {
                 if let Err(e) = flush_level0_bulk(tx, frame_id, &buf).await {
-                    debug!(
+                    warn!(
                         "elements: OCR bulk insert failed for frame {}: {}",
                         frame_id, e
                     );
-                    return;
+                    return false;
                 }
                 buf.clear();
             }
@@ -415,8 +415,8 @@ impl DatabaseManager {
                     sort_order += 1;
                 }
                 Err(e) => {
-                    debug!("elements: OCR insert failed for frame {}: {}", frame_id, e);
-                    return;
+                    warn!("elements: OCR insert failed for frame {}: {}", frame_id, e);
+                    return false;
                 }
             }
         }
@@ -424,12 +424,14 @@ impl DatabaseManager {
         // Flush any remaining buffered level-0 rows.
         if !buf.is_empty() {
             if let Err(e) = flush_level0_bulk(tx, frame_id, &buf).await {
-                debug!(
+                warn!(
                     "elements: OCR bulk insert failed for frame {}: {}",
                     frame_id, e
                 );
+                return false;
             }
         }
+        true
     }
 
     /// Insert accessibility tree nodes from `tree_json` (serialized
@@ -449,7 +451,7 @@ impl DatabaseManager {
         tx: &mut sqlx::pool::PoolConnection<Sqlite>,
         frame_id: i64,
         tree_json: &str,
-    ) {
+    ) -> bool {
         // AccessibilityTreeNode: { role, text, depth, bounds?, on_screen?, automation props... }
         #[derive(serde::Deserialize, serde::Serialize)]
         struct AxNode {
@@ -508,12 +510,12 @@ impl DatabaseManager {
         let nodes: Vec<AxNode> = match serde_json::from_str(tree_json) {
             Ok(n) => n,
             Err(e) => {
-                debug!("elements: skipping AX parse for frame {}: {}", frame_id, e);
-                return;
+                warn!("elements: skipping AX parse for frame {}: {}", frame_id, e);
+                return false;
             }
         };
         if nodes.is_empty() {
-            return;
+            return true;
         }
 
         // Reserve a contiguous id block up front instead of RETURNING id
@@ -530,11 +532,11 @@ impl DatabaseManager {
         {
             Ok(v) => v,
             Err(e) => {
-                debug!(
+                warn!(
                     "elements: AX id reservation failed for frame {}: {}",
                     frame_id, e
                 );
-                return;
+                return false;
             }
         };
 
@@ -674,13 +676,14 @@ impl DatabaseManager {
         const BULK_CHUNK: usize = 70;
         for chunk in rows.chunks(BULK_CHUNK) {
             if let Err(e) = flush_ax_bulk(tx, frame_id, chunk).await {
-                debug!(
+                warn!(
                     "elements: AX bulk insert failed for frame {}: {}",
                     frame_id, e
                 );
-                return;
+                return false;
             }
         }
+        true
     }
 
     /// Insert a snapshot frame AND optional OCR text positions in a single transaction.
@@ -711,6 +714,49 @@ impl DatabaseManager {
         simhash: Option<i64>,
         ocr_data: Option<(&str, &str, &str)>, // (text, text_json, ocr_engine)
         elements_ref_frame_id: Option<i64>,
+    ) -> Result<i64, sqlx::Error> {
+        self.insert_snapshot_frame_with_redaction(
+            device_name,
+            timestamp,
+            snapshot_path,
+            app_name,
+            window_name,
+            browser_url,
+            document_path,
+            focused,
+            capture_trigger,
+            accessibility_text,
+            text_source,
+            accessibility_tree_json,
+            content_hash,
+            simhash,
+            ocr_data,
+            elements_ref_frame_id,
+            Default::default(),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_snapshot_frame_with_redaction(
+        &self,
+        device_name: &str,
+        timestamp: DateTime<Utc>,
+        snapshot_path: &str,
+        app_name: Option<&str>,
+        window_name: Option<&str>,
+        browser_url: Option<&str>,
+        document_path: Option<&str>,
+        focused: bool,
+        capture_trigger: Option<&str>,
+        accessibility_text: Option<&str>,
+        text_source: Option<&str>,
+        accessibility_tree_json: Option<&str>,
+        content_hash: Option<i64>,
+        simhash: Option<i64>,
+        ocr_data: Option<(&str, &str, &str)>, // (text, text_json, ocr_engine)
+        elements_ref_frame_id: Option<i64>,
+        redaction: crate::CaptureRedactions,
     ) -> Result<i64, sqlx::Error> {
         use crate::write_queue::{WriteOp, WriteResult};
 
@@ -751,6 +797,7 @@ impl DatabaseManager {
         let result = self
             .write_queue
             .submit(WriteOp::InsertSnapshotFrameWithOcr {
+                redaction,
                 device_name: device_name.to_string(),
                 timestamp,
                 snapshot_path: snapshot_path.to_string(),

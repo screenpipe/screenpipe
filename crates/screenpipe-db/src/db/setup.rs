@@ -422,6 +422,7 @@ impl DatabaseManager {
         );
         let db_manager = DatabaseManager {
             release_owner: None,
+            redaction_read_pool: Default::default(),
             release_read_pools: Default::default(),
             storage,
             upload_source_id: tokio::sync::OnceCell::new(),

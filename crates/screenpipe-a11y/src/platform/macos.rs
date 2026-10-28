@@ -15,6 +15,7 @@ use arc_swap::ArcSwap;
 use chrono::Utc;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use parking_lot::Mutex;
+#[cfg(test)]
 use screenpipe_core::pii_removal::remove_pii;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicI8, AtomicPtr, Ordering};
@@ -561,9 +562,11 @@ fn spawn_clipboard_worker_thread(
                 if !seen.capture_and_deliver(
                     || {
                         with_allowed_focus(&current_focus, |focus| {
-                            let (generation, content) =
+                            let (generation, content, redaction) =
                                 clipboard_snapshot(req.capture_content, req.apply_pii)?;
-                            let event = clipboard_event(req.operation, content, req.start, &focus);
+                            let mut event =
+                                clipboard_event(req.operation, content, req.start, &focus);
+                            event.redaction = redaction;
                             Some(((req.operation != 'v').then_some(generation), event))
                         })
                     },
@@ -580,7 +583,14 @@ fn spawn_clipboard_worker_thread(
 
 /// Read content and its pasteboard identity together, then process the stable
 /// content outside the snapshot window. Both native producers use this policy.
-fn clipboard_snapshot(capture_content: bool, apply_pii: bool) -> Option<(i64, Option<String>)> {
+fn clipboard_snapshot(
+    capture_content: bool,
+    apply_pii: bool,
+) -> Option<(
+    i64,
+    Option<String>,
+    screenpipe_config::redaction::CaptureRedactions,
+)> {
     let (generation, content) = stable_snapshot(get_clipboard_change_count, || {
         if capture_content {
             let _pool = cidre::objc::AutoreleasePoolPage::push();
@@ -589,15 +599,20 @@ fn clipboard_snapshot(capture_content: bool, apply_pii: bool) -> Option<(i64, Op
             None
         }
     })?;
+    let mut redaction = Default::default();
     let content = content.map(|text| {
         let truncated = truncate(&text, 1000);
         if apply_pii {
-            remove_pii(&truncated)
+            screenpipe_core::pii_removal::redact_field(
+                &truncated,
+                &mut redaction,
+                screenpipe_config::redaction::CaptureField::TextContent,
+            )
         } else {
             truncated
         }
     });
-    Some((generation, content))
+    Some((generation, content, redaction))
 }
 
 fn clipboard_event(
@@ -607,6 +622,7 @@ fn clipboard_event(
     focus: &InputFocus,
 ) -> UiEvent {
     UiEvent {
+        redaction: Default::default(),
         id: None,
         timestamp: Utc::now(),
         relative_ms: start.elapsed().as_millis() as u64,
@@ -700,12 +716,13 @@ fn run_clipboard_poller(
         let delivered = seen.capture_and_deliver(
             || {
                 with_allowed_focus(&current_focus, |focus| {
-                    let (generation, content) = clipboard_snapshot(
+                    let (generation, content, redaction) = clipboard_snapshot(
                         config.capture_clipboard_content,
                         config.apply_pii_removal,
                     )?;
                     observed_generation = Some(generation);
-                    let event = clipboard_event(CLIPBOARD_OP_POLLED, content, start, &focus);
+                    let mut event = clipboard_event(CLIPBOARD_OP_POLLED, content, start, &focus);
+                    event.redaction = redaction;
                     Some((Some(generation), event))
                 })
             },
@@ -818,6 +835,7 @@ struct TapState {
 /// clicks/keys around it.
 fn scroll_flush_to_event(f: ScrollFlush) -> UiEvent {
     UiEvent {
+        redaction: Default::default(),
         id: None,
         timestamp: f.timestamp,
         relative_ms: f.relative_ms,
@@ -951,7 +969,11 @@ fn redact_text_event(mut event: UiEvent, config: &UiCaptureConfig) -> UiEvent {
             char_count,
         } = &mut event.data
         {
-            *content = remove_pii(content);
+            *content = screenpipe_core::pii_removal::redact_field(
+                content,
+                &mut event.redaction,
+                screenpipe_config::redaction::CaptureField::TextContent,
+            );
             *char_count = Some(content.chars().count());
         }
     }
@@ -1253,6 +1275,7 @@ extern "C" fn tap_callback(
 
                 if state.config.capture_mouse_move {
                     let ui_event = UiEvent {
+                        redaction: Default::default(),
                         id: None,
                         timestamp,
                         relative_ms: t,
@@ -1362,6 +1385,7 @@ extern "C" fn tap_callback(
             if mods.any_modifier() {
                 if state.config.capture_keystrokes {
                     let event = UiEvent {
+                        redaction: Default::default(),
                         id: None,
                         timestamp,
                         relative_ms: t,
@@ -1390,6 +1414,7 @@ extern "C" fn tap_callback(
                 } else if state.config.capture_keystrokes {
                     // Unknown key, record as key event
                     let event = UiEvent {
+                        redaction: Default::default(),
                         id: None,
                         timestamp,
                         relative_ms: t,
@@ -1407,6 +1432,7 @@ extern "C" fn tap_callback(
                 }
             } else if state.config.capture_keystrokes {
                 let event = UiEvent {
+                    redaction: Default::default(),
                     id: None,
                     timestamp,
                     relative_ms: t,
@@ -1529,6 +1555,7 @@ fn emit_focus_state(state: &ObserverCallbackState, focused_elem: Option<&ax::UiE
             let focused_element = focused_element_context(&state.config, focused_elem);
 
             let event = UiEvent {
+                redaction: Default::default(),
                 id: None,
                 timestamp: Utc::now(),
                 relative_ms: state.start.elapsed().as_millis() as u64,
@@ -2213,6 +2240,7 @@ fn build_click_element_context(
         // mirror the account/site context ("Sign in to <bank>"), which is
         // exactly what the '[password field]' scrub is hiding.
         return Some(ElementContext {
+            redaction: Default::default(),
             role,
             name: Some("[password field]".to_string()),
             value: None,
@@ -2230,11 +2258,16 @@ fn build_click_element_context(
     // is a valid prefix either way). Budgeted: <=12 hops, 15 ms wall clock.
     // Hop names can mirror on-screen content (web group labels, document
     // titles), so they get the same hot-path PII scrub as element_value.
+    let mut redaction = Default::default();
     let mut chain = collect_ancestor_chain(elem, 12, Duration::from_millis(15));
     if config.apply_pii_removal {
         for hop in &mut chain {
             if let Some(n) = hop.name.take() {
-                hop.name = Some(remove_pii(&n));
+                hop.name = Some(screenpipe_core::pii_removal::redact_field(
+                    &n,
+                    &mut redaction,
+                    screenpipe_config::redaction::CaptureField::ElementAncestors,
+                ));
             }
         }
     }
@@ -2254,7 +2287,11 @@ fn build_click_element_context(
         value: value.map(|s| {
             let truncated = truncate(&s, 500);
             if config.apply_pii_removal {
-                remove_pii(&truncated)
+                screenpipe_core::pii_removal::redact_field(
+                    &truncated,
+                    &mut redaction,
+                    screenpipe_config::redaction::CaptureField::ElementValue,
+                )
             } else {
                 truncated
             }
@@ -2263,6 +2300,7 @@ fn build_click_element_context(
         automation_id: None,
         bounds,
         ancestors,
+        redaction,
     })
 }
 
@@ -2445,6 +2483,7 @@ fn build_element_context(elem: &ax::UiElement, config: &UiCaptureConfig) -> Opti
     // Check for password field
     if config.is_password_field(Some(&role), name.as_deref()) {
         return Some(ElementContext {
+            redaction: Default::default(),
             role,
             name: Some("[password field]".to_string()),
             value: None,
@@ -2456,6 +2495,7 @@ fn build_element_context(elem: &ax::UiElement, config: &UiCaptureConfig) -> Opti
     }
 
     // Get value for text input elements
+    let mut redaction = Default::default();
     let value = if role.contains("TextField")
         || role.contains("TextArea")
         || role.contains("ComboBox")
@@ -2473,7 +2513,11 @@ fn build_element_context(elem: &ax::UiElement, config: &UiCaptureConfig) -> Opti
         value: value.map(|s| {
             let truncated = truncate(&s, 1000); // Allow more text for input fields
             if config.apply_pii_removal {
-                remove_pii(&truncated)
+                screenpipe_core::pii_removal::redact_field(
+                    &truncated,
+                    &mut redaction,
+                    screenpipe_config::redaction::CaptureField::ElementValue,
+                )
             } else {
                 truncated
             }
@@ -2482,6 +2526,7 @@ fn build_element_context(elem: &ax::UiElement, config: &UiCaptureConfig) -> Opti
         automation_id: None,
         bounds,
         ancestors: None,
+        redaction,
     })
 }
 

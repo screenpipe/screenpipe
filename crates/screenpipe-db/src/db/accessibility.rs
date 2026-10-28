@@ -545,6 +545,7 @@ impl DatabaseManager {
     fn ui_event_write(event: &InsertUiEvent) -> crate::write_queue::UiEventWrite {
         let text_length = event.text_content.as_ref().map(|s| s.len() as i32);
         crate::write_queue::UiEventWrite {
+            redaction: event.redaction.clone(),
             timestamp: event.timestamp.to_rfc3339(),
             session_id: event.session_id.clone(),
             relative_ms: event.relative_ms,

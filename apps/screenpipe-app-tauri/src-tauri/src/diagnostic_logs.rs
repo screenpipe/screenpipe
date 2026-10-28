@@ -1465,4 +1465,92 @@ mod tests {
         assert!(report.contains("recording resumed after restart"));
         assert!(!report.contains("private-person@example.com"));
     }
+    #[tokio::test]
+    async fn redaction_failure_survives_support_collection_redaction_rotation_and_restart() {
+        use screenpipe_redact::{RedactError, RedactionOutput, Redactor};
+        struct UnavailableModel;
+        #[async_trait::async_trait]
+        impl Redactor for UnavailableModel {
+            fn name(&self) -> &str {
+                "support-model-fixture"
+            }
+            fn version(&self) -> u32 {
+                1
+            }
+            fn provides_model_detection(&self) -> bool {
+                true
+            }
+            async fn redact_batch(
+                &self,
+                _: &[String],
+            ) -> Result<Vec<RedactionOutput>, RedactError> {
+                Err(RedactError::Unavailable(
+                    "fixture model unavailable; private@example.com".into(),
+                ))
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let db = std::sync::Arc::new(
+            screenpipe_db::DatabaseManager::new(
+                root.path().join("db.sqlite").to_str().unwrap(),
+                Default::default(),
+            )
+            .await
+            .unwrap(),
+        );
+        db.configure_release(&screenpipe_db::privacy_release::ReleasePolicy {
+            identity: "support-fixture:v1".into(),
+            text: true,
+            images: false,
+        })
+        .await
+        .unwrap();
+        db.execute_raw_sql_write("INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-10-28','WORKTRACE_RAW_SECRET private@example.com')").await.unwrap();
+        let worker = screenpipe_redact::worker::Worker::new_with_writer(
+            db.pool.clone(),
+            db.coordinated_writer(),
+            std::sync::Arc::new(UnavailableModel),
+            Default::default(),
+        )
+        .with_frame_storage(db.clone());
+        assert_eq!(worker.process_release_batch(10).await.unwrap(), 0);
+        assert!(!db.release_ready("frames", "1").await.unwrap());
+        assert_eq!(
+            db.query_activity_summary_sql("SELECT full_text FROM frames WHERE id=1")
+                .await
+                .unwrap()[0]["full_text"],
+            "WORKTRACE_RAW_SECRET private@example.com"
+        );
+        db.close().await;
+        drop(worker);
+        drop(db);
+        let logs = root.path().join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        let rolling = logs.join("screenpipe.log");
+        std::fs::write(&rolling, "old warning private@example.com").unwrap();
+        for rotated in [false, true] {
+            if rotated {
+                std::fs::remove_file(&rolling).unwrap();
+            }
+            let report = collect_redacted_from_dirs_at_root(&[logs.clone()], root.path().into())
+                .await
+                .unwrap();
+            for evidence in [
+                "redaction",
+                "frames",
+                "record_id",
+                "async_model",
+                "skipped",
+                "retryable",
+                "configured detector unavailable",
+            ] {
+                assert!(
+                    report.contains(evidence),
+                    "missing support evidence: {evidence}"
+                );
+            }
+            assert!(!report.contains("WORKTRACE_RAW_SECRET"));
+            assert!(!report.contains("private@example.com"));
+        }
+    }
 }

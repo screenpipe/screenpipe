@@ -14,7 +14,6 @@ use anyhow::Result;
 use chrono::Utc;
 use crossbeam_channel::{bounded, unbounded, Receiver, RecvTimeoutError, Sender};
 use parking_lot::Mutex;
-use screenpipe_core::pii_removal::remove_pii;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -337,6 +336,7 @@ impl UiRecorder {
 
                 // Send a supplementary event with the element context for the click
                 let event = UiEvent {
+                    redaction: Default::default(),
                     id: None,
                     timestamp: req.timestamp,
                     relative_ms: 0,
@@ -492,6 +492,7 @@ fn enqueue_raw(state: &CallbackState, raw: RawInput) {
 /// tick sums stay well within range.
 fn emit_aggregated_scroll(tx: &Sender<UiEvent>, agg: ScrollFlush) {
     let event = UiEvent {
+        redaction: Default::default(),
         id: None,
         timestamp: agg.timestamp,
         relative_ms: agg.relative_ms,
@@ -1002,6 +1003,7 @@ impl InputWorker {
         window_title: Option<String>,
     ) {
         let event = UiEvent {
+            redaction: Default::default(),
             id: None,
             timestamp,
             relative_ms,
@@ -1214,6 +1216,7 @@ impl InputWorker {
                     return;
                 }
                 let event = UiEvent {
+                    redaction: Default::default(),
                     id: None,
                     timestamp,
                     relative_ms,
@@ -1292,10 +1295,15 @@ impl InputWorker {
     }
 
     fn emit_clipboard_event(&self, p: PendingClipboard) {
+        let mut redaction = Default::default();
         let content = if self.config.capture_clipboard_content {
             get_clipboard_text().map(|c| {
                 if self.config.apply_pii_removal {
-                    remove_pii(&c)
+                    screenpipe_core::pii_removal::redact_field(
+                        &c,
+                        &mut redaction,
+                        screenpipe_config::redaction::CaptureField::TextContent,
+                    )
                 } else {
                     c
                 }
@@ -1304,6 +1312,7 @@ impl InputWorker {
             None
         };
         let event = UiEvent {
+            redaction,
             id: None,
             timestamp: p.timestamp,
             relative_ms: p.relative_ms,
@@ -1357,12 +1366,12 @@ impl InputWorker {
 fn flush_text_buffer(state: &mut InputWorker) {
     if !state.text_buf.is_empty() {
         let content = std::mem::take(&mut state.text_buf);
-        let text = if state.config.apply_pii_removal {
-            remove_pii(&content)
-        } else {
-            content
-        };
-        let event = UiEvent::text(Utc::now(), state.start.elapsed().as_millis() as u64, text);
+        let event = UiEvent::text_with_pii(
+            Utc::now(),
+            state.start.elapsed().as_millis() as u64,
+            content,
+            state.config.apply_pii_removal,
+        );
         let _ = state.tx.try_send(event);
         state.last_text_time = None;
     }
@@ -1860,6 +1869,7 @@ fn process_foreground_change(state: &mut AppObserverState) {
         // Send window focus event
         if state.config.capture_window_focus && window_changed {
             let mut event = UiEvent {
+                redaction: Default::default(),
                 id: None,
                 timestamp: Utc::now(),
                 relative_ms: state.start.elapsed().as_millis() as u64,

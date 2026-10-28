@@ -198,6 +198,67 @@ pub fn remove_pii(text: &str) -> String {
     remove_pii_with_renderer(text, renderer.as_deref())
 }
 
+/// Carry this evidence alongside the sanitized value to the existing writer.
+/// Inline work never sets the async worker's completion watermark.
+pub fn remove_pii_with_evidence(
+    text: &str,
+) -> (String, screenpipe_config::redaction::RedactionEvidence) {
+    let renderer = PSEUDONYMIZER.load();
+    let redacted = remove_pii_with_renderer(text, renderer.as_deref());
+    let evidence = screenpipe_config::redaction::RedactionEvidence::new(
+        screenpipe_config::redaction::RedactionMethod::InlineRegex,
+        renderer.is_some(),
+        redacted != text,
+    );
+    (redacted, evidence)
+}
+
+pub fn redact_field(
+    text: &str,
+    fields: &mut screenpipe_config::redaction::CaptureRedactions,
+    field: screenpipe_config::redaction::CaptureField,
+) -> String {
+    let (clean, evidence) = remove_pii_with_evidence(text);
+    fields.observe(field, evidence);
+    clean
+}
+
+/// Preserve structured keys and coordinates; process only the requested string
+/// properties and aggregate the evidence from the calls that actually ran.
+pub fn remove_pii_json_with_evidence(
+    text: &str,
+    keys: &[&str],
+) -> Result<(String, screenpipe_config::redaction::RedactionEvidence), serde_json::Error> {
+    use screenpipe_config::redaction::{RedactionEvidence, RedactionMethod};
+    fn visit(value: &mut serde_json::Value, keys: &[&str], evidence: &mut RedactionEvidence) {
+        match value {
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    visit(item, keys, evidence);
+                }
+            }
+            serde_json::Value::Object(items) => {
+                for (key, value) in items {
+                    if keys.contains(&key.as_str()) {
+                        if let Some(text) = value.as_str() {
+                            let (clean, step) = remove_pii_with_evidence(text);
+                            evidence.merge(&step);
+                            *value = serde_json::Value::String(clean);
+                            continue;
+                        }
+                    }
+                    visit(value, keys, evidence);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut value = serde_json::from_str(text)?;
+    let mut evidence = RedactionEvidence::new(RedactionMethod::InlineRegex, false, false);
+    visit(&mut value, keys, &mut evidence);
+    Ok((serde_json::to_string(&value)?, evidence))
+}
+
 /// Explicit renderer for callers that own an isolated recording context.
 pub fn remove_pii_with_renderer(text: &str, renderer: Option<&PiiPseudonymizer>) -> String {
     // Fast path: single RegexSet DFA pass checks all patterns at once.
@@ -218,7 +279,13 @@ pub fn remove_pii_with_renderer(text: &str, renderer: Option<&PiiPseudonymizer>)
             .to_string()
     } else {
         PASSWORD_CONTEXT_PATTERN
-            .replace_all(text, "$1[PASSWORD]")
+            .replace_all(text, |captures: &regex::Captures<'_>| {
+                if screenpipe_config::redaction::is_pseudonym(captures.get(2).unwrap().as_str()) {
+                    captures.get(0).unwrap().as_str().to_owned()
+                } else {
+                    format!("{}[PASSWORD]", captures.get(1).unwrap().as_str())
+                }
+            })
             .to_string()
     };
 
@@ -268,7 +335,18 @@ pub fn remove_pii_with_renderer(text: &str, renderer: Option<&PiiPseudonymizer>)
                 .to_string();
         } else {
             sanitized = pattern
-                .replace_all(&sanitized, replacement_bracketed.as_str())
+                .replace_all(&sanitized, |captures: &regex::Captures<'_>| {
+                    let matched = captures.get(0).unwrap().as_str();
+                    if *replacement == "ENV_SECRET"
+                        && matched.split_once('=').is_some_and(|(_, value)| {
+                            screenpipe_config::redaction::is_pseudonym(value.trim())
+                        })
+                    {
+                        matched.to_owned()
+                    } else {
+                        replacement_bracketed.clone()
+                    }
+                })
                 .to_string();
         }
     }

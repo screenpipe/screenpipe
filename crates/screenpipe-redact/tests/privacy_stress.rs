@@ -184,6 +184,7 @@ impl Redactor for SyntheticDetector {
         Ok(texts
             .iter()
             .map(|text| RedactionOutput {
+                evidence: None,
                 input: text.clone(),
                 redacted: text.replace("SYNTHETIC_SECRET", "[SECRET]"),
                 spans: vec![],

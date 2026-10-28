@@ -32,7 +32,7 @@ use crate::{
 /// Bumped whenever we add or change a pattern in [`PATTERNS`]. Invalidates
 /// in-memory pipeline cache entries; the database worker does not replay rows
 /// that were already redacted.
-pub const REGEX_REDACTOR_VERSION: u32 = 6;
+pub const REGEX_REDACTOR_VERSION: u32 = 7;
 
 struct Pattern {
     re: Regex,
@@ -1741,6 +1741,7 @@ fn detect(text: &str, policy: Option<&crate::TextRedactionPolicy>) -> RedactionO
     }
     if cand.is_empty() {
         return RedactionOutput {
+            evidence: None,
             input: text.to_string(),
             redacted: text.to_string(),
             spans: Vec::new(),
@@ -1763,6 +1764,19 @@ fn detect(text: &str, policy: Option<&crate::TextRedactionPolicy>) -> RedactionO
         }
         for m in pat.re.find_iter(text) {
             let matched = &text[m.start()..m.end()];
+            // Context detectors can match `password: [SECRET_<token>` without
+            // its closing bracket. Preserve the complete existing token, while
+            // still processing neighbouring raw credentials normally.
+            if pat.label == SpanLabel::Secret {
+                let candidate = if text[m.end()..].starts_with(']') {
+                    &text[m.start()..m.end() + 1]
+                } else {
+                    matched
+                };
+                if crate::pseudonym::is_pseudonym(crate::pseudonym::secret_value(candidate)) {
+                    continue;
+                }
+            }
             if pat.label == SpanLabel::DollarAmount
                 && !dollar_amount_boundaries(text, m.start(), m.end())
             {
@@ -1808,6 +1822,7 @@ fn detect(text: &str, policy: Option<&crate::TextRedactionPolicy>) -> RedactionO
 
     let redacted = render_redacted(text, &spans);
     RedactionOutput {
+        evidence: None,
         input: text.to_string(),
         redacted,
         spans,

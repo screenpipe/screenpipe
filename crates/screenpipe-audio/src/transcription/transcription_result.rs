@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+#[cfg(test)]
 use screenpipe_core::pii_removal::remove_pii;
 use screenpipe_db::{DatabaseManager, NewDiarizationSegment, Speaker, SpeakerEmbeddingMatch};
 use tracing::{debug, error, warn};
@@ -115,8 +116,15 @@ pub async fn process_transcription_result(
 
     let raw_transcription = result.transcription.clone().unwrap();
     // Apply PII removal if enabled
+    let mut redaction = screenpipe_config::redaction::CaptureRedactions::new();
     let transcription = if use_pii_removal {
-        remove_pii(&raw_transcription)
+        let (text, evidence) =
+            screenpipe_core::pii_removal::remove_pii_with_evidence(&raw_transcription);
+        redaction.insert(
+            screenpipe_config::redaction::CaptureField::Transcription,
+            evidence,
+        );
+        text
     } else {
         raw_transcription
     };
@@ -127,13 +135,20 @@ pub async fn process_transcription_result(
     if let Some(id) = previous_transcript_id {
         if let Some(prev_transcript) = previous_transcript {
             // Apply PII removal to previous transcript update as well
+            let mut previous_redaction = screenpipe_config::redaction::CaptureRedactions::new();
             let sanitized_prev = if use_pii_removal {
-                remove_pii(&prev_transcript)
+                let (text, evidence) =
+                    screenpipe_core::pii_removal::remove_pii_with_evidence(&prev_transcript);
+                previous_redaction.insert(
+                    screenpipe_config::redaction::CaptureField::Transcription,
+                    evidence,
+                );
+                text
             } else {
                 prev_transcript
             };
             match db
-                .update_audio_transcription(id, sanitized_prev.as_str())
+                .update_audio_transcription_with_redaction(id, sanitized_prev.as_str(), previous_redaction)
                 .await
             {
                 Ok(_) => {}
@@ -155,7 +170,7 @@ pub async fn process_transcription_result(
     // Without this, transcribed audio is silently dropped from the timeline.
     for retry in 0..CHUNK_TRANSCRIPTION_INSERT_ATTEMPTS {
         match db
-            .insert_audio_chunk_and_transcription(
+            .insert_audio_chunk_and_transcription_with_redaction(
                 &result.path,
                 &transcription,
                 0,
@@ -173,6 +188,7 @@ pub async fn process_transcription_result(
                 Some(result.start_time),
                 Some(result.end_time),
                 capture_ts,
+                redaction.clone(),
             )
             .await
         {

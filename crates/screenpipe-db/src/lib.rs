@@ -38,6 +38,10 @@ pub mod storage;
 pub mod text_normalizer;
 pub mod text_similarity;
 mod types;
+pub use screenpipe_config::redaction::{
+    is_pseudonym, CaptureField, CaptureRedactions, FieldRedactions, RedactionEvidence,
+    RedactionMethod, RedactionResult, PSEUDONYM_TOKEN_BYTES,
+};
 mod video_db;
 pub mod write_queue;
 
@@ -83,3 +87,4 @@ pub use write_queue::{
 
 pub use db::privacy_exports;
 pub use db::privacy_release;
+pub use db::redaction_status;
