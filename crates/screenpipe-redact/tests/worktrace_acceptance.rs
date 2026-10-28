@@ -267,8 +267,12 @@ async fn evidence_is_durable_invalidates_on_edits_and_filters_before_pagination(
         db.frame_redaction_status(id).await.unwrap()["fully_redacted"],
         false
     );
-    let recovered =
+    let mut recovered =
         screenpipe_db::RedactionEvidence::new(RedactionMethod::AsyncModel, false, false);
+    // Reused detector output must not make a newly processed row appear to
+    // have been redacted before it was captured.
+    recovered.processed_at = 1;
+    let applied_after = chrono::Utc::now().timestamp();
     assert!(db
         .apply_field_redactions(
             "frames",
@@ -283,6 +287,12 @@ async fn evidence_is_durable_invalidates_on_edits_and_filters_before_pagination(
     assert_eq!(
         db.frame_redaction_status(id).await.unwrap()["fully_redacted"],
         true
+    );
+    assert!(
+        db.frame_redaction_status(id).await.unwrap()["fields"]["full_text"]["processed_at"]
+            .as_i64()
+            .unwrap()
+            >= applied_after
     );
     db.execute_raw_sql_write(&format!(
         "UPDATE frames SET full_text='edited raw' WHERE id={id}"

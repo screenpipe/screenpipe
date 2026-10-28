@@ -3151,6 +3151,14 @@ mod tests {
             .await
             .unwrap();
 
+        // The real manager migrates this schema before starting the drain.
+        sqlx::raw_sql(include_str!(
+            "migrations/20261028180000_redaction_evidence.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS audio_chunks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -46,7 +46,9 @@ Each field exposes:
   fields with no operation as `false` and `result: "skipped"`. Historical fields
   without evidence remain `null`; legacy timestamps are exposed without inventing
   a method or outcome.
-- `processed_at`: Unix seconds when the operation ran, rather than capture time.
+- `processed_at`: Unix seconds when the value was processed. Inline retains its
+  capture-time call; async timestamps application to this row, including reused
+  detector output, rather than borrowing a cache entry's earlier time.
 - `method`: `inline_regex`, `async_regex`, `async_model`, or
   `async_regex_fallback`, recorded by the path that actually ran.
 - `pseudonymized`: whether a stored replacement used pseudonyms. An existing

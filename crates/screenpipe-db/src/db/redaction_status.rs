@@ -113,7 +113,7 @@ impl DatabaseManager {
         let elements = element_status(&mut snapshot, id).await?;
         Ok(
             json!({"fields": fields, "receipts": receipts, "fully_redacted": fully_redacted, "elements":elements,
-            "scope": "frame_fields_and_image", "historical_details": "unknown"}),
+            "scope": "frame_fields_image_and_elements", "historical_details": "unknown"}),
         )
     }
 }
@@ -155,6 +155,11 @@ pub async fn record(
     };
     for (field, incoming) in fields {
         let mut inherited = incoming.clone();
+        // A cached detector result can predate this row. Timestamp its actual
+        // application; inline evidence retains the original capture-time call.
+        if inherited.method != crate::RedactionMethod::InlineRegex {
+            inherited.processed_at = Utc::now().timestamp();
+        }
         if inherited.result == crate::RedactionResult::NoMatch {
             let prior:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM redaction_evidence WHERE kind=? AND record_id=? AND field=? AND json_extract(evidence,'$.pseudonymized')=1)").bind(kind).bind(id).bind(field).fetch_one(&mut *conn).await?;
             inherited.pseudonymized |= prior;
@@ -678,7 +683,7 @@ impl DatabaseManager {
         let directory = root.join("redaction-diagnostics");
         let component = if kind == "image" { "image" } else { "text" };
         let failure = screenpipe_config::redaction::RedactionFailure {
-            observed_at: evidence.processed_at,
+            observed_at: Utc::now().timestamp(),
             kind: kind.into(),
             record_id: id,
             field: field.map(str::to_owned),
