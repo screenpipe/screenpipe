@@ -235,6 +235,10 @@ pub(crate) struct SearchQuery {
     /// for shedding the repeated absolute `content.file_path`). Omit for all.
     #[serde(default)]
     fields: Option<String>,
+    /// Include persisted frame redaction watermarks and completion receipts.
+    /// Missing historical method/outcome data remains unknown.
+    #[serde(default, deserialize_with = "deserialize_flexible_bool")]
+    include_redaction: bool,
 }
 
 #[derive(OaSchema, Deserialize)]
@@ -404,6 +408,8 @@ pub struct StarredSearchHit {
     /// Omitted when optional star metadata is unavailable, never guessed false.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub starred: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redaction: Option<Value>,
 }
 
 fn captured_at(item: &ContentItem) -> String {
@@ -941,6 +947,7 @@ pub(crate) fn compute_search_cache_key(query: &SearchQuery) -> u64 {
     // request without it must not be served a related-bearing cache entry
     // (and vice-versa).
     query.include_related.hash(&mut hasher);
+    query.include_redaction.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -1235,7 +1242,12 @@ pub(crate) async fn search(
             .load(std::sync::atomic::Ordering::SeqCst)
             .rotate_left(37);
 
-    if !history_restricted && !query.include_frames && cacheable_render && !pipe_data_restricted {
+    if !history_restricted
+        && !query.include_frames
+        && !query.include_redaction
+        && cacheable_render
+        && !pipe_data_restricted
+    {
         if let Some(cached) = state
             .search_cache
             .get(&cache_key)
@@ -1757,12 +1769,30 @@ pub(crate) async fn search(
         }
     };
     let starred_metadata_available = starred.is_some();
+    let mut redaction_status = std::collections::HashMap::new();
+    if query.include_redaction {
+        for item in &content_items {
+            if let ContentItem::OCR(content) = item {
+                if !redaction_status.contains_key(&content.frame_id) {
+                    let status = state.db.frame_redaction_status(content.frame_id).await.map_err(|e| {
+                        error!("Failed to read search redaction status: {e}");
+                        (StatusCode::INTERNAL_SERVER_ERROR, JsonResponse(json!({"error":"Failed to read redaction status"})))
+                    })?;
+                    redaction_status.insert(content.frame_id, status);
+                }
+            }
+        }
+    }
     let response = SearchResponse {
         privacy: search_privacy(state.db.protected_reads_enabled()),
         data: content_items
             .into_iter()
             .enumerate()
             .map(|(index, item)| StarredSearchHit {
+                redaction: match &item {
+                    ContentItem::OCR(content) => redaction_status.get(&content.frame_id).cloned(),
+                    _ => None,
+                },
                 item,
                 starred: starred
                     .as_ref()
@@ -1784,6 +1814,7 @@ pub(crate) async fn search(
     let cache_entry = if !history_restricted
         && starred_metadata_available
         && !query.include_frames
+        && !query.include_redaction
         && cacheable_render
         && !pipe_data_restricted
     {
@@ -2028,7 +2059,23 @@ mod tests {
             include_related: false,
             format: None,
             fields: None,
+            include_redaction: false,
         }
+    }
+
+    #[test]
+    fn redaction_metadata_is_opt_in_and_has_a_distinct_cache_key() {
+        let parse = |uri: &str| {
+            Query::<SearchQuery>::try_from_uri(&uri.parse().unwrap()).unwrap().0
+        };
+        let plain = parse("/search?content_type=ocr");
+        let with_status = parse("/search?content_type=ocr&include_redaction=true");
+        assert!(!plain.include_redaction);
+        assert!(with_status.include_redaction);
+        assert_ne!(
+            compute_search_cache_key(&plain),
+            compute_search_cache_key(&with_status)
+        );
     }
 
     fn fixed_now() -> DateTime<Utc> {
@@ -2583,6 +2630,7 @@ mod tests {
             include_related: false,
             format: None,
             fields: None,
+            include_redaction: false,
         };
 
         let query2 = SearchQuery {
@@ -2620,6 +2668,7 @@ mod tests {
             include_related: false,
             format: None,
             fields: None,
+            include_redaction: false,
         };
 
         let key1 = compute_search_cache_key(&query1);
@@ -2665,6 +2714,7 @@ mod tests {
             include_related: false,
             format: None,
             fields: None,
+            include_redaction: false,
         };
 
         let query2 = SearchQuery {
@@ -2702,6 +2752,7 @@ mod tests {
             include_related: false,
             format: None,
             fields: None,
+            include_redaction: false,
         };
 
         let key1 = compute_search_cache_key(&query1);
@@ -2754,6 +2805,7 @@ mod tests {
             include_related: false,
             format: None,
             fields: None,
+            include_redaction: false,
         };
         let none = compute_search_cache_key(&mk(None));
         let yes = compute_search_cache_key(&mk(Some(true)));
@@ -2802,6 +2854,7 @@ mod tests {
             include_related,
             format: None,
             fields: None,
+            include_redaction: false,
         };
         assert_ne!(
             compute_search_cache_key(&mk(false)),
@@ -2869,6 +2922,7 @@ mod tests {
             data: data
                 .into_iter()
                 .map(|item| StarredSearchHit {
+                    redaction: None,
                     item,
                     starred: Some(false),
                 })

@@ -470,6 +470,7 @@ mod memories;
 mod planner_stats_tests;
 pub mod privacy_exports;
 pub mod privacy_release;
+pub mod redaction_status;
 mod starred;
 pub use starred::StarredSession;
 mod outputs;

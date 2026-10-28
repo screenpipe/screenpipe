@@ -191,6 +191,13 @@ impl DatabaseManager {
                 .execute(&mut **tx.conn())
                 .await?;
         }
+        let has_completed_at: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('_privacy_release') WHERE name='completed_at')"
+        ).fetch_one(&mut **tx.conn()).await?;
+        if !has_completed_at {
+            sqlx::query("ALTER TABLE _privacy_release ADD COLUMN completed_at INTEGER")
+                .execute(&mut **tx.conn()).await?;
+        }
         super::privacy_exports::install(&mut **tx.conn()).await?;
         sqlx::query("DELETE FROM _privacy_export_scan WHERE EXISTS(SELECT 1 FROM _privacy_policy WHERE identity!=? OR text_required!=? OR image_required!=?)")
             .bind(&policy.identity).bind(policy.text).bind(policy.images).execute(&mut **tx.conn()).await?;
@@ -972,6 +979,8 @@ pub(crate) async fn certify(
 ) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT INTO _privacy_release(kind,id,revision,policy) VALUES(?,?,0,(SELECT receipt_key FROM _privacy_policy WHERE identity=?)) ON CONFLICT(kind,id) DO UPDATE SET policy=excluded.policy,attempts=0,retry_at=NULL")
         .bind(&job.kind).bind(&job.id).bind(&job.policy).execute(&mut *conn).await?;
+    sqlx::query("UPDATE _privacy_release SET completed_at=unixepoch() WHERE kind=? AND id=?")
+        .bind(&job.kind).bind(&job.id).execute(&mut *conn).await?;
     sqlx::query("UPDATE _privacy_policy SET epoch=epoch+1 WHERE id=1")
         .execute(&mut *conn)
         .await?;

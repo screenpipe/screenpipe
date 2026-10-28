@@ -1348,6 +1348,7 @@ pub async fn get_next_valid_frame(
 pub struct FrameMetadataResponse {
     pub frame_id: i64,
     pub timestamp: DateTime<Utc>,
+    pub redaction: Value,
 }
 
 /// Get frame metadata (timestamp) for deep link navigation. screenpipe://frame/123 → resolve to timestamp.
@@ -1358,10 +1359,20 @@ pub async fn get_frame_metadata(
 ) -> Result<JsonResponse<FrameMetadataResponse>, (StatusCode, JsonResponse<Value>)> {
     require_frame_history_access(&state, frame_id).await?;
     match state.db.get_frame_timestamp(frame_id).await {
-        Ok(Some(timestamp)) => Ok(JsonResponse(FrameMetadataResponse {
-            frame_id,
-            timestamp,
-        })),
+        Ok(Some(timestamp)) => {
+            let redaction = state.db.frame_redaction_status(frame_id).await.map_err(|e| {
+                error!("Failed to read frame redaction status: {e}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    JsonResponse(json!({"error":"Failed to read redaction status"})),
+                )
+            })?;
+            Ok(JsonResponse(FrameMetadataResponse {
+                frame_id,
+                timestamp,
+                redaction,
+            }))
+        }
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             JsonResponse(json!({

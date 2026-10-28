@@ -9140,6 +9140,7 @@ dependencies = [
  "rand 0.9.4",
  "regex",
  "reqwest 0.13.3",
+ "screenpipe-core",
  "screenpipe-db",
  "screenpipe-fs",
  "screenpipe-resource",

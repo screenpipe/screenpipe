@@ -513,6 +513,8 @@ impl ServerCore {
             }
         };
         info!("Database initialized at {}", db_path);
+        let pseudonymizer = screenpipe_engine::recording_config::configure_inline_pseudonyms(config)
+            .map_err(|e| format!("could not configure pseudonyms: {e}"))?;
         db.configure_release(&screenpipe_db::privacy_release::ReleasePolicy {
             identity: format!(
                 "pii-release-v1:{}:{}:{:?}:{:?}:{}",
@@ -1244,32 +1246,10 @@ impl ServerCore {
             use screenpipe_redact::adapters::tinfoil::{TinfoilConfig, TinfoilRedactor};
             use screenpipe_redact::pipeline::{Pipeline, PipelineConfig};
             use screenpipe_redact::worker::{Worker, WorkerConfig, ALL_TARGET_TABLES};
-            use screenpipe_redact::Pseudonymizer;
             use screenpipe_redact::Redactor;
             use screenpipe_redact::TextRedactionPolicy;
 
-            // Consistent-pseudonym tokens (issue #4206), opt-in. Loads (or
-            // creates on first run) the per-install key under the data dir.
-            // On any IO error we log and fall back to static `[LABEL]`
-            // tags. No effect on the tinfoil backend (span-less output).
-            let pseudonymizer: Option<Arc<Pseudonymizer>> = if config.pii_redaction_pseudonyms {
-                match Pseudonymizer::load_or_create(&config.data_dir) {
-                    Ok(p) => {
-                        info!("text-PII redaction: consistent pseudonyms ON (issue #4206)");
-                        Some(Arc::new(p))
-                    }
-                    Err(e) => {
-                        warn!(
-                            "couldn't load pseudonym key ({e}); rendering static [LABEL] tags \
-                             instead"
-                        );
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-
+            let pseudonymizer = pseudonymizer.clone();
             // Backend selection for the text "AI" step:
             //   - "local"   → on-device candle OPF v3 (opf-rs). First
             //                 run downloads ~2.8 GB from

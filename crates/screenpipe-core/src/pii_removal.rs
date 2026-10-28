@@ -183,7 +183,23 @@ lazy_static! {
     ).unwrap();
 }
 
+/// Optional process-scoped renderer, configured before starting capture.
+/// Atomic reads keep disk I/O and mutexes out of capture callbacks.
+pub struct PiiPseudonymizer(pub Box<dyn Fn(&str, &str) -> String + Send + Sync>);
+static PSEUDONYMIZER: arc_swap::ArcSwapOption<PiiPseudonymizer> =
+    arc_swap::ArcSwapOption::const_empty();
+
+pub fn set_pii_pseudonymizer(renderer: Option<std::sync::Arc<PiiPseudonymizer>>) {
+    PSEUDONYMIZER.store(renderer);
+}
+
 pub fn remove_pii(text: &str) -> String {
+    let renderer = PSEUDONYMIZER.load();
+    remove_pii_with_renderer(text, renderer.as_deref())
+}
+
+/// Explicit renderer for callers that own an isolated recording context.
+pub fn remove_pii_with_renderer(text: &str, renderer: Option<&PiiPseudonymizer>) -> String {
     // Fast path: single RegexSet DFA pass checks all patterns at once.
     // Most captured text has zero PII, so we avoid 27 individual replace_all calls.
     let matches: Vec<usize> = PII_REGEX_SET.matches(text).into_iter().collect();
@@ -192,9 +208,19 @@ pub fn remove_pii(text: &str) -> String {
     }
 
     // First, handle password context specially - preserve the keyword, redact only the value
-    let mut sanitized = PASSWORD_CONTEXT_PATTERN
-        .replace_all(text, "$1[PASSWORD]")
-        .to_string();
+    let mut sanitized = if let Some(renderer) = renderer {
+        PASSWORD_CONTEXT_PATTERN
+            .replace_all(text, |captures: &regex::Captures<'_>| {
+                let prefix = captures.get(1).map_or("", |m| m.as_str());
+                let value = captures.get(2).unwrap().as_str();
+                format!("{}{}", prefix, (renderer.0)("PASSWORD", value))
+            })
+            .to_string()
+    } else {
+        PASSWORD_CONTEXT_PATTERN
+            .replace_all(text, "$1[PASSWORD]")
+            .to_string()
+    };
 
     // Only run replace_all for patterns that actually matched
     for idx in matches {
@@ -202,7 +228,8 @@ pub fn remove_pii(text: &str) -> String {
         if *replacement == "PASSWORD_CONTEXT" {
             continue; // Already handled above
         }
-        let replacement_bracketed = format!("[{}]", replacement);
+
+        let replacement_bracketed = format!("[{replacement}]");
         if matches!(
             *replacement,
             "ELEVENLABS_KEY"
@@ -218,9 +245,25 @@ pub fn remove_pii(text: &str) -> String {
                 .replace_all(&sanitized, |captures: &regex::Captures<'_>| {
                     format!(
                         "{}{}",
-                        replacement_bracketed,
+                        match renderer {
+                            Some(renderer) => {
+                                let matched = captures.get(0).unwrap().as_str();
+                                let delimiter = captures.get(1).map_or("", |m| m.as_str());
+                                std::borrow::Cow::Owned((renderer.0)(
+                                    replacement,
+                                    &matched[..matched.len() - delimiter.len()],
+                                ))
+                            }
+                            None => std::borrow::Cow::Borrowed(replacement_bracketed.as_str()),
+                        },
                         captures.get(1).map_or("", |value| value.as_str())
                     )
+                })
+                .to_string();
+        } else if let Some(renderer) = renderer {
+            sanitized = pattern
+                .replace_all(&sanitized, |captures: &regex::Captures<'_>| {
+                    (renderer.0)(replacement, captures.get(0).unwrap().as_str())
                 })
                 .to_string();
         } else {
@@ -1245,5 +1288,39 @@ mod tests {
                 input
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod pseudonym_tests {
+    use super::*;
+
+    #[test]
+    fn inline_renderer_receives_original_values_and_preserves_delimiters() {
+        // Build a synthetic fixture without embedding a key-shaped literal.
+        let key = format!("phx_{}", "123456789012".repeat(4));
+        let expected_key = key.clone();
+        let renderer = PiiPseudonymizer(Box::new(move |kind, value| {
+            match kind {
+                "EMAIL" => assert_eq!(value, "Alice@Example.com"),
+                "PASSWORD" => assert_eq!(value, "AbC123"),
+                "POSTHOG_KEY" => assert_eq!(value, expected_key),
+                _ => panic!("unexpected label: {kind}"),
+            }
+            format!("[{kind}_abcdefabcdef]")
+        }));
+        let text = "Email: Alice@Example.com password: AbC123";
+        assert_eq!(
+            remove_pii_with_renderer(text, Some(&renderer)),
+            "Email: [EMAIL_abcdefabcdef] password: [PASSWORD_abcdefabcdef]"
+        );
+        assert_eq!(
+            remove_pii_with_renderer(&format!("{key};"), Some(&renderer)),
+            "[POSTHOG_KEY_abcdefabcdef];"
+        );
+        assert_eq!(
+            remove_pii_with_renderer("ordinary text", Some(&renderer)),
+            "ordinary text"
+        );
     }
 }

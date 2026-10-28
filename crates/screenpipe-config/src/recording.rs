@@ -772,13 +772,13 @@ pub struct RecordingSettings {
     pub pii_redaction_columns: Vec<String>,
 
     /// Render redacted PII as **consistent pseudonyms** instead of static
-    /// `[LABEL]` tags when `asyncPiiRedaction` is on. Same value → same
+    /// `[LABEL]` tags in inline removal and async text redaction. Same value → same
     /// stable token (e.g. `[PERSON_1a2b3c4d5e6f]`), so the timeline stays
     /// correlatable without exposing the value. Irreversible: a one-way
-    /// keyed hash with a random per-install key, no `token -> value`
-    /// store. Applies to newly-redacted rows only — rows already redacted
+    /// keyed hash with a per-install key or a provisioned team key selected
+    /// by SCREENPIPE_PSEUDONYM_KEY_FILE, no `token -> value` store. Applies to newly-redacted rows only — rows already redacted
     /// keep their existing tags (the worker redacts each row once).
-    /// Ignored for the Tinfoil backend (the enclave returns no spans to
+    /// Tinfoil model output is excluded (the enclave returns no spans to
     /// tokenize). Off by default. See issue #4206 and `screenpipe-redact`'s
     /// `Pseudonymizer`.
     #[serde(rename = "piiRedactionPseudonyms", default)]

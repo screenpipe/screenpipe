@@ -607,10 +607,11 @@ pub struct RecordArgs {
     /// Render redacted PII as consistent pseudonym tokens
     /// (`[PERSON_1a2b3c4d5e6f]`) instead of static `[PERSON]` tags, so the
     /// same value stays correlatable across rows without exposing it.
-    /// Irreversible (one-way keyed hash, random per-install key, no
-    /// reverse map). Applies to the text worker when
-    /// `--async-pii-redaction` is on, for newly-redacted rows only;
-    /// ignored for the Tinfoil backend. Off by default. See issue #4206.
+    /// Uses a random per-install key, or an existing 32-byte binary team key
+    /// from SCREENPIPE_PSEUDONYM_KEY_FILE. Applies to inline PII removal and
+    /// newly processed async text. Shared keys normalize email case and phone
+    /// punctuation. Existing redactions cannot be recovered. The span-less
+    /// Tinfoil model output cannot be pseudonymized. Off by default.
     #[arg(long, default_value_t = false)]
     pub pii_redaction_pseudonyms: bool,
 
