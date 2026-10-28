@@ -778,6 +778,11 @@ fn http_error_detail(operation: &str, error: reqwest::Error) -> String {
     detail
 }
 
+/// Preserve the originating local recording failure before retention redacts URLs.
+pub(crate) fn local_api_http_error(operation: &str, error: reqwest::Error) -> EnterpriseSyncError {
+    EnterpriseSyncError::LocalApi(http_error_detail(operation, error))
+}
+
 /// POST a JSONL body to the ingest endpoint. Returns `Ok(())` on 2xx.
 /// Distinguishes auth (401/403) from transient (5xx) so the caller can apply
 /// the appropriate retry handling.
@@ -5975,6 +5980,77 @@ pub(crate) mod tests {
         assert!(!retained.contains("private-person@example.com"));
         assert!(!retained.contains("private-signature"));
         assert!(!retained.contains("private-license"));
+    }
+
+    #[tokio::test]
+    async fn local_transport_cause_survives_retention() {
+        let dir = TempDir::new().unwrap();
+        check_retained_local_transport_error(dir.path()).await;
+    }
+
+    #[tokio::test]
+    async fn local_transport_timeout_and_decode_preserve_their_causes() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::path("/slow"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_delay(Duration::from_secs(1)))
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::path("/invalid"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("invalid JSON"))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_millis(30))
+            .build()
+            .unwrap();
+        let error = http
+            .get(format!("{}/slow?signature=private-signature", server.uri()))
+            .send()
+            .await
+            .unwrap_err();
+        assert!(error.is_timeout());
+        let detail = local_api_http_error("read audio recordings", error).to_string();
+        assert!(detail.contains("read audio recordings"), "{detail}");
+        assert!(detail.contains("timed out"), "{detail}");
+        assert!(!detail.contains("private-signature"), "{detail}");
+        let response = reqwest::Client::new()
+            .get(format!("{}/invalid", server.uri()))
+            .send()
+            .await
+            .unwrap();
+        let error = response.json::<serde_json::Value>().await.unwrap_err();
+        let detail = local_api_http_error("decode frame recordings", error).to_string();
+        assert!(detail.contains("decode frame recordings"), "{detail}");
+        assert!(detail.contains("expected value"), "{detail}");
+    }
+
+    // The desktop support test also runs the real collector after log rotation.
+    pub(crate) async fn check_retained_local_transport_error(log_dir: &std::path::Path) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let url = format!("http://{address}/search?signature=private-signature");
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let error = http.get(&url).send().await.unwrap_err();
+        let error = local_api_http_error("read frame recordings", error);
+        assert!(matches!(error, EnterpriseSyncError::LocalApi(_)));
+        let detail = error.to_string();
+        assert!(detail.contains("read frame recordings"), "{detail}");
+        assert!(detail.to_lowercase().contains("refused"), "{detail}");
+        assert!(detail.contains("os error"), "{detail}");
+        assert!(!detail.contains("private-signature"), "{detail}");
+        assert!(!detail.contains("http://"), "{detail}");
+        let dir = TempDir::new().unwrap();
+        let mut cfg = test_cfg(&dir, url);
+        cfg.cursor_path = log_dir.join("cursor.json");
+        diagnostics::retain(&cfg, &format!("{detail}; upload did not complete, pending data retained; retry in 300 seconds; user=private-person@example.com"))
+            .await.unwrap();
+        let retained = std::fs::read_to_string(log_dir.join(diagnostics::LOG_NAME)).unwrap();
+        assert!(retained.contains("read frame recordings"));
+        assert!(retained.to_lowercase().contains("refused"));
+        assert!(retained.contains("pending data retained"));
+        assert!(!retained.contains("private-person@example.com"));
     }
 
     pub(crate) async fn check_retained_diagnostic(log_dir: &std::path::Path) {

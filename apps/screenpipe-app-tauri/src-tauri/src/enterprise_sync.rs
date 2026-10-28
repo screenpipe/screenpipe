@@ -634,7 +634,7 @@ mod imp {
                 .query(&query)
                 .send()
                 .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
+                .map_err(|e| ee_sync::local_api_http_error("read certified recording page", e))?;
             if !response.status().is_success() {
                 return Err(EnterpriseSyncError::LocalApi(
                     "privacy release page unavailable; retry pending".into(),
@@ -643,7 +643,7 @@ mod imp {
             response
                 .json()
                 .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))
+                .map_err(|e| ee_sync::local_api_http_error("read certified recording page", e))
         }
 
         async fn begin_export(
@@ -768,14 +768,14 @@ mod imp {
                 .auth(self.http.get(&url))
                 .send()
                 .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
+                .map_err(|e| ee_sync::local_api_http_error("read frame recordings", e))?;
             if !resp.status().is_success() {
                 return Err(local_api_error(resp, &url).await);
             }
             let body: LocalSearchResponse = resp
                 .json()
                 .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(format!("decode: {e}")))?;
+                .map_err(|e| ee_sync::local_api_http_error("decode frame recordings", e))?;
             let mut out = Vec::with_capacity(body.data.len());
             for item in body.data {
                 if let LocalSearchItem::OCR(o) = item {
@@ -838,14 +838,14 @@ mod imp {
                 .auth(self.http.get(&url))
                 .send()
                 .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
+                .map_err(|e| ee_sync::local_api_http_error("read audio recordings", e))?;
             if !resp.status().is_success() {
                 return Err(local_api_error(resp, &url).await);
             }
             let body: LocalSearchResponse = resp
                 .json()
                 .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(format!("decode: {e}")))?;
+                .map_err(|e| ee_sync::local_api_http_error("decode audio recordings", e))?;
             let mut out = Vec::with_capacity(body.data.len());
             for item in body.data {
                 if let LocalSearchItem::Audio(a) = item {
@@ -879,14 +879,14 @@ mod imp {
                 .auth(self.http.get(&url))
                 .send()
                 .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
+                .map_err(|e| ee_sync::local_api_http_error("read parsed recordings", e))?;
             if !resp.status().is_success() {
                 return Err(local_api_error(resp, &url).await);
             }
             let body: LocalSearchResponse = resp
                 .json()
                 .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(format!("decode: {e}")))?;
+                .map_err(|e| ee_sync::local_api_http_error("decode parsed recordings", e))?;
             let mut out = body
                 .data
                 .into_iter()
@@ -1001,14 +1001,14 @@ mod imp {
                 .auth(self.http.get(&url))
                 .send()
                 .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
+                .map_err(|e| ee_sync::local_api_http_error("read UI recordings", e))?;
             if !resp.status().is_success() {
                 return Err(local_api_error(resp, &url).await);
             }
             let body: LocalSearchResponse = resp
                 .json()
                 .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(format!("decode: {e}")))?;
+                .map_err(|e| ee_sync::local_api_http_error("decode UI recordings", e))?;
             let mut out = Vec::with_capacity(body.data.len());
             for item in body.data {
                 if let LocalSearchItem::Input(i) = item {
@@ -1072,14 +1072,14 @@ mod imp {
                 .auth(self.http.get(&search_url))
                 .send()
                 .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
+                .map_err(|e| ee_sync::local_api_http_error("read recording snapshot", e))?;
             if !resp.status().is_success() {
                 return Err(local_api_error(resp, &search_url).await);
             }
             let body: LocalSearchResponse = resp
                 .json()
                 .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(format!("decode: {e}")))?;
+                .map_err(|e| ee_sync::local_api_http_error("decode recording snapshot", e))?;
 
             // Newest first, so we snapshot the freshest frame that decodes.
             let mut candidates: Vec<(i64, chrono::DateTime<chrono::Utc>)> = body
@@ -1108,7 +1108,7 @@ mod imp {
                     .auth(self.http.get(&img_url))
                     .send()
                     .await
-                    .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
+                    .map_err(|e| ee_sync::local_api_http_error("read recording snapshot", e))?;
                 if !resp.status().is_success() {
                     continue;
                 }
@@ -1190,14 +1190,14 @@ mod imp {
                 .auth(self.http.get(&url))
                 .send()
                 .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(e.to_string()))?;
+                .map_err(|e| ee_sync::local_api_http_error("read recording memories", e))?;
             if !resp.status().is_success() {
                 return Err(local_api_error(resp, &url).await);
             }
             let body: LocalMemoriesResponse = resp
                 .json()
                 .await
-                .map_err(|e| EnterpriseSyncError::LocalApi(format!("decode: {e}")))?;
+                .map_err(|e| ee_sync::local_api_http_error("decode recording memories", e))?;
             let out = body
                 .data
                 .into_iter()
@@ -1235,14 +1235,13 @@ mod imp {
                 .auth(self.http.get(&url))
                 .send()
                 .await
-                .map_err(|error| EnterpriseSyncError::LocalApi(error.to_string()))?;
+                .map_err(|error| ee_sync::local_api_http_error("read recording feedback", error))?;
             if !resp.status().is_success() {
                 return Err(local_api_error(resp, &url).await);
             }
-            let body: LocalFeedbackResponse = resp
-                .json()
-                .await
-                .map_err(|error| EnterpriseSyncError::LocalApi(format!("decode: {error}")))?;
+            let body: LocalFeedbackResponse = resp.json().await.map_err(|error| {
+                ee_sync::local_api_http_error("decode recording feedback", error)
+            })?;
             Ok(body
                 .data
                 .into_iter()

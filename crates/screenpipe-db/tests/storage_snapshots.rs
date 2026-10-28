@@ -5,6 +5,143 @@ use screenpipe_db::{storage::Projection, DatabaseManager};
 use std::{sync::Arc, time::Duration};
 
 #[tokio::test]
+async fn background_deletion_and_upload_reads_progress_without_blocking_capture() {
+    let root = tempfile::tempdir().unwrap();
+    let db = Arc::new(
+        DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap(),
+    );
+    db.execute_raw_sql_write("INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-10-01T00:00:00+00:00','expired'),(2,'2026-10-28T00:00:00+00:00','pending upload')").await.unwrap();
+    db.seal_frame_payloads().await.unwrap();
+    let export = db.storage_export_token().await.unwrap();
+    let (selected, selection) = tokio::sync::oneshot::channel();
+    let (release, released) = tokio::sync::oneshot::channel();
+    let reader = Arc::clone(&db);
+    let reading = tokio::spawn(async move {
+        reader
+            .read_snapshot(async {
+                let rows = reader.frame_payloads(&[2], Projection::All).await.unwrap();
+                selected.send(()).unwrap();
+                released.await.unwrap();
+                rows
+            })
+            .await
+    });
+    selection.await.unwrap();
+    let cleanup_db = Arc::clone(&db);
+    let mut cleanup = tokio::spawn(async move {
+        cleanup_db
+            .delete_time_range_batch(
+                "2026-10-01T00:00:00Z".parse().unwrap(),
+                "2026-10-02T00:00:00Z".parse().unwrap(),
+                true,
+            )
+            .await
+    });
+    // An admitted page must finish before automated deletion can revoke it.
+    // This observation delay is test-only, not a cleanup or capture timeout.
+    let deletion_during_read = tokio::time::timeout(Duration::from_millis(100), &mut cleanup).await;
+    // Captures use the existing writer independently, even with cleanup queued.
+    let capture_started = std::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(15), db.execute_raw_sql_write(
+        "INSERT INTO frames(id,timestamp,full_text) VALUES(3,'2026-10-28T00:01:00+00:00','durable concurrent capture')"
+    )).await.expect("queued cleanup held the recording writer").unwrap();
+    println!(
+        "capture persisted with cleanup queued in {:?}",
+        capture_started.elapsed()
+    );
+    // The next page queues behind cleanup, so neither side starves the other.
+    let next_reader = Arc::clone(&db);
+    let next_page = tokio::spawn(async move {
+        next_reader
+            .read_snapshot(async {
+                next_reader
+                    .frame_payloads(&[1, 2, 3], Projection::All)
+                    .await
+                    .unwrap()
+            })
+            .await
+            .unwrap()
+    });
+    release.send(()).unwrap();
+    let page = reading.await.unwrap();
+    assert!(
+        deletion_during_read.is_err(),
+        "cleanup invalidated an admitted upload page"
+    );
+    assert_eq!(page.unwrap()[&2].text(), "pending upload");
+    assert_eq!(cleanup.await.unwrap().unwrap().frames_deleted, 1);
+    // Export admission still rejects bytes prepared before a real deletion.
+    assert!(export.admit(&db.pool).await.is_err());
+    drop(export);
+    let next = next_page.await.unwrap();
+    assert!(!next.contains_key(&1));
+    assert_eq!(next[&3].text(), "durable concurrent capture");
+    db.close().await;
+    drop(db);
+    let reopened = DatabaseManager::new(
+        root.path().join("db.sqlite").to_str().unwrap(),
+        Default::default(),
+    )
+    .await
+    .unwrap();
+    let next = reopened
+        .frame_payloads(&[1, 2, 3], Projection::All)
+        .await
+        .unwrap();
+    assert!(!next.contains_key(&1));
+    assert_eq!(next[&2].text(), "pending upload");
+    assert_eq!(next[&3].text(), "durable concurrent capture");
+    reopened.close().await;
+}
+
+#[tokio::test]
+async fn cancelled_history_read_releases_background_deletion() {
+    let root = tempfile::tempdir().unwrap();
+    let db = Arc::new(
+        DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())
+            .await
+            .unwrap(),
+    );
+    db.execute_raw_sql_write("INSERT INTO frames(id,timestamp,full_text) VALUES(1,'2026-10-01T00:00:00+00:00','expired')").await.unwrap();
+    let (ready, started) = tokio::sync::oneshot::channel();
+    let reader = Arc::clone(&db);
+    let reading = tokio::spawn(async move {
+        reader
+            .read_snapshot(async {
+                reader.frame_payloads(&[1], Projection::All).await.unwrap();
+                ready.send(()).unwrap();
+                std::future::pending::<()>().await;
+            })
+            .await
+    });
+    started.await.unwrap();
+    let cleanup_db = Arc::clone(&db);
+    let cleanup = tokio::spawn(async move {
+        cleanup_db
+            .delete_time_range_batch(
+                "2026-10-01T00:00:00Z".parse().unwrap(),
+                "2026-10-02T00:00:00Z".parse().unwrap(),
+                true,
+            )
+            .await
+    });
+    reading.abort();
+    assert!(reading.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), cleanup)
+            .await
+            .expect("cancelled read stranded cleanup")
+            .unwrap()
+            .unwrap()
+            .frames_deleted,
+        1
+    );
+    db.close().await;
+}
+
+#[tokio::test]
 async fn existing_hybrid_index_builds_lookup_and_maintains_mutations() {
     let root = tempfile::tempdir().unwrap();
     let db = DatabaseManager::new_hybrid(root.path(), Default::default(), Default::default())

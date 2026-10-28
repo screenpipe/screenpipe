@@ -243,6 +243,18 @@ impl DeviceManager {
         self.streams.get(device).map(|s| s.value().clone())
     }
 
+    #[cfg(test)]
+    pub(crate) fn install_stream_for_test(
+        &self,
+        device: AudioDevice,
+        stream: AudioStream,
+        is_running: bool,
+    ) {
+        self.streams.insert(device.clone(), Arc::new(stream));
+        self.states
+            .insert(device, Arc::new(AtomicBool::new(is_running)));
+    }
+
     pub fn is_running(&self, device: &AudioDevice) -> bool {
         self.states
             .get(device)

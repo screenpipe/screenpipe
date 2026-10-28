@@ -1,0 +1,3 @@
+WARN [DEVICE_RECOVERY] detected stale recording handle for Default microphone (input), cleaning up for restart
+INFO starting recording for device: Default microphone (input)
+INFO [DEVICE_RECOVERY] attaching replacement recorder for Default microphone (input) after previous recording task finished

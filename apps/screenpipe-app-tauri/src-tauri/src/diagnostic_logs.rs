@@ -527,6 +527,31 @@ mod tests {
 
     #[cfg(feature = "enterprise-build")]
     #[tokio::test]
+    async fn local_transport_cause_survives_rotation_and_support_redaction() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::enterprise::sync::tests::check_retained_local_transport_error(dir.path()).await;
+        for index in 0..7 {
+            tokio::fs::write(
+                dir.path()
+                    .join(format!("screenpipe-app.2026-10-27.{index}.log")),
+                "INFO recorder restarted\n",
+            )
+            .await
+            .unwrap();
+        }
+        let report = collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+            .await
+            .unwrap();
+        assert!(report.contains("read frame recordings"));
+        assert!(report.to_lowercase().contains("refused"));
+        assert!(report.contains("os error"));
+        assert!(report.contains("pending data retained"));
+        assert!(!report.contains("private-person@example.com"));
+        assert!(!report.contains("private-signature"));
+    }
+
+    #[cfg(feature = "enterprise-build")]
+    #[tokio::test]
     async fn retained_sync_diagnostic_survives_rotation_and_support_redaction() {
         let dir = tempfile::tempdir().unwrap();
         crate::enterprise::sync::tests::check_retained_diagnostic(dir.path()).await;
@@ -854,6 +879,24 @@ mod tests {
         assert!(report.contains("attempted to acquire a connection on a closed pool"));
         assert!(report.contains("recorder restarted"));
         assert!(!report.contains("private-person@example.com"));
+    }
+
+    #[tokio::test]
+    async fn audio_recorder_handoff_survives_collection_and_redaction() {
+        let diagnostic = include_str!(
+            "../../../../crates/screenpipe-audio/tests/fixtures/audio-recorder-handoff-diagnostic.txt"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(dir.path().join("screenpipe-app.2026-10-28.log"), diagnostic)
+            .await
+            .unwrap();
+
+        let report = collect_redacted_from_dirs(&[dir.path().to_path_buf()])
+            .await
+            .unwrap();
+        assert!(report.contains("detected stale recording handle"));
+        assert!(report.contains("starting recording for device"));
+        assert!(report.contains("attaching replacement recorder"));
     }
 
     #[cfg(windows)]

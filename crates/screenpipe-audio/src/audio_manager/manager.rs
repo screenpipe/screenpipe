@@ -1084,14 +1084,7 @@ impl AudioManager {
             return Ok(());
         }
 
-        if !self.recording_handles.contains_key(device) {
-            if let Some(is_running) = self.device_manager.is_running_mut(device) {
-                is_running.store(true, Ordering::Relaxed);
-            }
-            let handle = self.record_device(device).await?;
-            self.recording_handles
-                .insert(device.clone(), Arc::new(Mutex::new(handle)));
-        }
+        self.ensure_recording_handle(device).await?;
 
         if !self.enabled_devices().await.contains(&device.to_string()) {
             self.options
@@ -1245,24 +1238,45 @@ impl AudioManager {
             return Err(anyhow!("screen locked while opening {}", device));
         }
 
-        if !self.recording_handles.contains_key(device) {
-            if let Some(is_running) = self.device_manager.is_running_mut(device) {
-                is_running.store(true, Ordering::Relaxed);
-            }
-            match self.record_device(device).await {
-                Ok(handle) => {
-                    self.recording_handles
-                        .insert(device.clone(), Arc::new(Mutex::new(handle)));
-                }
-                Err(e) => {
-                    self.session_devices
-                        .write()
-                        .unwrap()
-                        .remove(&device.to_string());
-                    return Err(e);
-                }
-            }
+        if let Err(e) = self.ensure_recording_handle(device).await {
+            self.session_devices
+                .write()
+                .unwrap()
+                .remove(&device.to_string());
+            return Err(e);
         }
+        Ok(())
+    }
+
+    /// Attach a recorder to the stream published by `DeviceManager`.
+    ///
+    /// Device recovery can replace a disconnected native stream before the
+    /// monitor has removed its finished recorder. The complete device operation
+    /// is serialized, so hand the map entry over here instead of leaving the
+    /// replacement stream without a consumer until the next monitor tick.
+    async fn ensure_recording_handle(&self, device: &AudioDevice) -> Result<()> {
+        let existing = self
+            .recording_handles
+            .get(device)
+            .map(|entry| entry.value().clone());
+        if let Some(existing) = existing {
+            if !existing.lock().await.is_finished() {
+                return Ok(());
+            }
+            self.recording_handles
+                .remove_if(device, |_, current| Arc::ptr_eq(current, &existing));
+            info!(
+                "[DEVICE_RECOVERY] attaching replacement recorder for {} after previous recording task finished",
+                device
+            );
+        }
+
+        if let Some(is_running) = self.device_manager.is_running_mut(device) {
+            is_running.store(true, Ordering::Relaxed);
+        }
+        let handle = self.record_device(device).await?;
+        self.recording_handles
+            .insert(device.clone(), Arc::new(Mutex::new(handle)));
         Ok(())
     }
 
@@ -2370,7 +2384,7 @@ impl AudioManager {
 
     /// Check for recording handles that have finished (crashed or timed out)
     /// Returns device names that need to be cleaned up and restarted
-    pub async fn check_stale_recording_handles(&self) -> Vec<String> {
+    pub(crate) async fn check_stale_recording_handles(&self) -> Vec<StaleRecordingHandle> {
         let mut stale_devices = Vec::new();
         let session_devices = self.session_devices.read().unwrap().clone();
 
@@ -2389,7 +2403,10 @@ impl AudioManager {
 
             // Check if the JoinHandle has finished (task completed/crashed)
             if handle.lock().await.is_finished() {
-                stale_devices.push(device.to_string());
+                stale_devices.push(StaleRecordingHandle {
+                    device_name: device.to_string(),
+                    handle: handle.clone(),
+                });
             }
         }
 
@@ -2480,7 +2497,11 @@ impl AudioManager {
 
     /// Clean up a stale device that had its recording handle crash/timeout
     /// This prepares the device for restart by the device monitor
-    pub async fn cleanup_stale_device(&self, device_name: &str) -> anyhow::Result<()> {
+    pub(crate) async fn cleanup_stale_device(
+        &self,
+        stale: &StaleRecordingHandle,
+    ) -> anyhow::Result<()> {
+        let device_name = &stale.device_name;
         // Defensive: never clean up a session device here. `check_stale_recording_handles`
         // already omits them from the stale list (the only caller), but guard the
         // public entry point too — only `stop_session_device` may tear these down.
@@ -2496,12 +2517,39 @@ impl AudioManager {
             Err(_) => return Err(anyhow!("Device {} not found", device_name)),
         };
 
-        self.stop_device_recording(&device).await?;
+        let manager = self.clone();
+        let stale_handle = stale.handle.clone();
+        let target = device.clone();
+        self.device_manager
+            .run_device_operation(&device, async move {
+                let current = manager
+                    .recording_handles
+                    .get(&target)
+                    .map(|entry| entry.value().clone());
+                let Some(current) = current else {
+                    return Ok(());
+                };
+                if !Arc::ptr_eq(&current, &stale_handle) || !current.lock().await.is_finished() {
+                    debug!(
+                        "stale cleanup for {} no longer matches the current recording handle",
+                        target
+                    );
+                    return Ok(());
+                }
+                manager.stop_device_recording_inner(&target).await
+            })
+            .await?;
 
         debug!("cleaned up stale device {} for restart", device_name);
 
         Ok(())
     }
+}
+
+#[derive(Clone)]
+pub(crate) struct StaleRecordingHandle {
+    pub(crate) device_name: String,
+    handle: Arc<Mutex<JoinHandle<Result<()>>>>,
 }
 
 /// Seed the embedding manager with named speakers from the DB.
@@ -2641,12 +2689,95 @@ impl Drop for AudioManager {
 mod tests {
     use super::*;
     use crate::core::device::{AudioDevice, DeviceType};
+    use crate::core::stream::AudioStream;
     use std::path::Path;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
     use tokio::sync::{Barrier, Notify, Semaphore};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recovery_hands_replacement_stream_to_live_recorder_and_rejects_stale_cleanup() {
+        let db = Arc::new(
+            DatabaseManager::new("sqlite::memory:", Default::default())
+                .await
+                .unwrap(),
+        );
+        let manager = AudioManager::new(
+            AudioManagerOptions {
+                is_disabled: true,
+                audio_chunk_duration: Duration::from_secs(1),
+                ..Default::default()
+            },
+            db,
+        )
+        .await
+        .unwrap();
+        let device = AudioDevice::new("recovery microphone".into(), DeviceType::Input);
+
+        let finished = Arc::new(Mutex::new(tokio::spawn(async { Ok(()) })));
+        manager
+            .recording_handles
+            .insert(device.clone(), finished.clone());
+        while !finished.lock().await.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        let stale = manager.check_stale_recording_handles().await;
+        assert_eq!(stale.len(), 1);
+
+        // Model DeviceManager's completed retry: the disconnected native stream
+        // has already been replaced, but its old finished recorder remains.
+        let (replacement, samples) =
+            AudioStream::from_sender_for_test(Arc::new(device.clone()), 16_000, 1);
+        manager
+            .device_manager
+            .install_stream_for_test(device.clone(), replacement, false);
+        manager.ensure_recording_handle(&device).await.unwrap();
+
+        let live = manager
+            .recording_handles
+            .get(&device)
+            .unwrap()
+            .value()
+            .clone();
+        assert!(!Arc::ptr_eq(&finished, &live));
+        assert!(!live.lock().await.is_finished());
+        while samples.receiver_count() == 0 {
+            tokio::task::yield_now().await;
+        }
+        manager.meeting_audio_tap.set_active(true);
+        let mut live_samples = manager.meeting_audio_tap.subscribe();
+        for _ in 0..170 {
+            samples.send(vec![0.25; 320]).unwrap();
+        }
+        let live_frame = tokio::time::timeout(Duration::from_secs(2), live_samples.recv())
+            .await
+            .expect("replacement recorder must deliver live samples")
+            .unwrap();
+        assert!(!live_frame.samples.is_empty());
+        let delivered = tokio::time::timeout(
+            Duration::from_secs(2),
+            manager.recording_receiver.recv_async(),
+        )
+        .await
+        .expect("replacement recorder must consume samples")
+        .unwrap();
+        assert!(!delivered.data.is_empty());
+
+        manager.cleanup_stale_device(&stale[0]).await.unwrap();
+        let current = manager
+            .recording_handles
+            .get(&device)
+            .unwrap()
+            .value()
+            .clone();
+        assert!(Arc::ptr_eq(&live, &current));
+        assert!(!current.lock().await.is_finished());
+        assert!(manager.device_manager.stream(&device).is_some());
+
+        manager.stop_device_recording(&device).await.unwrap();
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn idle_audio_handlers_cancel_and_restart_without_stealing_queued_capture() {

@@ -159,6 +159,14 @@ pub(super) async fn run<T>(
         _ = storage.closing.cancelled() => return Err(sqlx::Error::PoolClosed),
         lane = Arc::clone(lanes).acquire_owned() => lane.map_err(|_| sqlx::Error::PoolClosed)?,
     };
+    // A cleanup backlog must not repeatedly revoke a page before it reaches
+    // final admission. Tokio's fair lock lets queued deletion and subsequent
+    // readers each progress. Recording uses neither side of this lock.
+    let _history = tokio::select! {
+        biased;
+        _ = storage.closing.cancelled() => return Err(sqlx::Error::PoolClosed),
+        history = storage.history.read() => history,
+    };
     let lease = tokio::select! {
         biased;
         _ = storage.closing.cancelled() => return Err(sqlx::Error::PoolClosed),
