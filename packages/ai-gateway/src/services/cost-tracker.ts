@@ -196,6 +196,9 @@ export function hasContextPricing(model: string): boolean {
 }
 
 export function getContextPricingPremium(model: string, input: number, output: number, cache: CacheUsage = {}): number {
+  const pricing = findPricing(model);
+  if (!pricing) throw new Error('Missing gateway token prices');
+  if (!pricing.longContext || input <= pricing.longContext.threshold) return 0;
   const rates = getBaseGatewayTokenRates(model);
   if (!rates) throw new Error('Missing gateway token prices');
   const read = Math.max(0, cache.cache_read_tokens ?? 0);

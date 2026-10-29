@@ -16,8 +16,8 @@ test('context premiums preserve published whole-request thresholds and cache rat
   ] as const) {
     const cache = model.startsWith('claude') ? { cache_read_tokens: 50000, cache_creation_tokens: 25000 }
       : { cache_read_tokens: 100000, cache_creation_tokens: 50000 };
-    expect(getContextPricingPremium(model, threshold - 1, 100, cache)).toBeCloseTo(0, 12);
-    expect(getContextPricingPremium(model, threshold, 100, cache)).toBeCloseTo(0, 12);
+    expect(getContextPricingPremium(model, threshold - 1, 100, cache)).toBe(0);
+    expect(getContextPricingPremium(model, threshold, 100, cache)).toBe(0);
     expect(getContextPricingPremium(model, threshold + 1, 100, cache)).toBeCloseTo(expected, 12);
   }
 });
