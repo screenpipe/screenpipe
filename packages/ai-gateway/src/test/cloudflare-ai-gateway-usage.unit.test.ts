@@ -24,6 +24,7 @@ const context: HostedChatGatewayContext = {
 
 function env(gatewayId: string): Env {
 	return {
+		DB: { prepare: () => ({ bind: () => ({ first: async () => null }) }) },
 		CLOUDFLARE_ACCOUNT_ID: '9850df1eb8fd807eb8e06f4057b473f1',
 		CLOUDFLARE_AI_GATEWAY_ID: gatewayId,
 		CLOUDFLARE_API_TOKEN: 'read-only-token',
