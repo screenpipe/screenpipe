@@ -56,6 +56,15 @@ describe("usePiModels", () => {
     });
   });
 
+  it("omits retired enclave models from an older gateway catalog", async () => {
+    settingsState={settings:{user:{token:"synthetic"}},isSettingsLoaded:true};
+    vi.mocked(fetch).mockImplementation(() => response([
+      {id:"glm-5.3-flash-reap50-iq3m"},{id:"gemma4-e4b"},{id:"auto"},{id:"gpt-5.6-luna"},
+    ]));
+    const {result}=renderHook(() => usePiModels());
+    await waitFor(() => expect(result.current.piModels.map(m=>m.id)).toEqual(["auto","gpt-5.6-luna"]));
+  });
+
   it("does not fetch before settings hydration", () => {
     renderHook(() => usePiModels());
     expect(fetch).not.toHaveBeenCalled();

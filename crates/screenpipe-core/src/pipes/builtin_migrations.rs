@@ -170,6 +170,8 @@ const LEGACY_MEETING_RENDER: &str = r#"step 2 — render the transcript and scre
 
 summarize what happened: key topics, decisions, action items. fold in anything the screen shows that the transcript does not — shared slides, docs, code, demos — and use the on-screen name tags video-call apps render on each tile to fill in attendees who never spoke."#;
 
+const LEGACY_V38_MEETING_MEDIA: &str = r#"step 2c — skip this step by default; it costs several round trips. only when the transcript and preferred screen data leave a *specific* visual question unanswered, use the cloud media (video/audio) model for that question — diagrams, charts, whiteboards, slide figures, UI demos, or screen-shared video. choose up to 4 representative `frame_id` values already returned by parsed data, or by the OCR fallback when both preferred sources were unavailable, fetch those still images with `GET /frames/<frame_id>`, and send them as `image_url[]` to `POST /v1/chat/completions` with `"model": "gemma4-e4b"`. NEVER call `POST /export` or run ffmpeg for a routine meeting summary; a full media export requires an explicit user request. if there is no returned `frame_id`, or the cloud-media block is absent or returns `503 cloud_token_missing`, skip visual analysis and summarize from the transcript plus the screen data already fetched."#;
+
 const LEGACY_MEETING_MEDIA: &str = r#"step 2c — skip this step by default; it costs several round trips. only when the transcript and screen text leave a *specific* visual question unanswered, use the cloud media (video/audio) model for that question — diagrams, charts, whiteboards, slide figures, UI demos, or screen-shared video. choose up to 4 representative `frame_id` values already returned by the bounded OCR search, fetch those still images with `GET /frames/<frame_id>`, and send them as `image_url[]` to `POST /v1/chat/completions` with `"model": "gemma4-e4b"`. NEVER call `POST /export` or run ffmpeg for a routine meeting summary; a full media export requires an explicit user request. if the cloud-media block is absent or returns `503 cloud_token_missing`, skip visual analysis and summarize from transcript + OCR."#;
 
 const LEGACY_MEETING_NAMING: &str = r#"step 2d — name the speakers from the screen (do this every run, don't ask first): video-call apps render each participant's name on their tile, and that text is already in the `content_type=ocr` rows you fetched in step 1. for every speaker still unnamed or generic ("speaker 1", "unknown", "") in the transcript, line up when they were talking with the on-screen name tag showing at that moment and rename them:
@@ -527,6 +529,14 @@ fn meeting_summary_swaps() -> Vec<FragmentSwap> {
         if let Some(new) = replacement {
             swaps.push(FragmentSwap { why, old, new });
         }
+    }
+
+    if let Some(new) = meeting_summary_media_step() {
+        swaps.push(FragmentSwap {
+            why: "retire the separate Gemma media endpoint without sending screenshots to another provider",
+            old: LEGACY_V38_MEETING_MEDIA,
+            new,
+        });
     }
 
     // Apply narrow replacements after whole-section legacy migrations.
@@ -1131,6 +1141,19 @@ mod tests {
             .is_none());
         }
     }
+    #[test]
+    fn retires_gemma_media_in_existing_builtin_without_changing_frontmatter() {
+        let bundled = super::bundled_prompt("meeting-summary").unwrap();
+        let current = super::meeting_summary_media_step().unwrap();
+        let legacy = bundled.replace(current, super::LEGACY_V38_MEETING_MEDIA);
+        let fixed = super::migrate_builtin_pipe_text("meeting-summary", &legacy).unwrap();
+        assert!(!fixed.contains("gemma4-e4b"));
+        assert!(fixed.contains("model has been retired"));
+        assert_eq!(fixed.splitn(3, "---").nth(1), legacy.splitn(3, "---").nth(1));
+        assert!(super::migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
+        assert!(super::migrate_builtin_pipe_text("meeting-summary", "My custom meeting prompt").is_none());
+    }
+
     use super::*;
     use crate::pipes::{parse_frontmatter, PipeManager};
     use std::collections::HashMap;

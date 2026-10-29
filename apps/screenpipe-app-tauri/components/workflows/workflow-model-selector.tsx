@@ -2,15 +2,11 @@
 // https://screenpipe.com
 "use client";
 import { useEffect, useState } from "react";
-import { Shield, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { AIPresetsSelector } from "@/components/rewind/ai-presets-selector";
 import { workflowModelPreference } from "@/lib/workflows/model-choice";
 import { supportsWorkflowPreset } from "@/lib/workflows/model-provider";
 import { useManagedPolicy } from "@/lib/hooks/use-managed-policy";
-import {
-  ConfidentialVerificationDetails,
-  useConfidentialVerification,
-} from "@screenpipe/workflows-ui";
 import type {
   WorkflowModelMode,
   WorkflowModelPreference,
@@ -28,7 +24,6 @@ export function WorkflowModelSelector({
   const cloudAllowed =
     !isManagedDeployment ||
     policy.aiPresetPolicy?.allow_screenpipe_cloud !== false;
-  const verification = useConfidentialVerification(preference.verification);
   useEffect(() => {
     let active = true;
     const refresh = () => {
@@ -90,11 +85,7 @@ export function WorkflowModelSelector({
             </span>
           ) : mode === "private" ? (
             <span className="flex min-w-0 items-center gap-2">
-              <Shield className="h-4 w-4 shrink-0 opacity-80" />
-              <span>Private</span>
-              <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">
-                Beta
-              </span>
+              <span>Private (retired)</span>
             </span>
           ) : undefined
         }
@@ -117,15 +108,6 @@ export function WorkflowModelSelector({
                   selected: mode === "intelligent",
                   onSelect: () => void choose("intelligent"),
                 },
-                {
-                  id: "workflow-private",
-                  label: "Private",
-                  icon: <Shield className="h-4 w-4" />,
-                  badge: "Beta",
-                  description: "Confidential AI",
-                  selected: mode === "private",
-                  onSelect: () => void choose("private"),
-                },
               ]
             : []
         }
@@ -136,10 +118,7 @@ export function WorkflowModelSelector({
               configured provider.
             </p>
             {mode === "private" && (
-              <ConfidentialVerificationDetails
-                current={verification}
-                showLabel
-              />
+              <p role="alert">Private AI is no longer available. Choose another AI model to continue.</p>
             )}
           </div>
         }

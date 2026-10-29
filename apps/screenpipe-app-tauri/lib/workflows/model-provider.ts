@@ -1,6 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
+import { isRetiredHostedPreset, RETIRED_ENCLAVE_MESSAGE } from "@/lib/retired-enclave-models";
 import {
   WORKFLOW_MODELS,
   type WorkflowModelMode,
@@ -19,13 +20,14 @@ export const supportsWorkflowPreset = (preset: AIPreset) =>
     "custom",
     "native-ollama",
     "pi",
-  ].includes(preset.provider);
+  ].includes(preset.provider) && !isRetiredHostedPreset(preset);
 
 export async function resolveWorkflowProvider(
   mode: WorkflowModelMode,
   config: PiProviderConfig,
 ): Promise<PiProviderConfig> {
-  if (mode === "intelligent" || mode === "private") {
+  if (mode === "private") throw new Error(RETIRED_ENCLAVE_MESSAGE);
+  if (mode === "intelligent") {
     return {
       ...config,
       provider: "screenpipe-cloud",

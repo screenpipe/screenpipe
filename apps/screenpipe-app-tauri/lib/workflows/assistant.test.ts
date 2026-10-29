@@ -33,7 +33,7 @@ import { fixturePersonalWorkProfile } from "@screenpipe/workflows-ui/fixture";
 
 describe("workflow assistant agent transport", () => {
   beforeEach(() => { vi.clearAllMocks(); vi.mocked(workflowModelPreference.load).mockResolvedValue("intelligent"); mocks.handlers.clear(); mocks.token.mockResolvedValue("test-token"); mocks.start.mockResolvedValue({ status: "ok", data: { running: true } }); mocks.stop.mockResolvedValue({ status: "ok" }); });
-  it.each(["intelligent", "private"] as const)("uses the existing harness, exact session routing, shared skill/API tools and real deltas", async (mode) => {
+  it.each(["intelligent"] as const)("uses the existing harness, exact session routing, shared skill/API tools and real deltas", async (mode) => {
     vi.mocked(workflowModelPreference.load).mockResolvedValue(mode);
     mocks.prompt.mockImplementation(async (id: string) => {
       const emit = (event: AgentEventEnvelope["event"], sessionId = id) => mocks.handlers.get(id)?.({ sessionId, source: "pi", event });
@@ -200,4 +200,11 @@ it("starts a custom workflow provider without a Screenpipe cloud token", async (
   });
   await expect(desktopAssistant.ask({ question: "Find a task", context: null, history: [], signal: new AbortController().signal, onProgress: vi.fn() })).resolves.toBe("Custom answer");
   expect(mocks.start).toHaveBeenLastCalledWith(expect.any(String), expect.any(String), null, expect.objectContaining({ provider: "custom", model: "private-model", url: "http://localhost:1234/v1", apiKey: "fixture-key" }));
+});
+
+it("never starts an agent when the persisted confidential model is retired", async () => {
+  vi.clearAllMocks();
+  vi.mocked(workflowModelPreference.load).mockResolvedValue("private");
+  await expect(desktopAssistant.ask({question:"Private context",context:null,history:[],signal:new AbortController().signal,onProgress:vi.fn()})).rejects.toThrow("no longer available");
+  expect(mocks.start).not.toHaveBeenCalled();
 });

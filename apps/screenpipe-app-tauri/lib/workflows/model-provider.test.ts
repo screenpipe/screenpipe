@@ -66,10 +66,18 @@ it("rejects external agents instead of treating their name as a hosted model", a
 });
 it("clears custom credentials when switching back to a built-in choice", async () => {
   expect(
-    await resolveWorkflowProvider("private", {
+    await resolveWorkflowProvider("intelligent", {
       ...base,
       apiKey: "old-fixture-key",
       url: custom.url,
     }),
   ).toMatchObject({ provider: "screenpipe-cloud", apiKey: null, url: "" });
+});
+
+it("rejects retired confidential choices while allowing the same model on a custom provider",async()=>{
+ await expect(resolveWorkflowProvider("private",base)).rejects.toThrow("no longer available");
+ store.get.mockResolvedValue({aiPresets:[{...custom,provider:"screenpipe-cloud",model:"glm-5.3-flash-reap50-iq3m"}]});
+ await expect(resolveWorkflowProvider("preset:Clinic model",base)).rejects.toThrow("missing or unsupported");
+ store.get.mockResolvedValue({aiPresets:[{...custom,model:"glm-5.3-flash-reap50-iq3m"}]});
+ expect(await resolveWorkflowProvider("preset:Clinic model",base)).toMatchObject({provider:"custom",model:"glm-5.3-flash-reap50-iq3m"});
 });

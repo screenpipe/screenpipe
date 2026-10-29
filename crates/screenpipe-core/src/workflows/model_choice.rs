@@ -6,6 +6,7 @@ use crate::pipes::{resolve_exact_preset, ResolvedPreset};
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 
+// Retained for recognizing legacy saved selections, never offered for new runs.
 pub const PRIVATE_MODEL: &str = "glm-5.3-flash-reap50-iq3m";
 pub fn selected_provider() -> Result<ResolvedPreset> {
     read_provider(&crate::paths::default_screenpipe_data_dir())
@@ -21,7 +22,7 @@ fn read_provider(base: &Path) -> Result<ResolvedPreset> {
     let value: serde_json::Value = serde_json::from_str(&text)?;
     let model = match value["mode"].as_str() {
         Some("intelligent") => "auto",
-        Some("private") => PRIVATE_MODEL,
+        Some("private") => bail!("Private AI is no longer available. Choose another AI model. No request was sent to another provider."),
         Some(mode) if mode.starts_with("preset:") && !mode[7..].trim().is_empty() => {
             let preset = resolve_exact_preset(&base.join("pipes"), &mode[7..])
                 .context("Your Workflows AI preset is unavailable. Choose an AI preset again.")?;
@@ -39,6 +40,11 @@ fn read_provider(base: &Path) -> Result<ResolvedPreset> {
                 )
             {
                 bail!("Your Workflows AI preset is unsupported. Choose an AI preset again.");
+            }
+            if preset.provider.as_deref() == Some("screenpipe")
+                && matches!(preset.model.to_ascii_lowercase().as_str(), "glm-5.3-flash-reap50-iq3m" | "gemma4-e4b" | "gemma4-e2b")
+            {
+                bail!("This confidential AI preset is retired. Choose another AI preset.");
             }
             return Ok(preset);
         }
@@ -64,7 +70,7 @@ mod tests {
         let path = dir.path().join("workflows-model.json");
         assert_eq!(read_provider(dir.path()).unwrap().model, "auto");
         std::fs::write(&path, r#"{"mode":"private"}"#).unwrap();
-        assert_eq!(read_provider(dir.path()).unwrap().model, PRIVATE_MODEL);
+        assert!(read_provider(dir.path()).err().unwrap().to_string().contains("no longer available"));
         for invalid in ["{", r#"{"mode":"custom"}"#, r#"{"mode":"preset:"}"#, "null"] {
             std::fs::write(&path, invalid).unwrap();
             assert!(read_provider(dir.path()).is_err());

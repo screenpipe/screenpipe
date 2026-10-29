@@ -248,60 +248,24 @@ describe('Settings sections', () => {
     expect(existsSync(filepath)).toBe(true);
   });
 
-  it('moves AI preferences from General into AI Settings and covers enabled/disabled analysis flows', async () => {
-    const navAiSettings = await $('[data-testid="settings-nav-ai-settings"]');
-    await navAiSettings.waitForExist({ timeout: 8_000 });
-    await navAiSettings.click();
-
+  it('keeps AI preferences while removing the retired media-analysis setting', async () => {
+    const nav = await $('[data-testid="settings-nav-ai-settings"]');
+    await nav.click();
     const section = await $('[data-testid="section-settings-ai-settings"]');
     await section.waitForExist({ timeout: 8_000 });
-
     const body = (await browser.execute(() => document.body.innerText.toLowerCase())) as string;
     expect(body).toContain('enhanced ai');
-    expect(body).toContain('ai audio & video analysis');
     expect(body).toContain('auto-generate chat titles');
-
-    const enhancedAiToggle = await $('#enhanced-ai-toggle');
-    const mediaAnalysisToggle = await $('#cloudMediaAnalysisEnabled');
-    const chatTitlesToggle = await $('#auto-generate-chat-titles-toggle');
-    await enhancedAiToggle.waitForExist({ timeout: 5_000 });
-    await mediaAnalysisToggle.waitForExist({ timeout: 5_000 });
-    await chatTitlesToggle.waitForExist({ timeout: 5_000 });
-
-    if ((await mediaAnalysisToggle.getAttribute('data-state')) !== 'checked') {
-      await mediaAnalysisToggle.click();
-    }
-    const preview = await $('[data-testid="cloud-media-analysis-preview"]');
-    await preview.waitForExist({ timeout: 5_000 });
-
-    await section.moveTo();
-    const enabledFilepath = await saveScreenshot('settings-ai-analysis-enabled');
-    expect(existsSync(enabledFilepath)).toBe(true);
-
-    await mediaAnalysisToggle.click();
-    await browser.waitUntil(
-      async () => (await mediaAnalysisToggle.getAttribute('data-state')) === 'unchecked',
-      { timeout: 5_000, timeoutMsg: 'AI media analysis toggle did not switch off' },
-    );
-    await preview.waitForExist({ reverse: true, timeout: 5_000 });
-
-    await section.moveTo();
-    const disabledFilepath = await saveScreenshot('settings-ai-analysis-disabled');
-    expect(existsSync(disabledFilepath)).toBe(true);
-
-    // Restore the seeded preference so this flow does not leak state into the
-    // remaining settings checks.
-    await mediaAnalysisToggle.click();
-    await preview.waitForExist({ timeout: 5_000 });
-
-    const navGeneral = await $('[data-testid="settings-nav-general"]');
-    await navGeneral.click();
-    const general = await $('[data-testid="section-settings-general"]');
-    await general.waitForExist({ timeout: 5_000 });
-    const generalBody = (await browser.execute(() => document.body.innerText.toLowerCase())) as string;
-    expect(generalBody).not.toContain('enhanced ai');
-    expect(generalBody).not.toContain('ai audio & video analysis');
-    expect(generalBody).not.toContain('auto-generate chat titles');
+    expect(body).not.toContain('ai audio & video analysis');
+    expect(await $('#cloudMediaAnalysisEnabled').isExisting()).toBe(false);
+    expect(await $('[data-testid="cloud-media-analysis-preview"]').isExisting()).toBe(false);
+    await $('#enhanced-ai-toggle').waitForExist({timeout:5000});
+    await $('#auto-generate-chat-titles-toggle').waitForExist({timeout:5000});
+    expect(existsSync(await saveScreenshot('settings-ai-retired-media-removed'))).toBe(true);
+    await $('[data-testid="settings-nav-general"]').click();
+    const general=await $('[data-testid="section-settings-general"]');
+    await general.waitForExist({timeout:5000});
+    expect((await general.getText()).toLowerCase()).not.toContain('auto-generate chat titles');
   });
 
   it('navigates to Speakers settings and mounts section container', async () => {

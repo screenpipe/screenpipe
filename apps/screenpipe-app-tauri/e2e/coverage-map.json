@@ -2771,7 +2771,7 @@
       "criticality": "high",
       "confidence": "strong",
       "ux": "real-user-flow",
-      "notes": "Separate Screen and Audio & meetings destinations, persisted screen-share privacy toggle with native-status readback, AI preset/preferences split and toggle flows, low-disk capture stop with persistent notification, storage, privacy, macOS-only permissions recovery hub (asserted absent on Windows/Linux), and rapid switching crash guard."
+      "notes": "Separate Screen and Audio & meetings destinations, persisted screen-share privacy toggle with native-status readback, AI preset/preferences split, retained Enhanced AI and chat-title controls, and absence of retired cloud-media analysis controls, low-disk capture stop with persistent notification, storage, privacy, macOS-only permissions recovery hub (asserted absent on Windows/Linux), and rapid switching crash guard."
     },
     {
       "spec": "speaker-rename-scope.spec.ts",

@@ -14,15 +14,16 @@ vi.mock("@tauri-apps/plugin-fs", () => fs);
 vi.mock("@/lib/utils/tauri", () => ({ commands: { getScreenpipeBaseDir: async () => ({ status: "ok", data: "/test/base" }) } }));
 import { workflowModelPreference } from "./model-choice";
 beforeEach(() => { files.clear(); vi.clearAllMocks(); });
-it("persists Private atomically in the native engine's data directory", async () => {
+it("persists Intelligent atomically and refuses a new Private selection", async () => {
   expect(await workflowModelPreference.load()).toBe("intelligent");
-  await workflowModelPreference.save("private");
+  await workflowModelPreference.save("intelligent");
   expect([...files.keys()]).toEqual(["/test/base/workflows-model.json"]);
-  expect(await workflowModelPreference.load()).toBe("private");
+  expect(await workflowModelPreference.load()).toBe("intelligent");
+  await expect(workflowModelPreference.save("private")).rejects.toThrow("no longer available");
   expect(fs.rename).toHaveBeenCalled();
 });
 it("keeps the previous Private selection when a replacement fails", async () => {
-  await workflowModelPreference.save("private");
+  files.set("/test/base/workflows-model.json", '{"mode":"private"}');
   fs.rename.mockRejectedValueOnce(Error("disk full"));
   await expect(workflowModelPreference.save("intelligent")).rejects.toThrow("disk full");
   expect(await workflowModelPreference.load()).toBe("private");

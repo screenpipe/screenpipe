@@ -410,12 +410,7 @@ export type Settings = SettingsStore & {
 	openaiCompatibleHeaders?: Record<string, string>;
 	/** Send raw WAV audio instead of MP3 to OpenAI-compatible endpoint */
 	openaiCompatibleRawAudio?: boolean;
-	/** Let Pi / Claude Code call the confidential cloud enclave
-	 * (Gemma 4 E4B inside an attested Tinfoil CVM) to analyze audio,
-	 * video frames, and images from screenpipe data. Default true. When
-	 * false, the "Cloud audio + video + image analysis" section is
-	 * stripped from `~/.claude/skills/screenpipe-api/SKILL.md` so agents
-	 * literally cannot see the endpoint and won't try to call it. */
+	/** @deprecated Retained only to read old settings. Cloud media analysis is retired. */
 	cloudMediaAnalysisEnabled?: boolean;
 	/** Filter music-dominant audio before transcription (reduces Spotify/YouTube music noise) */
 	filterMusic?: boolean;

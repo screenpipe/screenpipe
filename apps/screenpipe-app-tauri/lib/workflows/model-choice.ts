@@ -26,6 +26,7 @@ export const workflowModelPreference: WorkflowModelPreference = {
     return parseWorkflowModel(await exists(file) ? await readTextFile(file) : null);
   },
   async save(mode) {
+    if (mode === "private") throw new Error("Private AI is no longer available. Choose another AI model.");
     parseWorkflowModel(JSON.stringify({ mode }));
     const file = await path();
     const temporary = `${file}.${crypto.randomUUID()}.tmp`;

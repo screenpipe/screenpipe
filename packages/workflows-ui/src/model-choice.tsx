@@ -3,7 +3,7 @@
 
 "use client";
 import { useEffect, useId, useRef, useState } from "react";
-import { ConfidentialVerificationDetails, useConfidentialVerification, type ConfidentialVerificationSource } from "./confidential-verification";
+import { type ConfidentialVerificationSource } from "./confidential-verification";
 
 import { Check, ChevronDown, Shield, Sparkles } from "lucide-react";
 import styles from "./model-choice.module.css";
@@ -21,7 +21,7 @@ export type WorkflowModelPreference = {
 };
 export const WORKFLOW_MODELS = {
   intelligent: { label: msg("Intelligent"), model: "auto", description: msg("Automatically chooses a model. Uses your AI allowance.") },
-  private: { label: msg("Private (Beta)"), model: "glm-5.3-flash-reap50-iq3m", description: msg("Experimental encrypted AI processing. Separate usage, subject to capacity limits.") },
+  private: { label: msg("Private (retired)"), model: "glm-5.3-flash-reap50-iq3m", description: msg("This model is no longer available. Choose another AI model.") },
 } as const;
 export function parseWorkflowModel(text: string | null): WorkflowModelMode {
   if (text === null) return "intelligent";
@@ -38,12 +38,9 @@ export function WorkflowModelControl({ preference }: { preference: WorkflowModel
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const menuId = useId();
-  // Keep listening while the dropdown is closed, without claiming verification
-  // merely because Private was selected.
-  const verification = useConfidentialVerification(preference.verification);
   useEffect(() => {
     if (!open) return;
-    menu.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
+    (menu.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]') ?? menu.current?.querySelector<HTMLButtonElement>('button:not(:disabled)'))?.focus();
     const dismiss = (event: PointerEvent) => {
       if (!root.current?.contains(event.target as Node)) setOpen(false);
     };
@@ -90,11 +87,11 @@ export function WorkflowModelControl({ preference }: { preference: WorkflowModel
       const index = choices.indexOf(document.activeElement as HTMLButtonElement);
       choices[event.key === "Home" ? 0 : event.key === "End" ? choices.length - 1 : (index + (event.key === "ArrowUp" ? -1 : 1) + choices.length) % choices.length]?.focus();
     }}>
-      {Object.entries(WORKFLOW_MODELS).map(([key, value]) => <button type="button" key={key} role="menuitemradio" aria-checked={mode === key} disabled={busy} onClick={() => void choose(key as WorkflowModelMode)}>
+      {Object.entries(WORKFLOW_MODELS).filter(([key]) => key !== "private").map(([key, value]) => <button type="button" key={key} role="menuitemradio" aria-checked={mode === key} disabled={busy} onClick={() => void choose(key as WorkflowModelMode)}>
         {key === "private" ? <Shield size={16} aria-hidden="true" /> : <Sparkles size={16} aria-hidden="true" />}
         <span><strong>{uiMessages(value.label)}</strong><small>{uiMessages(value.description)}</small></span>{mode === key && <Check size={15} aria-hidden="true" />}
       </button>)}
-      {mode === "private" && <div className={styles.verification}><ConfidentialVerificationDetails current={verification} showLabel triggerRole="menuitem" /></div>}
+      {mode === "private" && <p role="alert">Private AI is no longer available. Choose another AI model to continue.</p>}
       <p>Applies to new chats and workflow updates.</p>
     </div>}
     {error && <span role="alert" className={styles.error}>{error}</span>}

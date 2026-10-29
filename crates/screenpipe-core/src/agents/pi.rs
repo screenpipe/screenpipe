@@ -517,6 +517,11 @@ async fn fetch_models_from_gateway(
     Some(json!(models))
 }
 
+fn retired_enclave_model(model: &str) -> bool {
+    matches!(model.trim().split('@').next().unwrap_or("").to_ascii_lowercase().as_str(),
+        "glm-5.3-flash-reap50-iq3m" | "gemma4-e4b" | "gemma4-e2b")
+}
+
 /// Turn the gateway catalog into Pi's provider catalog. The gateway retains
 /// locked models for UI upgrade prompts, while Pi treats every listed model as
 /// selectable. Omit locked entries here so a pipe never appears to select a
@@ -524,6 +529,7 @@ async fn fetch_models_from_gateway(
 fn gateway_models_to_pi_models(data: &[serde_json::Value]) -> Vec<serde_json::Value> {
     data.iter()
         .filter(|m| !m.get("locked").and_then(|v| v.as_bool()).unwrap_or(false))
+        .filter(|m| !retired_enclave_model(m.get("id").and_then(|v| v.as_str()).unwrap_or("")))
         .map(|m| {
             let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let name = m.get("name").and_then(|v| v.as_str()).unwrap_or(id);
@@ -548,9 +554,8 @@ fn gateway_models_to_pi_models(data: &[serde_json::Value]) -> Vec<serde_json::Va
                 "id": id,
                 "name": name,
                 "reasoning": reasoning,
-                // A distinct API fails closed when its secure extension is absent.
-                "api": if id == "glm-5.3-flash-reap50-iq3m" { "screenpipe-tinfoil" } else { "openai-completions" },
-                "input": if id == "glm-5.3-flash-reap50-iq3m" { json!(["text"]) } else { json!(["text", "image"]) },
+                "api": "openai-completions",
+                "input": ["text", "image"],
                 "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
                 "contextWindow": ctx,
                 "maxTokens": max_tokens,
@@ -693,43 +698,10 @@ impl PiExecutor {
         self
     }
 
-    /// User policy: when the marker file
-    /// `<data_dir>/cloud_media_analysis.disabled` exists, the
-    /// screenpipe-api skill is installed WITHOUT the Gemma 4 E4B
-    /// confidential-enclave block. Default (no marker) = enabled, so
-    /// fresh installs ship the capability documented and Pi knows to
-    /// call `api.screenpipe.com` with `model: "gemma4-e4b"` for audio /
-    /// video / image analysis.
-    ///
-    /// Gating happens at install time (here) rather than by mutating
-    /// the rendered SKILL.md after the fact — those copies get
-    /// overwritten on every Pi run, so post-install edits don't stick.
-    fn cloud_media_analysis_enabled() -> bool {
-        // Data-dir scoped, not `~/.screenpipe` scoped: a dev or relocated
-        // instance must read the marker its own Settings toggle wrote, not
-        // another install's. Identical path for a default install.
-        !crate::paths::default_screenpipe_data_dir()
-            .join("cloud_media_analysis.disabled")
-            .exists()
-    }
-
     fn render_screenpipe_api_skill() -> String {
-        let mut s = String::from(include_str!("../../assets/skills/screenpipe-api/SKILL.md"));
-        if Self::cloud_media_analysis_enabled() {
-            // Trim trailing whitespace before appending so we don't
-            // accumulate blank lines on rebuild.
-            while s.ends_with(char::is_whitespace) {
-                s.pop();
-            }
-            s.push('\n');
-            s.push('\n');
-            s.push_str(
-                include_str!("../../assets/skills/screenpipe-api/cloud_media_analysis_block.md")
-                    .trim_end(),
-            );
-            s.push('\n');
-        }
-        s
+        // The retired Gemma media capability must not be reinstalled, even when
+        // an older settings file still says cloudMediaAnalysisEnabled=true.
+        String::from(include_str!("../../assets/skills/screenpipe-api/SKILL.md"))
     }
 
     /// Install or wipe the `screenpipe-team` enterprise-admin skill under an
@@ -1291,25 +1263,14 @@ impl PiExecutor {
     }
 
     pub fn ensure_tinfoil_extension(project_dir: &Path) -> Result<()> {
-        let ext_dir = project_dir.join(".pi").join("extensions");
-        std::fs::create_dir_all(ext_dir.join("lib"))?;
-        let package_json = crate::paths::default_screenpipe_data_dir()
-            .join("pi-agent")
-            .join("package.json");
-        let source = include_str!("../../assets/extensions/tinfoil.ts").replace(
-            "__SCREENPIPE_PI_PACKAGE_JSON__",
-            &serde_json::to_string(&package_json.to_string_lossy())?,
-        );
-        std::fs::write(ext_dir.join("tinfoil.ts"), source)?;
-        std::fs::write(
-            ext_dir.join("lib").join("tinfoil-transport.ts"),
-            include_str!("../../assets/extensions/lib/tinfoil-transport.ts"),
-        )?;
-        std::fs::write(
-            ext_dir.join("lib").join("glm-protocol.ts"),
-            include_str!("../../assets/extensions/lib/glm-protocol.ts"),
-        )?;
-        Ok(())
+        // Remove only the app-owned entry point from previous installations.
+        // Other extensions and cached libraries are left untouched.
+        let path = project_dir.join(".pi/extensions/tinfoil.ts");
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub fn ensure_context_pruning_extension(project_dir: &Path) -> Result<()> {
@@ -1411,6 +1372,11 @@ impl PiExecutor {
         model: Option<&str>,
         provider_url: Option<&str>,
     ) -> Result<()> {
+        if matches!(provider, None | Some("screenpipe" | "screenpipe-cloud" | "pi"))
+            && model.is_some_and(retired_enclave_model)
+        {
+            anyhow::bail!("This confidential AI model is no longer available. Choose another AI model. No request was sent to another provider.");
+        }
         let config_dir = get_pi_config_dir()?;
         std::fs::create_dir_all(&config_dir)?;
 
@@ -1714,7 +1680,7 @@ impl PiExecutor {
         provider: &str,
     ) -> (String, Option<String>) {
         let base = Self::resolve_model(requested, provider);
-        if provider != "screenpipe" {
+        if provider != "screenpipe" || retired_enclave_model(&base) {
             return (base, None);
         }
 
@@ -1784,7 +1750,7 @@ impl PiExecutor {
     fn pick_allowed_model(requested: &str, allowed: &[String]) -> Result<String, String> {
         // Confidential selection is a transport promise. An unavailable model
         // must fail rather than downgrade to a plaintext hosted provider.
-        if requested == "glm-5.3-flash-reap50-iq3m" {
+        if retired_enclave_model(requested) {
             return Ok(requested.to_string());
         }
         // No catalog, or only the gateway fallback sentinel → we
@@ -6019,14 +5985,38 @@ mod tests {
         ]));
     }
 
+    #[tokio::test]
+    async fn retired_enclave_models_fail_before_config_or_network_access() {
+        for model in ["glm-5.3-flash-reap50-iq3m", "GEMMA4-E4B", "gemma4-e2b@legacy"] {
+            let error = PiExecutor::ensure_pi_config(None, "http://127.0.0.1:1", Some("screenpipe"), Some(model), None)
+                .await.expect_err("retired model must fail before setup");
+            assert!(error.to_string().contains("no longer available"));
+        }
+    }
+
+    #[test]
+    fn retired_enclave_extension_cleanup_preserves_other_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let extensions = dir.path().join(".pi/extensions");
+        std::fs::create_dir_all(&extensions).unwrap();
+        std::fs::write(extensions.join("tinfoil.ts"), "legacy app extension").unwrap();
+        std::fs::write(extensions.join("custom.ts"), "keep me").unwrap();
+        PiExecutor::ensure_tinfoil_extension(dir.path()).unwrap();
+        PiExecutor::ensure_tinfoil_extension(dir.path()).unwrap();
+        assert!(!extensions.join("tinfoil.ts").exists());
+        assert_eq!(std::fs::read_to_string(extensions.join("custom.ts")).unwrap(), "keep me");
+        let skill = PiExecutor::render_screenpipe_api_skill();
+        assert!(!skill.contains("gemma4"));
+        assert!(skill.contains("/search"));
+    }
+
     #[test]
     fn gateway_catalog_omits_locked_models_from_pi() {
         let confidential = gateway_models_to_pi_models(&[json!({
             "id": "glm-5.3-flash-reap50-iq3m", "context_window": 32768,
             "max_output_tokens": 8192
         })]);
-        assert_eq!(confidential[0]["api"], json!("screenpipe-tinfoil"));
-        assert_eq!(confidential[0]["input"], json!(["text"]));
+        assert!(confidential.is_empty(), "retired enclave model must not be selectable");
         let models = gateway_models_to_pi_models(&[
             json!({
                 "id": "auto",

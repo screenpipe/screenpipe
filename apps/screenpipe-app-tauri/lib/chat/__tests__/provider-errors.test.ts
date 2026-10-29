@@ -542,3 +542,12 @@ describe("Ollama preflight", () => {
     expect(result.ok ? "" : result.message).toContain("Cannot connect to Ollama");
   });
 });
+
+it("blocks retired hosted selections before any provider request, preserving BYOK", async () => {
+  const fetcher=vi.fn();
+  for(const model of ["glm-5.3-flash-reap50-iq3m","gemma4-e4b"]){
+    expect(await preflightChatProvider({provider:"screenpipe-cloud",model},fetcher)).toMatchObject({ok:false,message:expect.stringContaining("no longer available")});
+    expect(await preflightChatProvider({provider:"custom",model},fetcher)).toEqual({ok:true});
+  }
+  expect(fetcher).not.toHaveBeenCalled();
+});

@@ -33,16 +33,17 @@ describe("meeting summary pipe prompt", () => {
     ).toBeUndefined();
   });
 
-  it("uses bounded existing frames and forbids routine media export", () => {
+  it("uses existing text evidence and forbids retired media calls and routine export", () => {
     const prompt = buildMeetingSummarizeInstructions(42);
 
-    expect(prompt).toContain("up to 4 representative frame_id values");
-    expect(prompt).toContain("GET /frames/<frame_id>");
+    expect(prompt).not.toContain("GET /frames/<frame_id>");
     expect(prompt).toContain("NEVER call POST /export");
     expect(prompt).toContain('starting on a line with exactly "## Summary"');
     expect(prompt).toContain("the meeting UI streams this section");
     expect(prompt).not.toContain("export the meeting");
     expect(prompt).not.toContain("ffmpeg-sample");
+    expect(prompt).not.toContain("gemma4");
+    expect(prompt).toContain("model has been retired");
   });
 });
 
