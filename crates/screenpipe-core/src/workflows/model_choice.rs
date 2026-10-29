@@ -70,7 +70,11 @@ mod tests {
         let path = dir.path().join("workflows-model.json");
         assert_eq!(read_provider(dir.path()).unwrap().model, "auto");
         std::fs::write(&path, r#"{"mode":"private"}"#).unwrap();
-        assert!(read_provider(dir.path()).err().unwrap().to_string().contains("no longer available"));
+        assert!(read_provider(dir.path())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("no longer available"));
         for invalid in ["{", r#"{"mode":"custom"}"#, r#"{"mode":"preset:"}"#, "null"] {
             std::fs::write(&path, invalid).unwrap();
             assert!(read_provider(dir.path()).is_err());

@@ -1149,9 +1149,15 @@ mod tests {
         let fixed = super::migrate_builtin_pipe_text("meeting-summary", &legacy).unwrap();
         assert!(!fixed.contains("gemma4-e4b"));
         assert!(fixed.contains("model has been retired"));
-        assert_eq!(fixed.splitn(3, "---").nth(1), legacy.splitn(3, "---").nth(1));
+        assert_eq!(
+            fixed.splitn(3, "---").nth(1),
+            legacy.splitn(3, "---").nth(1)
+        );
         assert!(super::migrate_builtin_pipe_text("meeting-summary", &fixed).is_none());
-        assert!(super::migrate_builtin_pipe_text("meeting-summary", "My custom meeting prompt").is_none());
+        assert!(
+            super::migrate_builtin_pipe_text("meeting-summary", "My custom meeting prompt")
+                .is_none()
+        );
     }
 
     use super::*;

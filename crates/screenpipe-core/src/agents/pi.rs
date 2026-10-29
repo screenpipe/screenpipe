@@ -518,8 +518,16 @@ async fn fetch_models_from_gateway(
 }
 
 fn retired_enclave_model(model: &str) -> bool {
-    matches!(model.trim().split('@').next().unwrap_or("").to_ascii_lowercase().as_str(),
-        "glm-5.3-flash-reap50-iq3m" | "gemma4-e4b" | "gemma4-e2b")
+    matches!(
+        model
+            .trim()
+            .split('@')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "glm-5.3-flash-reap50-iq3m" | "gemma4-e4b" | "gemma4-e2b"
+    )
 }
 
 /// Turn the gateway catalog into Pi's provider catalog. The gateway retains
@@ -1372,8 +1380,10 @@ impl PiExecutor {
         model: Option<&str>,
         provider_url: Option<&str>,
     ) -> Result<()> {
-        if matches!(provider, None | Some("screenpipe" | "screenpipe-cloud" | "pi"))
-            && model.is_some_and(retired_enclave_model)
+        if matches!(
+            provider,
+            None | Some("screenpipe" | "screenpipe-cloud" | "pi")
+        ) && model.is_some_and(retired_enclave_model)
         {
             anyhow::bail!("This confidential AI model is no longer available. Choose another AI model. No request was sent to another provider.");
         }
@@ -5987,9 +5997,20 @@ mod tests {
 
     #[tokio::test]
     async fn retired_enclave_models_fail_before_config_or_network_access() {
-        for model in ["glm-5.3-flash-reap50-iq3m", "GEMMA4-E4B", "gemma4-e2b@legacy"] {
-            let error = PiExecutor::ensure_pi_config(None, "http://127.0.0.1:1", Some("screenpipe"), Some(model), None)
-                .await.expect_err("retired model must fail before setup");
+        for model in [
+            "glm-5.3-flash-reap50-iq3m",
+            "GEMMA4-E4B",
+            "gemma4-e2b@legacy",
+        ] {
+            let error = PiExecutor::ensure_pi_config(
+                None,
+                "http://127.0.0.1:1",
+                Some("screenpipe"),
+                Some(model),
+                None,
+            )
+            .await
+            .expect_err("retired model must fail before setup");
             assert!(error.to_string().contains("no longer available"));
         }
     }
@@ -6004,7 +6025,10 @@ mod tests {
         PiExecutor::ensure_tinfoil_extension(dir.path()).unwrap();
         PiExecutor::ensure_tinfoil_extension(dir.path()).unwrap();
         assert!(!extensions.join("tinfoil.ts").exists());
-        assert_eq!(std::fs::read_to_string(extensions.join("custom.ts")).unwrap(), "keep me");
+        assert_eq!(
+            std::fs::read_to_string(extensions.join("custom.ts")).unwrap(),
+            "keep me"
+        );
         let skill = PiExecutor::render_screenpipe_api_skill();
         assert!(!skill.contains("gemma4"));
         assert!(skill.contains("/search"));
@@ -6016,7 +6040,10 @@ mod tests {
             "id": "glm-5.3-flash-reap50-iq3m", "context_window": 32768,
             "max_output_tokens": 8192
         })]);
-        assert!(confidential.is_empty(), "retired enclave model must not be selectable");
+        assert!(
+            confidential.is_empty(),
+            "retired enclave model must not be selectable"
+        );
         let models = gateway_models_to_pi_models(&[
             json!({
                 "id": "auto",
