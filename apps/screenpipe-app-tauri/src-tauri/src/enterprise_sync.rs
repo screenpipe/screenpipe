@@ -1664,6 +1664,111 @@ mod imp {
     struct RecordingMeasurement {
         frame_status: Option<String>,
         audio_status: Option<String>,
+        #[serde(flatten)]
+        context: serde_json::Map<String, serde_json::Value>,
+        #[serde(skip)]
+        update_status: Option<serde_json::Value>,
+    }
+
+    impl RecordingMeasurement {
+        fn report(&self) -> serde_json::Value {
+            let mut report = serde_json::json!({
+                "frame_status": self.frame_status.as_deref().unwrap_or("unknown"),
+                "audio_status": self.audio_status.as_deref().unwrap_or("unknown"),
+            });
+            for key in [
+                "schedule_paused",
+                "drm_content_paused",
+                "vision_reason",
+                "screen_disabled_by",
+                "audio_disabled_by",
+                "ax_disabled_by",
+            ] {
+                if let Some(value) = self.context.get(key) {
+                    report[key] = value.clone();
+                }
+            }
+            if let Some(capture) = self
+                .context
+                .get("capture_status")
+                .and_then(|value| value.get("status"))
+            {
+                report["audio_reason"] = capture.clone();
+            }
+            if let Some(ax) = self.context.get("accessibility") {
+                if let Some(status) = ax.get("last_status") {
+                    report["ax_status"] = status.clone();
+                }
+                if let Some(observed) = ax.get("observed_at") {
+                    report["ax_observed_at"] = observed.clone();
+                }
+            }
+            if self
+                .context
+                .get("vision_reason")
+                .and_then(|value| value.as_str())
+                == Some("disabled_by_setting")
+            {
+                report["ax_status"] = serde_json::json!("disabled");
+            }
+            report
+        }
+
+        fn apply_settings(&mut self, settings: &crate::store::SettingsStore) {
+            let managed = settings.extra.get("enterpriseManagedSettings");
+            for (channel, disabled, keys) in [
+                (
+                    "screen",
+                    self.context
+                        .get("vision_reason")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|v| {
+                            matches!(v, "disabled_by_setting" | "screenshots_disabled_by_config")
+                        }),
+                    vec![
+                        ("disableVision", settings.recording.disable_vision),
+                        ("disableScreenshots", settings.recording.disable_screenshots),
+                    ],
+                ),
+                (
+                    "audio",
+                    self.audio_status.as_deref() == Some("disabled"),
+                    vec![("disableAudio", settings.recording.disable_audio)],
+                ),
+                (
+                    "ax",
+                    self.context.get("vision_reason").and_then(|v| v.as_str())
+                        == Some("disabled_by_setting"),
+                    vec![("disableVision", settings.recording.disable_vision)],
+                ),
+            ] {
+                if let Some((key, _)) = keys.iter().find(|(_, value)| *value && disabled) {
+                    // A missing policy snapshot cannot establish manual intent.
+                    if let Some(managed) = managed.and_then(|value| value.as_object()) {
+                        let source = if managed.get(*key) == Some(&serde_json::json!(true)) {
+                            Some("policy")
+                        } else if !managed.contains_key(*key) {
+                            Some("manual")
+                        } else {
+                            None
+                        };
+                        if let Some(source) = source {
+                            self.context.insert(
+                                format!("{channel}_disabled_by"),
+                                serde_json::json!(source),
+                            );
+                        }
+                    }
+                }
+            }
+            if let Some(policy) = settings.extra.get("enterpriseAppUpdatePolicy") {
+                self.update_status = Some(serde_json::json!({
+                    "policy_mode": policy.get("mode"), "default_auto_update": policy.get("default_auto_update"),
+                    "allow_employee_override": policy.get("allow_employee_override"), "channel": policy.get("channel"),
+                    "auto_update": settings.auto_update,
+                }));
+            }
+        }
     }
 
     // The recurring native watcher owns this measurement even when Home has
@@ -1693,17 +1798,29 @@ mod imp {
                 .json::<RecordingMeasurement>()
                 .await
                 .map_err(|error| format!("local health HTTP {status}: {error:?}"))?;
-            if ![&measured.frame_status, &measured.audio_status]
-                .iter()
-                .any(|channel| {
-                    channel.as_deref().is_some_and(|value| {
-                        !value.trim().is_empty() && !value.trim().eq_ignore_ascii_case("unknown")
-                    })
+            if ![
+                measured.frame_status.as_deref(),
+                measured.audio_status.as_deref(),
+                measured
+                    .context
+                    .get("accessibility")
+                    .and_then(|ax| ax.get("last_status"))
+                    .and_then(|value| value.as_str()),
+            ]
+            .iter()
+            .any(|channel| {
+                channel.is_some_and(|value| {
+                    !value.trim().is_empty() && !value.trim().eq_ignore_ascii_case("unknown")
                 })
+            }) && !measured.context.contains_key("recording_error")
             {
-                return Err(format!(
-                    "local health HTTP {status}: missing channel measurements"
-                ));
+                let cause = measured
+                    .context
+                    .get("error")
+                    .or_else(|| measured.context.get("message"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("missing channel measurements");
+                return Err(format!("local health HTTP {status}: {cause}"));
             }
             Ok(measured)
         }
@@ -1721,7 +1838,14 @@ mod imp {
                         &format!("cause={cause}; outcome=enrollment_only; previous_measurement_not_refreshed"),
                     );
                 }
-                RecordingMeasurement::default()
+                let mut measurement = RecordingMeasurement::default();
+                if let Ok(message) = crate::feedback_redact::redact_diagnostics_locally(cause).await
+                {
+                    measurement.context.insert("recording_error".into(), serde_json::json!({
+                        "source": "health", "message": message, "occurred_at": chrono::Utc::now().to_rfc3339(),
+                    }));
+                }
+                measurement
             }
         }
     }
@@ -1734,18 +1858,24 @@ mod imp {
         measurement: Option<&RecordingMeasurement>,
     ) -> Result<(), NativePolicyFetchError> {
         let pending = crate::enterprise::recording_events::pending(device_id, heartbeat_url);
-        let request = http.post(heartbeat_url).json(&serde_json::json!({
+        let mut payload = serde_json::json!({
             "device_id": device_id,
             "hostname": hostname::get().ok().and_then(|value| value.into_string().ok()),
             "platform": std::env::consts::OS,
             "app_version": env!("CARGO_PKG_VERSION"),
             "recording_lifecycle": crate::search_only::recording_lifecycle(),
             "recording_event": pending.as_ref().map(|(_, event)| event),
-            "recording_status": {
-                "frame_status": measurement.and_then(|value| value.frame_status.as_deref()).unwrap_or("unknown"),
-                "audio_status": measurement.and_then(|value| value.audio_status.as_deref()).unwrap_or("unknown"),
-            },
-        }));
+            "recording_status": measurement.map(|value| value.report()).unwrap_or_else(|| RecordingMeasurement::default().report()),
+        });
+        if let Some(measurement) = measurement {
+            if let Some(error) = measurement.context.get("recording_error") {
+                payload["recording_error"] = error.clone();
+            }
+            if let Some(status) = &measurement.update_status {
+                payload["update_status"] = status.clone();
+            }
+        }
+        let request = http.post(heartbeat_url).json(&payload);
         let request = apply_enterprise_credential(request, credential);
         let (status, body) = crate::enterprise::recording_events::send_heartbeat(request, pending)
             .await
@@ -2143,7 +2273,10 @@ mod imp {
                 // startup/restart may replace either after this task starts.
                 let api = local_api_context_from_app(&app);
                 let logs = crate::log_files::get_screenpipe_data_dir(&app).ok();
-                let measurement = measure_recording(&http, &api, logs.as_deref()).await;
+                let mut measurement = measure_recording(&http, &api, logs.as_deref()).await;
+                if let Ok(Some(settings)) = crate::store::SettingsStore::get(&app) {
+                    measurement.apply_settings(&settings);
+                }
                 let authorization = resolve_native_authorization(
                     &http,
                     &policy_url,
@@ -2672,6 +2805,56 @@ mod imp {
         }
 
         #[tokio::test]
+        async fn native_health_preserves_ax_error_time_and_applied_policy_without_private_fields() {
+            use axum::http::StatusCode;
+            let body = serde_json::json!({
+                "frame_status":"ok", "audio_status":"disabled", "vision_reason":"ok",
+                "accessibility": { "last_status":"error", "observed_at":"2026-10-29T12:00:00Z", "private":"must not leave device" },
+                "recording_error": { "source":"ax", "message":"AXError -25204", "occurred_at":"2026-10-29T12:00:00Z" },
+                "capture_status": { "status":"disabled", "reason":"must not leave device" },
+            }).to_string();
+            let (api, url, received, server) =
+                native_health_fixture(StatusCode::SERVICE_UNAVAILABLE, &body, StatusCode::OK).await;
+            let http = reqwest::Client::new();
+            let mut measurement = super::measure_recording(&http, &api, None).await;
+            let mut settings = crate::store::SettingsStore::default();
+            settings.recording.disable_audio = true;
+            settings.extra.insert(
+                "enterpriseManagedSettings".into(),
+                serde_json::json!({"disableAudio":true}),
+            );
+            settings.extra.insert(
+                "enterpriseAppUpdatePolicy".into(),
+                serde_json::json!({"mode":"manual"}),
+            );
+            measurement.apply_settings(&settings);
+            super::send_enrollment_heartbeat(
+                &http,
+                &url,
+                "test-device",
+                &super::EnterprisePolicyCredential::LicenseKey("test-key".into()),
+                Some(&measurement),
+            )
+            .await
+            .unwrap();
+            let sent = received.lock().unwrap().take().unwrap();
+            assert_eq!(sent["recording_status"]["ax_status"], "error");
+            assert_eq!(
+                sent["recording_status"]["ax_observed_at"],
+                "2026-10-29T12:00:00Z"
+            );
+            assert_eq!(sent["recording_status"]["audio_disabled_by"], "policy");
+            assert_eq!(sent["recording_error"]["message"], "AXError -25204");
+            assert_eq!(
+                sent["recording_error"]["occurred_at"],
+                "2026-10-29T12:00:00Z"
+            );
+            assert_eq!(sent["update_status"]["policy_mode"], "manual");
+            assert!(!sent.to_string().contains("must not leave device"));
+            server.abort();
+        }
+
+        #[tokio::test]
         async fn native_health_failures_keep_enrollment_and_retained_support_evidence() {
             use axum::http::StatusCode;
             let http = reqwest::Client::new();
@@ -2682,6 +2865,11 @@ mod imp {
                     "HTTP 401",
                 ),
                 (StatusCode::SERVICE_UNAVAILABLE, "not JSON", "HTTP 503"),
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    r#"{"frame_status":"unknown","audio_status":"unknown","message":"health snapshot timed out waiting for SQLite read pool"}"#,
+                    "SQLite read pool",
+                ),
                 (StatusCode::OK, "{}", "missing channel measurements"),
                 (
                     StatusCode::OK,

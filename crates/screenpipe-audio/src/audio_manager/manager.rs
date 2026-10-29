@@ -1029,6 +1029,9 @@ impl AudioManager {
 
         if let Err(e) = self.device_manager.start_device(device).await {
             let err_str = e.to_string();
+            if !err_str.contains("already running") {
+                screenpipe_core::health_diagnostics::record_recording_error("audio", &e);
+            }
 
             if err_str.contains("Failed to build input stream") {
                 return Err(anyhow!("Device {device} not found"));
@@ -1176,6 +1179,7 @@ impl AudioManager {
         if let Err(e) = start_result {
             let err_str = e.to_string();
             if !err_str.contains("already running") {
+                screenpipe_core::health_diagnostics::record_recording_error("audio", &e);
                 self.session_devices
                     .write()
                     .unwrap()

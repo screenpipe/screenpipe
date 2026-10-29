@@ -432,6 +432,7 @@ async function sendHeartbeat(
     }));
 
     let recordingContext: Record<string, unknown> = {};
+    let recordingError: unknown;
     let frameStatus = "unknown";
     let audioStatus = "unknown";
     let hostname = "unknown";
@@ -439,14 +440,19 @@ async function sendHeartbeat(
       const healthRes = await localFetch("/health", {
         signal: AbortSignal.timeout(2000),
       });
-      if (healthRes.ok) {
+      if (healthRes.ok || healthRes.status === 503) {
         const health = await healthRes.json();
         frameStatus = health.frame_status || "unknown";
         audioStatus = health.audio_status || "unknown";
         hostname = health.hostname || "unknown";
-        recordingContext = enterpriseRecordingContext(health);
+        recordingContext = enterpriseRecordingContext(health, Date.now(), settings, loadCachedPolicy()?.lockedSettings);
+        recordingError = health.recording_error;
+      } else {
+        recordingError = { source: "health", message: `Local GET /health returned HTTP ${healthRes.status} ${healthRes.statusText}`, occurred_at: new Date().toISOString() };
       }
-    } catch {}
+    } catch (cause) {
+      recordingError = { source: "health", message: cause instanceof Error ? cause.message : String(cause), occurred_at: new Date().toISOString() };
+    }
 
     // Gather enterprise pipe statuses for heartbeat
     let pipeStatuses: unknown[] = [];
@@ -476,6 +482,7 @@ async function sendHeartbeat(
           platform: devicePlatform,
           app_version: appVersion,
           recording_status: { frame_status: frameStatus, audio_status: audioStatus, ...recordingContext },
+          recording_error: recordingError,
           update_manager: installMetadata.update_manager,
           management_detected: installMetadata.managed,
           install_source: installMetadata.install_source,
@@ -483,6 +490,7 @@ async function sendHeartbeat(
           update_status: {
             policy_mode: appUpdatePolicy.mode,
             default_auto_update: appUpdatePolicy.default_auto_update,
+            auto_update: typeof settings.autoUpdate === "boolean" ? settings.autoUpdate : null,
             allow_employee_override: appUpdatePolicy.allow_employee_override,
             channel: appUpdatePolicy.channel,
           },
