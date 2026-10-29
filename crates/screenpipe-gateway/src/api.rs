@@ -2374,7 +2374,10 @@ mod tests {
                     actors: vec![json!({"name": "Ada Lovelace"})],
                 }],
                 &[AudioRow {
-                    transcription_id: 1,
+                    segment_id: format!("audio_transcription:{}", 1),
+                    legacy_record_id: None,
+                    audio_chunk_id: Some(1),
+                    meeting_id: None,
                     timestamp: format!("2026-07-22T{hour}:00:30Z"),
                     transcription: format!("{text} spoken"),
                     speaker: Some("presenter".to_string()),

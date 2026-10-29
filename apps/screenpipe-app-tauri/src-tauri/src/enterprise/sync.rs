@@ -3467,7 +3467,10 @@ pub(crate) mod tests {
 
     fn audio(id: i64, ts: &str, text: &str) -> AudioRow {
         AudioRow {
-            transcription_id: id,
+            segment_id: format!("audio_transcription:{}", id),
+            legacy_record_id: None,
+            audio_chunk_id: Some(id),
+            meeting_id: None,
             timestamp: ts.to_string(),
             transcription: text.to_string(),
             speaker: None,
@@ -5558,7 +5561,10 @@ pub(crate) mod tests {
                     return Ok(Vec::new());
                 }
                 Ok(vec![AudioRow {
-                    transcription_id: 1,
+                    segment_id: format!("audio_transcription:{}", 1),
+                    legacy_record_id: None,
+                    audio_chunk_id: Some(1),
+                    meeting_id: None,
                     timestamp: "2026-08-04T00:01:00Z".into(),
                     transcription: "unaffected audio".into(),
                     speaker: None,

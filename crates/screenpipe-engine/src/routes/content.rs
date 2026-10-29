@@ -147,6 +147,8 @@ pub struct OCRContent {
 
 #[derive(OaSchema, Serialize, Deserialize, Debug, Clone)]
 pub struct AudioContent {
+    pub segment_id: String,
+    pub audio_chunk_id: Option<i64>,
     pub chunk_id: i64,
     pub transcription: String,
     /// Convenience alias for generic clients and agents that read `text` on

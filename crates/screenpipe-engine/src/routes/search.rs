@@ -696,6 +696,8 @@ pub fn search_result_to_content_item(
         SearchResult::Audio(audio) => {
             let transcription = truncate(audio.transcription.clone());
             ContentItem::Audio(AudioContent {
+                segment_id: audio.segment_id.clone(),
+                audio_chunk_id: (audio.audio_chunk_id > 0).then_some(audio.audio_chunk_id),
                 chunk_id: audio.audio_chunk_id,
                 transcription: transcription.clone(),
                 text: transcription,

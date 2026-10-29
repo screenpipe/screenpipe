@@ -1054,6 +1054,7 @@ impl DatabaseManager {
         // base query for audio search
         let base_sql = String::from(
             "SELECT
+                audio_transcriptions.id AS transcription_segment_id,
                 audio_transcriptions.audio_chunk_id,
                 audio_transcriptions.transcription,
                 audio_transcriptions.timestamp,
@@ -1297,6 +1298,7 @@ impl DatabaseManager {
                 };
 
                 AudioResult {
+                    segment_id: format!("audio_transcription:{}", raw.transcription_segment_id),
                     audio_chunk_id: raw.audio_chunk_id,
                     transcription: raw.transcription,
                     timestamp: raw.timestamp,
@@ -1431,6 +1433,7 @@ impl DatabaseManager {
                     .and_then(|name| (!name.trim().is_empty()).then(|| name.clone()));
                 let speaker_provisional = speaker_label.is_some();
                 AudioResult {
+                    segment_id: format!("meeting_transcript:{}", raw.id),
                     audio_chunk_id: -raw.id,
                     transcription: raw.transcription,
                     timestamp,
