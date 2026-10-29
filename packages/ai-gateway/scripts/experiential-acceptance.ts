@@ -154,6 +154,9 @@ try {
 		for (const mode of modes.filter((mode) => !selectedModes || selectedModes.includes(mode))) {
 			const start = attempts.length;
 			const body: any = { model, max_tokens: 2048, max_completion_tokens: 2048, messages: [{ role: 'user', content: 'Reply OK.' }] };
+			// Fable exhausted this synthetic 2k cap on a tool-result turn. Exercise
+			// its normal adapter default instead of imposing a smaller test budget.
+			if (model === 'claude-fable-5') { delete body.max_tokens; delete body.max_completion_tokens; }
 			if (model in OPENAI_PRO_NATIVE_FEATURES) body.reasoning_effort = 'medium';
 			if (mode === 'stream' || mode === 'stream-tools') body.stream = true;
 			if (mode === 'tools' || mode === 'stream-tools') Object.assign(body, { tools: [tool], tool_choice: { type: 'function', function: { name: 'confirm' } } });
