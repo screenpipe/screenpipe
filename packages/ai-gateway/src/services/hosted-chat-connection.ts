@@ -7,7 +7,7 @@ import { GEMINI_ARGON_MODEL } from '../providers/gemini-argon';
 import { getHostedChatGatewayConnection, type CloudflareGatewayProvider, type HostedChatGatewayContext } from './cloudflare-ai-gateway';
 import { getFlatGatewayTokenRates } from './cost-tracker';
 import { originalGatewayReason } from './experiential-routing-policy';
-import { getExperientialRequestTags } from './experiential-metadata';
+import { experientialDispatchTags } from './experiential-metadata';
 
 export const EXPERIENTIAL_INFERENCE_ORIGIN = 'https://api.experientiallabs.ai';
 export class HostedInferencePrivacyError extends Error {
@@ -26,9 +26,9 @@ export function hostedInferencePrivacyError(error: unknown): HostedInferencePriv
   }
   return null;
 }
-/** No raw inference is a training contribution. Account opt-in continues to
- * authorize only the separately redacted Workflows contribution path.
- * Experiential enforces no-training on every provider rung through org policy;
+/** Upstream providers may not train on hosted inference. Screenpipe's own
+ * training permission travels separately in authenticated dispatch tags.
+ * Experiential enforces upstream no-training on every rung through org policy;
  * it has no documented per-request no-training parameter or response verdict.
  * Verify that policy with the dispatch key, without caching permission, before
  * sending content. Retention is permitted and is independent of training. */
@@ -112,8 +112,7 @@ export async function resolveHostedChatConnection(
   env: Env, provider: CloudflareGatewayProvider, context: HostedChatGatewayContext, model: string,
   body?: Pick<RequestBody, 'messages'>, forceOriginalReason?: string,
 ) {
-  const tags = getExperientialRequestTags(context);
-  const metadataHeaders: Record<string, string> = tags ? { 'X-Explabs-Tags': JSON.stringify(tags) } : {};
+  const metadataHeaders = { 'X-Explabs-Tags': JSON.stringify(experientialDispatchTags(context)) };
   const hybrid = env.HOSTED_CHAT_GATEWAY === 'experiential';
   const nativeProvider = provider === 'openai' || provider === 'anthropic' ||
     (provider === 'google-vertex-ai' && model === GEMINI_ARGON_MODEL);
@@ -190,8 +189,7 @@ export function resolveExperientialRescueConnection(
   if (!apiKey || !/^xpl_[0-9a-f]{40}$/.test(apiKey)) {
     throw Object.assign(new Error('EXPERIENTIAL_API_KEY is not configured'), { status: 503, transient: false });
   }
-  const tags = context ? getExperientialRequestTags(context) : null;
-  const metadataHeaders: Record<string, string> = tags ? { 'X-Explabs-Tags': JSON.stringify(tags) } : {};
+  const metadataHeaders = { 'X-Explabs-Tags': JSON.stringify(experientialDispatchTags(context ?? {})) };
   return {
     baseURL: provider === 'anthropic' ? EXPERIENTIAL_INFERENCE_ORIGIN : `${EXPERIENTIAL_INFERENCE_ORIGIN}/v1`,
     apiKey,

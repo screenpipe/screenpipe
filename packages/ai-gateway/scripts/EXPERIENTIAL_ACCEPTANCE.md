@@ -32,10 +32,21 @@ The policy read inherits the SDK cancellation signal and has no permission cache
 OpenAI `store=false` and full-conversation requests preserve stateless operation.
 A missing or false `x-gateway-zdr` verdict is accepted.
 
-Full Workflows contributions travel separately: strict attested redaction,
-current consent/epoch checks, and the Screenpipe-owned dataset's expiry/deletion
-controls. Consent permits training Screenpipe-owned models only, never the
-vendor's models. No training export is introduced here.
+Hosted-conversation training uses a separate optional account preference,
+`/api/user/ai-training-consent`. Before building a chat's gateway context, the
+Worker reads it with the authenticated caller's bearer, without the commercial
+entitlement cache. Verified opt-in adds `training_allowed=true` and its notice,
+grant time and epoch to `X-Explabs-Tags`. Missing permission, services, failed
+lookups and identity mismatches explicitly send `training_allowed=false`.
+Neither client headers nor inference JSON grant permission. Symbols preserve
+the verified permission across model-lane changes and rescue without adding
+fields to Cloudflare's spend metadata. Upstream no-training remains mandatory.
+
+The website's `/api/admin/ai-training/eligibility` rechecks captured request tags
+against current consent and request time when a Screenpipe-owned trainer selects
+traffic. Old epochs, pre-consent traffic and withdrawn/deleted accounts are
+denied. Metadata tags alone do not automatically turn on a vendor training job.
+The old Workflows contribution/upload path is separate from this inference path.
 
 The script does not modify account settings, expose
 the credential to the Worker, or deploy anything. Each case sends synthetic

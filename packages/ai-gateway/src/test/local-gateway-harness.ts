@@ -22,6 +22,7 @@ type PrivateControlName = keyof typeof TEST_PRIVATE_COST_CONTROLS;
 
 export interface LocalGatewayHarnessOptions {
 	port?: number;
+	syntheticClerkStanding?: boolean;
 	experientialCanary?: boolean;
 	experientialHybrid?: boolean;
 	privateCostControls?: Partial<Record<PrivateControlName, string | undefined>>;
@@ -200,6 +201,7 @@ export class LocalGatewayHarness {
 					...(options.experientialHybrid ? { HOSTED_CHAT_GATEWAY: 'experiential', CLOUDFLARE_EXPERIENTIAL_PROVIDER: 'custom-experiential-fixture', EXPERIENTIAL_API_KEY: `xpl_${'0'.repeat(40)}` } : {}),
 					OPENAI_API_KEY: 'screenpipe-local-e2e-only',
 					ADMIN_SECRET: 'screenpipe-local-e2e-admin-only',
+					...(options.syntheticClerkStanding ? { CLERK_SECRET_KEY: 'sk_test_synthetic_local_harness' } : {}),
 					AI_GATEWAY_SERVICE_TOKEN: LOCAL_GATEWAY_SERVICE_TOKEN,
 					MODEL_GATING_ENABLED: 'true',
 					PIPE_FRONTIER_POLICY: 'reject',

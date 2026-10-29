@@ -93,6 +93,7 @@ import {
 	type HostedChatGatewayContext,
 } from './services/cloudflare-ai-gateway';
 import { getCloudflareHostedChatUsage } from './services/cloudflare-ai-gateway-usage';
+import { attachHostedTrainingConsent, loadHostedTrainingConsent } from './services/hosted-chat-training';
 import { buildBackgroundPipeAllowanceAdvisory } from './services/background-pipe-advisory';
 import { logApiAuthAudit, logApiRouteAudit } from './services/api-audit';
 // import { handleTTSWebSocketUpgrade } from './handlers/voice-ws';
@@ -594,7 +595,10 @@ export async function handleRequest(request: Request, env: Env, ctx: ExecutionCo
 			}
 
 			const latency = resolveLatencyClass(request, body, env);
-			const gatewayContext = await buildHostedChatGatewayContext(authResult, body.model, latency);
+			const gatewayContext = attachHostedTrainingConsent(
+				await buildHostedChatGatewayContext(authResult, body.model, latency),
+				await loadHostedTrainingConsent(request, authResult),
+			);
 
 			let leaseReleased = false;
 			const releaseLease = async () => {

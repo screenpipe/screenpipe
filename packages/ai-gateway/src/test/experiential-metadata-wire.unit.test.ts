@@ -33,7 +33,7 @@ describe('Experiential metadata on installed SDK requests', () => {
     const spy = spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const request = new Request(input, init); const policy = experientialPolicyFixture(request); if (policy) return policy; const body: any = await request.json(); captured = request.headers;
       expect(request.url.endsWith(endpoint)).toBe(true);
-      expect(JSON.parse(request.headers.get('X-Explabs-Tags')!)).toEqual(shouldTag ? tags : null);
+      expect(JSON.parse(request.headers.get('X-Explabs-Tags')!)).toEqual(shouldTag ? { ...tags, training_allowed: 'false' } : null);
       const result = endpoint === 'v1/messages'
         ? { id: 'msg', type: 'message', role: 'assistant', model: body.model, content: [{ type: 'text', text: 'OK' }], stop_reason: 'end_turn', usage: { input_tokens: 8, output_tokens: 2 } }
         : endpoint === 'responses'
@@ -65,6 +65,6 @@ describe('Experiential metadata on installed SDK requests', () => {
     const context = await buildHostedChatGatewayContext({ ...auth, userId: undefined, clerkUserId: undefined, service: true }, 'auto', 'background');
     expect(getExperientialRequestTags(context)).toBeNull();
     const connection = await resolveHostedChatConnection({ ...base, HOSTED_CHAT_GATEWAY: 'experiential' }, 'openai', context, 'gpt-5.4-mini');
-    expect(connection.defaultHeaders['X-Explabs-Tags']).toBeUndefined();
+    expect(JSON.parse(connection.defaultHeaders['X-Explabs-Tags']!)).toEqual({ training_allowed: 'false' });
   });
 });

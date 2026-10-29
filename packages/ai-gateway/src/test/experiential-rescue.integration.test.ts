@@ -23,7 +23,7 @@ test('real rescue handler and SDK use Experiential for both existing rescue mode
     expect(request.headers.has('cf-aig-metadata')).toBe(false);
     const policy = experientialPolicyFixture(request); if (policy) return policy;
     const sent: any = await request.json(); posts.push(sent);
-    expect(request.headers.get('X-Explabs-Tags')).toBe(JSON.stringify({ audience: 'consumer', user_id_hash: 'a'.repeat(64) }));
+    expect(request.headers.get('X-Explabs-Tags')).toBe(JSON.stringify({ audience: 'consumer', user_id_hash: 'a'.repeat(64), training_allowed: 'false' }));
     expect(sent.provider).toBeUndefined(); expect(sent.store).toBe(false);
     expect(sent.tools).toEqual(body.tools);
     expect(sent.messages.at(-1).content).toBe('Synthetic rescue input.');
