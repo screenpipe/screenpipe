@@ -162,6 +162,45 @@ gateway token uses the authenticated gateway binding for rollback, preserving
 native SDK request/response formats and the existing metadata. Production
 connections with their configured gateway token keep their current transport.
 
+## October 29 live validation
+
+A dedicated browser-created Screenpipe inference key verified
+`require_no_training=true`, `require_zdr=false`, and no exemptions. The full
+local Worker/real-provider matrix completed 114 cases: 112 passed, GPT-5.4 Pro's
+unsupported schema was explicitly verified, and Fable's streaming tool-result
+turn hit its requested 2,048-token output budget. A focused repeat reproduced
+the truncation; a subsequent traced repeat completed without changing the
+request or output budget. Preserve those failures when interpreting coverage.
+Argon passed all six features, including both tool-result turns.
+
+An isolated deployed Worker (`ai-proxy-experiential-canary-20261029`, version
+`8d504489-57b6-4a2b-9946-f0596e48d16b`) then passed all 24 cases for Auto,
+GPT-5.4 Mini, Argon and Fable. The latter three used Experiential; Auto retained
+native context pricing. This run included the final-usage fix, used a separate
+migrated D1 database, and made no production route changes. It is partial
+deployed coverage, not a completed cutover or a full-model deployed matrix.
+
+The trace also showed that Experiential's opening Messages event reports an
+input estimate, with authoritative input/cache counts in `message_delta`.
+The adapter now uses those final counts, including zero, while preserving
+native Claude's opening counts when the final event omits them. Real Worker
+tests verify both public SSE usage and persisted cost telemetry.
+
+Live accounting probes used the existing gateway and a synthetic internal
+actor, without changing spend rules or customer balances. Without a custom
+rate header, a successful GPT-6 Luna request recorded 9 input/5 output tokens
+and **zero** Cloudflare cost (log `01a18932-39fc-71d4-bad0-eb21ce72c54c`).
+A Fable stream with source-policy custom rates settled its final 12 input/4
+output tokens as $0.00032 (log `01a18936-9d7a-7188-b445-3f5fa1d6a012`), rather
+than its opening 7-token estimate. Flat-rate settlement works; neither probe
+establishes a context-tier pricing contract. The current nine spend rules use
+fixed weekly windows; keep their existing identities and counters.
+
+Authenticated lookup of `glm-5.3-flash-reap50-iq3m` returned 404, explicitly
+stating it is absent from both the public catalog and Screenpipe's organizations.
+Screenpipe has no configured provider connections. Other GLM variants are not
+the deployed confidential model and are not substitutes.
+
 ## Native Pro capabilities
 
 Both existing Pro models require Responses, so the Worker keeps its public Chat

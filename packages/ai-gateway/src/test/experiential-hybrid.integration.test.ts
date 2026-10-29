@@ -4,6 +4,34 @@
 import {expect,test} from 'bun:test';
 const retainingJSON = (body: unknown, init?: ResponseInit) => Response.json(body, init);
 import {LocalGatewayHarness} from './local-gateway-harness';
+import {getModelCost} from '../services/cost-tracker';
+
+test('real Worker returns and persists settled Messages stream counts instead of opening estimates', async () => {
+  const harness = await LocalGatewayHarness.start({experientialHybrid:true, outboundResponse:async(request)=>{
+    if(!new URL(request.url).pathname.endsWith('/custom-experiential-fixture/v1/messages')) return undefined;
+    const events = [
+      {type:'message_start',message:{id:'msg_settled',type:'message',role:'assistant',model:'claude-fable-5',content:[],usage:{input_tokens:733,output_tokens:1}}},
+      {type:'content_block_start',index:0,content_block:{type:'text',text:''}},
+      {type:'content_block_delta',index:0,delta:{type:'text_delta',text:'OK.'}},
+      {type:'content_block_stop',index:0},
+      {type:'message_delta',delta:{stop_reason:'end_turn'},usage:{input_tokens:261,cache_read_input_tokens:0,cache_creation_input_tokens:0,output_tokens:72}},
+      {type:'message_stop'},
+    ];
+    return new Response(events.map(e=>`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(''),{headers:{'content-type':'text/event-stream'}});
+  }});
+  try {
+    const response = await harness.fetch('/chat/completions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'claude-fable-5',stream:true,messages:[{role:'user',content:'Synthetic settlement probe.'}]})});
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-screenpipe-gateway')).toBe('experiential');
+    const text = await response.text();
+    const events = text.split('\n').filter(l=>l.startsWith('data: ')&&!l.includes('[DONE]')).map(l=>JSON.parse(l.slice(6)));
+    expect(events.find(e=>e.usage).usage).toMatchObject({prompt_tokens:261,completion_tokens:72,total_tokens:333});
+    expect(text.trimEnd().endsWith('data: [DONE]')).toBe(true);
+    const telemetry = await harness.readInferenceTelemetry();
+    expect(telemetry.costs).toEqual([expect.objectContaining({model:'claude-fable-5',input_tokens:261,output_tokens:72,cost:getModelCost('claude-fable-5',261,72)})]);
+    harness.assertNoUnexpectedOutboundRequests();
+  } finally { await harness.dispose(); }
+},30000);
 
 test('real Worker stops on disabled no-training policy instead of cascading or rescuing', async () => {
   for (const model of ['gpt-5.4-mini', 'auto']) {

@@ -474,6 +474,32 @@ describe('simulated prefix cache across an agent loop (the actual savings)', () 
 });
 
 describe('cache usage reporting', () => {
+	it('streaming: final reported input/cache counts replace opening estimates, including zero', async () => {
+		for (const settled of [
+			{ input_tokens: 261, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+			{ input_tokens: 0, cache_read_input_tokens: 261, cache_creation_input_tokens: 0 },
+			{ input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 261 },
+		]) {
+			async function* fakeStream() {
+				yield { type: 'message_start', message: { usage: {
+					input_tokens: 733, cache_read_input_tokens: 100, cache_creation_input_tokens: 50,
+				} } };
+				yield { type: 'content_block_delta', delta: { type: 'text_delta', text: 'OK.' } };
+				yield { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { ...settled, output_tokens: 72 } };
+			}
+			const { provider } = makeProvider(fakeStream());
+			const stream = await provider.createStreamingCompletion(body([{ role: 'user', content: 'hi' }]));
+			const text = await new Response(stream).text();
+			const events = text.split('\n\n').filter(l => l.startsWith('data: ') && !l.includes('[DONE]')).map(l => JSON.parse(l.slice(6)));
+			const usage = events.find(e => e.usage).usage;
+			expect(usage.prompt_tokens).toBe(261);
+			expect(usage.completion_tokens).toBe(72);
+			expect(usage.total_tokens).toBe(333);
+			expect(usage.prompt_tokens_details.cached_tokens).toBe(settled.cache_read_input_tokens);
+			expect(usage.cache_creation_input_tokens).toBe(settled.cache_creation_input_tokens);
+		}
+	});
+
 	it('non-streaming: reports total prompt tokens with cached/written subsets', async () => {
 		const { provider } = makeProvider({
 			content: [{ type: 'text', text: 'ok' }],

@@ -276,7 +276,14 @@ export class AnthropicProvider implements AIProvider {
 							cacheCreationTokens = u.cache_creation_input_tokens || 0;
 						}
 						if (chunk.type === 'message_delta' && (chunk as any).usage) {
-							outputTokens = (chunk as any).usage.output_tokens || 0;
+							const u = (chunk as any).usage;
+							outputTokens = u.output_tokens || 0;
+							// Experiential's Messages wire starts with an estimate and
+							// settles input/cache counts in message_delta. Native Claude
+							// omits these fields here; retain its message_start counts.
+							if (typeof u.input_tokens === 'number') inputTokens = u.input_tokens;
+							if (typeof u.cache_read_input_tokens === 'number') cacheReadTokens = u.cache_read_input_tokens;
+							if (typeof u.cache_creation_input_tokens === 'number') cacheCreationTokens = u.cache_creation_input_tokens;
 						}
 						if (chunk.type === 'message_delta' && (chunk as any).delta?.stop_reason) {
 							finishReason = anthropicStopReasonToOpenAI((chunk as any).delta.stop_reason);
