@@ -218,7 +218,7 @@ impl EnterpriseSyncConfig {
 
 /// What we persist between runs. RFC3339 string for human-readability + cross-
 /// language portability if we ever read it from JS.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Cursor {
     #[serde(default)]
     pub privacy: std::collections::BTreeMap<String, PrivacyCursor>,
@@ -254,7 +254,7 @@ pub struct Cursor {
     boundary: CursorBoundary,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 struct CursorBoundary {
     #[serde(default)]
     starred_sequence: i64,
@@ -320,7 +320,7 @@ impl Cursor {
     }
 }
 
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PrivacyCursor {
     pub sequence: i64,
     pub cutoff: String,
@@ -3018,6 +3018,7 @@ pub async fn run(
             Ok(_) => {}
         }
 
+        let mut continue_backfill = false;
         match result {
             Ok(report) => {
                 let total = &report.total;
@@ -3046,10 +3047,9 @@ pub async fn run(
                 }
                 // Historical recovery has its own cursor and a bounded work budget.
                 // Live syncing always runs first. Failure here never rewinds it.
-                if let Err(error) =
-                    backfill::fulfill_requests(&cfg, local.as_ref(), &http, &shutdown).await
-                {
-                    warn!("enterprise backfill: will retry: {}", error);
+                match backfill::fulfill_requests(&cfg, local.as_ref(), &http, &shutdown).await {
+                    Ok(more_pending) => continue_backfill = more_pending,
+                    Err(error) => warn!("enterprise backfill: will retry: {}", error),
                 }
 
                 // On-demand frame fulfillment — best-effort, gated on the
@@ -3075,6 +3075,15 @@ pub async fn run(
             Err(_) => {}
         }
 
+        if continue_backfill {
+            if *shutdown.borrow() {
+                break;
+            }
+            // Start the next turn with live sync and fresh policy/source checks.
+            // Keep page checkpoints, transport sizes and failure retries intact.
+            tokio::task::yield_now().await;
+            continue;
+        }
         if sleep_or_shutdown(SYNC_INTERVAL, &mut shutdown).await {
             break;
         }

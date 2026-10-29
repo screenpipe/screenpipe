@@ -200,7 +200,7 @@ struct Pending {
 
 /// Outcomes acknowledged by storage, checkpointed with the image cursor.
 /// Missing pixels are never counted as uploaded screenshots.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub(super) struct ImageProgress {
     pub uploaded: u64,
     pub unavailable: u64,
@@ -208,7 +208,7 @@ pub(super) struct ImageProgress {
 
 /// Accepted image work remains part of the same request until acknowledged,
 /// even when policy revokes pixels or telemetry has reached the end of the range.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct ImageReplay {
     cursor: Cursor,
     pub(super) complete: bool,
@@ -547,6 +547,175 @@ mod tests {
         assert!(!policy.audio && !policy.snapshots && !policy.activities);
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn scheduled_image_backfill_continues_before_idle_interval() {
+        let _env = super::super::tests::ENV_LOCK.lock().unwrap();
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
+        let _restore = super::super::tests::RestoreDefaultSyncStreams;
+        crate::enterprise_policy::set_sync_streams(
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            "off".into(),
+            "all".into(),
+        );
+        struct History {
+            local: Local,
+            jpeg: Vec<u8>,
+            turns: Arc<std::sync::Mutex<Vec<&'static str>>>,
+        }
+        #[async_trait::async_trait]
+        impl LocalApiClient for History {
+            async fn upload_source_id(&self) -> Result<String, EnterpriseSyncError> {
+                self.local.upload_source_id().await
+            }
+            async fn fetch_frames_since(
+                &self,
+                since: Option<&str>,
+                offset: u32,
+                limit: u32,
+            ) -> Result<Vec<FrameRow>, EnterpriseSyncError> {
+                self.turns
+                    .lock()
+                    .unwrap()
+                    .push(if since.unwrap_or("") >= "2026-01-03" {
+                        "live"
+                    } else {
+                        "history"
+                    });
+                self.local.fetch_frames_since(since, offset, limit).await
+            }
+            async fn fetch_frame_jpeg(
+                &self,
+                _: i64,
+            ) -> Result<Option<Vec<u8>>, EnterpriseSyncError> {
+                Ok(Some(self.jpeg.clone()))
+            }
+            async fn fetch_audio_since(
+                &self,
+                _: Option<&str>,
+                _: u32,
+                _: u32,
+            ) -> Result<Vec<AudioRow>, EnterpriseSyncError> {
+                panic!("unselected audio");
+            }
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"desired_mode": "hosted_ingest"})),
+            )
+            .with_priority(10)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/enterprise/backfill-requests"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pending()))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done = completed.clone();
+        Mock::given(method("POST"))
+            .and(path("/api/enterprise/backfill-requests"))
+            .respond_with(move |r: &wiremock::Request| {
+                let body: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+                if body["status"] == "completed" {
+                    assert_eq!(body["uploaded_records"], FRAME_PAGE_LIMIT + 1);
+                    assert_eq!(body["screenshots"]["uploaded"], FRAME_PAGE_LIMIT + 1);
+                    assert_eq!(body["screenshots"]["unavailable"], 0);
+                    done.store(true, Ordering::SeqCst);
+                }
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"accepted": true}))
+            })
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/enterprise/ingest"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/enterprise/frame-uploads"))
+            .respond_with(|r: &wiremock::Request| {
+                let body: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+                let ids: Vec<_> = body["frames"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|frame| frame["frame_id"].as_i64().unwrap())
+                    .collect();
+                ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"stored": ids, "unavailable": [], "failed": []}),
+                )
+            })
+            .mount(&server)
+            .await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg = cfg(&dir, &server);
+        let live = Cursor {
+            last_frame_ts: Some("2026-01-03T00:00:00Z".into()),
+            ..Default::default()
+        };
+        live.save(&cfg.cursor_path).unwrap();
+        let mut jpeg = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(16, 16)
+            .write_to(&mut jpeg, image::ImageFormat::Jpeg)
+            .unwrap();
+        let turns = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let local = Arc::new(History {
+            local: Local {
+                reads: AtomicUsize::new(0),
+                fail_ui: false,
+            },
+            jpeg: jpeg.into_inner(),
+            turns: turns.clone(),
+        });
+        let (_stop, shutdown) = tokio::sync::watch::channel(false);
+        let worker = tokio::spawn(run(cfg.clone(), local, shutdown, None));
+        // Existing worker tests use this ten-second transport deadline. Do not
+        // advance the clock: the regression sleeps for the five-minute idle cycle.
+        let result = tokio::time::timeout(Duration::from_secs(10), async {
+            while !completed.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        worker.abort();
+        assert!(
+            result.is_ok(),
+            "acknowledged historical images must continue without the idle interval"
+        );
+        let turns = turns.lock().unwrap();
+        let live_turns: Vec<_> = turns
+            .iter()
+            .enumerate()
+            .filter_map(|(i, turn)| (*turn == "live").then_some(i))
+            .collect();
+        assert!(
+            live_turns.len() >= 2,
+            "live sync must run between image pages"
+        );
+        assert!(turns[live_turns[0] + 1..live_turns[1]].contains(&"history"));
+        assert!(turns[live_turns[1] + 1..].contains(&"history"));
+        let checkpoint = Cursor::load(&dir.path().join(format!(
+            "enterprise_backfill_{}_{}.json",
+            request().license_id,
+            request().id,
+        )));
+        assert!(checkpoint.boundary.backfill_telemetry_complete);
+        assert!(checkpoint.boundary.backfill_image_replay.unwrap().complete);
+        assert_eq!(
+            Cursor::load(&cfg.cursor_path).last_frame_ts,
+            live.last_frame_ts
+        );
+    }
+
     #[tokio::test]
     async fn backfill_resumes_timestamp_ties_after_lost_ack_without_touching_live_cursor() {
         let _guard = crate::enterprise_policy::sync_streams_test_lock();
@@ -643,6 +812,83 @@ mod tests {
             checkpoint.boundary.backfill_records,
             Some(super::FRAME_PAGE_LIMIT as u64 + 1)
         );
+    }
+
+    #[tokio::test]
+    async fn pending_backfill_read_keeps_checkpoint_without_immediate_retry() {
+        let _guard = crate::enterprise_policy::sync_streams_test_lock();
+        let _restore = super::super::tests::RestoreDefaultSyncStreams;
+        crate::enterprise_policy::set_sync_streams(
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            "off".into(),
+            "off".into(),
+        );
+        struct PendingRead;
+        #[async_trait::async_trait]
+        impl LocalApiClient for PendingRead {
+            async fn fetch_frames_since(
+                &self,
+                _: Option<&str>,
+                _: u32,
+                _: u32,
+            ) -> Result<Vec<FrameRow>, EnterpriseSyncError> {
+                Err(EnterpriseSyncError::LocalApi(
+                    "frame storage: read revision changed; retry pending".into(),
+                ))
+            }
+            async fn fetch_audio_since(
+                &self,
+                _: Option<&str>,
+                _: u32,
+                _: u32,
+            ) -> Result<Vec<AudioRow>, EnterpriseSyncError> {
+                panic!("unselected audio");
+            }
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/enterprise/backfill-requests"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pending()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/enterprise/backfill-requests"))
+            .respond_with(|r: &wiremock::Request| {
+                let body: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+                assert_eq!(body["status"], "running");
+                assert_eq!(body["uploaded_records"], 0);
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"accepted": true}))
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg = cfg(&dir, &server);
+        let (_stop, shutdown) = tokio::sync::watch::channel(false);
+        assert!(
+            !fulfill_requests(&cfg, &PendingRead, &enterprise_http_client(), &shutdown)
+                .await
+                .unwrap()
+        );
+        let req = request();
+        let checkpoint = Cursor::load(&dir.path().join(format!(
+            "enterprise_backfill_{}_{}.json",
+            req.license_id, req.id,
+        )));
+        assert_eq!(checkpoint.last_frame_ts, req.initial_cursor().last_frame_ts);
+        assert!(!checkpoint.boundary.backfill_telemetry_complete);
+        assert!(server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|r| r.url.path() == "/api/enterprise/backfill-requests"));
     }
 
     #[tokio::test]
@@ -1574,16 +1820,19 @@ mod tests {
     }
 }
 
+/// Return whether acknowledged checkpoint progress leaves ready recovery work.
+/// A page yield gives live sync a turn; it must not impose the idle poll delay.
 pub(super) async fn fulfill_requests(
     cfg: &EnterpriseSyncConfig,
     local: &dyn LocalApiClient,
     http: &reqwest::Client,
     shutdown: &tokio::sync::watch::Receiver<bool>,
-) -> Result<(), EnterpriseSyncError> {
+) -> Result<bool, EnterpriseSyncError> {
     let Some(base) = control_plane_base(&cfg.ingest_url) else {
-        return Ok(());
+        return Ok(false);
     };
     let url = format!("{base}/api/enterprise/backfill-requests");
+    let mut more_pending = false;
     // At most 10 pages after live sync; poll each page so cancellation and
     // server policy changes take effect before the next local read.
     for _ in 0..10 {
@@ -1650,6 +1899,7 @@ pub(super) async fn fulfill_requests(
             }
         };
         report(cfg, http, &url, &request, &cursor, "running", None).await?;
+        let before = cursor.clone();
         match run_replay_page(&replay_cfg, &mut cursor, local, http, &request).await {
             Ok(page) => {
                 let complete = !page.may_have_more();
@@ -1666,6 +1916,10 @@ pub(super) async fn fulfill_requests(
                     None,
                 )
                 .await?;
+                // Only durable progress can schedule an immediate next turn.
+                // Waiting for a local reader/privacy worker retains the normal
+                // retry cadence rather than repeatedly polling unchanged work.
+                more_pending = !complete && !page.pending_read && cursor != before;
                 // JPEG pages are heavier than telemetry pages. Yield to live
                 // sync after one acknowledged image page, retaining its cursor.
                 if complete
@@ -1682,5 +1936,5 @@ pub(super) async fn fulfill_requests(
             }
         }
     }
-    Ok(())
+    Ok(more_pending)
 }
