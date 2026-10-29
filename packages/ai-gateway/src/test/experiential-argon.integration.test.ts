@@ -13,7 +13,7 @@ import type { Env } from '../types';
 
 const model = 'gemini-4-argon';
 const context: HostedChatGatewayContext = { user_id: 'trusted-actor', plan: 'internal', lane: 'explicit', workload: 'interactive', trial: false };
-const env = { HOSTED_CHAT_GATEWAY: 'experiential', EXPERIENTIAL_API_KEY: `xpl_${'0'.repeat(40)}`,
+const env = { DB: { prepare: () => ({ bind: () => ({ first: async () => null }) }) }, HOSTED_CHAT_GATEWAY: 'experiential', EXPERIENTIAL_API_KEY: `xpl_${'0'.repeat(40)}`,
   CLOUDFLARE_EXPERIENTIAL_PROVIDER: 'custom-experiential-fixture', CLOUDFLARE_AI_GATEWAY_ID: 'fixture',
   CLOUDFLARE_AI_GATEWAY_BASE_URL: 'https://gateway.ai.cloudflare.com/v1/account/fixture', CLOUDFLARE_AI_GATEWAY_TOKEN: 'synthetic' } as Env;
 const callId = 'call_argon__signature_' + 'a'.repeat(256);

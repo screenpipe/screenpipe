@@ -8,7 +8,7 @@ import { resolveHostedChatConnection } from '../services/hosted-chat-connection'
 import type { HostedChatGatewayContext } from '../services/cloudflare-ai-gateway';
 import type { Env } from '../types';
 const key = `xpl_${'0'.repeat(40)}`;
-const env = { EXPERIENTIAL_CANARY_MODE: 'internal', EXPERIENTIAL_API_KEY: key,
+const env = { DB: { prepare: () => ({ bind: () => ({ first: async () => null }) }) }, EXPERIENTIAL_CANARY_MODE: 'internal', EXPERIENTIAL_API_KEY: key,
   CLOUDFLARE_AI_GATEWAY_ID: 'fixture', CLOUDFLARE_AI_GATEWAY_BASE_URL: 'https://gateway.ai.cloudflare.com/v1/account/fixture' } as Env;
 const context: HostedChatGatewayContext = { user_id: 'server-owned-actor', plan: 'internal', lane: 'auto', workload: 'interactive', trial: false };
 describe('real hosted chat connection selector', () => {

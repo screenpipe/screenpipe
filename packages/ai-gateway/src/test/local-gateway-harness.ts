@@ -183,7 +183,7 @@ export class LocalGatewayHarness {
 			const script = bundleWorker(tempDirectory, options.workerEntrypoint);
 			let harness: LocalGatewayHarness;
 			const providerReply = options.providerReply ?? 'local gateway ok';
-			const cloudflareSpendRules = options.cloudflareSpendRules === true;
+			const cloudflareSpendRules = options.cloudflareSpendRules === true || options.experientialHybrid === true;
 			const cloudflareAccountId = '00000000000000000000000000000000';
 			const cloudflareGatewayId = 'screenpipe-local-e2e';
 			const cloudflareGatewayRoot = `https://gateway.ai.cloudflare.com/v1/${cloudflareAccountId}/${cloudflareGatewayId}`;
@@ -341,6 +341,13 @@ export class LocalGatewayHarness {
 	get baseUrl(): string {
 		if (!this._baseUrl) throw new Error('local AI gateway is not ready');
 		return this._baseUrl;
+	}
+
+	/** Inspect persisted acceptance evidence and inject storage failures without
+	 * mocking the production settlement or admission helpers. */
+	databaseForTest(): D1Database {
+		if (!this.database) throw new Error('local AI gateway database is not ready');
+		return this.database;
 	}
 
 	get unexpectedOutboundRequests(): LocalGatewayOutboundRequest[] {

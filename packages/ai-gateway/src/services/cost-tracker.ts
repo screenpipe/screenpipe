@@ -174,6 +174,14 @@ function findPricing(model: string | null | undefined): ModelPricing | null {
 export function getFlatGatewayTokenRates(model: string) {
   const pricing = findPricing(model);
   if (!pricing || pricing.longContext) return null;
+  return getBaseGatewayTokenRates(model);
+}
+
+/** Cloudflare meters the base schedule. The durable context ledger meters
+ * only the additional tier charge, using final provider usage. */
+export function getBaseGatewayTokenRates(model: string) {
+  const pricing = findPricing(model);
+  if (!pricing) return null;
   const input = pricing.input / 1_000_000;
   return {
     per_token_in: input,
@@ -181,6 +189,21 @@ export function getFlatGatewayTokenRates(model: string) {
     per_cache_read_token: input * (pricing.cacheRead ?? 1),
     per_cache_write_token: input * (pricing.cacheWrite ?? 1),
   };
+}
+
+export function hasContextPricing(model: string): boolean {
+  return findPricing(model)?.longContext !== undefined;
+}
+
+export function getContextPricingPremium(model: string, input: number, output: number, cache: CacheUsage = {}): number {
+  const rates = getBaseGatewayTokenRates(model);
+  if (!rates) throw new Error('Missing gateway token prices');
+  const read = Math.max(0, cache.cache_read_tokens ?? 0);
+  const write = Math.max(0, cache.cache_creation_tokens ?? 0);
+  const scale = read + write ? Math.min(input, read + write) / (read + write) : 0;
+  const base = (input - (read + write) * scale) * rates.per_token_in + output * rates.per_token_out +
+    read * scale * rates.per_cache_read_token + write * scale * rates.per_cache_write_token;
+  return Math.max(0, getModelCost(model, input, output, cache) - base);
 }
 
 /** Collapse versioned model IDs and arbitrary caller input to a bounded key. */

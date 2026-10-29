@@ -13,6 +13,7 @@ function output(requiredColumns: number, requiredIndexes: number, success = true
 		results: [{
 			required_columns: requiredColumns,
 			required_indexes: requiredIndexes,
+			context_columns: 11, context_indexes: 3,
 		}],
 	}]);
 }
@@ -27,6 +28,8 @@ describe('assertRequiredSchema', () => {
 			output(10, 1),
 			output(11, 0),
 			output(11, 1, false),
+			JSON.stringify([{ success: true, results: [{ required_columns: 11, required_indexes: 1, context_columns: 10, context_indexes: 3 }] }]),
+			JSON.stringify([{ success: true, results: [{ required_columns: 11, required_indexes: 1, context_columns: 11, context_indexes: 2 }] }]),
 			'not-json',
 		]) {
 			expect(() => assertRequiredSchema(raw)).toThrow();
@@ -53,6 +56,10 @@ describe('required settlement migration', () => {
 		);
 		database.exec(migration);
 		database.exec(migration);
+		const contextMigration = readFileSync(new URL('../migrations/0009_hosted_context_pricing.sql', import.meta.url), 'utf8');
+		database.exec(contextMigration);
+		database.exec(contextMigration);
+		expect(database.query("SELECT COUNT(*) AS count FROM pragma_table_info('hosted_context_pricing')").get()).toEqual({ count: 11 });
 
 		expect(database.query(`
 			SELECT device_id, daily_cost_usd FROM usage

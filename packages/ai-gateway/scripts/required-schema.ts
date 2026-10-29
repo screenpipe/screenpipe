@@ -16,7 +16,7 @@ export function assertRequiredSchema(rawOutput: string): void {
 	}
 
 	const row = payload.find((result) => result.success === true)?.results?.[0];
-	if (row?.required_columns !== 11 || row?.required_indexes !== 1) {
+	if (row?.required_columns !== 11 || row?.required_indexes !== 1 || row?.context_columns !== 11 || row?.context_indexes !== 3) {
 		throw new Error('required hosted AI settlement schema is incomplete');
 	}
 }

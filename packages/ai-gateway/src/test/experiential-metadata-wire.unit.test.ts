@@ -12,15 +12,16 @@ const tags = { audience: 'enterprise' as const, user_id_hash: 'a'.repeat(64), en
 const auth: AuthResult = { isValid: true, tier: 'subscribed', accountPlan: 'enterprise', deviceId: 'user_fixture',
   userId: 'user_fixture', clerkUserId: 'user_fixture', trainingMetadata: tags };
 const key = `xpl_${'0'.repeat(40)}`;
-const base = { EXPERIENTIAL_API_KEY: key, CLOUDFLARE_AI_GATEWAY_ID: 'fixture',
+const base = { DB: { prepare: (query: string) => ({ bind: () => ({ first: async () => query.includes('coalesce(sum') ? { amount: 0 } : null, run: async () => ({ success: true }) }) }) },
+  CLOUDFLARE_ACCOUNT_ID: '0'.repeat(32), CLOUDFLARE_API_TOKEN: 'fixture-read', EXPERIENTIAL_API_KEY: key, CLOUDFLARE_AI_GATEWAY_ID: 'fixture',
   CLOUDFLARE_AI_GATEWAY_BASE_URL: 'https://gateway.ai.cloudflare.com/v1/account/fixture',
   CLOUDFLARE_AI_GATEWAY_TOKEN: 'fixture-gateway-token', CLOUDFLARE_EXPERIENTIAL_PROVIDER: 'custom-experiential-fixture' } as Env;
 
 describe('Experiential metadata on installed SDK requests', () => {
   for (const mode of ['hybrid', 'direct'] as const) it.each([
     ['openai', 'gpt-5.4-mini', 'chat/completions', true],
-    ['anthropic', 'claude-haiku-5-5', 'v1/messages', false],
-    ['openai', 'gpt-6-astra', 'responses', false],
+    ['anthropic', 'claude-haiku-5-5', 'v1/messages', true],
+    ['openai', 'gpt-6-astra', 'responses', true],
   ] as const)(`${mode}: %s %s preserves attribution on the selected route`, async (provider, model, endpoint, hybridEligible) => {
     const env = { ...base, ...(mode === 'hybrid' ? { HOSTED_CHAT_GATEWAY: 'experiential' } : { EXPERIENTIAL_CANARY_MODE: 'internal' }) } as Env;
     let context = await buildHostedChatGatewayContext(auth, 'auto', 'interactive');
@@ -31,7 +32,10 @@ describe('Experiential metadata on installed SDK requests', () => {
     const shouldTag = mode === 'direct' || hybridEligible;
     let captured: Headers | undefined;
     const spy = spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-      const request = new Request(input, init); const policy = experientialPolicyFixture(request); if (policy) return policy; const body: any = await request.json(); captured = request.headers;
+      const request = new Request(input, init);
+      if (request.url.endsWith('/ai-gateway/gateways/fixture')) return Response.json({ success: true, result: { spend_limits: { enabled: true, rules: [{ id: 'fixture', enabled: true, limitType: 'cost', limit: 10, window: 604800, technique: 'fixed', metadata: { user_id: { mode: 'partition' }, plan: { mode: 'filter', values: ['business_ultra'] } } }] } } });
+      if (request.url.endsWith('/graphql')) return Response.json({ data: { viewer: { accounts: [{ window0: [] }] } } });
+      const policy = experientialPolicyFixture(request); if (policy) return policy; const body: any = await request.json(); captured = request.headers;
       expect(request.url.endsWith(endpoint)).toBe(true);
       expect(JSON.parse(request.headers.get('X-Explabs-Tags')!)).toEqual(shouldTag ? { ...tags, training_allowed: 'false' } : null);
       const result = endpoint === 'v1/messages'

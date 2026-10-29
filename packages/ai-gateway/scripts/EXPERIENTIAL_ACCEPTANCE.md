@@ -100,8 +100,6 @@ existing Cloudflare route; client headers or JSON cannot choose this flag.
 
 Features retained on original routes:
 
-- Context-tier pricing models: retain native pricing rather than estimate the
-  threshold. The central pricing table identifies these models.
 - Confidential/custom GLM, classifier and audio retain their existing routes.
 - Argon uses Experiential with the current scheduled token/cache prices; rollback
   and explicit unsupported-request fallback retain native Vertex.
@@ -127,8 +125,35 @@ pass.
 Every hosted response carries `x-screenpipe-gateway` (`experiential` or
 `cloudflare`) and `x-screenpipe-gateway-reason`. Browser CORS exposes these
 headers; the normal route audit records `gateway_mode` and `gateway_reason`.
-Cloudflare custom-provider pricing comes from the same flat/cache rates as
-application settlement. Destination requests preserve the existing server-owned
+Cloudflare custom-provider pricing uses the central base/cache rates. Context-priced
+Haiku, Luna and Astra also record their final-usage premium in the durable
+`hosted_context_pricing` ledger. Admission and usage reporting add that premium
+to the same Cloudflare rules, actor, plan, lane and window. Base counters are
+never imported, reset or subtracted. Native rollback still includes prior premiums.
+
+Apply required migration `0009_hosted_context_pricing.sql` before deploying.
+The existing deploy migration/schema check includes it. The existing read-only
+`CLOUDFLARE_API_TOKEN` must read Gateway settings/logs and account analytics.
+A pending request has a request-sized hold from the existing reservation policy;
+it has no time-based deletion. Settlement commits before a terminal SSE event
+reaches an SDK that may then stop reading. Failed storage reports the operation,
+settlement ID and sanitized originating SQLite/network cause through the normal
+Sentry/log path, and leaves the hold recoverable.
+
+Later admission or usage polling recovers unfinished settlement from Cloudflare's
+financial `usage_metadata`, matching event ID, model and trusted account fields.
+The pre-dispatch `cf-aig-event-id` also recovers lost response headers. No second
+inference or prompt/response download is needed; payload storage remains disabled.
+Messages input excludes cached subsets and is normalized before choosing a tier;
+Chat and Responses input already include them. Missing/ambiguous evidence keeps
+the hold. Storage or allowance-reporting failures cannot bypass accounting via
+another model. Provider failures retain the existing fallback behavior.
+
+Like the existing Cloudflare policy, admission is eventually consistent: the
+base component comes from Cloudflare analytics and Cloudflare also independently
+enforces its base counter. This does not create a synchronous invoice ceiling.
+
+ Destination requests preserve the existing server-owned
 actor, plan, lane, workload and trial metadata, so native and Experiential
 requests share the same counters and rollback does not reset allowances.
 
@@ -226,3 +251,27 @@ preserves supported caller effort and native defaults when omitted.
 
 Capability references: [GPT-5.4 Pro](https://developers.openai.com/api/docs/models/gpt-5.4-pro)
 and [GPT-5.5 Pro](https://developers.openai.com/api/docs/models/gpt-5.5-pro).
+
+## Context-tier validation follow-up
+
+Real Worker/D1 acceptance covers all three context-priced models in JSON and SSE
+below, at and above the published thresholds; whole-request cache prices;
+admission below/at/above budget; another user's isolation; persisted rollback,
+restart and the actual fixed weekly reset; SQLite settlement failure; recovery
+with and without response headers; Messages cache normalization; and Auto
+fallback after a truncated paid response.
+
+Three real Cloudflare-to-Experiential Haiku requests also verified >100k input,
+cache creation and cache reading. Source-policy total equals Cloudflare base
+plus the final-usage premium. Financial log IDs are
+`01a1898f-c5d1-757f-b307-ca12b6e16a48`,
+`01a18990-0b97-7315-941f-43d0970901ef` and
+`01a18990-2f4c-72dc-9d40-d8a60a891da5`. Logs retained final cache counters with
+payload storage off. Exact event-ID recovery uses the API's JSON `filters`
+parameter, verified live; bracket/dotted alternatives were observed to ignore
+that filter and are not used.
+
+The selectable GLM label is the separate EHBP-encrypted Private AI transport,
+not ordinary hosted chat: desktop `tinfoil-transport.ts` selects
+`/v1/tinfoil/glm/chat/completions`. Confidential inference was excluded by the
+user's scope clarification. Preserve its opaque relay and enclave verification.

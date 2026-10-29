@@ -4,8 +4,10 @@
 
 import type { Env, RequestBody } from '../types';
 import { GEMINI_ARGON_MODEL } from '../providers/gemini-argon';
-import { getHostedChatGatewayConnection, type CloudflareGatewayProvider, type HostedChatGatewayContext } from './cloudflare-ai-gateway';
-import { getFlatGatewayTokenRates } from './cost-tracker';
+import { getHostedChatGatewayConnection, HostedChatAllowanceExceededError, type CloudflareGatewayProvider, type HostedChatGatewayContext } from './cloudflare-ai-gateway';
+import { getBaseGatewayTokenRates, hasContextPricing } from './cost-tracker';
+import { getCloudflareHostedChatSpend } from './cloudflare-ai-gateway-usage';
+import { contextAccountingFailure, contextPricingTotal, dispatchContextPricedRequest, hasContextPricingSpend, HostedContextAccountingError, reconcileContextPricing } from './hosted-context-pricing';
 import { originalGatewayReason } from './experiential-routing-policy';
 import { experientialDispatchTags } from './experiential-metadata';
 
@@ -67,7 +69,24 @@ async function verifyNoTrainingPolicy(apiKey: string, signal: AbortSignal): Prom
   }
 }
 
-function experientialPrivateFetch(baseURL: string, apiKey: string): typeof fetch {
+async function enforceContextPremium(env: Env, context: HostedChatGatewayContext, requireReporting = false) {
+  if (!requireReporting && !await hasContextPricingSpend(env, context)) return;
+  try {
+    await reconcileContextPricing(env, context);
+    const rules = await getCloudflareHostedChatSpend(env, context);
+    for (const rule of rules) {
+      if (rule.lane !== 'combined' && rule.lane !== context.lane) continue;
+      const extra = await contextPricingTotal(env, context, rule.start, rule.end, rule.lane);
+      if (rule.used + extra >= rule.limit) throw new HostedChatAllowanceExceededError(context,
+        rule.lane === 'combined' || rule.lane === 'frontier' ? rule.lane : 'unknown');
+    }
+  } catch (error) {
+    if (error instanceof HostedChatAllowanceExceededError || error instanceof HostedContextAccountingError) throw error;
+    throw contextAccountingFailure('allowance_lookup', undefined, error);
+  }
+}
+
+function experientialPrivateFetch(baseURL: string, apiKey: string, accounting?: { env: Env; context: HostedChatGatewayContext; model: string }): typeof fetch {
   return async (input, init) => {
     const request = new Request(input, init);
     if (!request.url.startsWith(baseURL.replace(/\/$/, '') + '/') || request.method !== 'POST') {
@@ -81,7 +100,15 @@ function experientialPrivateFetch(baseURL: string, apiKey: string): typeof fetch
     await verifyNoTrainingPolicy(apiKey, request.signal);
     const headers = new Headers(request.headers);
     headers.delete('content-length');
-    const response = await fetch(new Request(request, { headers, body: JSON.stringify(body), redirect: 'manual' }));
+    const dispatch = (eventId?: string) => {
+      if (eventId) headers.set('cf-aig-event-id', eventId);
+      return fetch(new Request(request, { headers, body: JSON.stringify(body), redirect: 'manual' }));
+    };
+    const tiered = accounting && hasContextPricing(accounting.model);
+    if (tiered) await enforceContextPremium(accounting.env, accounting.context, true);
+    const response = tiered
+      ? await dispatchContextPricedRequest(accounting.env, accounting.context, accounting.model, request, body, dispatch)
+      : await dispatch();
     if (!response.ok) {
       const failure = await response.clone().json().catch(() => null) as any;
       const code = failure?.error?.code ?? failure?.code;
@@ -117,6 +144,10 @@ export async function resolveHostedChatConnection(
   const nativeProvider = provider === 'openai' || provider === 'anthropic' ||
     (provider === 'google-vertex-ai' && model === GEMINI_ARGON_MODEL);
   const retainedReason = forceOriginalReason ?? (hybrid && nativeProvider ? originalGatewayReason(model, body) : null);
+  // Tiered dispatch checks immediately before its physical fetch. Other
+  // routes, including native rollback, still include all prior premiums.
+  if (!(hybrid && nativeProvider && !retainedReason && hasContextPricing(model)))
+    await enforceContextPremium(env, context);
   if (hybrid && nativeProvider && !retainedReason) {
     const apiKey = env.EXPERIENTIAL_API_KEY?.trim();
     const slug = env.CLOUDFLARE_EXPERIENTIAL_PROVIDER?.trim();
@@ -131,12 +162,12 @@ export async function resolveHostedChatConnection(
     const defaultHeaders: Record<string, string | null> = { ...connection.defaultHeaders,
       ...metadataHeaders,
       Authorization: `Bearer ${apiKey}`,
-      'cf-aig-custom-cost': JSON.stringify(getFlatGatewayTokenRates(model)),
+      'cf-aig-custom-cost': JSON.stringify(getBaseGatewayTokenRates(model)),
       ...(provider === 'anthropic' ? { 'x-api-key': null } : {}),
     };
     delete defaultHeaders['cf-aig-byok-alias'];
     const baseURL = url.toString().replace(/\/$/, '');
-    return { ...connection, baseURL, apiKey, defaultHeaders, fetch: experientialPrivateFetch(baseURL, apiKey),
+    return { ...connection, baseURL, apiKey, defaultHeaders, fetch: experientialPrivateFetch(baseURL, apiKey, { env, context, model }),
       openAICompatible: true,
       model: EXPERIENTIAL_MODEL_ALIASES[model] ?? model,
       explicitPromptCaching: false,

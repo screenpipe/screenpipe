@@ -4,6 +4,7 @@
 
 import type { Env } from '../types';
 import { TtlSingleFlightCache } from '../utils/ttl-single-flight-cache';
+import { hasContextPricingSpend, contextPricingTotal, reconcileContextPricing } from './hosted-context-pricing';
 import type {
 	HostedChatGatewayContext,
 	HostedChatLane,
@@ -468,6 +469,30 @@ async function fetchUsageRows(
 	}));
 }
 
+/** Fresh admission evidence; display caches never authorize more inference. */
+export async function getCloudflareHostedChatSpend(env: Env, context: HostedChatGatewayContext, now = new Date()) {
+	const settings = cloudflareSettings(env);
+	if (!settings) throw new Error('Cloudflare allowance reporting is not configured');
+	const ruleSet = await readSpendRules(settings);
+	const rules = applicableLaneRules(ruleSet.rules, context);
+	// Unsupported rules cannot be approximated by dropping a dimension.
+	if (!ruleSet.spendLimitsEnabled || (rules.length === 0 && context.plan !== 'internal'))
+		throw new Error('Cloudflare allowance rules are unavailable');
+	if (ruleSet.rules.some(rule => ruleSelectionReason(rule, context) !== 'plan_filter_mismatch' &&
+		ruleSelectionReason(rule, context) !== 'matched')) throw new Error('Unsupported Cloudflare allowance dimensions');
+	const intervals = [...new Map(rules.map(rule => { const interval = intervalForRule(rule, now); return [interval.key, interval]; })).values()];
+	const rows = await fetchUsageRows(settings, context, intervals);
+	return rules.map(rule => {
+		const interval = intervalForRule(rule, now);
+		const used = (rows.get(interval.key) ?? []).reduce((sum, row) => {
+			const metadata = metadataFromRow(row);
+			const cost = Number(row.sum?.cost);
+			return metadata && ruleMatchesRow(rule, context, metadata) && Number.isFinite(cost) && cost > 0 ? sum + cost : sum;
+		}, 0);
+		return { ...rule, used, start: interval.start.getTime(), end: now.getTime() };
+	});
+}
+
 /** Read the active Cloudflare rules and the authenticated user's matching spend. */
 export async function getCloudflareHostedChatUsage(
 	env: Env,
@@ -476,12 +501,14 @@ export async function getCloudflareHostedChatUsage(
 ): Promise<HostedChatUsageSnapshot | null> {
 	const settings = cloudflareSettings(env);
 	if (!settings) return null;
+	const hasExtraSpend = await hasContextPricingSpend(env, context);
+	if (hasExtraSpend) await reconcileContextPricing(env, context);
 	const snapshotRequest = sharedCacheRequest(
 		'snapshot',
 		`${settings.accountId}:${settings.gatewayId}:${context.plan}:${context.user_id}`,
 	);
 	const sharedSnapshot = await readSharedJson<HostedChatUsageSnapshot>(snapshotRequest);
-	if (sharedSnapshot?.allowance_managed_by === 'cloudflare' &&
+	if (!hasExtraSpend && sharedSnapshot?.allowance_managed_by === 'cloudflare' &&
 		Array.isArray(sharedSnapshot.allowances) &&
 		typeof sharedSnapshot.usage_as_of === 'string') return sharedSnapshot;
 	const ruleSet = await fetchSpendRules(settings);
@@ -495,14 +522,15 @@ export async function getCloudflareHostedChatUsage(
 	}
 	const intervals = [...intervalsByKey.values()];
 	const rowsByInterval = await fetchUsageRows(settings, context, intervals);
-	const allowances = rules.map((rule): HostedChatUsageAllowance => {
+	const allowances = (await Promise.all(rules.map(async (rule): Promise<HostedChatUsageAllowance> => {
 		const interval = intervalForRule(rule, now);
-		const used = (rowsByInterval.get(interval.key) ?? []).reduce((total, row) => {
+		const baseUsed = (rowsByInterval.get(interval.key) ?? []).reduce((total, row) => {
 			const metadata = metadataFromRow(row);
 			if (!metadata || !ruleMatchesRow(rule, context, metadata)) return total;
 			const cost = Number(row.sum?.cost);
 			return total + (Number.isFinite(cost) && cost > 0 ? cost : 0);
 		}, 0);
+		const used = baseUsed + (hasExtraSpend ? await contextPricingTotal(env, context, interval.start.getTime(), now.getTime(), rule.lane) : 0);
 		// Provider amounts are sensitive operational data. Use them only inside
 		// this calculation and return a clamped whole-number percentage.
 		const usedPercent = Math.min(100, Math.max(0, Math.floor((used / rule.limit) * 100)));
@@ -514,7 +542,7 @@ export async function getCloudflareHostedChatUsage(
 			technique: rule.technique,
 			resets_at: interval.reset?.toISOString() ?? null,
 		};
-	}).sort((left, right) =>
+	}))).sort((left, right) =>
 		left.lane.localeCompare(right.lane) ||
 		left.window_seconds - right.window_seconds ||
 		left.technique.localeCompare(right.technique));
@@ -523,6 +551,6 @@ export async function getCloudflareHostedChatUsage(
 		usage_as_of: now.toISOString(),
 		allowances,
 	};
-	if (allowances.length > 0) await writeSharedJson(snapshotRequest, snapshot);
+	if (!hasExtraSpend && allowances.length > 0) await writeSharedJson(snapshotRequest, snapshot);
 	return snapshot;
 }

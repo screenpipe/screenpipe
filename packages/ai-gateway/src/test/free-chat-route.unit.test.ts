@@ -832,7 +832,10 @@ describe('/v1/chat/completions free-plan route policy', () => {
 			CLOUDFLARE_AI_GATEWAY_ID: gatewayId,
 			CLOUDFLARE_ACCOUNT_ID: '9850df1eb8fd807eb8e06f4057b473f1',
 			CLOUDFLARE_API_TOKEN: 'read-only-token',
-			DB: { prepare: () => { throw new Error('legacy cost storage unavailable'); } },
+			DB: { prepare: (query: string) => {
+				if (query.includes('hosted_context_pricing')) return { bind: () => ({ first: async () => null }) };
+				throw new Error('legacy cost storage unavailable');
+			} },
 		} as unknown as Env;
 
 		const response = await handleRequest(new Request('https://gateway.test/v1/usage', {
@@ -930,6 +933,7 @@ describe('/v1/chat/completions free-plan route policy', () => {
 			DB: {
 				prepare: (query: string) => {
 					d1Statements.push(query);
+					if (query.includes('hosted_context_pricing')) return { bind: () => ({ first: async () => null }) };
 					throw new Error('legacy admission storage unavailable');
 				},
 			},
