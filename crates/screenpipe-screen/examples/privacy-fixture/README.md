@@ -46,6 +46,25 @@ requires a capture error with no PNG/JPEG created. Set `PRIVACY_ANIMATE=1` for t
 fixture to move and reorder the excluded window repeatedly. The allowed window
 stays stable so capture failures are not mistaken for passing privacy assertions.
 
+On Windows, build both examples and start two disposable native windows:
+
+```powershell
+cargo build -p screenpipe-screen --example windows_privacy_fixture --example screenshot_privacy_probe --profile debug-dev
+$fixture = "$PWD\target\debug-dev\examples\windows_privacy_fixture.exe"
+$allowed = Start-Process $fixture -ArgumentList 'allowed', '120', '140' -PassThru
+$blocked = Start-Process $fixture -ArgumentList 'blocked', '300', '260' -PassThru
+# The blocked window continuously moves and changes stacking order.
+& .\target\debug-dev\examples\screenshot_privacy_probe.exe C:\privacy-include 0 include
+Stop-Process -Id $allowed.Id, $blocked.Id
+```
+
+Use separate output directories for baseline, include, exclude, empty, and no-policy
+runs. The shared probe checks saved JPEGs on Windows too. The native fixture
+implements normal Win32 paint/print messages; accelerated application capture
+must also be checked with a real browser window. On x86_64, isolated capture uses
+WGC. ARM64 bypasses xcap's screen-copy fallback with PrintWindow only; applications
+that do not render through PrintWindow can yield unavailable or blank content.
+
 Unsupported window-isolation backends must withhold screenshots: macOS before
 14, Wayland window selection, or X11 without Composite. The production event loop
 continues independently filtered accessibility collection when screenshots are
