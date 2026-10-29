@@ -12,7 +12,7 @@ export const EXPERIENTIAL_INFERENCE_ORIGIN = 'https://api.experientiallabs.ai';
 export class HostedInferencePrivacyError extends Error {
   readonly privacyGate = true;
   readonly transient = false;
-  readonly userMessage = 'Hosted AI could not verify zero data retention. Please try again later.';
+  readonly userMessage = 'Hosted AI could not verify no-training routing. Please try again later.';
   constructor(message: string, readonly status = 502) { super(message); }
 }
 /** SDKs wrap fetch failures in connection errors; preserve the privacy gate. */
@@ -25,38 +25,71 @@ export function hostedInferencePrivacyError(error: unknown): HostedInferencePriv
   }
   return null;
 }
-/** Raw inference is never a training contribution, including after account
- * opt-in. Only the separately redacted Workflows dataset may be retained.
- * Apply after SDK serialization so Chat, Messages, Responses and retries share
- * the same rule, and a caller cannot replace it with provider.zdr=false. */
-function experientialPrivateFetch(baseURL: string): typeof fetch {
+/** No raw inference is a training contribution. Account opt-in continues to
+ * authorize only the separately redacted Workflows contribution path.
+ * Experiential enforces no-training on every provider rung through org policy;
+ * it has no documented per-request no-training parameter or response verdict.
+ * Verify that policy with the dispatch key, without caching permission, before
+ * sending content. Retention is permitted and is independent of training. */
+async function verifyNoTrainingPolicy(apiKey: string, signal: AbortSignal): Promise<void> {
+  async function read(path: string): Promise<any> {
+    const response = await fetch(`${EXPERIENTIAL_INFERENCE_ORIGIN}${path}`, {
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+      redirect: 'manual', signal,
+    });
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => {});
+      throw new HostedInferencePrivacyError(`Experiential no-training policy read failed (HTTP ${response.status})`, 503);
+    }
+    return response.json();
+  }
+  try {
+    const who = await read('/api/whoami');
+    if (typeof who.org_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(who.org_id)) {
+      throw new HostedInferencePrivacyError('Experiential returned an invalid no-training organization', 503);
+    }
+    const policy = await read(`/api/orgs/${who.org_id}/provider-policy`);
+    if (policy.policy?.require_no_training !== true) {
+      throw new HostedInferencePrivacyError('Experiential no-training routing is not enabled', 503);
+    }
+    // The deployed policy UI supports scoped exemptions. An unscoped provider
+    // or model exemption also bypasses no-training, even with the switch on.
+    const exemptions: unknown = policy.policy.exemptions === undefined ? [] : policy.policy.exemptions;
+    if (!Array.isArray(exemptions) || exemptions.some(value => typeof value !== 'string' ||
+        !/^(?:zdr|region):(?:provider:[a-z][a-z0-9_-]*|model:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.test(value))) {
+      throw new HostedInferencePrivacyError('Experiential policy permits a no-training exemption', 503);
+    }
+  } catch (error) {
+    if (error instanceof HostedInferencePrivacyError) throw error;
+    // Never retain an upstream body/URL/credential in a support error.
+    throw new HostedInferencePrivacyError('Experiential no-training policy could not be read', 503);
+  }
+}
+
+function experientialPrivateFetch(baseURL: string, apiKey: string): typeof fetch {
   return async (input, init) => {
     const request = new Request(input, init);
     if (!request.url.startsWith(baseURL.replace(/\/$/, '') + '/') || request.method !== 'POST') {
       throw new Error('Unexpected Experiential inference request');
     }
     const body = await request.json() as Record<string, unknown>;
-    body.provider = { ...(body.provider && typeof body.provider === 'object' && !Array.isArray(body.provider) ? body.provider : {}), zdr: true };
-    // Continuations would create another content store outside contribution
-    // consent, redaction, expiry and deletion. Both SDK protocols are stateless.
-    if (body.previous_response_id) throw new HostedInferencePrivacyError('Resend full conversation for private inference', 400);
+    // SDK/caller parameters cannot change the server-owned provider policy.
+    delete body.provider;
+    if (body.previous_response_id) throw new HostedInferencePrivacyError('Resend full conversation for stateless inference', 400);
     if (!request.url.endsWith('/v1/messages')) body.store = false;
+    await verifyNoTrainingPolicy(apiKey, request.signal);
     const headers = new Headers(request.headers);
     headers.delete('content-length');
-    const response = await fetch(new Request(request, { headers, body: JSON.stringify(body) }));
-    if (response.ok && response.headers.get('x-gateway-zdr') !== 'true') {
-      void response.body?.cancel().catch(() => {});
-      throw new HostedInferencePrivacyError('Experiential did not confirm zero data retention');
-    }
+    const response = await fetch(new Request(request, { headers, body: JSON.stringify(body), redirect: 'manual' }));
     if (!response.ok) {
       const failure = await response.clone().json().catch(() => null) as any;
       const code = failure?.error?.code ?? failure?.code;
       const message = String(failure?.error?.message ?? failure?.message ?? '');
-      if (['model_not_granted', 'needs_subscription', 'privacy_preflight_failed', 'zdr_continuation_disabled'].includes(code) ||
-        /\bzdr\b|zero.?data.?retention|parameter ['"]provider['"] is not supported/i.test(message)) {
+      if (['privacy_preflight_failed', 'provider_policy', 'zdr_continuation_disabled'].includes(code) ||
+        /no.?training|require_no_training|zero.?data.?retention|\bzdr\b/i.test(message)) {
         void response.body?.cancel().catch(() => {});
-        const reason = ['model_not_granted', 'needs_subscription', 'privacy_preflight_failed', 'zdr_continuation_disabled'].includes(code) ? code : response.status;
-        throw new HostedInferencePrivacyError(`Experiential refused the private request (${reason})`, response.status);
+        const reason = ['privacy_preflight_failed', 'provider_policy', 'zdr_continuation_disabled'].includes(code) ? code : 'provider_policy';
+        throw new HostedInferencePrivacyError(`Experiential refused the inference data policy (${reason})`, response.status);
       }
     }
     return response;
@@ -102,7 +135,7 @@ export async function resolveHostedChatConnection(
     };
     delete defaultHeaders['cf-aig-byok-alias'];
     const baseURL = url.toString().replace(/\/$/, '');
-    return { ...connection, baseURL, apiKey, defaultHeaders, fetch: experientialPrivateFetch(baseURL),
+    return { ...connection, baseURL, apiKey, defaultHeaders, fetch: experientialPrivateFetch(baseURL, apiKey),
       model: EXPERIENTIAL_MODEL_ALIASES[model] ?? model,
       explicitPromptCaching: false,
       gateway: 'experiential' as const, allowanceGateway: 'cloudflare' as const, gatewayReason: 'experiential_supported',
@@ -140,17 +173,26 @@ export async function resolveHostedChatConnection(
       gatewayReason: retainedReason ?? (hybrid ? 'retained_provider' : 'original_gateway'),
     };
   }
+  return resolveExperientialRescueConnection(env, model, context, provider, 'internal_canary');
+}
+
+/** Existing allowance-exempt rescue: bypass only the exhausted CF counter,
+ * retaining the same model, request, trusted attribution and no-training gate. */
+export function resolveExperientialRescueConnection(
+  env: Env, model: string, context?: HostedChatGatewayContext,
+  provider: 'openai' | 'anthropic' = 'openai', reason = 'background_rescue',
+) {
   const apiKey = env.EXPERIENTIAL_API_KEY?.trim();
   if (!apiKey || !/^xpl_[0-9a-f]{40}$/.test(apiKey)) {
-    const error = new Error('EXPERIENTIAL_API_KEY is not configured for the internal canary');
-    Object.assign(error, { status: 503, transient: false });
-    throw error;
+    throw Object.assign(new Error('EXPERIENTIAL_API_KEY is not configured'), { status: 503, transient: false });
   }
+  const tags = context ? getExperientialRequestTags(context) : null;
+  const metadataHeaders: Record<string, string> = tags ? { 'X-Explabs-Tags': JSON.stringify(tags) } : {};
   return {
     baseURL: provider === 'anthropic' ? EXPERIENTIAL_INFERENCE_ORIGIN : `${EXPERIENTIAL_INFERENCE_ORIGIN}/v1`,
     apiKey,
     maxRetries: 0,
-    fetch: experientialPrivateFetch(provider === 'anthropic' ? EXPERIENTIAL_INFERENCE_ORIGIN : `${EXPERIENTIAL_INFERENCE_ORIGIN}/v1`),
+    fetch: experientialPrivateFetch(provider === 'anthropic' ? EXPERIENTIAL_INFERENCE_ORIGIN : `${EXPERIENTIAL_INFERENCE_ORIGIN}/v1`, apiKey),
     defaultHeaders: {
       ...metadataHeaders,
       Authorization: `Bearer ${apiKey}`,
@@ -160,6 +202,6 @@ export async function resolveHostedChatConnection(
     explicitPromptCaching: false,
     gateway: 'experiential' as const,
     allowanceGateway: undefined,
-    gatewayReason: 'internal_canary',
+    gatewayReason: reason,
   };
 }

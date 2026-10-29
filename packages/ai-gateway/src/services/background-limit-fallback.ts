@@ -41,8 +41,10 @@ function configured(value: unknown): value is string {
 	return normalized.length > 0 && !['placeholder', 'changeme', 'change-me', 'none', 'null', 'undefined'].includes(normalized);
 }
 
-export function isBackgroundFallbackConfigured(env: Pick<Env, 'OPENAI_API_KEY'>): boolean {
-	return configured(env.OPENAI_API_KEY);
+export function isBackgroundFallbackConfigured(env: Pick<Env, 'OPENAI_API_KEY' | 'HOSTED_CHAT_GATEWAY' | 'EXPERIENTIAL_API_KEY'>): boolean {
+	return env.HOSTED_CHAT_GATEWAY === 'experiential'
+		? /^xpl_[0-9a-f]{40}$/.test(env.EXPERIENTIAL_API_KEY?.trim() ?? '')
+		: configured(env.OPENAI_API_KEY);
 }
 
 /** The rescue model is text-only here; never silently discard a Pipe's image or file input. */
@@ -130,7 +132,7 @@ export function shouldUseBackgroundFallback(input: {
 	enabled: boolean;
 	error: unknown;
 	body: RequestBody;
-	env: Pick<Env, 'OPENAI_API_KEY'>;
+	env: Pick<Env, 'OPENAI_API_KEY' | 'HOSTED_CHAT_GATEWAY' | 'EXPERIENTIAL_API_KEY'>;
 }): boolean {
 	return input.enabled &&
 		// An allowance rejected the gateway route, not the model. One direct
@@ -154,7 +156,7 @@ export function resolveBackgroundFallbackBody(input: {
 	enabled: boolean;
 	error: unknown;
 	body: RequestBody;
-	env: Pick<Env, 'OPENAI_API_KEY'>;
+	env: Pick<Env, 'OPENAI_API_KEY' | 'HOSTED_CHAT_GATEWAY' | 'EXPERIENTIAL_API_KEY'>;
 }): RequestBody | null {
 	if (!shouldUseBackgroundFallback(input)) return null;
 	return prepareBackgroundFallbackBody(input.body,

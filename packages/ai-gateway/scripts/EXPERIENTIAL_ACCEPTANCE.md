@@ -19,14 +19,18 @@ organization and `EXPERIENTIAL_ACCEPTANCE_REPORT` to a private absolute JSON pat
 bun scripts/experiential-acceptance.ts --allow-spend
 ```
 
-The script's synthetic test-organization preflight refuses a different organization
-or a configuration that does not have retention enabled and organization-level ZDR disabled.
-Production inference still forces `provider.zdr=true` after SDK serialization on
-both hybrid and internal-canary routes, with OpenAI `store=false`. A successful
-response must confirm `x-gateway-zdr: true`; a missing verdict or privacy refusal
-stops the request, including Auto and background rescue. These failures cannot
-fall back around the privacy gate. Organization-level defaults never grant
-retention for production inference.
+The script's synthetic test-organization preflight refuses a different organization.
+The destination's no-training policy is checked by the real Worker dispatch path,
+including when the local harness substitutes the operator's inference credential.
+Production inference permits retention and does not require ZDR. Before every
+SDK dispatch, the Worker reads `/api/whoami` and that organization's provider
+policy with the dispatch credential. It requires `require_no_training: true`
+and rejects unscoped or no-training exemptions. Unavailable or invalid policy
+reads stop before content is sent; policy failures cannot trigger native
+transport fallback or rescue. ZDR and region-only exemptions remain separate.
+The policy read inherits the SDK cancellation signal and has no permission cache.
+OpenAI `store=false` and full-conversation requests preserve stateless operation.
+A missing or false `x-gateway-zdr` verdict is accepted.
 
 Full Workflows contributions travel separately: strict attested redaction,
 current consent/epoch checks, and the Screenpipe-owned dataset's expiry/deletion
@@ -58,7 +62,7 @@ The temporary local Worker and database are disposed at the end.
 
 This supersedes the ad hoc direct-request matrix for cutover acceptance. Synthetic
 smoke and acceptance commands retain their test-organization preflight defaults;
-the production connection enforces per-request ZDR. Passing this harness alone does not enable
+the production connection verifies no-training policy before dispatch. Passing this harness alone does not enable
 production traffic or establish that every original provider can be moved.
 
 For a focused recheck, set comma-separated `EXPERIENTIAL_ACCEPTANCE_MODELS` and
@@ -86,8 +90,11 @@ Features retained on original routes:
 
 - Context-tier pricing models: retain native pricing rather than estimate the
   threshold. The central pricing table identifies these models.
-- Vertex, confidential/custom GLM, classifier, audio and background rescue:
-  retain their existing routes.
+- Vertex, confidential/custom GLM, classifier and audio retain their existing routes.
+- Background rescue uses Experiential directly when the hybrid flag is enabled.
+  It preserves the existing model and text-only eligibility, no-training gate,
+  and trusted tags while bypassing only the already exhausted Cloudflare counter.
+  Cloudflare mode restores the previous direct OpenAI rescue transport.
 
 GPT-5.4 Pro, Mini/Nano image input (GPT-5.4 and GPT-5), and GPT-5.6 now
 use Experiential. OpenAI Chat requests use automatic prompt caching there;
