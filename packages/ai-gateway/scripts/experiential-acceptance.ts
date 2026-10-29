@@ -27,7 +27,7 @@ const tool = { type: 'function', function: { name: 'confirm', description: 'Retu
 const attempts: any[] = [];
 const results: any[] = [];
 // These routes retain their existing protocols/providers during this cutover.
-const retainedModels = new Set(['glm-5.3-flash-reap50-iq3m', 'screenpipe-event-classifier', 'gemini-4-argon']);
+const retainedModels = new Set(['glm-5.3-flash-reap50-iq3m', 'screenpipe-event-classifier']);
 const selectedModels = process.env.EXPERIENTIAL_ACCEPTANCE_MODELS?.split(',');
 const selectedModes = process.env.EXPERIENTIAL_ACCEPTANCE_MODES?.split(',');
 const applicableModels = getHostedAiAllowedModels('business').filter((model) => !retainedModels.has(model));

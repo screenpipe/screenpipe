@@ -670,6 +670,10 @@ export class OpenAIProvider implements AIProvider {
 		});
 	}
 
+	protected normalizeToolCallIds(messages: Message[]): Message[] {
+		return sanitizeToolCallIds(messages);
+	}
+
 	formatMessages(messages: Message[]): ChatCompletionMessageParam[] {
 		messages = repairToolResultPairing(messages);
 		// Guard: OpenAI rejects tool_call ids longer than 40 chars ("tool_calls[0].id:
@@ -678,7 +682,7 @@ export class OpenAIProvider implements AIProvider {
 		// 3k+/day, 1 stuck client). Remap any over-length id to a short stable id,
 		// consistently across the assistant tool_calls[].id AND the matching tool
 		// message tool_call_id so the pairing the API requires is preserved.
-		messages = sanitizeToolCallIds(messages);
+		messages = this.normalizeToolCallIds(messages);
 
 		return messages.map(
 			(msg) =>

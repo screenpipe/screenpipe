@@ -43,8 +43,9 @@ content; the bundled image shows four digits. Preserve no-training and all other
 account settings. Model access denials remain failures, not policy overrides.
 
 Every hosted model from the source policy is tested through `/chat/completions`,
-including Auto. Gemini's native Vertex route, the confidential GLM route, and the
-self-hosted classifier stay on their existing providers and are listed separately
+including Auto. Argon uses Experiential's OpenAI-compatible Chat wire, preserving the native
+output bounds, effort mapping and opaque signed tool-call IDs. The confidential
+GLM route and the self-hosted classifier retain their existing providers and are listed separately
 in the report. They are not sent as vendor aliases. The verified mappings are native `claude-haiku-5-5` to catalog
 `claude-haiku-5.5`, and `gpt-5.6` to `gpt-5.6-sol`. OpenAI's official Sol
 documentation confirms that unsuffixed alias, and the authenticated destination
@@ -90,7 +91,9 @@ Features retained on original routes:
 
 - Context-tier pricing models: retain native pricing rather than estimate the
   threshold. The central pricing table identifies these models.
-- Vertex, confidential/custom GLM, classifier and audio retain their existing routes.
+- Confidential/custom GLM, classifier and audio retain their existing routes.
+- Argon uses Experiential with the current scheduled token/cache prices; rollback
+  and explicit unsupported-request fallback retain native Vertex.
 - Background rescue uses Experiential directly when the hybrid flag is enabled.
   It preserves the existing model and text-only eligibility, no-training gate,
   and trusted tags while bypassing only the already exhausted Cloudflare counter.
@@ -133,7 +136,7 @@ base URL and `EXPERIENTIAL_ACCEPTANCE_SERVICE_TOKEN` to its dedicated test-servi
 credential. Keep the same org preflight key and report path, then run the same
 command. The runner accepts only the Screenpipe canary prefix under the verified
 `louis-beaumont.workers.dev` account; it never sends the service bearer to an
-arbitrary URL. All six cases run against each applicable model, 108 total.
+arbitrary URL. All six cases run against each applicable model in the current source manifest.
 
 In this mode the request goes to the deployed Worker with no local egress
 instrumentation. Reports identify `worker_request_id` as Cloudflare's CF-Ray,
@@ -143,11 +146,12 @@ instrumented runs separately retain the vendor request IDs. Do not conflate
 these evidence boundaries.
 
 For hybrid acceptance set `EXPERIENTIAL_ACCEPTANCE_EXPECTED_GATEWAY=hybrid`.
-The same 108-case manifest verifies both the content and the policy-selected
+The same source-derived manifest verifies both the content and the policy-selected
 route. Each row names its actual gateway and reason. Known original-route cases
 are successful hybrid behavior, not Experiential coverage. GPT-5.4 Pro's native
-unsupported schema remains a separate unsupported case. A full passing run is
-107 supported cases plus that explicitly verified rejection.
+unsupported schema remains a separate unsupported case. The earlier pre-Argon live run passed
+107 supported cases plus that explicitly verified rejection. It does not certify
+Argon or the new no-training dispatch path; those require fresh live acceptance.
 
 For a deployed Cloudflare rollback/baseline run, set
 `EXPERIENTIAL_ACCEPTANCE_EXPECTED_GATEWAY=cloudflare` after selecting `HOSTED_CHAT_GATEWAY=cloudflare`.
