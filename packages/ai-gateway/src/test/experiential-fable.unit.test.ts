@@ -25,6 +25,8 @@ test('Fable selects Chat before its streamed tool continuation and preserves usa
       expect(request.headers.get('X-Explabs-Tags')).toBe('{"training_allowed":false}');
       expect(request.headers.get('cf-aig-custom-cost')).toContain('per_token_in');
       sent.push({ url: request.url, body: await request.json() });
+      if (!sent.at(-1)!.body.stream) return Response.json({ choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: finish }],
+        usage: { prompt_tokens: 270, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 200, cache_write_tokens: 50 } } });
       return new Response([
         { choices: [{ delta: { content: 'OK' }, finish_reason: null }] },
         { choices: [{ delta: {}, finish_reason: finish }] },
@@ -43,6 +45,13 @@ test('Fable selects Chat before its streamed tool continuation and preserves usa
   finish = 'length';
   expect(await new Response(await provider.createStreamingCompletion(body)).text()).toContain('"finish_reason":"length"');
   expect(sent).toHaveLength(2); // No replay or manufactured success on truncation.
+  finish = 'stop';
+  const json: any = await (await provider.createCompletion(body)).json();
+  expect(sent).toHaveLength(3);
+  expect(sent[2].url).toBe(`${baseURL}/v1/chat/completions`);
+  expect(sent[2].body).toMatchObject({ max_tokens: 2048, tool_choice: 'none', stream: false, messages: body.messages });
+  expect(json.choices[0].message.content).toBe('OK');
+  expect(json.usage).toMatchObject({ prompt_tokens: 270, cache_creation_input_tokens: 50 });
 });
 
 test('Fable keeps Messages for other turns and for explicit native rollback', async () => {
