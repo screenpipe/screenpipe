@@ -29,3 +29,6 @@ crates/screenpipe-sqlite-recovery/vendor/** linguist-vendored -whitespace
 
 # Tiny browser test fixture must work in checkouts without LFS downloads.
 apps/screenpipe-workflows-web/public/video-sop-fixture.mp4 -filter -diff -merge -text
+
+# Tiny inert extraction fixture must work without LFS downloads.
+crates/screenpipe-core/tests/fixtures/ffmpeg-install.zip -filter -diff -merge -text
