@@ -4,6 +4,7 @@
 
 import { OpenAIProvider } from './openai';
 import { ExperientialArgonProvider } from './experiential-argon';
+import { ExperientialFableProvider } from './experiential-fable';
 import { AstraProvider } from './astra';
 import { OpenAIProProvider, OPENAI_PRO_NATIVE_FEATURES } from './openai-pro';
 import { AnthropicProvider } from './anthropic';
@@ -184,6 +185,9 @@ export function createProvider(model: string, env: Env, connection?: ProviderCon
 		return provider;
 	}
 	if (model.toLowerCase().includes('claude')) {
+		if (model === 'claude-fable-5' && connection?.openAICompatible && connection.baseURL)
+			return new ExperientialFableProvider(requireSecret(connection.apiKey, 'Experiential API key not configured for Fable'),
+				connection.baseURL, connection.defaultHeaders, connection.maxRetries, connection.fetch);
 		return new AnthropicProvider(
 			connection?.apiKey ?? requireSecret(env.ANTHROPIC_API_KEY, 'Anthropic API key not configured'),
 			connection?.baseURL,
