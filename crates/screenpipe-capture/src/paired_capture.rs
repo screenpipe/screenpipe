@@ -847,6 +847,7 @@ pub(crate) fn run_accessibility_tree_walk(
     use screenpipe_a11y::tree::TreeWalkResult;
     match walker.walk_focused_window() {
         Ok(TreeWalkResult::Found(snapshot)) => {
+            screenpipe_core::health_diagnostics::observe_ax("ok");
             debug!(
                 "tree walk: app={}, window={}, text_len={}, nodes={}, structured_nodes={}, dur={:?}",
                 snapshot.app_name,
@@ -859,14 +860,18 @@ pub(crate) fn run_accessibility_tree_walk(
             TreeWalkResult::Found(snapshot)
         }
         Ok(TreeWalkResult::Skipped(reason)) => {
+            screenpipe_core::health_diagnostics::observe_ax("idle");
             debug!("tree walk: window skipped ({})", reason);
             TreeWalkResult::Skipped(reason)
         }
         Ok(TreeWalkResult::NotFound) => {
+            screenpipe_core::health_diagnostics::observe_ax("idle");
             debug!("tree walk: no focused window found");
             TreeWalkResult::NotFound
         }
         Err(e) => {
+            screenpipe_core::health_diagnostics::observe_ax("error");
+            screenpipe_core::health_diagnostics::record_recording_error("ax", &e);
             warn!("tree walk failed: {}", e);
             TreeWalkResult::NotFound
         }
@@ -1131,6 +1136,41 @@ fn sanitize_ocr_text_json(text_json: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ax_health_distinguishes_provider_failure_from_no_focused_window() {
+        struct Walker(bool);
+        impl screenpipe_a11y::tree::TreeWalkerPlatform for Walker {
+            fn walk_focused_window(&self) -> anyhow::Result<screenpipe_a11y::tree::TreeWalkResult> {
+                if self.0 {
+                    anyhow::bail!("AXError -25204: provider request failed");
+                }
+                Ok(screenpipe_a11y::tree::TreeWalkResult::NotFound)
+            }
+        }
+        super::run_accessibility_tree_walk(&Walker(true));
+        assert_eq!(
+            screenpipe_core::health_diagnostics::ax_observation()
+                .unwrap()
+                .0,
+            "error"
+        );
+        let failure = screenpipe_core::health_diagnostics::last_recording_error().unwrap();
+        assert_eq!(failure.source, "ax");
+        assert_eq!(failure.message, "AXError -25204: provider request failed");
+        super::run_accessibility_tree_walk(&Walker(false));
+        assert_eq!(
+            screenpipe_core::health_diagnostics::ax_observation()
+                .unwrap()
+                .0,
+            "idle"
+        );
+        assert_eq!(
+            screenpipe_core::health_diagnostics::last_recording_error()
+                .unwrap()
+                .occurred_at,
+            failure.occurred_at
+        );
+    }
     use super::*;
     use image::{DynamicImage, RgbImage};
     use screenpipe_a11y::tree::AccessibilityTreeNode;

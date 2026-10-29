@@ -308,6 +308,10 @@ impl UiRecorderConfig {
 /// Point-in-time snapshot of tree walker health metrics (no private data).
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, oasgen::OaSchema)]
 pub struct TreeWalkerSnapshot {
+    #[serde(default)]
+    pub last_status: String,
+    #[serde(default)]
+    pub observed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub walks_total: u64,
     pub walks_stored: u64,
     pub walks_deduped: u64,
@@ -395,9 +399,12 @@ impl TreeWalkerAccumulator {
     /// Derive the point-in-time snapshot (averages + rates) from the running
     /// sums. `walks_total` is the denominator for per-walk averages.
     fn snapshot(&self) -> TreeWalkerSnapshot {
+        let observed = screenpipe_core::health_diagnostics::ax_observation();
         let total = self.walks_total;
         let avg = |sum: u64| if total > 0 { sum / total } else { 0 };
         TreeWalkerSnapshot {
+            last_status: observed.map_or("unknown", |(status, _)| status).into(),
+            observed_at: observed.map(|(_, at)| at),
             walks_total: total,
             walks_stored: self.walks_stored,
             walks_deduped: self.walks_deduped,
