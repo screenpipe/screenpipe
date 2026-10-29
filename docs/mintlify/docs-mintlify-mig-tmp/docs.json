@@ -213,6 +213,10 @@
       {
         "label": "GitHub",
         "href": "https://github.com/screenpipe/screenpipe"
+      },
+      {
+        "label": "Privacy",
+        "href": "https://screenpipe.com/privacy"
       }
     ],
     "primary": {
@@ -226,7 +230,17 @@
       "github": "https://github.com/screenpipe/screenpipe",
       "x": "https://x.com/screenpipe",
       "discord": "https://discord.gg/screenpipe"
-    }
+    },
+    "links": [
+      {
+        "items": [
+          {
+            "label": "Privacy policy",
+            "href": "https://screenpipe.com/privacy"
+          }
+        ]
+      }
+    ]
   },
   "search": {
     "prompt": "Search Screenpipe docs..."
