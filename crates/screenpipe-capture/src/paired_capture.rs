@@ -1309,6 +1309,29 @@ mod tests {
         assert!(result.text_source.is_none());
         assert!(result.ocr_duration_ms.is_none());
         assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+
+        // The engine uses this same flag when isolated window capture fails.
+        // A privacy failure must not discard independently authorized AX text.
+        let snapshot = make_snap(vec![AccessibilityTreeNode {
+            role: "AXStaticText".into(),
+            text: "Allowed text survives a withheld screenshot".into(),
+            ..Default::default()
+        }]);
+        let text_only = paired_capture(&ctx, Some(&snapshot), None).await.unwrap();
+        assert_eq!(text_only.snapshot_path, "");
+        assert!(text_only.ocr_duration_ms.is_none());
+        let (text, tree) = db
+            .get_frame_accessibility_data(text_only.frame_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            text.as_deref(),
+            Some("Allowed text survives a withheld screenshot")
+        );
+        assert!(tree
+            .unwrap()
+            .contains("Allowed text survives a withheld screenshot"));
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
     }
 
     #[tokio::test]

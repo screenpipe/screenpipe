@@ -80,7 +80,7 @@ pub fn set_sck_capture_max_width(max_width: u32) {
     SCK_CAPTURE_MAX_WIDTH.store(max_width, std::sync::atomic::Ordering::Relaxed);
 }
 
-fn sck_capture_max_width() -> u32 {
+pub(crate) fn sck_capture_max_width() -> u32 {
     SCK_CAPTURE_MAX_WIDTH.load(std::sync::atomic::Ordering::Relaxed)
 }
 

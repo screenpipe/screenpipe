@@ -18,6 +18,8 @@ mod linux_portal;
 mod linux_wayland;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+pub(crate) use macos::sck_capture_max_width;
 #[cfg(target_os = "windows")]
 mod windows;
 

@@ -9221,6 +9221,7 @@ dependencies = [
  "url",
  "windows 0.58.0",
  "xcap",
+ "xcb",
  "zbus",
 ]
 

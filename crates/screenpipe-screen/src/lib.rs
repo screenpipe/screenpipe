@@ -56,6 +56,7 @@ pub use custom_ocr::perform_ocr_custom;
 pub use microsoft::perform_ocr_windows;
 pub use tesseract::{perform_ocr_tesseract, tesseract_available};
 pub mod browser_utils;
+pub mod screenshot_privacy;
 pub mod snapshot_writer;
 
 /// True when the native ScreenCaptureKit sync-worker containment layer has

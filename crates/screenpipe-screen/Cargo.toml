@@ -130,6 +130,7 @@ windows = { workspace = true, features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 xcap = { workspace = true }
+xcb = { version = "1.7", features = ["composite"] }
 ashpd = { version = "0.10.3", default-features = false, features = ["async-std"] }
 pipewire = "0.9"
 libc = { workspace = true }

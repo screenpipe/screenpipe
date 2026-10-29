@@ -268,9 +268,13 @@ impl WindowFilters {
     /// Apps that are always excluded — system lock screen processes.
     const BUILTIN_IGNORED: &'static [&'static str] = &["loginwindow", "logonui"];
 
-    /// True when no user-configured filters exist — resolving exclusion ids
-    /// is then a no-op that needs no WindowServer call (mirrors the early
-    /// return in `get_excluded_sck_window_ids`).
+    /// Explicit include/exclude patterns require isolated window pixels.
+    pub fn has_window_patterns(&self) -> bool {
+        !self.ignore_patterns.is_empty() || !self.include_patterns.is_empty()
+    }
+
+    /// True when no user-configured filters exist; exclusion resolution is
+    /// then a no-op unless an independent privacy source is enabled.
     pub fn is_empty(&self) -> bool {
         self.ignore_patterns.is_empty()
             && self.include_patterns.is_empty()

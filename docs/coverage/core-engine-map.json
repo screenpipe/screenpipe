@@ -1157,6 +1157,7 @@
         "src/monitor.rs",
         "src/ocr_cache.rs",
         "src/snapshot_writer.rs",
+        "src/screenshot_privacy.rs",
         "src/utils.rs",
         "tests/capture_error_test.rs",
         "tests/capture_retry_test.rs",

@@ -320,9 +320,12 @@ mod macos {
             &config.ignored_urls,
             &config.included_urls,
         );
-        if url_policy.is_active() {
+        if url_policy.is_active()
+            || !config.ignored_windows.is_empty()
+            || !config.included_windows.is_empty()
+        {
             info!(
-                "hd recorder disabled for monitor {monitor_id}: URL filters require per-frame tab verification"
+                "hd recorder disabled for monitor {monitor_id}: privacy filters require per-frame window/tab verification"
             );
             return;
         }

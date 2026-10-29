@@ -30,8 +30,8 @@ use screenpipe_db::DatabaseManager;
 use screenpipe_screen::capture_screenshot_by_window::WindowFilters;
 use screenpipe_screen::frame_comparison::{FrameComparer, FrameComparisonConfig};
 use screenpipe_screen::monitor::{list_monitors, SafeMonitor};
+use screenpipe_screen::screenshot_privacy::capture_monitor_image_filtered;
 use screenpipe_screen::snapshot_writer::SnapshotWriter;
-use screenpipe_screen::utils::capture_monitor_image_with_freshness;
 use std::collections::HashMap;
 #[cfg(debug_assertions)]
 use std::sync::atomic::AtomicU8;
@@ -3085,6 +3085,8 @@ async fn do_capture(
         .then(get_foreground_window_identity_fresh)
         .flatten();
 
+    // Explicit window patterns use fresh positive selection at the capture
+    // boundary below. Other policies retain the existing bounded resolution.
     // Resolve ignored windows to SCK window IDs so ScreenCaptureKit excludes
     // them from the capture buffer (zero overhead, pixel-perfect). Sorted +
     // deduped so the persistent stream isn't needlessly recreated when
@@ -3096,7 +3098,7 @@ async fn do_capture(
     // frame's pixels (like `screenshot_disabled`; the a11y walk continues and
     // applies its own independent window filtering) rather than storing a
     // frame that may contain a window the user asked to hide.
-    let storage_exclusions = if screenshot_disabled {
+    let storage_exclusions = if screenshot_disabled || params.window_filters.has_window_patterns() {
         Some(Vec::new())
     } else {
         storage_excluded_sck_window_ids(
@@ -3105,7 +3107,7 @@ async fn do_capture(
         )
         .await
     };
-    let skip_pixels_for_unknown_exclusions = storage_exclusions.is_none();
+    let mut skip_pixels_for_unknown_exclusions = storage_exclusions.is_none();
     if skip_pixels_for_unknown_exclusions {
         static LAST_SKIP_LOG: AtomicU64 = AtomicU64::new(0);
         let now_secs = std::time::SystemTime::now()
@@ -3147,18 +3149,31 @@ async fn do_capture(
     } else {
         let excluded_ids = storage_exclusions.unwrap_or_default();
 
-        // Take screenshot (with ignored windows excluded at the OS level)
-        let (image, capture_dur) = capture_monitor_image_with_freshness(
+        // Resolve positive window surfaces at the capture boundary, after any
+        // focus-settle delay. Never substitute monitor pixels on policy failure.
+        match capture_monitor_image_filtered(
             params.monitor,
+            &params.window_filters,
+            exclusion_sources(params.tree_walker_config),
             &excluded_ids,
             capture_needs_fresh_pixels(trigger, context_changed),
         )
-        .await?;
-        debug!(
-            "screenshot captured in {:?} for monitor {}",
-            capture_dur, params.monitor_id
-        );
-        image
+        .await
+        {
+            Ok((image, capture_dur)) => {
+                debug!(
+                    "screenshot captured in {:?} for monitor {}",
+                    capture_dur, params.monitor_id
+                );
+                image
+            }
+            Err(error) if params.window_filters.has_window_patterns() => {
+                debug!("window-filtered screenshot withheld: {error}");
+                skip_pixels_for_unknown_exclusions = true;
+                image::DynamicImage::new_rgba8(1, 1)
+            }
+            Err(error) => return Err(error),
+        }
     };
     // This scalar is the screenshot's app identity. Read it immediately after
     // ScreenCaptureKit returns so no process object travels with the pixels.
