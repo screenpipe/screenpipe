@@ -60,7 +60,8 @@ export function artifactKey(scope, version, target, filename) {
 		throw new Error("invalid version");
 	}
 	if (!TARGETS.has(target)) throw new Error("unsupported target");
-	const carrierManifest = scope === "consumer" && target.endsWith("-apple-darwin") &&
+	// Allow the carrier manifest for each supported consumer target, never arbitrary JSON.
+	const carrierManifest = scope === "consumer" &&
 		filename === "screenpipe-attribution.json";
 	if (
 		!filename ||

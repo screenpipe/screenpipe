@@ -1641,6 +1641,34 @@ jobs:
               --platform "$PLATFORM" --release "$VERSION"
           done
 
+      - name: Set up Python for filename carriers
+        if: matrix.os_type == 'windows' || matrix.os_type == 'linux'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      # Preserve the signed bytes; the website personalizes only the download filename.
+      - name: Prepare filename attribution carrier (Windows/Linux)
+        if: matrix.os_type == 'windows' || matrix.os_type == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          VERSION=$(grep '^version = ' apps/screenpipe-app-tauri/src-tauri/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          BUNDLE_DIR="apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle"
+          case "${{ matrix.target }}" in
+            x86_64-pc-windows-msvc) PLATFORM=windows; ARTIFACTS=("$BUNDLE_DIR"/nsis/*.exe) ;;
+            aarch64-pc-windows-msvc) PLATFORM=windows-arm; ARTIFACTS=("$BUNDLE_DIR"/nsis/*.exe) ;;
+            x86_64-unknown-linux-gnu) PLATFORM=linux; ARTIFACTS=("$BUNDLE_DIR"/appimage/*.AppImage) ;;
+            *) echo "Unsupported filename carrier target" >&2; exit 1 ;;
+          esac
+          if [[ ${#ARTIFACTS[@]} -ne 1 ]]; then
+            echo "Expected exactly one release installer for $PLATFORM" >&2
+            exit 1
+          fi
+          python scripts/package-attribution-carrier.py --artifact "${ARTIFACTS[0]}" \
+            --output "$BUNDLE_DIR/attribution" --platform "$PLATFORM" --release "$VERSION"
+
       - name: Upload macOS dry-run artifacts
         if: matrix.os_type == 'macos' && github.event.inputs.dry_run == 'true'
         uses: actions/upload-artifact@v4
@@ -1662,6 +1690,19 @@ jobs:
           path: |
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
             apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.sig
+            apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/attribution/*
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload Linux dry-run artifacts
+        if: matrix.os_type == 'linux' && github.event.inputs.dry_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: consumer-linux-${{ matrix.target }}
+          path: |
+            apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.sig
+            apps/screenpipe-app-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/attribution/*
           if-no-files-found: error
           compression-level: 0
 
@@ -1694,7 +1735,8 @@ jobs:
           .github/scripts/upload-release-artifacts.sh consumer "$VERSION" "$TARGET" \
             "${BUNDLE_DIR}"/nsis/*.exe \
             "${BUNDLE_DIR}"/nsis/*.nsis.zip \
-            "${BUNDLE_DIR}"/nsis/*.sig
+            "${BUNDLE_DIR}"/nsis/*.sig \
+            "${BUNDLE_DIR}"/attribution/*
 
       - name: Upload to Cloudflare R2 (Linux)
         if: matrix.os_type == 'linux' && github.event.inputs.dry_run != 'true'
@@ -1710,7 +1752,8 @@ jobs:
             "${BUNDLE_DIR}"/appimage/*.AppImage \
             "${BUNDLE_DIR}"/appimage/*.tar.gz \
             "${BUNDLE_DIR}"/appimage/*.sig \
-            "${BUNDLE_DIR}"/deb/*.deb
+            "${BUNDLE_DIR}"/deb/*.deb \
+            "${BUNDLE_DIR}"/attribution/*
 
       # Sentry uploads run AFTER R2 so they don't delay release artifacts
       - name: Upload debug symbols to Sentry (Windows)

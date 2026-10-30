@@ -6,14 +6,18 @@ import { describe, expect, test } from "bun:test";
 import { artifactKey, handleRequest } from "./index.js";
 
 describe("release artifact capability boundary", () => {
-	test("admits only the consumer Mac carrier manifest alongside ordinary artifacts", () => {
-		for (const target of ["aarch64-apple-darwin", "x86_64-apple-darwin"]) {
-			expect(artifactKey("consumer", "2.7.130", target, "screenpipe-attribution.json"))
-				.toBe(`releases/2.7.130/${target}/screenpipe-attribution.json`);
-		}
-		expect(() => artifactKey("consumer", "2.7.130", "x86_64-pc-windows-msvc", "screenpipe-attribution.json")).toThrow();
+	// Every supported consumer carrier needs the same manifest; publication JSON stays forbidden.
+	test.each([
+		"aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc",
+		"aarch64-pc-windows-msvc", "x86_64-unknown-linux-gnu",
+	])("admits the consumer carrier manifest for %s", (target) => {
+		expect(artifactKey("consumer", "2.7.130", target, "screenpipe-attribution.json"))
+			.toBe(`releases/2.7.130/${target}/screenpipe-attribution.json`);
+	});
+	test("keeps manifest access limited to the exact consumer filename", () => {
 		expect(() => artifactKey("enterprise", "2.7.130", "aarch64-apple-darwin", "screenpipe-attribution.json")).toThrow();
 		expect(() => artifactKey("consumer", "2.7.130", "aarch64-apple-darwin", "latest.json")).toThrow();
+		expect(() => artifactKey("consumer", "2.7.130", "x86_64-pc-windows-msvc", "other.json")).toThrow();
 	});
 	test("allows only versioned consumer and enterprise artifact keys", () => {
 		expect(
