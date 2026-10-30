@@ -1717,7 +1717,7 @@ mod imp {
                 if let Some(logs) = logs {
                     crate::recording::recovery_log::append(
                         logs,
-                        "enterprise_recording_measurement_failed",
+                        crate::recording::recovery_log::MEASUREMENT_FAILED,
                         &format!("cause={cause}; outcome=enrollment_only; previous_measurement_not_refreshed"),
                     );
                 }
@@ -2032,19 +2032,7 @@ mod imp {
                             app.state::<crate::recording::RecordingState>()
                                 .set_capture_intent(true);
                         }
-                        if newly_authorized {
-                            crate::recording::resume_enterprise_recording(app).await;
-                        } else {
-                            let apply_app = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                if crate::enterprise::managed_settings::apply(&apply_app)
-                                    .await
-                                    .is_ok()
-                                {
-                                    crate::recording::resume_enterprise_recording(&apply_app).await;
-                                }
-                            });
-                        }
+                        crate::recording::resume_enterprise_recording(app).await;
                         crate::enterprise_policy::set_enterprise_policy(
                             policy.hidden_sections,
                             policy.enforce_auto_start,
@@ -2166,33 +2154,26 @@ mod imp {
                         let was_authorized = crate::enterprise_policy::recording_authorized();
                         // Save before granting access so a concurrent app
                         // start cannot capture with the previous policy.
-                        let mut newly_authorized = false;
-                        let settings_applied = if crate::enterprise::managed_settings::prepare(
+                        let settings_prepared = if crate::enterprise::managed_settings::prepare(
                             &app,
                             &policy.locked_settings,
                         )
                         .await
                         .is_ok()
                         {
-                            newly_authorized =
+                            let newly_authorized =
                                 crate::enterprise_policy::update_recording_authorized(true);
                             if newly_authorized {
                                 app.state::<crate::recording::RecordingState>()
                                     .set_capture_intent(true);
                             }
-                            if newly_authorized {
-                                // The recovery owner retries both settings and
-                                // startup without blocking policy revocation.
-                                true
-                            } else {
-                                crate::enterprise::managed_settings::apply(&app)
-                                    .await
-                                    .is_ok()
-                            }
+                            // The native owner applies settings and reconciles
+                            // capture. Policy refresh never waits for teardown.
+                            true
                         } else {
                             false
                         };
-                        if !settings_applied {
+                        if !settings_prepared {
                             next_poll = NATIVE_POLICY_RETRY_INTERVAL;
                             crate::enterprise_policy::update_recording_authorized(was_authorized);
                         }
@@ -2215,7 +2196,7 @@ mod imp {
 
                         // Autostart and hidden-UI launches can have no webview,
                         // so AppEntitlementGate cannot perform the usual resume.
-                        if settings_applied {
+                        if settings_prepared {
                             crate::recording::resume_enterprise_recording(&app).await;
                         }
                         // Hidden installs may never create the migration UI.
@@ -2226,11 +2207,11 @@ mod imp {
                     }
                     NativeAuthorizationResult::RecordingDisabled => {
                         info!("enterprise: recording paused for this device by workspace admin");
-                        let _ =
-                            crate::enterprise_recording_access::revoke_enterprise_recording(&app)
-                                .await;
-                        // Stop capture before any reporting I/O: a failed
-                        // heartbeat must never delay the admin's pause.
+                        crate::enterprise_recording_access::revoke_enterprise_recording_from_watcher(
+                            &app,
+                        );
+                        // Publish cancellation and retain native teardown before
+                        // reporting I/O; heartbeat failure cannot delay the stop.
                         if crate::enterprise::recording_events::pending(&device_id, &heartbeat_url)
                             .is_some()
                         {
@@ -2261,9 +2242,9 @@ mod imp {
                             crate::enterprise_policy::set_enterprise_policy(Vec::new(), false);
                             let _ = crate::commands::apply_enterprise_ui_visibility(app.clone());
                         }
-                        let _ =
-                            crate::enterprise_recording_access::revoke_enterprise_recording(&app)
-                                .await;
+                        crate::enterprise_recording_access::revoke_enterprise_recording_from_watcher(
+                            &app,
+                        );
                         show_enterprise_auth_recovery(&app);
                     }
                     NativeAuthorizationResult::Rejected
@@ -2272,9 +2253,9 @@ mod imp {
                             crate::enterprise_policy::set_enterprise_policy(Vec::new(), false);
                             let _ = crate::commands::apply_enterprise_ui_visibility(app.clone());
                         }
-                        let _ =
-                            crate::enterprise_recording_access::revoke_enterprise_recording(&app)
-                                .await;
+                        crate::enterprise_recording_access::revoke_enterprise_recording_from_watcher(
+                            &app,
+                        );
                         show_enterprise_auth_recovery(&app);
                     }
                     NativeAuthorizationResult::Unavailable(error) => {

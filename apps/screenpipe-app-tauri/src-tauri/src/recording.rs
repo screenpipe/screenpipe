@@ -1102,15 +1102,6 @@ pub(crate) fn resume_deferred_account_start(app: tauri::AppHandle) {
 /// Policy refresh remains free to revoke access while startup is retrying.
 #[cfg(feature = "enterprise-support")]
 pub(crate) async fn resume_enterprise_recording(app: &tauri::AppHandle) {
-    let state = app.state::<RecordingState>();
-    // An unchanged authorized policy is the hidden install's only native
-    // reconciliation tick. Healthy capture needs no work; missing server or
-    // capture state is handed back to the existing paced recovery owner.
-    let server_running = state.server.lock().await.is_some();
-    let capture_running = state.capture.lock().await.is_some();
-    if server_running && capture_running {
-        return;
-    }
     let generation = app
         .state::<RecordingState>()
         .authorization_recovery
@@ -1120,7 +1111,6 @@ pub(crate) async fn resume_enterprise_recording(app: &tauri::AppHandle) {
         let state = app.state::<RecordingState>();
         let allowed = || {
             state.authorization_recovery.is_current(generation)
-                && state.capture_intended()
                 && crate::enterprise_policy::recording_authorized()
                 && !crate::process_exit::QUIT_REQUESTED.load(Ordering::SeqCst)
                 && !crate::db_relaunch::manual_recovery_required()
@@ -1141,7 +1131,7 @@ pub(crate) async fn resume_enterprise_recording(app: &tauri::AppHandle) {
                             crate::enterprise::managed_settings::apply(&app).await?;
                             authorized_start::attempt(
                                 &state.server_lifecycle,
-                                allowed,
+                                || allowed() && state.capture_intended(),
                                 || async {
                                     // Drop each slot guard before acquiring the other;
                                     // capture teardown can itself need the server slot.

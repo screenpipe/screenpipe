@@ -202,7 +202,12 @@ mod tests {
             first_failed.notified().await;
             for _ in 0..100 {
                 recovery
-                    .run(0, || true, || async { panic!("duplicate recovery queued") }, &SHORT_RETRY)
+                    .run(
+                        0,
+                        || true,
+                        || async { panic!("duplicate recovery queued") },
+                        &SHORT_RETRY,
+                    )
                     .await
                     .unwrap();
             }
