@@ -14,7 +14,10 @@
 //! residual personal data may remain.
 //!
 //! Unattended collection never includes screenshots, audio/video, chat history,
-//! settings, or the timeline database.
+//! full settings, or the timeline database. Explicit support requests include
+//! aggregate filesystem metadata and four whitelisted recording settings.
+
+mod storage;
 
 use std::path::Path;
 use std::time::Duration;
@@ -156,10 +159,27 @@ async fn redact_files_with_migration(
     // existing redacted-bundle boundary. Reuse the manual support reader and
     // send all bytes through the same local redaction as unattended logs.
     let mut raw = match data_root {
-        Some(root) => format!(
-            "=== Storage migration diagnostics ===\n{}\n",
-            crate::feedback_upload::collect_migration_diagnostics_from_root(root).await
-        ),
+        Some(root) => {
+            let settings = crate::store::support_recording_settings();
+            let days = (settings["local_retention_enabled"] == true)
+                .then(|| settings["local_retention_days"].as_u64())
+                .flatten();
+            let inventory_root = root.clone();
+            // This request-only scan is independent of the engine, DB and
+            // local HTTP API, and never occupies an async recording worker.
+            let inventory =
+                tokio::task::spawn_blocking(move || storage::collect(&inventory_root, days))
+                    .await
+                    .map_err(|error| format!("storage support inventory failed: {error}"))?;
+            let inventory = serde_json::to_string_pretty(&serde_json::json!({
+                "filesystem": inventory, "saved_recording_settings": settings
+            }))
+            .map_err(|error| format!("storage support inventory encoding failed: {error}"))?;
+            format!(
+                "=== Storage support diagnostics ===\n{inventory}\n=== Storage migration diagnostics ===\n{}\n",
+                crate::feedback_upload::collect_migration_diagnostics_from_root(root).await
+            )
+        }
         None => String::new(),
     };
     raw.push_str(&build_bundle(files).await);
@@ -261,6 +281,102 @@ async fn build_bundle(files: &[LogFile]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn storage_support_report_works_without_a_recording_engine() {
+        let root = tempfile::tempdir().unwrap();
+        let archive = root.path().join("storage/payloads");
+        tokio::fs::create_dir_all(&archive).await.unwrap();
+        tokio::fs::write(root.path().join("db.sqlite"), "password=hunter2")
+            .await
+            .unwrap();
+        tokio::fs::write(root.path().join("db.sqlite-wal"), [0u8; 29])
+            .await
+            .unwrap();
+        tokio::fs::write(archive.join("private-window-title.parquet"), [0u8; 43])
+            .await
+            .unwrap();
+        let report = collect_redacted_from_dirs_at_root(&[], root.path().to_path_buf())
+            .await
+            .unwrap();
+        let json = report
+            .strip_prefix("=== Storage support diagnostics ===\n")
+            .unwrap()
+            .split("=== Storage migration diagnostics ===")
+            .next()
+            .unwrap();
+        let evidence: serde_json::Value = serde_json::from_str(json).unwrap();
+        assert_eq!(evidence["filesystem"]["complete"], true);
+        assert_eq!(
+            evidence["filesystem"]["categories"]["sqlite_wal"]["bytes"],
+            29
+        );
+        assert_eq!(evidence["filesystem"]["categories"]["parquet"]["bytes"], 43);
+        assert_eq!(evidence["filesystem"]["files"], 3);
+        assert!(!report.contains("hunter2"));
+        assert!(!report.contains("private-window-title"));
+        assert!(!report.contains(root.path().to_str().unwrap()));
+        assert_eq!(
+            tokio::fs::read_to_string(root.path().join("db.sqlite"))
+                .await
+                .unwrap(),
+            "password=hunter2"
+        );
+    }
+
+    #[tokio::test]
+    async fn storage_support_failure_remains_visible_in_returned_report() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("private-missing-root");
+        let report = collect_redacted_from_dirs_at_root(&[], missing)
+            .await
+            .unwrap();
+        let json = report
+            .strip_prefix("=== Storage support diagnostics ===\n")
+            .unwrap()
+            .split("=== Storage migration diagnostics ===")
+            .next()
+            .unwrap();
+        let evidence: serde_json::Value = serde_json::from_str(json).unwrap();
+        assert_eq!(evidence["filesystem"]["complete"], false);
+        assert_eq!(evidence["filesystem"]["failures"][0]["kind"], "NotFound");
+        assert_eq!(
+            evidence["filesystem"]["failures"][0]["operation"],
+            "read_root"
+        );
+        assert!(!report.contains("private-missing-root"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn storage_support_preserves_large_byte_counts_through_redaction() {
+        let root = tempfile::tempdir().unwrap();
+        // Sparse fixture: account for a single 300 GiB file using metadata,
+        // without allocating, reading or copying its logical contents.
+        let path = root.path().join("db.sqlite-wal");
+        let file = std::fs::File::create(&path).unwrap();
+        let size = 300_u64 * 1024 * 1024 * 1024;
+        file.set_len(size).unwrap();
+        let report = collect_redacted_from_dirs_at_root(&[], root.path().to_path_buf())
+            .await
+            .unwrap();
+        let json = report
+            .strip_prefix("=== Storage support diagnostics ===\n")
+            .unwrap()
+            .split("=== Storage migration diagnostics ===")
+            .next()
+            .unwrap();
+        let evidence: serde_json::Value = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            evidence["filesystem"]["categories"]["sqlite_wal"]["bytes"],
+            size
+        );
+        assert_eq!(
+            evidence["filesystem"]["categories"]["sqlite_wal"]["largest_file_bytes"],
+            size
+        );
+        assert_eq!(std::fs::metadata(path).unwrap().len(), size);
+    }
 
     #[cfg(feature = "enterprise-build")]
     #[tokio::test(flavor = "current_thread")]
