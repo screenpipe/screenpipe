@@ -25,7 +25,11 @@ status, settings = get(base + "/workers/scripts/ai-proxy/settings", token)
 print("accounting_binding", status, json.dumps([{k:b.get(k) for k in ("name","type","id")} for b in settings.get("result",{}).get("bindings",[]) if b.get("name") in ("DB","CLOUDFLARE_API_TOKEN","CLOUDFLARE_ACCOUNT_ID")]))
 now = int(datetime.datetime.now(datetime.timezone.utc).timestamp()*1000)
 status, telemetry = get(base + "/workers/observability/telemetry/query", token, {"queryId":"hosted-accounting-incident", "dry":True, "view":"events", "timeframe":{"from":1793388000000,"to":now}, "parameters":{"datasets":["cloudflare-workers"],"filters":[{"key":"$metadata.service","operation":"eq","type":"string","value":"ai-proxy"},{"key":"$metadata.message","operation":"includes","type":"string","value":"Hosted context pricing"}],"filterCombination":"and"},"limit":2000})
-print("accounting_telemetry", status, json.dumps(telemetry))
+print("accounting_telemetry_status", status, flush=True)
+print("accounting_telemetry_shape", list(telemetry.get("result",{})), flush=True)
+for event in telemetry.get("result",{}).get("events",[]):
+    source=event.get("source",{})
+    print("accounting_event", json.dumps({"timestamp":event.get("timestamp"),"source":source}), flush=True)
 sentry = os.environ.get("SENTRY_AUTH_TOKEN")
 if sentry:
     status, issues = get("https://sentry.io/api/0/projects/mediar/screenpipe-ai-proxy/issues/?query=Hosted%20context%20pricing&statsPeriod=24h", sentry)
