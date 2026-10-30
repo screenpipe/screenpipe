@@ -2609,6 +2609,7 @@ pub(crate) fn has_quota_exhausted_token(text: &str) -> bool {
 fn parse_error_type(stderr: &str) -> (Option<String>, Option<String>) {
     let lower = stderr.to_lowercase();
     for (code, message) in [
+        ("model_retired", "This confidential AI model is no longer available. Choose another AI model to resume this task."),
         ("workflow_rollout_disabled", "Workflows is not available for this account yet."),
         ("workflow_business_required", "Automatic workflow discovery requires Business."),
         ("workflow_allowance_paused", "Workflow updates paused to preserve AI allowance. Manage usage to check capacity and reset times."),
@@ -2822,10 +2823,20 @@ fn has_safety_refusal_token(text: &str) -> bool {
         || text.contains("flagged for possible cybersecurity risk")
 }
 
-/// A configured fallback should advance after any failed provider attempt.
-/// Safety refusals remain terminal across every provider.
+/// Retirement and safety refusals require a user decision. Neither may send the
+/// same task to a different provider through the configured fallback chain.
 fn should_try_fallback_preset(error_type: Option<&str>) -> bool {
-    error_type != Some("safety_refusal")
+    !matches!(error_type, Some("safety_refusal" | "model_retired"))
+}
+
+fn executor_error_type(message: &str, cancelled: bool) -> &'static str {
+    if cancelled {
+        "cancelled"
+    } else if message.starts_with("model_retired:") {
+        "model_retired"
+    } else {
+        "crash"
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4567,7 +4578,7 @@ impl PipeManager {
                 }
                 Ok(Err(e)) => {
                     let status = if was_cancelled { "cancelled" } else { "failed" };
-                    let error_type = if was_cancelled { "cancelled" } else { "crash" };
+                    let error_type = executor_error_type(&e.to_string(), was_cancelled);
                     let error_message = if was_cancelled {
                         None
                     } else {
@@ -4599,7 +4610,7 @@ impl PipeManager {
                             stdout: String::new(),
                             stderr: e.to_string(),
                         },
-                        Some("crash".to_string()),
+                        Some(error_type.to_string()),
                     )
                 }
                 Err(_elapsed) => {
@@ -5252,7 +5263,7 @@ impl PipeManager {
                     // Executor error (not timeout)
                     let cancelled = was_cancelled();
                     let status = if cancelled { "cancelled" } else { "failed" };
-                    let error_type = if cancelled { "cancelled" } else { "crash" };
+                    let error_type = executor_error_type(&e.to_string(), cancelled);
                     let error_message = if cancelled { None } else { Some(e.to_string()) };
                     if let (Some(ref store), Some(id)) = (&self.store, exec_id) {
                         let _ = store
@@ -7342,7 +7353,7 @@ impl PipeManager {
                                 error!("pipe '{}' error: {}", pipe_name, e);
                                 let cancelled = was_cancelled();
                                 let status = if cancelled { "cancelled" } else { "failed" };
-                                let error_type = if cancelled { "cancelled" } else { "crash" };
+                                let error_type = executor_error_type(&e.to_string(), cancelled);
                                 let error_message =
                                     if cancelled { None } else { Some(e.to_string()) };
                                 if let (Some(ref store), Some(id)) = (&store_ref, exec_id) {
@@ -7371,7 +7382,7 @@ impl PipeManager {
                                         stdout: String::new(),
                                         stderr: e.to_string(),
                                     },
-                                    Some("crash".to_string()),
+                                    Some(error_type.to_string()),
                                 )
                             }
                             Err(_elapsed) => {
@@ -12010,6 +12021,22 @@ mod tests {
     }
 
     #[test]
+    fn retired_private_tasks_never_advance_to_a_fallback_provider() {
+        let message = "model_retired: Private AI is no longer available. Choose another AI model.";
+        let (kind, _) = parse_error_type_from_output(message, "");
+        assert_eq!(kind.as_deref(), Some("model_retired"));
+        assert!(!should_try_fallback_preset(kind.as_deref()));
+        // The scheduler receives a failed executor result rather than model output.
+        assert_eq!(executor_error_type(message, false), "model_retired");
+        assert!(!should_try_fallback_preset(Some(executor_error_type(
+            message, false
+        ))));
+        assert_eq!(executor_error_type("ordinary failure", false), "crash");
+        assert_eq!(executor_error_type(message, true), "cancelled");
+        assert!(should_try_fallback_preset(Some("crash")));
+    }
+
+    #[test]
     fn fallback_advances_after_any_non_safety_failure() {
         for error in [
             "daily_limit",
@@ -12242,6 +12269,103 @@ Run the scheduled task.
         assert_eq!(pipe_logs.len(), 2);
         assert!(!pipe_logs.front().unwrap().success);
         assert!(pipe_logs.back().unwrap().success);
+    }
+
+    #[tokio::test]
+    async fn scheduled_retired_private_run_does_not_use_configured_fallback() {
+        let temp = tempfile::tempdir().unwrap();
+        let pipes_dir = temp.path().join("pipes");
+        let pipe_dir = pipes_dir.join("retired-private-e2e");
+        std::fs::create_dir_all(&pipe_dir).unwrap();
+        std::fs::write(
+            temp.path().join("store.bin"),
+            serde_json::to_vec(&serde_json::json!({
+                "settings": {
+                    "aiPresets": [
+                        {
+                            "id": "hosted-primary",
+                            "provider": "screenpipe-cloud",
+                            "model": "glm-5.3-flash-reap50-iq3m"
+                        },
+                        {
+                            "id": "byok-fallback",
+                            "provider": "openai",
+                            "model": "fallback-model",
+                            "apiKey": "test-only"
+                        }
+                    ]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let raw = r#"---
+schedule: every 1m
+enabled: true
+agent: mock
+history: false
+preset:
+  - removed-pipes-preset
+  - hosted-primary
+  - byok-fallback
+---
+Run the scheduled task.
+"#;
+        std::fs::write(pipe_dir.join("pipe.md"), raw).unwrap();
+
+        let executor = Arc::new(SequencedExecutor {
+            outputs: std::sync::Mutex::new(VecDeque::from([
+                AgentOutput {
+                    stdout: String::new(),
+                    stderr: "model_retired: Private AI is no longer available".to_string(),
+                    success: false,
+                    pid: None,
+                },
+                AgentOutput {
+                    stdout: "fallback completed".to_string(),
+                    stderr: String::new(),
+                    success: true,
+                    pid: None,
+                },
+            ])),
+            attempts: std::sync::Mutex::new(Vec::new()),
+        });
+        let mut executors: HashMap<String, Arc<dyn AgentExecutor>> = HashMap::new();
+        executors.insert("mock".to_string(), executor.clone());
+
+        let mut manager = PipeManager::new(pipes_dir, executors, None, 0);
+        manager.load_pipes().await.unwrap();
+        manager.start_scheduler().await.unwrap();
+
+        for _ in 0..100 {
+            let completed = {
+                let logs = manager.logs.lock().await;
+                logs.get("retired-private-e2e")
+                    .and_then(|pipe_logs| pipe_logs.back())
+                    .map(|_| true)
+                    .unwrap_or(false)
+            };
+            if completed {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        manager.stop_scheduler().await;
+
+        let attempts = executor.attempts.lock().unwrap().clone();
+        assert_eq!(
+            attempts,
+            vec![(
+                "glm-5.3-flash-reap50-iq3m".to_string(),
+                Some("screenpipe".to_string()),
+            )]
+        );
+        let logs = manager.logs.lock().await;
+        let pipe_logs = logs.get("retired-private-e2e").unwrap();
+        assert_eq!(pipe_logs.len(), 1);
+        assert!(!pipe_logs.front().unwrap().success);
+        assert_eq!(executor.outputs.lock().unwrap().len(), 1);
     }
 
     #[test]

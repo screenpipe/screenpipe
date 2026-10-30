@@ -22,7 +22,7 @@ fn read_provider(base: &Path) -> Result<ResolvedPreset> {
     let value: serde_json::Value = serde_json::from_str(&text)?;
     let model = match value["mode"].as_str() {
         Some("intelligent") => "auto",
-        Some("private") => bail!("Private AI is no longer available. Choose another AI model. No request was sent to another provider."),
+        Some("private") => bail!("model_retired: Private AI is no longer available. Choose another AI model. No request was sent to another provider."),
         Some(mode) if mode.starts_with("preset:") && !mode[7..].trim().is_empty() => {
             let preset = resolve_exact_preset(&base.join("pipes"), &mode[7..])
                 .context("Your Workflows AI preset is unavailable. Choose an AI preset again.")?;
@@ -44,7 +44,7 @@ fn read_provider(base: &Path) -> Result<ResolvedPreset> {
             if preset.provider.as_deref() == Some("screenpipe")
                 && matches!(preset.model.to_ascii_lowercase().as_str(), "glm-5.3-flash-reap50-iq3m" | "gemma4-e4b" | "gemma4-e2b")
             {
-                bail!("This confidential AI preset is retired. Choose another AI preset.");
+                bail!("model_retired: This confidential AI preset is retired. Choose another AI preset.");
             }
             return Ok(preset);
         }

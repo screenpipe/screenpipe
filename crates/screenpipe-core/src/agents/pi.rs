@@ -1385,7 +1385,7 @@ impl PiExecutor {
             None | Some("screenpipe" | "screenpipe-cloud" | "pi")
         ) && model.is_some_and(retired_enclave_model)
         {
-            anyhow::bail!("This confidential AI model is no longer available. Choose another AI model. No request was sent to another provider.");
+            anyhow::bail!("model_retired: This confidential AI model is no longer available. Choose another AI model. No request was sent to another provider.");
         }
         let config_dir = get_pi_config_dir()?;
         std::fs::create_dir_all(&config_dir)?;
