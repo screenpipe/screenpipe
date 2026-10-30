@@ -2211,8 +2211,12 @@ mod imp {
 
                         // Autostart and hidden-UI launches can have no webview,
                         // so AppEntitlementGate cannot perform the usual resume.
-                        if newly_authorized && settings_applied {
-                            crate::recording::resume_enterprise_recording(&app).await;
+                        if settings_applied {
+                            crate::recording::resume_enterprise_recording_if_needed(
+                                &app,
+                                newly_authorized,
+                            )
+                            .await;
                         }
                         // Hidden installs may never create the migration UI.
                         // This returns after scheduling native maintenance so

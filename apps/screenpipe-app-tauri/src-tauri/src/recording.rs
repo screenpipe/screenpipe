@@ -1098,6 +1098,26 @@ pub(crate) fn resume_deferred_account_start(app: tauri::AppHandle) {
     });
 }
 
+/// Restore an absent recorder on the existing authenticated policy poll.
+#[cfg(feature = "enterprise-support")]
+pub(crate) async fn resume_enterprise_recording_if_needed(
+    app: &tauri::AppHandle,
+    newly_authorized: bool,
+) {
+    let state = app.state::<RecordingState>();
+    // A busy slot belongs to lifecycle work. Skip this observation rather
+    // than delaying the policy watcher (and revocation) behind startup.
+    let server_missing = state.server.try_lock().is_ok_and(|server| server.is_none());
+    if authorized_start::resume_required(
+        newly_authorized,
+        state.capture_intended(),
+        !server_missing,
+        state.authorization_recovery.is_pending(),
+    ) {
+        resume_enterprise_recording(app).await;
+    }
+}
+
 /// Schedule one paced native recovery request for this intent generation.
 /// Policy refresh remains free to revoke access while startup is retrying.
 #[cfg(feature = "enterprise-support")]
