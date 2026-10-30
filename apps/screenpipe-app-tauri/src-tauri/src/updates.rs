@@ -2354,17 +2354,25 @@ pub(crate) mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn update_meeting_gate_retains_unavailable_cause_in_collected_support_report() {
+        use std::sync::atomic::{AtomicBool, Ordering};
         let root = tempfile::tempdir().unwrap();
         let capture = tokio::sync::Mutex::new(Some(()));
         let server = tokio::sync::Mutex::new(Some(()));
-        super::wait_for_update_meeting_window(
+        let available = AtomicBool::new(true);
+        let gate = super::wait_for_update_meeting_window(
             || {
                 super::update_meeting_state(
                     true,
                     crate::health::RecordingStatus::Recording,
                     &capture,
                     &server,
-                    |_| Err("meeting_detector_state_busy"),
+                    |_| {
+                        if available.load(Ordering::SeqCst) {
+                            Ok(true)
+                        } else {
+                            Err("meeting_detector_state_busy")
+                        }
+                    },
                 )
             },
             stream::pending::<()>(),
@@ -2376,8 +2384,26 @@ pub(crate) mod tests {
                     &format!("cause={cause}; outcome={outcome}"),
                 )
             },
+        );
+        tokio::pin!(gate);
+        assert!(futures::poll!(&mut gate).is_pending());
+        let pending_report = crate::diagnostic_logs::collect_redacted_from_dirs_at_root(
+            &[root.path().to_path_buf()],
+            root.path().to_path_buf(),
         )
-        .await;
+        .await
+        .unwrap();
+        assert!(
+            pending_report.contains("cause=confirmed_active_meeting"),
+            "{pending_report}"
+        );
+        assert!(
+            pending_report.contains("outcome=update_restart_deferred"),
+            "{pending_report}"
+        );
+        available.store(false, Ordering::SeqCst);
+        tokio::time::advance(super::MEETING_RESTART_QUIET_WINDOW).await;
+        gate.await;
         let report = crate::diagnostic_logs::collect_redacted_from_dirs_at_root(
             &[root.path().to_path_buf()],
             root.path().to_path_buf(),
