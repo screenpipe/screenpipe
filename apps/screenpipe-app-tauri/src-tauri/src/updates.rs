@@ -8,7 +8,7 @@ use crate::store::{get_store, SettingsStore};
 use crate::RecordingState;
 use anyhow::Error;
 use dark_light::Mode;
-use futures::StreamExt;
+use futures::{FutureExt, Stream, StreamExt};
 use log::{debug, error, info, warn};
 use semver::Version;
 use serde_json;
@@ -503,39 +503,150 @@ fn request_persistent_update_for_restart() -> Result<(), String> {
     result.map(|_| ())
 }
 
-async fn meeting_active(app: &tauri::AppHandle) -> bool {
-    let state = app.state::<RecordingState>();
-    let server = state.server.lock().await;
-    let Some(server) = server.as_ref() else {
-        return false;
-    };
-    screenpipe_engine::routes::meetings::resolve_meeting_status_from(
-        server.db.as_ref(),
-        server.manual_meeting.as_ref(),
-    )
-    .await
-    .map(|status| status.active)
-    .unwrap_or_else(|error| {
-        warn!("auto-update: could not verify meeting status: {}", error);
-        true
-    })
+const MEETING_RESTART_QUIET_WINDOW: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UpdateMeetingState {
+    RecorderUnavailable(&'static str),
+    Idle,
+    Active,
 }
 
-/// Require 30 meeting-free seconds before an automatic restart.
-async fn wait_for_meeting_restart_window(app: &tauri::AppHandle) {
-    let mut started = screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_started");
-    let mut ended = screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_ended");
-
-    if meeting_active(app).await {
-        ended.next().await;
+/// Inspect only live in-memory state. An update must never join the recorder's
+/// lock/database queue: repairing that recorder can require this very restart.
+fn update_meeting_state<S, C>(
+    recording_intended: bool,
+    recording_status: crate::health::RecordingStatus,
+    capture: &Mutex<Option<C>>,
+    server: &Mutex<Option<S>>,
+    read_meeting: impl FnOnce(&S) -> Result<bool, &'static str>,
+) -> UpdateMeetingState {
+    use UpdateMeetingState::*;
+    if !recording_intended {
+        return RecorderUnavailable("capture_not_requested");
     }
+    if recording_status != crate::health::RecordingStatus::Recording {
+        return RecorderUnavailable("recorder_not_recording");
+    }
+    let Ok(capture) = capture.try_lock() else {
+        return RecorderUnavailable("capture_state_busy");
+    };
+    if capture.is_none() {
+        return RecorderUnavailable("capture_absent");
+    }
+    let Ok(server) = server.try_lock() else {
+        return RecorderUnavailable("server_state_busy");
+    };
+    let Some(server) = server.as_ref() else {
+        return RecorderUnavailable("server_absent");
+    };
+    match read_meeting(server) {
+        Ok(true) => Active,
+        Ok(false) => Idle,
+        Err(cause) => RecorderUnavailable(cause),
+    }
+}
 
+fn current_update_meeting_state(app: &tauri::AppHandle) -> UpdateMeetingState {
+    let state = app.state::<RecordingState>();
+    update_meeting_state(
+        state.capture_intended(),
+        crate::health::get_recording_status(),
+        &state.capture,
+        &state.server,
+        |server| {
+            let manual = server
+                .manual_meeting
+                .try_read()
+                .map_err(|_| "manual_meeting_state_busy")?;
+            if manual.is_some() {
+                return Ok(true);
+            }
+            // Poll the accessor once; do not await its RwLock during teardown.
+            let detector = server
+                .audio_manager
+                .meeting_detector()
+                .now_or_never()
+                .ok_or("meeting_detector_state_busy")?;
+            Ok(detector.is_some_and(|detector| detector.is_in_meeting()))
+        },
+    )
+}
+
+async fn wait_for_update_meeting_window(
+    mut state: impl FnMut() -> UpdateMeetingState,
+    mut started: impl Stream + Unpin,
+    mut ended: impl Stream + Unpin,
+    mut record: impl FnMut(&str),
+) {
+    use UpdateMeetingState::*;
+    let mut active = match state() {
+        RecorderUnavailable(cause) => {
+            record(cause);
+            return;
+        }
+        Active => true,
+        Idle => false,
+    };
+    let quiet_window = tokio::time::sleep(MEETING_RESTART_QUIET_WINDOW);
+    tokio::pin!(quiet_window);
     loop {
         tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(30)) => return,
-            _ = started.next() => { ended.next().await; }
+            event = started.next() => {
+                if event.is_none() {
+                    record("meeting_started_stream_closed");
+                    return;
+                }
+                active = true;
+            }
+            event = ended.next() => {
+                if event.is_none() {
+                    record("meeting_ended_stream_closed");
+                    return;
+                }
+                active = false;
+            }
+            _ = &mut quiet_window => {
+                match state() {
+                    RecorderUnavailable(cause) => {
+                        record(cause);
+                        return;
+                    }
+                    Idle if !active => return,
+                    Idle => active = false,
+                    Active => active = true,
+                }
+            }
         }
+        if let RecorderUnavailable(cause) = state() {
+            record(cause);
+            return;
+        }
+        // Reconcile recorder availability even if a meeting never emits its end
+        // event. Reuse the existing restart window; this adds no new timeout.
+        quiet_window
+            .as_mut()
+            .reset(tokio::time::Instant::now() + MEETING_RESTART_QUIET_WINDOW);
     }
+}
+
+/// Preserve the quiet window for live meetings; a stopped/broken recorder must
+/// not prevent installing the update that can recover it.
+async fn wait_for_meeting_restart_window(app: &tauri::AppHandle) {
+    let started = screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_started");
+    let ended = screenpipe_events::subscribe_to_event::<serde_json::Value>("meeting_ended");
+    wait_for_update_meeting_window(
+        || current_update_meeting_state(app),
+        started,
+        ended,
+        |cause| {
+            crate::update_diagnostics::record(
+                "meeting_gate_bypassed",
+                &format!("cause={cause}; outcome=update_restart_allowed"),
+            );
+        },
+    )
+    .await;
 }
 
 /// Banner-click restart. Mirror the auto-update path: gate, stop server, then
@@ -1741,7 +1852,7 @@ impl UpdatesManager {
 
                 let _ = self.app.emit(
                     "update-restarting",
-                    serde_json::json!({ "version": update.version, "delay_secs": 30 }),
+                    serde_json::json!({ "version": update.version, "delay_secs": MEETING_RESTART_QUIET_WINDOW.as_secs() }),
                 );
                 wait_for_meeting_restart_window(&self.app).await;
                 let Some(restart) = crate::update_restart::RESTART_SAFETY
@@ -1755,7 +1866,7 @@ impl UpdatesManager {
                     "update-restarting",
                     serde_json::json!({
                         "version": update.version,
-                        "delay_secs": 30,
+                        "delay_secs": MEETING_RESTART_QUIET_WINDOW.as_secs(),
                     }),
                 );
                 wait_for_meeting_restart_window(&self.app).await;
@@ -2083,6 +2194,187 @@ pub fn start_update_check(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use futures::{channel::mpsc, stream};
+
+    async fn expect_recorder_bypass(
+        intended: bool,
+        status: crate::health::RecordingStatus,
+        capture: &tokio::sync::Mutex<Option<()>>,
+        server: &tokio::sync::Mutex<Option<()>>,
+        expected: &str,
+    ) {
+        let mut installed = false;
+        let mut causes = Vec::new();
+        tokio::time::timeout(std::time::Duration::ZERO, async {
+            super::wait_for_update_meeting_window(
+                || {
+                    super::update_meeting_state(intended, status, capture, server, |_| {
+                        panic!("an unavailable recorder must not be queried for meeting state")
+                    })
+                },
+                stream::pending::<()>(),
+                stream::pending::<()>(),
+                |cause| causes.push(cause.to_string()),
+            )
+            .await;
+            // Same continuation used by the installer/restart callers: the
+            // production gate must resolve before installation can proceed.
+            installed = true;
+        })
+        .await
+        .expect("update handoff must not wait on the recorder");
+        assert!(installed);
+        assert_eq!(causes, [expected]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn update_meeting_gate_allows_stopped_missing_and_busy_recorders() {
+        use crate::health::RecordingStatus::*;
+        let capture = tokio::sync::Mutex::new(Some(()));
+        let server = tokio::sync::Mutex::new(Some(()));
+        expect_recorder_bypass(false, Recording, &capture, &server, "capture_not_requested").await;
+        for status in [Starting, Paused, ScheduledPause, Stopped, Error] {
+            expect_recorder_bypass(true, status, &capture, &server, "recorder_not_recording").await;
+        }
+        let missing = tokio::sync::Mutex::new(None::<()>);
+        expect_recorder_bypass(true, Recording, &missing, &server, "capture_absent").await;
+        expect_recorder_bypass(true, Recording, &capture, &missing, "server_absent").await;
+        let held = capture.lock().await;
+        expect_recorder_bypass(true, Recording, &capture, &server, "capture_state_busy").await;
+        drop(held);
+        let _held = server.lock().await;
+        expect_recorder_bypass(true, Recording, &capture, &server, "server_state_busy").await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn update_meeting_gate_releases_when_recording_stops_without_an_end_event() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let intended = AtomicBool::new(true);
+        let capture = tokio::sync::Mutex::new(Some(()));
+        let server = tokio::sync::Mutex::new(Some(()));
+        let mut causes = Vec::new();
+        let mut installed = false;
+        {
+            let handoff = async {
+                super::wait_for_update_meeting_window(
+                    || {
+                        super::update_meeting_state(
+                            intended.load(Ordering::SeqCst),
+                            crate::health::RecordingStatus::Recording,
+                            &capture,
+                            &server,
+                            |_| Ok(true),
+                        )
+                    },
+                    stream::pending::<()>(),
+                    stream::pending::<()>(),
+                    |cause| causes.push(cause.to_string()),
+                )
+                .await;
+                installed = true;
+            };
+            tokio::pin!(handoff);
+            assert!(futures::poll!(&mut handoff).is_pending());
+            tokio::time::advance(super::MEETING_RESTART_QUIET_WINDOW).await;
+            assert!(
+                futures::poll!(&mut handoff).is_pending(),
+                "confirmed live meeting must defer restart"
+            );
+            intended.store(false, Ordering::SeqCst);
+            tokio::time::advance(super::MEETING_RESTART_QUIET_WINDOW).await;
+            handoff.await;
+        }
+        assert!(installed);
+        assert_eq!(causes, ["capture_not_requested"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn update_meeting_gate_preserves_the_quiet_window_and_back_to_back_meetings() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let active = AtomicBool::new(true);
+        let (mut start_tx, started) = mpsc::unbounded::<()>();
+        let (mut end_tx, ended) = mpsc::unbounded::<()>();
+        let gate = super::wait_for_update_meeting_window(
+            || {
+                if active.load(Ordering::SeqCst) {
+                    super::UpdateMeetingState::Active
+                } else {
+                    super::UpdateMeetingState::Idle
+                }
+            },
+            started,
+            ended,
+            |cause| panic!("healthy meeting must not bypass: {cause}"),
+        );
+        tokio::pin!(gate);
+        assert!(futures::poll!(&mut gate).is_pending());
+        tokio::time::advance(super::MEETING_RESTART_QUIET_WINDOW).await;
+        assert!(futures::poll!(&mut gate).is_pending());
+        active.store(false, Ordering::SeqCst);
+        end_tx.start_send(()).unwrap();
+        assert!(futures::poll!(&mut gate).is_pending());
+        tokio::time::advance(super::MEETING_RESTART_QUIET_WINDOW / 2).await;
+        assert!(futures::poll!(&mut gate).is_pending());
+        active.store(true, Ordering::SeqCst);
+        start_tx.start_send(()).unwrap();
+        assert!(futures::poll!(&mut gate).is_pending());
+        tokio::time::advance(super::MEETING_RESTART_QUIET_WINDOW).await;
+        assert!(futures::poll!(&mut gate).is_pending());
+        active.store(false, Ordering::SeqCst);
+        end_tx.start_send(()).unwrap();
+        assert!(futures::poll!(&mut gate).is_pending());
+        tokio::time::advance(
+            super::MEETING_RESTART_QUIET_WINDOW - std::time::Duration::from_secs(1),
+        )
+        .await;
+        assert!(futures::poll!(&mut gate).is_pending());
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        gate.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn update_meeting_gate_retains_unavailable_cause_in_collected_support_report() {
+        let root = tempfile::tempdir().unwrap();
+        let capture = tokio::sync::Mutex::new(Some(()));
+        let server = tokio::sync::Mutex::new(Some(()));
+        super::wait_for_update_meeting_window(
+            || {
+                super::update_meeting_state(
+                    true,
+                    crate::health::RecordingStatus::Recording,
+                    &capture,
+                    &server,
+                    |_| Err("meeting_detector_state_busy"),
+                )
+            },
+            stream::pending::<()>(),
+            stream::pending::<()>(),
+            |cause| {
+                crate::update_diagnostics::append(
+                    root.path(),
+                    "meeting_gate_bypassed",
+                    &format!("cause={cause}; outcome=update_restart_allowed"),
+                )
+            },
+        )
+        .await;
+        let report = crate::diagnostic_logs::collect_redacted_from_dirs_at_root(
+            &[root.path().to_path_buf()],
+            root.path().to_path_buf(),
+        )
+        .await
+        .unwrap();
+        assert!(report.contains("meeting_gate_bypassed"), "{report}");
+        assert!(
+            report.contains("cause=meeting_detector_state_busy"),
+            "{report}"
+        );
+        assert!(
+            report.contains("outcome=update_restart_allowed"),
+            "{report}"
+        );
+    }
+
     #[cfg(target_os = "macos")]
     pub(crate) fn consume_failed_update_fixture(root: &std::path::Path) {
         let path = root.join(super::UPDATE_ATTEMPT_MARKER_FILE);

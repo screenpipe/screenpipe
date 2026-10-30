@@ -69,7 +69,7 @@ pub async fn collect_redacted_from_dirs(dirs: &[std::path::PathBuf]) -> Result<S
     collect_redacted_from_dirs_at_root(dirs, crate::db_relaunch::active_data_dir()).await
 }
 
-async fn collect_redacted_from_dirs_at_root(
+pub(crate) async fn collect_redacted_from_dirs_at_root(
     dirs: &[std::path::PathBuf],
     root: std::path::PathBuf,
 ) -> Result<String, String> {
