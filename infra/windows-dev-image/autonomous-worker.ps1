@@ -285,9 +285,13 @@ $($task.prBody)
   Set-GitHubAppCredential
   $ghErrorPath = Join-Path $resultRoot 'github-cli.stderr.log'
   $ErrorActionPreference = 'Continue'
-  $existingPrOutput = & gh.exe pr list --repo $task.baseRepository --head "$($task.headOwner):$($task.branch)" --state open --json url --jq '.[0].url // empty' 2>$ghErrorPath | Out-String
+  $existingPrOutput = & gh.exe api "repos/$($task.baseRepository)/pulls" --method GET --field state=open --field "head=$($task.headOwner):$($task.branch)" --field "base=$($task.baseBranch)" --jq '.[0].html_url // empty' 2>$ghErrorPath | Out-String
   $ghExitCode = $LASTEXITCODE
-  if ($ghExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingPrOutput)) {
+  if ($ghExitCode -ne 0) {
+    $ErrorActionPreference = $priorErrorPreference
+    throw "pull request lookup failed with code $ghExitCode`: $((Get-Content $ghErrorPath -Raw).Trim())"
+  }
+  if (-not [string]::IsNullOrWhiteSpace($existingPrOutput)) {
     $prUrl = $existingPrOutput.Trim()
     & gh.exe pr edit $prUrl --body-file $prBodyPath 2>>$ghErrorPath | Out-Null
     $ghExitCode = $LASTEXITCODE
