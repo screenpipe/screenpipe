@@ -6,6 +6,7 @@ import json
 import os
 import urllib.request
 import urllib.error
+import datetime
 
 def get(url, token, body=None):
     req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, data=None if body is None else json.dumps(body).encode())
@@ -20,6 +21,11 @@ token = os.environ["CLOUDFLARE_API_TOKEN"]
 base = f"https://api.cloudflare.com/client/v4/accounts/{account}"
 status, result = get(base + "/d1/database/f410ff74-4c3f-4786-a1ca-c8365f6c0ddf/query", token, {"sql": "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('hosted_context_pricing','hosted_ai_settlements')"})
 print("accounting_schema", status, json.dumps(result.get("result", [])))
+status, settings = get(base + "/workers/scripts/ai-proxy/settings", token)
+print("accounting_binding", status, json.dumps([{k:b.get(k) for k in ("name","type","id")} for b in settings.get("result",{}).get("bindings",[]) if b.get("name") in ("DB","CLOUDFLARE_API_TOKEN","CLOUDFLARE_ACCOUNT_ID")]))
+now = int(datetime.datetime.now(datetime.timezone.utc).timestamp()*1000)
+status, telemetry = get(base + "/workers/observability/telemetry/query", token, {"queryId":"hosted-accounting-incident", "dry":True, "view":"events", "timeframe":{"from":1793388000000,"to":now}, "parameters":{"datasets":["cloudflare-workers"],"filters":[{"key":"$metadata.service","operation":"eq","type":"string","value":"ai-proxy"},{"key":"$metadata.message","operation":"includes","type":"string","value":"Hosted context pricing"}],"filterCombination":"and"},"limit":2000})
+print("accounting_telemetry", status, json.dumps(telemetry))
 sentry = os.environ.get("SENTRY_AUTH_TOKEN")
 if sentry:
     status, issues = get("https://sentry.io/api/0/projects/mediar/screenpipe-ai-proxy/issues/?query=Hosted%20context%20pricing&statsPeriod=24h", sentry)
