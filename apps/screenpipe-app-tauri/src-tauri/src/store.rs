@@ -979,6 +979,39 @@ pub fn persist_store_before_restart(app: &AppHandle) -> Result<(), String> {
 /// update restart on Windows where resource IDs become stale).
 static STORE_CACHE: Mutex<Option<Arc<tauri_plugin_store::Store<tauri::Wry>>>> = Mutex::new(None);
 
+/// Operational evidence for an explicit support request. Never builds a store,
+/// reads credentials, exports arbitrary settings, or substitutes defaults when
+/// the native settings are unavailable.
+pub(crate) fn support_recording_settings() -> Value {
+    let cached = STORE_CACHE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    let Some(settings) = cached.and_then(|store| store.get("settings")) else {
+        return serde_json::json!({"source": "unavailable", "cleanup_outcome": "unknown"});
+    };
+    let enabled = settings
+        .get("localRetentionEnabled")
+        .and_then(Value::as_bool);
+    let days = settings.get("localRetentionDays").and_then(Value::as_u64);
+    let mode = settings
+        .get("localRetentionMode")
+        .and_then(Value::as_str)
+        .filter(|mode| matches!(*mode, "media" | "lean" | "all"));
+    let quality = settings
+        .get("videoQuality")
+        .and_then(Value::as_str)
+        .filter(|quality| matches!(*quality, "low" | "balanced" | "high" | "max"));
+    serde_json::json!({
+        "source": "cached_native_settings",
+        "local_retention_enabled": enabled,
+        "local_retention_days": days,
+        "local_retention_mode": mode,
+        "video_quality": quality,
+        "cleanup_outcome": "not established by saved settings"
+    })
+}
+
 /// Build (or rebuild) the store, retrying on TOCTOU races and stale resource IDs.
 fn build_store(app: &AppHandle) -> anyhow::Result<Arc<tauri_plugin_store::Store<tauri::Wry>>> {
     let base_dir = get_base_dir(app, None)?;
