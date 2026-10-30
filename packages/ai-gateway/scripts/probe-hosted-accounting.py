@@ -11,7 +11,7 @@ with tempfile.TemporaryFile(mode='w+') as logs:
         while process.poll() is None:
             try:
                 req=urllib.request.Request('http://127.0.0.1:8791/',headers={'Authorization':'Bearer '+token})
-                with urllib.request.urlopen(req) as response:
+                with urllib.request.urlopen(req,timeout=25) as response:
                     print('accounting_probe',response.read().decode(),flush=True)
                     break
             except ConnectionError: time.sleep(1)
@@ -24,5 +24,10 @@ with tempfile.TemporaryFile(mode='w+') as logs:
             raise RuntimeError('remote_dev_exited')
     finally:
         if process.poll() is None: os.killpg(process.pid,signal.SIGTERM)
-        process.wait()
+        try: process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid,signal.SIGKILL)
+            process.wait()
         print('remote_dev_stopped',True,flush=True)
+        logs.seek(0)
+        print('remote_dev_output',logs.read(),flush=True)
