@@ -577,15 +577,18 @@ async fn wait_for_update_meeting_window(
     mut state: impl FnMut() -> UpdateMeetingState,
     mut started: impl Stream + Unpin,
     mut ended: impl Stream + Unpin,
-    mut record: impl FnMut(&str),
+    mut record: impl FnMut(&str, &str),
 ) {
     use UpdateMeetingState::*;
     let mut active = match state() {
         RecorderUnavailable(cause) => {
-            record(cause);
+            record(cause, "update_restart_allowed");
             return;
         }
-        Active => true,
+        Active => {
+            record("confirmed_active_meeting", "update_restart_deferred");
+            true
+        }
         Idle => false,
     };
     let quiet_window = tokio::time::sleep(MEETING_RESTART_QUIET_WINDOW);
@@ -594,14 +597,15 @@ async fn wait_for_update_meeting_window(
         tokio::select! {
             event = started.next() => {
                 if event.is_none() {
-                    record("meeting_started_stream_closed");
+                    record("meeting_started_stream_closed", "update_restart_allowed");
                     return;
                 }
                 active = true;
+                record("confirmed_active_meeting", "update_restart_deferred");
             }
             event = ended.next() => {
                 if event.is_none() {
-                    record("meeting_ended_stream_closed");
+                    record("meeting_ended_stream_closed", "update_restart_allowed");
                     return;
                 }
                 active = false;
@@ -609,17 +613,20 @@ async fn wait_for_update_meeting_window(
             _ = &mut quiet_window => {
                 match state() {
                     RecorderUnavailable(cause) => {
-                        record(cause);
+                        record(cause, "update_restart_allowed");
                         return;
                     }
-                    Idle if !active => return,
+                    Idle if !active => {
+                        record("meeting_quiet_window_complete", "update_restart_allowed");
+                        return;
+                    }
                     Idle => active = false,
                     Active => active = true,
                 }
             }
         }
         if let RecorderUnavailable(cause) = state() {
-            record(cause);
+            record(cause, "update_restart_allowed");
             return;
         }
         // Reconcile recorder availability even if a meeting never emits its end
@@ -639,10 +646,10 @@ async fn wait_for_meeting_restart_window(app: &tauri::AppHandle) {
         || current_update_meeting_state(app),
         started,
         ended,
-        |cause| {
+        |cause, outcome| {
             crate::update_diagnostics::record(
-                "meeting_gate_bypassed",
-                &format!("cause={cause}; outcome=update_restart_allowed"),
+                "meeting_gate",
+                &format!("cause={cause}; outcome={outcome}"),
             );
         },
     )
@@ -2214,7 +2221,10 @@ pub(crate) mod tests {
                 },
                 stream::pending::<()>(),
                 stream::pending::<()>(),
-                |cause| causes.push(cause.to_string()),
+                |cause, outcome| {
+                    assert_eq!(outcome, "update_restart_allowed");
+                    causes.push(cause.to_string());
+                },
             )
             .await;
             // Same continuation used by the installer/restart callers: the
@@ -2268,7 +2278,11 @@ pub(crate) mod tests {
                     },
                     stream::pending::<()>(),
                     stream::pending::<()>(),
-                    |cause| causes.push(cause.to_string()),
+                    |cause, outcome| {
+                        if outcome == "update_restart_allowed" {
+                            causes.push(cause.to_string());
+                        }
+                    },
                 )
                 .await;
                 installed = true;
@@ -2304,7 +2318,13 @@ pub(crate) mod tests {
             },
             started,
             ended,
-            |cause| panic!("healthy meeting must not bypass: {cause}"),
+            |cause, outcome| {
+                assert!(matches!(
+                    (cause, outcome),
+                    ("confirmed_active_meeting", "update_restart_deferred")
+                        | ("meeting_quiet_window_complete", "update_restart_allowed")
+                ));
+            },
         );
         tokio::pin!(gate);
         assert!(futures::poll!(&mut gate).is_pending());
@@ -2349,11 +2369,11 @@ pub(crate) mod tests {
             },
             stream::pending::<()>(),
             stream::pending::<()>(),
-            |cause| {
+            |cause, outcome| {
                 crate::update_diagnostics::append(
                     root.path(),
-                    "meeting_gate_bypassed",
-                    &format!("cause={cause}; outcome=update_restart_allowed"),
+                    "meeting_gate",
+                    &format!("cause={cause}; outcome={outcome}"),
                 )
             },
         )
@@ -2364,7 +2384,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        assert!(report.contains("meeting_gate_bypassed"), "{report}");
+        assert!(report.contains("meeting_gate"), "{report}");
         assert!(
             report.contains("cause=meeting_detector_state_busy"),
             "{report}"
