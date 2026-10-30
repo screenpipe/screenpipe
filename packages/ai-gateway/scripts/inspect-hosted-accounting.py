@@ -24,12 +24,23 @@ print("accounting_schema", status, json.dumps(result.get("result", [])))
 status, settings = get(base + "/workers/scripts/ai-proxy/settings", token)
 print("accounting_binding", status, json.dumps([{k:b.get(k) for k in ("name","type","id")} for b in settings.get("result",{}).get("bindings",[]) if b.get("name") in ("DB","CLOUDFLARE_API_TOKEN","CLOUDFLARE_ACCOUNT_ID")]))
 now = int(datetime.datetime.now(datetime.timezone.utc).timestamp()*1000)
-status, telemetry = get(base + "/workers/observability/telemetry/query", token, {"queryId":"hosted-accounting-incident", "dry":True, "view":"events", "timeframe":{"from":1793388000000,"to":now}, "parameters":{"datasets":["cloudflare-workers"],"filters":[{"key":"$metadata.service","operation":"eq","type":"string","value":"ai-proxy"},{"key":"$metadata.message","operation":"includes","type":"string","value":"Hosted context pricing"}],"filterCombination":"and"},"limit":2000})
+status, telemetry = get(base + "/workers/observability/telemetry/query", token, {"queryId":"hosted-accounting-incident", "dry":True, "view":"events", "timeframe":{"from":1793389980000,"to":now}, "parameters":{"datasets":["cloudflare-workers"],"filters":[{"key":"$metadata.service","operation":"eq","type":"string","value":"ai-proxy"},{"key":"$metadata.message","operation":"regex","type":"string","value":"Hosted context pricing|screenpipe.ai-gateway-route|Cloudflare hosted AI allowance reached"}],"filterCombination":"and"},"limit":2000})
 print("accounting_telemetry_status", status, flush=True)
 print("accounting_telemetry_shape", list(telemetry.get("result",{})), flush=True)
-for event in telemetry.get("result",{}).get("events",[]):
+summaries={}
+for event in telemetry.get("result",{}).get("events",{}).get("events",[]):
     source=event.get("source",{})
-    print("accounting_event", json.dumps({"timestamp":event.get("timestamp"),"source":source}), flush=True)
+    version=event.get("$workers",{}).get("scriptVersion",{}).get("id")
+    message=source.get("message","")
+    if message.startswith("screenpipe.ai-gateway-route "):
+        route=json.loads(message.split(" ",1)[1])
+        key=(version,route.get("status_code"),route.get("served_model"))
+        summary=summaries.setdefault(key,{"version":version,"status":key[1],"model":key[2],"count":0,"latest":0})
+        summary['count']+=1
+        summary['latest']=max(summary['latest'],event.get('timestamp',0))
+    elif 'allowance reached' in message:
+        print('cloudflare_allowance_event',json.dumps({"timestamp":event.get("timestamp"),"version":version,"model":source.get('model'),"lane":source.get('lane'),"limitScope":source.get('limitScope')}),flush=True)
+for summary in summaries.values(): print('production_route_summary',json.dumps(summary),flush=True)
 sentry = os.environ.get("SENTRY_AUTH_TOKEN")
 if sentry:
     status, issues = get("https://sentry.io/api/0/projects/mediar/screenpipe-ai-proxy/issues/?query=Hosted%20context%20pricing&statsPeriod=24h", sentry)
