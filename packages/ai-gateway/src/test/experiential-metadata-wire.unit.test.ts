@@ -20,8 +20,8 @@ const base = { DB: { prepare: (query: string) => ({ bind: () => ({ first: async 
 describe('Experiential metadata on installed SDK requests', () => {
   for (const mode of ['hybrid', 'direct'] as const) it.each([
     ['openai', 'gpt-5.4-mini', 'chat/completions', true],
-    ['anthropic', 'claude-haiku-5-5', 'v1/messages', true],
-    ['openai', 'gpt-6-astra', 'responses', true],
+    ['anthropic', 'claude-haiku-5-5', 'v1/messages', false],
+    ['openai', 'gpt-6-astra', 'responses', false],
   ] as const)(`${mode}: %s %s preserves attribution on the selected route`, async (provider, model, endpoint, hybridEligible) => {
     const env = { ...base, ...(mode === 'hybrid' ? { HOSTED_CHAT_GATEWAY: 'experiential' } : { EXPERIENTIAL_CANARY_MODE: 'internal' }) } as Env;
     let context = await buildHostedChatGatewayContext(auth, 'auto', 'interactive');

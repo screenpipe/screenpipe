@@ -4,7 +4,6 @@
 
 import type { Env } from '../types';
 import { TtlSingleFlightCache } from '../utils/ttl-single-flight-cache';
-import { hasContextPricingSpend, contextPricingTotal, reconcileContextPricing } from './hosted-context-pricing';
 import type {
 	HostedChatGatewayContext,
 	HostedChatLane,
@@ -501,14 +500,12 @@ export async function getCloudflareHostedChatUsage(
 ): Promise<HostedChatUsageSnapshot | null> {
 	const settings = cloudflareSettings(env);
 	if (!settings) return null;
-	const hasExtraSpend = await hasContextPricingSpend(env, context);
-	if (hasExtraSpend) await reconcileContextPricing(env, context);
 	const snapshotRequest = sharedCacheRequest(
 		'snapshot',
 		`${settings.accountId}:${settings.gatewayId}:${context.plan}:${context.user_id}`,
 	);
 	const sharedSnapshot = await readSharedJson<HostedChatUsageSnapshot>(snapshotRequest);
-	if (!hasExtraSpend && sharedSnapshot?.allowance_managed_by === 'cloudflare' &&
+	if (sharedSnapshot?.allowance_managed_by === 'cloudflare' &&
 		Array.isArray(sharedSnapshot.allowances) &&
 		typeof sharedSnapshot.usage_as_of === 'string') return sharedSnapshot;
 	const ruleSet = await fetchSpendRules(settings);
@@ -530,7 +527,7 @@ export async function getCloudflareHostedChatUsage(
 			const cost = Number(row.sum?.cost);
 			return total + (Number.isFinite(cost) && cost > 0 ? cost : 0);
 		}, 0);
-		const used = baseUsed + (hasExtraSpend ? await contextPricingTotal(env, context, interval.start.getTime(), now.getTime(), rule.lane) : 0);
+		const used = baseUsed;
 		// Provider amounts are sensitive operational data. Use them only inside
 		// this calculation and return a clamped whole-number percentage.
 		const usedPercent = Math.min(100, Math.max(0, Math.floor((used / rule.limit) * 100)));
@@ -551,6 +548,6 @@ export async function getCloudflareHostedChatUsage(
 		usage_as_of: now.toISOString(),
 		allowances,
 	};
-	if (!hasExtraSpend && allowances.length > 0) await writeSharedJson(snapshotRequest, snapshot);
+	if (allowances.length > 0) await writeSharedJson(snapshotRequest, snapshot);
 	return snapshot;
 }

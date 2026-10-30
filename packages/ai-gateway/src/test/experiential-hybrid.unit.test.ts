@@ -28,10 +28,10 @@ describe('hybrid route keeps features on their working transport',()=>{
     expect(c.gateway).toBe('experiential');expect(c.model).toBe(model);expect(c.gatewayReason).toBe('experiential_supported');
     expect(c.apiKey).toBe(key);
   });
-  it.each(['gpt-6-astra','gpt-6-luna','claude-haiku-5-5'])('routes context-priced %s with base-rate headers and durable premium settlement',async model=>{
+  it.each(['gpt-6-astra','gpt-6-luna','claude-haiku-5-5'])('keeps context-priced %s on Cloudflare native pricing',async model=>{
     expect(getFlatGatewayTokenRates(model)).toBeNull();
     const c=await resolveHostedChatConnection(env,model.startsWith('claude')?'anthropic':'openai',context,model,text);
-    expect(c.gateway).toBe('experiential');expect(c.gatewayReason).toBe('experiential_supported');expect(c.model).toBe(model === 'claude-haiku-5-5' ? 'claude-haiku-5.5' : model);
+    expect(c.gateway).toBe('cloudflare');expect(c.gatewayReason).toBe('native_context_pricing');expect(c.model).toBe(model);expect(c.defaultHeaders['cf-aig-custom-cost']).toBeUndefined();
   });
   it('routes newly supported Pro and GPT-5.6 caching through Experiential',async()=>{
     for (const model of ['gpt-5.4-pro','gpt-5.6','gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna']) {
