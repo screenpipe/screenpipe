@@ -394,7 +394,7 @@ async function tryModel(
     // spend refusals above and provider billing/quota refusals stay terminal
     // for this transport retry.
     if (env.HOSTED_CHAT_GATEWAY === 'experiential' && attemptGateway === 'experiential' && !originalReason &&
-        Number(error?.status) === 429 && !isProviderQuotaOrBillingLimitError(error)) {
+        Number(error?.status) === 429 && !isProviderQuotaOrBillingLimitError(error) && !isSafetyRefusalError(error)) {
       return tryModel(model, body, env, ctx, flexEligible, gatewayContext, 'experiential_provider_rate_limit');
     }
 
