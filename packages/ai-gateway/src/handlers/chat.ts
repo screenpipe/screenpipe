@@ -388,6 +388,16 @@ async function tryModel(
       throw error;
     }
 
+    // A throttled bridge can affect every model in the cascade. The native
+    // transport uses the same Cloudflare actor and spend rules, so recover an
+    // ordinary provider RPM/TPM refusal there before changing models. Account
+    // spend refusals above and provider billing/quota refusals stay terminal
+    // for this transport retry.
+    if (env.HOSTED_CHAT_GATEWAY === 'experiential' && attemptGateway === 'experiential' && !originalReason &&
+        Number(error?.status) === 429 && !isProviderQuotaOrBillingLimitError(error)) {
+      return tryModel(model, body, env, ctx, flexEligible, gatewayContext, 'experiential_provider_rate_limit');
+    }
+
     if (isSafetyRefusalError(error)) {
       const refusal = error instanceof SafetyRefusalError
         ? error

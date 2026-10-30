@@ -64,6 +64,7 @@ test('real Worker stops on disabled no-training policy instead of cascading or r
 test('real Worker serves retained features on the same model, labels both routes, and rolls back with D1 intact',async()=>{
   let spendBlocked=false;
   let vendorQuota=false;
+  let vendorRateLimited=false;
   const calls:{path:string;body:any;metadata:any}[]=[];
   const harness=await LocalGatewayHarness.start({experientialHybrid:true,cloudflareSpendRules:true,outboundResponse:async(request,body)=>{
     const path=new URL(request.url).pathname;
@@ -77,6 +78,7 @@ test('real Worker serves retained features on the same model, labels both routes
       expect(body.provider).toBeUndefined();
       if(vendorQuota)return retainingJSON({error:{message:'Model not available: provider quota exhausted',code:'insufficient_quota'}},{status:403});
       if(spendBlocked)return retainingJSON({name:'AiGatewayError',internalCode:2045,error:[{code:2045,message:"Spend limit exceeded: rule 'local-business-total' (cost limit 10 per 604800s, fixed)"}]},{status:429});
+      if(vendorRateLimited)return retainingJSON({error:{message:'Rate limit reached: provider requests per minute',code:'rate_limit_exceeded'}},{status:429});
       if(body.model==='gpt-5.5')return retainingJSON({error:{message:'The selected model route cannot accept this unsupported request',code:'unsupported_capability'}},{status:400});
     }
     if(path.endsWith('/responses'))return retainingJSON({id:'resp_fixture',model:body.model,status:'completed',output:[{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:'OK'}]}],usage:{input_tokens:10,output_tokens:4,total_tokens:14}});
@@ -97,6 +99,16 @@ test('real Worker serves retained features on the same model, labels both routes
     const attempts=calls.filter(c=>c.body.model==='gpt-5.5');expect(attempts).toHaveLength(2);const {provider,store,...nativeBody}=attempts[0].body;expect(nativeBody).toEqual(attempts[1].body);
     expect(new Set(calls.map(c=>JSON.stringify(c.metadata))).size).toBe(2); // Pro is the frontier lane; actor, plan and workload stay fixed.
     for(const c of calls){expect(c.metadata.plan).toBe('internal');expect(c.metadata.user_id).toBe(calls[0].metadata.user_id);}
+    vendorRateLimited=true;
+    const rateStart=calls.length;
+    const rateRecovered=await call('gpt-5.4-mini');expect(rateRecovered.status).toBe(200);
+    expect(rateRecovered.headers.get('x-screenpipe-model')).toBe('gpt-5.4-mini');
+    expect(rateRecovered.headers.get('x-screenpipe-gateway-reason')).toBe('experiential_provider_rate_limit');
+    await rateRecovered.text();
+    const rateCalls=calls.slice(rateStart);expect(rateCalls).toHaveLength(2);
+    expect(rateCalls[0].path).toContain('/custom-experiential-fixture/');expect(rateCalls[1].path).toContain('/openai/');
+    expect(rateCalls[1].metadata).toEqual(rateCalls[0].metadata);
+    vendorRateLimited=false;
     vendorQuota=true;
     const quotaStart=calls.length;
     const quota=await call('gpt-5.5');expect(quota.status).toBe(403);await quota.text();
