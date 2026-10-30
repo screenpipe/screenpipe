@@ -2,9 +2,6 @@
 # https://screenpipe.com
 """Bounded synthetic WebRTC probe against an isolated remote development session."""
 import asyncio, json, os, secrets, subprocess, signal, urllib.request, urllib.error, time, tempfile
-import runpy
-runpy.run_path(str(__import__('pathlib').Path(__file__).with_name('probe-hosted-accounting.py')))
-raise SystemExit(0)
 from aiortc import RTCPeerConnection, RTCSessionDescription, AudioStreamTrack
 import aiohttp
 

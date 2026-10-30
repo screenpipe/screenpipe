@@ -125,29 +125,17 @@ pass.
 Every hosted response carries `x-screenpipe-gateway` (`experiential` or
 `cloudflare`) and `x-screenpipe-gateway-reason`. Browser CORS exposes these
 headers; the normal route audit records `gateway_mode` and `gateway_reason`.
-Cloudflare custom-provider pricing uses the central base/cache rates. Context-priced
-Haiku, Luna and Astra also record their final-usage premium in the durable
-`hosted_context_pricing` ledger. Admission and usage reporting add that premium
-to the same Cloudflare rules, actor, plan, lane and window. Base counters are
-never imported, reset or subtracted. Native rollback still includes prior premiums.
+Cloudflare custom-provider pricing uses the central flat base/cache rates.
+Context-priced Haiku, Luna and Astra retain the native Cloudflare provider route
+so Cloudflare accounts for native context pricing and enforces its existing
+per-actor spend rules. Chat does not read reporting APIs or the legacy
+`hosted_context_pricing` ledger before dispatch. Reporting outages and missing
+legacy ledger storage cannot refuse a chat request. Native Cloudflare spend
+refusals remain terminal and cannot cascade around the account limit.
 
-Apply required migration `0009_hosted_context_pricing.sql` before deploying.
-The existing deploy migration/schema check includes it. The existing read-only
-`CLOUDFLARE_API_TOKEN` must read Gateway settings/logs and account analytics.
-A pending request has a request-sized hold from the existing reservation policy;
-it has no time-based deletion. Settlement commits before a terminal SSE event
-reaches an SDK that may then stop reading. Failed storage reports the operation,
-settlement ID and sanitized originating SQLite/network cause through the normal
-Sentry/log path, and leaves the hold recoverable.
-
-Later admission or usage polling recovers unfinished settlement from Cloudflare's
-financial `usage_metadata`, matching event ID, model and trusted account fields.
-The pre-dispatch `cf-aig-event-id` also recovers lost response headers. No second
-inference or prompt/response download is needed; payload storage remains disabled.
-Messages input excludes cached subsets and is normalized before choosing a tier;
-Chat and Responses input already include them. Missing/ambiguous evidence keeps
-the hold. Storage or allowance-reporting failures cannot bypass accounting via
-another model. Provider failures retain the existing fallback behavior.
+The October 29 premium ledger is retained for historical audit; it is no longer
+an admission authority or an addition to the Cloudflare usage display. No
+existing rows, counters or pending holds are deleted by this recovery.
 
 Like the existing Cloudflare policy, admission is eventually consistent: the
 base component comes from Cloudflare analytics and Cloudflare also independently
