@@ -581,10 +581,7 @@ async fn wait_for_update_meeting_window(
 ) {
     use UpdateMeetingState::*;
     let mut active = match state() {
-        RecorderUnavailable(cause) => {
-            record(cause, "update_restart_allowed");
-            return;
-        }
+        RecorderUnavailable(_) => false,
         Active => {
             record("confirmed_active_meeting", "update_restart_deferred");
             true
@@ -600,6 +597,9 @@ async fn wait_for_update_meeting_window(
                     record("meeting_started_stream_closed", "update_restart_allowed");
                     return;
                 }
+                if matches!(state(), RecorderUnavailable(_)) {
+                    continue;
+                }
                 active = true;
                 record("confirmed_active_meeting", "update_restart_deferred");
             }
@@ -607,6 +607,9 @@ async fn wait_for_update_meeting_window(
                 if event.is_none() {
                     record("meeting_ended_stream_closed", "update_restart_allowed");
                     return;
+                }
+                if matches!(state(), RecorderUnavailable(_)) {
+                    continue;
                 }
                 active = false;
             }
@@ -624,10 +627,6 @@ async fn wait_for_update_meeting_window(
                     Active => active = true,
                 }
             }
-        }
-        if let RecorderUnavailable(cause) = state() {
-            record(cause, "update_restart_allowed");
-            return;
         }
         // Reconcile recorder availability even if a meeting never emits its end
         // event. Reuse the existing restart window; this adds no new timeout.
@@ -2212,7 +2211,8 @@ pub(crate) mod tests {
     ) {
         let mut installed = false;
         let mut causes = Vec::new();
-        tokio::time::timeout(std::time::Duration::ZERO, async {
+        let started = tokio::time::Instant::now();
+        tokio::time::timeout(super::MEETING_RESTART_QUIET_WINDOW, async {
             super::wait_for_update_meeting_window(
                 || {
                     super::update_meeting_state(intended, status, capture, server, |_| {
@@ -2232,7 +2232,8 @@ pub(crate) mod tests {
             installed = true;
         })
         .await
-        .expect("update handoff must not wait on the recorder");
+        .expect("update handoff must proceed within the existing quiet window");
+        assert_eq!(started.elapsed(), super::MEETING_RESTART_QUIET_WINDOW);
         assert!(installed);
         assert_eq!(causes, [expected]);
     }
