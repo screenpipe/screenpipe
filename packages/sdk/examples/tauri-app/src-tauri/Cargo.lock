@@ -7050,6 +7050,7 @@ dependencies = [
  "objc2-event-kit",
  "objc2-foundation",
  "once_cell",
+ "percent-encoding",
  "reqwest",
  "russh",
  "russh-sftp",
@@ -7246,6 +7247,7 @@ dependencies = [
  "url",
  "windows 0.58.0",
  "xcap",
+ "xcb",
  "zbus",
 ]
 
