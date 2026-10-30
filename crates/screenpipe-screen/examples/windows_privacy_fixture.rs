@@ -135,7 +135,9 @@ mod windows_harness {
             if blocked {
                 let raw = hwnd.0 as usize;
                 thread::spawn(move || loop {
-                    for (next_x, next_y, order) in [(220, 210, 0), (360, 300, 1)] {
+                    // Keep the synthetic fixture above the test runner while
+                    // still exercising both sides of the allowed window's Z order.
+                    for (next_x, next_y, order) in [(220, 210, -1), (360, 300, -2)] {
                         let _ = SetWindowPos(
                             raw as isize,
                             order,
@@ -148,6 +150,8 @@ mod windows_harness {
                         thread::sleep(Duration::from_millis(15));
                     }
                 });
+            } else {
+                let _ = SetWindowPos(hwnd.0 as isize, -1, x, y, 0, 0, 0x0001 | 0x0010);
             }
             let mut message = MSG::default();
             while GetMessageW(&mut message, None, 0, 0).as_bool() {
