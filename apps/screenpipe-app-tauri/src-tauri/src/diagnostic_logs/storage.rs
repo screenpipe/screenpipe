@@ -248,12 +248,9 @@ mod tests {
         let report = collect(root.path(), Some(4));
         assert!(report.complete);
         assert_eq!(report.files, 5);
-        assert_eq!(report.bytes, 114 + b"password=hunter2".len() as u64);
+        assert_eq!(report.bytes, 130);
         assert_eq!(report.categories["sqlite_wal"].bytes, 29);
-        assert_eq!(
-            report.categories["parquet"].bytes,
-            b"password=hunter2".len() as u64
-        );
+        assert_eq!(report.categories["parquet"].bytes, 16);
         assert!(report.volume_total_bytes.is_some());
         let json = serde_json::to_string(&report).unwrap();
         assert!(!json.contains("hunter2"));
@@ -307,6 +304,21 @@ mod tests {
             unknown.categories["snapshot_images"].bytes_modified_before_policy_cutoff,
             0
         );
+    }
+
+    #[test]
+    fn inventory_enumerates_every_file_without_a_history_cap() {
+        let root = tempfile::tempdir().unwrap();
+        for index in 0..1_100 {
+            fs::write(root.path().join(format!("recording-{index}.mp4")), [0u8]).unwrap();
+        }
+
+        let report = collect(root.path(), None);
+
+        assert!(report.complete);
+        assert_eq!(report.files, 1_100);
+        assert_eq!(report.bytes, 1_100);
+        assert_eq!(report.categories["media_containers"].files, 1_100);
     }
 
     #[cfg(windows)]
