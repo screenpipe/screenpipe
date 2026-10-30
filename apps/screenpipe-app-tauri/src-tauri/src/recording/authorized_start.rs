@@ -61,7 +61,13 @@ impl Recovery {
         mut attempt: impl FnMut() -> F,
         retry_delays: &[Duration],
     ) -> Result<(), String> {
-        let _owner = self.owner.lock().await;
+        // Policy refresh is also the hidden install's health reconciliation.
+        // Never let repeated polls queue behind a recovery that already owns
+        // this generation: the owner retains the established retry cadence,
+        // and the next poll can reconcile again after it completes.
+        let Ok(_owner) = self.owner.try_lock() else {
+            return Ok(());
+        };
         let mut attempts = 0usize;
         loop {
             if !self.is_current(generation) || !should_start() {
@@ -176,6 +182,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn duplicate_policy_polls_do_not_queue_behind_recovery_owner() {
+        let recovery = Recovery::default();
+        let attempts = AtomicUsize::new(0);
+        let first_failed = Notify::new();
+        let release = Notify::new();
+        let owner = recovery.run(
+            0,
+            || true,
+            || async {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                first_failed.notify_one();
+                release.notified().await;
+                Ok(())
+            },
+            &SHORT_RETRY,
+        );
+        let duplicates = async {
+            first_failed.notified().await;
+            for _ in 0..100 {
+                recovery
+                    .run(0, || true, || async { panic!("duplicate recovery queued") }, &SHORT_RETRY)
+                    .await
+                    .unwrap();
+            }
+            release.notify_one();
+        };
+        let (result, ()) = tokio::join!(owner, duplicates);
+        result.unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn prerequisite_recovery_persists_frame_and_survives_redacted_support_collection() {
         use screenpipe_db::DatabaseManager;
 
@@ -248,7 +286,10 @@ mod tests {
             std::fs::write(
                 root.path()
                     .join(format!("screenpipe-app.2026-10-{day:02}.log")),
-                "newer restart noise contact=private-person@example.com\n",
+                "enterprise upload configuration blocked: recording database is not ready; \
+                 upload did not complete, pending data retained; localhost:3030/health \
+                 connection refused; contact=private-person@example.com\n"
+                    .repeat(256),
             )
             .unwrap();
         }

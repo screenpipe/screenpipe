@@ -2037,8 +2037,12 @@ mod imp {
                         } else {
                             let apply_app = app.clone();
                             tauri::async_runtime::spawn(async move {
-                                let _ =
-                                    crate::enterprise::managed_settings::apply(&apply_app).await;
+                                if crate::enterprise::managed_settings::apply(&apply_app)
+                                    .await
+                                    .is_ok()
+                                {
+                                    crate::recording::resume_enterprise_recording(&apply_app).await;
+                                }
                             });
                         }
                         crate::enterprise_policy::set_enterprise_policy(
@@ -2211,7 +2215,7 @@ mod imp {
 
                         // Autostart and hidden-UI launches can have no webview,
                         // so AppEntitlementGate cannot perform the usual resume.
-                        if newly_authorized && settings_applied {
+                        if settings_applied {
                             crate::recording::resume_enterprise_recording(&app).await;
                         }
                         // Hidden installs may never create the migration UI.

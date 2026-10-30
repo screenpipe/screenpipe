@@ -1102,6 +1102,15 @@ pub(crate) fn resume_deferred_account_start(app: tauri::AppHandle) {
 /// Policy refresh remains free to revoke access while startup is retrying.
 #[cfg(feature = "enterprise-support")]
 pub(crate) async fn resume_enterprise_recording(app: &tauri::AppHandle) {
+    let state = app.state::<RecordingState>();
+    // An unchanged authorized policy is the hidden install's only native
+    // reconciliation tick. Healthy capture needs no work; missing server or
+    // capture state is handed back to the existing paced recovery owner.
+    let server_running = state.server.lock().await.is_some();
+    let capture_running = state.capture.lock().await.is_some();
+    if server_running && capture_running {
+        return;
+    }
     let generation = app
         .state::<RecordingState>()
         .authorization_recovery
