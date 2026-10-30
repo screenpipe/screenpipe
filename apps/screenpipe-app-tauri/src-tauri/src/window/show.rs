@@ -650,17 +650,10 @@ impl ShowRewindWindow {
             if id.label() == RewindWindowId::Home.label() {
                 if let ShowRewindWindow::Home { ref page } = self {
                     let url = home_navigation_url(page.as_deref());
-                    // Opening the app should preserve an existing Home view, but
-                    // leave Settings when the same webview is showing that route.
-                    if page.is_some() {
-                        let _ = window.emit("navigate", serde_json::json!({ "url": url }));
-                    }
-                    if let Ok(url_literal) = serde_json::to_string(&url) {
-                        let _ = window.eval(&format!(
-                            "if (window.location.pathname !== '/home') window.location.replace({});",
-                            url_literal
-                        ));
-                    }
+                    // The shared Home/Settings layout handles cross-route
+                    // navigation without reloading the webview. Home itself
+                    // handles explicit sections and ignores a plain reopen.
+                    let _ = window.emit("navigate", serde_json::json!({ "url": url }));
                 }
                 // Windows: if the user opted into `minimizeToTrayOnClose`, the
                 // Home window may have been hidden with skip_taskbar(true) on
