@@ -611,6 +611,47 @@ fn get_ffmpeg_install_dir() -> Result<PathBuf, anyhow::Error> {
 mod tests {
     use super::*;
 
+    // Exercise the downloader's real ZIP extraction path with inert fixtures.
+    // macOS uses flat ZIPs; Linux uses tar.xz and Windows uses a nested bin/.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn archive_upgrade_preserves_install_and_cleanup() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("download.zip");
+        std::fs::write(
+            &archive,
+            include_bytes!("../tests/fixtures/ffmpeg-install.zip"),
+        )
+        .unwrap();
+        unpack_ffmpeg(&archive, dir.path()).unwrap();
+        for name in ["ffmpeg", "ffprobe", "ffplay"] {
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join(name)).unwrap(),
+                format!("fixture {name}\n")
+            );
+        }
+        assert!(
+            !archive.exists(),
+            "successful extraction must clean up its archive"
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn corrupt_archive_does_not_replace_an_existing_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("ffmpeg");
+        let archive = dir.path().join("download.zip");
+        std::fs::write(&binary, "existing installation").unwrap();
+        std::fs::write(&archive, b"truncated zip").unwrap();
+        assert!(unpack_ffmpeg(&archive, dir.path()).is_err());
+        assert_eq!(
+            std::fs::read_to_string(binary).unwrap(),
+            "existing installation"
+        );
+    }
+
     #[test]
     fn existing_file_is_usable() {
         // The running test binary itself is a real, existing file.
