@@ -1,6 +1,7 @@
 // screenpipe — AI that knows everything you've seen, said, or heard
 // https://screenpipe.com
 
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 #![cfg_attr(not(target_os = "windows"), allow(dead_code, unused_imports))]
 
 #[cfg(target_os = "windows")]
