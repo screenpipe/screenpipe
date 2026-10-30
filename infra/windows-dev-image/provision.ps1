@@ -22,7 +22,7 @@ New-Item -Path $oobePolicy -Force | Out-Null
 Set-ItemProperty -Path $oobePolicy -Name DisablePrivacyExperience -Type DWord -Value 1
 
 New-Item -ItemType Directory -Force -Path $toolsRoot, $cacheRoot, $devRoot, 'C:\src', $targetRoot | Out-Null
-if (-not $RuntimeScriptPayloads -or $RuntimeScriptPayloads.Count -ne 3) {
+if (-not $RuntimeScriptPayloads -or $RuntimeScriptPayloads.Count -ne 4) {
   throw 'autonomous runtime scripts were not supplied by the image builder'
 }
 foreach ($entry in $RuntimeScriptPayloads.GetEnumerator()) {

@@ -41,7 +41,8 @@ one-time image build is required.
    rather than merely proving compilation or matching source text.
 6. Record the VM-owned console desktop and upload durable logs, native exit
    code, video, and exact tested SHA before delivery.
-7. When delivery is authorized, the VM pushes the branch, creates the PR, and
+7. When delivery is authorized, the VM uses its GitHub App installation to
+   push a branch in the installed repository, create the PR, and
    updates its body with the durable video link and tested SHA.
 8. The VM clears runtime credentials and shuts itself down even after failure.
    Delete the exact disposable resources later; keep the immutable image.

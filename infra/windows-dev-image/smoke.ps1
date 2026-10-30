@@ -14,6 +14,7 @@ $required = @(
   'C:\screenpipe-dev\with-openai-key.ps1',
   'C:\screenpipe-dev\autonomous-bootstrap.ps1',
   'C:\screenpipe-dev\autonomous-worker.ps1',
+  'C:\screenpipe-dev\github-app-token.mjs',
   'C:\screenpipe-dev\dispatch-autonomous.sh',
   'C:\Users\Public\Desktop\screenpipe-record-desktop.ps1',
   'C:\Tools\bun\bun.exe',

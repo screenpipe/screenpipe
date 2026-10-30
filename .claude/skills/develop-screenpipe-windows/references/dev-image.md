@@ -36,8 +36,10 @@ be short.
 
 Do not install or register a GitHub Actions runner. Do not bake API keys,
 GitHub credentials, signing material, Azure-controller credentials, source
-branches, passwords, or user data into the image. OpenAI and GitHub credentials
-must be fetched only at runtime through managed identity and Key Vault.
+branches, passwords, or user data into the image. OpenAI credentials and GitHub App signing configuration must be fetched only
+at runtime through managed identity and Key Vault. Follow the GitHub delivery
+identity contract in `infra/windows-dev-image/README.md`; personal GitHub
+tokens and personal forks are not supported.
 
 ## Build and publish an image version
 

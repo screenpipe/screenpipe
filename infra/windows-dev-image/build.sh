@@ -101,7 +101,7 @@ fi
 {
   sed -n '1,4p' "$script_dir/provision.ps1"
   printf '\n$RuntimeScriptPayloads = @{\n'
-  for runtime_script in autonomous-bootstrap.ps1 autonomous-worker.ps1 dispatch-autonomous.sh; do
+  for runtime_script in autonomous-bootstrap.ps1 autonomous-worker.ps1 dispatch-autonomous.sh github-app-token.mjs; do
     printf "  '%s' = '%s'\n" "$runtime_script" "$(base64 <"$script_dir/$runtime_script" | tr -d '\r\n')"
   done
   printf '}\n'

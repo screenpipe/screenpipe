@@ -48,6 +48,7 @@ New-Item -ItemType Directory -Force -Path $workerRoot | Out-Null
 Receive-TaskBlob 'autonomous-worker.ps1' (Join-Path $workerRoot 'autonomous-worker.ps1')
 Receive-TaskBlob 'autonomous-bootstrap.ps1' (Join-Path $workerRoot 'autonomous-bootstrap.ps1')
 Receive-TaskBlob 'dispatch-autonomous.sh' (Join-Path $workerRoot 'dispatch-autonomous.sh')
+Receive-TaskBlob 'github-app-token.mjs' (Join-Path $workerRoot 'github-app-token.mjs')
 Receive-TaskBlob 'task.json' (Join-Path $workerRoot 'task.json')
 
 $env:Path = 'C:\ProgramData\chocolatey\bin;' + [Environment]::GetEnvironmentVariable('Path', 'Machine')

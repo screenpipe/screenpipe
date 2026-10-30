@@ -19,6 +19,9 @@ $recorder = $null
 $resultState = 'failed'
 $failure = $null
 $prUrl = $null
+$githubIdentity = $null
+$githubInstallationId = $null
+$githubAuthErrorPath = Join-Path $resultRoot 'github-auth.stderr.log'
 
 New-Item -ItemType Directory -Force -Path $resultRoot | Out-Null
 Start-Transcript -Path $transcriptPath -Force
@@ -49,6 +52,32 @@ function Get-KeyVaultSecret([string] $Name) {
     Start-Sleep -Seconds 2
   }
   throw "Key Vault did not return runtime secret $Name"
+}
+
+function Set-GitHubAppCredential {
+  if (-not $task.githubAppSecretName) { throw 'Task requires githubAppSecretName; personal GitHub tokens are not supported' }
+  $configuration = Get-KeyVaultSecret $task.githubAppSecretName
+  try {
+    $priorPreference = $ErrorActionPreference
+    try {
+      $ErrorActionPreference = 'Continue'
+      $credentialJson = $configuration | & node.exe (Join-Path $workerRoot 'github-app-token.mjs') $task.baseRepository 2>$githubAuthErrorPath
+      $authExitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $priorPreference }
+    if ($authExitCode -ne 0) {
+      $cause = (Get-Content $githubAuthErrorPath -Raw).Trim()
+      throw "GitHub App authentication failed for $($task.baseRepository) (exit $authExitCode): $cause"
+    }
+    $credential = $credentialJson | ConvertFrom-Json
+    $env:GH_TOKEN = $credential.token
+    $script:githubIdentity = $credential.login
+    $script:githubInstallationId = $credential.installationId
+    Write-Host "GitHub delivery identity: $githubIdentity; installation: $githubInstallationId; expires: $($credential.expiresAt)"
+  } finally {
+    $configuration = $null
+    $credentialJson = $null
+    $credential = $null
+  }
 }
 
 function Send-ResultBlob([string] $FilePath, [string] $Name, [string] $ContentType) {
@@ -130,7 +159,14 @@ try {
 
   $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
   $env:Path = "$machinePath;C:\ProgramData\chocolatey\bin;$env:Path"
-  $env:GH_TOKEN = Get-KeyVaultSecret $task.githubSecretName
+  Remove-Item Env:\GH_TOKEN -ErrorAction SilentlyContinue
+  Remove-Item Env:\GITHUB_TOKEN -ErrorAction SilentlyContinue
+  $env:GH_CONFIG_DIR = Join-Path $workerRoot '.gh-app'
+  New-Item -ItemType Directory -Force -Path $env:GH_CONFIG_DIR | Out-Null
+  if ($task.pushRemote -ne "https://github.com/$($task.baseRepository).git" -or $task.headOwner -ne ($task.baseRepository -split '/')[0]) {
+    throw 'GitHub App delivery must push to the installed base repository, not a personal fork'
+  }
+  Set-GitHubAppCredential
   $env:CODEX_HOME = Join-Path $workerRoot '.codex'
   New-Item -ItemType Directory -Force -Path $env:CODEX_HOME | Out-Null
   $openAiKey = Get-KeyVaultSecret $task.openAiSecretName
@@ -155,7 +191,7 @@ try {
   }
   Invoke-Checked 'git.exe' @('-C', $repository, 'checkout', '--force', '-B', $task.branch, $startCommit)
   Invoke-Checked 'git.exe' @('-C', $repository, 'clean', '-ffd', '--exclude', 'target')
-  Invoke-Checked 'git.exe' @('-C', $repository, 'config', 'user.name', 'screenpipe Windows autonomous worker')
+  Invoke-Checked 'git.exe' @('-C', $repository, 'config', 'user.name', $githubIdentity)
   Invoke-Checked 'git.exe' @('-C', $repository, 'config', 'user.email', 'windows-worker@screenpipe.local')
 
   $agentPrompt = @"
@@ -169,7 +205,7 @@ Execution contract:
 - Work only in $repository and make the smallest complete related change.
 - The durable target is a reusable Azure Windows dev image whose disposable VM owns agent execution, an interactive console desktop, native tests, video recording, evidence upload, branch push, and PR creation after a one-shot dispatch. It must continue if the dispatching computer disconnects or powers off.
 - There must be no inbound RDP rule and no operator desktop session in the workflow.
-- Runtime OpenAI and GitHub credentials come only from managed identity plus Key Vault; never print, persist in source, or include them in evidence.
+- Runtime OpenAI and GitHub App credentials come only from managed identity plus Key Vault; never print, persist in source, or include them in evidence.
 - Copy the proven runtime scripts from C:\screenpipe-worker into infra/windows-dev-image when they are not already present, then make the image provisioning, dispatcher, canonical skill, and reference agree with the autonomous invariant. Retire contradictory RDP/host-import wording rather than adding parallel rules.
 - Use the immutable image and exact task blob model; do not clone or modify the release builder.
 - Run the narrowest relevant checks, including shell syntax, PowerShell parsing, skill validation, and git diff --check. Do not run raw Cargo for src-tauri.
@@ -211,6 +247,9 @@ exit /b %ERRORLEVEL%
   $testedTree = (git.exe -C $repository rev-parse 'HEAD^{tree}').Trim()
   if ((git.exe -C $repository status --porcelain)) { throw 'worktree is dirty after autonomous development' }
 
+  # Native work can outlive GitHub's one-hour installation token. Mint again
+  # immediately before delivery; never retain a long-lived personal token.
+  Set-GitHubAppCredential
   $remoteRef = "refs/heads/$($task.branch)"
   $remoteLine = (& git.exe -C $repository ls-remote $task.pushRemote $remoteRef | Out-String).Trim()
   if ($LASTEXITCODE -ne 0) { throw 'remote branch lease lookup failed' }
@@ -243,9 +282,10 @@ $($task.prBody)
 - Tested tree: ``$testedTree``
 - The disposable VM ran Codex, native validation, recording, push, and PR creation without an inbound desktop connection or a host-held process.
 "@ | Set-Content -Encoding UTF8 $prBodyPath
+  Set-GitHubAppCredential
   $ghErrorPath = Join-Path $resultRoot 'github-cli.stderr.log'
   $ErrorActionPreference = 'Continue'
-  $existingPrOutput = & gh.exe pr list --repo $task.baseRepository --head $task.branch --state open --json url --jq '.[0].url // empty' 2>$ghErrorPath | Out-String
+  $existingPrOutput = & gh.exe pr list --repo $task.baseRepository --head "$($task.headOwner):$($task.branch)" --state open --json url --jq '.[0].url // empty' 2>$ghErrorPath | Out-String
   $ghExitCode = $LASTEXITCODE
   if ($ghExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingPrOutput)) {
     $prUrl = $existingPrOutput.Trim()
@@ -282,6 +322,8 @@ $($task.prBody)
     state = $resultState
     failure = $failure
     prUrl = $prUrl
+    githubIdentity = $githubIdentity
+    githubInstallationId = $githubInstallationId
     baseSha = $task.baseSha
     testedHead = if (Test-Path $repository) { (& git.exe -C $repository rev-parse HEAD 2>$null | Out-String).Trim() } else { $null }
     videoSha256 = $videoSha
@@ -300,11 +342,15 @@ $($task.prBody)
     @($agentError, 'codex.stderr.log', 'text/plain'),
     @($recorderLog, 'ffmpeg-recorder.log', 'text/plain'),
     @($azErrorPath, 'azure-cli.stderr.log', 'text/plain'),
-    @($ghErrorPath, 'github-cli.stderr.log', 'text/plain')
+    @($ghErrorPath, 'github-cli.stderr.log', 'text/plain'),
+    @($githubAuthErrorPath, 'github-auth.stderr.log', 'text/plain')
   )) {
     try { Send-ResultBlob $file[0] $file[1] $file[2] } catch { }
   }
   Remove-Item Env:\GH_TOKEN -ErrorAction SilentlyContinue
+  Remove-Item Env:\GITHUB_TOKEN -ErrorAction SilentlyContinue
+  if ($env:GH_CONFIG_DIR) { Remove-Item $env:GH_CONFIG_DIR -Recurse -Force -ErrorAction SilentlyContinue }
+  Remove-Item Env:\GH_CONFIG_DIR -ErrorAction SilentlyContinue
   Remove-Item Env:\OPENAI_API_KEY -ErrorAction SilentlyContinue
   Remove-Item $env:CODEX_HOME -Recurse -Force -ErrorAction SilentlyContinue
   & az.cmd logout 2>$null

@@ -85,11 +85,11 @@ jq -n \
     identityClientId: $identityClientId,
     vaultName: "kv-scpwin-aa28",
     openAiSecretName: "chatgpt-codex-api-key",
-    githubSecretName: "screenpipe-github-pr-token",
-    pushRemote: "https://github.com/EzraEllette/screenpipe.git",
+    githubAppSecretName: "screenpipe-windows-github-app",
+    pushRemote: "https://github.com/screenpipe/screenpipe.git",
     baseRepository: "screenpipe/screenpipe",
     baseBranch: "main",
-    headOwner: "EzraEllette",
+    headOwner: "screenpipe",
     prTitle: $prTitle,
     prBody: $prBody,
     commitMessage: $commitMessage
@@ -99,6 +99,7 @@ prefix="$blob_root/$task_id"
 for file in \
   "$task_file:task.json" \
   "$script_dir/autonomous-worker.ps1:autonomous-worker.ps1" \
+  "$script_dir/github-app-token.mjs:github-app-token.mjs" \
   "$script_dir/autonomous-bootstrap.ps1:autonomous-bootstrap.ps1" \
   "$script_dir/dispatch-autonomous.sh:dispatch-autonomous.sh"; do
   source_path="${file%%:*}"
