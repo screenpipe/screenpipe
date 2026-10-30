@@ -5,6 +5,9 @@
 [workspace]
 members = ["wer-dump-helper", "windows/persistence-supervisor", "release-router-contract"]
 
+# screenpipe — AI that knows everything you've seen, said, or heard
+# https://screenpipe.com
+
 [package]
 name = "screenpipe-app"
 version = "2.7.132"
@@ -15,6 +18,8 @@ repository = ""
 default-run = "screenpipe-app"
 edition = "2021"
 rust-version = "1.94"
+# Older source revisions cannot be repackaged as Enterprise by this workflow.
+metadata.screenpipe.shared-package-runtime = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -170,7 +175,7 @@ screenpipe-redact = { path = "../../../crates/screenpipe-redact", features = ["o
 image = "0.25.5"
 
 # Used only by the path-included `apps/screenpipe-app-tauri/src-tauri/src/enterprise/sync.rs`. Gated
-# behind enterprise-build via the `dep:thiserror` syntax in [features] so
+# behind enterprise-support via the `dep:thiserror` syntax in [features] so
 # cargo-machete (which doesn't follow `#[path = ...]` imports) doesn't flag
 # this as unused. Stays cross-platform — the EE sync compiles on Windows
 # too, so this CANNOT live under `cfg(not(target_os = "windows"))`.
@@ -178,7 +183,7 @@ thiserror = { version = "1.0", optional = true }
 
 # Generic sync primitives (destination trait + ticketed pipeline + body
 # encryption). Used by `apps/screenpipe-app-tauri/src-tauri/src/enterprise/upload.rs` for the
-# direct-upload path. Gated behind enterprise-build for the same reason
+# direct-upload path. Gated behind enterprise-support for the same reason
 # as thiserror — `#[path = ...]` imports aren't followed by cargo-machete.
 screenpipe-sync = { path = "../../../crates/screenpipe-sync", optional = true }
 
@@ -306,13 +311,11 @@ custom-protocol = ["tauri/custom-protocol"]
 # Source builds without this flag will show "auto-updates unavailable"
 official-build = []
 
-# The standard app includes managed capabilities; account/config selects them
-# at runtime. Keep the legacy package feature for existing MDM installations.
+# Both packages compile the same managed capabilities. Package metadata selects
+# installer identity and defaults before settings or application state are read.
 enterprise-support = ["dep:thiserror", "dep:screenpipe-sync", "screenpipe-core/enterprise-build"]
-enterprise-build = [
-    "enterprise-support",
-    "screenpipe-config/enterprise-build",
-]
+# Compatibility alias for existing build commands; it never selects an edition.
+enterprise-build = ["enterprise-support"]
 
 qwen3-asr = ["screenpipe-engine/qwen3-asr"]
 parakeet = ["screenpipe-engine/parakeet"]
@@ -356,7 +359,7 @@ whisper-rs = { git = "https://github.com/EzraEllette/whisper-rs.git", rev = "b64
 [package.metadata.cargo-machete]
 # screenpipe-redact: workspace dep added for async PII reconciliation (PR #3188);
 # wiring lands in a follow-up. Cargo compiles it for the workspace either way.
-# thiserror: gated behind `enterprise-build` via `dep:thiserror`; cargo-machete
+# thiserror: gated behind `enterprise-support` via `dep:thiserror`; cargo-machete
 # can't follow `#[path = ...]` imports into apps/screenpipe-app-tauri/src-tauri/src/enterprise/sync.rs.
 # eventkit-rs: lib crate is imported as `eventkit` (calendar.rs, permissions.rs);
 # cargo-machete matches the package name `eventkit_rs` so it can't see the use.

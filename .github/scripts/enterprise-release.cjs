@@ -22,6 +22,7 @@ async function dispatchEnterprise({ github, context, sha, version, forceGithubRu
       inputs: {
         commit_hash: sha,
         version,
+        shared_build_run_id: String(context.runId),
         force_github_runners: String(forceGithubRunners),
         dry_run: String(dryRun),
         ...(localizationRunId ? { localization_run_id: String(localizationRunId) } : {}),

@@ -5298,7 +5298,7 @@ fn dir_size(path: &std::path::Path) -> u64 {
 pub fn set_autostart(app_handle: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 
-    #[cfg(all(feature = "enterprise-build", target_os = "windows"))]
+    #[cfg(all(feature = "enterprise-support", target_os = "windows"))]
     if crate::enterprise_persistence::installed() {
         // The protected service owns startup for this package. Keep the
         // user-writable Run entry absent even if an old setting is toggled.

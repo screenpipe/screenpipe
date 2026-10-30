@@ -262,7 +262,30 @@ async fn build_bundle(files: &[LogFile]) -> String {
 mod tests {
     use super::*;
 
-    #[cfg(feature = "enterprise-build")]
+    #[tokio::test]
+    async fn package_identity_failure_reaches_collected_redacted_support_report() {
+        let root = tempfile::tempdir().unwrap();
+        #[cfg(target_os = "macos")]
+        let metadata = root.path().join("screenpipe.app/Contents/Resources/screenpipe-package.json");
+        #[cfg(not(target_os = "macos"))]
+        let metadata = root.path().join("bin/screenpipe-package.json");
+        std::fs::create_dir_all(metadata.parent().unwrap()).unwrap();
+        std::fs::write(&metadata, "{").unwrap();
+        #[cfg(target_os = "macos")]
+        let executable = root.path().join("screenpipe.app/Contents/MacOS/screenpipe-app");
+        #[cfg(not(target_os = "macos"))]
+        let executable = root.path().join("bin/screenpipe-app");
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        let cause = crate::package_identity::product_name_for(&executable).unwrap_err();
+        crate::package_identity::record_failure(root.path(), &cause);
+        let report = collect_redacted_from_dirs_at_root(&[root.path().to_path_buf()], root.path().to_path_buf()).await.unwrap();
+        assert!(report.contains("package_identity_failed"));
+        assert!(report.contains("parse"));
+        assert!(report.contains("startup_aborted"));
+        assert!(report.contains("restore_matching_signed_package"));
+    }
+
+    #[cfg(feature = "enterprise-support")]
     #[tokio::test(flavor = "current_thread")]
     async fn parsed_backlog_failure_and_recovery_survive_collected_support_upload() {
         let logs = tempfile::tempdir().unwrap();
@@ -303,7 +326,7 @@ mod tests {
         assert!(!bundle.contains("hunter2"));
     }
 
-    #[cfg(feature = "enterprise-build")]
+    #[cfg(feature = "enterprise-support")]
     #[tokio::test]
     async fn recording_event_missing_ack_survives_support_collection() {
         let root = tempfile::tempdir().unwrap();
@@ -499,7 +522,7 @@ mod tests {
         assert!(!report.contains("private-person@example.com"));
     }
 
-    #[cfg(feature = "enterprise-build")]
+    #[cfg(feature = "enterprise-support")]
     #[tokio::test]
     async fn ingest_transport_cause_survives_rotation_and_support_redaction() {
         let dir = tempfile::tempdir().unwrap();
@@ -525,7 +548,7 @@ mod tests {
         assert!(!report.contains("private-license"));
     }
 
-    #[cfg(feature = "enterprise-build")]
+    #[cfg(feature = "enterprise-support")]
     #[tokio::test]
     async fn local_transport_cause_survives_rotation_and_support_redaction() {
         let dir = tempfile::tempdir().unwrap();
@@ -604,7 +627,7 @@ mod tests {
         assert!(!report.contains("private-person@example.com"));
     }
 
-    #[cfg(feature = "enterprise-build")]
+    #[cfg(feature = "enterprise-support")]
     #[tokio::test(flavor = "current_thread")]
     async fn image_source_revocation_and_recovery_survive_support_collection() {
         let dir = tempfile::tempdir().unwrap();
@@ -720,7 +743,7 @@ mod tests {
         assert!(!report.contains("private-person@example.com"));
     }
 
-    #[cfg(feature = "enterprise-build")]
+    #[cfg(feature = "enterprise-support")]
     #[tokio::test(flavor = "current_thread")]
     async fn sync_retry_failure_reaches_support_after_collection_and_redaction() {
         let dir = tempfile::tempdir().unwrap();
@@ -733,7 +756,7 @@ mod tests {
         assert!(!report.contains("backing off 3600s"));
     }
 
-    #[cfg(feature = "enterprise-build")]
+    #[cfg(feature = "enterprise-support")]
     #[tokio::test]
     async fn readable_screenshot_failure_survives_support_collection_and_redaction() {
         let dir = tempfile::tempdir().unwrap();
@@ -758,7 +781,7 @@ mod tests {
         assert!(!report.contains("private-person@example.com"));
     }
 
-    #[cfg(feature = "enterprise-build")]
+    #[cfg(feature = "enterprise-support")]
     #[tokio::test]
     async fn exact_frame_failure_survives_support_collection_and_rotation() {
         let dir = tempfile::tempdir().unwrap();
@@ -791,7 +814,7 @@ mod tests {
         assert!(!report.contains("client-tax-return"));
     }
 
-    #[cfg(feature = "enterprise-build")]
+    #[cfg(feature = "enterprise-support")]
     #[tokio::test]
     async fn full_quality_upload_failure_survives_support_collection_and_rotation() {
         let dir = tempfile::tempdir().unwrap();

@@ -1,3 +1,6 @@
+<!-- screenpipe — AI that knows everything you've seen, said, or heard -->
+<!-- https://screenpipe.com -->
+
 # Human-only app publication
 
 <!-- doc-covers: none -->
@@ -13,7 +16,9 @@ The app release pipeline deliberately separates artifact preparation from public
 
 It has no route for updater pointers, enterprise publication state, GitHub tags, or GitHub releases. The service validates the version, target, filename, and scope before writing to R2.
 
-`Release App` builds consumer artifacts first, then dispatches `Release Enterprise` with the same validated commit and version. Before dispatch, it adds a pending `Enterprise artifacts` status to that release commit; enterprise completion changes it to success or failure. Consumer readiness remains independent, while a failed dispatch or missing/failed enterprise build cannot silently look complete. Dry runs use a separate status and preserve the no-upload setting. Manual `Release Enterprise` dispatch is retained for recovery, not as a separate step in a normal release.
+`Release App` compiles the shared desktop executable and builds standard artifacts first, then dispatches `Release Enterprise` with the same validated commit, version, and source run ID. Enterprise packaging verifies the shared payload's revision, target, version and checksum before bundling and signing it under the existing Enterprise installer identity. Package metadata selects the legacy identity, updater and defaults at runtime; Cargo features do not select the edition. A missing or incompatible shared payload fails packaging rather than recompiling the app.
+
+Before dispatch, `Release App` adds a pending `Enterprise artifacts` status to that release commit; enterprise completion changes it to success or failure. Consumer readiness remains independent, while a failed dispatch or missing/failed enterprise package cannot silently look complete. Dry runs use a separate status and preserve the no-upload setting. Manual `Release Enterprise` dispatch is retained for recovery from an existing matching `Release App` run, not as a separate step in a normal release. Publication and Enterprise update-policy gates remain separate from artifact reuse.
 
 ## Only a human may publish
 

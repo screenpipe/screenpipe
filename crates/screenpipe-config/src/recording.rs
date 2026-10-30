@@ -1039,7 +1039,7 @@ impl Default for RecordingSettings {
 }
 
 fn default_disable_input_capture() -> bool {
-    !cfg!(feature = "enterprise-build")
+    !crate::is_enterprise_package()
 }
 
 fn default_true() -> bool {
@@ -1080,11 +1080,11 @@ fn default_pause_extraction_on_input_ms() -> u64 {
 }
 
 fn default_ai_pii_redaction() -> bool {
-    cfg!(feature = "enterprise-build")
+    crate::is_enterprise_package()
 }
 
 fn default_pii_backend() -> String {
-    if cfg!(feature = "enterprise-build") {
+    if crate::is_enterprise_package() {
         "tinfoil".to_string()
     } else {
         "local".to_string()
@@ -1133,8 +1133,8 @@ fn default_hd_recording_interval_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn pii_defaults_follow_build_and_preserve_explicit_choices() {
-        let enterprise = cfg!(feature = "enterprise-build");
+    fn pii_defaults_follow_package_and_preserve_explicit_choices() {
+        let enterprise = crate::is_enterprise_package();
         let defaults = RecordingSettings::default();
         let missing: RecordingSettings = serde_json::from_str("{}").unwrap();
         for settings in [defaults, missing] {
@@ -1164,8 +1164,8 @@ mod tests {
     }
 
     #[test]
-    fn input_capture_defaults_follow_build_and_preserve_explicit_choices() {
-        let disabled = !cfg!(feature = "enterprise-build");
+    fn input_capture_defaults_follow_package_and_preserve_explicit_choices() {
+        let disabled = !crate::is_enterprise_package();
         let defaults = RecordingSettings::default();
         let missing: RecordingSettings = serde_json::from_value(serde_json::json!({})).unwrap();
         for settings in [defaults, missing] {

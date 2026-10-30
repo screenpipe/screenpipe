@@ -13,9 +13,13 @@ static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 static RETIREMENT: Retirement = Retirement::new();
 static STORAGE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-const SERVICE: &str = if cfg!(feature = "enterprise-build") {
-    "com.screenpipe.enterprise.acquisition.v1"
-} else { "com.screenpipe.acquisition.v1" };
+fn service() -> &'static str {
+    if crate::package_identity::is_enterprise() {
+        "com.screenpipe.enterprise.acquisition.v1"
+    } else {
+        "com.screenpipe.acquisition.v1"
+    }
+}
 const PLACEHOLDER: &str = "00000000-0000-4000-8000-000000000000";
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -99,7 +103,7 @@ fn decode_pending(bytes: &[u8]) -> Result<Pending, ()> {
 #[cfg(target_os = "macos")]
 async fn load_saved() -> Result<Option<Pending>, ()> {
     tauri::async_runtime::spawn_blocking(|| {
-        match security_framework::passwords::get_generic_password(SERVICE, &current_storage_account()) {
+        match security_framework::passwords::get_generic_password(service(), &current_storage_account()) {
             Ok(bytes) => decode_pending(&bytes).map(Some),
             Err(e) if e.code() == -25300 => Ok(None),
             Err(_) => Err(()), // A locked Keychain is not an empty one.
@@ -111,7 +115,7 @@ async fn load_saved() -> Result<Option<Pending>, ()> {
 async fn save(pending: &Pending) -> Result<(), ()> {
     let bytes = serde_json::to_vec(pending).map_err(|_| ())?;
     tauri::async_runtime::spawn_blocking(move || {
-        security_framework::passwords::set_generic_password(SERVICE, &current_storage_account(), &bytes).map_err(|_| ())
+        security_framework::passwords::set_generic_password(service(), &current_storage_account(), &bytes).map_err(|_| ())
     }).await.map_err(|_| ())?
 }
 
@@ -134,14 +138,14 @@ async fn credential_store() -> Result<screenpipe_secrets::SecretStore, ()> {
 #[cfg(not(target_os = "macos"))]
 async fn load_saved() -> Result<Option<Pending>, ()> {
     let store = credential_store().await?;
-    store.get(&format!("{SERVICE}.{}", current_storage_account())).await.map_err(|_| ())?
+    store.get(&format!("{}.{}", service(), current_storage_account())).await.map_err(|_| ())?
         .map(|bytes| decode_pending(&bytes)).transpose()
 }
 
 #[cfg(not(target_os = "macos"))]
 async fn save(pending: &Pending) -> Result<(), ()> {
     let store = credential_store().await?;
-    store.set(&format!("{SERVICE}.{}", current_storage_account()), &serde_json::to_vec(pending).map_err(|_| ())?)
+    store.set(&format!("{}.{}", service(), current_storage_account()), &serde_json::to_vec(pending).map_err(|_| ())?)
         .await.map_err(|_| ())
 }
 

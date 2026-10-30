@@ -176,6 +176,7 @@ pub use icons::*;
 pub use store::get_store;
 
 mod config;
+mod package_identity;
 pub use config::get_base_dir;
 
 pub use commands::set_tray_health_icon;
@@ -313,16 +314,16 @@ fn emit_menu_close_window(app: &tauri::AppHandle) {
 /// Used to skip Home so login starts stay in the tray.
 const AUTOSTART_ARG: &str = "--autostart";
 
-#[cfg(any(test, all(feature = "enterprise-build", target_os = "macos")))]
+#[cfg(any(test, all(feature = "enterprise-support", target_os = "macos")))]
 const MACOS_LOGIN_DUPLICATE_WINDOW: std::time::Duration = std::time::Duration::from_secs(30);
 
-#[cfg(any(test, all(feature = "enterprise-build", target_os = "macos")))]
+#[cfg(any(test, all(feature = "enterprise-support", target_os = "macos")))]
 #[derive(Default)]
 struct PendingPlainLoginDuplicate {
     expires_at: Option<std::time::Instant>,
 }
 
-#[cfg(any(test, all(feature = "enterprise-build", target_os = "macos")))]
+#[cfg(any(test, all(feature = "enterprise-support", target_os = "macos")))]
 impl PendingPlainLoginDuplicate {
     fn arm(&mut self, legacy_launch: bool, main_app_enabled: bool, now: std::time::Instant) {
         self.expires_at =
@@ -345,7 +346,7 @@ impl PendingPlainLoginDuplicate {
     }
 }
 
-#[cfg(all(feature = "enterprise-build", target_os = "macos"))]
+#[cfg(all(feature = "enterprise-support", target_os = "macos"))]
 static PENDING_MACOS_LOGIN_DUPLICATE: once_cell::sync::Lazy<
     std::sync::Mutex<PendingPlainLoginDuplicate>,
 > = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(PendingPlainLoginDuplicate::default()));
@@ -354,19 +355,20 @@ static PENDING_MACOS_LOGIN_DUPLICATE: once_cell::sync::Lazy<
 /// (LaunchAgent / Run registry), not a manual user launch.
 fn launched_from_autostart() -> bool {
     let argument_launch = args_contain_autostart(std::env::args());
-    #[cfg(all(feature = "enterprise-build", target_os = "macos"))]
-    let login_item_event = match enterprise_autostart::launched_as_macos_login_item() {
-        Ok(detected) => detected,
-        Err(error) => {
-            warn!("autostart: could not inspect macOS launch event: {error}");
-            false
-        }
-    };
-    #[cfg(not(all(feature = "enterprise-build", target_os = "macos")))]
+    #[cfg(all(feature = "enterprise-support", target_os = "macos"))]
+    let login_item_event = crate::package_identity::is_enterprise()
+        && match enterprise_autostart::launched_as_macos_login_item() {
+            Ok(detected) => detected,
+            Err(error) => {
+                warn!("autostart: could not inspect macOS launch event: {error}");
+                false
+            }
+        };
+    #[cfg(not(all(feature = "enterprise-support", target_os = "macos")))]
     let login_item_event = false;
 
-    #[cfg(all(feature = "enterprise-build", target_os = "macos"))]
-    if argument_launch {
+    #[cfg(all(feature = "enterprise-support", target_os = "macos"))]
+    if argument_launch && crate::package_identity::is_enterprise() {
         match enterprise_autostart::macos_main_app_is_enabled() {
             Ok(main_app_enabled) => {
                 let mut pending = PENDING_MACOS_LOGIN_DUPLICATE
@@ -403,7 +405,7 @@ pub(crate) fn should_suppress_startup_handoff<S: AsRef<str>>(args: &[S]) -> bool
         return true;
     }
 
-    #[cfg(all(feature = "enterprise-build", target_os = "macos"))]
+    #[cfg(all(feature = "enterprise-support", target_os = "macos"))]
     {
         return PENDING_MACOS_LOGIN_DUPLICATE
             .lock()
@@ -411,7 +413,7 @@ pub(crate) fn should_suppress_startup_handoff<S: AsRef<str>>(args: &[S]) -> bool
             .consume_if_plain(args, std::time::Instant::now());
     }
 
-    #[cfg(not(all(feature = "enterprise-build", target_os = "macos")))]
+    #[cfg(not(all(feature = "enterprise-support", target_os = "macos")))]
     false
 }
 
@@ -477,6 +479,14 @@ macro_rules! define_specta_builder {
 
 #[tokio::main]
 async fn main() {
+    let context = package_identity::initialize(tauri::generate_context!()).unwrap_or_else(|cause| {
+        crate::package_identity::record_failure(
+            &screenpipe_core::paths::default_screenpipe_data_dir(),
+            &cause,
+        );
+        eprintln!("screenpipe: package identity initialization failed: {cause}");
+        std::process::exit(1);
+    });
     #[cfg(target_os = "macos")]
     if let Some(code) = screenpipe_audio::core::vpio_process::run_hidden_mode().await {
         std::process::exit(code);
@@ -530,26 +540,25 @@ async fn main() {
     // kernel-backed build identity even while Enterprise has not bound a port
     // or its HTTP endpoints are unhealthy.
     #[cfg(target_os = "windows")]
-    if !arguments.iter().any(|argument| argument == "--cpu-smoke")
-    {
-        #[cfg(feature = "enterprise-build")]
-        if let Err(error) =
-            windows_enterprise_takeover::publish_enterprise_presence(focus_port, api_port)
-        {
-            eprintln!("screenpipe: enterprise presence initialization failed: {error}");
-            std::process::exit(1);
-        }
-
-        #[cfg(not(feature = "enterprise-build"))]
-        match windows_enterprise_takeover::enterprise_is_present(focus_port, api_port).await {
-            Ok(true) => {
-                eprintln!("screenpipe: Enterprise is running; Consumer startup is blocked.");
-                std::process::exit(0);
-            }
-            Ok(false) => {}
-            Err(error) => {
-                eprintln!("screenpipe: Enterprise presence check failed: {error}");
+    if !arguments.iter().any(|argument| argument == "--cpu-smoke") {
+        if crate::package_identity::is_enterprise() {
+            if let Err(error) =
+                windows_enterprise_takeover::publish_enterprise_presence(focus_port, api_port)
+            {
+                eprintln!("screenpipe: enterprise presence initialization failed: {error}");
                 std::process::exit(1);
+            }
+        } else {
+            match windows_enterprise_takeover::enterprise_is_present(focus_port, api_port).await {
+                Ok(true) => {
+                    eprintln!("screenpipe: Enterprise is running; Consumer startup is blocked.");
+                    std::process::exit(0);
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    eprintln!("screenpipe: Enterprise presence check failed: {error}");
+                    std::process::exit(1);
+                }
             }
         }
     }
@@ -667,8 +676,8 @@ async fn main() {
         #[cfg(not(target_os = "macos"))]
         let launchd_job_label: Option<String> = None;
 
-        #[cfg(all(target_os = "windows", feature = "enterprise-build"))]
-        let enterprise_duplicate = {
+        #[cfg(target_os = "windows")]
+        let enterprise_duplicate = if crate::package_identity::is_enterprise() {
             match windows_enterprise_takeover::take_over_screenpipe_owners(focus_port, api_port)
                 .await
             {
@@ -680,6 +689,8 @@ async fn main() {
                     std::process::exit(1);
                 }
             }
+        } else {
+            false
         };
 
         let focus_response = reqwest::Client::new()
@@ -694,26 +705,26 @@ async fn main() {
             .send()
             .await;
 
-        #[cfg(all(target_os = "windows", feature = "enterprise-build"))]
+        #[cfg(target_os = "windows")]
         if enterprise_duplicate {
-            eprintln!("screenpipe: Enterprise is already running — focused existing window, exiting.");
+            eprintln!(
+                "screenpipe: Enterprise is already running — focused existing window, exiting."
+            );
             std::process::exit(0);
         }
 
         if let Ok(resp) = focus_response {
             if resp.status().is_success() {
-                #[cfg(not(all(target_os = "windows", feature = "enterprise-build")))]
-                {
+                if !cfg!(target_os = "windows") || !crate::package_identity::is_enterprise() {
                     eprintln!("screenpipe: another instance is already running — focused existing window, exiting.");
                     std::process::exit(0);
                 }
             } else if resp.status() == reqwest::StatusCode::CONFLICT {
-                #[cfg(not(all(target_os = "windows", feature = "enterprise-build")))]
-                {
-                // The control endpoint answered with Screenpipe's explicit
-                // cross-install rejection. Preserve that healthy instance;
-                // the bind path will report it instead of reclaiming its port.
-                crate::port_conflict::mark_healthy_control_server_present();
+                if !cfg!(target_os = "windows") || !crate::package_identity::is_enterprise() {
+                    // The control endpoint answered with Screenpipe's explicit
+                    // cross-install rejection. Preserve that healthy instance;
+                    // the bind path will report it instead of reclaiming its port.
+                    crate::port_conflict::mark_healthy_control_server_present();
                 }
             }
         }
@@ -976,10 +987,8 @@ async fn main() {
     // inside `.setup()`: a `block_on` there nests runtimes under
     // #[tokio::main] and panics ("Cannot start a runtime from within a
     // runtime"), killing the app at launch.
-    let initial_cloud_token = crate::auth_token::migrate_plaintext_token(
-        crate::config::app_data_dir(),
-    )
-    .await;
+    let initial_cloud_token =
+        crate::auth_token::migrate_plaintext_token(crate::config::app_data_dir()).await;
 
     let recording_state = RecordingState {
         server_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
@@ -2310,7 +2319,7 @@ async fn main() {
             if crate::dev_isolation::is_active() {
                 debug!("dev isolation active, skipping autostart registration");
             } else if crate::enterprise_persistence::installed() {
-                #[cfg(all(feature = "enterprise-build", target_os = "macos"))]
+                #[cfg(all(feature = "enterprise-support", target_os = "macos"))]
                 match enterprise_autostart::set_macos_employee_autostart(&app_handle, false) {
                     Ok(()) => {
                         info!("persistence: retired redundant employee startup registrations")
@@ -2319,7 +2328,7 @@ async fn main() {
                         "persistence: could not retire redundant startup registrations: {error}"
                     ),
                 }
-                #[cfg(all(feature = "enterprise-build", target_os = "windows"))]
+                #[cfg(all(feature = "enterprise-support", target_os = "windows"))]
                 match app_handle.autolaunch().disable() {
                     Ok(()) => info!("persistence: retired redundant Windows startup registration"),
                     Err(error) => warn!(
@@ -2570,7 +2579,7 @@ async fn main() {
             manual_handoff::install(app.handle())?;
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application");
 
     // Setup dock right-click menu (fallback for when tray is behind the notch)
@@ -2693,15 +2702,17 @@ async fn main() {
 
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => {
-                    #[cfg(feature = "enterprise-build")]
-                    match enterprise_autostart::launched_as_macos_login_item() {
-                        Ok(true) => {
-                            info!("autostart: ignored macOS login-item Reopen event");
-                            return;
-                        }
-                        Ok(false) => {}
-                        Err(error) => {
-                            warn!("autostart: could not inspect macOS Reopen event: {error}")
+                    #[cfg(feature = "enterprise-support")]
+                    if crate::package_identity::is_enterprise() {
+                        match enterprise_autostart::launched_as_macos_login_item() {
+                            Ok(true) => {
+                                info!("autostart: ignored macOS login-item Reopen event");
+                                return;
+                            }
+                            Ok(false) => {}
+                            Err(error) => {
+                                warn!("autostart: could not inspect macOS Reopen event: {error}")
+                            }
                         }
                     }
                     if manual_handoff::reopen(app_handle.app_handle(), "native_reopen") {

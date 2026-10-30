@@ -328,7 +328,7 @@ impl CaptureSession {
 
         screenpipe_engine::meeting_watcher::set_capture_stopped(false);
         info!("Capture session started successfully");
-        #[cfg(feature = "enterprise-build")]
+        #[cfg(feature = "enterprise-support")]
         crate::enterprise::recording_events::record(
             crate::enterprise::recording_events::State::Started,
         );
@@ -435,13 +435,13 @@ impl CaptureSession {
 
         info!("Capture session stopped");
         if failures.is_empty() {
-            #[cfg(feature = "enterprise-build")]
+            #[cfg(feature = "enterprise-support")]
             crate::enterprise::recording_events::record(
                 crate::enterprise::recording_events::State::Paused,
             );
             Ok(())
         } else {
-            #[cfg(feature = "enterprise-build")]
+            #[cfg(feature = "enterprise-support")]
             crate::enterprise::recording_events::record(
                 crate::enterprise::recording_events::State::Unknown,
             );

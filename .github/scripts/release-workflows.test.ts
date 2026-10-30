@@ -43,6 +43,42 @@ test("enterprise dispatch is mandatory after all consumer platforms, without wai
   expect(Object.values(app.jobs).some((job: any) => job.uses?.includes("release-enterprise.yml"))).toBe(false);
 });
 
+test("enterprise packages the verified shared application without another app compilation", () => {
+  expect(enterprise.on.workflow_dispatch.inputs.shared_build_run_id.required).toBe(true);
+  expect(enterprise.jobs["resolve-release"].steps.some((step: any) => step.name === "Verify shared build origin")).toBe(true);
+  for (const name of ["release-enterprise-windows", "release-enterprise-linux", "release-enterprise-macos"]) {
+    const job = enterprise.jobs[name];
+    const download = job.steps.find((step: any) => step.name === "Download shared compiled desktop");
+    expect(download.with["run-id"]).toBe("${{ inputs.shared_build_run_id }}");
+    expect(download.with["github-token"]).toBe("${{ github.token }}");
+    expect(job.permissions.actions).toBe("read");
+    expect(job.steps.some((step: any) => step.uses?.startsWith("tauri-apps/tauri-action"))).toBe(false);
+    expect(job.steps.some((step: any) => /\btauri build\b/.test(step.run ?? ""))).toBe(false);
+    expect(job.steps.some((step: any) => step.name === "Prepare Enterprise package from shared desktop")).toBe(true);
+  }
+  const shared = app.jobs["publish-tauri"].steps.find((step: any) => step.name === "Upload shared compiled desktop");
+  expect(shared.with.name).toBe("shared-desktop-${{ matrix.target }}");
+  expect(shared.if).toBeUndefined();
+  const steps = app.jobs["publish-tauri"].steps;
+  const captureIndex = steps.findIndex((step: any) => step.name === "Capture shared compiled desktop");
+  for (const [index, step] of steps.entries()) {
+    if (step.run?.includes("upload-release-artifacts.sh consumer")) expect(index).toBeLessThan(captureIndex);
+  }
+  const persistent = enterprise.jobs["release-enterprise-windows"].steps.find((step: any) => step.name === "Bundle persistent enterprise installer");
+  expect(persistent.run).toContain("bun run bundle:persistence-installer --config src-tauri/shared-build-bundle.conf.json");
+});
+
+test("manual packaging can recover an existing payload after a later consumer dispatch or upload failure", async () => {
+  const step = enterprise.jobs["resolve-release"].steps.find((step: any) => step.name === "Verify shared build origin");
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const verify = new AsyncFunction("github", "context", "process", step.with.script);
+  const source = { path: ".github/workflows/release-app.yml", head_branch: "main", event: "workflow_dispatch", status: "completed", conclusion: "failure" };
+  const github = { rest: { actions: { getWorkflowRun: async () => ({ data: source }) } } };
+  await verify(github, context, { env: { SHARED_BUILD_RUN_ID: "123" } });
+  source.head_branch = "untrusted-branch";
+  await expect(verify(github, context, { env: { SHARED_BUILD_RUN_ID: "123" } })).rejects.toThrow("Release App run from main");
+});
+
 for (const dryRun of [false, true]) {
   test(`record pending before dispatch and preserve exact revision/flags (dry run=${dryRun})`, async () => {
     const { github, calls } = api();
@@ -51,7 +87,7 @@ for (const dryRun of [false, true]) {
     expect(calls[0].args).toMatchObject({ sha, state: "pending", context: dryRun ? "Enterprise artifacts (dry run)" : "Enterprise artifacts" });
     expect(calls[1].args).toEqual({
       ...context.repo, workflow_id: "release-enterprise.yml", ref: "main",
-      inputs: { commit_hash: sha, version: "2.7.43", force_github_runners: "true", dry_run: String(dryRun) },
+      inputs: { commit_hash: sha, version: "2.7.43", shared_build_run_id: "123", force_github_runners: "true", dry_run: String(dryRun) },
     });
   });
 }
@@ -190,7 +226,7 @@ test("every platform waits for and downloads one finalized snapshot", () => {
   const finalize = prepare.runs.steps.find((step: any) => step.name === "Finalize and validate translations");
   expect(finalize.env.SCREENPIPE_I18N_MODE).toContain("'cached' || 'generate'");
   expect(finalize["continue-on-error"]).toBeUndefined();
-  expect(enterprise.jobs.localization.steps.find((step: any) => step.id === "localization").with["source-run-id"]).toBe("${{ inputs.localization_run_id }}");
+  expect(enterprise.jobs.localization.steps.find((step: any) => step.id === "localization").with["source-run-id"]).toBe("${{ inputs.localization_run_id || inputs.shared_build_run_id }}");
 });
 
 test("production packaging enables localization without changing development defaults", () => {

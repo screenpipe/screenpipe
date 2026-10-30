@@ -15,6 +15,8 @@ on:
       - .github/actions/refresh-windows-signing-trust/**
       - .github/scripts/release-workflows.test.ts
       - .github/scripts/enterprise-release.cjs
+      - .github/scripts/shared-desktop-build.ts
+      - .github/scripts/shared-desktop-build.test.ts
       - .github/actions/prepare-desktop-localization/**
       - apps/screenpipe-app-tauri/scripts/i18n/**
       - apps/screenpipe-app-tauri/scripts/build-production.ts
@@ -38,6 +40,8 @@ on:
       - .github/actions/refresh-windows-signing-trust/**
       - .github/scripts/release-workflows.test.ts
       - .github/scripts/enterprise-release.cjs
+      - .github/scripts/shared-desktop-build.ts
+      - .github/scripts/shared-desktop-build.test.ts
       - .github/actions/prepare-desktop-localization/**
       - apps/screenpipe-app-tauri/scripts/i18n/**
       - apps/screenpipe-app-tauri/scripts/build-production.ts
@@ -63,7 +67,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.10"
-      - run: bun test ./.github/scripts/release-workflows.test.ts ./.github/scripts/release-performance.test.ts ./.github/actions/install-windows-frontend-dependencies/prune-dependencies.test.ts
+      - run: bun test ./.github/scripts/release-workflows.test.ts ./.github/scripts/release-performance.test.ts ./.github/scripts/shared-desktop-build.test.ts ./.github/actions/install-windows-frontend-dependencies/prune-dependencies.test.ts
 
   localization-generation:
     if: github.event_name == 'workflow_dispatch'

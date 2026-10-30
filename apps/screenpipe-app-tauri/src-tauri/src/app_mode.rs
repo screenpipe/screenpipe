@@ -52,7 +52,7 @@ fn has_managed_config_marker() -> bool {
 }
 
 pub(crate) fn deployment_or_session_is_managed() -> bool {
-    cfg!(feature = "enterprise-build")
+    crate::package_identity::is_enterprise()
         || *MANAGED_DEPLOYMENT
         || MANAGED_SESSION.load(Ordering::SeqCst)
 }
@@ -60,7 +60,7 @@ pub(crate) fn deployment_or_session_is_managed() -> bool {
 pub(crate) fn for_settings(settings: &SettingsStore) -> bool {
     resolve_mode(
         &MANAGED_SESSION,
-        cfg!(feature = "enterprise-build"),
+        crate::package_identity::is_enterprise(),
         *MANAGED_DEPLOYMENT,
         settings,
     )
@@ -82,7 +82,7 @@ pub(crate) fn is_managed(app: &tauri::AppHandle) -> bool {
         Ok(Some(settings)) => for_settings(&settings),
         Ok(None) => {
             MANAGED_SESSION.load(Ordering::SeqCst)
-                || cfg!(feature = "enterprise-build")
+                || crate::package_identity::is_enterprise()
                 || *MANAGED_DEPLOYMENT
         }
         // A failed store read cannot downgrade managed enforcement.
@@ -150,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(not(feature = "enterprise-build"), not(target_os = "windows")))]
+    #[cfg(not(target_os = "windows"))]
     fn deployment_sources_are_resolved_in_isolated_processes() {
         // Each process gets fresh deployment/session statics and a task-owned
         // data directory. No test reads or changes the installed user's store.

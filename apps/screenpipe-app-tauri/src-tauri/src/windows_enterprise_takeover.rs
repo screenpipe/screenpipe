@@ -31,7 +31,6 @@ fn presence_name(control_port: u16, api_port: u16) -> String {
 /// The kernel releases the marker when the process truly exits, including on a
 /// crash, so Consumer cannot mistake a stale file or unhealthy HTTP endpoint
 /// for a live Enterprise instance.
-#[cfg(feature = "enterprise-build")]
 pub(crate) fn publish_enterprise_presence(control_port: u16, api_port: u16) -> Result<(), String> {
     use windows::core::HSTRING;
     use windows::Win32::System::Threading::CreateMutexW;
@@ -56,7 +55,6 @@ pub(crate) fn publish_enterprise_presence(control_port: u16, api_port: u16) -> R
 }
 
 /// Consumer must stop while the Enterprise build owns its session marker.
-#[cfg(not(feature = "enterprise-build"))]
 pub(crate) async fn enterprise_is_present(
     control_port: u16,
     api_port: u16,
@@ -177,6 +175,10 @@ fn process_executable(pid: u32) -> Result<PathBuf, String> {
 }
 
 fn executable_product_name(path: &Path) -> Result<Option<String>, String> {
+    if let Some(product_name) = crate::package_identity::product_name_for(path)? {
+        return Ok(Some(product_name));
+    }
+
     use std::ffi::c_void;
 
     #[link(name = "version")]
@@ -712,7 +714,6 @@ mod tests {
         let _ = std::io::read_to_string(std::io::stdin());
     }
 
-    #[cfg(not(feature = "enterprise-build"))]
     #[tokio::test]
     async fn consumer_blocks_until_live_enterprise_presence_exits() {
         use std::io::{BufRead, BufReader};
@@ -747,7 +748,6 @@ mod tests {
         assert!(!enterprise_is_present(control_port, api_port).await.unwrap());
     }
 
-    #[cfg(not(feature = "enterprise-build"))]
     #[tokio::test]
     async fn consumer_allows_screenpipe_owner_without_product_metadata() {
         let control_port = unused_port();
@@ -765,6 +765,28 @@ mod tests {
         assert!(owner.try_wait().unwrap().is_none());
         owner.kill().unwrap();
         let _ = owner.wait().unwrap();
+    }
+
+    #[test]
+    fn shared_executable_uses_installed_package_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let executable = temp.path().join("screenpipe-app.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.enterprise.conf.json")).unwrap();
+        let identity = crate::package_identity::PackageIdentity {
+            identifier: "screenpi.pe.enterprise".into(),
+            product_name: "screenpipe enterprise".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            updater: config["plugins"]["updater"].clone(),
+            deep_link: config["plugins"]["deep-link"].clone(),
+        };
+        let metadata = temp.path().join(crate::package_identity::METADATA_FILE);
+        std::fs::write(&metadata, serde_json::to_vec(&identity).unwrap()).unwrap();
+        assert_eq!(executable_product_name(&executable).unwrap().as_deref(), Some(ENTERPRISE_PRODUCT_NAME));
+        std::fs::write(&metadata, "{").unwrap();
+        assert!(executable_product_name(&executable).unwrap_err().contains("parse"));
+        std::fs::remove_file(metadata).unwrap();
+        assert_ne!(executable_product_name(&executable).unwrap().as_deref(), Some(ENTERPRISE_PRODUCT_NAME));
     }
 
     fn remove_version_resource(path: &Path) {

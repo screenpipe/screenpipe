@@ -17,13 +17,19 @@ struct PersistentUpdateRequest {
     signature: String,
 }
 
-#[cfg(all(feature = "enterprise-build", target_os = "macos"))]
+#[cfg(all(feature = "enterprise-support", target_os = "macos"))]
 pub fn installed() -> bool {
+    if !crate::package_identity::is_enterprise() {
+        return false;
+    }
     Path::new("/Library/Application Support/screenpipe/persistence/enabled").is_file()
 }
 
-#[cfg(all(feature = "enterprise-build", target_os = "windows"))]
+#[cfg(all(feature = "enterprise-support", target_os = "windows"))]
 pub fn installed() -> bool {
+    if !crate::package_identity::is_enterprise() {
+        return false;
+    }
     let Some(program_data) = std::env::var_os("ProgramData") else {
         return false;
     };
@@ -44,8 +50,8 @@ pub fn installed() -> bool {
 }
 
 #[cfg(not(any(
-    all(feature = "enterprise-build", target_os = "macos"),
-    all(feature = "enterprise-build", target_os = "windows")
+    all(feature = "enterprise-support", target_os = "macos"),
+    all(feature = "enterprise-support", target_os = "windows")
 )))]
 pub fn installed() -> bool {
     false
