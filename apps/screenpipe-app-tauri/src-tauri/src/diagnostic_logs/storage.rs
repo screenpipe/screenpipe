@@ -248,9 +248,12 @@ mod tests {
         let report = collect(root.path(), Some(4));
         assert!(report.complete);
         assert_eq!(report.files, 5);
-        assert_eq!(report.bytes, 129);
+        assert_eq!(report.bytes, 114 + b"password=hunter2".len() as u64);
         assert_eq!(report.categories["sqlite_wal"].bytes, 29);
-        assert_eq!(report.categories["parquet"].bytes, 15);
+        assert_eq!(
+            report.categories["parquet"].bytes,
+            b"password=hunter2".len() as u64
+        );
         assert!(report.volume_total_bytes.is_some());
         let json = serde_json::to_string(&report).unwrap();
         assert!(!json.contains("hunter2"));
