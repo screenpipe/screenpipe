@@ -48,7 +48,7 @@ use windows::{
         SizeInt32,
     },
     Win32::{
-        Foundation::{BOOL, HMODULE, LPARAM, RECT, TRUE},
+        Foundation::{BOOL, HMODULE, HWND, LPARAM, RECT, TRUE},
         Graphics::{
             Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP},
             Direct3D11::{
@@ -400,7 +400,6 @@ impl PersistentCapture {
     /// Create and start a persistent WGC capture for the given monitor ID.
     pub fn new(monitor_id: u32) -> Result<Self> {
         let h_monitor = find_hmonitor(monitor_id)?;
-        let d3d = acquire_d3d()?;
 
         let interop = factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
             .map_err(|e| anyhow!("failed to get GraphicsCaptureItem factory: {}", e))?;
@@ -409,6 +408,24 @@ impl PersistentCapture {
                 .CreateForMonitor(h_monitor)
                 .map_err(|e| anyhow!("CreateForMonitor failed: {}", e))?
         };
+        Self::from_item(item, false)
+    }
+
+    /// Capture only this window's compositor surface, on every Windows architecture.
+    /// Native item dimensions avoid applying process DPI scaling to physical pixels.
+    pub(crate) fn new_window(window_id: u32) -> Result<Self> {
+        let interop = factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
+            .map_err(|e| anyhow!("failed to get GraphicsCaptureItem factory: {}", e))?;
+        let item: GraphicsCaptureItem = unsafe {
+            interop
+                .CreateForWindow(HWND(window_id as usize as *mut std::ffi::c_void))
+                .map_err(|e| anyhow!("CreateForWindow failed: {}", e))?
+        };
+        Self::from_item(item, true)
+    }
+
+    fn from_item(item: GraphicsCaptureItem, capture_initial_frame: bool) -> Result<Self> {
+        let d3d = acquire_d3d()?;
         let item_size = item
             .Size()
             .map_err(|e| anyhow!("GraphicsCaptureItem::Size failed: {}", e))?;
@@ -424,13 +441,20 @@ impl PersistentCapture {
         )
         .map_err(|e| d3d.describe_err("CreateFreeThreaded", e))?;
 
+        // A newly created window session can emit its only frame before its
+        // caller starts waiting. Retain that first frame for a static window;
+        // ordinary persistent monitor sessions remain demand-driven as before.
+        let mut demand = CopyDemand::default();
+        if capture_initial_frame {
+            demand.request();
+        }
         let latest: Arc<(Mutex<LatestFrame>, Condvar)> = Arc::new((
             Mutex::new(LatestFrame {
                 texture: None,
                 width: 0,
                 height: 0,
                 pool_size: (item_size.Width, item_size.Height),
-                demand: CopyDemand::default(),
+                demand,
             }),
             Condvar::new(),
         ));

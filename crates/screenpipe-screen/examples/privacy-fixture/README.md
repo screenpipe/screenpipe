@@ -61,9 +61,11 @@ Stop-Process -Id $allowed.Id, $blocked.Id
 Use separate output directories for baseline, include, exclude, empty, and no-policy
 runs. The shared probe checks saved JPEGs on Windows too. The native fixture
 implements normal Win32 paint/print messages; accelerated application capture
-must also be checked with a real browser window. On x86_64, isolated capture uses
-WGC. ARM64 bypasses xcap's screen-copy fallback with PrintWindow only; applications
-that do not render through PrintWindow can yield unavailable or blank content.
+must also be checked with a real browser window. Isolated capture uses the native
+WGC window backend on every Windows architecture, with physical capture-item
+dimensions and software D3D fallback. A new session retains its initial frame so a
+static window can be captured without waiting for another compositor change.
+Capture errors withhold the screenshot instead of falling back to monitor pixels.
 
 Unsupported window-isolation backends must withhold screenshots: macOS before
 14, Wayland window selection, or X11 without Composite. The production event loop
