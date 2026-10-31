@@ -151,7 +151,7 @@ pub async fn list_pipes(
                 obj
             })
             .collect();
-        Json(json!({ "data": data, "total": total }))
+        Json(json!({ "data": data, "total": total, "agent_executors": mgr.available_executors() }))
     } else {
         let pipes = mgr.list_pipes().await;
         let total = pipes.len();
@@ -172,9 +172,13 @@ pub async fn list_pipes(
                     obj
                 })
                 .collect();
-            Json(json!({ "data": data, "total": total }))
+            Json(
+                json!({ "data": data, "total": total, "agent_executors": mgr.available_executors() }),
+            )
         } else {
-            Json(json!({ "data": pipes, "total": total }))
+            Json(
+                json!({ "data": pipes, "total": total, "agent_executors": mgr.available_executors() }),
+            )
         }
     }
 }
