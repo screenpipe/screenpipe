@@ -347,15 +347,14 @@ mod tests {
         assert!(!report.contains("private-missing-root"));
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn storage_support_preserves_large_byte_counts_through_redaction() {
         let root = tempfile::tempdir().unwrap();
-        // Sparse fixture: account for a single 300 GiB file using metadata,
+        // Sparse fixture: account for a single 5 GiB file using metadata,
         // without allocating, reading or copying its logical contents.
         let path = root.path().join("db.sqlite-wal");
         let file = std::fs::File::create(&path).unwrap();
-        let size = 300_u64 * 1024 * 1024 * 1024;
+        let size = 5_u64 * 1024 * 1024 * 1024;
         file.set_len(size).unwrap();
         let report = collect_redacted_from_dirs_at_root(&[], root.path().to_path_buf())
             .await
