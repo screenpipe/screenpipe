@@ -32,6 +32,7 @@ import {
 } from "./telemetry";
 import { createCallObserver, currentMcpRequestId, observeSearchResult } from "./call-observation";
 import { formatSearchHit, searchContentCap, searchResultHeader } from "./search-result";
+import { CHAT_SEARCH_TOOL, searchChats } from "./chat-search";
 import { PKG_VERSION } from "./version";
 import { BUNDLED_SKILLS_TOOL, readBundledSkills } from "./bundled-skills";
 import { normalizeTimeFields } from "./time-normalization";
@@ -313,10 +314,10 @@ function createMcpServer(screenpipePort: number): Server {
     client,
   );
 
-  s.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...TOOLS, BUNDLED_SKILLS_TOOL] }));
+  s.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...TOOLS, CHAT_SEARCH_TOOL, BUNDLED_SKILLS_TOOL] }));
 
   const observeCall = createCallObserver({
-    tools: [...TOOLS.map(tool => tool.name), BUNDLED_SKILLS_TOOL.name], transport: "http", client,
+    tools: [...TOOLS.map(tool => tool.name), CHAT_SEARCH_TOOL.name, BUNDLED_SKILLS_TOOL.name], transport: "http", client,
     send: async (payload, signal) => {
       const response = await fetchAPI("/internal/telemetry/mcp-call", { method: "POST", body: JSON.stringify(payload), signal });
       if (!response.ok) throw new Error("Telemetry unavailable");
@@ -326,6 +327,7 @@ function createMcpServer(screenpipePort: number): Server {
     const { name, arguments: args } = request.params;
     if (name === BUNDLED_SKILLS_TOOL.name) return readBundledSkills(args);
     if (!args) throw Object.assign(new Error("Missing arguments"), { status: 400 });
+    if (name === CHAT_SEARCH_TOOL.name) return searchChats(args, fetchAPI);
     if (name === "search_content") return handleSearchContent(fetchAPI, args, qualifiedValue);
     throw Object.assign(new Error(`Unknown tool: ${name}`), { status: 400 });
   }));

@@ -32,6 +32,7 @@ import {
 } from "./qualified-value";
 import { discoverTeamConfig } from "./team-config";
 import { teamFrameContent, teamFramePath } from "./team-frame";
+import { CHAT_SEARCH_TOOL, searchChats } from "./chat-search";
 import { WORKFLOW_TOOLS, readWorkflowTool, frameAutomationContent } from "./workflow-tools";
 import { PKG_VERSION } from "./version";
 import { BUNDLED_SKILLS_TOOL, readBundledSkills } from "./bundled-skills";
@@ -325,6 +326,7 @@ const server = new Server(
 // Tools
 // ---------------------------------------------------------------------------
 const TOOLS: Tool[] = [
+  CHAT_SEARCH_TOOL,
   ...WORKFLOW_TOOLS,
   BUNDLED_SKILLS_TOOL,
   {
@@ -2276,6 +2278,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => observeCall(r
           content: [{ type: "text", text: `Results: ${results.length}\n\n${formatted.join("\n---\n")}` }],
         };
       }
+
+      case "search-chats":
+        return await searchChats(args, callAPI);
 
       case "list-workflows":
       case "get-workflow":
