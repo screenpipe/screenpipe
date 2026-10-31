@@ -26,6 +26,7 @@ pub struct MastraExecutor {
 struct RunRequest<'a> {
     #[serde(rename = "protocol_version")]
     protocol_version: u8,
+    execution_id: String,
     prompt: &'a str,
     system_prompt: Option<&'a str>,
     model: &'a str,
@@ -210,8 +211,17 @@ impl AgentExecutor for MastraExecutor {
             None | Some("screenpipe-cloud" | "pi") => "screenpipe",
             Some(provider) => provider,
         };
+        if executor_config.is_some_and(|config| !config.is_object()) {
+            anyhow::bail!("Mastra executor configuration must be an object");
+        }
         let request = RunRequest {
             protocol_version: 1,
+            execution_id: executor_config
+                .and_then(|config| config.get("_screenpipeExecutionId"))
+                .and_then(|id| id.as_str())
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             prompt,
             system_prompt: pipe_system_prompt,
             model,
@@ -436,6 +446,55 @@ mod tests {
             std::fs::read_to_string(dir.path().join("auth.txt")).unwrap(),
             "sp_pipe_fixture|3131|"
         );
+    }
+
+    #[tokio::test]
+    async fn forwards_delivery_identity_across_attempts_but_gives_new_runs_distinct_ids() {
+        let (dir, executor) = fixture(&format!("cat > request.json\n{COMPLETE}"));
+        let mut ids = Vec::new();
+        for (index, delivery) in [
+            Some("delivery:source-one"),
+            Some("delivery:source-one"),
+            None,
+            None,
+        ]
+        .iter()
+        .enumerate()
+        {
+            let config = delivery.map(|id| serde_json::json!({"_screenpipeExecutionId": id}));
+            let owner = format!("pipe:fixture:{index}");
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+            let result = executor
+                .run_streaming(
+                    "same accepted input",
+                    "fixture-model",
+                    dir.path(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    tx,
+                    false,
+                    None,
+                    None,
+                    None,
+                    Some(&owner),
+                    config.as_ref(),
+                )
+                .await
+                .unwrap();
+            assert!(result.success, "{}", result.stderr);
+            let request: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(dir.path().join("request.json")).unwrap())
+                    .unwrap();
+            ids.push(request["executionId"].as_str().unwrap().to_owned());
+            assert_eq!(request["sessionOwner"], owner);
+        }
+        assert_eq!(ids[0], "delivery:source-one");
+        assert_eq!(ids[0], ids[1]);
+        assert_ne!(ids[2], ids[3]);
+        assert!(uuid::Uuid::parse_str(&ids[2]).is_ok());
+        assert!(uuid::Uuid::parse_str(&ids[3]).is_ok());
     }
 
     #[tokio::test]

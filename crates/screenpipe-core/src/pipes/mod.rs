@@ -2913,6 +2913,7 @@ fn pipe_executor_config(
     agent: &str,
     config: Option<serde_json::Value>,
     subagent: bool,
+    source_delivery_id: Option<&str>,
 ) -> Option<serde_json::Value> {
     if agent != "mastra" {
         return config;
@@ -2920,6 +2921,16 @@ fn pipe_executor_config(
     let mut value = config.unwrap_or_else(|| serde_json::json!({}));
     if let Some(object) = value.as_object_mut() {
         object.insert("subagent".to_string(), serde_json::Value::Bool(subagent));
+        // The watcher reuses this durable delivery after a lost completion.
+        // Preset settings cannot override the scheduler-owned retry identity.
+        let execution_id = source_delivery_id
+            .filter(|id| !id.is_empty())
+            .map(|id| format!("delivery:{id}"))
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        object.insert(
+            "_screenpipeExecutionId".to_string(),
+            serde_json::Value::String(execution_id),
+        );
     }
     Some(value)
 }
@@ -4586,8 +4597,16 @@ impl PipeManager {
                         .await;
                 }
             }
-            let run_executor_config =
-                pipe_executor_config(&run_agent, run_executor_config, config.subagent);
+            let run_executor_config = pipe_executor_config(
+                &run_agent,
+                run_executor_config,
+                config.subagent,
+                event_context
+                    .as_ref()
+                    .filter(|event| event.name == "connection_trigger")
+                    .and_then(|event| event.data.get("delivery_id"))
+                    .and_then(|id| id.as_str()),
+            );
             let run_result = if let Some(error) = permissions_error {
                 drop(line_tx);
                 Ok(Err(error))
@@ -5286,8 +5305,16 @@ impl PipeManager {
                         .await;
                 }
             }
-            let run_executor_config =
-                pipe_executor_config(&run_agent, run_executor_config, config.subagent);
+            let run_executor_config = pipe_executor_config(
+                &run_agent,
+                run_executor_config,
+                config.subagent,
+                event_context
+                    .as_ref()
+                    .filter(|event| event.name == "connection_trigger")
+                    .and_then(|event| event.data.get("delivery_id"))
+                    .and_then(|id| id.as_str()),
+            );
             let run_result = if let Some(error) = permissions_error {
                 drop(line_tx);
                 Ok(Err(error))
@@ -7134,8 +7161,16 @@ impl PipeManager {
                     let token_registry_ref = token_registry.clone();
                     let mcp_session_access_ref = mcp_session_access.clone();
                     let effort = config.effort;
-                    let executor_config =
-                        pipe_executor_config(&run_agent, executor_config, config.subagent);
+                    let executor_config = pipe_executor_config(
+                        &run_agent,
+                        executor_config,
+                        config.subagent,
+                        event_triggered
+                            .get(name)
+                            .filter(|event| event.name == "connection_trigger")
+                            .and_then(|event| event.data.get("delivery_id"))
+                            .and_then(|id| id.as_str()),
+                    );
                     let pipe_timeout = config.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
                     let semaphore = execution_semaphore.clone();
                     let event_sem = event_semaphore.clone();
@@ -9542,6 +9577,31 @@ mod tests {
         async fn remove_token(&self, token: &str) {
             self.0.lock().unwrap().remove(token);
         }
+    }
+
+    #[test]
+    fn mastra_delivery_identity_overrides_presets_and_survives_fallback_attempts() {
+        let preset = serde_json::json!({"_screenpipeExecutionId": "forged", "custom": true});
+        let first =
+            pipe_executor_config("mastra", Some(preset.clone()), true, Some("source-one")).unwrap();
+        let retry = pipe_executor_config("mastra", None, false, Some("source-one")).unwrap();
+        assert_eq!(first["_screenpipeExecutionId"], "delivery:source-one");
+        assert_eq!(
+            first["_screenpipeExecutionId"],
+            retry["_screenpipeExecutionId"]
+        );
+        assert_eq!(first["custom"], true);
+        let timer = pipe_executor_config("mastra", Some(preset.clone()), false, None).unwrap();
+        let next_timer = pipe_executor_config("mastra", None, false, None).unwrap();
+        assert_ne!(
+            timer["_screenpipeExecutionId"],
+            next_timer["_screenpipeExecutionId"]
+        );
+        assert_ne!(timer["_screenpipeExecutionId"], "forged");
+        assert_eq!(
+            pipe_executor_config("pi", Some(preset.clone()), false, Some("source-one")),
+            Some(preset)
+        );
     }
 
     #[tokio::test]
