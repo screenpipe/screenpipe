@@ -761,7 +761,7 @@ async fn insert_audio(
     device_id: &str,
     audio: &AudioRow,
 ) -> Result<bool, GatewayError> {
-    let sid = sync_id(device_id, "audio", audio.transcription_id);
+    let sid = format!("{device_id}:audio_segment:{}", audio.segment_id);
     let exists: Option<(i64,)> =
         sqlx::query_as("SELECT 1 FROM audio_transcriptions WHERE sync_id = ?1 LIMIT 1")
             .bind(&sid)
@@ -790,15 +790,28 @@ async fn insert_audio(
         }
         None => None,
     };
-    let chunk_id: i64 = sqlx::query_scalar(
-        r#"INSERT INTO audio_chunks (file_path, sync_id, machine_id)
-           VALUES ('gw://' || ?1, ?1, ?2)
-           RETURNING id"#,
-    )
-    .bind(&sid)
-    .bind(device_id)
-    .fetch_one(&mut **conn)
-    .await?;
+    let chunk_sid = audio
+        .audio_chunk_id
+        .map(|id| sync_id(device_id, "audio_chunk", id))
+        .unwrap_or_else(|| sid.clone());
+    let chunk_id: i64 =
+        match sqlx::query_scalar::<_, i64>("SELECT id FROM audio_chunks WHERE sync_id = ?1")
+            .bind(&chunk_sid)
+            .fetch_optional(&mut **conn)
+            .await?
+        {
+            Some(id) => id,
+            None => {
+                sqlx::query_scalar(
+                    r#"INSERT INTO audio_chunks (file_path, sync_id, machine_id)
+               VALUES ('gw://' || ?1, ?1, ?2) RETURNING id"#,
+                )
+                .bind(&chunk_sid)
+                .bind(device_id)
+                .fetch_one(&mut **conn)
+                .await?
+            }
+        };
     sqlx::query(
         r#"INSERT INTO audio_transcriptions
            (audio_chunk_id, offset_index, timestamp, transcription, device, is_input_device,
@@ -1050,7 +1063,10 @@ mod tests {
                 })],
             }],
             &[AudioRow {
-                transcription_id: 1,
+                segment_id: format!("audio_transcription:{}", 1),
+                legacy_record_id: None,
+                audio_chunk_id: Some(1),
+                meeting_id: None,
                 timestamp: "2026-07-22T10:00:30Z".to_string(),
                 transcription: format!("{text} spoken aloud"),
                 speaker: Some("alice".to_string()),
@@ -1107,6 +1123,124 @@ mod tests {
         .await
         .unwrap();
         (ingestor, db, src)
+    }
+
+    #[tokio::test]
+    async fn audio_segments_sharing_a_chunk_survive_legacy_replay_and_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = test_db(&dir).await;
+        let src = Arc::new(S3BlobSource::from_store(Arc::new(InMemory::new()), None));
+        let make_ingestor = || {
+            Ingestor::new(
+                src.clone(),
+                db.clone(),
+                "lic-1".into(),
+                dir.path().join("snapshots"),
+            )
+        };
+        let ingestor = make_ingestor().await.unwrap();
+        let segments = ["first spoken segment", "second spoken segment"];
+        let current: Vec<_> = segments
+            .iter()
+            .enumerate()
+            .map(|(id, text)| {
+                AudioRow::from_search_result(
+                    Some(format!("audio_transcription:{id}")),
+                    Some(7),
+                    None,
+                    "2026-07-22T10:00:00Z".into(),
+                    (*text).into(),
+                    None,
+                    Some("Mic".into()),
+                )
+            })
+            .collect();
+        let current =
+            screenpipe_telemetry_wire::build_jsonl("dev-a", "Mac", &[], &current, &[], &[], &[]);
+        src.put_for_tests(
+            &direct_batch_key("lic-1", "dev-a", "current"),
+            current.clone(),
+        )
+        .await
+        .unwrap();
+        let legacy = segments
+            .iter()
+            .map(|text| {
+                format!(
+                    "{}\n",
+                    serde_json::json!({
+                        "kind": "audio", "device_id": "dev-b", "device_label": "Mac",
+                        "transcription_id": 7, "timestamp": "2026-07-22T10:00:00Z",
+                        "transcription": text, "device": "Mic"
+                    })
+                )
+            })
+            .collect::<String>();
+        src.put_for_tests(
+            &direct_batch_key("lic-1", "dev-b", "legacy"),
+            legacy.as_bytes().to_vec(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ingestor.run_once().await.unwrap().lines_unparseable, 0);
+        drop(ingestor);
+        let ingestor = make_ingestor().await.unwrap();
+        src.put_for_tests(
+            &direct_batch_key("lic-1", "dev-a", "current-replay"),
+            current,
+        )
+        .await
+        .unwrap();
+        // A new object after restart carries the same segments, normalized to
+        // the new wire format. Neither a replay nor a shared chunk loses speech.
+        let canonical = parse_jsonl(legacy.as_bytes())
+            .records
+            .iter()
+            .map(|record| format!("{}\n", serde_json::to_string(record).unwrap()))
+            .collect::<String>();
+        src.put_for_tests(
+            &direct_batch_key("lic-1", "dev-b", "canonical-replay"),
+            canonical.into_bytes(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ingestor.run_once().await.unwrap().lines_unparseable, 0);
+        let counts: (i64, i64) = sqlx::query_as(
+            "SELECT COUNT(*), COUNT(DISTINCT audio_chunk_id) FROM audio_transcriptions",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        // Current records share one known chunk. Legacy records retain two
+        // distinct segments without inventing a chunk relationship.
+        assert_eq!(counts, (4, 3));
+        let found = db
+            .search_audio_ordered(
+                "spoken",
+                10,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &[],
+                screenpipe_db::Order::Ascending,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            found.len(),
+            4,
+            "all current and legacy segments remain searchable after restart and replay"
+        );
+        let texts: std::collections::HashSet<_> =
+            found.iter().map(|row| row.transcription.as_str()).collect();
+        assert_eq!(texts, segments.into_iter().collect());
+        db.close().await;
     }
 
     #[tokio::test]

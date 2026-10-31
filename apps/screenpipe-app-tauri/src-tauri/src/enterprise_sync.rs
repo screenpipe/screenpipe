@@ -133,11 +133,29 @@ mod imp {
 
     #[derive(Debug, Deserialize)]
     struct LocalAudio {
+        segment_id: Option<String>,
+        audio_chunk_id: Option<i64>,
+        meeting_id: Option<i64>,
         chunk_id: i64,
         transcription: String,
         timestamp: chrono::DateTime<chrono::Utc>,
         device_name: String,
         speaker: Option<LocalSpeaker>,
+    }
+
+    impl From<LocalAudio> for AudioRow {
+        fn from(row: LocalAudio) -> Self {
+            AudioRow::from_search_result(
+                row.segment_id,
+                row.audio_chunk_id
+                    .or_else(|| (row.chunk_id > 0).then_some(row.chunk_id)),
+                row.meeting_id,
+                row.timestamp.to_rfc3339(),
+                row.transcription,
+                row.speaker.and_then(|s| s.name).filter(|s| !s.is_empty()),
+                Some(row.device_name).filter(|s| !s.is_empty()),
+            )
+        }
     }
 
     #[derive(Debug, Deserialize)]
@@ -849,13 +867,7 @@ mod imp {
             let mut out = Vec::with_capacity(body.data.len());
             for item in body.data {
                 if let LocalSearchItem::Audio(a) = item {
-                    out.push(AudioRow {
-                        transcription_id: a.chunk_id,
-                        timestamp: a.timestamp.to_rfc3339(),
-                        transcription: a.transcription,
-                        speaker: a.speaker.and_then(|s| s.name).filter(|s| !s.is_empty()),
-                        device: Some(a.device_name).filter(|s| !s.is_empty()),
-                    });
+                    out.push(AudioRow::from(a));
                 }
             }
             out.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
@@ -2542,6 +2554,126 @@ mod imp {
 
     #[cfg(test)]
     pub(crate) mod device_id_tests {
+        #[tokio::test]
+        async fn protected_audio_exports_use_the_same_segment_and_chunk_schema() {
+            let dir = tempfile::tempdir().unwrap();
+            let db = std::sync::Arc::new(
+                screenpipe_db::DatabaseManager::new(
+                    dir.path().join("db.sqlite").to_str().unwrap(),
+                    Default::default(),
+                )
+                .await
+                .unwrap(),
+            );
+            db.configure_release(&screenpipe_db::privacy_release::ReleasePolicy {
+                identity: "audio-schema-test".into(),
+                text: true,
+                images: false,
+            })
+            .await
+            .unwrap();
+            db.execute_raw_sql_write(
+                "INSERT INTO audio_chunks(id,file_path) VALUES(7,'test.wav');
+                 INSERT INTO audio_transcriptions(id,audio_chunk_id,offset_index,timestamp,transcription,device)
+                 VALUES(21,7,0,'2026-07-22T10:00:00Z','first segment','Mic'),
+                       (22,7,0,'2026-07-22T10:00:00Z','second segment','Mic');",
+            ).await.unwrap();
+            for job in db.release_pending("audio", 10).await.unwrap() {
+                assert!(db.publish_release(&job, &job.values).await.unwrap());
+            }
+            let protected = db.protected_reads().await.unwrap();
+            let page = protected
+                .release_export_page("audio", 0, "2026-07-01T00:00:00Z", 10)
+                .await
+                .unwrap();
+            let rows: Vec<super::AudioRow> = serde_json::from_value(page.rows.clone()).unwrap();
+            assert_eq!(rows.len(), 2);
+            assert!(rows.iter().all(|row| row.audio_chunk_id == Some(7)));
+            assert_ne!(rows[0].segment_id, rows[1].segment_id);
+            assert!(page
+                .rows
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row.get("transcription_id").is_none()));
+            let refreshed = db
+                .refresh_release_export_selection("audio", &["21".into(), "22".into()])
+                .await
+                .unwrap();
+            let refreshed: Vec<super::AudioRow> = serde_json::from_value(refreshed).unwrap();
+            assert_eq!(refreshed.len(), 2);
+            assert!(refreshed.iter().all(|row| row.audio_chunk_id == Some(7)));
+            let searched = protected
+                .search_audio_ordered(
+                    "",
+                    10,
+                    0,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    &[],
+                    screenpipe_db::Order::Ascending,
+                )
+                .await
+                .unwrap();
+            let mut api_ids = std::collections::BTreeSet::new();
+            for audio in searched {
+                let content = screenpipe_engine::routes::search::search_result_to_content_item(
+                    &screenpipe_db::SearchResult::Audio(audio),
+                    None,
+                );
+                let item: super::LocalSearchItem =
+                    serde_json::from_value(serde_json::to_value(content).unwrap()).unwrap();
+                let super::LocalSearchItem::Audio(audio) = item else {
+                    panic!("expected an audio API result");
+                };
+                let exported: super::AudioRow = audio.into();
+                assert_eq!(exported.audio_chunk_id, Some(7));
+                api_ids.insert(exported.segment_id);
+            }
+            assert_eq!(
+                api_ids,
+                rows.iter().map(|row| row.segment_id.clone()).collect()
+            );
+            db.close().await;
+        }
+
+        #[test]
+        fn audio_export_separates_segment_chunk_and_meeting_identity() {
+            let base = serde_json::json!({
+                "segment_id": "audio_transcription:21", "audio_chunk_id": 7,
+                "chunk_id": 7, "meeting_id": null,
+                "timestamp": "2026-07-22T10:00:00Z", "transcription": "spoken segment",
+                "device_name": "Mic", "speaker": null
+            });
+            let first: super::LocalAudio = serde_json::from_value(base.clone()).unwrap();
+            let first: super::AudioRow = first.into();
+            let mut next = base;
+            next["segment_id"] = serde_json::json!("audio_transcription:22");
+            let next: super::LocalAudio = serde_json::from_value(next).unwrap();
+            let next: super::AudioRow = next.into();
+            assert_eq!(first.audio_chunk_id, next.audio_chunk_id);
+            assert_ne!(first.segment_id, next.segment_id);
+            let live: super::LocalAudio = serde_json::from_value(serde_json::json!({
+                "segment_id": "meeting_transcript:21", "audio_chunk_id": null,
+                "chunk_id": -21, "meeting_id": 42,
+                "timestamp": "2026-07-22T10:00:00Z", "transcription": "meeting segment",
+                "device_name": "Mic", "speaker": null
+            }))
+            .unwrap();
+            let live: super::AudioRow = live.into();
+            assert_eq!(live.meeting_id, Some(42));
+            assert_eq!(live.audio_chunk_id, None);
+            assert_ne!(live.segment_id, first.segment_id);
+            let canonical = serde_json::to_value(live).unwrap();
+            assert!(canonical.get("transcription_id").is_none());
+        }
+
         use super::{
             choose_device_id, classify_failed_enterprise_response, credential_authorizes_policy,
             enterprise_license_hash, exact_frame_url, explicitly_rejects_authorization,

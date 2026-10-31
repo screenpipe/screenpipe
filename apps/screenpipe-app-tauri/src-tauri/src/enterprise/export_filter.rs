@@ -225,7 +225,13 @@ impl ExportRows<'_> {
         })
         .await?;
         refresh(self.audio, db, "audio", |r| {
-            (r.transcription_id.to_string(), r.timestamp.clone())
+            (
+                r.segment_id
+                    .strip_prefix("audio_transcription:")
+                    .unwrap_or(&r.segment_id)
+                    .to_owned(),
+                r.timestamp.clone(),
+            )
         })
         .await?;
         refresh(self.ui, db, "input", |r| {
@@ -281,12 +287,10 @@ impl ExportRows<'_> {
             },
         )
         .await?;
-        // The local audio API identifies ordinary audio by chunk + timestamp,
-        // and live meeting segments by a negative segment ID.
         report.audio = filter_current_rows(
             self.audio,
             PAGE_LIMIT,
-            |r| (r.transcription_id, r.timestamp.clone()),
+            |r| (r.segment_id.clone(), r.timestamp.clone()),
             |r| r.timestamp.as_str(),
             |since, offset, limit| async move {
                 local.fetch_audio_since(Some(&since), offset, limit).await

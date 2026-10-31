@@ -225,6 +225,7 @@ pub enum ContentType {
 
 #[derive(FromRow)]
 pub struct AudioResultRaw {
+    pub transcription_segment_id: i64,
     pub audio_chunk_id: i64,
     pub transcription: String,
     pub timestamp: DateTime<Utc>,
@@ -501,6 +502,7 @@ pub enum DeviceType {
 
 #[derive(OaSchema, Debug, Serialize, Deserialize)]
 pub struct AudioResult {
+    pub segment_id: String,
     pub audio_chunk_id: i64,
     pub transcription: String,
     pub timestamp: DateTime<Utc>,

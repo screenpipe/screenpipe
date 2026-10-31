@@ -318,16 +318,7 @@ mod imp {
                 .await?
                 .into_iter()
                 .filter_map(|item| match item {
-                    LocalSearchItem::Audio(row) => Some(AudioRow {
-                        transcription_id: row.chunk_id,
-                        timestamp: row.timestamp.to_rfc3339(),
-                        transcription: row.transcription,
-                        speaker: row
-                            .speaker
-                            .and_then(|speaker| speaker.name)
-                            .and_then(nonempty),
-                        device: nonempty(row.device_name),
-                    }),
+                    LocalSearchItem::Audio(row) => Some(AudioRow::from(row)),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
@@ -502,11 +493,31 @@ mod imp {
 
     #[derive(Debug, Deserialize)]
     struct LocalAudio {
+        segment_id: Option<String>,
+        audio_chunk_id: Option<i64>,
+        meeting_id: Option<i64>,
         chunk_id: i64,
         transcription: String,
         timestamp: DateTime<Utc>,
         device_name: String,
         speaker: Option<LocalSpeaker>,
+    }
+
+    impl From<LocalAudio> for AudioRow {
+        fn from(row: LocalAudio) -> Self {
+            AudioRow::from_search_result(
+                row.segment_id,
+                row.audio_chunk_id
+                    .or_else(|| (row.chunk_id > 0).then_some(row.chunk_id)),
+                row.meeting_id,
+                row.timestamp.to_rfc3339(),
+                row.transcription,
+                row.speaker
+                    .and_then(|speaker| speaker.name)
+                    .and_then(nonempty),
+                nonempty(row.device_name),
+            )
+        }
     }
 
     #[derive(Debug, Deserialize)]
