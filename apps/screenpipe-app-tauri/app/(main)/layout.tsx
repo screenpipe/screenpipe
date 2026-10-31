@@ -17,12 +17,35 @@ import { AppSidebarLayout, SidebarProvider } from "@/components/app-sidebar";
 import { MeetingCalendarReminder } from "@/components/meeting-calendar-reminder";
 import { CardAskProvider } from "@/components/card-ask-provider";
 import { FirstRunLearningWindowProvider } from "@/components/first-run/learning-window-provider";
+import { useRouter } from "next/navigation";
+import { useTauriEvent } from "@/lib/hooks/use-tauri-event";
 
 export default function MainLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const router = useRouter();
+
+  useTauriEvent<{ url: string }>("navigate", ({ payload }) => {
+    // Home owns section changes while mounted. Settings shares this layout,
+    // so a native reopen can return to Home without restarting the document.
+    if (window.location.pathname === "/home") return;
+    let url: URL;
+    try {
+      url = new URL(payload.url, window.location.href);
+    } catch {
+      return;
+    }
+    // Custom Tauri schemes can have an opaque URL origin on macOS.
+    if (
+      url.protocol !== window.location.protocol ||
+      url.host !== window.location.host ||
+      url.pathname !== "/home"
+    ) return;
+    router.replace(`${url.pathname}${url.search}${url.hash}`);
+  });
+
   return (
     <FirstRunLearningWindowProvider>
       <SidebarProvider>
