@@ -107,7 +107,7 @@ impl MastraExecutor {
             .env("MASTRA_TELEMETRY_DISABLED", "1")
             .env(
                 "SCREENPIPE_MASTRA_LEGACY_AGENT_DIR",
-                super::pi::pi_config_dir()?,
+                super::pi::pi_config_path()?,
             )
             .env("SCREENPIPE_PIPE_PERMISSIONS", permissions_json)
             .env("SCREENPIPE_MASTRA_PERMISSIONS_FILE", permissions_path)

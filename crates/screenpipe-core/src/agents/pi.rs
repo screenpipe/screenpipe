@@ -2700,6 +2700,14 @@ impl AgentExecutor for PiExecutor {
 /// Escape hatch: `SCREENPIPE_PI_AGENT_DIR` overrides the location; setting it
 /// to `~/.pi/agent` restores the old shared-config behavior.
 pub fn pi_config_dir() -> Result<PathBuf> {
+    let dir = pi_config_path()?;
+    seed_pi_config_from_global(&dir);
+    ensure_pi_settings_defaults(&dir)?;
+    Ok(dir)
+}
+
+/// Resolve legacy state without installing or changing the Pi runtime.
+pub(super) fn pi_config_path() -> Result<PathBuf> {
     let dir = match std::env::var("SCREENPIPE_PI_AGENT_DIR") {
         Ok(v) if !v.trim().is_empty() => {
             let v = v.trim();
@@ -2717,8 +2725,6 @@ pub fn pi_config_dir() -> Result<PathBuf> {
         }
         _ => crate::paths::default_screenpipe_data_dir().join("pi-config"),
     };
-    seed_pi_config_from_global(&dir);
-    ensure_pi_settings_defaults(&dir)?;
     Ok(dir)
 }
 
