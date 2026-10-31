@@ -27,6 +27,8 @@ struct RunRequest<'a> {
     #[serde(rename = "protocol_version")]
     protocol_version: u8,
     execution_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_input: Option<&'a serde_json::Value>,
     prompt: &'a str,
     system_prompt: Option<&'a str>,
     model: &'a str,
@@ -222,6 +224,8 @@ impl AgentExecutor for MastraExecutor {
                 .filter(|id| !id.is_empty())
                 .map(str::to_owned)
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            execution_input: executor_config
+                .and_then(|config| config.get("_screenpipeExecutionInput")),
             prompt,
             system_prompt: pipe_system_prompt,
             model,
@@ -461,12 +465,13 @@ mod tests {
         .iter()
         .enumerate()
         {
-            let config = delivery.map(|id| serde_json::json!({"_screenpipeExecutionId": id}));
+            let config = delivery.map(|id| serde_json::json!({"_screenpipeExecutionId": id, "_screenpipeExecutionInput": {"items": ["accepted source"]}}));
             let owner = format!("pipe:fixture:{index}");
+            let prompt = format!("Run context time changes on attempt {index}");
             let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
             let result = executor
                 .run_streaming(
-                    "same accepted input",
+                    &prompt,
                     "fixture-model",
                     dir.path(),
                     None,
@@ -489,6 +494,15 @@ mod tests {
                     .unwrap();
             ids.push(request["executionId"].as_str().unwrap().to_owned());
             assert_eq!(request["sessionOwner"], owner);
+            assert_eq!(request["prompt"], prompt);
+            if delivery.is_some() {
+                assert_eq!(
+                    request["executionInput"],
+                    serde_json::json!({"items": ["accepted source"]})
+                );
+            } else {
+                assert!(request.get("executionInput").is_none());
+            }
         }
         assert_eq!(ids[0], "delivery:source-one");
         assert_eq!(ids[0], ids[1]);
